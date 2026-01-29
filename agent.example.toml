@@ -1,0 +1,70 @@
+# Agent configuration example
+# Proxy listen address (auto-detects HTTP and SOCKS5 protocols)
+listen_addr = "127.0.0.1:8080"
+proxy_addr = "127.0.0.1:8443"
+tokio_console_addr = "127.0.0.1:10071"
+# Proxy's RSA public key (will be provided by proxy server admin)
+# Copy this from the proxy server's configuration after first run
+proxy_rsa_public_key = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuSkWZnibXzNdZGQNefwE
+zrGFTTFqU9YobtqFWJxnCDjkr0CpZHFf8V8xMCjvznH3gnJrp9/N8WdhBZVgRRiC
+lzIBlE4o9O/zkNFdXIv7OFIdrl+kMR9qT4sMSmFDgLqINVQ4f/EJf9G+TwIoHzNC
+TQDIIUQcC8Dxvn7cg2WEvJHantnuV5auQzRWu0P5MuekxUYAcg6ExdiqFgw9CGRb
+tIv4jAnMXHX6lxrJDt1xoyrNWJ0Xhdh5luLru4Nu2E4Xw8Gai7hL4QULrospNjmb
+Uq72sSWHoBH6nqCyt4fGWo10w5A1m2DVHDl1xtuLZ0hHXk893PaFeXxk4uxwtkbX
+QwIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+[user]
+username = "user1"
+password = "your-secure-password"
+# These will be auto-generated if empty on first run
+# Example keys shown below (these will be replaced automatically)
+rsa_public_key = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu15Xj6JBK9LhREwFlXU/
+5oEMc8GXMGHIda9rz9EnEQXC7SBHCH0VtphGl8ZqeNFSWvhlpVmt7DpSodz8L2eo
+Piw7FZyxh1wbLOpFCwf7fzmw1N5ilGAxz7Sh1ykJpLbVpOI+Fuy8tCyF+2L9ApMX
+Ms5Qa+IO1WhZpNNjcYR92AfCwC1lU4XC0+vOwLs/48LNtgotWRueLoPRQtHl417f
+8lCN5m3v7YWo9HDiKJuJPPh2aSOh78ZS0Vp5vwDeEvChkSgLW9uXQ9vapEa8YZMW
+GsXE7mbAtyqlWHgJCVa6LQ8fzmsIEL2Bk6C7DfR+svqjp3ZMBuqc4fI9kAcIcw2B
+MQIDAQAB
+-----END PUBLIC KEY-----
+"""
+rsa_private_key = """
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7XlePokEr0uFE
+TAWVdT/mgQxzwZcwYch1r2vP0ScRBcLtIEcIfRW2mEaXxmp40VJa+GWlWa3sOlKh
+3PwvZ6g+LDsVnLGHXBss6kULB/t/ObDU3mKUYDHPtKHXKQmkttWk4j4W7Ly0LIX7
+Yv0CkxcyzlBr4g7VaFmk02NxhH3YB8LALWVThcLT687Auz/jws22Ci1ZG54ug9FC
+0eXjXt/yUI3mbe/thaj0cOIom4k8+HZpI6HvxlLRWnm/AN4S8KGRKAtb25dD29qk
+RrxhkxYaxcTuZsC3KqVYeAkJVrotDx/OawgQvYGToLsN9H6y+qOndkwG6pzh8j2Q
+BwhzDYExAgMBAAECggEAU1GtkEKvxmQdJjjEFuUvyDnEpskEiVBCSwr530z7mVc9
+iiLbU4wEFtF6Os3R1O4IOEnTMYdCjxSUYEQbpJzstNEIaSDn1PCBaSS4FSK0lKu7
+1b0aiy6Hl/yUJ1CpaCShtpOg1qLpexl9bv9i0T1FiKM0IfVBcWbYzjHuO7GWIHT4
+H1ZBccohgceaZNyRA6gFExRM2SW5G1Yyl1F4L2ESZ1zeT44ZyqMh7DxmVSo9uCqF
+UQW1bUA9NPdByPFCG1pnWJpceAjqp4U5R23zFeH3Q43wTekjHHl+Z0V1UT591OV5
+xjAPNppPSSVuk1zC4nKO6MT8lTiF1B/s5/MJGLQ37QKBgQDTfY0C0lWcUHUulTWv
+z/GE8qnPEwYKFvwnBhxhvCUUfAFJK+lZFEZaWxol5reFK1kkxkVutadUJ/l7eLNe
+iJhz5wHb692CWhzqpivM6NgcpZyZ1xvuSmQlxLmOhO5D9OlPcZMb+YereyEDDoZn
+QBcSrL3SP5TwPnApcwJ53IHg8wKBgQDizS1vjIPGKx53FzZ85j6SW2BMclEdtK2I
+3HWSM1rF2F22ci9Du/GR8drmBYmnMqzppurT9ARJXHxwALjeL4B3Nxzokj9uPInm
+WbtgKF8Ute8qwi12+at2IJee3oBPd++26KfFqZY34xEQ03z4UMRVyb/MdpI3ErgZ
+//o+bNN+SwKBgDyByRwrjS7BniULr2ZzecftnUOPT8UHOnD3wJr9tyYbLEsA8yv3
+LwGe2uZJEexZsJFi4G6CLjNXlHsM11SOg/908gU3gBJRMcC4dgOUAnB/uUQSVP1h
+7zEXDXeG9Jwgr7d46Pux8mzPN2ymdTGJFpDTNyO16Siq1HAnZWfz/HydAoGAOyHh
+qcbKCJ3vaH9t3mytfb1DQ0s+6O7Vm+xW3xJypUi/TjVBK3jSCAo112k0NZqZyKWT
+bkWd5H6vlwgpKwzZgruk1uJilVxFXACjQPPlrmGtBMnxzqZT1Q20WmCKta2Am4DX
+VUrc9p9GMMvjNl7ggbmDP0ze3GsOAwFhfmsjTTcCgYEAsC5QMrB9GTiYyfixrwI4
+o6OmSEbDPXpAjhcQqqhwrhjr4AZ4pPdU9QV4BsgtyNE2YHb85hfULCn7kyKolHSe
+XzeE35v2B04a1aL4U6N9/inwyKY3VB5N5li+rlm8/tLYSPL39IBd/DP7OxjpKZbe
+uv8yX2PxmVUJDTOc0ndlsNE=
+-----END PRIVATE KEY-----
+"""
+
+[connection_pool]
+max_size = 10
+idle_timeout_secs = 300
+connection_timeout_secs = 30

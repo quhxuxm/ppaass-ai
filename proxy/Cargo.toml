@@ -1,0 +1,37 @@
+[package]
+name = "proxy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "proxy"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio-console = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+console-subscriber = "0.4"
