@@ -1,7 +1,8 @@
 use crate::connection_pool::ConnectionPool;
 use anyhow::{Result, anyhow};
-use fast_socks5::server::{DnsResolveHelper, Socks5ServerProtocol, SocksServerError};
+use fast_socks5::server::{Socks5ServerProtocol, SocksServerError};
 use fast_socks5::server::states;
+
 use fast_socks5::{ReplyError, Socks5Command};
 use fast_socks5::util::target_addr::TargetAddr;
 use std::{
@@ -28,9 +29,6 @@ pub async fn handle_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> 
         .await
         .map_err(map_socks_error)?
         .read_command()
-        .await
-        .map_err(map_socks_error)?
-        .resolve_dns()
         .await
         .map_err(map_socks_error)?;
 
