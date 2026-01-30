@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+// NOTE: This module is deprecated and replaced by multiplexer.rs for connection pooling with multiplexing
+
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use protocol::{

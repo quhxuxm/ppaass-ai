@@ -1,5 +1,5 @@
 use crate::error::{AgentError, Result};
-use crate::pool::ProxyPool;
+use crate::multiplexer::{MultiplexedPool, StreamHandle};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -9,11 +9,12 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use protocol::Address;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
-pub async fn handle_http_connection(stream: TcpStream, pool: ProxyPool) -> Result<()> {
+pub async fn handle_http_connection(stream: TcpStream, pool: Arc<MultiplexedPool>) -> Result<()> {
     info!("Handling HTTP connection");
 
     let io = TokioIo::new(stream);
@@ -37,7 +38,7 @@ pub async fn handle_http_connection(stream: TcpStream, pool: ProxyPool) -> Resul
 
 async fn handle_http_request(
     req: Request<Incoming>,
-    pool: ProxyPool,
+    pool: Arc<MultiplexedPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     info!("HTTP request: {} {}", req.method(), req.uri());
 
@@ -50,7 +51,7 @@ async fn handle_http_request(
 
 async fn handle_connect(
     mut req: Request<Incoming>,
-    pool: ProxyPool,
+    pool: Arc<MultiplexedPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     let uri = req.uri().clone();
     let host = uri.host().unwrap_or("").to_string();
@@ -60,29 +61,17 @@ async fn handle_connect(
 
     let address = Address::Domain { host: host.clone(), port };
 
-    // Get connection from pool
-    let proxy_conn = match pool.get().await {
-        Ok(conn) => conn,
+    // Get stream from multiplexed pool
+    let stream_handle = match pool.get_stream(address).await {
+        Ok(handle) => {
+            info!("Got stream from pool, stream_id: {}", handle.stream_id());
+            handle
+        }
         Err(e) => {
-            error!("Failed to get connection from pool: {}", e);
+            error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(Full::new(Bytes::from("Failed to connect to proxy")))
-                .unwrap());
-        }
-    };
-
-    // Connect to target through proxy
-    let stream_id = match proxy_conn.connect_target(address).await {
-        Ok(id) => {
-            info!("Connected to target via proxy, stream_id: {}", id);
-            id
-        }
-        Err(e) => {
-            error!("Failed to connect to target: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from("Failed to connect to target")))
                 .unwrap());
         }
     };
@@ -92,7 +81,7 @@ async fn handle_connect(
         match hyper::upgrade::on(&mut req).await {
             Ok(upgraded) => {
                 info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
-                if let Err(e) = tunnel(upgraded, proxy_conn, stream_id).await {
+                if let Err(e) = tunnel(upgraded, stream_handle).await {
                     error!("Tunnel error: {}", e);
                 }
             }
@@ -111,17 +100,13 @@ async fn handle_connect(
 
 async fn tunnel(
     upgraded: Upgraded,
-    proxy_conn: deadpool::managed::Object<crate::pool::ProxyConnectionManager>,
-    stream_id: String,
+    stream_handle: StreamHandle,
 ) -> std::result::Result<(), AgentError> {
-    use std::sync::Arc;
-
     let io = TokioIo::new(upgraded);
     let (mut read_half, mut write_half) = tokio::io::split(io);
 
-    let proxy_conn = Arc::new(proxy_conn);
-    let stream_id_for_send = stream_id.clone();
-    let proxy_conn_for_send = Arc::clone(&proxy_conn);
+    // Split stream handle into sender and receiver for concurrent use
+    let (stream_sender, mut stream_receiver) = stream_handle.split();
 
     // Read from client and send to proxy
     let client_to_proxy = async move {
@@ -130,13 +115,13 @@ async fn tunnel(
             match read_half.read(&mut buffer).await {
                 Ok(0) => {
                     debug!("Client closed CONNECT tunnel");
-                    let _ = proxy_conn_for_send.send_data(stream_id_for_send.clone(), vec![], true).await;
+                    let _ = stream_sender.send_data(vec![], true).await;
                     break;
                 }
                 Ok(n) => {
                     let data = buffer[..n].to_vec();
                     debug!("CONNECT tunnel: {} bytes client -> proxy", n);
-                    if let Err(e) = proxy_conn_for_send.send_data(stream_id_for_send.clone(), data, false).await {
+                    if let Err(e) = stream_sender.send_data(data, false).await {
                         error!("Failed to send data to proxy: {}", e);
                         break;
                     }
@@ -149,39 +134,38 @@ async fn tunnel(
         }
     };
 
-    let proxy_conn_for_recv = Arc::clone(&proxy_conn);
-
     // Read from proxy and send to client
     let proxy_to_client = async move {
         loop {
-            match proxy_conn_for_recv.receive_data().await {
-                Ok(data_packet) => {
-                    if !data_packet.data.is_empty() {
-                        debug!("CONNECT tunnel: {} bytes proxy -> client", data_packet.data.len());
-                        if let Err(e) = write_half.write_all(&data_packet.data).await {
+            match stream_receiver.receive_data().await {
+                Some(packet) => {
+                    if !packet.data.is_empty() {
+                        debug!("CONNECT tunnel: {} bytes proxy -> client", packet.data.len());
+                        if let Err(e) = write_half.write_all(&packet.data).await {
                             error!("Failed to write to CONNECT tunnel client: {}", e);
                             break;
                         }
-                        let _ = write_half.flush().await;
+                        if let Err(e) = write_half.flush().await {
+                            error!("Failed to flush to CONNECT tunnel client: {}", e);
+                            break;
+                        }
                     }
 
-                    if data_packet.is_end {
+                    if packet.is_end {
                         debug!("Proxy indicated end of CONNECT tunnel stream");
                         break;
                     }
                 }
-                Err(e) => {
-                    error!("Failed to receive data from proxy: {}", e);
+                None => {
+                    debug!("Stream channel closed");
                     break;
                 }
             }
         }
     };
 
-    tokio::select! {
-        _ = client_to_proxy => {},
-        _ = proxy_to_client => {},
-    }
+    // Run both tasks concurrently - wait for both to complete
+    tokio::join!(client_to_proxy, proxy_to_client);
 
     info!("CONNECT tunnel closed");
     Ok(())
@@ -189,7 +173,7 @@ async fn tunnel(
 
 async fn handle_regular_request(
     req: Request<Incoming>,
-    pool: ProxyPool,
+    pool: Arc<MultiplexedPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     let uri = req.uri();
 
@@ -214,11 +198,11 @@ async fn handle_regular_request(
 
     let address = Address::Domain { host: host.clone(), port };
 
-    // Get connection from pool
-    let proxy_conn = match pool.get().await {
-        Ok(conn) => conn,
+    // Get stream from multiplexed pool
+    let stream_handle = match pool.get_stream(address).await {
+        Ok(handle) => handle,
         Err(e) => {
-            error!("Failed to get connection from pool: {}", e);
+            error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(Full::new(Bytes::from("Failed to connect to proxy")))
@@ -226,17 +210,8 @@ async fn handle_regular_request(
         }
     };
 
-    // Connect to target through proxy
-    let stream_id = match proxy_conn.connect_target(address).await {
-        Ok(id) => id,
-        Err(e) => {
-            error!("Failed to connect to target: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from("Failed to connect to target")))
-                .unwrap());
-        }
-    };
+    // Split stream handle for send/receive
+    let (stream_sender, mut stream_receiver) = stream_handle.split();
 
     // Build the HTTP request to send to target
     let path = uri.path_and_query()
@@ -274,7 +249,7 @@ async fn handle_regular_request(
     full_request.extend_from_slice(&body_bytes);
 
     // Send request to proxy
-    if let Err(e) = proxy_conn.send_data(stream_id.clone(), full_request, false).await {
+    if let Err(e) = stream_sender.send_data(full_request, false).await {
         error!("Failed to send request to proxy: {}", e);
         return Ok(Response::builder()
             .status(StatusCode::BAD_GATEWAY)
@@ -285,8 +260,8 @@ async fn handle_regular_request(
     // Receive response from proxy
     let mut response_data = Vec::new();
     loop {
-        match proxy_conn.receive_data().await {
-            Ok(data_packet) => {
+        match stream_receiver.receive_data().await {
+            Some(data_packet) => {
                 response_data.extend_from_slice(&data_packet.data);
                 if data_packet.is_end {
                     break;
@@ -298,12 +273,9 @@ async fn handle_regular_request(
                     break;
                 }
             }
-            Err(e) => {
-                error!("Failed to receive response: {}", e);
-                return Ok(Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .body(Full::new(Bytes::from("Failed to receive response")))
-                    .unwrap());
+            None => {
+                debug!("Stream channel closed");
+                break;
             }
         }
     }

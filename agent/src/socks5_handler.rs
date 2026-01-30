@@ -1,5 +1,5 @@
 use crate::error::{AgentError, Result};
-use crate::pool::ProxyPool;
+use crate::multiplexer::{MultiplexedPool, StreamHandle};
 use fast_socks5::server::{
     Socks5ServerProtocol, NoAuthentication, SocksServerError,
     states::Opened,
@@ -8,11 +8,12 @@ use fast_socks5::{Socks5Command, ReplyError};
 use fast_socks5::util::target_addr::TargetAddr;
 use protocol::Address;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
-pub async fn handle_socks5_connection(stream: TcpStream, pool: ProxyPool) -> Result<()> {
+pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<MultiplexedPool>) -> Result<()> {
     info!("Handling SOCKS5 connection");
 
     // Using the new fast-socks5 1.0 API with Socks5ServerProtocol
@@ -44,23 +45,14 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: ProxyPool) -> Res
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
 
-    // Get connection from pool
-    let proxy_conn = pool
-        .get()
-        .await
-        .map_err(|e| {
-            error!("Failed to get connection from pool: {}", e);
-            AgentError::Pool(e.to_string())
-        })?;
-
-    // Connect to target through proxy
-    let stream_id = match proxy_conn.connect_target(address).await {
-        Ok(id) => {
-            info!("Connected to target via proxy, stream_id: {}", id);
-            id
+    // Get a stream from the multiplexed pool
+    let stream_handle = match pool.get_stream(address).await {
+        Ok(handle) => {
+            info!("Got stream from pool, stream_id: {}", handle.stream_id());
+            handle
         }
         Err(e) => {
-            error!("Failed to connect to target: {}", e);
+            error!("Failed to get stream from pool: {}", e);
             let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
             return Err(e);
         }
@@ -76,7 +68,7 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: ProxyPool) -> Res
     info!("SOCKS5 tunnel established, starting data relay");
 
     // Start bidirectional data relay
-    relay_data(&mut client_stream, proxy_conn, stream_id).await
+    relay_data(&mut client_stream, stream_handle).await
 }
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
@@ -102,16 +94,12 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
 
 async fn relay_data(
     client_stream: &mut TcpStream,
-    proxy_conn: deadpool::managed::Object<crate::pool::ProxyConnectionManager>,
-    stream_id: String,
+    stream_handle: StreamHandle,
 ) -> Result<()> {
-    use std::sync::Arc;
-
-    let proxy_conn = Arc::new(proxy_conn);
     let (mut client_read, mut client_write) = tokio::io::split(client_stream);
 
-    let stream_id_for_send = stream_id.clone();
-    let proxy_conn_for_send = Arc::clone(&proxy_conn);
+    // Split stream handle into sender and receiver for concurrent use
+    let (stream_sender, mut stream_receiver) = stream_handle.split();
 
     // Task to read from client and send to proxy
     let client_to_proxy = async move {
@@ -120,13 +108,13 @@ async fn relay_data(
             match client_read.read(&mut buffer).await {
                 Ok(0) => {
                     debug!("Client closed connection");
-                    let _ = proxy_conn_for_send.send_data(stream_id_for_send.clone(), vec![], true).await;
+                    let _ = stream_sender.send_data(vec![], true).await;
                     break;
                 }
                 Ok(n) => {
                     let data = buffer[..n].to_vec();
                     debug!("Received {} bytes from client, forwarding to proxy", n);
-                    if let Err(e) = proxy_conn_for_send.send_data(stream_id_for_send.clone(), data, false).await {
+                    if let Err(e) = stream_sender.send_data(data, false).await {
                         error!("Failed to send data to proxy: {}", e);
                         break;
                     }
@@ -139,40 +127,38 @@ async fn relay_data(
         }
     };
 
-    let proxy_conn_for_recv = Arc::clone(&proxy_conn);
-
     // Task to read from proxy and send to client
     let proxy_to_client = async move {
         loop {
-            match proxy_conn_for_recv.receive_data().await {
-                Ok(data_packet) => {
-                    if !data_packet.data.is_empty() {
-                        debug!("Received {} bytes from proxy, forwarding to client", data_packet.data.len());
-                        if let Err(e) = client_write.write_all(&data_packet.data).await {
+            match stream_receiver.receive_data().await {
+                Some(packet) => {
+                    if !packet.data.is_empty() {
+                        debug!("Received {} bytes from proxy, forwarding to client", packet.data.len());
+                        if let Err(e) = client_write.write_all(&packet.data).await {
                             error!("Failed to write to client: {}", e);
                             break;
                         }
-                        let _ = client_write.flush().await;
+                        if let Err(e) = client_write.flush().await {
+                            error!("Failed to flush to client: {}", e);
+                            break;
+                        }
                     }
 
-                    if data_packet.is_end {
+                    if packet.is_end {
                         debug!("Proxy indicated end of stream");
                         break;
                     }
                 }
-                Err(e) => {
-                    error!("Failed to receive data from proxy: {}", e);
+                None => {
+                    debug!("Stream channel closed");
                     break;
                 }
             }
         }
     };
 
-    // Run both tasks concurrently
-    tokio::select! {
-        _ = client_to_proxy => {},
-        _ = proxy_to_client => {},
-    }
+    // Run both tasks concurrently - wait for both to complete
+    tokio::join!(client_to_proxy, proxy_to_client);
 
     info!("SOCKS5 data relay completed");
     Ok(())
