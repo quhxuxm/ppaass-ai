@@ -1,0 +1,23 @@
+# PPAASS Proxy Server Configuration
+# This configuration is for demo purposes with real RSA keys
+
+# Address to listen for incoming agent connections
+listen_addr = "0.0.0.0:8080"
+
+# Address for REST API (user management, monitoring)
+api_addr = "0.0.0.0:8081"
+
+# Path to users configuration file (contains public keys)
+users_config_path = "config/users.toml"
+
+# Directory where RSA keys are stored
+keys_dir = "keys"
+
+# Maximum connections per user
+max_connections_per_user = 100
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Optional: Enable tokio-console for debugging
+# console_port = 6670

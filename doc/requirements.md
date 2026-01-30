@@ -55,8 +55,23 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - Use `hyper` latest stable version to implement the http protocol logic in agent side.
   - Use `deadpool` crate to implement the connection pool in agent side.
   - All the used crates should be the latest available stable version on crates.io.
+  - The version of the crates should be defined in the workspace `Cargo.toml` file.
+- Important logic:
   - The configuration file format should be `TOML`.
   - The pooled connections from agent to proxy use multiplexing.
   - The whole project should be organized as a cargo workspace with two members: `agent` and `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.
+  - The codec should use `LengthDelimitedCodec` from `tokio-util` as the base codec.
+  - The data package transferred between agent and proxy should use `Framed` trait so that the data can be sent and received in a stream way.
+  - There should be debug logs for important steps in the application flow, especially on the time data is transferring between agent and proxy, the debug log should print the content of the data package in hex format.
+  - The log level should be configurable via the configuration file and cli parameter.
+- Flow:
+  - The data exchange between agent and proxy should include 3 process:
+    - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
+    - *Connect process* to send the target server address from agent to proxy, and proxy connect to the target server. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*.
+    - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional.
+- Testing:
+  - Unit tests should be written for important logic.
+  - Integration tests should be written to test the whole flow.
+  - Load tests should be written to test the performance and stability of the application.

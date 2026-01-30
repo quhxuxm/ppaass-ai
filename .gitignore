@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.toml.local
+*.log
+*.pem
+*.key
+/keys
+/config/*.local.toml
+.idea
+.vscode
+*.swp
+*.swo
+*~

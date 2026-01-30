@@ -1,0 +1,40 @@
+[workspace]
+members = ["agent", "proxy", "common", "protocol"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["PPAASS Team"]
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1.42", features = ["full", "tracing"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+config = "0.14"
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2.0"
+anyhow = "1.0"
+bytes = "1.9"
+console-subscriber = "0.5"
+fast-socks5 = "1.0"
+hyper = { version = "1.5", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+deadpool = "0.12"
+toml = "0.8"
+rsa = "0.9"
+aes-gcm = "0.10"
+rand = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+async-trait = "0.1"
+parking_lot = "0.12"
+dashmap = "6.1"

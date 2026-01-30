@@ -1,0 +1,85 @@
+mod api;
+mod config;
+mod connection;
+mod error;
+mod server;
+mod user_manager;
+mod bandwidth;
+
+use anyhow::Result;
+use clap::Parser;
+use tracing::info;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+use crate::config::ProxyConfig;
+use crate::server::ProxyServer;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to configuration file
+    #[arg(short, long, default_value = "config/proxy.toml")]
+    config: String,
+
+    /// Override listen address
+    #[arg(short, long)]
+    listen: Option<String>,
+
+    /// Override API address
+    #[arg(short, long)]
+    api: Option<String>,
+    
+    /// Override log level (trace, debug, info, warn, error)
+    #[arg(long)]
+    log_level: Option<String>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    // Load configuration first to get log_level
+    let mut config = ProxyConfig::load(&args.config)?;
+
+    // Override with command line arguments
+    if let Some(listen) = args.listen {
+        config.listen_addr = listen;
+    }
+    if let Some(api) = args.api {
+        config.api_addr = api;
+    }
+    if let Some(log_level) = args.log_level {
+        config.log_level = log_level;
+    }
+
+    // Initialize tracing with log level from config or CLI
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)?;
+
+    info!("Starting PPAASS Proxy");
+    info!("Listen address: {}", config.listen_addr);
+    info!("API address: {}", config.api_addr);
+    info!("Log level: {}", config.log_level);
+
+    // Initialize tokio-console if configured
+    #[cfg(feature = "console")]
+    if let Some(console_port) = config.console_port {
+        info!("Starting tokio-console on port {}", console_port);
+        console_subscriber::init();
+    }
+
+    // Start proxy server
+    let server = ProxyServer::new(config).await?;
+    server.run().await?;
+
+    Ok(())
+}

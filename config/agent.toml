@@ -1,0 +1,16 @@
+# PPAASS Agent Configuration
+# This configuration is for demo purposes with real RSA keys
+
+listen_addr = "127.0.0.1:1080"
+proxy_addr = "127.0.0.1:8080"
+username = "user1"
+password = "demo_password"
+private_key_path = "keys/user1.pem"
+pool_size = 10
+pool_timeout_secs = 30
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Optional: Enable tokio-console for debugging
+# console_port = 6669
