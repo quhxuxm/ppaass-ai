@@ -1,6 +1,9 @@
-You are an expert Rust developer, specializing in network application developing.
+# Background
 
-# Business requirements:
+You are an expert Rust developer, specializing in network application developing. You are developing a proxy application that consists of two main components: an agent side and a proxy side. The agent side runs on the client machine, forwarding all traffic to the proxy side, which then forwards the traffic to the target server. The proxy side also handles responses from the target server, sending them back to the agent side, which in turn forwards them back to the client machine.
+
+# Business requirements
+
 Write a proxy application, it has an agent side and a proxy side. The agent side will run on the client machine, it will forward all the traffic to the proxy side, and the proxy side will forward the traffic to the target server. The proxy side will also forward the response from the target server back to the agent side, and the agent side will forward the response back to the client machine.
 
 The agent side should support HTTP and SOCKS5 protocols, it is no need for user to select to use HTTP or SOCKS5, the agent side should detect the protocol automatically.
@@ -11,17 +14,18 @@ To make the DNS resolution secure, the agent side should not resolve the domain 
 
 It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side.
 
-The RSA key is different between different users.
+Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
 
 In proxy side there should REST api to:
-- Add user.
-- Remove user.
+- Add user, including generate RSA private key and public key by user, and also can let user download their private key.
+- Remove user, when remove the user, the related private key should be deleted also.
 - Query the current connections and user bandwidth usage.
 - Check proxy configuration
 - Update proxy configuration without restart the proxy service.
 - Monitor the health status of the proxy service.
 
-# Technical requirements:
+# Architecture requirements
+
 The communication between agent and proxy should be secure, using RSA encryption for key exchange and AES for encrypting the traffic.
 
 The configuration for both sides should be read from a configuration file using the `config` crate, and the configuration data should be serialized/deserialized using `serde`. And configuration should be able to be overridden by command line arguments using `clap`.
@@ -34,8 +38,8 @@ The port of `tokio-console` should be configurable via the configuration file, a
 
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
 
+# Implementation details
 
-# Technical details:
 - Programming Language: Rust 1.93.0 with edition `2024`
 - Key Libraries/Frameworks: 
   - Use `tokio` as the basic network framework.
@@ -49,4 +53,9 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - Use `tokio-codec` for network package encoding and decoding.
   - Use `fast-socks5` latest stable version to implement the socks5 protocol logic in agent side.
   - Use `hyper` latest stable version to implement the http protocol logic in agent side.
+  - Use `deadpool` crate to implement the connection pool in agent side.
   - All the used crates should be the latest available stable version on crates.io.
+  - The configuration file format should be `TOML`.
+  - The whole project should be organized as a cargo workspace with two members: `agent` and `proxy`.
+  - The common logic should be organized as a separate crate named `common` in the workspace.
+  - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.
