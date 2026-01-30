@@ -9,7 +9,7 @@ mod bandwidth;
 use anyhow::Result;
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::config::ProxyConfig;
 use crate::server::ProxyServer;
@@ -32,13 +32,20 @@ struct Args {
     /// Override log level (trace, debug, info, warn, error)
     #[arg(long)]
     log_level: Option<String>,
+    
+    /// Override log directory
+    #[arg(long)]
+    log_dir: Option<String>,
+    
+    /// Override number of runtime worker threads
+    #[arg(long)]
+    runtime_threads: Option<usize>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Load configuration first to get log_level
+    // Load configuration first
     let mut config = ProxyConfig::load(&args.config)?;
 
     // Override with command line arguments
@@ -51,35 +58,68 @@ async fn main() -> Result<()> {
     if let Some(log_level) = args.log_level {
         config.log_level = log_level;
     }
+    if let Some(log_dir) = args.log_dir {
+        config.log_dir = log_dir;
+    }
+    if let Some(runtime_threads) = args.runtime_threads {
+        config.runtime_threads = Some(runtime_threads);
+    }
 
-    // Initialize tracing with log level from config or CLI
+    // Create log directory if it doesn't exist
+    std::fs::create_dir_all(&config.log_dir)?;
+
+    // Initialize file-based logging for better performance
+    let file_appender = tracing_appender::rolling::daily(&config.log_dir, "proxy.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
-    let subscriber = FmtSubscriber::builder()
-        .with_env_filter(filter)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_line_number(true)
-        .finish();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            fmt::layer()
+                .with_writer(non_blocking)
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_line_number(true)
+                .with_ansi(false)
+        )
+        .init();
 
-    tracing::subscriber::set_global_default(subscriber)?;
-
-    info!("Starting PPAASS Proxy");
-    info!("Listen address: {}", config.listen_addr);
-    info!("API address: {}", config.api_addr);
-    info!("Log level: {}", config.log_level);
-
-    // Initialize tokio-console if configured
-    #[cfg(feature = "console")]
-    if let Some(console_port) = config.console_port {
-        info!("Starting tokio-console on port {}", console_port);
-        console_subscriber::init();
+    // Build Tokio runtime with configurable thread count
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.enable_all();
+    
+    if let Some(threads) = config.runtime_threads {
+        info!("Configuring Tokio runtime with {} worker threads", threads);
+        runtime_builder.worker_threads(threads);
     }
+    
+    let runtime = runtime_builder.build()?;
 
-    // Start proxy server
-    let server = ProxyServer::new(config).await?;
-    server.run().await?;
+    runtime.block_on(async {
+        info!("Starting PPAASS Proxy");
+        info!("Listen address: {}", config.listen_addr);
+        info!("API address: {}", config.api_addr);
+        info!("Log level: {}", config.log_level);
+        info!("Log directory: {}", config.log_dir);
+        if let Some(threads) = config.runtime_threads {
+            info!("Runtime threads: {}", threads);
+        } else {
+            info!("Runtime threads: default (CPU cores)");
+        }
 
-    Ok(())
+        // Initialize tokio-console if configured
+        #[cfg(feature = "console")]
+        if let Some(console_port) = config.console_port {
+            info!("Starting tokio-console on port {}", console_port);
+            console_subscriber::init();
+        }
+
+        // Start proxy server
+        let server = ProxyServer::new(config).await?;
+        server.run().await?;
+        Ok(())
+    })
 }

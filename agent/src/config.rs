@@ -22,6 +22,14 @@ pub struct AgentConfig {
     /// Log level: trace, debug, info, warn, error
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    
+    /// Log directory for file-based logging (improves performance vs console)
+    #[serde(default = "default_log_dir")]
+    pub log_dir: String,
+    
+    /// Number of Tokio runtime worker threads (defaults to CPU cores)
+    #[serde(default)]
+    pub runtime_threads: Option<usize>,
 }
 
 fn default_pool_size() -> usize {
@@ -34,6 +42,10 @@ fn default_pool_timeout() -> u64 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_log_dir() -> String {
+    "logs".to_string()
 }
 
 impl AgentConfig {

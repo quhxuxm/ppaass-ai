@@ -19,5 +19,11 @@ max_connections_per_user = 100
 # Log level: trace, debug, info, warn, error
 log_level = "info"
 
+# Log directory for file-based logging (better performance than console)
+log_dir = "logs"
+
+# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# runtime_threads = 4
+
 # Optional: Enable tokio-console for debugging
 # console_port = 6670

@@ -66,6 +66,8 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - The data package transferred between agent and proxy should use `Framed` trait so that the data can be sent and received in a stream way.
   - There should be debug logs for important steps in the application flow, especially on the time data is transferring between agent and proxy, the debug log should print the content of the data package in hex format.
   - The log level should be configurable via the configuration file and cli parameter.
+  - The log should print into log files in non-blocking mode.
+  - The thread number of `tokio` runtime should be configurable via the configuration file and cli parameter.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.

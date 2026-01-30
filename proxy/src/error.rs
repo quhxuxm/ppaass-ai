@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum ProxyError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -17,15 +16,6 @@ pub enum ProxyError {
 
     #[error("User not found: {0}")]
     UserNotFound(String),
-
-    #[error("Invalid address: {0}")]
-    InvalidAddress(String),
-
-    #[error("Bandwidth limit exceeded")]
-    BandwidthLimitExceeded,
-
-    #[error("Connection limit exceeded")]
-    ConnectionLimitExceeded,
 }
 
 pub type Result<T> = std::result::Result<T, ProxyError>;

@@ -23,8 +23,6 @@ pub struct ProxyConnection {
     reader: Arc<Mutex<FramedReader>>,
     user_config: Option<UserConfig>,
     aes_cipher: Option<Arc<AesGcmCipher>>,
-    #[allow(dead_code)]
-    session_id: Option<String>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
     // Store write half of target streams, read half is handled by spawned tasks
     target_writers: HashMap<String, Arc<Mutex<WriteHalf<TcpStream>>>>,
@@ -40,7 +38,6 @@ impl ProxyConnection {
             reader: Arc::new(Mutex::new(reader)),
             user_config: None,
             aes_cipher: None,
-            session_id: None,
             bandwidth_monitor,
             target_writers: HashMap::new(),
             pending_auth_request: None,
@@ -189,7 +186,6 @@ impl ProxyConnection {
 
         self.user_config = Some(user_config);
         self.aes_cipher = Some(Arc::new(aes_cipher));
-        self.session_id = Some(session_id);
 
         info!("Authentication successful");
         Ok(())

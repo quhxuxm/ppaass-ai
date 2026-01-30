@@ -372,11 +372,6 @@ impl StreamSender {
 
         Ok(())
     }
-
-    #[allow(dead_code)]
-    pub fn stream_id(&self) -> &str {
-        &self.stream_id
-    }
 }
 
 /// Receiver half of a stream handle - receives data from proxy
@@ -390,11 +385,6 @@ pub struct StreamReceiver {
 impl StreamReceiver {
     pub async fn receive_data(&mut self) -> Option<DataPacket> {
         self.receiver.recv().await
-    }
-
-    #[allow(dead_code)]
-    pub fn stream_id(&self) -> &str {
-        &self.stream_id
     }
 }
 

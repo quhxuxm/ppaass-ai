@@ -73,15 +73,6 @@ impl BandwidthMonitor {
         true
     }
 
-    #[allow(dead_code)]
-    pub fn get_stats(&self, username: &str) -> Option<(u64, u64)> {
-        self.user_bandwidth.get(username).map(|entry| {
-            (
-                entry.bytes_sent.load(Ordering::Relaxed),
-                entry.bytes_received.load(Ordering::Relaxed),
-            )
-        })
-    }
 
     pub fn get_all_stats(&self) -> Vec<(String, u64, u64)> {
         self.user_bandwidth

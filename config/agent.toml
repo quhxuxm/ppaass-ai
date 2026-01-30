@@ -6,11 +6,17 @@ proxy_addr = "127.0.0.1:8080"
 username = "user1"
 password = "demo_password"
 private_key_path = "keys/user1.pem"
-pool_size = 10
+pool_size = 20
 pool_timeout_secs = 30
 
 # Log level: trace, debug, info, warn, error
 log_level = "info"
+
+# Log directory for file-based logging (better performance than console)
+log_dir = "logs"
+
+# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# runtime_threads = 4
 
 # Optional: Enable tokio-console for debugging
 # console_port = 6669

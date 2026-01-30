@@ -6,6 +6,7 @@ Cargo.lock
 *.pem
 *.key
 /keys
+/logs
 /config/*.local.toml
 .idea
 .vscode
