@@ -28,6 +28,8 @@ pub struct MultiplexedConnection {
     pending_connects: Arc<RwLock<HashMap<String, oneshot::Sender<(bool, String)>>>>,
     /// Current stream count for quick access
     stream_count: Arc<AtomicUsize>,
+    /// Flag to indicate if the connection is still healthy
+    is_healthy: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MultiplexedConnection {
@@ -57,12 +59,13 @@ impl MultiplexedConnection {
         let pending_connects: Arc<RwLock<HashMap<String, oneshot::Sender<(bool, String)>>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let stream_count = Arc::new(AtomicUsize::new(0));
+        let is_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         // Create write channel for non-blocking writes
         let (write_tx, write_rx) = mpsc::channel::<Message>(1024);
 
         // Spawn writer task
-        Self::spawn_writer_task(writer, write_rx);
+        Self::spawn_writer_task(writer, write_rx, is_healthy.clone());
 
         // Send auth request
         Self::do_authenticate(&write_tx, config.username.clone(), encrypted_aes_key).await?;
@@ -73,7 +76,7 @@ impl MultiplexedConnection {
             aes_cipher.clone(),
             stream_senders.clone(),
             pending_connects.clone(),
-            stream_count.clone(),
+            is_healthy.clone(),
         );
 
         Ok(Self {
@@ -82,18 +85,25 @@ impl MultiplexedConnection {
             stream_senders,
             pending_connects,
             stream_count,
+            is_healthy,
         })
     }
 
-    fn spawn_writer_task(mut writer: FramedWriter, mut write_rx: mpsc::Receiver<Message>) {
+    fn spawn_writer_task(
+        mut writer: FramedWriter,
+        mut write_rx: mpsc::Receiver<Message>,
+        is_healthy: Arc<std::sync::atomic::AtomicBool>,
+    ) {
         tokio::spawn(async move {
             while let Some(msg) = write_rx.recv().await {
                 if let Err(e) = writer.send(msg).await {
                     error!("Writer task error: {}", e);
+                    is_healthy.store(false, Ordering::SeqCst);
                     break;
                 }
             }
             info!("Writer task ended");
+            is_healthy.store(false, Ordering::SeqCst);
         });
     }
 
@@ -128,7 +138,7 @@ impl MultiplexedConnection {
         aes_cipher: Arc<AesGcmCipher>,
         stream_senders: Arc<RwLock<HashMap<String, mpsc::Sender<DataPacket>>>>,
         pending_connects: Arc<RwLock<HashMap<String, oneshot::Sender<(bool, String)>>>>,
-        stream_count: Arc<AtomicUsize>,
+        is_healthy: Arc<std::sync::atomic::AtomicBool>,
     ) {
         tokio::spawn(async move {
             while let Some(result) = reader.next().await {
@@ -136,6 +146,7 @@ impl MultiplexedConnection {
                     Ok(msg) => msg,
                     Err(e) => {
                         error!("Reader task error: {}", e);
+                        is_healthy.store(false, Ordering::SeqCst);
                         break;
                     }
                 };
@@ -203,17 +214,16 @@ impl MultiplexedConnection {
                             if sender.send(data_packet).await.is_err() {
                                 warn!("Failed to send data to stream handler, removing stream: {}", stream_id);
                                 stream_senders.write().await.remove(&stream_id);
-                                stream_count.fetch_sub(1, Ordering::Relaxed);
+                                // Note: don't decrement stream_count here - StreamReceiver Drop will handle it
                             }
                         } else {
                             warn!("No handler for stream_id: {}", stream_id);
                         }
 
-                        // Clean up if stream ended
+                        // Note: We don't cleanup here anymore - the StreamReceiver will handle cleanup
+                        // when it's dropped or when is_end is received
                         if is_end {
-                            stream_senders.write().await.remove(&stream_id);
-                            stream_count.fetch_sub(1, Ordering::Relaxed);
-                            debug!("Stream ended and removed: {}", stream_id);
+                            debug!("Stream ended signal received: {}", stream_id);
                         }
                     }
                     ProxyResponse::Heartbeat => {
@@ -226,11 +236,17 @@ impl MultiplexedConnection {
             }
             
             info!("Reader task ended");
+            is_healthy.store(false, Ordering::SeqCst);
         });
     }
 
     /// Connect to a target and return a Stream handle for sending/receiving data
     pub async fn connect_target(&self, address: Address) -> Result<StreamHandle> {
+        // Check if connection is still healthy before trying to use it
+        if !self.is_healthy() {
+            return Err(AgentError::Connection("Connection is no longer healthy".to_string()));
+        }
+
         let stream_id = common::generate_id();
         
         // Create channel for this stream's data
@@ -307,6 +323,11 @@ impl MultiplexedConnection {
     pub fn stream_count(&self) -> usize {
         self.stream_count.load(Ordering::Relaxed)
     }
+
+    /// Check if the connection is still healthy
+    pub fn is_healthy(&self) -> bool {
+        self.is_healthy.load(Ordering::SeqCst)
+    }
 }
 
 /// Handle for a single stream within a multiplexed connection
@@ -337,6 +358,7 @@ impl StreamHandle {
             receiver: self.receiver,
             stream_senders: self.stream_senders,
             stream_count: self.stream_count,
+            cleaned_up: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         (sender, receiver)
     }
@@ -380,25 +402,51 @@ pub struct StreamReceiver {
     receiver: mpsc::Receiver<DataPacket>,
     stream_senders: Arc<RwLock<HashMap<String, mpsc::Sender<DataPacket>>>>,
     stream_count: Arc<AtomicUsize>,
+    /// Flag to indicate if we've already decremented the stream count
+    cleaned_up: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StreamReceiver {
     pub async fn receive_data(&mut self) -> Option<DataPacket> {
         self.receiver.recv().await
     }
+
+    /// Clean up this stream - call this when done to ensure proper cleanup
+    #[allow(dead_code)]
+    pub async fn cleanup(&mut self) {
+        // Use compare_exchange to ensure we only cleanup once
+        if self.cleaned_up.compare_exchange(
+            false,
+            true,
+            Ordering::SeqCst,
+            Ordering::SeqCst
+        ).is_ok() {
+            self.stream_senders.write().await.remove(&self.stream_id);
+            self.stream_count.fetch_sub(1, Ordering::Relaxed);
+            debug!("Stream receiver cleaned up: {}", self.stream_id);
+        }
+    }
 }
 
 impl Drop for StreamReceiver {
     fn drop(&mut self) {
-        // Remove stream from senders map
-        let stream_id = self.stream_id.clone();
-        let stream_senders = self.stream_senders.clone();
-        let stream_count = self.stream_count.clone();
-        tokio::spawn(async move {
-            stream_senders.write().await.remove(&stream_id);
-            stream_count.fetch_sub(1, Ordering::Relaxed);
-            debug!("Stream receiver dropped: {}", stream_id);
-        });
+        // Only cleanup if not already done
+        // Use compare_exchange to ensure we only cleanup once
+        if self.cleaned_up.compare_exchange(
+            false,
+            true,
+            Ordering::SeqCst,
+            Ordering::SeqCst
+        ).is_ok() {
+            let stream_id = self.stream_id.clone();
+            let stream_senders = self.stream_senders.clone();
+            let stream_count = self.stream_count.clone();
+            tokio::spawn(async move {
+                stream_senders.write().await.remove(&stream_id);
+                stream_count.fetch_sub(1, Ordering::Relaxed);
+                debug!("Stream receiver dropped: {}", stream_id);
+            });
+        }
     }
 }
 
@@ -418,12 +466,27 @@ impl MultiplexedPool {
         }
     }
 
+    /// Remove dead connections from the pool
+    async fn cleanup_dead_connections(&self) {
+        let mut connections = self.connections.write().await;
+        let before_len = connections.len();
+        connections.retain(|conn| conn.is_healthy());
+        let after_len = connections.len();
+        if before_len != after_len {
+            info!("Cleaned up {} dead connections from pool", before_len - after_len);
+        }
+    }
+
     pub async fn get_stream(&self, address: Address) -> Result<StreamHandle> {
-        // Try to find an existing connection with capacity
+        // First, cleanup any dead connections
+        self.cleanup_dead_connections().await;
+
+        // Try to find an existing healthy connection with capacity
         {
             let connections = self.connections.read().await;
             for conn in connections.iter() {
-                if conn.stream_count() < self.max_streams_per_conn {
+                // Only use healthy connections
+                if conn.is_healthy() && conn.stream_count() < self.max_streams_per_conn {
                     match conn.connect_target(address.clone()).await {
                         Ok(handle) => return Ok(handle),
                         Err(e) => {
@@ -446,6 +509,8 @@ impl MultiplexedPool {
         
         {
             let mut connections = self.connections.write().await;
+            // Remove dead connections before adding
+            connections.retain(|conn| conn.is_healthy());
             if connections.len() < self.config.pool_size {
                 connections.push(new_conn);
             }
