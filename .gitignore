@@ -1,8 +1,0 @@
-.idea/
-target/
-*.toml
-!*.example.toml
-!Cargo.toml
-*.log
-*.pem
-Cargo.lock
