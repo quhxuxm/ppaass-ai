@@ -420,7 +420,8 @@ impl ProxyConnection {
     }
 
     async fn handle_data(&mut self, data_packet: DataPacket) -> Result<()> {
-        debug!("[AGENT->TARGET] Data packet for stream: {}, size: {}", data_packet.stream_id, data_packet.data.len());
+        debug!("[AGENT->TARGET] Data packet for stream: {}, size: {}, is_end: {}",
+            data_packet.stream_id, data_packet.data.len(), data_packet.is_end);
 
         // Record bandwidth usage
         if let Some(user_config) = &self.user_config {
@@ -445,15 +446,20 @@ impl ProxyConnection {
                     let _ = w.flush().await;
                 }
 
-                // If this is the last data packet, remove the stream
+                // If this is the last data packet, shutdown write side and remove the stream
                 if data_packet.is_end {
-                    debug!("[AGENT->TARGET] End of stream, closing target connection");
+                    debug!("[AGENT->TARGET] End of stream, shutting down write side");
+                    let mut w = writer.lock().await;
+                    // Shutdown write side to signal end of request to HTTP server
+                    let _ = w.shutdown().await;
+                    drop(w);
                     self.target_writers.remove(&data_packet.stream_id);
                 }
-                // Note: We don't send a response here anymore - the reader task handles sending data back
+                // Note: We don't send a response here - the reader task handles sending data back
             }
             None => {
-                error!("No target stream found for stream_id: {}", data_packet.stream_id);
+                // This can happen if the reader task already closed the connection
+                debug!("No target stream found for stream_id: {} (may already be closed)", data_packet.stream_id);
             }
         }
 
