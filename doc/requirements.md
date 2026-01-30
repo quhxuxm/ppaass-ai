@@ -56,6 +56,7 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - Use `deadpool` crate to implement the connection pool in agent side.
   - All the used crates should be the latest available stable version on crates.io.
   - The configuration file format should be `TOML`.
+  - The pooled connections from agent to proxy use multiplexing.
   - The whole project should be organized as a cargo workspace with two members: `agent` and `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.
