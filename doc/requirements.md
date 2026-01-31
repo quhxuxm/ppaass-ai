@@ -12,7 +12,7 @@ The proxy side should support multiple concurrent connections and handle errors 
 
 To make the DNS resolution secure, the agent side should not resolve the domain name, it should send the domain name to the proxy side, and the proxy side should resolve the domain name and connect to the target.
 
-It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side.
+It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side. The user connection number limit should be configurable for each user on the proxy side.
 
 Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
 
@@ -73,10 +73,16 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
     - *Connect process* to send the target server address from agent to proxy, and proxy connect to the target server. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*.
     - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional.
+- Mocking:
+  - Create mock client which can support HTTP and SOCKS5 protocol use agent connect to proxy and then to target.
+  - Create mock target which can receive the request from client through agent and proxy.
+
 - Testing:
-  - Unit tests should be written for important logic.
-  - Integration tests should be written to test the whole flow.
-  - Load tests should be written to test the performance and stability of the application.
-  - Generate mock client and mock target.
-  - Run the integration testing with mock client and mock target.
-  - Generate the performance testing report.
+  - Unit tests:
+    - Unit tests should be written for important logic.
+  - Integration tests:
+    - Integration tests should be written to test the whole flow.
+    - Run the integration testing with mock client and mock target.
+  - Load tests:
+    - Load tests should be written to test the performance and stability of the application.
+    - Generate the performance testing report.

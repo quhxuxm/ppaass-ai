@@ -1,14 +1,18 @@
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::UserConfig;
 use crate::error::{ProxyError, Result};
+use crate::user_manager::UserManager;
+use futures::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use protocol::{
-    crypto::{AesGcmCipher, RsaKeyPair},
     Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, Message,
     MessageType, ProxyCodec, ProxyRequest, ProxyResponse,
+    crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -24,13 +28,18 @@ pub struct ProxyConnection {
     user_config: Option<UserConfig>,
     aes_cipher: Option<Arc<AesGcmCipher>>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    connection_manager: Arc<UserManager>, // Added field to manage user connections
     // Store write half of target streams, read half is handled by spawned tasks
     target_writers: HashMap<String, Arc<Mutex<WriteHalf<TcpStream>>>>,
     pending_auth_request: Option<AuthRequest>,
 }
 
 impl ProxyConnection {
-    pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        bandwidth_monitor: Arc<BandwidthMonitor>,
+        connection_manager: Arc<UserManager>, // Added parameter for connection manager
+    ) -> Self {
         let framed = Framed::new(stream, ProxyCodec::new());
         let (writer, reader) = framed.split();
         Self {
@@ -39,6 +48,7 @@ impl ProxyConnection {
             user_config: None,
             aes_cipher: None,
             bandwidth_monitor,
+            connection_manager, // Initialize connection manager
             target_writers: HashMap::new(),
             pending_auth_request: None,
         }
@@ -46,9 +56,9 @@ impl ProxyConnection {
 
     async fn send_message(&self, message: Message) -> Result<()> {
         let mut w = self.writer.lock().await;
-        w.send(message).await.map_err(|e| ProxyError::Protocol(
-            protocol::ProtocolError::Io(e)
-        ))?;
+        w.send(message)
+            .await
+            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
         Ok(())
     }
 
@@ -91,7 +101,9 @@ impl ProxyConnection {
             self.pending_auth_request = Some(auth_request);
             Ok(username)
         } else {
-            Err(ProxyError::Authentication("Expected auth request".to_string()))
+            Err(ProxyError::Authentication(
+                "Expected auth request".to_string(),
+            ))
         }
     }
 
@@ -111,10 +123,15 @@ impl ProxyConnection {
     }
 
     pub async fn authenticate(&mut self, user_config: UserConfig) -> Result<()> {
-        info!("Authenticating connection for user: {}", user_config.username);
+        info!(
+            "Authenticating connection for user: {}",
+            user_config.username
+        );
 
         // Use the pending auth request that was read in peek_auth_username
-        let auth_request = self.pending_auth_request.take()
+        let auth_request = self
+            .pending_auth_request
+            .take()
             .ok_or_else(|| ProxyError::Authentication("No pending auth request".to_string()))?;
 
         debug!(
@@ -145,8 +162,9 @@ impl ProxyConnection {
 
         let aes_key_bytes = protocol::crypto::decrypt_with_public_key(
             &user_public_key,
-            &auth_request.encrypted_aes_key
-        ).map_err(|e| {
+            &auth_request.encrypted_aes_key,
+        )
+        .map_err(|e| {
             error!("Failed to decrypt AES key: {}", e);
             ProxyError::Authentication(format!("Failed to decrypt AES key: {}", e))
         })?;
@@ -158,7 +176,8 @@ impl ProxyConnection {
         );
 
         // Convert to fixed-size array
-        let aes_key: [u8; 32] = aes_key_bytes.try_into()
+        let aes_key: [u8; 32] = aes_key_bytes
+            .try_into()
             .map_err(|_| ProxyError::Authentication("Invalid AES key length".to_string()))?;
 
         let aes_cipher = AesGcmCipher::from_key(aes_key);
@@ -206,7 +225,9 @@ impl ProxyConnection {
         );
 
         // Decrypt payload
-        let aes_cipher = self.aes_cipher.as_ref()
+        let aes_cipher = self
+            .aes_cipher
+            .as_ref()
             .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
 
         let decrypted_payload = aes_cipher.decrypt(&msg.payload)?;
@@ -224,8 +245,7 @@ impl ProxyConnection {
             ProxyRequest::Connect(ref connect_request) => {
                 debug!(
                     "[CONNECT REQUEST] request_id={}, address={:?}",
-                    connect_request.request_id,
-                    connect_request.address
+                    connect_request.request_id, connect_request.address
                 );
                 self.handle_connect(connect_request.clone()).await?;
             }
@@ -259,14 +279,42 @@ impl ProxyConnection {
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("Connect request: {:?}", connect_request.address);
 
-        // Check bandwidth limit
-        if let Some(user_config) = &self.user_config &&
-            !self.bandwidth_monitor.check_limit(&user_config.username).await {
-                return self.send_connect_error(
-                    connect_request.request_id,
-                    "Bandwidth limit exceeded".to_string(),
-                ).await;
+        // Check user connection limit
+        if let Some(user_config) = &self.user_config {
+            let active_connections = self
+                .connection_manager
+                .get_active_connections(&user_config.username)
+                .await;
+            if active_connections >= user_config.max_connections {
+                return self
+                    .send_connect_error(
+                        connect_request.request_id,
+                        "Connection limit exceeded".to_string(),
+                    )
+                    .await;
             }
+
+            // Increment active connections
+            self.connection_manager
+                .increment_active_connections(&user_config.username)
+                .await?;
+        }
+
+        // Check user bandwidth limit
+        if let Some(user_config) = &self.user_config {
+            if !self
+                .bandwidth_monitor
+                .check_limit(&user_config.username)
+                .await
+            {
+                return self
+                    .send_connect_error(
+                        connect_request.request_id,
+                        "Bandwidth limit exceeded".to_string(),
+                    )
+                    .await;
+            }
+        }
 
         // Connect to target
         let target_addr = match &connect_request.address {
@@ -275,7 +323,8 @@ impl ProxyConnection {
                 format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], port)
             }
             Address::Ipv6 { addr, port } => {
-                format!("[{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}]:{}",
+                format!(
+                    "[{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}]:{}",
                     u16::from_be_bytes([addr[0], addr[1]]),
                     u16::from_be_bytes([addr[2], addr[3]]),
                     u16::from_be_bytes([addr[4], addr[5]]),
@@ -298,7 +347,8 @@ impl ProxyConnection {
 
                 // Store the write half for sending data to target
                 let stream_id = connect_request.request_id.clone();
-                self.target_writers.insert(stream_id.clone(), Arc::new(Mutex::new(target_writer)));
+                self.target_writers
+                    .insert(stream_id.clone(), Arc::new(Mutex::new(target_writer)));
 
                 // Spawn a task to continuously read from target and send to agent
                 let writer = self.writer.clone();
@@ -314,7 +364,8 @@ impl ProxyConnection {
                         aes_cipher,
                         bandwidth_monitor,
                         username,
-                    ).await;
+                    )
+                    .await;
                 });
 
                 let connect_response = ConnectResponse {
@@ -323,14 +374,23 @@ impl ProxyConnection {
                     message: "Connected".to_string(),
                 };
 
-                self.send_response(ProxyResponse::Connect(connect_response)).await?;
+                self.send_response(ProxyResponse::Connect(connect_response))
+                    .await?;
             }
             Err(e) => {
                 error!("Failed to connect to target: {}", e);
                 self.send_connect_error(
                     connect_request.request_id,
                     format!("Failed to connect: {}", e),
-                ).await?;
+                )
+                .await?;
+
+                // Decrement active connections on failure
+                if let Some(user_config) = &self.user_config {
+                    self.connection_manager
+                        .decrement_active_connections(&user_config.username)
+                        .await?;
+                }
             }
         }
 
@@ -352,7 +412,10 @@ impl ProxyConnection {
             match target_reader.read(&mut buffer).await {
                 Ok(0) => {
                     // Target closed connection
-                    debug!("[TARGET->AGENT] Target closed connection for stream: {}", stream_id);
+                    debug!(
+                        "[TARGET->AGENT] Target closed connection for stream: {}",
+                        stream_id
+                    );
                     let end_packet = DataPacket {
                         stream_id: stream_id.clone(),
                         data: vec![],
@@ -364,7 +427,10 @@ impl ProxyConnection {
                     break;
                 }
                 Ok(n) => {
-                    debug!("[TARGET->AGENT] Read {} bytes from target for stream: {}", n, stream_id);
+                    debug!(
+                        "[TARGET->AGENT] Read {} bytes from target for stream: {}",
+                        n, stream_id
+                    );
 
                     // Record bandwidth
                     if let Some(ref user) = username {
@@ -377,7 +443,8 @@ impl ProxyConnection {
                         is_end: false,
                     };
 
-                    if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, data_packet).await {
+                    if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, data_packet).await
+                    {
                         error!("Failed to send data packet: {}", e);
                         break;
                     }
@@ -395,7 +462,10 @@ impl ProxyConnection {
             }
         }
 
-        debug!("[TARGET->AGENT] Reader task ended for stream: {}", stream_id);
+        debug!(
+            "[TARGET->AGENT] Reader task ended for stream: {}",
+            stream_id
+        );
     }
 
     /// Helper to send a data packet to the agent
@@ -411,20 +481,25 @@ impl ProxyConnection {
         let message = Message::new(MessageType::Data, encrypted_payload);
 
         let mut w = writer.lock().await;
-        w.send(message).await.map_err(|e| ProxyError::Protocol(
-            protocol::ProtocolError::Io(e)
-        ))?;
+        w.send(message)
+            .await
+            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
 
         Ok(())
     }
 
     async fn handle_data(&mut self, data_packet: DataPacket) -> Result<()> {
-        debug!("[AGENT->TARGET] Data packet for stream: {}, size: {}, is_end: {}",
-            data_packet.stream_id, data_packet.data.len(), data_packet.is_end);
+        debug!(
+            "[AGENT->TARGET] Data packet for stream: {}, size: {}, is_end: {}",
+            data_packet.stream_id,
+            data_packet.data.len(),
+            data_packet.is_end
+        );
 
         // Record bandwidth usage
         if let Some(user_config) = &self.user_config {
-            self.bandwidth_monitor.record_received(&user_config.username, data_packet.data.len() as u64);
+            self.bandwidth_monitor
+                .record_received(&user_config.username, data_packet.data.len() as u64);
         }
 
         // Get the target writer for this stream_id (clone the Arc to avoid borrow issues)
@@ -434,7 +509,10 @@ impl ProxyConnection {
             Some(writer) => {
                 // Forward data to target
                 if !data_packet.data.is_empty() {
-                    debug!("[AGENT->TARGET] Forwarding {} bytes to target", data_packet.data.len());
+                    debug!(
+                        "[AGENT->TARGET] Forwarding {} bytes to target",
+                        data_packet.data.len()
+                    );
                     let mut w = writer.lock().await;
                     if let Err(e) = w.write_all(&data_packet.data).await {
                         error!("Failed to write to target: {}", e);
@@ -458,7 +536,10 @@ impl ProxyConnection {
             }
             None => {
                 // This can happen if the reader task already closed the connection
-                debug!("No target stream found for stream_id: {} (may already be closed)", data_packet.stream_id);
+                debug!(
+                    "No target stream found for stream_id: {} (may already be closed)",
+                    data_packet.stream_id
+                );
             }
         }
 
@@ -478,7 +559,8 @@ impl ProxyConnection {
             message,
         };
 
-        self.send_response(ProxyResponse::Connect(connect_response)).await
+        self.send_response(ProxyResponse::Connect(connect_response))
+            .await
     }
 
     async fn send_response(&self, response: ProxyResponse) -> Result<()> {
@@ -492,7 +574,9 @@ impl ProxyConnection {
         );
 
         // Encrypt payload
-        let aes_cipher = self.aes_cipher.as_ref()
+        let aes_cipher = self
+            .aes_cipher
+            .as_ref()
             .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
 
         let encrypted_payload = aes_cipher.encrypt(&payload)?;
@@ -513,7 +597,8 @@ impl ProxyConnection {
 
         // Record bandwidth usage
         if let Some(user_config) = &self.user_config {
-            self.bandwidth_monitor.record_sent(&user_config.username, payload_len as u64);
+            self.bandwidth_monitor
+                .record_sent(&user_config.username, payload_len as u64);
         }
 
         Ok(())
