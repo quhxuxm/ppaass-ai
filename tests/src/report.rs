@@ -42,8 +42,14 @@ fn generate_markdown_report(results: &PerformanceTestResults, path: &str) -> Res
     content.push_str(&format!("- **Total Requests:** {}\n", results.total_requests));
     content.push_str(&format!("- **Successful Requests:** {}\n", results.successful_requests));
     content.push_str(&format!("- **Failed Requests:** {}\n", results.failed_requests));
-    content.push_str(&format!("- **Success Rate:** {:.2}%\n", 
-        (results.successful_requests as f64 / results.total_requests as f64) * 100.0));
+    
+    if results.total_requests > 0 {
+        content.push_str(&format!("- **Success Rate:** {:.2}%\n", 
+            (results.successful_requests as f64 / results.total_requests as f64) * 100.0));
+    } else {
+        content.push_str("- **Success Rate:** N/A (no requests completed)\n");
+    }
+    
     content.push_str(&format!("- **Requests per Second:** {:.2}\n", results.requests_per_second));
     content.push_str(&format!("- **Throughput:** {:.2} Mbps\n\n", results.throughput_mbps));
     
@@ -85,6 +91,12 @@ fn generate_markdown_report(results: &PerformanceTestResults, path: &str) -> Res
 
 /// Generate HTML report with charts
 fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<()> {
+    let success_rate = if results.total_requests > 0 {
+        (results.successful_requests as f64 / results.total_requests as f64) * 100.0
+    } else {
+        0.0
+    };
+    
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -402,7 +414,7 @@ fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<
 </html>"#,
         results.test_duration_secs,
         results.total_requests,
-        (results.successful_requests as f64 / results.total_requests as f64) * 100.0,
+        success_rate,
         results.requests_per_second,
         results.throughput_mbps,
         results.http_metrics.total_requests,

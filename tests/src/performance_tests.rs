@@ -168,7 +168,11 @@ pub async fn run_performance_tests(
 
     info!("=== Performance Tests Complete ===");
     info!("Total Requests: {}", total_requests);
-    info!("Success Rate: {:.2}%", (successful_requests as f64 / total_requests as f64) * 100.0);
+    if total_requests > 0 {
+        info!("Success Rate: {:.2}%", (successful_requests as f64 / total_requests as f64) * 100.0);
+    } else {
+        info!("Success Rate: N/A (no requests completed)");
+    }
     info!("Requests/sec: {:.2}", requests_per_second);
     info!("Throughput: {:.2} Mbps", throughput_mbps);
 
