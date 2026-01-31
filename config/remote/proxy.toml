@@ -1,0 +1,26 @@
+# PPAASS Proxy Server Configuration
+# This configuration is for demo purposes with real RSA keys
+
+# Address to listen for incoming agent connections
+listen_addr = "0.0.0.0:8080"
+
+# Address for REST API (user management, monitoring)
+api_addr = "0.0.0.0:8081"
+
+# Path to users configuration file (contains public keys)
+users_config_path = "config/users.toml"
+
+# Directory where RSA keys are stored
+keys_dir = "keys"
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Log directory for file-based logging (better performance than console)
+log_dir = "logs"
+
+# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# runtime_threads = 4
+
+# Optional: Enable tokio-console for debugging
+# console_port = 6670

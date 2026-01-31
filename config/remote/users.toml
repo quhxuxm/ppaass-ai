@@ -1,0 +1,29 @@
+[users.user1]
+username = "user1"
+public_key_pem = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtm6UwXI/ZmUrWPF9gkXs
+vmnh/77vci16aGJBZv9BM7+wuY2ml7mvdYFbGVPiKB9LC4tudvGmv298XuecKxuz
+HRoSwspj2qnr8wA1qsjHlVKaACVKKSgajlRE4bkBxylyfIZmXGOQrrzvuu61Ku3S
+xAPMzdW5EUIaHHJ5bd01ZfEJ6vsJKLG8cT9Iyj+ssED8pRTRp2jbtVJ/sNqc0tS1
+MznDGEVOa8UzyZUa8aGaQjGQExAzRCCDzh3ceSedIhp4ySs6Kud7nsQSgFVc0pxc
+PxzO8/ImXr5KWigaTnkfTVGFzFHrzgTdqPJiLtNRPCmxQAMZpu/U9nxCA5YY2xR5
+ywIDAQAB
+-----END PUBLIC KEY-----
+"""
+bandwidth_limit_mbps = 100
+
+[users.user2]
+username = "user2"
+public_key_pem = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0yqkQjUeFaYbsJxiUJtW
+s3Jd22uAg7fyGyZZAtzI6JNmF/L8zeHxoWhUjEOUuwHmRn4AaEvgSbjFIwnPuVGm
+qCAd8h31379p3Mp5ahA4IMDarb6PUoKDDIxSAYUfkRtpjNZilPVeh2eFWyH41NrS
+NyuKhxQ/aMnVoDrwuEwJQM5K8hdo0pwnfQv3yNtX16E3woe/vTb5f2fvPMZfz0sQ
+rqKBednzxoJ3Zd5SCHBBTnD4u6VVzKlkQc9qpsSIkhJ8jQK4SsxCXlKH2vrsYAHj
+Xsg2dea7zeV8pRw0uL010Cx208clFEtV3EMdgY2iSpbTW+gOuhgciVdzjR/EAXtH
+lwIDAQAB
+-----END PUBLIC KEY-----
+"""
+bandwidth_limit_mbps = 50

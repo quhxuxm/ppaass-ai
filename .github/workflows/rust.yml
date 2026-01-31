@@ -33,3 +33,13 @@ jobs:
       - name: 运行测试
         run: |
           cargo test --verbose
+
+      - name: 传输文件到服务器 (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: "target/release/proxy,config/remote/proxy.toml,config/remote/users.toml,start-proxy.sh" # 替换为你的二进制文件名
+          target: "/ppaass-ai" # 服务器目标路径
+          strip_components: 0
