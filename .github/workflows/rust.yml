@@ -51,7 +51,7 @@ jobs:
           password: ${{ secrets.REMOTE_PASSWORD }}
           script: |
             chmod +x /ppaass-ai/start-proxy.sh
-            /ppaass-ai/start-proxy.sh
+            sudo nohup /ppaass-ai/start-proxy.sh >run.log 2>&1 &
       - name: 部署完成
         run: |
           echo "部署成功！"
