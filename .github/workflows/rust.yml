@@ -28,7 +28,7 @@ jobs:
 
       - name: 编译项目
         run: |
-          cargo build --verbose
+          cargo build --release
 
       - name: 运行测试
         run: |
