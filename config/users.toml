@@ -12,7 +12,6 @@ ywIDAQAB
 -----END PUBLIC KEY-----
 """
 bandwidth_limit_mbps = 100
-max_connections = 50
 
 [users.user2]
 username = "user2"
@@ -28,5 +27,3 @@ lwIDAQAB
 -----END PUBLIC KEY-----
 """
 bandwidth_limit_mbps = 50
-max_connections = 25
-

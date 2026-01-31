@@ -31,7 +31,6 @@ struct AppState {
 struct AddUserRequest {
     username: String,
     bandwidth_limit_mbps: Option<u64>,
-    max_connections: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,12 +128,9 @@ async fn add_user(
 ) -> impl IntoResponse {
     info!("API: Add user request for {}", request.username);
 
-    let max_connections = request.max_connections.unwrap_or(100);
-
     match state.user_manager.add_user(
         request.username.clone(),
         request.bandwidth_limit_mbps,
-        max_connections,
     ) {
         Ok((private_key, public_key)) => {
             // Register user in bandwidth monitor

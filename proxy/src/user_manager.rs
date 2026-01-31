@@ -11,7 +11,6 @@ pub struct UserManager {
     users: Arc<DashMap<String, UserConfig>>,
     users_config_path: PathBuf,
     keys_dir: PathBuf,
-    active_connections: Arc<DashMap<String, usize>>, // Track active connections per user
 }
 
 impl UserManager {
@@ -24,14 +23,12 @@ impl UserManager {
 
         // Load users from config
         let users = Arc::new(DashMap::new());
-        let active_connections = Arc::new(DashMap::new());
 
         if users_config_path.exists() {
             match UsersConfig::load(&users_config_path) {
                 Ok(config) => {
                     for (username, user_config) in config.users {
-                        users.insert(username.clone(), user_config);
-                        active_connections.insert(username, 0); // Initialize active connections to 0
+                        users.insert(username, user_config);
                     }
                     info!("Loaded {} users from config", users.len());
                 }
@@ -45,7 +42,6 @@ impl UserManager {
             users,
             users_config_path,
             keys_dir,
-            active_connections,
         })
     }
 
@@ -57,7 +53,6 @@ impl UserManager {
         &self,
         username: String,
         bandwidth_limit_mbps: Option<u64>,
-        max_connections: usize,
     ) -> Result<(String, String)> {
         info!("Adding user: {}", username);
 
@@ -75,7 +70,6 @@ impl UserManager {
             username: username.clone(),
             public_key_pem: public_key_pem.clone(),
             bandwidth_limit_mbps,
-            max_connections,
         };
 
         self.users.insert(username.clone(), user_config);
@@ -109,33 +103,6 @@ impl UserManager {
 
     pub fn list_users(&self) -> Vec<String> {
         self.users.iter().map(|entry| entry.key().clone()).collect()
-    }
-
-    pub async fn get_active_connections(&self, username: &str) -> usize {
-        self.active_connections
-            .get(username)
-            .map(|r| *r)
-            .unwrap_or(0)
-    }
-
-    pub async fn increment_active_connections(&self, username: &str) -> Result<()> {
-        let mut count = self
-            .active_connections
-            .entry(username.to_string())
-            .or_insert(0);
-        *count += 1;
-        Ok(())
-    }
-
-    pub async fn decrement_active_connections(&self, username: &str) -> Result<()> {
-        let mut count = self
-            .active_connections
-            .entry(username.to_string())
-            .or_insert(0);
-        if *count > 0 {
-            *count -= 1;
-        }
-        Ok(())
     }
 
     fn save_config(&self) -> Result<()> {

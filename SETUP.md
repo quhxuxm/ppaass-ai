@@ -49,7 +49,6 @@ listen_addr = "0.0.0.0:8080"
 api_addr = "0.0.0.0:8081"
 users_config_path = "config/users.toml"
 keys_dir = "keys"
-max_connections_per_user = 100
 ```
 
 2. Start the proxy server:
@@ -83,8 +82,7 @@ curl -X POST http://localhost:8081/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "myuser",
-    "bandwidth_limit_mbps": 100,
-    "max_connections": 50
+    "bandwidth_limit_mbps": 100
   }'
 ```
 

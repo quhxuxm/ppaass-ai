@@ -97,7 +97,7 @@ async fn handle_connection(
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
 ) -> Result<()> {
-    let mut connection = ProxyConnection::new(stream, bandwidth_monitor, user_manager.clone());
+    let mut connection = ProxyConnection::new(stream, bandwidth_monitor);
 
     // First, peek at the auth request to get the username
     let username = match connection.peek_auth_username().await {

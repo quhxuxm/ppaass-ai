@@ -13,9 +13,6 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub console_port: Option<u16>,
 
-    #[serde(default = "default_max_connections")]
-    pub max_connections_per_user: usize,
-
     /// Log level: trace, debug, info, warn, error
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -27,10 +24,6 @@ pub struct ProxyConfig {
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
     pub runtime_threads: Option<usize>,
-}
-
-fn default_max_connections() -> usize {
-    100
 }
 
 fn default_log_level() -> String {
@@ -48,9 +41,6 @@ pub struct UserConfig {
 
     #[serde(default)]
     pub bandwidth_limit_mbps: Option<u64>, // Megabits per second
-
-    #[serde(default = "default_max_connections")]
-    pub max_connections: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +93,6 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtm6UwXI/ZmUrWPF9gkXs
 -----END PUBLIC KEY-----
 """
 bandwidth_limit_mbps = 100
-max_connections = 50
 "#;
         let file = create_temp_file(content);
         let config = UsersConfig::load(file.path()).unwrap();
@@ -114,7 +103,6 @@ max_connections = 50
         let user = config.users.get("user1").unwrap();
         assert_eq!(user.username, "user1");
         assert_eq!(user.bandwidth_limit_mbps, Some(100));
-        assert_eq!(user.max_connections, 50);
         assert!(user.public_key_pem.contains("BEGIN PUBLIC KEY"));
     }
 
@@ -125,13 +113,11 @@ max_connections = 50
 username = "user1"
 public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY1\n-----END PUBLIC KEY-----"
 bandwidth_limit_mbps = 100
-max_connections = 50
 
 [users.user2]
 username = "user2"
 public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY2\n-----END PUBLIC KEY-----"
 bandwidth_limit_mbps = 50
-max_connections = 25
 "#;
         let file = create_temp_file(content);
         let config = UsersConfig::load(file.path()).unwrap();
@@ -145,7 +131,6 @@ max_connections = 25
 
         let user2 = config.users.get("user2").unwrap();
         assert_eq!(user2.bandwidth_limit_mbps, Some(50));
-        assert_eq!(user2.max_connections, 25);
     }
 
     #[test]
@@ -154,27 +139,12 @@ max_connections = 25
 [users.user1]
 username = "user1"
 public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
-max_connections = 50
 "#;
         let file = create_temp_file(content);
         let config = UsersConfig::load(file.path()).unwrap();
 
         let user = config.users.get("user1").unwrap();
         assert_eq!(user.bandwidth_limit_mbps, None);
-    }
-
-    #[test]
-    fn parse_users_config_with_default_max_connections() {
-        let content = r#"
-[users.user1]
-username = "user1"
-public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
-"#;
-        let file = create_temp_file(content);
-        let config = UsersConfig::load(file.path()).unwrap();
-
-        let user = config.users.get("user1").unwrap();
-        assert_eq!(user.max_connections, 100);
     }
 
     #[test]
@@ -195,7 +165,6 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
                 username: "testuser".to_string(),
                 public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----".to_string(),
                 bandwidth_limit_mbps: Some(200),
-                max_connections: 75,
             },
         );
         let original = UsersConfig { users };
@@ -208,7 +177,6 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
         let user = loaded.users.get("testuser").unwrap();
         assert_eq!(user.username, "testuser");
         assert_eq!(user.bandwidth_limit_mbps, Some(200));
-        assert_eq!(user.max_connections, 75);
     }
 
     #[test]
@@ -243,7 +211,6 @@ listen_addr = "0.0.0.0:8080"
 api_addr = "0.0.0.0:8081"
 users_config_path = "config/users.toml"
 keys_dir = "keys"
-max_connections_per_user = 200
 console_port = 6670
 "#;
         let file = create_temp_file(content);
@@ -253,12 +220,11 @@ console_port = 6670
         assert_eq!(config.api_addr, "0.0.0.0:8081");
         assert_eq!(config.users_config_path, "config/users.toml");
         assert_eq!(config.keys_dir, "keys");
-        assert_eq!(config.max_connections_per_user, 200);
         assert_eq!(config.console_port, Some(6670));
     }
 
     #[test]
-    fn parse_proxy_config_with_default_max_connections() {
+    fn parse_proxy_config_without_console_port() {
         let content = r#"
 listen_addr = "0.0.0.0:8080"
 api_addr = "0.0.0.0:8081"
@@ -268,7 +234,6 @@ keys_dir = "keys"
         let file = create_temp_file(content);
         let config = ProxyConfig::load(file.path()).unwrap();
 
-        assert_eq!(config.max_connections_per_user, 100);
         assert_eq!(config.console_port, None);
     }
 

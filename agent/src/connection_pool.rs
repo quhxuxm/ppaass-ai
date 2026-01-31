@@ -8,6 +8,7 @@ use protocol::{
 };
 use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::Framed;
@@ -301,6 +302,8 @@ pub struct ConnectionPool {
     config: Arc<AgentConfig>,
     /// Channel to request refill
     refill_tx: mpsc::Sender<()>,
+    /// Tracks number of available connections in the pool
+    available: Arc<AtomicUsize>,
 }
 
 impl ConnectionPool {
@@ -315,19 +318,27 @@ impl ConnectionPool {
 
         let pool_clone = pool.clone();
         let config_clone = config.clone();
+        let available = Arc::new(AtomicUsize::new(0));
+        let available_clone = available.clone();
 
         // Spawn background refill task
         tokio::spawn(async move {
-            Self::refill_task(refill_rx, pool_clone, config_clone, pool_size).await;
+            Self::refill_task(refill_rx, pool_clone, config_clone, available_clone, pool_size).await;
         });
 
-        Self { pool, config, refill_tx }
+        Self {
+            pool,
+            config,
+            refill_tx,
+            available,
+        }
     }
 
     async fn refill_task(
         mut refill_rx: mpsc::Receiver<()>,
         pool: Pool<ProxyConnection>,
         config: Arc<AgentConfig>,
+        available: Arc<AtomicUsize>,
         target_size: usize,
     ) {
         loop {
@@ -338,8 +349,7 @@ impl ConnectionPool {
             }
 
             // Check current pool size
-            let status = pool.status();
-            let current_size = status.size;
+            let current_size = available.load(Ordering::Acquire);
 
             // Refill if below target
             if current_size < target_size {
@@ -349,11 +359,13 @@ impl ConnectionPool {
                 for _ in 0..to_create {
                     match ProxyConnection::new(&config).await {
                         Ok(conn) => {
-                            if let Err(_) = pool.try_add(conn) {
+                            if pool.try_add(conn).is_ok() {
+                                available.fetch_add(1, Ordering::Release);
+                                debug!("Added prewarmed connection to pool");
+                            } else {
                                 debug!("Pool is full, stopping refill");
                                 break;
                             }
-                            debug!("Added prewarmed connection to pool");
                         }
                         Err(e) => {
                             warn!("Failed to create prewarmed connection: {}", e);
@@ -375,10 +387,12 @@ impl ConnectionPool {
         for i in 0..self.config.pool_size {
             let config = self.config.clone();
             let pool = self.pool.clone();
+            let available = self.available.clone();
             handles.push(tokio::spawn(async move {
                 match ProxyConnection::new(&config).await {
                     Ok(conn) => {
                         if pool.try_add(conn).is_ok() {
+                            available.fetch_add(1, Ordering::Release);
                             debug!("Prewarmed connection {}", i + 1);
                             true
                         } else {
@@ -413,6 +427,7 @@ impl ConnectionPool {
         // Try to get a prewarmed connection from the pool
         let conn = match self.pool.try_remove() {
             Ok(conn) => {
+                self.available.fetch_sub(1, Ordering::AcqRel);
                 debug!("Using prewarmed connection from pool");
                 conn
             }

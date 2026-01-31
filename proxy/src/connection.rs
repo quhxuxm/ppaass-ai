@@ -1,7 +1,6 @@
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::UserConfig;
 use crate::error::{ProxyError, Result};
-use crate::user_manager::UserManager;
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -28,7 +27,6 @@ pub struct ProxyConnection {
     user_config: Option<UserConfig>,
     aes_cipher: Option<Arc<AesGcmCipher>>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
-    connection_manager: Arc<UserManager>, // Added field to manage user connections
     // Store write half of target streams, read half is handled by spawned tasks
     target_writers: HashMap<String, Arc<Mutex<WriteHalf<TcpStream>>>>,
     pending_auth_request: Option<AuthRequest>,
@@ -38,7 +36,6 @@ impl ProxyConnection {
     pub fn new(
         stream: TcpStream,
         bandwidth_monitor: Arc<BandwidthMonitor>,
-        connection_manager: Arc<UserManager>, // Added parameter for connection manager
     ) -> Self {
         let framed = Framed::new(stream, ProxyCodec::new());
         let (writer, reader) = framed.split();
@@ -48,7 +45,6 @@ impl ProxyConnection {
             user_config: None,
             aes_cipher: None,
             bandwidth_monitor,
-            connection_manager, // Initialize connection manager
             target_writers: HashMap::new(),
             pending_auth_request: None,
         }
@@ -279,27 +275,6 @@ impl ProxyConnection {
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("Connect request: {:?}", connect_request.address);
 
-        // Check user connection limit
-        if let Some(user_config) = &self.user_config {
-            let active_connections = self
-                .connection_manager
-                .get_active_connections(&user_config.username)
-                .await;
-            if active_connections >= user_config.max_connections {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "Connection limit exceeded".to_string(),
-                    )
-                    .await;
-            }
-
-            // Increment active connections
-            self.connection_manager
-                .increment_active_connections(&user_config.username)
-                .await?;
-        }
-
         // Check user bandwidth limit
         if let Some(user_config) = &self.user_config {
             if !self
@@ -384,13 +359,6 @@ impl ProxyConnection {
                     format!("Failed to connect: {}", e),
                 )
                 .await?;
-
-                // Decrement active connections on failure
-                if let Some(user_config) = &self.user_config {
-                    self.connection_manager
-                        .decrement_active_connections(&user_config.username)
-                        .await?;
-                }
             }
         }
 
@@ -432,9 +400,20 @@ impl ProxyConnection {
                         n, stream_id
                     );
 
-                    // Record bandwidth
+                    // Record bandwidth and enforce limit
                     if let Some(ref user) = username {
                         bandwidth_monitor.record_sent(user, n as u64);
+                        if !bandwidth_monitor.check_limit(user).await {
+                            let end_packet = DataPacket {
+                                stream_id: stream_id.clone(),
+                                data: vec![],
+                                is_end: true,
+                            };
+                            if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, end_packet).await {
+                                error!("Failed to send end packet: {}", e);
+                            }
+                            break;
+                        }
                     }
 
                     let data_packet = DataPacket {
@@ -496,10 +475,29 @@ impl ProxyConnection {
             data_packet.is_end
         );
 
-        // Record bandwidth usage
+        // Record bandwidth usage and enforce limit
         if let Some(user_config) = &self.user_config {
             self.bandwidth_monitor
                 .record_received(&user_config.username, data_packet.data.len() as u64);
+            if !self
+                .bandwidth_monitor
+                .check_limit(&user_config.username)
+                .await
+            {
+                if let Some(aes_cipher) = &self.aes_cipher {
+                    let end_packet = DataPacket {
+                        stream_id: data_packet.stream_id.clone(),
+                        data: vec![],
+                        is_end: true,
+                    };
+                    let _ = Self::send_data_packet(&self.writer, aes_cipher, end_packet).await;
+                }
+                if let Some(writer) = self.target_writers.remove(&data_packet.stream_id) {
+                    let mut w = writer.lock().await;
+                    let _ = w.shutdown().await;
+                }
+                return Ok(());
+            }
         }
 
         // Get the target writer for this stream_id (clone the Arc to avoid borrow issues)

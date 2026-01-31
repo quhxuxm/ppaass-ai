@@ -13,9 +13,6 @@ users_config_path = "config/users.toml"
 # Directory where RSA keys are stored
 keys_dir = "keys"
 
-# Maximum connections per user
-max_connections_per_user = 100
-
 # Log level: trace, debug, info, warn, error
 log_level = "info"
 

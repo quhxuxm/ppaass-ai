@@ -10,7 +10,7 @@ pool_size = 1
 pool_timeout_secs = 30
 
 # Log level: trace, debug, info, warn, error
-log_level = "info"
+log_level = "debug"
 
 # Log directory for file-based logging (better performance than console)
 log_dir = "logs"

@@ -43,8 +43,7 @@ Create a new user with RSA keys and optional bandwidth limits.
 ```json
 {
   "username": "string",
-  "bandwidth_limit_mbps": number (optional),
-  "max_connections": number (optional)
+  "bandwidth_limit_mbps": number (optional)
 }
 ```
 
@@ -64,8 +63,7 @@ curl -X POST http://localhost:8081/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "alice",
-    "bandwidth_limit_mbps": 100,
-    "max_connections": 50
+    "bandwidth_limit_mbps": 100
   }'
 ```
 
@@ -179,8 +177,7 @@ Retrieve the current proxy configuration.
   "api_addr": "0.0.0.0:8081",
   "users_config_path": "config/users.toml",
   "keys_dir": "keys",
-  "console_port": null,
-  "max_connections_per_user": 100
+  "console_port": null
 }
 ```
 
@@ -203,8 +200,7 @@ Update proxy configuration without restarting.
   "listen_addr": "0.0.0.0:8080",
   "api_addr": "0.0.0.0:8081",
   "users_config_path": "config/users.toml",
-  "keys_dir": "keys",
-  "max_connections_per_user": 100
+  "keys_dir": "keys"
 }
 ```
 
@@ -224,8 +220,7 @@ curl -X PUT http://localhost:8081/api/config \
     "listen_addr": "0.0.0.0:8080",
     "api_addr": "0.0.0.0:8081",
     "users_config_path": "config/users.toml",
-    "keys_dir": "keys",
-    "max_connections_per_user": 100
+    "keys_dir": "keys"
   }'
 ```
 
@@ -338,12 +333,10 @@ class PpaassClient:
     def health(self):
         return requests.get(f"{self.base_url}/health").json()
     
-    def add_user(self, username, bandwidth_limit_mbps=None, max_connections=None):
+    def add_user(self, username, bandwidth_limit_mbps=None):
         data = {"username": username}
         if bandwidth_limit_mbps:
             data["bandwidth_limit_mbps"] = bandwidth_limit_mbps
-        if max_connections:
-            data["max_connections"] = max_connections
         return requests.post(f"{self.base_url}/api/users", json=data).json()
     
     def list_users(self):

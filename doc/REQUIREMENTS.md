@@ -12,7 +12,7 @@ The proxy side should support multiple concurrent connections and handle errors 
 
 To make the DNS resolution secure, the agent side should not resolve the domain name, it should send the domain name to the proxy side, and the proxy side should resolve the domain name and connect to the target.
 
-It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side. The user connection number limit should be configurable for each user on the proxy side.
+It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side.
 
 Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
 

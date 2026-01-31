@@ -60,8 +60,7 @@ curl -X POST http://localhost:8081/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "user1",
-    "bandwidth_limit_mbps": 100,
-    "max_connections": 50
+    "bandwidth_limit_mbps": 100
   }'
 ```
 
@@ -85,8 +84,7 @@ The proxy exposes a REST API on port 8081 (configurable):
 POST /api/users
 {
   "username": "user1",
-  "bandwidth_limit_mbps": 100,
-  "max_connections": 50
+  "bandwidth_limit_mbps": 100
 }
 ```
 
@@ -150,7 +148,6 @@ listen_addr = "0.0.0.0:8080"              # Proxy listen address
 api_addr = "0.0.0.0:8081"                 # API listen address
 users_config_path = "config/users.toml"   # Users configuration file
 keys_dir = "keys"                         # Directory for storing keys
-max_connections_per_user = 100            # Default max connections
 console_port = 6670                       # Optional: tokio-console port
 ```
 
