@@ -258,7 +258,7 @@ async fn socks5_worker(
 fn calculate_metrics(histogram: &Histogram<u64>, successful: usize, failed: usize) -> RequestMetrics {
     let total = successful + failed;
     
-    if histogram.len() == 0 {
+    if histogram.is_empty() {
         return RequestMetrics {
             total_requests: total,
             successful,

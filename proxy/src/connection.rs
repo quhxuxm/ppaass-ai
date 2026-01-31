@@ -33,10 +33,7 @@ pub struct ProxyConnection {
 }
 
 impl ProxyConnection {
-    pub fn new(
-        stream: TcpStream,
-        bandwidth_monitor: Arc<BandwidthMonitor>,
-    ) -> Self {
+    pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>) -> Self {
         let framed = Framed::new(stream, ProxyCodec::new());
         let (writer, reader) = framed.split();
         Self {
@@ -276,19 +273,18 @@ impl ProxyConnection {
         info!("Connect request: {:?}", connect_request.address);
 
         // Check user bandwidth limit
-        if let Some(user_config) = &self.user_config {
-            if !self
+        if let Some(user_config) = &self.user_config
+            && !self
                 .bandwidth_monitor
                 .check_limit(&user_config.username)
                 .await
-            {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "Bandwidth limit exceeded".to_string(),
-                    )
-                    .await;
-            }
+        {
+            return self
+                .send_connect_error(
+                    connect_request.request_id,
+                    "Bandwidth limit exceeded".to_string(),
+                )
+                .await;
         }
 
         // Connect to target
@@ -409,7 +405,9 @@ impl ProxyConnection {
                                 data: vec![],
                                 is_end: true,
                             };
-                            if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, end_packet).await {
+                            if let Err(e) =
+                                Self::send_data_packet(&writer, &aes_cipher, end_packet).await
+                            {
                                 error!("Failed to send end packet: {}", e);
                             }
                             break;

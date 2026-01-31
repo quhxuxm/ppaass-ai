@@ -1,12 +1,12 @@
 use crate::error::{ProtocolError, Result};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, KeyInit},
 };
 use rsa::{
+    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::{OsRng, RngCore},
-    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
 };
 use sha2::{Digest, Sha256};
 
@@ -43,8 +43,7 @@ impl RsaKeyPair {
     }
 
     pub fn from_public_key_pem(pem: &str) -> Result<RsaPublicKey> {
-        RsaPublicKey::from_public_key_pem(pem)
-            .map_err(|e| ProtocolError::InvalidKey(e.to_string()))
+        RsaPublicKey::from_public_key_pem(pem).map_err(|e| ProtocolError::InvalidKey(e.to_string()))
     }
 
     pub fn private_key_to_pem(&self) -> Result<String> {
@@ -76,20 +75,22 @@ impl RsaKeyPair {
     /// Encrypt data with private key (can be decrypted with public key)
     /// This uses raw RSA private key operation: c = m^d mod n
     pub fn encrypt_with_private_key(&self, data: &[u8]) -> Result<Vec<u8>> {
-        use rsa::traits::{PublicKeyParts, PrivateKeyParts};
         use rsa::BigUint;
+        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 
         // Add PKCS#1 v1.5 signature padding: 0x00 0x01 [0xFF padding] 0x00 [data]
         let key_size = self.private_key.size();
         if data.len() > key_size - 11 {
-            return Err(ProtocolError::Encryption("Data too large for key size".to_string()));
+            return Err(ProtocolError::Encryption(
+                "Data too large for key size".to_string(),
+            ));
         }
 
         let padding_len = key_size - data.len() - 3;
         let mut padded = Vec::with_capacity(key_size);
         padded.push(0x00);
         padded.push(0x01);
-        padded.extend(std::iter::repeat(0xFF).take(padding_len));
+        padded.extend(std::iter::repeat_n(0xFF, padding_len));
         padded.push(0x00);
         padded.extend_from_slice(data);
 
@@ -138,8 +139,8 @@ pub fn decrypt_with_public_key(public_key: &RsaPublicKey, data: &[u8]) -> Result
     // However, standard RSA libraries don't expose raw "decrypt with public key".
     // A practical workaround: use the raw RSA primitive directly.
 
-    use rsa::traits::PublicKeyParts;
     use rsa::BigUint;
+    use rsa::traits::PublicKeyParts;
 
     // Raw RSA: m = c^e mod n (public key operation, normally used for encryption)
     // To "decrypt" with public key, we do: m = c^e mod n
@@ -158,18 +159,18 @@ pub fn decrypt_with_public_key(public_key: &RsaPublicKey, data: &[u8]) -> Result
 
     // Find the 0x00 separator after padding
     let mut data_start = None;
-    for i in 2..m_bytes.len() {
-        if m_bytes[i] == 0x00 {
+    for (i, &byte) in m_bytes.iter().enumerate().skip(2) {
+        if byte == 0x00 {
             data_start = Some(i + 1);
             break;
         }
     }
 
     match data_start {
-        Some(start) if start < m_bytes.len() => {
-            Ok(m_bytes[start..].to_vec())
-        }
-        _ => Err(ProtocolError::Decryption("Invalid PKCS#1 padding".to_string())),
+        Some(start) if start < m_bytes.len() => Ok(m_bytes[start..].to_vec()),
+        _ => Err(ProtocolError::Decryption(
+            "Invalid PKCS#1 padding".to_string(),
+        )),
     }
 }
 

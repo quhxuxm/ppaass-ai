@@ -1,12 +1,12 @@
+use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
-use crate::connection_pool::{ConnectionPool, ConnectedStream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper::upgrade::Upgraded;
+use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::Address;
 use std::sync::Arc;
@@ -17,7 +17,8 @@ use tracing::{debug, error, info};
 /// Extract host and port from HTTP request, handling IPv6 addresses correctly
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     // Try to get from Host header first
-    if let Some(host_header) = req.headers()
+    if let Some(host_header) = req
+        .headers()
         .get(hyper::header::HOST)
         .and_then(|h| h.to_str().ok())
     {
@@ -26,7 +27,9 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
             // IPv6 format
             if let Some(bracket_end) = host_header.find(']') {
                 let host = host_header[1..bracket_end].to_string();
-                let port = if host_header.len() > bracket_end + 2 && host_header.as_bytes()[bracket_end + 1] == b':' {
+                let port = if host_header.len() > bracket_end + 2
+                    && host_header.as_bytes()[bracket_end + 1] == b':'
+                {
                     host_header[bracket_end + 2..].parse().unwrap_or(80)
                 } else {
                     80
@@ -98,12 +101,18 @@ async fn handle_connect(
 
     info!("CONNECT request to {}:{}", host, port);
 
-    let address = Address::Domain { host: host.clone(), port };
+    let address = Address::Domain {
+        host: host.clone(),
+        port,
+    };
 
     // Get connected stream from pool
     let connected_stream = match pool.get_connected_stream(address).await {
         Ok(stream) => {
-            info!("Got connected stream from pool, stream_id: {}", stream.stream_id());
+            info!(
+                "Got connected stream from pool, stream_id: {}",
+                stream.stream_id()
+            );
             stream
         }
         Err(e) => {
@@ -236,7 +245,10 @@ async fn handle_regular_request(
             .unwrap());
     }
 
-    let address = Address::Domain { host: host.clone(), port };
+    let address = Address::Domain {
+        host: host.clone(),
+        port,
+    };
 
     // Get connected stream from pool
     let connected_stream = match pool.get_connected_stream(address).await {
@@ -254,9 +266,7 @@ async fn handle_regular_request(
     let (stream_sender, mut stream_receiver) = connected_stream.split();
 
     // Build the HTTP request to send to target
-    let path = uri.path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
+    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
 
     // Format Host header - only include port if non-standard
     let host_header = if port == 80 {
@@ -267,7 +277,9 @@ async fn handle_regular_request(
 
     let mut request_bytes = format!(
         "{} {} HTTP/1.1\r\nHost: {}\r\n",
-        req.method(), path, host_header
+        req.method(),
+        path,
+        host_header
     );
 
     // Add other headers, but modify Connection header
@@ -371,8 +383,10 @@ async fn handle_regular_request(
     }
 }
 
+type HttpParseResult = std::result::Result<(StatusCode, Vec<(String, String)>, Vec<u8>), String>;
+
 /// Parse HTTP response into status, headers, and body
-fn parse_http_response(data: &[u8]) -> std::result::Result<(StatusCode, Vec<(String, String)>, Vec<u8>), String> {
+fn parse_http_response(data: &[u8]) -> HttpParseResult {
     // Find header/body separator
     let header_end = data
         .windows(4)
@@ -382,8 +396,8 @@ fn parse_http_response(data: &[u8]) -> std::result::Result<(StatusCode, Vec<(Str
     let header_bytes = &data[..header_end];
     let body = data[header_end + 4..].to_vec();
 
-    let header_str = std::str::from_utf8(header_bytes)
-        .map_err(|e| format!("Invalid header encoding: {}", e))?;
+    let header_str =
+        std::str::from_utf8(header_bytes).map_err(|e| format!("Invalid header encoding: {}", e))?;
 
     let mut lines = header_str.lines();
 
@@ -394,10 +408,8 @@ fn parse_http_response(data: &[u8]) -> std::result::Result<(StatusCode, Vec<(Str
         return Err("Invalid status line".to_string());
     }
 
-    let status_code: u16 = parts[1].parse()
-        .map_err(|_| "Invalid status code")?;
-    let status = StatusCode::from_u16(status_code)
-        .map_err(|_| "Invalid status code")?;
+    let status_code: u16 = parts[1].parse().map_err(|_| "Invalid status code")?;
+    let status = StatusCode::from_u16(status_code).map_err(|_| "Invalid status code")?;
 
     // Parse headers
     let mut headers = Vec::new();
@@ -416,7 +428,8 @@ fn parse_http_response(data: &[u8]) -> std::result::Result<(StatusCode, Vec<(Str
                 && !name.eq_ignore_ascii_case("proxy-authorization")
                 && !name.eq_ignore_ascii_case("te")
                 && !name.eq_ignore_ascii_case("trailer")
-                && !name.eq_ignore_ascii_case("upgrade") {
+                && !name.eq_ignore_ascii_case("upgrade")
+            {
                 headers.push((name, value));
             }
         }

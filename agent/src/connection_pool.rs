@@ -1,16 +1,19 @@
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use deadpool::unmanaged::Pool;
-use protocol::{
-    crypto::{AesGcmCipher, RsaKeyPair},
-    Address, AuthRequest, ConnectRequest, DataPacket,
-    Message, MessageType, ProxyCodec, ProxyRequest, ProxyResponse,
+use futures::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
-use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
+use protocol::{
+    Address, AuthRequest, ConnectRequest, DataPacket, Message, MessageType, ProxyCodec,
+    ProxyRequest, ProxyResponse,
+    crypto::{AesGcmCipher, RsaKeyPair},
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, warn};
 
@@ -39,11 +42,12 @@ impl ProxyConnection {
 
         // Generate AES key for the session
         let aes_cipher = AesGcmCipher::new();
-        let aes_key = aes_cipher.key().clone();
+        let aes_key = *aes_cipher.key();
 
         // Load user's private key to encrypt the AES key
-        let private_key_pem = std::fs::read_to_string(&config.private_key_path)
-            .map_err(|e| AgentError::Authentication(format!("Failed to read private key: {}", e)))?;
+        let private_key_pem = std::fs::read_to_string(&config.private_key_path).map_err(|e| {
+            AgentError::Authentication(format!("Failed to read private key: {}", e))
+        })?;
 
         let rsa_keypair = RsaKeyPair::from_private_key_pem(&private_key_pem)?;
         let encrypted_aes_key = rsa_keypair.encrypt_with_private_key(&aes_key)?;
@@ -61,26 +65,30 @@ impl ProxyConnection {
         let message = Message::new(MessageType::AuthRequest, payload);
 
         debug!("[AUTH] Sending auth request");
-        writer.send(message).await.map_err(|e| {
-            AgentError::Connection(format!("Failed to send auth request: {}", e))
-        })?;
+        writer
+            .send(message)
+            .await
+            .map_err(|e| AgentError::Connection(format!("Failed to send auth request: {}", e)))?;
 
         // Wait for auth response with timeout
-        let auth_response = match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            reader.next()
-        ).await {
-            Ok(Some(Ok(msg))) => msg,
-            Ok(Some(Err(e))) => {
-                return Err(AgentError::Connection(format!("Failed to read auth response: {}", e)));
-            }
-            Ok(None) => {
-                return Err(AgentError::Connection("Connection closed during auth".to_string()));
-            }
-            Err(_) => {
-                return Err(AgentError::Authentication("Auth timeout".to_string()));
-            }
-        };
+        let auth_response =
+            match tokio::time::timeout(std::time::Duration::from_secs(10), reader.next()).await {
+                Ok(Some(Ok(msg))) => msg,
+                Ok(Some(Err(e))) => {
+                    return Err(AgentError::Connection(format!(
+                        "Failed to read auth response: {}",
+                        e
+                    )));
+                }
+                Ok(None) => {
+                    return Err(AgentError::Connection(
+                        "Connection closed during auth".to_string(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(AgentError::Authentication("Auth timeout".to_string()));
+                }
+            };
 
         // Parse auth response
         let response: ProxyResponse = serde_json::from_slice(&auth_response.payload)
@@ -94,7 +102,9 @@ impl ProxyConnection {
                 info!("Authentication successful");
             }
             _ => {
-                return Err(AgentError::Authentication("Unexpected auth response".to_string()));
+                return Err(AgentError::Authentication(
+                    "Unexpected auth response".to_string(),
+                ));
             }
         }
 
@@ -128,14 +138,21 @@ impl ProxyConnection {
         // Wait for connect response with timeout
         let connect_response = match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            self.reader.next()
-        ).await {
+            self.reader.next(),
+        )
+        .await
+        {
             Ok(Some(Ok(msg))) => msg,
             Ok(Some(Err(e))) => {
-                return Err(AgentError::Connection(format!("Failed to read connect response: {}", e)));
+                return Err(AgentError::Connection(format!(
+                    "Failed to read connect response: {}",
+                    e
+                )));
             }
             Ok(None) => {
-                return Err(AgentError::Connection("Connection closed during connect".to_string()));
+                return Err(AgentError::Connection(
+                    "Connection closed during connect".to_string(),
+                ));
             }
             Err(_) => {
                 return Err(AgentError::Connection("Connect timeout".to_string()));
@@ -155,7 +172,9 @@ impl ProxyConnection {
                 info!("Connected to target: {:?}", address);
             }
             _ => {
-                return Err(AgentError::Connection("Unexpected connect response".to_string()));
+                return Err(AgentError::Connection(
+                    "Unexpected connect response".to_string(),
+                ));
             }
         }
 
@@ -222,10 +241,7 @@ impl StreamSender {
 
         let mut writer = self.writer.lock().await;
 
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            writer.send(message)
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(30), writer.send(message)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(AgentError::Protocol(protocol::ProtocolError::Io(e))),
             Err(_) => Err(AgentError::Connection("Send timeout".to_string())),
@@ -268,7 +284,10 @@ impl StreamReceiver {
                             if packet.stream_id == self.stream_id {
                                 return Some(packet);
                             } else {
-                                warn!("Received data for wrong stream: {} vs {}", packet.stream_id, self.stream_id);
+                                warn!(
+                                    "Received data for wrong stream: {} vs {}",
+                                    packet.stream_id, self.stream_id
+                                );
                             }
                         }
                         ProxyResponse::Heartbeat => {
@@ -323,7 +342,14 @@ impl ConnectionPool {
 
         // Spawn background refill task
         tokio::spawn(async move {
-            Self::refill_task(refill_rx, pool_clone, config_clone, available_clone, pool_size).await;
+            Self::refill_task(
+                refill_rx,
+                pool_clone,
+                config_clone,
+                available_clone,
+                pool_size,
+            )
+            .await;
         });
 
         Self {
@@ -354,7 +380,10 @@ impl ConnectionPool {
             // Refill if below target
             if current_size < target_size {
                 let to_create = target_size - current_size;
-                debug!("Refilling pool: creating {} connections (current: {})", to_create, current_size);
+                debug!(
+                    "Refilling pool: creating {} connections (current: {})",
+                    to_create, current_size
+                );
 
                 for _ in 0..to_create {
                     match ProxyConnection::new(&config).await {
@@ -379,7 +408,10 @@ impl ConnectionPool {
 
     /// Prewarm the pool with initial connections
     pub async fn prewarm(&self) {
-        info!("Prewarming connection pool with {} connections", self.config.pool_size);
+        info!(
+            "Prewarming connection pool with {} connections",
+            self.config.pool_size
+        );
 
         // Create connections concurrently
         let mut handles = Vec::with_capacity(self.config.pool_size);
