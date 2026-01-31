@@ -26,12 +26,6 @@ jobs:
           # 将 cargo 路径加入当前 shell
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: 验证环境
-        run: |
-          source $HOME/.cargo/env
-          rustc --version
-          cat /etc/debian_version # 确认确实运行在 Debian 上
-
       - name: 编译项目
         run: |
           source $HOME/.cargo/env
