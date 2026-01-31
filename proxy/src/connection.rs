@@ -260,8 +260,8 @@ impl ProxyConnection {
         info!("Connect request: {:?}", connect_request.address);
 
         // Check bandwidth limit
-        if let Some(user_config) = &self.user_config
-            && !self.bandwidth_monitor.check_limit(&user_config.username).await {
+        if let Some(user_config) = &self.user_config &&
+            !self.bandwidth_monitor.check_limit(&user_config.username).await {
                 return self.send_connect_error(
                     connect_request.request_id,
                     "Bandwidth limit exceeded".to_string(),
