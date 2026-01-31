@@ -6,26 +6,33 @@ You are an expert Rust developer, specializing in network application developing
 
 ## Business requirements
 
-Write a proxy application, it has an agent side and a proxy side. The agent side will run on the client machine, it will forward all the traffic to the proxy side, and the proxy side will forward the traffic to the target server. The proxy side will also forward the response from the target server back to the agent side, and the agent side will forward the response back to the client machine.
+- Write a proxy application, it has an agent side and a proxy side. The agent side will run on the client machine, it will forward all the traffic to the proxy side, and the proxy side will forward the traffic to the target server. The proxy side will also forward the response from the target server back to the agent side, and the agent side will forward the response back to the client machine.
 
-The agent side should support HTTP and SOCKS5 protocols, it is no need for user to select to use HTTP or SOCKS5, the agent side should detect the protocol automatically.
+- The agent side should support HTTP and SOCKS5 protocols, it is no need for user to select to use HTTP or SOCKS5, the agent side should detect the protocol automatically.
 
-The proxy side should support multiple concurrent connections and handle errors gracefully.
+- The proxy side should support multiple concurrent connections and handle errors gracefully.
 
-To make the DNS resolution secure, the agent side should not resolve the domain name, it should send the domain name to the proxy side, and the proxy side should resolve the domain name and connect to the target.
+- To make the DNS resolution secure, the agent side should not resolve the domain name, it should send the domain name to the proxy side, and the proxy side should resolve the domain name and connect to the target.
 
-It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side.
+- It should support multiple user to use agent connect to proxy, each user should have different username and password, they should not impact each other. The authentication should be done on the agent side before forwarding the traffic to the proxy side. The bind width limit should be configurable for each user on the proxy side.
 
-Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
+- Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
 
-In proxy side there should REST api to:
+- In agent side there should be a UI which can run in Windows and Mac OS, so that the agent user can configure the agent through UI without restart agent. The confiugraiton items should including:
+  - The listning address of the agent.
+  - The proxy address
+  - The username
+  - The connection pool size
+  - The log level
 
-- Add user, including generate RSA private key and public key by user, and also can let user download their private key.
-- Remove user, when remove the user, the related private key should be deleted also.
-- Query the current connections and user bandwidth usage.
-- Check proxy configuration
-- Update proxy configuration without restart the proxy service.
-- Monitor the health status of the proxy service.
+- In proxy side there should REST api to:
+
+  - Add user, including generate RSA private key and public key by user, and also can let user download their private key.
+  - Remove user, when remove the user, the related private key should be deleted also.
+  - Query the current connections and user bandwidth usage.
+  - Check proxy configuration
+  - Update proxy configuration without restart the proxy service.
+  - Monitor the health status of the proxy service.
 
 ## Architecture requirements
 
@@ -40,6 +47,8 @@ The RSA keys should be generated using a secure random number generator, and the
 The port of `tokio-console` should be configurable via the configuration file, and it is optional, if configured the `tokio-console` should be started when the application starts.
 
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
+
+The UI of agent should use `tauri 2`, `typescript` and `vue3`.
 
 ## Implementation details
 

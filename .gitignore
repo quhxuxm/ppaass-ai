@@ -3,13 +3,12 @@
 Cargo.lock
 *.toml.local
 *.log
-*.pem
-*.key
-/keys
 /logs
 /config/*.local.toml
 .idea
 .vscode
 *.swp
 *.swo
+.DS_Store
+/agent-ui/node_modules
 *~
