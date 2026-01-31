@@ -61,6 +61,19 @@ max_connections_per_user = 100
 ./target/release/proxy --config config/proxy.toml
 ```
 
+#### Alternative: Use startup scripts (same-folder deployment)
+If you deploy the binaries and configs alongside the scripts, use:
+
+```bash
+# Proxy on Linux
+./start-proxy.sh
+```
+
+```powershell
+# Proxy on Windows (dev helper)
+.\start-proxy.bat
+```
+
 ### Step 2: Add a User via API
 
 Use curl or any HTTP client:
@@ -101,6 +114,19 @@ pool_timeout_secs = 30
 
 # On Linux/macOS
 ./target/release/agent --config config/agent.toml
+```
+
+#### Alternative: Use startup scripts (same-folder deployment)
+If you deploy the binaries and configs alongside the scripts, use:
+
+```powershell
+# Agent on Windows
+.\start-agent.bat
+```
+
+```bash
+# Agent on macOS
+./start-agent.sh
 ```
 
 ### Step 4: Configure Your Applications

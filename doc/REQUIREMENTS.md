@@ -68,16 +68,20 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - The log level should be configurable via the configuration file and cli parameter.
   - The log should print into log files in non-blocking mode.
   - The thread number of `tokio` runtime should be configurable via the configuration file and cli parameter.
+  - The agent and proxy will be deployed separately on different host, so the startup script should be separate, and should assume the final build target is in the same folder of the startup script.
+  - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
+  - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
     - *Connect process* to send the target server address from agent to proxy, and proxy connect to the target server. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*.
-    - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional.
-- Mocking:
+    - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional. 
+
+# Mocking:
   - Create mock client which can support HTTP and SOCKS5 protocol use agent connect to proxy and then to target.
   - Create mock target which can receive the request from client through agent and proxy.
 
-- Testing:
+# Testing:
   - Unit tests:
     - Unit tests should be written for important logic.
   - Integration tests:
