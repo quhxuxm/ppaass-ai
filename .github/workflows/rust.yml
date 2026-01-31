@@ -1,22 +1,43 @@
-name: Rust
+name: Ppaass Security Proxy
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
-
-env:
-  CARGO_TERM_COLOR: always
+    branches: ["main"]
 
 jobs:
-  build:
-
+  build-and-test:
     runs-on: ubuntu-latest
+    # 核心配置：指定使用 Debian 镜像
+    container:
+      image: debian:bookworm-slim # 你可以选择 bullseye 或 bookworm 等版本
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Debian 依赖与 Rust
+        run: |
+          apt-get update && apt-get install -y \
+            curl build-essential gcc pkg-config libssl-dev
+          # 在容器内手动安装 rustup
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # 将 cargo 路径加入当前 shell
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: 验证环境
+        run: |
+          source $HOME/.cargo/env
+          rustc --version
+          cat /etc/debian_version # 确认确实运行在 Debian 上
+
+      - name: 编译项目
+        run: |
+          source $HOME/.cargo/env
+          cargo build --verbose
+
+      - name: 运行测试
+        run: |
+          source $HOME/.cargo/env
+          cargo test --verbose
