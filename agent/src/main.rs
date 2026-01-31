@@ -1,7 +1,7 @@
 mod config;
+mod connection_pool;
 mod error;
 mod http_handler;
-mod multiplexer;
 mod socks5_handler;
 mod server;
 

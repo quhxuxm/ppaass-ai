@@ -30,7 +30,7 @@ The communication between agent and proxy should be secure, using RSA encryption
 
 The configuration for both sides should be read from a configuration file using the `config` crate, and the configuration data should be serialized/deserialized using `serde`. And configuration should be able to be overridden by command line arguments using `clap`.
 
-The agent side should have a connection pool for proxy side, and the connection pool should be configurable via the configuration file. The connection in the pool should be reused for multiple requests to improve performance.
+The agent side should have a connection pool for proxy side, and the connection pool should be configurable via the configuration file.
 
 The RSA keys should be generated using a secure random number generator, and the keys should be stored securely on both sides.
 
@@ -58,7 +58,7 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - The version of the crates should be defined in the workspace `Cargo.toml` file.
 - Important logic:
   - The configuration file format should be `TOML`.
-  - The pooled connections from agent to proxy use multiplexing.
+  - The pooled connections from agent to proxy do not need to be reusable, but the pool should prewarm number of connections to improve performance.
   - The whole project should be organized as a cargo workspace with two members: `agent` and `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.

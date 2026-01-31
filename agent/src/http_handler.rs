@@ -1,5 +1,5 @@
 use crate::error::{AgentError, Result};
-use crate::multiplexer::{MultiplexedPool, StreamHandle};
+use crate::connection_pool::{ConnectionPool, ConnectedStream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -53,7 +53,7 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     (host, port)
 }
 
-pub async fn handle_http_connection(stream: TcpStream, pool: Arc<MultiplexedPool>) -> Result<()> {
+pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling HTTP connection");
 
     let io = TokioIo::new(stream);
@@ -77,7 +77,7 @@ pub async fn handle_http_connection(stream: TcpStream, pool: Arc<MultiplexedPool
 
 async fn handle_http_request(
     req: Request<Incoming>,
-    pool: Arc<MultiplexedPool>,
+    pool: Arc<ConnectionPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     info!("HTTP request: {} {}", req.method(), req.uri());
 
@@ -90,7 +90,7 @@ async fn handle_http_request(
 
 async fn handle_connect(
     mut req: Request<Incoming>,
-    pool: Arc<MultiplexedPool>,
+    pool: Arc<ConnectionPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     let uri = req.uri().clone();
     let host = uri.host().unwrap_or("").to_string();
@@ -100,11 +100,11 @@ async fn handle_connect(
 
     let address = Address::Domain { host: host.clone(), port };
 
-    // Get stream from multiplexed pool
-    let stream_handle = match pool.get_stream(address).await {
-        Ok(handle) => {
-            info!("Got stream from pool, stream_id: {}", handle.stream_id());
-            handle
+    // Get connected stream from pool
+    let connected_stream = match pool.get_connected_stream(address).await {
+        Ok(stream) => {
+            info!("Got connected stream from pool, stream_id: {}", stream.stream_id());
+            stream
         }
         Err(e) => {
             error!("Failed to get stream from pool: {}", e);
@@ -120,7 +120,7 @@ async fn handle_connect(
         match hyper::upgrade::on(&mut req).await {
             Ok(upgraded) => {
                 info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
-                if let Err(e) = tunnel(upgraded, stream_handle).await {
+                if let Err(e) = tunnel(upgraded, connected_stream).await {
                     error!("Tunnel error: {}", e);
                 }
             }
@@ -139,72 +139,80 @@ async fn handle_connect(
 
 async fn tunnel(
     upgraded: Upgraded,
-    stream_handle: StreamHandle,
+    connected_stream: ConnectedStream,
 ) -> std::result::Result<(), AgentError> {
     let io = TokioIo::new(upgraded);
     let (mut read_half, mut write_half) = tokio::io::split(io);
 
-    // Split stream handle into sender and receiver for concurrent use
-    let (stream_sender, mut stream_receiver) = stream_handle.split();
+    // Split connected stream into sender and receiver for concurrent use
+    let (stream_sender, mut stream_receiver) = connected_stream.split();
 
-    // Read from client and send to proxy
-    let client_to_proxy = async move {
-        let mut buffer = vec![0u8; 8192];
-        loop {
-            match read_half.read(&mut buffer).await {
-                Ok(0) => {
-                    debug!("Client closed CONNECT tunnel");
-                    let _ = stream_sender.send_data(vec![], true).await;
-                    break;
-                }
-                Ok(n) => {
-                    let data = buffer[..n].to_vec();
-                    debug!("CONNECT tunnel: {} bytes client -> proxy", n);
-                    if let Err(e) = stream_sender.send_data(data, false).await {
-                        error!("Failed to send data to proxy: {}", e);
-                        break;
+    // Use select to handle both directions and terminate when either ends
+    let mut buffer = vec![0u8; 8192];
+    let mut client_closed = false;
+    let mut proxy_closed = false;
+
+    loop {
+        if client_closed && proxy_closed {
+            break;
+        }
+
+        tokio::select! {
+            // Read from client and send to proxy
+            result = read_half.read(&mut buffer), if !client_closed => {
+                match result {
+                    Ok(0) => {
+                        debug!("Client closed CONNECT tunnel");
+                        let _ = stream_sender.send_data(vec![], true).await;
+                        client_closed = true;
+                    }
+                    Ok(n) => {
+                        let data = buffer[..n].to_vec();
+                        debug!("CONNECT tunnel: {} bytes client -> proxy", n);
+                        if let Err(e) = stream_sender.send_data(data, false).await {
+                            error!("Failed to send data to proxy: {}", e);
+                            client_closed = true;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to read from CONNECT tunnel client: {}", e);
+                        let _ = stream_sender.send_data(vec![], true).await;
+                        client_closed = true;
                     }
                 }
-                Err(e) => {
-                    error!("Failed to read from CONNECT tunnel client: {}", e);
-                    break;
+            }
+
+            // Read from proxy and send to client
+            packet = stream_receiver.receive_data(), if !proxy_closed => {
+                match packet {
+                    Some(packet) => {
+                        if !packet.data.is_empty() {
+                            debug!("CONNECT tunnel: {} bytes proxy -> client", packet.data.len());
+                            if let Err(e) = write_half.write_all(&packet.data).await {
+                                error!("Failed to write to CONNECT tunnel client: {}", e);
+                                proxy_closed = true;
+                                continue;
+                            }
+                            if let Err(e) = write_half.flush().await {
+                                error!("Failed to flush to CONNECT tunnel client: {}", e);
+                                proxy_closed = true;
+                                continue;
+                            }
+                        }
+
+                        if packet.is_end {
+                            debug!("Proxy indicated end of CONNECT tunnel stream");
+                            proxy_closed = true;
+                        }
+                    }
+                    None => {
+                        debug!("Stream channel closed");
+                        proxy_closed = true;
+                    }
                 }
             }
         }
-    };
-
-    // Read from proxy and send to client
-    let proxy_to_client = async move {
-        loop {
-            match stream_receiver.receive_data().await {
-                Some(packet) => {
-                    if !packet.data.is_empty() {
-                        debug!("CONNECT tunnel: {} bytes proxy -> client", packet.data.len());
-                        if let Err(e) = write_half.write_all(&packet.data).await {
-                            error!("Failed to write to CONNECT tunnel client: {}", e);
-                            break;
-                        }
-                        if let Err(e) = write_half.flush().await {
-                            error!("Failed to flush to CONNECT tunnel client: {}", e);
-                            break;
-                        }
-                    }
-
-                    if packet.is_end {
-                        debug!("Proxy indicated end of CONNECT tunnel stream");
-                        break;
-                    }
-                }
-                None => {
-                    debug!("Stream channel closed");
-                    break;
-                }
-            }
-        }
-    };
-
-    // Run both tasks concurrently - wait for both to complete
-    tokio::join!(client_to_proxy, proxy_to_client);
+    }
 
     info!("CONNECT tunnel closed");
     Ok(())
@@ -212,7 +220,7 @@ async fn tunnel(
 
 async fn handle_regular_request(
     req: Request<Incoming>,
-    pool: Arc<MultiplexedPool>,
+    pool: Arc<ConnectionPool>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     let uri = req.uri();
 
@@ -230,9 +238,9 @@ async fn handle_regular_request(
 
     let address = Address::Domain { host: host.clone(), port };
 
-    // Get stream from multiplexed pool
-    let stream_handle = match pool.get_stream(address).await {
-        Ok(handle) => handle,
+    // Get connected stream from pool
+    let connected_stream = match pool.get_connected_stream(address).await {
+        Ok(stream) => stream,
         Err(e) => {
             error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
@@ -242,8 +250,8 @@ async fn handle_regular_request(
         }
     };
 
-    // Split stream handle for send/receive
-    let (stream_sender, mut stream_receiver) = stream_handle.split();
+    // Split stream for send/receive
+    let (stream_sender, mut stream_receiver) = connected_stream.split();
 
     // Build the HTTP request to send to target
     let path = uri.path_and_query()

@@ -1,5 +1,5 @@
 use crate::error::{AgentError, Result};
-use crate::multiplexer::{MultiplexedPool, StreamHandle};
+use crate::connection_pool::{ConnectionPool, ConnectedStream};
 use fast_socks5::server::{
     Socks5ServerProtocol, NoAuthentication, SocksServerError,
     states::Opened,
@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
-pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<MultiplexedPool>) -> Result<()> {
+pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling SOCKS5 connection");
 
     // Using the new fast-socks5 1.0 API with Socks5ServerProtocol
@@ -45,11 +45,11 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<MultiplexedPo
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
 
-    // Get a stream from the multiplexed pool
-    let stream_handle = match pool.get_stream(address).await {
-        Ok(handle) => {
-            info!("Got stream from pool, stream_id: {}", handle.stream_id());
-            handle
+    // Get a connected stream from the pool
+    let connected_stream = match pool.get_connected_stream(address).await {
+        Ok(stream) => {
+            info!("Got connected stream from pool, stream_id: {}", stream.stream_id());
+            stream
         }
         Err(e) => {
             error!("Failed to get stream from pool: {}", e);
@@ -68,7 +68,7 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<MultiplexedPo
     info!("SOCKS5 tunnel established, starting data relay");
 
     // Start bidirectional data relay
-    relay_data(&mut client_stream, stream_handle).await
+    relay_data(&mut client_stream, connected_stream).await
 }
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
@@ -94,71 +94,79 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
 
 async fn relay_data(
     client_stream: &mut TcpStream,
-    stream_handle: StreamHandle,
+    connected_stream: ConnectedStream,
 ) -> Result<()> {
     let (mut client_read, mut client_write) = tokio::io::split(client_stream);
 
-    // Split stream handle into sender and receiver for concurrent use
-    let (stream_sender, mut stream_receiver) = stream_handle.split();
+    // Split connected stream into sender and receiver for concurrent use
+    let (stream_sender, mut stream_receiver) = connected_stream.split();
 
-    // Task to read from client and send to proxy
-    let client_to_proxy = async move {
-        let mut buffer = vec![0u8; 8192];
-        loop {
-            match client_read.read(&mut buffer).await {
-                Ok(0) => {
-                    debug!("Client closed connection");
-                    let _ = stream_sender.send_data(vec![], true).await;
-                    break;
-                }
-                Ok(n) => {
-                    let data = buffer[..n].to_vec();
-                    debug!("Received {} bytes from client, forwarding to proxy", n);
-                    if let Err(e) = stream_sender.send_data(data, false).await {
-                        error!("Failed to send data to proxy: {}", e);
-                        break;
+    // Use select to handle both directions and terminate when either ends
+    let mut buffer = vec![0u8; 8192];
+    let mut client_closed = false;
+    let mut proxy_closed = false;
+
+    loop {
+        if client_closed && proxy_closed {
+            break;
+        }
+
+        tokio::select! {
+            // Read from client and send to proxy
+            result = client_read.read(&mut buffer), if !client_closed => {
+                match result {
+                    Ok(0) => {
+                        debug!("Client closed connection");
+                        let _ = stream_sender.send_data(vec![], true).await;
+                        client_closed = true;
+                    }
+                    Ok(n) => {
+                        let data = buffer[..n].to_vec();
+                        debug!("Received {} bytes from client, forwarding to proxy", n);
+                        if let Err(e) = stream_sender.send_data(data, false).await {
+                            error!("Failed to send data to proxy: {}", e);
+                            client_closed = true;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to read from client: {}", e);
+                        let _ = stream_sender.send_data(vec![], true).await;
+                        client_closed = true;
                     }
                 }
-                Err(e) => {
-                    error!("Failed to read from client: {}", e);
-                    break;
+            }
+
+            // Read from proxy and send to client
+            packet = stream_receiver.receive_data(), if !proxy_closed => {
+                match packet {
+                    Some(packet) => {
+                        if !packet.data.is_empty() {
+                            debug!("Received {} bytes from proxy, forwarding to client", packet.data.len());
+                            if let Err(e) = client_write.write_all(&packet.data).await {
+                                error!("Failed to write to client: {}", e);
+                                proxy_closed = true;
+                                continue;
+                            }
+                            if let Err(e) = client_write.flush().await {
+                                error!("Failed to flush to client: {}", e);
+                                proxy_closed = true;
+                                continue;
+                            }
+                        }
+
+                        if packet.is_end {
+                            debug!("Proxy indicated end of stream");
+                            proxy_closed = true;
+                        }
+                    }
+                    None => {
+                        debug!("Stream channel closed");
+                        proxy_closed = true;
+                    }
                 }
             }
         }
-    };
-
-    // Task to read from proxy and send to client
-    let proxy_to_client = async move {
-        loop {
-            match stream_receiver.receive_data().await {
-                Some(packet) => {
-                    if !packet.data.is_empty() {
-                        debug!("Received {} bytes from proxy, forwarding to client", packet.data.len());
-                        if let Err(e) = client_write.write_all(&packet.data).await {
-                            error!("Failed to write to client: {}", e);
-                            break;
-                        }
-                        if let Err(e) = client_write.flush().await {
-                            error!("Failed to flush to client: {}", e);
-                            break;
-                        }
-                    }
-
-                    if packet.is_end {
-                        debug!("Proxy indicated end of stream");
-                        break;
-                    }
-                }
-                None => {
-                    debug!("Stream channel closed");
-                    break;
-                }
-            }
-        }
-    };
-
-    // Run both tasks concurrently - wait for both to complete
-    tokio::join!(client_to_proxy, proxy_to_client);
+    }
 
     info!("SOCKS5 data relay completed");
     Ok(())
