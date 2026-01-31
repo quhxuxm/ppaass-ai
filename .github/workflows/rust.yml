@@ -51,6 +51,9 @@ jobs:
           password: ${{ secrets.REMOTE_PASSWORD }}
           script: |
             chmod +x /ppaass-ai/start-proxy.sh
+            process_id=$(ps -ef | grep "ppaass-proxy" | grep -v grep | awk '{print $2}')
+            kill -9 $process_id
+            ulimit -n 655360
             sudo nohup /ppaass-ai/start-proxy.sh >run.log 2>&1 &
       - name: 部署完成
         run: |
