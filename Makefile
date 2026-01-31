@@ -29,6 +29,18 @@ dev-proxy:
 test:
 	cargo test --workspace
 
+test-integration:
+	./run-tests.sh integration
+
+test-performance:
+	./run-tests.sh performance
+
+test-all:
+	./run-tests.sh all
+
+mock-target:
+	./run-tests.sh mock-target
+
 ## Code Quality
 fmt:
 	cargo fmt --all

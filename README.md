@@ -169,6 +169,23 @@ console_port = 6670                       # Optional: tokio-console port
 - **Multiplexing**: Multiple streams over single connection
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
+### Performance Testing
+
+The project includes comprehensive performance testing tools:
+
+```bash
+# Start mock target servers
+./run-tests.sh mock-target
+
+# Run performance tests (in another terminal)
+./run-tests.sh performance 100 60
+
+# View HTML report with charts
+open performance-report-*.html
+```
+
+See `tests/README.md` for detailed testing documentation.
+
 ## Monitoring
 
 ### Tokio Console
@@ -197,6 +214,7 @@ ppaass-ai/
 ├── proxy/          # Server-side proxy
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities
+├── tests/          # Integration and performance tests
 ├── config/         # Configuration files
 ├── keys/           # RSA keys (gitignored)
 └── doc/           # Documentation
@@ -205,7 +223,13 @@ ppaass-ai/
 ### Running Tests
 
 ```bash
+# Unit tests
 cargo test --workspace
+
+# Integration and performance tests
+./run-tests.sh all
+
+# See tests/README.md for detailed testing documentation
 ```
 
 ### Code Quality
