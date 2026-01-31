@@ -111,7 +111,7 @@ impl UserManager {
 
         let users_config = UsersConfig { users: users_map };
         users_config.save(&self.users_config_path)
-            .map_err(|e| ProxyError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| ProxyError::Io(std::io::Error::other(e)))?;
 
         Ok(())
     }

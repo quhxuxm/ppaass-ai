@@ -45,8 +45,8 @@ impl BandwidthMonitor {
     }
 
     pub async fn check_limit(&self, username: &str) -> bool {
-        if let Some(entry) = self.user_bandwidth.get(username) {
-            if let Some(limit_mbps) = entry.limit_mbps {
+        if let Some(entry) = self.user_bandwidth.get(username)
+            && let Some(limit_mbps) = entry.limit_mbps {
                 let last_reset = entry.last_reset.read().await;
                 let elapsed = last_reset.elapsed();
 
@@ -69,7 +69,6 @@ impl BandwidthMonitor {
 
                 return total_bytes < limit_bytes_per_sec;
             }
-        }
         true
     }
 
