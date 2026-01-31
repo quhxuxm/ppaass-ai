@@ -43,3 +43,15 @@ jobs:
           source: "target/release/proxy,config/remote/proxy.toml,config/remote/users.toml,start-proxy.sh" # 替换为你的二进制文件名
           target: "/ppaass-ai" # 服务器目标路径
           strip_components: 0
+      - name: 远程执行启动脚本 (SSH)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          script: |
+            chmod +x /ppaass-ai/start-proxy.sh
+            /ppaass-ai/start-proxy.sh
+      - name: 部署完成
+        run: |
+          echo "部署成功！"
