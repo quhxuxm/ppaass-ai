@@ -7,7 +7,6 @@ pub struct AgentConfig {
     pub listen_addr: String,
     pub proxy_addr: String,
     pub username: String,
-    pub password: String,
     pub private_key_path: String,
 
     #[serde(default = "default_pool_size")]
@@ -18,15 +17,15 @@ pub struct AgentConfig {
 
     #[serde(default)]
     pub console_port: Option<u16>,
-    
+
     /// Log level: trace, debug, info, warn, error
     #[serde(default = "default_log_level")]
     pub log_level: String,
-    
+
     /// Log directory for file-based logging (improves performance vs console)
     #[serde(default = "default_log_dir")]
     pub log_dir: String,
-    
+
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
     pub runtime_threads: Option<usize>,
