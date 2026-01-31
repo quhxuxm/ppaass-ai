@@ -11,10 +11,6 @@ if not exist "agent.exe" (
 )
 
 set "CONFIG_PATH=agent.toml"
-if not exist "%CONFIG_PATH%" (
-  echo Warning: agent.toml not found. Starting without --config (using defaults).
-  set "CONFIG_PATH="
-)
 
 echo Starting Agent...
 if not exist "logs" mkdir "logs"
