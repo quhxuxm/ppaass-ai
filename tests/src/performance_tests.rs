@@ -3,6 +3,7 @@ use anyhow::Result;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use sysinfo::System;
 use tokio::sync::Mutex;
@@ -48,7 +49,10 @@ pub async fn run_performance_tests(
     duration_secs: u64,
 ) -> Result<PerformanceTestResults> {
     info!("=== Starting Performance Tests ===");
-    info!("Agent: {}, Concurrency: {}, Duration: {}s", agent_addr, concurrency, duration_secs);
+    info!(
+        "Agent: {}, Concurrency: {}, Duration: {}s",
+        agent_addr, concurrency, duration_secs
+    );
 
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration_secs);
@@ -56,17 +60,17 @@ pub async fn run_performance_tests(
     // Shared state for metrics collection
     let http_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
     let socks5_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
-    let http_success = Arc::new(Mutex::new(0usize));
-    let http_failed = Arc::new(Mutex::new(0usize));
-    let socks5_success = Arc::new(Mutex::new(0usize));
-    let socks5_failed = Arc::new(Mutex::new(0usize));
-    let total_bytes = Arc::new(Mutex::new(0u64));
+    let http_success = Arc::new(AtomicUsize::new(0));
+    let http_failed = Arc::new(AtomicUsize::new(0));
+    let socks5_success = Arc::new(AtomicUsize::new(0));
+    let socks5_failed = Arc::new(AtomicUsize::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(0));
 
     // System monitoring
     let mut system = System::new_all();
     system.refresh_all();
     let initial_memory = system.used_memory();
-    let peak_memory = Arc::new(Mutex::new(initial_memory));
+    let peak_memory = Arc::new(AtomicU64::new(initial_memory));
 
     // Spawn worker tasks
     let mut handles = Vec::new();
@@ -79,7 +83,7 @@ pub async fn run_performance_tests(
         let success = http_success.clone();
         let failed = http_failed.clone();
         let bytes = total_bytes.clone();
-        
+
         let handle = tokio::spawn(async move {
             http_worker(addr, end_time, hist, success, failed, bytes).await;
         });
@@ -94,7 +98,7 @@ pub async fn run_performance_tests(
         let success = socks5_success.clone();
         let failed = socks5_failed.clone();
         let bytes = total_bytes.clone();
-        
+
         let handle = tokio::spawn(async move {
             socks5_worker(addr, end_time, hist, success, failed, bytes).await;
         });
@@ -109,10 +113,7 @@ pub async fn run_performance_tests(
             tokio::time::sleep(Duration::from_secs(1)).await;
             sys.refresh_all();
             let current_mem = sys.used_memory();
-            let mut peak = peak_mem.lock().await;
-            if current_mem > *peak {
-                *peak = current_mem;
-            }
+            peak_mem.fetch_max(current_mem, Ordering::Relaxed);
         }
     });
 
@@ -127,12 +128,12 @@ pub async fn run_performance_tests(
     // Collect results
     let http_hist = http_histogram.lock().await;
     let socks5_hist = socks5_histogram.lock().await;
-    let http_succ = *http_success.lock().await;
-    let http_fail = *http_failed.lock().await;
-    let socks5_succ = *socks5_success.lock().await;
-    let socks5_fail = *socks5_failed.lock().await;
-    let total_transferred = *total_bytes.lock().await;
-    let peak_mem_val = *peak_memory.lock().await;
+    let http_succ = http_success.load(Ordering::Relaxed);
+    let http_fail = http_failed.load(Ordering::Relaxed);
+    let socks5_succ = socks5_success.load(Ordering::Relaxed);
+    let socks5_fail = socks5_failed.load(Ordering::Relaxed);
+    let total_transferred = total_bytes.load(Ordering::Relaxed);
+    let peak_mem_val = peak_memory.load(Ordering::Relaxed);
 
     let http_metrics = calculate_metrics(&http_hist, http_succ, http_fail);
     let socks5_metrics = calculate_metrics(&socks5_hist, socks5_succ, socks5_fail);
@@ -142,7 +143,8 @@ pub async fn run_performance_tests(
     let failed_requests = http_fail + socks5_fail;
 
     let requests_per_second = total_requests as f64 / actual_duration.as_secs_f64();
-    let throughput_mbps = (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+    let throughput_mbps =
+        (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
 
     // Final system metrics
     system.refresh_all();
@@ -169,7 +171,10 @@ pub async fn run_performance_tests(
     info!("=== Performance Tests Complete ===");
     info!("Total Requests: {}", total_requests);
     if total_requests > 0 {
-        info!("Success Rate: {:.2}%", (successful_requests as f64 / total_requests as f64) * 100.0);
+        info!(
+            "Success Rate: {:.2}%",
+            (successful_requests as f64 / total_requests as f64) * 100.0
+        );
     } else {
         info!("Success Rate: N/A (no requests completed)");
     }
@@ -183,9 +188,9 @@ async fn http_worker(
     agent_addr: String,
     end_time: Instant,
     histogram: Arc<Mutex<Histogram<u64>>>,
-    success: Arc<Mutex<usize>>,
-    failed: Arc<Mutex<usize>>,
-    total_bytes: Arc<Mutex<u64>>,
+    success: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total_bytes: Arc<AtomicU64>,
 ) {
     let client = MockHttpClient::new(agent_addr);
     let urls = [
@@ -205,17 +210,12 @@ async fn http_worker(
                 let _ = hist.record(duration.as_millis() as u64);
                 drop(hist);
 
-                let mut succ = success.lock().await;
-                *succ += 1;
-                drop(succ);
-
-                let mut bytes = total_bytes.lock().await;
-                *bytes += body.len() as u64;
+                success.fetch_add(1, Ordering::Relaxed);
+                total_bytes.fetch_add(body.len() as u64, Ordering::Relaxed);
             }
             Err(e) => {
                 warn!("HTTP request failed: {}", e);
-                let mut fail = failed.lock().await;
-                *fail += 1;
+                failed.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -225,9 +225,9 @@ async fn socks5_worker(
     agent_addr: String,
     end_time: Instant,
     histogram: Arc<Mutex<Histogram<u64>>>,
-    success: Arc<Mutex<usize>>,
-    failed: Arc<Mutex<usize>>,
-    total_bytes: Arc<Mutex<u64>>,
+    success: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total_bytes: Arc<AtomicU64>,
 ) {
     let client = MockSocks5Client::new(agent_addr);
     let test_data = b"Performance test data";
@@ -239,25 +239,24 @@ async fn socks5_worker(
                 let _ = hist.record(duration.as_millis() as u64);
                 drop(hist);
 
-                let mut succ = success.lock().await;
-                *succ += 1;
-                drop(succ);
-
-                let mut bytes = total_bytes.lock().await;
-                *bytes += (test_data.len() + response.len()) as u64;
+                success.fetch_add(1, Ordering::Relaxed);
+                total_bytes.fetch_add((test_data.len() + response.len()) as u64, Ordering::Relaxed);
             }
             Err(e) => {
                 warn!("SOCKS5 request failed: {}", e);
-                let mut fail = failed.lock().await;
-                *fail += 1;
+                failed.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
 }
 
-fn calculate_metrics(histogram: &Histogram<u64>, successful: usize, failed: usize) -> RequestMetrics {
+fn calculate_metrics(
+    histogram: &Histogram<u64>,
+    successful: usize,
+    failed: usize,
+) -> RequestMetrics {
     let total = successful + failed;
-    
+
     if histogram.is_empty() {
         return RequestMetrics {
             total_requests: total,
