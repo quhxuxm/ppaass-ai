@@ -1,5 +1,6 @@
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
+use deadpool::unmanaged::Pool;
 use protocol::{
     crypto::{AesGcmCipher, RsaKeyPair},
     Address, AuthRequest, ConnectRequest, DataPacket,
@@ -8,7 +9,7 @@ use protocol::{
 use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, warn};
 
@@ -292,130 +293,130 @@ impl StreamReceiver {
     }
 }
 
-/// Connection pool that prewarms connections for better performance
-/// Connections are NOT reused - each connection is used once and discarded
+/// Connection pool using deadpool::unmanaged for prewarming connections
+/// Connections are NOT reused - each connection is taken from the pool and consumed
 pub struct ConnectionPool {
-    /// Prewarmed authenticated connections ready to use
-    ready_connections: Arc<Mutex<Vec<ProxyConnection>>>,
+    /// The unmanaged pool of prewarmed connections
+    pool: Pool<ProxyConnection>,
     config: Arc<AgentConfig>,
-    /// Semaphore to limit concurrent connections
-    semaphore: Arc<Semaphore>,
-    /// Channel to request more connections to be created
+    /// Channel to request refill
     refill_tx: mpsc::Sender<()>,
 }
 
 impl ConnectionPool {
     pub fn new(config: Arc<AgentConfig>) -> Self {
         let pool_size = config.pool_size;
-        let ready_connections = Arc::new(Mutex::new(Vec::with_capacity(pool_size)));
-        let semaphore = Arc::new(Semaphore::new(pool_size * 2)); // Allow some burst
+
+        // Create unmanaged pool with specified size
+        let pool = Pool::new(pool_size * 2);
 
         // Create refill channel
         let (refill_tx, refill_rx) = mpsc::channel::<()>(pool_size);
 
-        let pool = Self {
-            ready_connections: ready_connections.clone(),
-            config: config.clone(),
-            semaphore,
-            refill_tx,
-        };
+        let pool_clone = pool.clone();
+        let config_clone = config.clone();
 
-        // Spawn background task to maintain pool
-        pool.spawn_refill_task(refill_rx, ready_connections, config, pool_size);
+        // Spawn background refill task
+        tokio::spawn(async move {
+            Self::refill_task(refill_rx, pool_clone, config_clone, pool_size).await;
+        });
 
-        pool
+        Self { pool, config, refill_tx }
     }
 
-    fn spawn_refill_task(
-        &self,
+    async fn refill_task(
         mut refill_rx: mpsc::Receiver<()>,
-        ready_connections: Arc<Mutex<Vec<ProxyConnection>>>,
+        pool: Pool<ProxyConnection>,
         config: Arc<AgentConfig>,
-        pool_size: usize,
+        target_size: usize,
     ) {
-        tokio::spawn(async move {
-            loop {
-                // Wait for refill request or periodic check
-                tokio::select! {
-                    _ = refill_rx.recv() => {}
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                }
+        loop {
+            // Wait for refill request or periodic check
+            tokio::select! {
+                _ = refill_rx.recv() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+            }
 
-                // Check current pool size
-                let current_size = {
-                    let conns = ready_connections.lock().await;
-                    conns.len()
-                };
+            // Check current pool size
+            let status = pool.status();
+            let current_size = status.size;
 
-                // Refill if below target
-                if current_size < pool_size {
-                    let to_create = pool_size - current_size;
-                    debug!("Refilling pool: creating {} connections", to_create);
+            // Refill if below target
+            if current_size < target_size {
+                let to_create = target_size - current_size;
+                debug!("Refilling pool: creating {} connections (current: {})", to_create, current_size);
 
-                    for _ in 0..to_create {
-                        match ProxyConnection::new(&config).await {
-                            Ok(conn) => {
-                                let mut conns = ready_connections.lock().await;
-                                if conns.len() < pool_size {
-                                    conns.push(conn);
-                                    debug!("Added prewarmed connection to pool, size: {}", conns.len());
-                                }
+                for _ in 0..to_create {
+                    match ProxyConnection::new(&config).await {
+                        Ok(conn) => {
+                            if let Err(_) = pool.try_add(conn) {
+                                debug!("Pool is full, stopping refill");
+                                break;
                             }
-                            Err(e) => {
-                                warn!("Failed to create prewarmed connection: {}", e);
-                                // Small delay before retrying
-                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            }
+                            debug!("Added prewarmed connection to pool");
+                        }
+                        Err(e) => {
+                            warn!("Failed to create prewarmed connection: {}", e);
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                     }
                 }
             }
-        });
+        }
     }
 
     /// Prewarm the pool with initial connections
     pub async fn prewarm(&self) {
         info!("Prewarming connection pool with {} connections", self.config.pool_size);
 
+        // Create connections concurrently
+        let mut handles = Vec::with_capacity(self.config.pool_size);
+
         for i in 0..self.config.pool_size {
-            match ProxyConnection::new(&self.config).await {
-                Ok(conn) => {
-                    let mut conns = self.ready_connections.lock().await;
-                    conns.push(conn);
-                    debug!("Prewarmed connection {}/{}", i + 1, self.config.pool_size);
+            let config = self.config.clone();
+            let pool = self.pool.clone();
+            handles.push(tokio::spawn(async move {
+                match ProxyConnection::new(&config).await {
+                    Ok(conn) => {
+                        if pool.try_add(conn).is_ok() {
+                            debug!("Prewarmed connection {}", i + 1);
+                            true
+                        } else {
+                            debug!("Pool full during prewarm");
+                            false
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to prewarm connection {}: {}", i + 1, e);
+                        false
+                    }
                 }
-                Err(e) => {
-                    warn!("Failed to prewarm connection {}: {}", i + 1, e);
-                }
+            }));
+        }
+
+        let mut success_count = 0;
+        for handle in handles {
+            if let Ok(true) = handle.await {
+                success_count += 1;
             }
         }
 
-        let final_size = self.ready_connections.lock().await.len();
-        info!("Pool prewarmed with {} connections", final_size);
+        info!("Pool prewarmed with {} connections", success_count);
     }
 
     /// Get a connection and connect to target
     /// The connection is consumed (not returned to pool)
     pub async fn get_connected_stream(&self, address: Address) -> Result<ConnectedStream> {
-        // Acquire semaphore permit
-        let _permit = self.semaphore.acquire().await
-            .map_err(|_| AgentError::Connection("Pool semaphore closed".to_string()))?;
-
-        // Try to get a prewarmed connection first
-        let conn = {
-            let mut conns = self.ready_connections.lock().await;
-            conns.pop()
-        };
-
-        // Request refill
+        // Request refill in background
         let _ = self.refill_tx.try_send(());
 
-        let conn = match conn {
-            Some(c) => {
+        // Try to get a prewarmed connection from the pool
+        let conn = match self.pool.try_remove() {
+            Ok(conn) => {
                 debug!("Using prewarmed connection from pool");
-                c
+                conn
             }
-            None => {
+            Err(_) => {
                 debug!("No prewarmed connection available, creating new one");
                 ProxyConnection::new(&self.config).await?
             }

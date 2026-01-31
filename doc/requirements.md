@@ -77,3 +77,6 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - Unit tests should be written for important logic.
   - Integration tests should be written to test the whole flow.
   - Load tests should be written to test the performance and stability of the application.
+  - Generate mock client and mock target.
+  - Run the integration testing with mock client and mock target.
+  - Generate the performance testing report.
