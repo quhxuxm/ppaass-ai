@@ -1,8 +1,10 @@
-# Background
+# Secure Proxy Application
+
+## Background
 
 You are an expert Rust developer, specializing in network application developing. You are developing a proxy application that consists of two main components: an agent side and a proxy side. The agent side runs on the client machine, forwarding all traffic to the proxy side, which then forwards the traffic to the target server. The proxy side also handles responses from the target server, sending them back to the agent side, which in turn forwards them back to the client machine.
 
-# Business requirements
+## Business requirements
 
 Write a proxy application, it has an agent side and a proxy side. The agent side will run on the client machine, it will forward all the traffic to the proxy side, and the proxy side will forward the traffic to the target server. The proxy side will also forward the response from the target server back to the agent side, and the agent side will forward the response back to the client machine.
 
@@ -17,6 +19,7 @@ It should support multiple user to use agent connect to proxy, each user should 
 Each user should have his own RSA key, their public key is stored in proxy side and public key is configured in agent side user configuration file.
 
 In proxy side there should REST api to:
+
 - Add user, including generate RSA private key and public key by user, and also can let user download their private key.
 - Remove user, when remove the user, the related private key should be deleted also.
 - Query the current connections and user bandwidth usage.
@@ -24,7 +27,7 @@ In proxy side there should REST api to:
 - Update proxy configuration without restart the proxy service.
 - Monitor the health status of the proxy service.
 
-# Architecture requirements
+## Architecture requirements
 
 The communication between agent and proxy should be secure, using RSA encryption for key exchange and AES for encrypting the traffic.
 
@@ -38,10 +41,10 @@ The port of `tokio-console` should be configurable via the configuration file, a
 
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
 
-# Implementation details
+## Implementation details
 
 - Programming Language: Rust 1.93.0 with edition `2024`
-- Key Libraries/Frameworks: 
+- Key Libraries/Frameworks:
   - Use `tokio` as the basic network framework.
   - Use `config` as the crate to read configuration file.
   - Use `serde` for serialization and deserialization of configuration data.
@@ -75,18 +78,20 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
   - The data exchange between agent and proxy should include 3 process:
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
     - *Connect process* to send the target server address from agent to proxy, and proxy connect to the target server. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*.
-    - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional. 
+    - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional.
 
-# Mocking:
-  - Create mock client which can support HTTP and SOCKS5 protocol use agent connect to proxy and then to target.
-  - Create mock target which can receive the request from client through agent and proxy.
+## Mocking
 
-# Testing:
-  - Unit tests:
-    - Unit tests should be written for important logic.
-  - Integration tests:
-    - Integration tests should be written to test the whole flow.
-    - Run the integration testing with mock client and mock target.
-  - Load tests:
-    - Load tests should be written to test the performance and stability of the application.
-    - Generate the performance testing report.
+- Create mock client which can support HTTP and SOCKS5 protocol use agent connect to proxy and then to target.
+- Create mock target which can receive the request from client through agent and proxy.
+
+## Testing
+
+- Unit tests:
+  - Unit tests should be written for important logic.
+- Integration tests:
+  - Integration tests should be written to test the whole flow.
+  - Run the integration testing with mock client and mock target.
+- Load tests:
+  - Load tests should be written to test the performance and stability of the application.
+  - Generate the performance testing report.
