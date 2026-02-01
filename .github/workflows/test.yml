@@ -1,0 +1,35 @@
+name: Build and test proxy
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    # 核心配置：指定使用 Debian 镜像
+    container:
+      image: debian:bookworm-slim # 你可以选择 bullseye 或 bookworm 等版本
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Debian 依赖与 Rust
+        run: |
+          apt-get update && apt-get install -y \
+            curl build-essential gcc pkg-config libssl-dev
+          # 在容器内手动安装 rustup
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # 将 cargo 路径加入当前 shell
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: 编译项目
+        run: |
+          cargo build --release
+
+      - name: 运行测试
+        run: |
+          cargo test --verbose

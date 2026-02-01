@@ -1,13 +1,14 @@
-name: Ppaass Security Proxy
+name: Build and deploy proxy to target server
 
 on:
   push:
     branches: ["main"]
   pull_request:
+    types: ["closed"]
     branches: ["main"]
 
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: ubuntu-latest
     # 核心配置：指定使用 Debian 镜像
     container:
@@ -29,10 +30,6 @@ jobs:
       - name: 编译项目
         run: |
           cargo build --release
-
-      - name: 运行测试
-        run: |
-          cargo test --verbose
 
       - name: 传输proxy构建结果到目标服务器
         uses: appleboy/scp-action@v0.1.7
