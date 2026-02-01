@@ -1,4 +1,4 @@
-name: Build and deploy proxy to target server
+name: Do deploy
 
 on:
   push:
@@ -30,6 +30,23 @@ jobs:
       - name: 编译项目
         run: |
           cargo build --release
+
+      - name: 停止proxy服务
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          script: |
+            chmod +x /ppaass-ai/start-proxy.sh
+            chmod +x /ppaass-ai/proxy
+            # Stop existing proxy process
+            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+            if [ -n "$process_id" ]; then
+              echo "Stopping existing proxy process with PID: $process_id"
+              kill -9 $process_id || true
+            fi
+            echo "Stopped existing proxy process: $process_id"
 
       - name: 传输proxy构建结果到目标服务器
         uses: appleboy/scp-action@v0.1.7
@@ -73,16 +90,11 @@ jobs:
           script: |
             chmod +x /ppaass-ai/start-proxy.sh
             chmod +x /ppaass-ai/proxy
-            # Stop existing proxy process
-            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
-            if [ -n "$process_id" ]; then
-              echo "Stopping existing proxy process with PID: $process_id"
-              kill -9 $process_id || true
-            fi
             # Start the proxy (migration is handled in start-proxy.sh)
             cd /ppaass-ai
             ulimit -n 655360
             nohup ./start-proxy.sh >run.log 2>&1 &
+            sleep 5
             process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
             echo "Started new proxy process with PID: $process_id"
 
