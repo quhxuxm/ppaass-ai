@@ -1,11 +1,10 @@
+use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
-use crate::connection_pool::{ConnectionPool, ConnectedStream};
 use fast_socks5::server::{
-    Socks5ServerProtocol, NoAuthentication, SocksServerError,
-    states::Opened,
+    NoAuthentication, Socks5ServerProtocol, SocksServerError, states::Opened,
 };
-use fast_socks5::{Socks5Command, ReplyError};
 use fast_socks5::util::target_addr::TargetAddr;
+use fast_socks5::{ReplyError, Socks5Command};
 use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,7 +37,9 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     // Only handle CONNECT command
     if command != Socks5Command::TCPConnect {
         let _ = protocol.reply_error(&ReplyError::CommandNotSupported).await;
-        return Err(AgentError::Socks5("Only CONNECT command is supported".to_string()));
+        return Err(AgentError::Socks5(
+            "Only CONNECT command is supported".to_string(),
+        ));
     }
 
     // Convert target address to protocol Address
@@ -47,7 +48,10 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     // Get a connected stream from the pool
     let connected_stream = match pool.get_connected_stream(address).await {
         Ok(stream) => {
-            info!("Got connected stream from pool, stream_id: {}", stream.stream_id());
+            info!(
+                "Got connected stream from pool, stream_id: {}",
+                stream.stream_id()
+            );
             stream
         }
         Err(e) => {
@@ -72,18 +76,16 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
     match target {
-        TargetAddr::Ip(addr) => {
-            match addr {
-                std::net::SocketAddr::V4(v4) => Address::Ipv4 {
-                    addr: v4.ip().octets(),
-                    port: v4.port(),
-                },
-                std::net::SocketAddr::V6(v6) => Address::Ipv6 {
-                    addr: v6.ip().octets(),
-                    port: v6.port(),
-                },
-            }
-        }
+        TargetAddr::Ip(addr) => match addr {
+            std::net::SocketAddr::V4(v4) => Address::Ipv4 {
+                addr: v4.ip().octets(),
+                port: v4.port(),
+            },
+            std::net::SocketAddr::V6(v6) => Address::Ipv6 {
+                addr: v6.ip().octets(),
+                port: v6.port(),
+            },
+        },
         TargetAddr::Domain(host, port) => Address::Domain {
             host: host.clone(),
             port: *port,
