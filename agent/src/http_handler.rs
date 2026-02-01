@@ -339,13 +339,13 @@ async fn handle_regular_request(
         match stream_receiver.receive_data().await {
             Some(data_packet) => {
                 debug!("Received {} bytes from proxy", data_packet.data.len());
-                
+
                 // Check size limit
                 if response_data.len() + data_packet.data.len() > max_response_size {
                     error!("Response too large, truncating");
                     break;
                 }
-                
+
                 response_data.extend_from_slice(&data_packet.data);
                 if data_packet.is_end {
                     debug!("Received end of stream signal");

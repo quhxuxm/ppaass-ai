@@ -230,7 +230,7 @@ async fn http_worker(
                 success.fetch_add(1, Ordering::Relaxed);
                 total_bytes.fetch_add(body.len() as u64, Ordering::Relaxed);
                 consecutive_failures = 0;
-                
+
                 // Batch update histogram every 100 requests
                 if latencies.len() >= 100 {
                     let mut hist = histogram.lock().await;
@@ -243,7 +243,7 @@ async fn http_worker(
                 warn!("HTTP request failed: {}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
                 consecutive_failures += 1;
-                
+
                 // Add exponential backoff for consecutive failures
                 if consecutive_failures > 0 {
                     let delay_ms = std::cmp::min(100, consecutive_failures * 10);
@@ -252,7 +252,7 @@ async fn http_worker(
             }
         }
     }
-    
+
     // Flush remaining latencies
     if !latencies.is_empty() {
         let mut hist = histogram.lock().await;
@@ -293,7 +293,7 @@ async fn socks5_worker(
                 success.fetch_add(1, Ordering::Relaxed);
                 total_bytes.fetch_add((test_data.len() + response.len()) as u64, Ordering::Relaxed);
                 consecutive_failures = 0;
-                
+
                 // Batch update histogram every 100 requests
                 if latencies.len() >= 100 {
                     let mut hist = histogram.lock().await;
@@ -306,7 +306,7 @@ async fn socks5_worker(
                 warn!("SOCKS5 request failed: {}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
                 consecutive_failures += 1;
-                
+
                 // Add exponential backoff for consecutive failures
                 if consecutive_failures > 0 {
                     let delay_ms = std::cmp::min(100, consecutive_failures * 10);
@@ -315,7 +315,7 @@ async fn socks5_worker(
             }
         }
     }
-    
+
     // Flush remaining latencies
     if !latencies.is_empty() {
         let mut hist = histogram.lock().await;
