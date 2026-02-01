@@ -32,4 +32,4 @@ jobs:
 
       - name: 运行测试
         run: |
-          cargo test --verbose
+          cargo test
