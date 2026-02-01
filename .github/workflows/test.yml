@@ -1,4 +1,4 @@
-name: Ppaass Security Proxy
+name: Build and test proxy
 
 on:
   push:
