@@ -86,6 +86,7 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
   - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
   - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
   - The CRUD for user in proxy side should from `sqlite` with `SeaORM`
+  - The `Data forwarding process` should use `tokio::io::copy_bidirectional` to forward data between client, agent, proxy and target.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.

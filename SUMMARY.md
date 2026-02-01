@@ -179,7 +179,7 @@ curl -x http://127.0.0.1:1080 http://example.com
 - **[README.md](README.md)**: Comprehensive project documentation
 - **[SETUP.md](SETUP.md)**: Detailed setup and troubleshooting guide
 - **[API.md](API.md)**: Complete REST API documentation
-- **[requirements.md](doc/requirements.md)**: Original requirements specification
+- **[requirements.md](docs/requirements.md)**: Original requirements specification
 
 ## 🔍 Key Design Decisions
 
