@@ -51,10 +51,16 @@ jobs:
           password: ${{ secrets.REMOTE_PASSWORD }}
           script: |
             chmod +x /ppaass-ai/start-proxy.sh
-            process_id=$(ps -ef | grep "ppaass-proxy" | grep -v grep | awk '{print $2}')
-            kill -9 $process_id
+            chmod +x /ppaass-ai/proxy
+            # Stop existing proxy process
+            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+            if [ -n "$process_id" ]; then
+              kill -9 $process_id || true
+            fi
+            # Start the proxy (migration is handled in start-proxy.sh)
+            cd /ppaass-ai
             ulimit -n 655360
-            sudo nohup /ppaass-ai/start-proxy.sh >run.log 2>&1 &
+            nohup ./start-proxy.sh >run.log 2>&1 &
       - name: 部署完成
         run: |
           echo "部署成功！"

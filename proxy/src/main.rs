@@ -1,24 +1,26 @@
 mod api;
+mod bandwidth;
 mod config;
 mod connection;
+mod entity;
 mod error;
 mod server;
 mod user_manager;
-mod bandwidth;
 
 use anyhow::Result;
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::config::ProxyConfig;
+use crate::config::{ProxyConfig, UsersConfig};
 use crate::server::ProxyServer;
+use crate::user_manager::UserManager;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to configuration file
-    #[arg(short, long, default_value = "config/proxy.toml")]
+    #[arg(short, long, default_value = "proxy.toml")]
     config: String,
 
     /// Override listen address
@@ -28,18 +30,22 @@ struct Args {
     /// Override API address
     #[arg(short, long)]
     api: Option<String>,
-    
+
     /// Override log level (trace, debug, info, warn, error)
     #[arg(long)]
     log_level: Option<String>,
-    
+
     /// Override log directory
     #[arg(long)]
     log_dir: Option<String>,
-    
+
     /// Override number of runtime worker threads
     #[arg(long)]
     runtime_threads: Option<usize>,
+
+    /// Migrate users from a TOML file to the SQLite database
+    #[arg(long)]
+    migrate_users: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -72,8 +78,8 @@ fn main() -> Result<()> {
     let file_appender = tracing_appender::rolling::daily(&config.log_dir, "proxy.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -83,19 +89,19 @@ fn main() -> Result<()> {
                 .with_target(true)
                 .with_thread_ids(true)
                 .with_line_number(true)
-                .with_ansi(false)
+                .with_ansi(false),
         )
         .init();
 
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.enable_all();
-    
+
     if let Some(threads) = config.runtime_threads {
         info!("Configuring Tokio runtime with {} worker threads", threads);
         runtime_builder.worker_threads(threads);
     }
-    
+
     let runtime = runtime_builder.build()?;
 
     runtime.block_on(async {
@@ -110,6 +116,14 @@ fn main() -> Result<()> {
             info!("Runtime threads: default (CPU cores)");
         }
 
+        // Handle user migration if requested
+        if let Some(users_toml_path) = args.migrate_users {
+            info!("Migrating users from {} to database", users_toml_path);
+            migrate_users_from_toml(&config, &users_toml_path).await?;
+            info!("User migration completed successfully");
+            return Ok(());
+        }
+
         // Initialize tokio-console if configured
         #[cfg(feature = "console")]
         if let Some(console_port) = config.console_port {
@@ -122,4 +136,37 @@ fn main() -> Result<()> {
         server.run().await?;
         Ok(())
     })
+}
+
+async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
+    // Load users from TOML file
+    let users_config = UsersConfig::load(users_toml_path)?;
+    info!("Found {} users in TOML file", users_config.users.len());
+
+    // Initialize user manager (this creates the database if needed)
+    let user_manager = UserManager::new(&config.database_path, &config.keys_dir).await?;
+
+    // Import each user
+    for (username, user_config) in users_config.users {
+        info!("Importing user: {}", username);
+
+        // Check if user already exists
+        if let Ok(Some(_)) = user_manager.get_user(&username).await {
+            info!("User {} already exists, skipping", username);
+            continue;
+        }
+
+        // Import user directly with their existing public key
+        user_manager
+            .import_user(
+                username.clone(),
+                user_config.public_key_pem.clone(),
+                user_config.bandwidth_limit_mbps,
+            )
+            .await?;
+
+        info!("User {} imported successfully", username);
+    }
+
+    Ok(())
 }

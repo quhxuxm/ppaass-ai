@@ -16,6 +16,9 @@ pub enum ProxyError {
 
     #[error("User not found: {0}")]
     UserNotFound(String),
+
+    #[error("Database error: {0}")]
+    Database(#[from] sea_orm::DbErr),
 }
 
 pub type Result<T> = std::result::Result<T, ProxyError>;

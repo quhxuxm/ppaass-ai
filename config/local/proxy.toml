@@ -7,8 +7,8 @@ listen_addr = "0.0.0.0:8080"
 # Address for REST API (user management, monitoring)
 api_addr = "0.0.0.0:8081"
 
-# Path to users configuration file (contains public keys)
-users_config_path = "config/users.toml"
+# Path to SQLite database for user management
+database_path = "data/users.db"
 
 # Directory where RSA keys are stored
 keys_dir = "keys"

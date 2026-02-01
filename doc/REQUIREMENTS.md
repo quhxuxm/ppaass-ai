@@ -48,7 +48,9 @@ The port of `tokio-console` should be configurable via the configuration file, a
 
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
 
-The UI of agent should use `tauri 2`, `typescript` and `vue3`.
+The UI of agent should use `tauri 2`, `typescript` and `vue3`, and `primevue` should be used as the component library of `vue3` .
+
+The user management in proxy side should use `SeaORM` to access `sqlite` to do CRUD.
 
 ## Implementation details
 
@@ -83,6 +85,7 @@ The UI of agent should use `tauri 2`, `typescript` and `vue3`.
   - The agent and proxy will be deployed separately on different host, so the startup script should be separate, and should assume the final build target is in the same folder of the startup script.
   - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
   - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
+  - The CRUD for user in proxy side should from `sqlite` with `SeaORM`
 - Flow:
   - The data exchange between agent and proxy should include 3 process:
     - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
