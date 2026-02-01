@@ -20,7 +20,7 @@ log_level = "info"
 log_dir = "logs"
 
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
-# runtime_threads = 4
+runtime_threads = 64
 
 # Optional: Enable tokio-console for debugging
 # console_port = 6670
