@@ -43,6 +43,7 @@ jobs:
           source: "target/release/proxy,config/remote/proxy.toml,config/remote/users.toml,start-proxy.sh" # 替换为你的二进制文件名
           target: "/ppaass-ai" # 服务器目标路径
           strip_components: 2
+          overwrite: true
       - name: 远程执行启动脚本 (SSH)
         uses: appleboy/ssh-action@v1.0.3
         with:
