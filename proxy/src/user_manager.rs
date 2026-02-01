@@ -1,55 +1,68 @@
-use crate::config::{UserConfig, UsersConfig};
+use crate::config::UserConfig;
+use crate::entity::user;
 use crate::error::{ProxyError, Result};
-use dashmap::DashMap;
 use protocol::crypto::RsaKeyPair;
+use sea_orm::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tracing::{error, info};
+use tracing::info;
 
 pub struct UserManager {
-    users: Arc<DashMap<String, UserConfig>>,
-    users_config_path: PathBuf,
+    db: DatabaseConnection,
     keys_dir: PathBuf,
 }
 
 impl UserManager {
-    pub fn new<P: AsRef<Path>>(users_config_path: P, keys_dir: P) -> Result<Self> {
-        let users_config_path = users_config_path.as_ref().to_path_buf();
+    pub async fn new<P: AsRef<Path>>(database_path: P, keys_dir: P) -> Result<Self> {
+        let database_path = database_path.as_ref();
         let keys_dir = keys_dir.as_ref().to_path_buf();
 
         // Create keys directory if it doesn't exist
         fs::create_dir_all(&keys_dir)?;
 
-        // Load users from config
-        let users = Arc::new(DashMap::new());
-
-        if users_config_path.exists() {
-            match UsersConfig::load(&users_config_path) {
-                Ok(config) => {
-                    for (username, user_config) in config.users {
-                        users.insert(username, user_config);
-                    }
-                    info!("Loaded {} users from config", users.len());
-                }
-                Err(e) => {
-                    error!("Failed to load users config: {}", e);
-                }
-            }
+        // Create parent directory for database if it doesn't exist
+        if let Some(parent) = database_path.parent() {
+            fs::create_dir_all(parent)?;
         }
 
-        Ok(Self {
-            users,
-            users_config_path,
-            keys_dir,
-        })
+        // Connect to SQLite database
+        let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
+        let db = Database::connect(&database_url).await?;
+
+        // Create table if not exists
+        let create_table_sql = r#"
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY NOT NULL,
+                public_key_pem TEXT NOT NULL,
+                bandwidth_limit_mbps INTEGER,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        "#;
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            create_table_sql.to_string(),
+        ))
+        .await?;
+
+        info!("Connected to SQLite database: {}", database_path.display());
+
+        Ok(Self { db, keys_dir })
     }
 
-    pub fn get_user(&self, username: &str) -> Option<UserConfig> {
-        self.users.get(username).map(|entry| entry.value().clone())
+    pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
+        let user = user::Entity::find_by_id(username.to_string())
+            .one(&self.db)
+            .await?;
+
+        Ok(user.map(|u| UserConfig {
+            username: u.username,
+            public_key_pem: u.public_key_pem,
+            bandwidth_limit_mbps: u.bandwidth_limit_mbps.map(|v| v as u64),
+        }))
     }
 
-    pub fn add_user(
+    pub async fn add_user(
         &self,
         username: String,
         bandwidth_limit_mbps: Option<u64>,
@@ -65,26 +78,30 @@ impl UserManager {
         let private_key_path = self.keys_dir.join(format!("{}.pem", username));
         fs::write(&private_key_path, &private_key_pem)?;
 
-        // Create user config
-        let user_config = UserConfig {
-            username: username.clone(),
-            public_key_pem: public_key_pem.clone(),
-            bandwidth_limit_mbps,
+        // Create user in database
+        let now = chrono::Utc::now().naive_utc();
+        let user = user::ActiveModel {
+            username: Set(username.clone()),
+            public_key_pem: Set(public_key_pem.clone()),
+            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
+            created_at: Set(now),
+            updated_at: Set(now),
         };
 
-        self.users.insert(username.clone(), user_config);
-
-        // Save to config file
-        self.save_config()?;
+        user::Entity::insert(user).exec(&self.db).await?;
 
         info!("User {} added successfully", username);
         Ok((private_key_pem, public_key_pem))
     }
 
-    pub fn remove_user(&self, username: &str) -> Result<()> {
+    pub async fn remove_user(&self, username: &str) -> Result<()> {
         info!("Removing user: {}", username);
 
-        if self.users.remove(username).is_none() {
+        let result = user::Entity::delete_by_id(username.to_string())
+            .exec(&self.db)
+            .await?;
+
+        if result.rows_affected == 0 {
             return Err(ProxyError::UserNotFound(username.to_string()));
         }
 
@@ -94,29 +111,66 @@ impl UserManager {
             fs::remove_file(private_key_path)?;
         }
 
-        // Save to config file
-        self.save_config()?;
-
         info!("User {} removed successfully", username);
         Ok(())
     }
 
-    pub fn list_users(&self) -> Vec<String> {
-        self.users.iter().map(|entry| entry.key().clone()).collect()
+    pub async fn list_users(&self) -> Result<Vec<String>> {
+        let users = user::Entity::find().all(&self.db).await?;
+        Ok(users.into_iter().map(|u| u.username).collect())
     }
 
-    fn save_config(&self) -> Result<()> {
-        let users_map: std::collections::HashMap<String, UserConfig> = self
-            .users
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
+    /// Import a user with an existing public key (for migration from TOML config)
+    pub async fn import_user(
+        &self,
+        username: String,
+        public_key_pem: String,
+        bandwidth_limit_mbps: Option<u64>,
+    ) -> Result<()> {
+        info!("Importing user: {}", username);
 
-        let users_config = UsersConfig { users: users_map };
-        users_config
-            .save(&self.users_config_path)
-            .map_err(|e| ProxyError::Io(std::io::Error::other(e)))?;
+        // Create user in database
+        let now = chrono::Utc::now().naive_utc();
+        let user = user::ActiveModel {
+            username: Set(username.clone()),
+            public_key_pem: Set(public_key_pem),
+            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
 
+        user::Entity::insert(user).exec(&self.db).await?;
+
+        info!("User {} imported successfully", username);
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn update_user_bandwidth(
+        &self,
+        username: &str,
+        bandwidth_limit_mbps: Option<u64>,
+    ) -> Result<()> {
+        info!("Updating bandwidth for user: {}", username);
+
+        let user = user::Entity::find_by_id(username.to_string())
+            .one(&self.db)
+            .await?;
+
+        match user {
+            Some(_) => {
+                let now = chrono::Utc::now().naive_utc();
+                let update = user::ActiveModel {
+                    username: Set(username.to_string()),
+                    bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
+                    updated_at: Set(now),
+                    ..Default::default()
+                };
+                user::Entity::update(update).exec(&self.db).await?;
+                info!("User {} bandwidth updated successfully", username);
+                Ok(())
+            }
+            None => Err(ProxyError::UserNotFound(username.to_string())),
+        }
     }
 }

@@ -131,7 +131,7 @@ async fn add_user(
     match state.user_manager.add_user(
         request.username.clone(),
         request.bandwidth_limit_mbps,
-    ) {
+    ).await {
         Ok((private_key, public_key)) => {
             // Register user in bandwidth monitor
             state.bandwidth_monitor.register_user(
@@ -167,7 +167,7 @@ async fn remove_user(
 ) -> impl IntoResponse {
     info!("API: Remove user request for {}", request.username);
 
-    match state.user_manager.remove_user(&request.username) {
+    match state.user_manager.remove_user(&request.username).await {
         Ok(_) => (
             StatusCode::OK,
             Json(GenericResponse {
@@ -186,8 +186,16 @@ async fn remove_user(
 }
 
 async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
-    let users = state.user_manager.list_users();
-    Json(UsersListResponse { users })
+    match state.user_manager.list_users().await {
+        Ok(users) => (
+            StatusCode::OK,
+            Json(UsersListResponse { users }),
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(UsersListResponse { users: vec![] }),
+        ),
+    }
 }
 
 async fn get_bandwidth_stats(State(state): State<AppState>) -> impl IntoResponse {

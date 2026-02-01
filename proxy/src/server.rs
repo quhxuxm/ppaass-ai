@@ -18,18 +18,18 @@ impl ProxyServer {
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
 
-        // Initialize user manager
+        // Initialize user manager with SQLite database
         let user_manager = Arc::new(UserManager::new(
-            &config.users_config_path,
+            &config.database_path,
             &config.keys_dir,
-        )?);
+        ).await?);
 
         // Initialize bandwidth monitor
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
 
         // Register all users in bandwidth monitor
-        for username in user_manager.list_users() {
-            if let Some(user_config) = user_manager.get_user(&username) {
+        for username in user_manager.list_users().await? {
+            if let Some(user_config) = user_manager.get_user(&username).await? {
                 bandwidth_monitor.register_user(username, user_config.bandwidth_limit_mbps);
             }
         }
@@ -111,12 +111,17 @@ async fn handle_connection(
     info!("Authentication request from user: {}", username);
 
     // Look up the user config for this username
-    let user_config = match user_manager.get_user(&username) {
-        Some(config) => config,
-        None => {
+    let user_config = match user_manager.get_user(&username).await {
+        Ok(Some(config)) => config,
+        Ok(None) => {
             error!("User not found: {}", username);
             connection.send_auth_error("User not found").await?;
             return Err(crate::error::ProxyError::UserNotFound(username));
+        }
+        Err(e) => {
+            error!("Database error looking up user: {}", e);
+            connection.send_auth_error("Internal error").await?;
+            return Err(e);
         }
     };
 

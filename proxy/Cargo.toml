@@ -31,6 +31,8 @@ parking_lot.workspace = true
 dashmap.workspace = true
 rsa.workspace = true
 base64.workspace = true
+sea-orm.workspace = true
+chrono.workspace = true
 
 [features]
 default = []
@@ -38,4 +40,3 @@ console = ["dep:console-subscriber"]
 
 [dev-dependencies]
 tempfile = "3.19"
-
