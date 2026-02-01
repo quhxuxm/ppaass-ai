@@ -1,4 +1,4 @@
-name: Build and deploy proxy to target server
+name: Do deploy
 
 on:
   push:
