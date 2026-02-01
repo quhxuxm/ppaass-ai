@@ -9,7 +9,6 @@ use fast_socks5::util::target_addr::TargetAddr;
 use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
@@ -96,78 +95,26 @@ async fn relay_data(
     client_stream: &mut TcpStream,
     connected_stream: ConnectedStream,
 ) -> Result<()> {
-    let (mut client_read, mut client_write) = tokio::io::split(client_stream);
+    // Convert to AsyncRead + AsyncWrite compatible types
+    let mut proxy_io = connected_stream.into_async_io();
 
-    // Split connected stream into sender and receiver for concurrent use
-    let (stream_sender, mut stream_receiver) = connected_stream.split();
-
-    // Use select to handle both directions and terminate when either ends
-    let mut buffer = vec![0u8; 8192];
-    let mut client_closed = false;
-    let mut proxy_closed = false;
-
-    loop {
-        if client_closed && proxy_closed {
-            break;
+    // Use tokio's optimized bidirectional copy
+    // This is more efficient than manual select loops as it:
+    // 1. Uses zero-copy when possible
+    // 2. Has optimized buffering
+    // 3. Handles backpressure properly
+    match tokio::io::copy_bidirectional(client_stream, &mut proxy_io).await {
+        Ok((client_to_proxy, proxy_to_client)) => {
+            info!(
+                "SOCKS5 relay completed: {} bytes client->proxy, {} bytes proxy->client",
+                client_to_proxy, proxy_to_client
+            );
         }
-
-        tokio::select! {
-            // Read from client and send to proxy
-            result = client_read.read(&mut buffer), if !client_closed => {
-                match result {
-                    Ok(0) => {
-                        debug!("Client closed connection");
-                        let _ = stream_sender.send_data(vec![], true).await;
-                        client_closed = true;
-                    }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        debug!("Received {} bytes from client, forwarding to proxy", n);
-                        if let Err(e) = stream_sender.send_data(data, false).await {
-                            error!("Failed to send data to proxy: {}", e);
-                            client_closed = true;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to read from client: {}", e);
-                        let _ = stream_sender.send_data(vec![], true).await;
-                        client_closed = true;
-                    }
-                }
-            }
-
-            // Read from proxy and send to client
-            packet = stream_receiver.receive_data(), if !proxy_closed => {
-                match packet {
-                    Some(packet) => {
-                        if !packet.data.is_empty() {
-                            debug!("Received {} bytes from proxy, forwarding to client", packet.data.len());
-                            if let Err(e) = client_write.write_all(&packet.data).await {
-                                error!("Failed to write to client: {}", e);
-                                proxy_closed = true;
-                                continue;
-                            }
-                            if let Err(e) = client_write.flush().await {
-                                error!("Failed to flush to client: {}", e);
-                                proxy_closed = true;
-                                continue;
-                            }
-                        }
-
-                        if packet.is_end {
-                            debug!("Proxy indicated end of stream");
-                            proxy_closed = true;
-                        }
-                    }
-                    None => {
-                        debug!("Stream channel closed");
-                        proxy_closed = true;
-                    }
-                }
-            }
+        Err(e) => {
+            // Connection errors are expected when client closes connection
+            debug!("SOCKS5 relay ended: {}", e);
         }
     }
 
-    info!("SOCKS5 data relay completed");
     Ok(())
 }
