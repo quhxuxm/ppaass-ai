@@ -11,8 +11,6 @@ pub enum MessageType {
     ConnectRequest = 3,
     ConnectResponse = 4,
     Data = 5,
-    Heartbeat = 6,
-    Disconnect = 7,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,8 +86,6 @@ pub enum ProxyRequest {
     Auth(AuthRequest),
     Connect(ConnectRequest),
     Data(DataPacket),
-    Heartbeat,
-    Disconnect(String), // stream_id
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +93,5 @@ pub enum ProxyResponse {
     Auth(AuthResponse),
     Connect(ConnectResponse),
     Data(DataPacket),
-    Heartbeat,
     Error { message: String },
 }

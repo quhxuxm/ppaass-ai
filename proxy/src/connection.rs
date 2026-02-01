@@ -12,14 +12,51 @@ use protocol::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info};
 
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, Message>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
+
+/// Context for the bidirectional relay task containing shared resources
+struct RelayContext {
+    stream_id: String,
+    writer: Arc<Mutex<FramedWriter>>,
+    aes_cipher: Arc<AesGcmCipher>,
+    bandwidth_monitor: Arc<BandwidthMonitor>,
+    username: Option<String>,
+}
+
+impl RelayContext {
+    /// Send a data packet to the agent
+    async fn send_data_packet(&self, data_packet: DataPacket) -> Result<()> {
+        let payload = serde_json::to_vec(&ProxyResponse::Data(data_packet))
+            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
+
+        let encrypted_payload = self.aes_cipher.encrypt(&payload)?;
+        let message = Message::new(MessageType::Data, encrypted_payload);
+
+        let mut w = self.writer.lock().await;
+        w.send(message)
+            .await
+            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
+
+        Ok(())
+    }
+
+    /// Send end-of-stream packet to agent
+    async fn send_end_packet(&self) {
+        let end_packet = DataPacket {
+            stream_id: self.stream_id.clone(),
+            data: vec![],
+            is_end: true,
+        };
+        let _ = self.send_data_packet(end_packet).await;
+    }
+}
 
 pub struct ProxyConnection {
     writer: Arc<Mutex<FramedWriter>>,
@@ -27,8 +64,10 @@ pub struct ProxyConnection {
     user_config: Option<UserConfig>,
     aes_cipher: Option<Arc<AesGcmCipher>>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
-    // Store write half of target streams, read half is handled by spawned tasks
-    target_writers: HashMap<String, Arc<Mutex<WriteHalf<TcpStream>>>>,
+    // Store channels for sending data to target streams (for bidirectional copy)
+    target_senders: HashMap<String, mpsc::Sender<Vec<u8>>>,
+    // Store shutdown senders to signal end of stream
+    target_shutdown: HashMap<String, mpsc::Sender<()>>,
     pending_auth_request: Option<AuthRequest>,
 }
 
@@ -42,7 +81,8 @@ impl ProxyConnection {
             user_config: None,
             aes_cipher: None,
             bandwidth_monitor,
-            target_writers: HashMap::new(),
+            target_senders: HashMap::new(),
+            target_shutdown: HashMap::new(),
             pending_auth_request: None,
         }
     }
@@ -53,6 +93,22 @@ impl ProxyConnection {
             .await
             .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
         Ok(())
+    }
+
+    /// Send an encrypted data packet to the agent
+    async fn send_encrypted_data_packet(&self, data_packet: DataPacket) -> Result<()> {
+        let aes_cipher = self
+            .aes_cipher
+            .as_ref()
+            .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
+
+        let payload = serde_json::to_vec(&ProxyResponse::Data(data_packet))
+            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
+
+        let encrypted_payload = aes_cipher.encrypt(&payload)?;
+        let message = Message::new(MessageType::Data, encrypted_payload);
+
+        self.send_message(message).await
     }
 
     async fn read_message(&self) -> Result<Option<Message>> {
@@ -252,15 +308,6 @@ impl ProxyConnection {
                 );
                 self.handle_data(data_packet.clone()).await?;
             }
-            ProxyRequest::Heartbeat => {
-                debug!("[HEARTBEAT REQUEST]");
-                self.handle_heartbeat().await?;
-            }
-            ProxyRequest::Disconnect(ref stream_id) => {
-                debug!("[DISCONNECT REQUEST] stream_id={}", stream_id);
-                info!("Disconnect request for stream: {}", stream_id);
-                self.target_writers.remove(stream_id);
-            }
             _ => {
                 error!("Unexpected request type");
             }
@@ -313,30 +360,30 @@ impl ProxyConnection {
             Ok(stream) => {
                 info!("Connected to target: {}", target_addr);
 
-                // Split target stream into read and write halves
-                let (target_reader, target_writer) = tokio::io::split(stream);
-
-                // Store the write half for sending data to target
                 let stream_id = connect_request.request_id.clone();
-                self.target_writers
-                    .insert(stream_id.clone(), Arc::new(Mutex::new(target_writer)));
 
-                // Spawn a task to continuously read from target and send to agent
-                let writer = self.writer.clone();
-                let aes_cipher = self.aes_cipher.clone().unwrap();
-                let bandwidth_monitor = self.bandwidth_monitor.clone();
-                let username = self.user_config.as_ref().map(|c| c.username.clone());
+                // Create channels for bidirectional communication
+                // Data channel: main task -> relay task (agent -> target)
+                let (data_tx, data_rx) = mpsc::channel::<Vec<u8>>(32);
+                // Shutdown channel: main task -> relay task
+                let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
 
+                // Store senders for this stream
+                self.target_senders.insert(stream_id.clone(), data_tx);
+                self.target_shutdown.insert(stream_id.clone(), shutdown_tx);
+
+                // Create relay context with shared resources
+                let ctx = RelayContext {
+                    stream_id,
+                    writer: self.writer.clone(),
+                    aes_cipher: self.aes_cipher.clone().unwrap(),
+                    bandwidth_monitor: self.bandwidth_monitor.clone(),
+                    username: self.user_config.as_ref().map(|c| c.username.clone()),
+                };
+
+                // Spawn bidirectional relay task
                 tokio::spawn(async move {
-                    Self::target_reader_task(
-                        stream_id,
-                        target_reader,
-                        writer,
-                        aes_cipher,
-                        bandwidth_monitor,
-                        username,
-                    )
-                    .await;
+                    Self::bidirectional_relay_task(ctx, stream, data_rx, shutdown_rx).await;
                 });
 
                 let connect_response = ConnectResponse {
@@ -361,108 +408,102 @@ impl ProxyConnection {
         Ok(())
     }
 
-    /// Background task that continuously reads from target and sends data back to agent
-    async fn target_reader_task(
-        stream_id: String,
-        mut target_reader: ReadHalf<TcpStream>,
-        writer: Arc<Mutex<FramedWriter>>,
-        aes_cipher: Arc<AesGcmCipher>,
-        bandwidth_monitor: Arc<BandwidthMonitor>,
-        username: Option<String>,
+    /// Bidirectional relay task using tokio::io::copy_bidirectional pattern
+    /// This handles both directions efficiently:
+    /// - Agent -> Target: receives data from channel and writes to target
+    /// - Target -> Agent: reads from target and sends encrypted data to agent
+    async fn bidirectional_relay_task(
+        ctx: RelayContext,
+        target_stream: TcpStream,
+        mut data_rx: mpsc::Receiver<Vec<u8>>,
+        mut shutdown_rx: mpsc::Receiver<()>,
     ) {
-        let mut buffer = vec![0u8; 8192]; // Reduced from 16KB to 8KB
+        let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
+        let mut read_buffer = vec![0u8; 8192];
+        let mut agent_closed = false;
+        let mut target_closed = false;
 
         loop {
-            match target_reader.read(&mut buffer).await {
-                Ok(0) => {
-                    // Target closed connection
-                    debug!(
-                        "[TARGET->AGENT] Target closed connection for stream: {}",
-                        stream_id
-                    );
-                    let end_packet = DataPacket {
-                        stream_id: stream_id.clone(),
-                        data: vec![],
-                        is_end: true,
-                    };
-                    if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, end_packet).await {
-                        error!("Failed to send end packet: {}", e);
-                    }
-                    break;
-                }
-                Ok(n) => {
-                    debug!(
-                        "[TARGET->AGENT] Read {} bytes from target for stream: {}",
-                        n, stream_id
-                    );
+            if agent_closed && target_closed {
+                break;
+            }
 
-                    // Record bandwidth and enforce limit
-                    if let Some(ref user) = username {
-                        bandwidth_monitor.record_sent(user, n as u64);
-                        if !bandwidth_monitor.check_limit(user).await {
-                            let end_packet = DataPacket {
-                                stream_id: stream_id.clone(),
-                                data: vec![],
-                                is_end: true,
-                            };
-                            if let Err(e) =
-                                Self::send_data_packet(&writer, &aes_cipher, end_packet).await
-                            {
-                                error!("Failed to send end packet: {}", e);
+            tokio::select! {
+                // Receive data from agent (via channel) and write to target
+                data = data_rx.recv(), if !agent_closed => {
+                    match data {
+                        Some(data) if data.is_empty() => {
+                            // End of stream from agent
+                            debug!("[RELAY] Agent signaled end of stream for: {}", ctx.stream_id);
+                            let _ = target_writer.shutdown().await;
+                            agent_closed = true;
+                        }
+                        Some(data) => {
+                            debug!("[RELAY] {} bytes agent -> target for: {}", data.len(), ctx.stream_id);
+                            if let Err(e) = target_writer.write_all(&data).await {
+                                error!("Failed to write to target: {}", e);
+                                agent_closed = true;
                             }
-                            break;
+                        }
+                        None => {
+                            // Channel closed
+                            debug!("[RELAY] Data channel closed for: {}", ctx.stream_id);
+                            let _ = target_writer.shutdown().await;
+                            agent_closed = true;
                         }
                     }
+                }
 
-                    let data_packet = DataPacket {
-                        stream_id: stream_id.clone(),
-                        data: buffer[..n].to_vec(),
-                        is_end: false,
-                    };
+                // Read from target and send to agent
+                result = target_reader.read(&mut read_buffer), if !target_closed => {
+                    match result {
+                        Ok(0) => {
+                            // Target closed
+                            debug!("[RELAY] Target closed for: {}", ctx.stream_id);
+                            ctx.send_end_packet().await;
+                            target_closed = true;
+                        }
+                        Ok(n) => {
+                            debug!("[RELAY] {} bytes target -> agent for: {}", n, ctx.stream_id);
 
-                    if let Err(e) = Self::send_data_packet(&writer, &aes_cipher, data_packet).await
-                    {
-                        error!("Failed to send data packet: {}", e);
-                        break;
+                            // Record bandwidth
+                            if let Some(ref user) = ctx.username {
+                                ctx.bandwidth_monitor.record_sent(user, n as u64);
+                                if !ctx.bandwidth_monitor.check_limit(user).await {
+                                    ctx.send_end_packet().await;
+                                    target_closed = true;
+                                    continue;
+                                }
+                            }
+
+                            let data_packet = DataPacket {
+                                stream_id: ctx.stream_id.clone(),
+                                data: read_buffer[..n].to_vec(),
+                                is_end: false,
+                            };
+                            if let Err(e) = ctx.send_data_packet(data_packet).await {
+                                error!("Failed to send data to agent: {}", e);
+                                target_closed = true;
+                            }
+                        }
+                        Err(e) => {
+                            error!("[RELAY] Error reading from target: {}", e);
+                            ctx.send_end_packet().await;
+                            target_closed = true;
+                        }
                     }
                 }
-                Err(e) => {
-                    error!("[TARGET->AGENT] Error reading from target: {}", e);
-                    let end_packet = DataPacket {
-                        stream_id: stream_id.clone(),
-                        data: vec![],
-                        is_end: true,
-                    };
-                    let _ = Self::send_data_packet(&writer, &aes_cipher, end_packet).await;
+
+                // Handle shutdown signal
+                _ = shutdown_rx.recv() => {
+                    debug!("[RELAY] Shutdown signal received for: {}", ctx.stream_id);
+                    let _ = target_writer.shutdown().await;
                     break;
                 }
             }
         }
 
-        debug!(
-            "[TARGET->AGENT] Reader task ended for stream: {}",
-            stream_id
-        );
-    }
-
-    /// Helper to send a data packet to the agent
-    async fn send_data_packet(
-        writer: &Arc<Mutex<FramedWriter>>,
-        aes_cipher: &AesGcmCipher,
-        data_packet: DataPacket,
-    ) -> Result<()> {
-        let payload = serde_json::to_vec(&ProxyResponse::Data(data_packet))
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let encrypted_payload = aes_cipher.encrypt(&payload)?;
-        let message = Message::new(MessageType::Data, encrypted_payload);
-
-        let mut w = writer.lock().await;
-        w.send(message)
-            .await
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
-
-        Ok(())
+        info!("[RELAY] Relay task ended for stream: {}", ctx.stream_id);
     }
 
     async fn handle_data(&mut self, data_packet: DataPacket) -> Result<()> {
@@ -482,69 +523,56 @@ impl ProxyConnection {
                 .check_limit(&user_config.username)
                 .await
             {
-                if let Some(aes_cipher) = &self.aes_cipher {
-                    let end_packet = DataPacket {
-                        stream_id: data_packet.stream_id.clone(),
-                        data: vec![],
-                        is_end: true,
-                    };
-                    let _ = Self::send_data_packet(&self.writer, aes_cipher, end_packet).await;
+                let end_packet = DataPacket {
+                    stream_id: data_packet.stream_id.clone(),
+                    data: vec![],
+                    is_end: true,
+                };
+                let _ = self.send_encrypted_data_packet(end_packet).await;
+                // Signal shutdown to relay task
+                if let Some(shutdown_tx) = self.target_shutdown.remove(&data_packet.stream_id) {
+                    let _ = shutdown_tx.send(()).await;
                 }
-                if let Some(writer) = self.target_writers.remove(&data_packet.stream_id) {
-                    let mut w = writer.lock().await;
-                    let _ = w.shutdown().await;
-                }
+                self.target_senders.remove(&data_packet.stream_id);
                 return Ok(());
             }
         }
 
-        // Get the target writer for this stream_id (clone the Arc to avoid borrow issues)
-        let target_writer = self.target_writers.get(&data_packet.stream_id).cloned();
+        // Get the data sender channel for this stream_id
+        let data_sender = self.target_senders.get(&data_packet.stream_id).cloned();
 
-        match target_writer {
-            Some(writer) => {
-                // Forward data to target
-                if !data_packet.data.is_empty() {
+        match data_sender {
+            Some(sender) => {
+                // Send data to relay task via channel
+                if data_packet.is_end {
+                    // Send empty data to signal end of stream
+                    debug!("[AGENT->TARGET] End of stream, sending shutdown signal");
+                    if sender.send(vec![]).await.is_err() {
+                        debug!("Channel closed for stream: {}", data_packet.stream_id);
+                    }
+                    self.target_senders.remove(&data_packet.stream_id);
+                    self.target_shutdown.remove(&data_packet.stream_id);
+                } else if !data_packet.data.is_empty() {
                     debug!(
-                        "[AGENT->TARGET] Forwarding {} bytes to target",
+                        "[AGENT->TARGET] Forwarding {} bytes via channel",
                         data_packet.data.len()
                     );
-                    let mut w = writer.lock().await;
-                    if let Err(e) = w.write_all(&data_packet.data).await {
-                        error!("Failed to write to target: {}", e);
-                        drop(w); // Drop the lock before removing
-                        self.target_writers.remove(&data_packet.stream_id);
-                        return Ok(());
+                    if sender.send(data_packet.data).await.is_err() {
+                        error!("Failed to send data to relay task");
+                        self.target_senders.remove(&data_packet.stream_id);
+                        self.target_shutdown.remove(&data_packet.stream_id);
                     }
-                    let _ = w.flush().await;
                 }
-
-                // If this is the last data packet, shutdown write side and remove the stream
-                if data_packet.is_end {
-                    debug!("[AGENT->TARGET] End of stream, shutting down write side");
-                    let mut w = writer.lock().await;
-                    // Shutdown write side to signal end of request to HTTP server
-                    let _ = w.shutdown().await;
-                    drop(w);
-                    self.target_writers.remove(&data_packet.stream_id);
-                }
-                // Note: We don't send a response here - the reader task handles sending data back
             }
             None => {
-                // This can happen if the reader task already closed the connection
+                // This can happen if the relay task already closed the connection
                 debug!(
-                    "No target stream found for stream_id: {} (may already be closed)",
+                    "No channel found for stream_id: {} (may already be closed)",
                     data_packet.stream_id
                 );
             }
         }
 
-        Ok(())
-    }
-
-    async fn handle_heartbeat(&mut self) -> Result<()> {
-        debug!("Heartbeat received");
-        self.send_response(ProxyResponse::Heartbeat).await?;
         Ok(())
     }
 

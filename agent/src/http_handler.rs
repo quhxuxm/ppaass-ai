@@ -10,7 +10,6 @@ use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::Address;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
@@ -150,80 +149,28 @@ async fn tunnel(
     upgraded: Upgraded,
     connected_stream: ConnectedStream,
 ) -> std::result::Result<(), AgentError> {
-    let io = TokioIo::new(upgraded);
-    let (mut read_half, mut write_half) = tokio::io::split(io);
+    // Convert to AsyncRead + AsyncWrite compatible types
+    let mut client_io = TokioIo::new(upgraded);
+    let mut proxy_io = connected_stream.into_async_io();
 
-    // Split connected stream into sender and receiver for concurrent use
-    let (stream_sender, mut stream_receiver) = connected_stream.split();
-
-    // Use select to handle both directions and terminate when either ends
-    let mut buffer = vec![0u8; 4096]; // Reduced buffer size
-    let mut client_closed = false;
-    let mut proxy_closed = false;
-
-    loop {
-        if client_closed && proxy_closed {
-            break;
+    // Use tokio's optimized bidirectional copy
+    // This is more efficient than manual select loops as it:
+    // 1. Uses zero-copy when possible
+    // 2. Has optimized buffering
+    // 3. Handles backpressure properly
+    match tokio::io::copy_bidirectional(&mut client_io, &mut proxy_io).await {
+        Ok((client_to_proxy, proxy_to_client)) => {
+            info!(
+                "CONNECT tunnel closed: {} bytes client->proxy, {} bytes proxy->client",
+                client_to_proxy, proxy_to_client
+            );
         }
-
-        tokio::select! {
-            // Read from client and send to proxy
-            result = read_half.read(&mut buffer), if !client_closed => {
-                match result {
-                    Ok(0) => {
-                        debug!("Client closed CONNECT tunnel");
-                        let _ = stream_sender.send_data(vec![], true).await;
-                        client_closed = true;
-                    }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        debug!("CONNECT tunnel: {} bytes client -> proxy", n);
-                        if let Err(e) = stream_sender.send_data(data, false).await {
-                            error!("Failed to send data to proxy: {}", e);
-                            client_closed = true;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to read from CONNECT tunnel client: {}", e);
-                        let _ = stream_sender.send_data(vec![], true).await;
-                        client_closed = true;
-                    }
-                }
-            }
-
-            // Read from proxy and send to client
-            packet = stream_receiver.receive_data(), if !proxy_closed => {
-                match packet {
-                    Some(packet) => {
-                        if !packet.data.is_empty() {
-                            debug!("CONNECT tunnel: {} bytes proxy -> client", packet.data.len());
-                            if let Err(e) = write_half.write_all(&packet.data).await {
-                                error!("Failed to write to CONNECT tunnel client: {}", e);
-                                proxy_closed = true;
-                                continue;
-                            }
-                            if let Err(e) = write_half.flush().await {
-                                error!("Failed to flush to CONNECT tunnel client: {}", e);
-                                proxy_closed = true;
-                                continue;
-                            }
-                        }
-
-                        if packet.is_end {
-                            debug!("Proxy indicated end of CONNECT tunnel stream");
-                            proxy_closed = true;
-                        }
-                    }
-                    None => {
-                        debug!("Stream channel closed");
-                        proxy_closed = true;
-                    }
-                }
-            }
+        Err(e) => {
+            // Connection errors are expected when client closes connection
+            debug!("CONNECT tunnel ended: {}", e);
         }
     }
 
-    info!("CONNECT tunnel closed");
     Ok(())
 }
 
@@ -263,7 +210,7 @@ async fn handle_regular_request(
     };
 
     // Split stream for send/receive
-    let (stream_sender, mut stream_receiver) = connected_stream.split();
+    let (mut stream_sender, mut stream_receiver) = connected_stream.split();
 
     // Build the HTTP request to send to target
     let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
