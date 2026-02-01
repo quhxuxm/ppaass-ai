@@ -34,17 +34,40 @@ jobs:
         run: |
           cargo test --verbose
 
-      - name: 传输文件到服务器 (SCP)
+      - name: 传输proxy构建结果到目标服务器
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           password: ${{ secrets.REMOTE_PASSWORD }}
-          source: "target/release/proxy,config/remote/proxy.toml,config/remote/users.toml,start-proxy.sh" # 替换为你的二进制文件名
+          source: "target/release/proxy"
           target: "/ppaass-ai" # 服务器目标路径
-          strip_components: 2
+          strip_components: 2 #去掉target/release/
           overwrite: true
-      - name: 远程执行启动脚本 (SSH)
+
+      - name: 传输配置文件到目标服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: "config/remote/proxy.toml,config/remote/users.toml" # 替换为你的二进制文件名
+          target: "/ppaass-ai" # 服务器目标路径
+          strip_components: 2 #去掉config/remote/
+          overwrite: true
+
+      - name: 传输启动脚本到目标服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: "start-proxy.sh" # 替换为你的二进制文件名
+          target: "/ppaass-ai" # 服务器目标路径
+          strip_components: 0 #没有多余路径
+          overwrite: true
+
+      - name: 启动proxy服务
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
@@ -56,12 +79,16 @@ jobs:
             # Stop existing proxy process
             process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
             if [ -n "$process_id" ]; then
+              echo "Stopping existing proxy process with PID: $process_id"
               kill -9 $process_id || true
             fi
             # Start the proxy (migration is handled in start-proxy.sh)
             cd /ppaass-ai
             ulimit -n 655360
             nohup ./start-proxy.sh >run.log 2>&1 &
+            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+            echo "Started new proxy process with PID: $process_id"
+
       - name: 部署完成
         run: |
           echo "部署成功！"
