@@ -6,7 +6,7 @@ use hyper_util::rt::TokioIo;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Mock HTTP client that sends requests through the agent
 pub struct MockHttpClient {
@@ -56,7 +56,7 @@ impl MockHttpClient {
         
         let duration = start.elapsed();
         
-        info!("HTTP GET {} - Status: {} - Duration: {:?}", url, status, duration);
+        debug!("HTTP GET {} - Status: {} - Duration: {:?}", url, status, duration);
         
         Ok((duration, body))
     }
@@ -65,7 +65,7 @@ impl MockHttpClient {
     pub async fn post(&self, url: &str, body: Vec<u8>) -> Result<(Duration, String)> {
         let start = Instant::now();
         
-        // Connect to agent
+        // For POST, create a new connection (can't reuse due to body type mismatch)
         let stream = TcpStream::connect(&self.agent_addr)
             .await
             .context("Failed to connect to agent")?;
@@ -100,7 +100,7 @@ impl MockHttpClient {
         
         let duration = start.elapsed();
         
-        info!("HTTP POST {} - Status: {} - Duration: {:?}", url, status, duration);
+        debug!("HTTP POST {} - Status: {} - Duration: {:?}", url, status, duration);
         
         Ok((duration, body))
     }
@@ -125,7 +125,6 @@ impl MockSocks5Client {
             .context("Failed to connect to agent")?;
         
         // SOCKS5 handshake
-        // Send version identifier/method selection message
         stream.write_all(&[0x05, 0x01, 0x00]).await?; // Version 5, 1 method, no auth
         
         let mut buf = [0u8; 2];
@@ -148,6 +147,7 @@ impl MockSocks5Client {
         if response[1] != 0x00 {
             anyhow::bail!("SOCKS5 connection failed: status={}", response[1]);
         }
+        
         
         // Read remaining address (skip it)
         match response[3] {
@@ -172,14 +172,21 @@ impl MockSocks5Client {
         stream.write_all(data).await?;
         stream.flush().await?;
         
-        // Receive response
-        let mut response_data = vec![0u8; 8192];
-        let n = stream.read(&mut response_data).await?;
+        // Receive response with timeout
+        let mut response_data = vec![0u8; 4096]; // Reduced buffer size
+        let n = match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read(&mut response_data)
+        ).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => anyhow::bail!("Read timeout"),
+        };
         response_data.truncate(n);
         
         let duration = start.elapsed();
         
-        info!("SOCKS5 {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}", 
+        debug!("SOCKS5 {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}", 
               target_host, target_port, data.len(), n, duration);
         
         Ok((duration, response_data))

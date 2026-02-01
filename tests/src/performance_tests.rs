@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use sysinfo::System;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +72,11 @@ pub async fn run_performance_tests(
     let initial_memory = system.used_memory();
     let peak_memory = Arc::new(AtomicU64::new(initial_memory));
 
+    // Add semaphore to limit concurrent requests and reduce memory usage
+    let max_concurrent = std::cmp::min(concurrency * 2, 200); // Cap at 200 concurrent
+    let semaphore = Arc::new(Semaphore::new(max_concurrent));
+    info!("Limiting max concurrent requests to: {}", max_concurrent);
+
     // Spawn worker tasks
     let mut handles = Vec::new();
 
@@ -83,9 +88,10 @@ pub async fn run_performance_tests(
         let success = http_success.clone();
         let failed = http_failed.clone();
         let bytes = total_bytes.clone();
+        let sem = semaphore.clone();
 
         let handle = tokio::spawn(async move {
-            http_worker(addr, end_time, hist, success, failed, bytes).await;
+            http_worker(addr, end_time, hist, success, failed, bytes, sem).await;
         });
         handles.push(handle);
     }
@@ -98,9 +104,10 @@ pub async fn run_performance_tests(
         let success = socks5_success.clone();
         let failed = socks5_failed.clone();
         let bytes = total_bytes.clone();
+        let sem = semaphore.clone();
 
         let handle = tokio::spawn(async move {
-            socks5_worker(addr, end_time, hist, success, failed, bytes).await;
+            socks5_worker(addr, end_time, hist, success, failed, bytes, sem).await;
         });
         handles.push(handle);
     }
@@ -191,6 +198,7 @@ async fn http_worker(
     success: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
     total_bytes: Arc<AtomicU64>,
+    semaphore: Arc<Semaphore>,
 ) {
     let client = MockHttpClient::new(agent_addr);
     let urls = [
@@ -199,24 +207,57 @@ async fn http_worker(
         "http://127.0.0.1:9090/large",
     ];
     let mut url_idx = 0;
+    let mut consecutive_failures = 0;
+    let mut latencies = Vec::with_capacity(100); // Batch histogram updates
 
     while Instant::now() < end_time {
         let url = urls[url_idx % urls.len()];
         url_idx += 1;
 
+        // Acquire semaphore permit before making request
+        let _permit = match semaphore.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                // If can't acquire, wait a bit and try again
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+        };
+
         match client.get(url).await {
             Ok((duration, body)) => {
-                let mut hist = histogram.lock().await;
-                let _ = hist.record(duration.as_millis() as u64);
-                drop(hist);
-
+                latencies.push(duration.as_millis() as u64);
                 success.fetch_add(1, Ordering::Relaxed);
                 total_bytes.fetch_add(body.len() as u64, Ordering::Relaxed);
+                consecutive_failures = 0;
+                
+                // Batch update histogram every 100 requests
+                if latencies.len() >= 100 {
+                    let mut hist = histogram.lock().await;
+                    for latency in latencies.drain(..) {
+                        let _ = hist.record(latency);
+                    }
+                }
             }
             Err(e) => {
                 warn!("HTTP request failed: {}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
+                consecutive_failures += 1;
+                
+                // Add exponential backoff for consecutive failures
+                if consecutive_failures > 0 {
+                    let delay_ms = std::cmp::min(100, consecutive_failures * 10);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
             }
+        }
+    }
+    
+    // Flush remaining latencies
+    if !latencies.is_empty() {
+        let mut hist = histogram.lock().await;
+        for latency in latencies {
+            let _ = hist.record(latency);
         }
     }
 }
@@ -228,24 +269,58 @@ async fn socks5_worker(
     success: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
     total_bytes: Arc<AtomicU64>,
+    semaphore: Arc<Semaphore>,
 ) {
     let client = MockSocks5Client::new(agent_addr);
     let test_data = b"Performance test data";
+    let mut consecutive_failures = 0;
+    let mut latencies = Vec::with_capacity(100); // Batch histogram updates
 
     while Instant::now() < end_time {
+        // Acquire semaphore permit before making request
+        let _permit = match semaphore.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                // If can't acquire, wait a bit and try again
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+        };
+
         match client.send_receive("127.0.0.1", 9091, test_data).await {
             Ok((duration, response)) => {
-                let mut hist = histogram.lock().await;
-                let _ = hist.record(duration.as_millis() as u64);
-                drop(hist);
-
+                latencies.push(duration.as_millis() as u64);
                 success.fetch_add(1, Ordering::Relaxed);
                 total_bytes.fetch_add((test_data.len() + response.len()) as u64, Ordering::Relaxed);
+                consecutive_failures = 0;
+                
+                // Batch update histogram every 100 requests
+                if latencies.len() >= 100 {
+                    let mut hist = histogram.lock().await;
+                    for latency in latencies.drain(..) {
+                        let _ = hist.record(latency);
+                    }
+                }
             }
             Err(e) => {
                 warn!("SOCKS5 request failed: {}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
+                consecutive_failures += 1;
+                
+                // Add exponential backoff for consecutive failures
+                if consecutive_failures > 0 {
+                    let delay_ms = std::cmp::min(100, consecutive_failures * 10);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
             }
+        }
+    }
+    
+    // Flush remaining latencies
+    if !latencies.is_empty() {
+        let mut hist = histogram.lock().await;
+        for latency in latencies {
+            let _ = hist.record(latency);
         }
     }
 }

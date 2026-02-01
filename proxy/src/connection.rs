@@ -370,7 +370,7 @@ impl ProxyConnection {
         bandwidth_monitor: Arc<BandwidthMonitor>,
         username: Option<String>,
     ) {
-        let mut buffer = vec![0u8; 16384];
+        let mut buffer = vec![0u8; 8192]; // Reduced from 16KB to 8KB
 
         loop {
             match target_reader.read(&mut buffer).await {

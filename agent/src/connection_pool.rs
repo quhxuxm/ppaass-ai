@@ -329,8 +329,8 @@ impl ConnectionPool {
     pub fn new(config: Arc<AgentConfig>) -> Self {
         let pool_size = config.pool_size;
 
-        // Create unmanaged pool with specified size
-        let pool = Pool::new(pool_size * 2);
+        // Create unmanaged pool with reasonable capacity (1.5x target size)
+        let pool = Pool::new((pool_size as f32 * 1.5) as usize);
 
         // Create refill channel
         let (refill_tx, refill_rx) = mpsc::channel::<()>(pool_size);

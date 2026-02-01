@@ -157,7 +157,7 @@ async fn tunnel(
     let (stream_sender, mut stream_receiver) = connected_stream.split();
 
     // Use select to handle both directions and terminate when either ends
-    let mut buffer = vec![0u8; 8192];
+    let mut buffer = vec![0u8; 4096]; // Reduced buffer size
     let mut client_closed = false;
     let mut proxy_closed = false;
 
@@ -334,10 +334,18 @@ async fn handle_regular_request(
 
     // Receive complete response from proxy
     let mut response_data = Vec::new();
+    let max_response_size = 10 * 1024 * 1024; // 10MB limit
     loop {
         match stream_receiver.receive_data().await {
             Some(data_packet) => {
                 debug!("Received {} bytes from proxy", data_packet.data.len());
+                
+                // Check size limit
+                if response_data.len() + data_packet.data.len() > max_response_size {
+                    error!("Response too large, truncating");
+                    break;
+                }
+                
                 response_data.extend_from_slice(&data_packet.data);
                 if data_packet.is_end {
                     debug!("Received end of stream signal");
