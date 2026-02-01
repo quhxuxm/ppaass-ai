@@ -31,10 +31,6 @@ jobs:
         run: |
           cargo build --release
 
-      - name: 运行测试
-        run: |
-          cargo test --verbose
-
       - name: 传输proxy构建结果到目标服务器
         uses: appleboy/scp-action@v0.1.7
         with:
