@@ -114,6 +114,7 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
 
 There should be github workflow to do build, integration testing and deploy.
 
+- The container to run the workflow should be Debine latest stable version.
 - Build workflow to build project and run the unit testing.
 - Integration testing work flow, run the integration teting.
 - Deploy workflow:
