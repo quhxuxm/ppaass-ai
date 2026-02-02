@@ -93,9 +93,7 @@ jobs:
           host: ${{ env.REMOTE_HOST }}
           username: ${{ env.REMOTE_USER }}
           password: ${{ env.REMOTE_PASSWORD }}
-          source: |
-            config/remote/proxy.toml
-            config/remote/users.toml
+          source: "config/remote/proxy.toml,config/remote/users.toml"
           target: ${{ secrets.DEPLOY_FOLDER }}
           strip_components: 2
           overwrite: true
@@ -108,6 +106,7 @@ jobs:
           password: ${{ env.REMOTE_PASSWORD }}
           source: start-proxy.sh
           target: ${{ secrets.DEPLOY_FOLDER }}
+          strip_components: 0
           overwrite: true
 
       - name: Restart proxy
