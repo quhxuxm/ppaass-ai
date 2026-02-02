@@ -1,108 +1,65 @@
-name: Do deploy
+name: deploy
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "选择部署环境"
-        required: true
-        default: "production"
-        type: choice
-        options:
-          - dev
-          - production
+  push:
+    tags:
+      - "v*"
 
 jobs:
-  build-and-deploy:
+  deploy-proxy:
     runs-on: ubuntu-latest
-    # 核心配置：指定使用 Debian 镜像
-    container:
-      image: debian:bookworm-slim # 你可以选择 bullseye 或 bookworm 等版本
-
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Debian 依赖与 Rust
-        run: |
-          apt-get update && apt-get install -y \
-            curl build-essential gcc pkg-config libssl-dev
-          # 在容器内手动安装 rustup
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          # 将 cargo 路径加入当前 shell
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
 
-      - name: 编译项目
-        run: |
-          cargo build --release
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: 停止proxy服务
+      - name: Build Proxy (Linux)
+        run: cargo build -p proxy --release
+
+      - name: Upload proxy binary
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: target/release/proxy
+          target: ${{ secrets.DEPLOY_FOLDER }}
+          strip_components: 2
+
+      - name: Upload config files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: |
+            config/remote/proxy.toml
+            config/remote/users.toml
+          target: ${{ secrets.DEPLOY_FOLDER }}
+          strip_components: 2
+
+      - name: Upload start script
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASSWORD }}
+          source: start-proxy.sh
+          target: ${{ secrets.DEPLOY_FOLDER }}
+
+      - name: Restart proxy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           password: ${{ secrets.REMOTE_PASSWORD }}
           script: |
-            chmod +x /ppaass-ai/start-proxy.sh
-            chmod +x /ppaass-ai/proxy
-            # Stop existing proxy process
-            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
-            if [ -n "$process_id" ]; then
-              echo "Stopping existing proxy process with PID: $process_id"
-              kill -9 $process_id || true
-            fi
-            echo "Stopped existing proxy process: $process_id"
-
-      - name: 传输proxy构建结果到目标服务器
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
-          source: "target/release/proxy"
-          target: "/ppaass-ai" # 服务器目标路径
-          strip_components: 2 #去掉target/release/
-          overwrite: true
-
-      - name: 传输配置文件到目标服务器
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
-          source: "config/remote/proxy.toml,config/remote/users.toml" # 替换为你的二进制文件名
-          target: "/ppaass-ai" # 服务器目标路径
-          strip_components: 2 #去掉config/remote/
-          overwrite: true
-
-      - name: 传输启动脚本到目标服务器
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
-          source: "start-proxy.sh" # 替换为你的二进制文件名
-          target: "/ppaass-ai" # 服务器目标路径
-          strip_components: 0 #没有多余路径
-          overwrite: true
-
-      - name: 启动proxy服务
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
-          script: |
-            chmod +x /ppaass-ai/start-proxy.sh
-            chmod +x /ppaass-ai/proxy
-            # Start the proxy (migration is handled in start-proxy.sh)
-            cd /ppaass-ai
-            ulimit -n 655360
-            nohup ./start-proxy.sh >run.log 2>&1 &
-            sleep 5
-            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
-            echo "Started new proxy process with PID: $process_id"
-
-      - name: 部署完成
-        run: |
-          echo "部署成功！"
+            chmod +x ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
+            ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh

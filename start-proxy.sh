@@ -16,6 +16,18 @@ if [ ! -f "$CONFIG_PATH" ]; then
     CONFIG_PATH=""
 fi
 
+EXISTING_PIDS=$(pgrep -f "$SCRIPT_DIR/proxy")
+if [ -n "$EXISTING_PIDS" ]; then
+    echo "Stopping existing Proxy process(es): $EXISTING_PIDS"
+    kill $EXISTING_PIDS 2>/dev/null || true
+    sleep 2
+    STILL_RUNNING=$(pgrep -f "$SCRIPT_DIR/proxy")
+    if [ -n "$STILL_RUNNING" ]; then
+        echo "Force killing Proxy process(es): $STILL_RUNNING"
+        kill -9 $STILL_RUNNING 2>/dev/null || true
+    fi
+fi
+
 # Create data directory for SQLite database
 mkdir -p data
 mkdir -p logs
@@ -30,8 +42,8 @@ fi
 
 echo "Starting Proxy..."
 if [ -n "$CONFIG_PATH" ]; then
-    ./proxy --config "$CONFIG_PATH" > logs/proxy.out 2>&1
+    nohup ./proxy --config "$CONFIG_PATH" > logs/proxy.out 2>&1 &
 else
-    ./proxy > logs/proxy.out 2>&1
+    nohup ./proxy > logs/proxy.out 2>&1 &
 fi
 echo "Proxy started with PID $!"

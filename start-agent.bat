@@ -12,13 +12,18 @@ if not exist "agent.exe" (
 
 set "CONFIG_PATH=agent.toml"
 
+for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq agent.exe" ^| findstr /I "agent.exe"') do (
+  echo Stopping existing Agent process PID: %%P
+  taskkill /F /PID %%P >nul 2>&1
+)
+
 echo Starting Agent...
 if not exist "logs" mkdir "logs"
 
 if defined CONFIG_PATH (
-  "%~dp0agent.exe" --config "%CONFIG_PATH%" > "%~dp0logs\agent.out" 2>&1
+  start "" /B "%~dp0agent.exe" --config "%CONFIG_PATH%" > "%~dp0logs\agent.out" 2>&1
 ) else (
-  "%~dp0agent.exe" > "%~dp0logs\agent.out" 2>&1
+  start "" /B "%~dp0agent.exe" > "%~dp0logs\agent.out" 2>&1
 )
 
 endlocal

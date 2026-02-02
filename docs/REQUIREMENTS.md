@@ -83,6 +83,7 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
   - The log should print into log files in non-blocking mode.
   - The thread number of `tokio` runtime should be configurable via the configuration file and cli parameter.
   - The agent and proxy will be deployed separately on different host, so the startup script should be separate, and should assume the final build target is in the same folder of the startup script.
+  - The startup script should first stop the current running process and start a new process.
   - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
   - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
   - The CRUD for user in proxy side should from `sqlite` with `SeaORM`
@@ -108,3 +109,18 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
 - Load tests:
   - Load tests should be written to test the performance and stability of the application.
   - Generate the performance testing report.
+
+## Github Workflow
+
+There should be github workflow to do build, integration testing and deploy.
+
+- Build workflow to build project and run the unit testing.
+- Integration testing work flow, run the integration teting.
+- Deploy workflow:
+  - Deploy the proxy build result and related configuration files to target linux server with SCP, and start the proxy side with the `start-proxy.sh`.
+  - The proxy build result should copy to the folder path with is defined in repository secrets with key `DEPLOY_FOLDER`.
+  - The configuration file should be copy to the same level of the build reustl.
+  - In deploy workflow the target linux server hostname, username and password of the target linux server should read from repository secrets.
+    - The linux server ip address is defined with: `REMOTE_HOST`
+    - The linux server username is defined with: `REMOTE_USER`
+    - The linux server password is defined with: `REMOTE_PASSWORD`
