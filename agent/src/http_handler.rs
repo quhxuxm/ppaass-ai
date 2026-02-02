@@ -1,7 +1,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -9,6 +9,7 @@ use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::Address;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
@@ -19,8 +20,10 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     if let Some(host_header) = req
         .headers()
         .get(hyper::header::HOST)
-        .and_then(|h| h.to_str().ok())
+        // Explicitly annotate closure argument type to help inference
+        .and_then(|h: &hyper::header::HeaderValue| h.to_str().ok())
     {
+        let host_header: &str = host_header;
         // Handle IPv6 addresses: [::1]:8080
         if host_header.starts_with('[') {
             // IPv6 format
@@ -80,7 +83,7 @@ pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>
 async fn handle_http_request(
     req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
-) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
+) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("HTTP request: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
@@ -93,7 +96,7 @@ async fn handle_http_request(
 async fn handle_connect(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
-) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
+) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri().clone();
     let host = uri.host().unwrap_or("").to_string();
     let port = uri.port_u16().unwrap_or(443);
@@ -118,7 +121,7 @@ async fn handle_connect(
             error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from("Failed to connect to proxy")))
+                .body(boxed(Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {})))
                 .unwrap());
         }
     };
@@ -141,7 +144,7 @@ async fn handle_connect(
     // Send 200 Connection Established response
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .body(Full::new(Bytes::new()))
+        .body(empty())
         .unwrap())
 }
 
@@ -175,9 +178,9 @@ async fn tunnel(
 }
 
 async fn handle_regular_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
-) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
+) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri();
 
     // Extract host and port from Host header or URI
@@ -188,7 +191,7 @@ async fn handle_regular_request(
     if host.is_empty() {
         return Ok(Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(Full::new(Bytes::from("Missing host")))
+            .body(boxed(Full::new(Bytes::from("Missing host")).map_err(|e| match e {})))
             .unwrap());
     }
 
@@ -204,191 +207,51 @@ async fn handle_regular_request(
             error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from("Failed to connect to proxy")))
+                .body(boxed(Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {})))
                 .unwrap());
         }
     };
 
-    // Split stream for send/receive
-    let (mut stream_sender, mut stream_receiver) = connected_stream.split();
+    // Convert into async IO
+    let proxy_io = connected_stream.into_async_io();
 
-    // Build the HTTP request to send to target
-    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    // Fix up the URI to be a relative path (origin-form) for the target server
+    let path = req.uri().path_and_query().map(|pq: &hyper::http::uri::PathAndQuery| pq.as_str()).unwrap_or("/");
 
-    // Format Host header - only include port if non-standard
-    let host_header = if port == 80 {
-        host.clone()
-    } else {
-        format!("{}:{}", host, port)
-    };
-
-    let mut request_bytes = format!(
-        "{} {} HTTP/1.1\r\nHost: {}\r\n",
-        req.method(),
-        path,
-        host_header
-    );
-
-    // Add other headers, but modify Connection header
-    let mut has_connection = false;
-    for (name, value) in req.headers() {
-        if name == hyper::header::HOST {
-            continue;
-        }
-        if name == hyper::header::CONNECTION {
-            has_connection = true;
-            // Force close connection to get complete response
-            request_bytes.push_str("Connection: close\r\n");
-            continue;
-        }
-        if let Ok(v) = value.to_str() {
-            request_bytes.push_str(&format!("{}: {}\r\n", name, v));
-        }
+    if let Ok(new_uri) = Uri::from_str(path) {
+        *req.uri_mut() = new_uri;
     }
 
-    // Add Connection: close if not present to ensure we get complete response
-    if !has_connection {
-        request_bytes.push_str("Connection: close\r\n");
-    }
+    // Handshake with the target (via proxy tunnel)
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
 
-    request_bytes.push_str("\r\n");
-
-    // Collect body
-    let body_bytes = match req.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
-            error!("Failed to collect request body: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from("Failed to read request body")))
-                .unwrap());
+    tokio::spawn(async move {
+        if let Err(err) = conn.await {
+            error!("Connection failed: {:?}", err);
         }
-    };
+    });
 
-    let mut full_request = request_bytes.into_bytes();
-    full_request.extend_from_slice(&body_bytes);
+    // Send the request
+    let response = sender.send_request(req).await?;
 
-    debug!("Sending HTTP request: {} bytes", full_request.len());
+    // Convert the response body to our BoxBody type
+    let (parts, body) = response.into_parts();
+    let body = boxed(body);
 
-    // Send request to proxy (don't send is_end yet - we need the response first)
-    if let Err(e) = stream_sender.send_data(full_request, false).await {
-        error!("Failed to send request to proxy: {}", e);
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .body(Full::new(Bytes::from("Failed to send request")))
-            .unwrap());
-    }
-
-    // Receive complete response from proxy
-    let mut response_data = Vec::new();
-    let max_response_size = 10 * 1024 * 1024; // 10MB limit
-    loop {
-        match stream_receiver.receive_data().await {
-            Some(data_packet) => {
-                debug!("Received {} bytes from proxy", data_packet.data.len());
-
-                // Check size limit
-                if response_data.len() + data_packet.data.len() > max_response_size {
-                    error!("Response too large, truncating");
-                    break;
-                }
-
-                response_data.extend_from_slice(&data_packet.data);
-                if data_packet.is_end {
-                    debug!("Received end of stream signal");
-                    break;
-                }
-            }
-            None => {
-                debug!("Stream channel closed");
-                break;
-            }
-        }
-    }
-
-    // Now signal end of stream (cleanup)
-    let _ = stream_sender.send_data(vec![], true).await;
-
-    debug!("Total response size: {} bytes", response_data.len());
-
-    if response_data.is_empty() {
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .body(Full::new(Bytes::from("No response from target")))
-            .unwrap());
-    }
-
-    // Parse the HTTP response
-    match parse_http_response(&response_data) {
-        Ok((status, headers, body)) => {
-            let mut builder = Response::builder().status(status);
-            for (name, value) in headers {
-                builder = builder.header(name, value);
-            }
-            Ok(builder.body(Full::new(Bytes::from(body))).unwrap())
-        }
-        Err(e) => {
-            error!("Failed to parse HTTP response: {}", e);
-            // Return raw response as fallback
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .body(Full::new(Bytes::from(response_data)))
-                .unwrap())
-        }
-    }
+    Ok(Response::from_parts(parts, body))
 }
 
-type HttpParseResult = std::result::Result<(StatusCode, Vec<(String, String)>, Vec<u8>), String>;
+// Helper for unknown body
+type AgentBody = BoxBody<Bytes, hyper::Error>;
 
-/// Parse HTTP response into status, headers, and body
-fn parse_http_response(data: &[u8]) -> HttpParseResult {
-    // Find header/body separator
-    let header_end = data
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or("No header/body separator found")?;
-
-    let header_bytes = &data[..header_end];
-    let body = data[header_end + 4..].to_vec();
-
-    let header_str =
-        std::str::from_utf8(header_bytes).map_err(|e| format!("Invalid header encoding: {}", e))?;
-
-    let mut lines = header_str.lines();
-
-    // Parse status line
-    let status_line = lines.next().ok_or("Missing status line")?;
-    let parts: Vec<&str> = status_line.splitn(3, ' ').collect();
-    if parts.len() < 2 {
-        return Err("Invalid status line".to_string());
-    }
-
-    let status_code: u16 = parts[1].parse().map_err(|_| "Invalid status code")?;
-    let status = StatusCode::from_u16(status_code).map_err(|_| "Invalid status code")?;
-
-    // Parse headers
-    let mut headers = Vec::new();
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        if let Some(pos) = line.find(':') {
-            let name = line[..pos].trim().to_string();
-            let value = line[pos + 1..].trim().to_string();
-            // Skip hop-by-hop headers
-            if !name.eq_ignore_ascii_case("transfer-encoding")
-                && !name.eq_ignore_ascii_case("connection")
-                && !name.eq_ignore_ascii_case("keep-alive")
-                && !name.eq_ignore_ascii_case("proxy-authenticate")
-                && !name.eq_ignore_ascii_case("proxy-authorization")
-                && !name.eq_ignore_ascii_case("te")
-                && !name.eq_ignore_ascii_case("trailer")
-                && !name.eq_ignore_ascii_case("upgrade")
-            {
-                headers.push((name, value));
-            }
-        }
-    }
-
-    Ok((status, headers, body))
+fn boxed<B>(body: B) -> AgentBody
+where
+    B: hyper::body::Body<Data = Bytes, Error = hyper::Error> + Send + Sync + 'static,
+{
+    BoxBody::new(body)
 }
+
+fn empty() -> AgentBody {
+    boxed(Full::new(Bytes::new()).map_err(|e| match e {}))
+}
+
