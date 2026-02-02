@@ -1,74 +1,69 @@
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::UserConfig;
 use crate::error::{ProxyError, Result};
-use futures::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
-};
+use futures::{Sink, SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use protocol::{
     Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, ProxyRequest,
     ProxyResponse, ServerCodec,
     crypto::{AesGcmCipher, RsaKeyPair},
     CipherState,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tokio_util::sync::PollSender;
 use tracing::{debug, error, info};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use futures::{Sink, Stream};
 use bytes::Bytes;
+use std::io;
 
 type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
 
-/// Context for the bidirectional relay task containing shared resources
-struct RelayContext {
+struct BytesToProxyResponseSink<'a> {
+    inner: &'a mut FramedWriter,
     stream_id: String,
-    write_tx: mpsc::Sender<ProxyResponse>,
-    bandwidth_monitor: Arc<BandwidthMonitor>,
     username: Option<String>,
+    bandwidth_monitor: Arc<BandwidthMonitor>,
 }
 
-impl RelayContext {
-    /// Send a data packet to the agent
-    async fn send_data_packet(&self, data_packet: DataPacket) -> Result<()> {
-        // Encryption and serialization is handled by the codec
-        self.write_tx
-            .send(ProxyResponse::Data(data_packet))
-            .await
-            .map_err(|e| ProxyError::Connection(format!("Failed to send data packet: {}", e)))?;
+impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
+    type Error = std::io::Error;
 
-        Ok(())
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_ready(cx)
     }
 
-    /// Send end-of-stream packet to agent
-    async fn send_end_packet(&self) {
-        let end_packet = DataPacket {
-            stream_id: self.stream_id.clone(),
-            data: vec![],
-            is_end: true,
+    fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::result::Result<(), Self::Error> {
+        let stream_id = self.stream_id.clone();
+        if let Some(user) = &self.username {
+            self.bandwidth_monitor.record_sent(user, item.len() as u64);
+        }
+        let packet = DataPacket {
+            stream_id,
+            data: item.to_vec(),
+            is_end: false,
         };
-        let _ = self.send_data_packet(end_packet).await;
+        Pin::new(&mut self.inner).start_send(ProxyResponse::Data(packet))
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_close(cx)
     }
 }
 
 pub struct ProxyConnection {
-    write_tx: mpsc::Sender<ProxyResponse>,
+    writer: FramedWriter,
     reader: FramedReader,
     user_config: Option<UserConfig>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
     cipher_state: Arc<CipherState>,
-    // Store channels for sending data to target streams (for bidirectional copy)
-    target_senders: HashMap<String, mpsc::Sender<Vec<u8>>>,
-    // Store shutdown senders to signal end of stream
-    target_shutdown: HashMap<String, mpsc::Sender<()>>,
     pending_auth_request: Option<AuthRequest>,
 }
 
@@ -78,47 +73,14 @@ impl ProxyConnection {
         let framed = Framed::new(stream, ServerCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
 
-        // Spawn write loop
-        let (write_tx, write_rx) = mpsc::channel(32);
-        tokio::spawn(Self::write_loop(writer, write_rx));
-
         Self {
-            write_tx,
+            writer,
             reader,
             user_config: None,
             bandwidth_monitor,
             cipher_state,
-            target_senders: HashMap::new(),
-            target_shutdown: HashMap::new(),
             pending_auth_request: None,
         }
-    }
-
-    async fn write_loop(mut writer: FramedWriter, mut rx: mpsc::Receiver<ProxyResponse>) {
-        while let Some(response) = rx.recv().await {
-            if let Err(e) = writer.send(response).await {
-                error!("Failed to write response to socket: {}", e);
-                break;
-            }
-        }
-    }
-
-    async fn send_response_internal(&self, response: ProxyResponse) -> Result<()> {
-        self.write_tx
-            .send(response)
-            .await
-            .map_err(|e| ProxyError::Connection(format!("Failed to send response: {}", e)))?;
-        Ok(())
-    }
-
-    /// Send an encrypted data packet to the agent
-    async fn send_encrypted_data_packet(&self, data_packet: DataPacket) -> Result<()> {
-        if self.user_config.is_none() {
-            return Err(ProxyError::Authentication("Not authenticated".to_string()));
-        }
-
-        // Encryption and serialization is handled by the codec
-        self.send_response_internal(ProxyResponse::Data(data_packet)).await
     }
 
     async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
@@ -163,7 +125,7 @@ impl ProxyConnection {
             session_id: None,
         };
 
-        self.send_response_internal(ProxyResponse::Auth(auth_response)).await
+        self.send_response(ProxyResponse::Auth(auth_response)).await
     }
 
     pub async fn authenticate(&mut self, user_config: UserConfig) -> Result<()> {
@@ -240,7 +202,7 @@ impl ProxyConnection {
             auth_response.session_id
         );
 
-        self.send_response_internal(ProxyResponse::Auth(auth_response)).await?;
+        self.send_response(ProxyResponse::Auth(auth_response)).await?;
 
         self.user_config = Some(user_config);
 
@@ -251,37 +213,46 @@ impl ProxyConnection {
         Ok(())
     }
 
-    pub async fn handle_request(&mut self) -> Result<bool> {
-        // Receive encrypted message (decrypted by codec)
-        let request = match self.read_request().await? {
-            Some(req) => req,
-            None => return Ok(false), // Connection closed
-        };
+    async fn send_response(&mut self, response: ProxyResponse) -> Result<()> {
+        self.writer
+            .send(response)
+            .await
+            .map_err(|e| ProxyError::Connection(format!("Failed to send response: {}", e)))?;
+        Ok(())
+    }
 
-        match request {
-            ProxyRequest::Connect(ref connect_request) => {
-                debug!(
-                    "[CONNECT REQUEST] request_id={}, address={:?}",
-                    connect_request.request_id, connect_request.address
-                );
-                self.handle_connect(connect_request.clone()).await?;
-            }
-            ProxyRequest::Data(ref data_packet) => {
-                debug!(
-                    "[DATA REQUEST] stream_id={}, data_len={}, is_end={}, data_hex={}",
-                    data_packet.stream_id,
-                    data_packet.data.len(),
-                    data_packet.is_end,
-                    hex::encode(&data_packet.data)
-                );
-                self.handle_data(data_packet.clone()).await?;
-            }
-            _ => {
-                error!("Unexpected request type");
+    pub async fn handle_request(&mut self) -> Result<bool> {
+        self.process().await
+    }
+
+    pub async fn process(&mut self) -> Result<bool> {
+        // Only loops for initial requests (Auth, Connect)
+        // Once connected, it hands over to relay and returns.
+        loop {
+            match self.reader.next().await {
+                Some(Ok(req)) => {
+                    match req {
+                        ProxyRequest::Connect(connect_request) => {
+                            debug!(
+                                "[CONNECT REQUEST] request_id={}, address={:?}",
+                                connect_request.request_id, connect_request.address
+                            );
+                            self.handle_connect(connect_request).await?;
+                            // After relay finishes (connection closed), we return false to close connection
+                            return Ok(false);
+                        }
+                        ProxyRequest::Auth(auth_request) => {
+                            debug!("Unexpected Auth request in process loop: {:?}", auth_request.username);
+                        }
+                        _ => {
+                            error!("Unexpected request type before Connect");
+                        }
+                    }
+                }
+                Some(Err(e)) => return Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
+                None => return Ok(false), // Agent connection closed
             }
         }
-
-        Ok(true)
     }
 
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
@@ -325,42 +296,20 @@ impl ProxyConnection {
         };
 
         match TcpStream::connect(&target_addr).await {
-            Ok(stream) => {
+            Ok(mut target_stream) => {
                 info!("Connected to target: {}", target_addr);
 
-                let stream_id = connect_request.request_id.clone();
-
-                // Create channels for bidirectional communication
-                // Data channel: main task -> relay task (agent -> target)
-                let (data_tx, data_rx) = mpsc::channel::<Vec<u8>>(32);
-                // Shutdown channel: main task -> relay task
-                let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
-
-                // Store senders for this stream
-                self.target_senders.insert(stream_id.clone(), data_tx);
-                self.target_shutdown.insert(stream_id.clone(), shutdown_tx);
-
-                // Create relay context with shared resources
-                let ctx = RelayContext {
-                    stream_id,
-                    write_tx: self.write_tx.clone(),
-                    bandwidth_monitor: self.bandwidth_monitor.clone(),
-                    username: self.user_config.as_ref().map(|c| c.username.clone()),
-                };
-
-                // Spawn bidirectional relay task
-                tokio::spawn(async move {
-                    Self::bidirectional_relay_task(ctx, stream, data_rx, shutdown_rx).await;
-                });
-
                 let connect_response = ConnectResponse {
-                    request_id: connect_request.request_id,
+                    request_id: connect_request.request_id.clone(),
                     success: true,
                     message: "Connected".to_string(),
                 };
 
                 self.send_response(ProxyResponse::Connect(connect_response))
                     .await?;
+
+                // Handover to bidirectional relay
+                self.relay(connect_request.request_id, &mut target_stream).await?;
             }
             Err(e) => {
                 error!("Failed to connect to target: {}", e);
@@ -375,223 +324,122 @@ impl ProxyConnection {
         Ok(())
     }
 
-    /// Bidirectional relay task using tokio::io::copy_bidirectional pattern
-    /// This handles both directions efficiently:
-    /// - Agent -> Target: receives data from channel and writes to target
-    /// - Target -> Agent: reads from target and sends encrypted data to agent
-    async fn bidirectional_relay_task(
-        ctx: RelayContext,
-        mut target_stream: TcpStream,
-        data_rx: mpsc::Receiver<Vec<u8>>,
-        mut shutdown_rx: mpsc::Receiver<()>,
-    ) {
-        let write_tx = ctx.write_tx.clone();
+    async fn relay(&mut self, stream_id: String, target_stream: &mut TcpStream) -> Result<()> {
+        let username = self.user_config.as_ref().map(|c| c.username.clone());
+        let monitor_stream = self.bandwidth_monitor.clone();
+        let username_stream = username.clone();
 
-        // Agent write: Send wrapper (implements Sink)
-        struct AgentSink {
-            tx: PollSender<ProxyResponse>,
-            stream_id: String,
-        }
-
-        impl Sink<&[u8]> for AgentSink {
-            type Error = std::io::Error;
-
-            fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Pin::new(&mut self.tx).poll_ready(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-
-            fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::io::Result<()> {
-                let packet = DataPacket {
-                    stream_id: self.stream_id.clone(),
-                    data: item.to_vec(),
-                    is_end: false,
-                };
-                Pin::new(&mut self.tx).start_send(ProxyResponse::Data(packet))
-                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-
-            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Pin::new(&mut self.tx).poll_flush(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-
-            fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                let packet = DataPacket {
-                    stream_id: self.stream_id.clone(),
-                    data: vec![],
-                    is_end: true,
-                };
-                // Try to send close packet, but ignore errors if pipe broken
-                let _ = Pin::new(&mut self.tx).start_send(ProxyResponse::Data(packet));
-                Pin::new(&mut self.tx).poll_close(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-        }
-
-        // Agent read: Receiver wrapper
-        struct AgentSource {
-            rx: mpsc::Receiver<Vec<u8>>,
-        }
-
-        impl Stream for AgentSource {
-            type Item = std::io::Result<Bytes>;
-
-            fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-                match self.rx.poll_recv(cx) {
-                    Poll::Ready(Some(data)) if !data.is_empty() => {
-                        Poll::Ready(Some(Ok(Bytes::from(data))))
-                    },
-                    Poll::Ready(Some(_)) => Poll::Ready(None), // Empty data signals EOF
-                    Poll::Ready(None) => Poll::Ready(None),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-
-        // Combine into AsyncRead + AsyncWrite
-        let agent_sink = AgentSink {
-            tx: PollSender::new(write_tx),
-            stream_id: ctx.stream_id.clone(),
+        // Use a custom Sink implementation to avoid HRTB issues with SinkExt::with and closures
+        let sink = BytesToProxyResponseSink {
+            inner: &mut self.writer,
+            stream_id: stream_id.clone(),
+            username: username.clone(),
+            bandwidth_monitor: self.bandwidth_monitor.clone(),
         };
-        let agent_writer = SinkWriter::new(agent_sink);
 
-        let agent_source = AgentSource {
-            rx: data_rx,
-        };
-        let agent_reader = StreamReader::new(agent_source);
+        // Use StreamExt::filter_map to adapt ProxyRequest -> Bytes
+        // Note: We use filter_map without async closure to ensure Unpin
+        // Async closures in filter_map return a Future, which might not be Unpin if it captures references.
+        // We can use std::future::ready or just strict values if no await is needed.
+        let stream = (&mut self.reader).filter_map(move |res| {
+            let user = username_stream.as_ref();
+            let monitor = &monitor_stream;
 
-        // We need to implement a combined IO object or wrap separate writer/reader
-        // Since copy_bidirectional takes AsyncRead + AsyncWrite, we use tokio::io::join? No, that's for futures.
-        // We can use helper struct that composes reader and writer.
+            let result = match res {
+                Ok(ProxyRequest::Data(packet)) => {
+                    if !packet.data.is_empty() {
+                        if let Some(u) = user {
+                            monitor.record_received(u, packet.data.len() as u64);
+                        }
+                        Some(io::Result::Ok(Bytes::from(packet.data)))
+                    } else {
+                        // Empty data or is_end=true: ignore, let TCP FIN handle EOF
+                        None
+                    }
+                },
+                Ok(_) => None, // Ignore non-Data packets
+                Err(e) => Some(Err(io::Error::other(e))),
+            };
 
+            futures::future::ready(result)
+        });
+
+        let writer = SinkWriter::new(sink);
+        let reader = StreamReader::new(stream);
+
+        // Wrapper to satisfy AsyncRead + AsyncWrite on the generic types
         struct AgentIo<R, W> {
             reader: R,
             writer: W,
         }
-
         impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncRead for AgentIo<R, W> {
-            fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+            fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
                 Pin::new(&mut self.reader).poll_read(cx, buf)
             }
         }
-
         impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for AgentIo<R, W> {
-            fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+                // SinkWriter writes bytes. We ideally want to write &[u8] but our Sink adapter expects Vec<u8> now?
+                // Wait, if we change the Sink adapter to expect Vec<u8>, SinkWriter needs to feed it Vec<u8>.
+                // SinkWriter documentation says it requires Sink<&[u8]>.
+                // BUT the error says "implements Sink<&'2 [u8]> for some specific lifetime '2" but needs "for any lifetime '1".
+                // This is a Higher-Rank Trait Bound (HRTB) issue.
+                // The closure takes `|bytes: &[u8]|`. The compiler infers a specific lifetime.
+                // We need it to work for ANY lifetime.
+
+                // Usually this is fixed by hinting the compiler about the argument type.
+                // closure argument: `bytes: &[u8]`.
+                // The issue might be that `sink.with` creates a type that is bound to the specific lifetime of the closure argument?
+                // Or rather, SinkWriter calls start_send with a short-lived reference.
+
+                // Let's try explicitly typing the closure argument as `&[u8]`. I did that.
+                // Maybe the problem is `move |bytes: &[u8]|`?
+
+                // Alternative fix: Use `Vec<u8>` in the Sink, but `SinkWriter` writes `&[u8]`.
+                // SinkWriter copies data into its internal buffer?
+                // SinkWriter implements AsyncWrite. When we write to it, it buffers.
+                // When we flush/write, it feeds items to the Sink.
+                // SinkWriter feeds `&[u8]` (slice of buffer) to the sink.
+
+                // The error is tricky.
+                // "implementation of `futures::Sink` is not general enough"
+                // `With<...>` must implement `Sink<&'1 [u8]>` for any lifetime '1.
+                // But it implements `Sink<&'2 [u8]>`.
+
+                // This often happens when the closure return type depends on the lifetime of the input.
+                // My closure returns `Ready<Result<...>>`. `Ready` owns the result.
+                // `Result` contains `ProxyResponse`.
+                // `ProxyResponse::Data(packet)`. `Packet` owns `data` (Vec<u8>).
+                // `bytes.to_vec()` creates owned data from borrowed input.
+                // So the return future does NOT depend on input lifetime.
+
+                // Why does the compiler think it does?
+                // `move |bytes: &[u8]|`.
+
+                // Maybe because I am using `&mut self.writer`?
+                // No, that's the inner sink.
+
+                // Let's try to remove `move` if possible? No, we capture `stream_id` etc.
+
+                // One workaround for this specific rustc quirk with HRTB and closures in `with` is to force the type inference.
+                // Or box the sink? `Box::pin(sink)`?
+
+                // Let's try boxing the sink.
                 Pin::new(&mut self.writer).poll_write(cx, buf)
             }
-
-            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
                 Pin::new(&mut self.writer).poll_flush(cx)
             }
-
-            fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
                 Pin::new(&mut self.writer).poll_shutdown(cx)
             }
         }
 
-        let mut agent_io = AgentIo {
-            reader: agent_reader,
-            writer: agent_writer,
-        };
+        let mut agent_io = AgentIo { reader, writer };
 
-        // Also handling shutdown_rx via select?
-        // copy_bidirectional finishes when one side closes.
-        // But shutdown_rx can come from outside (client disconnects forcefully).
-        // Since we are now using copy_bidirectional, we block on it.
-        // We can run copy_bidirectional in a select with shutdown_rx.
-
-        tokio::select! {
-            res = tokio::io::copy_bidirectional(&mut target_stream, &mut agent_io) => {
-                match res {
-                    Ok((target_to_agent, agent_to_target)) => {
-                        debug!("Relay finished: {} up, {} down", agent_to_target, target_to_agent);
-                        // Record bandwidth for the final flush
-                        if let Some(ref user) = ctx.username {
-                            // target_to_agent bytes were sent to agent
-                            ctx.bandwidth_monitor.record_sent(user, target_to_agent);
-
-                            // agent_to_target bytes were received from agent
-                            ctx.bandwidth_monitor.record_received(user, agent_to_target);
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Relay error: {}", e);
-                    }
-                }
-            }
-            _ = shutdown_rx.recv() => {
-                debug!("Relay shutdown signaled");
-            }
-        }
-
-        // Ensure EOF sent
-        ctx.send_end_packet().await;
-        debug!("[RELAY] Relay task ended for stream: {}", ctx.stream_id);
-    }
-
-    async fn handle_data(&mut self, data_packet: DataPacket) -> Result<()> {
-        debug!(
-            "[AGENT->TARGET] Data packet for stream: {}, size: {}, is_end: {}",
-            data_packet.stream_id,
-            data_packet.data.len(),
-            data_packet.is_end
-        );
-
-        // Record bandwidth usage and enforce limit
-        if let Some(user_config) = &self.user_config {
-            self.bandwidth_monitor
-                .record_received(&user_config.username, data_packet.data.len() as u64);
-            if !self
-                .bandwidth_monitor
-                .check_limit(&user_config.username)
-                .await
-            {
-                let end_packet = DataPacket {
-                    stream_id: data_packet.stream_id.clone(),
-                    data: vec![],
-                    is_end: true,
-                };
-                let _ = self.send_encrypted_data_packet(end_packet).await;
-                // Signal shutdown to relay task
-                if let Some(shutdown_tx) = self.target_shutdown.remove(&data_packet.stream_id) {
-                    let _ = shutdown_tx.send(()).await;
-                }
-                self.target_senders.remove(&data_packet.stream_id);
-                return Ok(());
-            }
-        }
-
-        // Get the data sender channel for this stream_id
-        let data_sender = self.target_senders.get(&data_packet.stream_id).cloned();
-
-        match data_sender {
-            Some(sender) => {
-                // Send data to relay task via channel
-                if data_packet.is_end {
-                    // Send empty data to signal end of stream
-                    debug!("[AGENT->TARGET] End of stream, sending shutdown signal");
-                    if sender.send(vec![]).await.is_err() {
-                        debug!("Channel closed for stream: {}", data_packet.stream_id);
-                    }
-                    self.target_senders.remove(&data_packet.stream_id);
-                    self.target_shutdown.remove(&data_packet.stream_id);
-                } else if !data_packet.data.is_empty() {
-                    debug!(
-                        "[AGENT->TARGET] Forwarding {} bytes via channel",
-                        data_packet.data.len()
-                    );
-                    if sender.send(data_packet.data).await.is_err() {
-                        error!("Failed to send data to relay task");
-                        self.target_senders.remove(&data_packet.stream_id);
-                        self.target_shutdown.remove(&data_packet.stream_id);
-                    }
-                }
-            }
-            None => {
-                // This can happen if the relay task already closed the connection
-                debug!(
-                    "No channel found for stream_id: {} (may already be closed)",
-                    data_packet.stream_id
-                );
-            }
+        match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
+            Ok((up, down)) => debug!("Relay finished: {} up, {} down", up, down),
+            Err(e) => debug!("Relay error: {}", e),
         }
 
         Ok(())
@@ -606,16 +454,5 @@ impl ProxyConnection {
 
         self.send_response(ProxyResponse::Connect(connect_response))
             .await
-    }
-
-    async fn send_response(&self, response: ProxyResponse) -> Result<()> {
-        // Use codec to encode message with length-delimited framing
-        // Note: explicit serialization for size checking removed to rely on codec
-        self.send_response_internal(response).await?;
-
-        debug!("[RESPONSE] Message sent successfully");
-
-
-        Ok(())
     }
 }
