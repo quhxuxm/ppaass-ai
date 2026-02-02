@@ -67,13 +67,13 @@ impl Decoder for ProxyCodec {
                 })?;
 
                 // Decrypt payload if cipher is present and message type requires encryption
-                if let Some(cipher) = self.state.cipher.get() {
-                    if !matches!(message.message_type, MessageType::AuthRequest | MessageType::AuthResponse) {
-                         let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
-                             io::Error::new(io::ErrorKind::InvalidData, format!("Decryption failed: {}", e))
-                         })?;
-                         message.payload = decrypted;
-                    }
+                if let Some(cipher) = self.state.cipher.get()
+                    && !matches!(message.message_type, MessageType::AuthRequest | MessageType::AuthResponse)
+                {
+                     let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
+                         io::Error::new(io::ErrorKind::InvalidData, format!("Decryption failed: {}", e))
+                     })?;
+                     message.payload = decrypted;
                 }
 
                 Ok(Some(message))
@@ -89,13 +89,13 @@ impl Encoder<Message> for ProxyCodec {
     fn encode(&mut self, mut item: Message, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
         // Encrypt payload if cipher is present and message type requires encryption
         {
-            if let Some(cipher) = self.state.cipher.get() {
-                if !matches!(item.message_type, MessageType::AuthRequest | MessageType::AuthResponse) {
-                     let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
-                         io::Error::new(io::ErrorKind::InvalidData, format!("Encryption failed: {}", e))
-                     })?;
-                     item.payload = encrypted;
-                }
+            if let Some(cipher) = self.state.cipher.get()
+                && !matches!(item.message_type, MessageType::AuthRequest | MessageType::AuthResponse)
+            {
+                 let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
+                     io::Error::new(io::ErrorKind::InvalidData, format!("Encryption failed: {}", e))
+                 })?;
+                 item.payload = encrypted;
             }
         }
 

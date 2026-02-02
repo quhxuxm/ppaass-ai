@@ -510,11 +510,10 @@ impl ProxyConnection {
                         // Record bandwidth for the final flush
                         if let Some(ref user) = ctx.username {
                             // target_to_agent bytes were sent to agent
-                            ctx.bandwidth_monitor.record_sent(user, target_to_agent as u64);
-                            // bandwidth checks are done during transfer inside codec? NO.
-                            // Previously bandwidth checks were inside loop.
-                            // With copy_bidirectional, we lose per-chunk access unless we wrap streams.
-                            // We can wrap AgentSink to record bandwidth!
+                            ctx.bandwidth_monitor.record_sent(user, target_to_agent);
+
+                            // agent_to_target bytes were received from agent
+                            ctx.bandwidth_monitor.record_received(user, agent_to_target);
                         }
                     }
                     Err(e) => {

@@ -21,7 +21,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
@@ -186,20 +186,6 @@ pub struct ConnectedStream {
 impl ConnectedStream {
     pub fn stream_id(&self) -> &str {
         &self.stream_id
-    }
-
-    /// Split into sender and receiver for concurrent bidirectional communication
-    pub fn split(self) -> (StreamSender, StreamReceiver) {
-        (
-            StreamSender {
-                writer: self.writer,
-                stream_id: self.stream_id.clone(),
-            },
-            StreamReceiver {
-                reader: self.reader,
-                stream_id: self.stream_id,
-            },
-        )
     }
 
     /// Convert to an AsyncRead + AsyncWrite compatible stream for use with copy_bidirectional
@@ -402,76 +388,6 @@ impl AsyncWrite for ProxyStreamIo {
     }
 }
 
-/// Sender half for sending data to proxy
-pub struct StreamSender {
-    writer: FramedWriter,
-    stream_id: String,
-}
-
-impl StreamSender {
-    pub async fn send_data(&mut self, data: Vec<u8>, is_end: bool) -> Result<()> {
-        let data_packet = DataPacket {
-            stream_id: self.stream_id.clone(),
-            data,
-            is_end,
-        };
-
-        // Encryption and serialization is handled by codec
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.writer.send(ProxyRequest::Data(data_packet)),
-        )
-        .await
-        {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(AgentError::Protocol(protocol::ProtocolError::Io(e))),
-            Err(_) => Err(AgentError::Connection("Send timeout".to_string())),
-        }
-    }
-}
-
-/// Receiver half for receiving data from proxy
-pub struct StreamReceiver {
-    reader: FramedReader,
-    stream_id: String,
-}
-
-impl StreamReceiver {
-    pub async fn receive_data(&mut self) -> Option<DataPacket> {
-        loop {
-            match self.reader.next().await {
-                Some(Ok(response)) => {
-                    // Decryption and deserialization handled by codec
-                    match response {
-                        ProxyResponse::Data(packet) => {
-                            if packet.stream_id == self.stream_id {
-                                return Some(packet);
-                            } else {
-                                warn!(
-                                    "Received data for wrong stream: {} vs {}",
-                                    packet.stream_id, self.stream_id
-                                );
-                            }
-                        }
-                        _ => {
-                            warn!("Unexpected response type");
-                            continue;
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    error!("Failed to read from proxy: {}", e);
-                    return None;
-                }
-                None => {
-                    debug!("Proxy connection closed");
-                    return None;
-                }
-            }
-        }
-    }
-}
-
 /// Connection pool using deadpool::unmanaged for prewarming connections
 /// Connections are NOT reused - each connection is taken from the pool and consumed
 pub struct ConnectionPool {
@@ -545,20 +461,38 @@ impl ConnectionPool {
                     to_create, current_size
                 );
 
+                // Limit concurrency to avoid overwhelming the system or proxy
+                const MAX_CONCURRENT_REFILL: usize = 10;
+                let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REFILL));
+                let mut set = tokio::task::JoinSet::new();
+
                 for _ in 0..to_create {
-                    match ProxyConnection::new(&config).await {
-                        Ok(conn) => {
+                    let config = config.clone();
+                    let semaphore = semaphore.clone();
+
+                    set.spawn(async move {
+                        let _permit = semaphore.acquire().await.ok();
+                        ProxyConnection::new(&config).await
+                    });
+                }
+
+                while let Some(res) = set.join_next().await {
+                    match res {
+                        Ok(Ok(conn)) => {
                             if pool.try_add(conn).is_ok() {
                                 available.fetch_add(1, Ordering::Release);
                                 debug!("Added prewarmed connection to pool");
                             } else {
                                 debug!("Pool is full, stopping refill");
-                                break;
+                                // If pool is full, we can discard the rest of the tasks or let them finish and fail to add
+                                // We'll let them finish but stop adding if pool is actually full (try_add fails)
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             warn!("Failed to create prewarmed connection: {}", e);
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        Err(e) => {
+                            warn!("Refill task join error: {}", e);
                         }
                     }
                 }
