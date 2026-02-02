@@ -14,7 +14,7 @@ database_path = "data/users.db"
 keys_dir = "keys"
 
 # Log level: trace, debug, info, warn, error
-log_level = "info"
+log_level = "error"
 
 # Log directory for file-based logging (better performance than console)
 log_dir = "logs"
