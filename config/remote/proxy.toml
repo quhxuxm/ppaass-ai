@@ -2,10 +2,10 @@
 # This configuration is for demo purposes with real RSA keys
 
 # Address to listen for incoming agent connections
-listen_addr = "0.0.0.0:8080"
+listen_addr = "0.0.0.0:80"
 
 # Address for REST API (user management, monitoring)
-api_addr = "0.0.0.0:8081"
+api_addr = "0.0.0.0:8080"
 
 # Path to SQLite database for user management
 database_path = "data/users.db"
