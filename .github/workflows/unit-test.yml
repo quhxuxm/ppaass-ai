@@ -1,4 +1,4 @@
-name: Build and Run Integration Tests
+name: Build and Run Unit Tests
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  integration-test:
+  build:
     runs-on: ubuntu-latest
     container:
       image: debian:bookworm-slim
@@ -23,9 +23,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.93.0"
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Integration Tests
-        run: cargo test -p tests
+      - name: Build
+        run: cargo build --workspace --all-targets --release
+
+      - name: Unit Tests
+        run: cargo test --workspace --lib --bins
