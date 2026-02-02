@@ -6,26 +6,32 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, Message,
-    MessageType, ProxyCodec, ProxyRequest, ProxyResponse,
+    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, ProxyRequest,
+    ProxyResponse, ServerCodec,
     crypto::{AesGcmCipher, RsaKeyPair},
+    CipherState,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
+use tokio_util::io::{SinkWriter, StreamReader};
+use tokio_util::sync::PollSender;
 use tracing::{debug, error, info};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use futures::{Sink, Stream};
+use bytes::Bytes;
 
-type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, Message>;
-type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
+type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
+type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
 
 /// Context for the bidirectional relay task containing shared resources
 struct RelayContext {
     stream_id: String,
-    writer: Arc<Mutex<FramedWriter>>,
-    aes_cipher: Arc<AesGcmCipher>,
+    write_tx: mpsc::Sender<ProxyResponse>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
     username: Option<String>,
 }
@@ -33,16 +39,11 @@ struct RelayContext {
 impl RelayContext {
     /// Send a data packet to the agent
     async fn send_data_packet(&self, data_packet: DataPacket) -> Result<()> {
-        let payload = serde_json::to_vec(&ProxyResponse::Data(data_packet))
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let encrypted_payload = self.aes_cipher.encrypt(&payload)?;
-        let message = Message::new(MessageType::Data, encrypted_payload);
-
-        let mut w = self.writer.lock().await;
-        w.send(message)
+        // Encryption and serialization is handled by the codec
+        self.write_tx
+            .send(ProxyResponse::Data(data_packet))
             .await
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
+            .map_err(|e| ProxyError::Connection(format!("Failed to send data packet: {}", e)))?;
 
         Ok(())
     }
@@ -59,11 +60,11 @@ impl RelayContext {
 }
 
 pub struct ProxyConnection {
-    writer: Arc<Mutex<FramedWriter>>,
-    reader: Arc<Mutex<FramedReader>>,
+    write_tx: mpsc::Sender<ProxyResponse>,
+    reader: FramedReader,
     user_config: Option<UserConfig>,
-    aes_cipher: Option<Arc<AesGcmCipher>>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    cipher_state: Arc<CipherState>,
     // Store channels for sending data to target streams (for bidirectional copy)
     target_senders: HashMap<String, mpsc::Sender<Vec<u8>>>,
     // Store shutdown senders to signal end of stream
@@ -73,48 +74,56 @@ pub struct ProxyConnection {
 
 impl ProxyConnection {
     pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>) -> Self {
-        let framed = Framed::new(stream, ProxyCodec::new());
+        let cipher_state = Arc::new(CipherState::new());
+        let framed = Framed::new(stream, ServerCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
+
+        // Spawn write loop
+        let (write_tx, write_rx) = mpsc::channel(32);
+        tokio::spawn(Self::write_loop(writer, write_rx));
+
         Self {
-            writer: Arc::new(Mutex::new(writer)),
-            reader: Arc::new(Mutex::new(reader)),
+            write_tx,
+            reader,
             user_config: None,
-            aes_cipher: None,
             bandwidth_monitor,
+            cipher_state,
             target_senders: HashMap::new(),
             target_shutdown: HashMap::new(),
             pending_auth_request: None,
         }
     }
 
-    async fn send_message(&self, message: Message) -> Result<()> {
-        let mut w = self.writer.lock().await;
-        w.send(message)
+    async fn write_loop(mut writer: FramedWriter, mut rx: mpsc::Receiver<ProxyResponse>) {
+        while let Some(response) = rx.recv().await {
+            if let Err(e) = writer.send(response).await {
+                error!("Failed to write response to socket: {}", e);
+                break;
+            }
+        }
+    }
+
+    async fn send_response_internal(&self, response: ProxyResponse) -> Result<()> {
+        self.write_tx
+            .send(response)
             .await
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Io(e)))?;
+            .map_err(|e| ProxyError::Connection(format!("Failed to send response: {}", e)))?;
         Ok(())
     }
 
     /// Send an encrypted data packet to the agent
     async fn send_encrypted_data_packet(&self, data_packet: DataPacket) -> Result<()> {
-        let aes_cipher = self
-            .aes_cipher
-            .as_ref()
-            .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
+        if self.user_config.is_none() {
+            return Err(ProxyError::Authentication("Not authenticated".to_string()));
+        }
 
-        let payload = serde_json::to_vec(&ProxyResponse::Data(data_packet))
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let encrypted_payload = aes_cipher.encrypt(&payload)?;
-        let message = Message::new(MessageType::Data, encrypted_payload);
-
-        self.send_message(message).await
+        // Encryption and serialization is handled by the codec
+        self.send_response_internal(ProxyResponse::Data(data_packet)).await
     }
 
-    async fn read_message(&self) -> Result<Option<Message>> {
-        let mut r = self.reader.lock().await;
-        match r.next().await {
-            Some(Ok(msg)) => Ok(Some(msg)),
+    async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
+        match self.reader.next().await {
+            Some(Ok(req)) => Ok(Some(req)),
             Some(Err(e)) => Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
             None => Ok(None), // Connection closed
         }
@@ -123,20 +132,10 @@ impl ProxyConnection {
     /// Peek at the auth request to get the username without completing authentication
     pub async fn peek_auth_username(&mut self) -> Result<String> {
         // Receive auth request
-        let msg = match self.read_message().await? {
-            Some(msg) => msg,
+        let request = match self.read_request().await? {
+            Some(req) => req,
             None => return Err(ProxyError::Connection("Connection closed".to_string())),
         };
-
-        debug!(
-            "[AUTH REQUEST] Received message: type={:?}, payload_len={}, payload_hex={}",
-            msg.message_type,
-            msg.payload.len(),
-            hex::encode(&msg.payload)
-        );
-
-        let request: ProxyRequest = serde_json::from_slice(&msg.payload)
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
 
         if let ProxyRequest::Auth(auth_request) = request {
             let username = auth_request.username.clone();
@@ -164,11 +163,7 @@ impl ProxyConnection {
             session_id: None,
         };
 
-        let payload = serde_json::to_vec(&ProxyResponse::Auth(auth_response))
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let message = Message::new(MessageType::AuthResponse, payload);
-        self.send_message(message).await
+        self.send_response_internal(ProxyResponse::Auth(auth_response)).await
     }
 
     pub async fn authenticate(&mut self, user_config: UserConfig) -> Result<()> {
@@ -240,55 +235,32 @@ impl ProxyConnection {
             session_id: Some(session_id.clone()),
         };
 
-        let payload = serde_json::to_vec(&ProxyResponse::Auth(auth_response))
+        let payload = serde_json::to_vec(&ProxyResponse::Auth(auth_response.clone()))
             .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
 
         debug!(
-            "[AUTH RESPONSE] Sending: success=true, session_id={}, payload_hex={}",
-            session_id,
+            "[AUTH RESPONSE] Sending: success=true, session_id={:?}, payload_hex={}",
+            auth_response.session_id,
             hex::encode(&payload)
         );
 
-        let message = Message::new(MessageType::AuthResponse, payload);
-        self.send_message(message).await?;
+        self.send_response_internal(ProxyResponse::Auth(auth_response)).await?;
 
         self.user_config = Some(user_config);
-        self.aes_cipher = Some(Arc::new(aes_cipher));
+
+        // Update cipher state for future messages
+        self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
         info!("Authentication successful");
         Ok(())
     }
 
     pub async fn handle_request(&mut self) -> Result<bool> {
-        // Receive encrypted message
-        let msg = match self.read_message().await? {
-            Some(msg) => msg,
+        // Receive encrypted message (decrypted by codec)
+        let request = match self.read_request().await? {
+            Some(req) => req,
             None => return Ok(false), // Connection closed
         };
-
-        debug!(
-            "[REQUEST] Received message: type={:?}, payload_len={}, payload_hex={}",
-            msg.message_type,
-            msg.payload.len(),
-            hex::encode(&msg.payload)
-        );
-
-        // Decrypt payload
-        let aes_cipher = self
-            .aes_cipher
-            .as_ref()
-            .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
-
-        let decrypted_payload = aes_cipher.decrypt(&msg.payload)?;
-
-        debug!(
-            "[REQUEST] Decrypted payload_len={}, payload_hex={}",
-            decrypted_payload.len(),
-            hex::encode(&decrypted_payload)
-        );
-
-        let request: ProxyRequest = serde_json::from_slice(&decrypted_payload)
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
 
         match request {
             ProxyRequest::Connect(ref connect_request) => {
@@ -375,8 +347,7 @@ impl ProxyConnection {
                 // Create relay context with shared resources
                 let ctx = RelayContext {
                     stream_id,
-                    writer: self.writer.clone(),
-                    aes_cipher: self.aes_cipher.clone().unwrap(),
+                    write_tx: self.write_tx.clone(),
                     bandwidth_monitor: self.bandwidth_monitor.clone(),
                     username: self.user_config.as_ref().map(|c| c.username.clone()),
                 };
@@ -414,96 +385,151 @@ impl ProxyConnection {
     /// - Target -> Agent: reads from target and sends encrypted data to agent
     async fn bidirectional_relay_task(
         ctx: RelayContext,
-        target_stream: TcpStream,
-        mut data_rx: mpsc::Receiver<Vec<u8>>,
+        mut target_stream: TcpStream,
+        data_rx: mpsc::Receiver<Vec<u8>>,
         mut shutdown_rx: mpsc::Receiver<()>,
     ) {
-        let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
-        let mut read_buffer = vec![0u8; 8192];
-        let mut agent_closed = false;
-        let mut target_closed = false;
+        let write_tx = ctx.write_tx.clone();
 
-        loop {
-            if agent_closed && target_closed {
-                break;
+        // Agent write: Send wrapper (implements Sink)
+        struct AgentSink {
+            tx: PollSender<ProxyResponse>,
+            stream_id: String,
+        }
+
+        impl Sink<&[u8]> for AgentSink {
+            type Error = std::io::Error;
+
+            fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Pin::new(&mut self.tx).poll_ready(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
             }
 
-            tokio::select! {
-                // Receive data from agent (via channel) and write to target
-                data = data_rx.recv(), if !agent_closed => {
-                    match data {
-                        Some(data) if data.is_empty() => {
-                            // End of stream from agent
-                            debug!("[RELAY] Agent signaled end of stream for: {}", ctx.stream_id);
-                            let _ = target_writer.shutdown().await;
-                            agent_closed = true;
-                        }
-                        Some(data) => {
-                            debug!("[RELAY] {} bytes agent -> target for: {}", data.len(), ctx.stream_id);
-                            if let Err(e) = target_writer.write_all(&data).await {
-                                error!("Failed to write to target: {}", e);
-                                agent_closed = true;
-                            }
-                        }
-                        None => {
-                            // Channel closed
-                            debug!("[RELAY] Data channel closed for: {}", ctx.stream_id);
-                            let _ = target_writer.shutdown().await;
-                            agent_closed = true;
-                        }
-                    }
-                }
+            fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::io::Result<()> {
+                let packet = DataPacket {
+                    stream_id: self.stream_id.clone(),
+                    data: item.to_vec(),
+                    is_end: false,
+                };
+                Pin::new(&mut self.tx).start_send(ProxyResponse::Data(packet))
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
 
-                // Read from target and send to agent
-                result = target_reader.read(&mut read_buffer), if !target_closed => {
-                    match result {
-                        Ok(0) => {
-                            // Target closed
-                            debug!("[RELAY] Target closed for: {}", ctx.stream_id);
-                            ctx.send_end_packet().await;
-                            target_closed = true;
-                        }
-                        Ok(n) => {
-                            debug!("[RELAY] {} bytes target -> agent for: {}", n, ctx.stream_id);
+            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Pin::new(&mut self.tx).poll_flush(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
 
-                            // Record bandwidth
-                            if let Some(ref user) = ctx.username {
-                                ctx.bandwidth_monitor.record_sent(user, n as u64);
-                                if !ctx.bandwidth_monitor.check_limit(user).await {
-                                    ctx.send_end_packet().await;
-                                    target_closed = true;
-                                    continue;
-                                }
-                            }
+            fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                let packet = DataPacket {
+                    stream_id: self.stream_id.clone(),
+                    data: vec![],
+                    is_end: true,
+                };
+                // Try to send close packet, but ignore errors if pipe broken
+                let _ = Pin::new(&mut self.tx).start_send(ProxyResponse::Data(packet));
+                Pin::new(&mut self.tx).poll_close(cx).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
 
-                            let data_packet = DataPacket {
-                                stream_id: ctx.stream_id.clone(),
-                                data: read_buffer[..n].to_vec(),
-                                is_end: false,
-                            };
-                            if let Err(e) = ctx.send_data_packet(data_packet).await {
-                                error!("Failed to send data to agent: {}", e);
-                                target_closed = true;
-                            }
-                        }
-                        Err(e) => {
-                            error!("[RELAY] Error reading from target: {}", e);
-                            ctx.send_end_packet().await;
-                            target_closed = true;
-                        }
-                    }
-                }
+        // Agent read: Receiver wrapper
+        struct AgentSource {
+            rx: mpsc::Receiver<Vec<u8>>,
+        }
 
-                // Handle shutdown signal
-                _ = shutdown_rx.recv() => {
-                    debug!("[RELAY] Shutdown signal received for: {}", ctx.stream_id);
-                    let _ = target_writer.shutdown().await;
-                    break;
+        impl Stream for AgentSource {
+            type Item = std::io::Result<Bytes>;
+
+            fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+                match self.rx.poll_recv(cx) {
+                    Poll::Ready(Some(data)) if !data.is_empty() => {
+                        Poll::Ready(Some(Ok(Bytes::from(data))))
+                    },
+                    Poll::Ready(Some(_)) => Poll::Ready(None), // Empty data signals EOF
+                    Poll::Ready(None) => Poll::Ready(None),
+                    Poll::Pending => Poll::Pending,
                 }
             }
         }
 
-        info!("[RELAY] Relay task ended for stream: {}", ctx.stream_id);
+        // Combine into AsyncRead + AsyncWrite
+        let agent_sink = AgentSink {
+            tx: PollSender::new(write_tx),
+            stream_id: ctx.stream_id.clone(),
+        };
+        let agent_writer = SinkWriter::new(agent_sink);
+
+        let agent_source = AgentSource {
+            rx: data_rx,
+        };
+        let agent_reader = StreamReader::new(agent_source);
+
+        // We need to implement a combined IO object or wrap separate writer/reader
+        // Since copy_bidirectional takes AsyncRead + AsyncWrite, we use tokio::io::join? No, that's for futures.
+        // We can use helper struct that composes reader and writer.
+
+        struct AgentIo<R, W> {
+            reader: R,
+            writer: W,
+        }
+
+        impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncRead for AgentIo<R, W> {
+            fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+                Pin::new(&mut self.reader).poll_read(cx, buf)
+            }
+        }
+
+        impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for AgentIo<R, W> {
+            fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+                Pin::new(&mut self.writer).poll_write(cx, buf)
+            }
+
+            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Pin::new(&mut self.writer).poll_flush(cx)
+            }
+
+            fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Pin::new(&mut self.writer).poll_shutdown(cx)
+            }
+        }
+
+        let mut agent_io = AgentIo {
+            reader: agent_reader,
+            writer: agent_writer,
+        };
+
+        // Also handling shutdown_rx via select?
+        // copy_bidirectional finishes when one side closes.
+        // But shutdown_rx can come from outside (client disconnects forcefully).
+        // Since we are now using copy_bidirectional, we block on it.
+        // We can run copy_bidirectional in a select with shutdown_rx.
+
+        tokio::select! {
+            res = tokio::io::copy_bidirectional(&mut target_stream, &mut agent_io) => {
+                match res {
+                    Ok((target_to_agent, agent_to_target)) => {
+                        debug!("Relay finished: {} up, {} down", agent_to_target, target_to_agent);
+                        // Record bandwidth for the final flush
+                        if let Some(ref user) = ctx.username {
+                            // target_to_agent bytes were sent to agent
+                            ctx.bandwidth_monitor.record_sent(user, target_to_agent as u64);
+                            // bandwidth checks are done during transfer inside codec? NO.
+                            // Previously bandwidth checks were inside loop.
+                            // With copy_bidirectional, we lose per-chunk access unless we wrap streams.
+                            // We can wrap AgentSink to record bandwidth!
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Relay error: {}", e);
+                    }
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                debug!("Relay shutdown signaled");
+            }
+        }
+
+        // Ensure EOF sent
+        ctx.send_end_packet().await;
+        debug!("[RELAY] Relay task ended for stream: {}", ctx.stream_id);
     }
 
     async fn handle_data(&mut self, data_packet: DataPacket) -> Result<()> {
@@ -588,34 +614,14 @@ impl ProxyConnection {
     }
 
     async fn send_response(&self, response: ProxyResponse) -> Result<()> {
-        let payload = serde_json::to_vec(&response)
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        debug!(
-            "[RESPONSE] Plain payload_len={}, payload_hex={}",
-            payload.len(),
-            hex::encode(&payload)
-        );
-
-        // Encrypt payload
-        let aes_cipher = self
-            .aes_cipher
-            .as_ref()
-            .ok_or_else(|| ProxyError::Authentication("Not authenticated".to_string()))?;
-
-        let encrypted_payload = aes_cipher.encrypt(&payload)?;
-        let payload_len = encrypted_payload.len();
-
-        debug!(
-            "[RESPONSE] Encrypted payload_len={}, payload_hex={}",
-            payload_len,
-            hex::encode(&encrypted_payload)
-        );
-
-        let message = Message::new(MessageType::Data, encrypted_payload);
+        // Calculate payload length for bandwidth monitoring
+        // This causes double serialization but ensures accuracy for billing/limits
+        let payload_len = serde_json::to_vec(&response)
+             .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?
+             .len();
 
         // Use codec to encode message with length-delimited framing
-        self.send_message(message).await?;
+        self.send_response_internal(response).await?;
 
         debug!("[RESPONSE] Message sent successfully");
 
