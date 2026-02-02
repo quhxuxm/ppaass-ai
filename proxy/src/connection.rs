@@ -235,13 +235,9 @@ impl ProxyConnection {
             session_id: Some(session_id.clone()),
         };
 
-        let payload = serde_json::to_vec(&ProxyResponse::Auth(auth_response.clone()))
-            .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
         debug!(
-            "[AUTH RESPONSE] Sending: success=true, session_id={:?}, payload_hex={}",
-            auth_response.session_id,
-            hex::encode(&payload)
+            "[AUTH RESPONSE] Sending: success=true, session_id={:?}",
+            auth_response.session_id
         );
 
         self.send_response_internal(ProxyResponse::Auth(auth_response)).await?;
@@ -613,22 +609,12 @@ impl ProxyConnection {
     }
 
     async fn send_response(&self, response: ProxyResponse) -> Result<()> {
-        // Calculate payload length for bandwidth monitoring
-        // This causes double serialization but ensures accuracy for billing/limits
-        let payload_len = serde_json::to_vec(&response)
-             .map_err(|e| ProxyError::Protocol(protocol::ProtocolError::Serialization(e)))?
-             .len();
-
         // Use codec to encode message with length-delimited framing
+        // Note: explicit serialization for size checking removed to rely on codec
         self.send_response_internal(response).await?;
 
         debug!("[RESPONSE] Message sent successfully");
 
-        // Record bandwidth usage
-        if let Some(user_config) = &self.user_config {
-            self.bandwidth_monitor
-                .record_sent(&user_config.username, payload_len as u64);
-        }
 
         Ok(())
     }
