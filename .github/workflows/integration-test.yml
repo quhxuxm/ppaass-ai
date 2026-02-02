@@ -1,35 +1,24 @@
-name: Do integration tests
+name: integration-test
 
 on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
 
 jobs:
-  build-and-integration-test:
+  integration-test:
     runs-on: ubuntu-latest
-    # 核心配置：指定使用 Debian 镜像
-    container:
-      image: debian:bookworm-slim # 你可以选择 bullseye 或 bookworm 等版本
-
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Debian 依赖与 Rust
-        run: |
-          apt-get update && apt-get install -y \
-            curl build-essential gcc pkg-config libssl-dev
-          # 在容器内手动安装 rustup
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          # 将 cargo 路径加入当前 shell
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
 
-      - name: 编译项目
-        run: |
-          cargo build --release
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: 运行测试
-        run: |
-          cargo test
+      - name: Integration Tests
+        run: cargo test -p tests

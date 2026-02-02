@@ -16,11 +16,23 @@ if [ ! -f "$CONFIG_PATH" ]; then
     CONFIG_PATH=""
 fi
 
+EXISTING_PIDS=$(pgrep -f "$SCRIPT_DIR/agent")
+if [ -n "$EXISTING_PIDS" ]; then
+    echo "Stopping existing Agent process(es): $EXISTING_PIDS"
+    kill $EXISTING_PIDS 2>/dev/null || true
+    sleep 2
+    STILL_RUNNING=$(pgrep -f "$SCRIPT_DIR/agent")
+    if [ -n "$STILL_RUNNING" ]; then
+        echo "Force killing Agent process(es): $STILL_RUNNING"
+        kill -9 $STILL_RUNNING 2>/dev/null || true
+    fi
+fi
+
 echo "Starting Agent..."
 mkdir -p logs
 if [ -n "$CONFIG_PATH" ]; then
-    ./agent --config "$CONFIG_PATH" > logs/agent.out 2>&1
+    nohup ./agent --config "$CONFIG_PATH" > logs/agent.out 2>&1 &
 else
-    ./agent > logs/agent.out 2>&1
+    nohup ./agent > logs/agent.out 2>&1 &
 fi
-echo "Agent started."
+echo "Agent started with PID $!"
