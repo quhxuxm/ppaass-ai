@@ -45,6 +45,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential gcc pkg-config libssl-dev
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
