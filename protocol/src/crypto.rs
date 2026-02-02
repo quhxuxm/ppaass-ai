@@ -176,6 +176,7 @@ pub fn decrypt_with_public_key(public_key: &RsaPublicKey, data: &[u8]) -> Result
 
 pub struct AesGcmCipher {
     key: [u8; AES_KEY_SIZE],
+    cipher: Aes256Gcm,
 }
 
 impl std::fmt::Debug for AesGcmCipher {
@@ -190,11 +191,13 @@ impl AesGcmCipher {
     pub fn new() -> Self {
         let mut key = [0u8; AES_KEY_SIZE];
         OsRng.fill_bytes(&mut key);
-        Self { key }
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+        Self { key, cipher }
     }
 
     pub fn from_key(key: [u8; AES_KEY_SIZE]) -> Self {
-        Self { key }
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+        Self { key, cipher }
     }
 
     pub fn key(&self) -> &[u8; AES_KEY_SIZE] {
@@ -202,14 +205,12 @@ impl AesGcmCipher {
     }
 
     pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
-
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         let mut rng = OsRng;
         rng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher
+        let ciphertext = self.cipher
             .encrypt(nonce, data)
             .map_err(|e| ProtocolError::Encryption(e.to_string()))?;
 
@@ -227,11 +228,10 @@ impl AesGcmCipher {
             ));
         }
 
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
         let nonce = Nonce::from_slice(&data[..NONCE_SIZE]);
         let ciphertext = &data[NONCE_SIZE..];
 
-        cipher
+        self.cipher
             .decrypt(nonce, ciphertext)
             .map_err(|e| ProtocolError::Decryption(e.to_string()))
     }
