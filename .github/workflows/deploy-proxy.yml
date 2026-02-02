@@ -68,10 +68,17 @@ jobs:
           username: ${{ env.REMOTE_USER }}
           password: ${{ env.REMOTE_PASSWORD }}
           script: |
-            process_id=$(ps -ef | grep "${{ secrets.DEPLOY_FOLDER }}/proxy" | grep -v grep | awk '{print $2}')
+            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
             if [ -n "$process_id" ]; then
               echo "Stopping existing proxy process with PID: $process_id"
               kill -9 $process_id || true
+              sleep 5
+              stopped_process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+              if [ -n "$stopped_process_id" ]; then
+                echo "Failed to stop proxy process with PID: $stopped_process_id"
+                exit 1
+              fi
+              echo "Stopped existing proxy process with PID: $process_id"
             else
               echo "No running proxy process found"
             fi

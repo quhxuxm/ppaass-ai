@@ -16,12 +16,12 @@ if [ ! -f "$CONFIG_PATH" ]; then
     CONFIG_PATH=""
 fi
 
-EXISTING_PIDS=$(pgrep -f "$SCRIPT_DIR/proxy")
+EXISTING_PIDS=$(pgrep -f "./proxy")
 if [ -n "$EXISTING_PIDS" ]; then
     echo "Stopping existing Proxy process(es): $EXISTING_PIDS"
     kill $EXISTING_PIDS 2>/dev/null || true
     sleep 2
-    STILL_RUNNING=$(pgrep -f "$SCRIPT_DIR/proxy")
+    STILL_RUNNING=$(pgrep -f "./proxy")
     if [ -n "$STILL_RUNNING" ]; then
         echo "Force killing Proxy process(es): $STILL_RUNNING"
         kill -9 $STILL_RUNNING 2>/dev/null || true
