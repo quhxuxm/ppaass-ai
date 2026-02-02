@@ -120,7 +120,20 @@ There should be github workflow to do build, integration testing and deploy.
   - Deploy the proxy build result and related configuration files to target linux server with SCP, and start the proxy side with the `start-proxy.sh`.
   - The proxy build result should copy to the folder path with is defined in repository secrets with key `DEPLOY_FOLDER`.
   - The configuration file should be copy to the same level of the build reustl.
+  - The deploy workflow should be triggered manually, with a selection of enviorment types:
+    - `production`
+    - `dev`
+    - `qa`
   - In deploy workflow the target linux server hostname, username and password of the target linux server should read from repository secrets.
-    - The linux server ip address is defined with: `REMOTE_HOST`
-    - The linux server username is defined with: `REMOTE_USER`
-    - The linux server password is defined with: `REMOTE_PASSWORD`
+    - For `production` env:
+      - The linux server ip address is defined with: `PRODUCTION_REMOTE_HOST`
+      - The linux server username is defined with: `PRODUCTION_REMOTE_USER`
+      - The linux server password is defined with: `PRODUCTION_REMOTE_PASSWORD`
+    - For `dev` env:
+      - The linux server ip address is defined with: `DEV_REMOTE_HOST`
+      - The linux server username is defined with: `DEV_REMOTE_USER`
+      - The linux server password is defined with: `DEV_REMOTE_PASSWORD`
+    - For `qa` env:
+      - The linux server ip address is defined with: `QA_REMOTE_HOST`
+      - The linux server username is defined with: `QA_REMOTE_USER`
+      - The linux server password is defined with: `QA_REMOTE_PASSWORD`

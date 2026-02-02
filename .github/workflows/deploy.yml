@@ -1,14 +1,45 @@
 name: deploy
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select environment"
+        required: true
+        type: choice
+        options:
+          - production
+          - dev
+          - qa
 
 jobs:
   deploy-proxy:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve deploy secrets
+        run: |
+          case "${{ inputs.environment }}" in
+            production)
+              echo "REMOTE_HOST=${{ secrets.PRODUCTION_REMOTE_HOST }}" >> $GITHUB_ENV
+              echo "REMOTE_USER=${{ secrets.PRODUCTION_REMOTE_USER }}" >> $GITHUB_ENV
+              echo "REMOTE_PASSWORD=${{ secrets.PRODUCTION_REMOTE_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            dev)
+              echo "REMOTE_HOST=${{ secrets.DEV_REMOTE_HOST }}" >> $GITHUB_ENV
+              echo "REMOTE_USER=${{ secrets.DEV_REMOTE_USER }}" >> $GITHUB_ENV
+              echo "REMOTE_PASSWORD=${{ secrets.DEV_REMOTE_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            qa)
+              echo "REMOTE_HOST=${{ secrets.QA_REMOTE_HOST }}" >> $GITHUB_ENV
+              echo "REMOTE_USER=${{ secrets.QA_REMOTE_USER }}" >> $GITHUB_ENV
+              echo "REMOTE_PASSWORD=${{ secrets.QA_REMOTE_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "Unknown environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -26,9 +57,9 @@ jobs:
       - name: Upload proxy binary
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
+          host: ${{ env.REMOTE_HOST }}
+          username: ${{ env.REMOTE_USER }}
+          password: ${{ env.REMOTE_PASSWORD }}
           source: target/release/proxy
           target: ${{ secrets.DEPLOY_FOLDER }}
           strip_components: 2
@@ -36,9 +67,9 @@ jobs:
       - name: Upload config files
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
+          host: ${{ env.REMOTE_HOST }}
+          username: ${{ env.REMOTE_USER }}
+          password: ${{ env.REMOTE_PASSWORD }}
           source: |
             config/remote/proxy.toml
             config/remote/users.toml
@@ -48,18 +79,18 @@ jobs:
       - name: Upload start script
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
+          host: ${{ env.REMOTE_HOST }}
+          username: ${{ env.REMOTE_USER }}
+          password: ${{ env.REMOTE_PASSWORD }}
           source: start-proxy.sh
           target: ${{ secrets.DEPLOY_FOLDER }}
 
       - name: Restart proxy
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          password: ${{ secrets.REMOTE_PASSWORD }}
+          host: ${{ env.REMOTE_HOST }}
+          username: ${{ env.REMOTE_USER }}
+          password: ${{ env.REMOTE_PASSWORD }}
           script: |
             chmod +x ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
             ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
