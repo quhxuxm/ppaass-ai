@@ -178,6 +178,14 @@ pub struct AesGcmCipher {
     key: [u8; AES_KEY_SIZE],
 }
 
+impl std::fmt::Debug for AesGcmCipher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AesGcmCipher")
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl AesGcmCipher {
     pub fn new() -> Self {
         let mut key = [0u8; AES_KEY_SIZE];

@@ -3,7 +3,9 @@ pub mod crypto;
 pub mod error;
 pub mod message;
 
-pub use codec::{ProxyCodec, ProxyDecoder, ProxyEncoder};
+pub use codec::{
+    AgentCodec, CipherState, ProxyCodec, ProxyDecoder, ProxyEncoder, ServerCodec,
+};
 pub use crypto::{AesGcmCipher, CryptoManager, RsaKeyPair};
 pub use error::{ProtocolError, Result};
 pub use message::{

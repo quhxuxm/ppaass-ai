@@ -7,9 +7,9 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthRequest, ConnectRequest, DataPacket, Message, MessageType, ProxyCodec,
-    ProxyRequest, ProxyResponse,
+    Address, AgentCodec, AuthRequest, ConnectRequest, DataPacket, ProxyRequest, ProxyResponse,
     crypto::{AesGcmCipher, RsaKeyPair},
+    CipherState,
 };
 use std::io;
 use std::pin::Pin;
@@ -23,15 +23,14 @@ use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info, warn};
 
-type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, Message>;
-type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
+type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
+type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
 /// A single-use authenticated connection to the proxy
 /// This connection is used for one request and then discarded
 pub struct ProxyConnection {
     writer: FramedWriter,
     reader: FramedReader,
-    aes_cipher: Arc<AesGcmCipher>,
 }
 
 impl ProxyConnection {
@@ -43,7 +42,8 @@ impl ProxyConnection {
             .await
             .map_err(|e| AgentError::Connection(e.to_string()))?;
 
-        let framed = Framed::new(stream, ProxyCodec::new());
+        let cipher_state = Arc::new(CipherState::new());
+        let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
         let (mut writer, mut reader) = framed.split();
 
         // Generate AES key for the session
@@ -65,21 +65,16 @@ impl ProxyConnection {
             encrypted_aes_key,
         };
 
-        let payload = serde_json::to_vec(&ProxyRequest::Auth(auth_request))
-            .map_err(|e| AgentError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let message = Message::new(MessageType::AuthRequest, payload);
-
         debug!("[AUTH] Sending auth request");
         writer
-            .send(message)
+            .send(ProxyRequest::Auth(auth_request))
             .await
             .map_err(|e| AgentError::Connection(format!("Failed to send auth request: {}", e)))?;
 
         // Wait for auth response with timeout
-        let auth_response =
+        let response =
             match tokio::time::timeout(std::time::Duration::from_secs(10), reader.next()).await {
-                Ok(Some(Ok(msg))) => msg,
+                Ok(Some(Ok(resp))) => resp,
                 Ok(Some(Err(e))) => {
                     return Err(AgentError::Connection(format!(
                         "Failed to read auth response: {}",
@@ -96,16 +91,15 @@ impl ProxyConnection {
                 }
             };
 
-        // Parse auth response
-        let response: ProxyResponse = serde_json::from_slice(&auth_response.payload)
-            .map_err(|e| AgentError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
         match response {
             ProxyResponse::Auth(auth_resp) => {
                 if !auth_resp.success {
                     return Err(AgentError::Authentication(auth_resp.message));
                 }
                 info!("Authentication successful");
+
+                // Set the cipher key in the state for subsequent messages
+                cipher_state.set_cipher(Arc::new(aes_cipher));
             }
             _ => {
                 return Err(AgentError::Authentication(
@@ -117,7 +111,6 @@ impl ProxyConnection {
         Ok(Self {
             writer,
             reader,
-            aes_cipher: Arc::new(aes_cipher),
         })
     }
 
@@ -130,25 +123,20 @@ impl ProxyConnection {
             address: address.clone(),
         };
 
-        let payload = serde_json::to_vec(&ProxyRequest::Connect(connect_request))
-            .map_err(|e| AgentError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let encrypted_payload = self.aes_cipher.encrypt(&payload)?;
-        let message = Message::new(MessageType::ConnectRequest, encrypted_payload);
-
+        // Encryption and serialization is now handled by the codec
         debug!("[CONNECT] Sending connect request for {:?}", address);
-        self.writer.send(message).await.map_err(|e| {
+        self.writer.send(ProxyRequest::Connect(connect_request)).await.map_err(|e| {
             AgentError::Connection(format!("Failed to send connect request: {}", e))
         })?;
 
         // Wait for connect response with timeout
-        let connect_response = match tokio::time::timeout(
+        let response = match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             self.reader.next(),
         )
         .await
         {
-            Ok(Some(Ok(msg))) => msg,
+            Ok(Some(Ok(resp))) => resp,
             Ok(Some(Err(e))) => {
                 return Err(AgentError::Connection(format!(
                     "Failed to read connect response: {}",
@@ -164,11 +152,6 @@ impl ProxyConnection {
                 return Err(AgentError::Connection("Connect timeout".to_string()));
             }
         };
-
-        // Decrypt and parse connect response
-        let decrypted = self.aes_cipher.decrypt(&connect_response.payload)?;
-        let response: ProxyResponse = serde_json::from_slice(&decrypted)
-            .map_err(|e| AgentError::Protocol(protocol::ProtocolError::Serialization(e)))?;
 
         match response {
             ProxyResponse::Connect(connect_resp) => {
@@ -187,7 +170,6 @@ impl ProxyConnection {
         Ok(ConnectedStream {
             writer: self.writer,
             reader: self.reader,
-            aes_cipher: self.aes_cipher,
             stream_id: request_id,
         })
     }
@@ -198,7 +180,6 @@ impl ProxyConnection {
 pub struct ConnectedStream {
     writer: FramedWriter,
     reader: FramedReader,
-    aes_cipher: Arc<AesGcmCipher>,
     stream_id: String,
 }
 
@@ -212,12 +193,10 @@ impl ConnectedStream {
         (
             StreamSender {
                 writer: self.writer,
-                aes_cipher: self.aes_cipher.clone(),
                 stream_id: self.stream_id.clone(),
             },
             StreamReceiver {
                 reader: self.reader,
-                aes_cipher: self.aes_cipher,
                 stream_id: self.stream_id,
             },
         )
@@ -225,58 +204,35 @@ impl ConnectedStream {
 
     /// Convert to an AsyncRead + AsyncWrite compatible stream for use with copy_bidirectional
     pub fn into_async_io(self) -> ProxyStreamIo {
-        ProxyStreamIo::new(self.writer, self.reader, self.aes_cipher, self.stream_id)
+        ProxyStreamIo::new(self.writer, self.reader, self.stream_id)
     }
 }
 
-/// A stream adapter that decrypts and extracts data from proxy protocol messages
+/// A stream adapter that extracts data from proxy protocol messages
 /// This implements Stream<Item = Result<Bytes, io::Error>> for use with StreamReader
-pub struct DecryptingStream {
+pub struct ResponseStream {
     reader: FramedReader,
-    aes_cipher: Arc<AesGcmCipher>,
     stream_id: String,
 }
 
-impl DecryptingStream {
-    pub fn new(reader: FramedReader, aes_cipher: Arc<AesGcmCipher>, stream_id: String) -> Self {
+impl ResponseStream {
+    pub fn new(reader: FramedReader, stream_id: String) -> Self {
         Self {
             reader,
-            aes_cipher,
             stream_id,
         }
     }
 }
 
-impl Stream for DecryptingStream {
+impl Stream for ResponseStream {
     type Item = io::Result<Bytes>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             let reader = Pin::new(&mut self.reader);
             match reader.poll_next(cx) {
-                Poll::Ready(Some(Ok(msg))) => {
-                    // Decrypt payload
-                    let decrypted = match self.aes_cipher.decrypt(&msg.payload) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                e.to_string(),
-                            ))));
-                        }
-                    };
-
-                    // Parse response
-                    let response: ProxyResponse = match serde_json::from_slice(&decrypted) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                e,
-                            ))));
-                        }
-                    };
-
+                Poll::Ready(Some(Ok(response))) => {
+                    // Response is already deserialized and decrypted by codec
                     match response {
                         ProxyResponse::Data(packet) => {
                             if packet.stream_id == self.stream_id {
@@ -306,43 +262,33 @@ impl Stream for DecryptingStream {
     }
 }
 
-/// A sink adapter that encrypts and wraps data into proxy protocol messages
+/// A sink adapter that wraps data into proxy protocol messages
 /// This implements Sink<&[u8], Error = io::Error> for use with SinkWriter
-pub struct EncryptingSink {
+pub struct DataPacketSink {
     writer: FramedWriter,
-    aes_cipher: Arc<AesGcmCipher>,
     stream_id: String,
 }
 
-impl EncryptingSink {
-    pub fn new(writer: FramedWriter, aes_cipher: Arc<AesGcmCipher>, stream_id: String) -> Self {
+impl DataPacketSink {
+    pub fn new(writer: FramedWriter, stream_id: String) -> Self {
         Self {
             writer,
-            aes_cipher,
             stream_id,
         }
     }
 
-    fn create_data_message(&self, data: &[u8], is_end: bool) -> io::Result<Message> {
+    fn create_data_request(&self, data: &[u8], is_end: bool) -> ProxyRequest {
         let data_packet = DataPacket {
             stream_id: self.stream_id.clone(),
             data: data.to_vec(),
             is_end,
         };
 
-        let payload = serde_json::to_vec(&ProxyRequest::Data(data_packet))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        let encrypted_payload = self
-            .aes_cipher
-            .encrypt(&payload)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-        Ok(Message::new(MessageType::Data, encrypted_payload))
+        ProxyRequest::Data(data_packet)
     }
 }
 
-impl<'a> Sink<&'a [u8]> for EncryptingSink {
+impl<'a> Sink<&'a [u8]> for DataPacketSink {
     type Error = io::Error;
 
     fn poll_ready(
@@ -358,9 +304,9 @@ impl<'a> Sink<&'a [u8]> for EncryptingSink {
         mut self: Pin<&mut Self>,
         item: &'a [u8],
     ) -> std::result::Result<(), Self::Error> {
-        let message = self.create_data_message(item, false)?;
+        let request = self.create_data_request(item, false);
         Pin::new(&mut self.writer)
-            .start_send(message)
+            .start_send(request)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
@@ -379,14 +325,14 @@ impl<'a> Sink<&'a [u8]> for EncryptingSink {
     ) -> Poll<std::result::Result<(), Self::Error>> {
         // First, send end-of-stream message
         let this = self.as_mut().get_mut();
-        let message = this.create_data_message(&[], true)?;
+        let request = this.create_data_request(&[], true);
 
         let writer = Pin::new(&mut this.writer);
         match writer.poll_ready(cx) {
             Poll::Ready(Ok(())) => {
                 let writer = Pin::new(&mut this.writer);
                 writer
-                    .start_send(message)
+                    .start_send(request)
                     .map_err(|e| io::Error::other(e.to_string()))?;
             }
             Poll::Ready(Err(e)) => {
@@ -407,24 +353,23 @@ impl<'a> Sink<&'a [u8]> for EncryptingSink {
 /// A wrapper that implements AsyncRead + AsyncWrite for use with tokio::io::copy_bidirectional
 /// This uses SinkWriter and StreamReader from tokio_util for better performance
 pub struct ProxyStreamIo {
-    reader: StreamReader<DecryptingStream, Bytes>,
-    writer: SinkWriter<EncryptingSink>,
+    reader: StreamReader<ResponseStream, Bytes>,
+    writer: SinkWriter<DataPacketSink>,
 }
 
 impl ProxyStreamIo {
     pub fn new(
         framed_writer: FramedWriter,
         framed_reader: FramedReader,
-        aes_cipher: Arc<AesGcmCipher>,
         stream_id: String,
     ) -> Self {
-        let decrypting_stream =
-            DecryptingStream::new(framed_reader, aes_cipher.clone(), stream_id.clone());
-        let encrypting_sink = EncryptingSink::new(framed_writer, aes_cipher, stream_id);
+        let response_stream =
+            ResponseStream::new(framed_reader, stream_id.clone());
+        let data_sink = DataPacketSink::new(framed_writer, stream_id);
 
         Self {
-            reader: StreamReader::new(decrypting_stream),
-            writer: SinkWriter::new(encrypting_sink),
+            reader: StreamReader::new(response_stream),
+            writer: SinkWriter::new(data_sink),
         }
     }
 }
@@ -460,7 +405,6 @@ impl AsyncWrite for ProxyStreamIo {
 /// Sender half for sending data to proxy
 pub struct StreamSender {
     writer: FramedWriter,
-    aes_cipher: Arc<AesGcmCipher>,
     stream_id: String,
 }
 
@@ -472,15 +416,10 @@ impl StreamSender {
             is_end,
         };
 
-        let payload = serde_json::to_vec(&ProxyRequest::Data(data_packet))
-            .map_err(|e| AgentError::Protocol(protocol::ProtocolError::Serialization(e)))?;
-
-        let encrypted_payload = self.aes_cipher.encrypt(&payload)?;
-        let message = Message::new(MessageType::Data, encrypted_payload);
-
+        // Encryption and serialization is handled by codec
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            self.writer.send(message),
+            self.writer.send(ProxyRequest::Data(data_packet)),
         )
         .await
         {
@@ -494,7 +433,6 @@ impl StreamSender {
 /// Receiver half for receiving data from proxy
 pub struct StreamReceiver {
     reader: FramedReader,
-    aes_cipher: Arc<AesGcmCipher>,
     stream_id: String,
 }
 
@@ -502,25 +440,8 @@ impl StreamReceiver {
     pub async fn receive_data(&mut self) -> Option<DataPacket> {
         loop {
             match self.reader.next().await {
-                Some(Ok(msg)) => {
-                    // Decrypt payload
-                    let decrypted = match self.aes_cipher.decrypt(&msg.payload) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            error!("Failed to decrypt message: {}", e);
-                            return None;
-                        }
-                    };
-
-                    // Parse response
-                    let response: ProxyResponse = match serde_json::from_slice(&decrypted) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!("Failed to parse response: {}", e);
-                            return None;
-                        }
-                    };
-
+                Some(Ok(response)) => {
+                    // Decryption and deserialization handled by codec
                     match response {
                         ProxyResponse::Data(packet) => {
                             if packet.stream_id == self.stream_id {
