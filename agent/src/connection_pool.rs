@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info, warn};
@@ -557,8 +557,8 @@ pub struct ConnectionPool {
     /// The unmanaged pool of prewarmed connections
     pool: Pool<ProxyConnection>,
     config: Arc<AgentConfig>,
-    /// Channel to request refill
-    refill_tx: mpsc::Sender<()>,
+    /// Notification to request refill
+    refill_notify: Arc<Notify>,
     /// Tracks number of available connections in the pool
     available: Arc<AtomicUsize>,
 }
@@ -570,18 +570,19 @@ impl ConnectionPool {
         // Create unmanaged pool with reasonable capacity (1.5x target size)
         let pool = Pool::new((pool_size as f32 * 1.5) as usize);
 
-        // Create refill channel
-        let (refill_tx, refill_rx) = mpsc::channel::<()>(pool_size);
+        // Create refill notification mechanism instead of channel
+        let refill_notify = Arc::new(Notify::new());
 
         let pool_clone = pool.clone();
         let config_clone = config.clone();
         let available = Arc::new(AtomicUsize::new(0));
         let available_clone = available.clone();
+        let refill_notify_clone = refill_notify.clone();
 
         // Spawn background refill task
         tokio::spawn(async move {
             Self::refill_task(
-                refill_rx,
+                refill_notify_clone,
                 pool_clone,
                 config_clone,
                 available_clone,
@@ -593,13 +594,13 @@ impl ConnectionPool {
         Self {
             pool,
             config,
-            refill_tx,
+            refill_notify,
             available,
         }
     }
 
     async fn refill_task(
-        mut refill_rx: mpsc::Receiver<()>,
+        refill_notify: Arc<Notify>,
         pool: Pool<ProxyConnection>,
         config: Arc<AgentConfig>,
         available: Arc<AtomicUsize>,
@@ -608,7 +609,7 @@ impl ConnectionPool {
         loop {
             // Wait for refill request or periodic check
             tokio::select! {
-                _ = refill_rx.recv() => {}
+                _ = refill_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             }
 
@@ -691,8 +692,8 @@ impl ConnectionPool {
     /// Get a connection and connect to target
     /// The connection is consumed (not returned to pool)
     pub async fn get_connected_stream(&self, address: Address) -> Result<ConnectedStream> {
-        // Request refill in background
-        let _ = self.refill_tx.try_send(());
+        // Request refill in background using notify
+        self.refill_notify.notify_one();
 
         // Try to get a prewarmed connection from the pool
         let conn = match self.pool.try_remove() {
