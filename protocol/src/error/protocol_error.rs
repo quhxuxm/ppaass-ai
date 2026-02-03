@@ -6,7 +6,7 @@ pub enum ProtocolError {
     Io(#[from] std::io::Error),
 
     #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(#[from] bitcode::Error),
 
     #[error("Encryption error: {0}")]
     Encryption(String),
