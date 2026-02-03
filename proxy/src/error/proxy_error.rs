@@ -20,5 +20,3 @@ pub enum ProxyError {
     #[error("Database error: {0}")]
     Database(#[from] sea_orm::DbErr),
 }
-
-pub type Result<T> = std::result::Result<T, ProxyError>;

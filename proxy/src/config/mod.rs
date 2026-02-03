@@ -1,80 +1,15 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+mod proxy_config;
+mod user_config;
+mod users_config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfig {
-    pub listen_addr: String,
-    pub api_addr: String,
-    pub database_path: String,
-    pub keys_dir: String,
-
-    #[serde(default)]
-    pub console_port: Option<u16>,
-
-    /// Log level: trace, debug, info, warn, error
-    #[serde(default = "default_log_level")]
-    pub log_level: String,
-
-    /// Log directory for file-based logging (improves performance vs console)
-    #[serde(default = "default_log_dir")]
-    pub log_dir: String,
-
-    /// Number of Tokio runtime worker threads (defaults to CPU cores)
-    #[serde(default)]
-    pub runtime_threads: Option<usize>,
-}
-
-fn default_log_level() -> String {
-    "info".to_string()
-}
-
-fn default_log_dir() -> String {
-    "logs".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserConfig {
-    pub username: String,
-    pub public_key_pem: String,
-
-    #[serde(default)]
-    pub bandwidth_limit_mbps: Option<u64>, // Megabits per second
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsersConfig {
-    pub users: HashMap<String, UserConfig>,
-}
-
-impl ProxyConfig {
-    pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let content = fs::read_to_string(path)?;
-        let config: ProxyConfig = toml::from_str(&content)?;
-        Ok(config)
-    }
-}
-
-#[allow(dead_code)]
-impl UsersConfig {
-    pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let content = fs::read_to_string(path)?;
-        let config: UsersConfig = toml::from_str(&content)?;
-        Ok(config)
-    }
-
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
-        let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
-        Ok(())
-    }
-}
+pub use proxy_config::ProxyConfig;
+pub use user_config::UserConfig;
+pub use users_config::UsersConfig;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -201,74 +136,10 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
         let content = r#"
 [users.user1]
 username = "user1"
+# Missing public_key_pem
 "#;
         let file = create_temp_file(content);
         let result = UsersConfig::load(file.path());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_proxy_config_with_all_fields() {
-        let content = r#"
-listen_addr = "0.0.0.0:8080"
-api_addr = "0.0.0.0:8081"
-database_path = "data/users.db"
-keys_dir = "keys"
-console_port = 6670
-"#;
-        let file = create_temp_file(content);
-        let config = ProxyConfig::load(file.path()).unwrap();
-
-        assert_eq!(config.listen_addr, "0.0.0.0:8080");
-        assert_eq!(config.api_addr, "0.0.0.0:8081");
-        assert_eq!(config.database_path, "data/users.db");
-        assert_eq!(config.keys_dir, "keys");
-        assert_eq!(config.console_port, Some(6670));
-    }
-
-    #[test]
-    fn parse_proxy_config_without_console_port() {
-        let content = r#"
-listen_addr = "0.0.0.0:8080"
-api_addr = "0.0.0.0:8081"
-database_path = "data/users.db"
-keys_dir = "keys"
-"#;
-        let file = create_temp_file(content);
-        let config = ProxyConfig::load(file.path()).unwrap();
-
-        assert_eq!(config.console_port, None);
-    }
-
-    #[test]
-    fn parse_proxy_config_missing_required_field_returns_error() {
-        let content = r#"
-listen_addr = "0.0.0.0:8080"
-"#;
-        let file = create_temp_file(content);
-        let result = ProxyConfig::load(file.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn user_config_public_key_preserves_multiline_format() {
-        let content = r#"
-[users.user1]
-username = "user1"
-public_key_pem = """
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtm6UwXI/ZmUrWPF9gkXs
-vmnh/77vci16aGJBZv9BM7+wuY2ml7mvdYFbGVPiKB9LC4tudvGmv298XuecKxuz
------END PUBLIC KEY-----
-"""
-"#;
-        let file = create_temp_file(content);
-        let config = UsersConfig::load(file.path()).unwrap();
-
-        let user = config.users.get("user1").unwrap();
-        assert!(user.public_key_pem.contains('\n'));
-        assert!(
-            user.public_key_pem.starts_with('\n') || user.public_key_pem.starts_with("-----BEGIN")
-        );
     }
 }
