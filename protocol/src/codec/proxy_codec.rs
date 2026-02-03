@@ -42,7 +42,7 @@ impl Decoder for ProxyCodec {
         match self.inner.decode(src)? {
             Some(frame) => {
                 // Deserialize the message from the frame
-                let mut message: Message = serde_json::from_slice(&frame).map_err(|e| {
+                let mut message: Message = bitcode::deserialize(&frame).map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Failed to deserialize message: {}", e),
@@ -83,7 +83,7 @@ impl Encoder<Message> for ProxyCodec {
         }
 
         // Serialize the message
-        let data = serde_json::to_vec(&item).map_err(|e| {
+        let data = bitcode::serialize(&item).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to serialize message: {}", e),

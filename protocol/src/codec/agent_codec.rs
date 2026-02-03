@@ -24,7 +24,7 @@ impl Decoder for AgentCodec {
     fn decode(&mut self, src: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
             Some(message) => {
-                let response: ProxyResponse = serde_json::from_slice(&message.payload).map_err(|e| {
+                let response: ProxyResponse = bitcode::deserialize(&message.payload).map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Failed to deserialize proxy response: {}", e),
@@ -47,7 +47,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
             ProxyRequest::Data(_) => MessageType::Data,
         };
 
-        let payload = serde_json::to_vec(&item).map_err(|e| {
+        let payload = bitcode::serialize(&item).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to serialize proxy request: {}", e),
