@@ -11,5 +11,3 @@ pub enum CommonError {
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 }
-
-pub type Result<T> = std::result::Result<T, CommonError>;

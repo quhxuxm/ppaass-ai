@@ -1,62 +1,29 @@
+mod agent_io;
+mod response_sink;
+
+pub use agent_io::AgentIo;
+pub use response_sink::BytesToProxyResponseSink;
+
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::UserConfig;
 use crate::error::{ProxyError, Result};
-use futures::{Sink, SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
+use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use protocol::{
-    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, ProxyRequest,
+    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, ProxyRequest,
     ProxyResponse, ServerCodec,
     crypto::{AesGcmCipher, RsaKeyPair},
     CipherState,
 };
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use bytes::Bytes;
 use std::io;
 
 type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
-
-struct BytesToProxyResponseSink<'a> {
-    inner: &'a mut FramedWriter,
-    stream_id: String,
-    username: Option<String>,
-    bandwidth_monitor: Arc<BandwidthMonitor>,
-}
-
-impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
-    type Error = std::io::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_ready(cx)
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::result::Result<(), Self::Error> {
-        let stream_id = self.stream_id.clone();
-        if let Some(user) = &self.username {
-            self.bandwidth_monitor.record_sent(user, item.len() as u64);
-        }
-        let packet = DataPacket {
-            stream_id,
-            data: item.to_vec(),
-            is_end: false,
-        };
-        Pin::new(&mut self.inner).start_send(ProxyResponse::Data(packet))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        Pin::new(&mut self.inner).poll_close(cx)
-    }
-}
 
 pub struct ProxyConnection {
     writer: FramedWriter,
@@ -94,6 +61,7 @@ impl ProxyConnection {
     /// Peek at the auth request to get the username without completing authentication
     pub async fn peek_auth_username(&mut self) -> Result<String> {
         // Receive auth request
+        // First request is always AuthRequest?
         let request = match self.read_request().await? {
             Some(req) => req,
             None => return Err(ProxyError::Connection("Connection closed".to_string())),
@@ -337,10 +305,6 @@ impl ProxyConnection {
             bandwidth_monitor: self.bandwidth_monitor.clone(),
         };
 
-        // Use StreamExt::filter_map to adapt ProxyRequest -> Bytes
-        // Note: We use filter_map without async closure to ensure Unpin
-        // Async closures in filter_map return a Future, which might not be Unpin if it captures references.
-        // We can use std::future::ready or just strict values if no await is needed.
         let stream = (&mut self.reader).filter_map(move |res| {
             let user = username_stream.as_ref();
             let monitor = &monitor_stream;
@@ -366,74 +330,6 @@ impl ProxyConnection {
 
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
-
-        // Wrapper to satisfy AsyncRead + AsyncWrite on the generic types
-        struct AgentIo<R, W> {
-            reader: R,
-            writer: W,
-        }
-        impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncRead for AgentIo<R, W> {
-            fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-                Pin::new(&mut self.reader).poll_read(cx, buf)
-            }
-        }
-        impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for AgentIo<R, W> {
-            fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-                // SinkWriter writes bytes. We ideally want to write &[u8] but our Sink adapter expects Vec<u8> now?
-                // Wait, if we change the Sink adapter to expect Vec<u8>, SinkWriter needs to feed it Vec<u8>.
-                // SinkWriter documentation says it requires Sink<&[u8]>.
-                // BUT the error says "implements Sink<&'2 [u8]> for some specific lifetime '2" but needs "for any lifetime '1".
-                // This is a Higher-Rank Trait Bound (HRTB) issue.
-                // The closure takes `|bytes: &[u8]|`. The compiler infers a specific lifetime.
-                // We need it to work for ANY lifetime.
-
-                // Usually this is fixed by hinting the compiler about the argument type.
-                // closure argument: `bytes: &[u8]`.
-                // The issue might be that `sink.with` creates a type that is bound to the specific lifetime of the closure argument?
-                // Or rather, SinkWriter calls start_send with a short-lived reference.
-
-                // Let's try explicitly typing the closure argument as `&[u8]`. I did that.
-                // Maybe the problem is `move |bytes: &[u8]|`?
-
-                // Alternative fix: Use `Vec<u8>` in the Sink, but `SinkWriter` writes `&[u8]`.
-                // SinkWriter copies data into its internal buffer?
-                // SinkWriter implements AsyncWrite. When we write to it, it buffers.
-                // When we flush/write, it feeds items to the Sink.
-                // SinkWriter feeds `&[u8]` (slice of buffer) to the sink.
-
-                // The error is tricky.
-                // "implementation of `futures::Sink` is not general enough"
-                // `With<...>` must implement `Sink<&'1 [u8]>` for any lifetime '1.
-                // But it implements `Sink<&'2 [u8]>`.
-
-                // This often happens when the closure return type depends on the lifetime of the input.
-                // My closure returns `Ready<Result<...>>`. `Ready` owns the result.
-                // `Result` contains `ProxyResponse`.
-                // `ProxyResponse::Data(packet)`. `Packet` owns `data` (Vec<u8>).
-                // `bytes.to_vec()` creates owned data from borrowed input.
-                // So the return future does NOT depend on input lifetime.
-
-                // Why does the compiler think it does?
-                // `move |bytes: &[u8]|`.
-
-                // Maybe because I am using `&mut self.writer`?
-                // No, that's the inner sink.
-
-                // Let's try to remove `move` if possible? No, we capture `stream_id` etc.
-
-                // One workaround for this specific rustc quirk with HRTB and closures in `with` is to force the type inference.
-                // Or box the sink? `Box::pin(sink)`?
-
-                // Let's try boxing the sink.
-                Pin::new(&mut self.writer).poll_write(cx, buf)
-            }
-            fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-                Pin::new(&mut self.writer).poll_flush(cx)
-            }
-            fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-                Pin::new(&mut self.writer).poll_shutdown(cx)
-            }
-        }
 
         let mut agent_io = AgentIo { reader, writer };
 

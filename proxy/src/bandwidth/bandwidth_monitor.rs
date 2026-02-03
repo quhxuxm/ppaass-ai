@@ -1,18 +1,11 @@
+use super::user_bandwidth::UserBandwidth;
 use dashmap::DashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct BandwidthMonitor {
     user_bandwidth: Arc<DashMap<String, UserBandwidth>>,
-}
-
-struct UserBandwidth {
-    bytes_sent: AtomicU64,
-    bytes_received: AtomicU64,
-    /// Stored as milliseconds since UNIX_EPOCH for lock-free access
-    last_reset_millis: AtomicU64,
-    limit_mbps: Option<u64>,
 }
 
 fn current_time_millis() -> u64 {

@@ -17,5 +17,3 @@ pub enum AgentError {
     #[error("SOCKS5 error: {0}")]
     Socks5(String),
 }
-
-pub type Result<T> = std::result::Result<T, AgentError>;

@@ -29,5 +29,3 @@ pub enum ProtocolError {
     #[error("Message too large: {0} bytes")]
     MessageTooLarge(usize),
 }
-
-pub type Result<T> = std::result::Result<T, ProtocolError>;
