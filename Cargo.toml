@@ -9,7 +9,7 @@ authors = ["PPAASS Team"]
 license = "MIT"
 
 [workspace.dependencies]
-tokio = { version = "1.42", features = ["full", "tracing"] }
+tokio = { version = "1.49", features = ["full", "tracing"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -21,10 +21,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 thiserror = "2.0"
 anyhow = "1.0"
-bytes = "1.9"
+bytes = "1.11"
 console-subscriber = "0.5"
 fast-socks5 = "1.0"
-hyper = { version = "1.5", features = ["full"] }
+hyper = { version = "1.8", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 deadpool = "0.12"
