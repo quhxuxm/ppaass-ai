@@ -1,6 +1,5 @@
 [workspace]
 members = ["agent", "proxy", "common", "protocol", "tests"]
-exclude = ["agent-ui/src-tauri"]
 resolver = "2"
 
 [workspace.package]
