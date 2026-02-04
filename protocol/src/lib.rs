@@ -10,5 +10,5 @@ pub use crypto::{AesGcmCipher, CryptoManager, RsaKeyPair};
 pub use error::{ProtocolError, Result};
 pub use message::{
     Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket,
-    Message, MessageType, ProxyRequest, ProxyResponse,
+    Message, MessageType, ProxyRequest, ProxyResponse, TransportProtocol,
 };

@@ -2,16 +2,16 @@
 # This configuration is for demo purposes with real RSA keys
 
 # Address to listen for incoming agent connections
-listen_addr = "0.0.0.0:80"
+listen_addr = "0.0.0.0:8080"
 
 # Address for REST API (user management, monitoring)
-api_addr = "0.0.0.0:8080"
+api_addr = "0.0.0.0:8081"
 
 # Path to SQLite database for user management
-database_path = "data/users.db"
+database_path = "config/local/data/users.db"
 
 # Directory where RSA keys are stored
-keys_dir = "keys"
+keys_dir = "config/local/keys"
 
 # Log level: trace, debug, info, warn, error
 log_level = "error"

@@ -105,12 +105,17 @@ impl ProxyConnection {
     }
 
     /// Connect to a target address and return a bidirectional stream handle
-    pub async fn connect_target(mut self, address: Address) -> Result<ConnectedStream> {
+    pub async fn connect_target(
+        mut self,
+        address: Address,
+        transport: protocol::TransportProtocol,
+    ) -> Result<ConnectedStream> {
         let request_id = common::generate_id();
 
         let connect_request = ConnectRequest {
             request_id: request_id.clone(),
             address: address.clone(),
+            transport,
         };
 
         // Encryption and serialization is now handled by the codec

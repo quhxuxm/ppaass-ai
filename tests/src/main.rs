@@ -59,6 +59,10 @@ enum Commands {
         /// TCP echo server port
         #[arg(long, default_value = "9091")]
         tcp_port: u16,
+
+        /// UDP echo server port
+        #[arg(long, default_value = "9092")]
+        udp_port: u16,
     },
 }
 
@@ -100,12 +104,9 @@ async fn main() -> Result<()> {
             report::generate_reports(&results, &output)?;
             tracing::info!("Performance report generated: {}", output);
         }
-        Commands::MockTarget { http_port, tcp_port } => {
-            tracing::info!("Starting mock target servers");
-            tracing::info!("HTTP server on port {}", http_port);
-            tracing::info!("TCP echo server on port {}", tcp_port);
-            
-            mock_target::run_mock_servers(http_port, tcp_port).await?;
+        Commands::MockTarget { http_port, tcp_port, udp_port } => {
+            tracing::info!("Starting mock target servers on ports: HTTP={}, TCP={}, UDP={}", http_port, tcp_port, udp_port);
+            mock_target::run_mock_servers(http_port, tcp_port, udp_port).await?;
         }
     }
 

@@ -13,7 +13,7 @@ mod values;
 pub use address::Address;
 pub use auth_request::AuthRequest;
 pub use auth_response::AuthResponse;
-pub use connect_request::ConnectRequest;
+pub use connect_request::{ConnectRequest, TransportProtocol};
 pub use connect_response::ConnectResponse;
 pub use data_packet::DataPacket;
 pub use envelope::Message;

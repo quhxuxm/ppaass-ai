@@ -9,6 +9,7 @@ use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::Address;
+use protocol::TransportProtocol;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -109,7 +110,7 @@ async fn handle_connect(
     };
 
     // Get connected stream from pool
-    let connected_stream = match pool.get_connected_stream(address).await {
+    let connected_stream = match pool.get_connected_stream(address, TransportProtocol::Tcp).await {
         Ok(stream) => {
             info!(
                 "Got connected stream from pool, stream_id: {}",
@@ -201,7 +202,7 @@ async fn handle_regular_request(
     };
 
     // Get connected stream from pool
-    let connected_stream = match pool.get_connected_stream(address).await {
+    let connected_stream = match pool.get_connected_stream(address, TransportProtocol::Tcp).await {
         Ok(stream) => stream,
         Err(e) => {
             error!("Failed to get stream from pool: {}", e);

@@ -45,6 +45,9 @@ pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
     // Test SOCKS5 large data transfer
     results.add_test(test_socks5_large_data(agent_addr).await);
     
+    // Test SOCKS5 UDP Associate
+    results.add_test(test_socks5_udp(agent_addr).await);
+    
     info!("=== Integration Tests Complete ===");
     info!("Total: {}, Passed: {}, Failed: {}", 
           results.total_tests, results.passed, results.failed);
@@ -202,16 +205,37 @@ async fn test_socks5_large_data(agent_addr: &str) -> TestResult {
     
     match client.send_receive("127.0.0.1", 9091, &test_data).await {
         Ok((_, response)) => {
+            let passed = response.len() == test_data.len() && response == test_data;
+            TestResult {
+                name,
+                passed,
+                error: if !passed { Some(format!("Data transfer failed. Sent {}, Recv {}", test_data.len(), response.len())) } else { None },
+                duration_ms: start.elapsed().as_millis(),
+            }
+        }
+        Err(e) => TestResult {
+            name,
+            passed: false,
+            error: Some(e.to_string()),
+            duration_ms: start.elapsed().as_millis(),
+        },
+    }
+}
+
+async fn test_socks5_udp(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "SOCKS5 UDP Associate".to_string();
+    
+    let client = MockSocks5Client::new(agent_addr.to_string());
+    let test_data = b"SOCKS5 UDP Echo Test";
+    
+    match client.udp_send_receive("127.0.0.1", 9092, test_data).await {
+        Ok((_, response)) => {
             let passed = response == test_data;
             TestResult {
                 name,
                 passed,
-                error: if !passed { 
-                    Some(format!("Data mismatch: sent {} bytes, received {} bytes", 
-                                 test_data.len(), response.len())) 
-                } else { 
-                    None 
-                },
+                error: if !passed { Some(format!("Echo response didn't match request. Sent: {:?}, Recv: {:?}", test_data, response)) } else { None },
                 duration_ms: start.elapsed().as_millis(),
             }
         }
