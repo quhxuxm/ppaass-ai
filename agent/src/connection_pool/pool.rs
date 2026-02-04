@@ -3,7 +3,7 @@ use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
 use crate::error::Result;
 use deadpool::unmanaged::Pool;
-use protocol::Address;
+use protocol::{Address, TransportProtocol};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -167,7 +167,7 @@ impl ConnectionPool {
 
     /// Get a connection and connect to target
     /// The connection is consumed (not returned to pool)
-    pub async fn get_connected_stream(&self, address: Address) -> Result<ConnectedStream> {
+    pub async fn get_connected_stream(&self, address: Address, transport: TransportProtocol) -> Result<ConnectedStream> {
         // Request refill in background using notify
         self.refill_notify.notify_one();
 
@@ -185,6 +185,6 @@ impl ConnectionPool {
         };
 
         // Connect to target (consumes the connection)
-        conn.connect_target(address).await
+        conn.connect_target(address, transport).await
     }
 }

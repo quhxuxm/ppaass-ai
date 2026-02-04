@@ -71,16 +71,16 @@ cargo build --release -p integration-tests
 cargo run --release -p integration-tests -- mock-target
 
 # Run integration tests
-cargo run --release -p integration-tests -- integration \
-    --agent-addr 127.0.0.1:7070 \
+cargo run --release -p integration-tests -- integration
+    --agent-addr 127.0.0.1:7070
     --proxy-addr 127.0.0.1:8080
 
 # Run performance tests
-cargo run --release -p integration-tests -- performance \
-    --agent-addr 127.0.0.1:7070 \
-    --proxy-addr 127.0.0.1:8080 \
-    --concurrency 100 \
-    --duration 60 \
+cargo run --release -p integration-tests -- performance 
+    --agent-addr 127.0.0.1:7070
+    --proxy-addr 127.0.0.1:8080
+    --concurrency 100
+    --duration 60
     --output performance-report.html
 ```
 
@@ -94,6 +94,33 @@ The integration test suite includes:
 4. **HTTP JSON**: Test JSON response parsing
 5. **SOCKS5 Echo**: Test basic SOCKS5 connection and echo
 6. **SOCKS5 Large Data**: Test large data transfer through SOCKS5
+7. **SOCKS5 UDP Associate**: Test UDP forwarding via SOCKS5 UDP ASSOCIATE (UDP echo)
+
+### Testing SOCKS5 UDP Associate
+
+The integration test suite now includes a test for SOCKS5 UDP Associate, which verifies UDP forwarding through the agent and proxy. This test sends a UDP packet through the SOCKS5 proxy to the mock UDP echo server and checks that the response matches the request.
+
+**How to run:**
+
+- The UDP echo server is started automatically with the mock target servers (on port 9092 by default).
+- Run the integration tests as usual:
+
+```bash
+./run-tests.sh integration
+```
+
+or manually:
+
+```bash
+cargo run --release -p integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
+```
+
+- The test result for "SOCKS5 UDP Associate" will be shown in the output summary.
+
+**What it does:**
+- Performs a SOCKS5 UDP ASSOCIATE handshake
+- Sends a UDP packet to the mock UDP echo server (port 9092)
+- Verifies the echoed response matches the sent data
 
 ## Performance Tests
 

@@ -1,15 +1,17 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use fast_socks5::server::{
-    NoAuthentication, Socks5ServerProtocol, SocksServerError, states::Opened,
+    NoAuthentication, Socks5ServerProtocol, SocksServerError, states::{Opened, CommandRead},
 };
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
-use protocol::Address;
+use protocol::{Address, TransportProtocol};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::io::AsyncReadExt;
 use tracing::{debug, error, info};
+use dashmap::DashMap;
 
 pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling SOCKS5 connection");
@@ -34,19 +36,32 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
 
     info!("SOCKS5 command: {:?}, target: {:?}", command, target_addr);
 
-    // Only handle CONNECT command
-    if command != Socks5Command::TCPConnect {
-        let _ = protocol.reply_error(&ReplyError::CommandNotSupported).await;
-        return Err(AgentError::Socks5(
-            "Only CONNECT command is supported".to_string(),
-        ));
+    match command {
+        Socks5Command::TCPConnect => {
+            handle_tcp_connect(protocol, target_addr, pool).await
+        }
+        Socks5Command::UDPAssociate => {
+            handle_udp_associate(protocol, target_addr, pool).await
+        }
+        _ => {
+            let _ = protocol.reply_error(&ReplyError::CommandNotSupported).await;
+            Err(AgentError::Socks5(
+                "Only CONNECT and UDP ASSOCIATE commands are supported".to_string(),
+            ))
+        }
     }
+}
 
+async fn handle_tcp_connect(
+    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    target_addr: TargetAddr,
+    pool: Arc<ConnectionPool>,
+) -> Result<()> {
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
 
     // Get a connected stream from the pool
-    let connected_stream = match pool.get_connected_stream(address).await {
+    let connected_stream = match pool.get_connected_stream(address, TransportProtocol::Tcp).await {
         Ok(stream) => {
             info!(
                 "Got connected stream from pool, stream_id: {}",
@@ -72,6 +87,152 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
 
     // Start bidirectional data relay
     relay_data(&mut client_stream, connected_stream).await
+}
+
+async fn handle_udp_associate(
+    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    _target_addr: TargetAddr,
+    pool: Arc<ConnectionPool>,
+) -> Result<()> {
+    info!("Handling UDP ASSOCIATE");
+
+    // Bind a UDP socket on a random port
+    let udp_socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| AgentError::Socks5(format!("Failed to bind UDP socket: {}", e)))?;
+
+    let bind_addr = udp_socket.local_addr()
+        .map_err(|e| AgentError::Socks5(format!("Failed to get local addr: {}", e)))?;
+
+    info!("UDP Associate bound to {}", bind_addr);
+
+    // Reply success with the bind address
+    let mut tcp_stream = protocol
+        .reply_success(bind_addr)
+        .await
+        .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+    let udp_socket = Arc::new(udp_socket);
+    let pool = pool.clone();
+
+    // The client sends UDP packets to `bind_addr`
+
+    // We need to keep the TCP stream alive to maintain association
+    let keep_alive = async move {
+        let mut buf = [0u8; 1];
+        // If read returns 0 (EOF) or error, the client closed connection
+        let _ = tcp_stream.read(&mut buf).await;
+        debug!("UDP Associate TCP control channel closed");
+    };
+
+    let udp_handler = process_udp_traffic(udp_socket, pool);
+
+    tokio::select! {
+        _ = keep_alive => {
+           // Client closed TCP connection, we should stop
+        }
+        result = udp_handler => {
+            if let Err(e) = result {
+                error!("UDP handler error: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPool>) -> Result<()> {
+    let mut buf = [0u8; 65535];
+    type StreamMap = DashMap<String, tokio::sync::mpsc::Sender<Vec<u8>>>;
+    let streams: Arc<StreamMap> = Arc::new(DashMap::new());
+
+    loop {
+        let (n, client_addr) = udp_socket.recv_from(&mut buf).await.map_err(|e| AgentError::Socks5(e.to_string()))?;
+        let packet_data = &buf[..n];
+        // Parse SOCKS5 UDP header
+        if n < 10 {
+            continue;
+        }
+        if packet_data[0] != 0 || packet_data[1] != 0 {
+            continue;
+        }
+        if packet_data[2] != 0 {
+            continue;
+        }
+        let address_result = parse_udp_address(&packet_data[3..]);
+        let (dest_addr, header_len) = match address_result {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Failed to parse UDP dest address: {}", e);
+                continue;
+            }
+        };
+        let payload = packet_data[3 + header_len..].to_vec();
+        let dest_key = format!("{:?}", dest_addr);
+        if !streams.contains_key(&dest_key) {
+            info!("New UDP session for destination: {:?}", dest_addr);
+            match pool.get_connected_stream(dest_addr.clone(), TransportProtocol::Udp).await {
+                Ok(connected_stream) => {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+                    streams.insert(dest_key.clone(), tx);
+                    let udp_socket_clone = udp_socket.clone();
+                    let dest_addr_clone = dest_addr.clone();
+                    let streams_clone = streams.clone();
+                    let dest_key_clone = dest_key.clone();
+                    tokio::spawn(async move {
+                        let proxy_io = connected_stream.into_async_io();
+                        let (mut reader, mut writer) = tokio::io::split(proxy_io);
+                        let write_task = async {
+                            while let Some(data) = rx.recv().await {
+                                use tokio::io::AsyncWriteExt;
+                                if let Err(e) = writer.write_all(&data).await {
+                                    error!("Failed to write to proxy UDP stream: {}", e);
+                                    break;
+                                }
+                            }
+                        };
+                        let read_task = async {
+                            let mut read_buf = [0u8; 65535];
+                            loop {
+                                match reader.read(&mut read_buf).await {
+                                    Ok(0) => break,
+                                    Ok(len) => {
+                                        let data = &read_buf[..len];
+                                        match create_udp_packet(&dest_addr_clone, data) {
+                                            Ok(packet) => {
+                                                if let Err(e) = udp_socket_clone.send_to(&packet, client_addr).await {
+                                                    error!("Failed to send UDP packet to client: {}", e);
+                                                }
+                                            }
+                                            Err(e) => error!("Failed to create UDP packet: {}", e),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Error reading from proxy UDP stream: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                        };
+                        tokio::select! {
+                            _ = write_task => {}
+                            _ = read_task => {}
+                        }
+                        streams_clone.remove(&dest_key_clone);
+                        info!("UDP session finished: {:?}", dest_addr_clone);
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to connect to proxy for UDP: {}", e);
+                    continue;
+                }
+            }
+        }
+        let sender = streams.get(&dest_key).map(|s| s.clone());
+        if let Some(sender) = sender {
+            let _ = sender.send(payload).await;
+        }
+    }
 }
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
@@ -119,4 +280,69 @@ async fn relay_data(
     }
 
     Ok(())
+}
+
+fn parse_udp_address(buf: &[u8]) -> Result<(Address, usize)> {
+    if buf.is_empty() {
+        return Err(AgentError::Socks5("Invalid UDP header".to_string()));
+    }
+    let atyp = buf[0];
+    match atyp {
+        1 => {
+            if buf.len() < 7 {
+                return Err(AgentError::Socks5("Invalid IPv4 address".to_string()));
+            }
+            let mut ip_bytes = [0u8; 4];
+            ip_bytes.copy_from_slice(&buf[1..5]);
+            let port = u16::from_be_bytes([buf[5], buf[6]]);
+            Ok((Address::Ipv4 { addr: ip_bytes, port }, 7))
+        }
+        3 => {
+            let len = buf[1] as usize;
+            if buf.len() < 2 + len + 2 {
+                return Err(AgentError::Socks5("Invalid Domain address".to_string()));
+            }
+            let domain = String::from_utf8_lossy(&buf[2..2+len]).to_string();
+            let port = u16::from_be_bytes([buf[2+len], buf[2+len+1]]);
+            Ok((Address::Domain { host: domain, port }, 2 + len + 2))
+        }
+        4 => {
+            if buf.len() < 19 {
+                return Err(AgentError::Socks5("Invalid IPv6 address".to_string()));
+            }
+            let mut ip_bytes = [0u8; 16];
+            ip_bytes.copy_from_slice(&buf[1..17]);
+            let port = u16::from_be_bytes([buf[17], buf[18]]);
+            Ok((Address::Ipv6 { addr: ip_bytes, port }, 19))
+        }
+        _ => Err(AgentError::Socks5("Unsupported address type".to_string())),
+    }
+}
+
+fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> {
+    let mut packet = Vec::with_capacity(10 + data.len());
+    packet.extend_from_slice(&[0, 0, 0]);
+    match addr {
+        Address::Ipv4 { addr, port } => {
+            packet.push(1);
+            packet.extend_from_slice(addr);
+            packet.extend_from_slice(&port.to_be_bytes());
+        }
+        Address::Domain { host, port } => {
+            packet.push(3);
+            if host.len() > 255 {
+                return Err(AgentError::Socks5("Domain too long".to_string()));
+            }
+            packet.push(host.len() as u8);
+            packet.extend_from_slice(host.as_bytes());
+            packet.extend_from_slice(&port.to_be_bytes());
+        }
+        Address::Ipv6 { addr, port } => {
+            packet.push(4);
+            packet.extend_from_slice(addr);
+            packet.extend_from_slice(&port.to_be_bytes());
+        }
+    }
+    packet.extend_from_slice(data);
+    Ok(packet)
 }

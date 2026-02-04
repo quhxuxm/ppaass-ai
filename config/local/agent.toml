@@ -1,8 +1,8 @@
 # PPAASS Agent Configuration
 # This configuration is for demo purposes with real RSA keys
 
-listen_addr = "127.0.0.1:10080"
-proxy_addr = "127.0.0.1:80"
+listen_addr = "127.0.0.1:7070"
+proxy_addr = "127.0.0.1:8080"
 username = "user1"
 private_key_path = "keys/user1.pem"
 pool_size = 1

@@ -7,8 +7,9 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing::{error, info};
+use std::sync::Arc;
 
 /// Mock HTTP target server that responds to various test endpoints
 pub struct MockHttpServer {
@@ -79,6 +80,43 @@ impl MockTcpServer {
     }
 }
 
+/// Mock UDP echo server
+pub struct MockUdpServer {
+    port: u16,
+}
+
+impl MockUdpServer {
+    pub fn new(port: u16) -> Self {
+        Self { port }
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        let addr: SocketAddr = format!("0.0.0.0:{}", self.port).parse()?;
+        let socket = UdpSocket::bind(addr).await?;
+        let socket = Arc::new(socket);
+        info!("Mock UDP echo server listening on {}", addr);
+
+        let mut buf = [0u8; 8192];
+        loop {
+            match socket.recv_from(&mut buf).await {
+                Ok((n, client_addr)) => {
+                    info!("Received UDP from {}", client_addr);
+                    let socket_clone = socket.clone();
+                    let data = buf[..n].to_vec();
+                    tokio::spawn(async move {
+                         if let Err(e) = socket_clone.send_to(&data, client_addr).await {
+                              error!("Failed to send UDP echo to {}: {}", client_addr, e);
+                         }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to receive UDP: {}", e);
+                }
+            }
+        }
+    }
+}
+
 async fn handle_http_request(
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
@@ -140,10 +178,11 @@ async fn handle_tcp_echo(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-/// Run both mock servers
-pub async fn run_mock_servers(http_port: u16, tcp_port: u16) -> Result<()> {
+/// Run mock servers
+pub async fn run_mock_servers(http_port: u16, tcp_port: u16, udp_port: u16) -> Result<()> {
     let http_server = MockHttpServer::new(http_port);
     let tcp_server = MockTcpServer::new(tcp_port);
+    let udp_server = MockUdpServer::new(udp_port);
 
     tokio::select! {
         res = http_server.run() => {
@@ -152,6 +191,10 @@ pub async fn run_mock_servers(http_port: u16, tcp_port: u16) -> Result<()> {
         }
         res = tcp_server.run() => {
             error!("TCP server stopped: {:?}", res);
+            res
+        }
+        res = udp_server.run() => {
+            error!("UDP server stopped: {:?}", res);
             res
         }
         _ = tokio::signal::ctrl_c() => {
@@ -176,5 +219,11 @@ mod tests {
     async fn test_mock_tcp_server() {
         let server = MockTcpServer::new(19091);
         assert_eq!(server.port, 19091);
+    }
+
+    #[tokio::test]
+    async fn test_mock_udp_server() {
+        let server = MockUdpServer::new(19092);
+        assert_eq!(server.port, 19092);
     }
 }

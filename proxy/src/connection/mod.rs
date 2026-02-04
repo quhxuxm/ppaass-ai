@@ -10,14 +10,15 @@ use crate::error::{ProxyError, Result};
 use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use protocol::{
     Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, ProxyRequest,
-    ProxyResponse, ServerCodec,
+    ProxyResponse, ServerCodec, TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
     CipherState,
 };
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info};
 use bytes::Bytes;
 use std::io;
@@ -263,32 +264,164 @@ impl ProxyConnection {
             }
         };
 
-        match TcpStream::connect(&target_addr).await {
-            Ok(mut target_stream) => {
-                info!("Connected to target: {}", target_addr);
+        match connect_request.transport {
+            TransportProtocol::Tcp => {
+                match TcpStream::connect(&target_addr).await {
+                    Ok(mut target_stream) => {
+                        info!("Connected to target (TCP): {}", target_addr);
 
-                let connect_response = ConnectResponse {
-                    request_id: connect_request.request_id.clone(),
-                    success: true,
-                    message: "Connected".to_string(),
-                };
+                        let connect_response = ConnectResponse {
+                            request_id: connect_request.request_id.clone(),
+                            success: true,
+                            message: "Connected".to_string(),
+                        };
 
-                self.send_response(ProxyResponse::Connect(connect_response))
-                    .await?;
+                        self.send_response(ProxyResponse::Connect(connect_response))
+                            .await?;
 
-                // Handover to bidirectional relay
-                self.relay(connect_request.request_id, &mut target_stream).await?;
+                        // Handover to bidirectional relay
+                        self.relay(connect_request.request_id, &mut target_stream).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to connect to target (TCP): {}", e);
+                        self.send_connect_error(
+                            connect_request.request_id,
+                            format!("Failed to connect: {}", e),
+                        )
+                        .await?;
+                    }
+                }
             }
-            Err(e) => {
-                error!("Failed to connect to target: {}", e);
-                self.send_connect_error(
-                    connect_request.request_id,
-                    format!("Failed to connect: {}", e),
-                )
-                .await?;
+            TransportProtocol::Udp => {
+                // Bind to any available port
+                match UdpSocket::bind("0.0.0.0:0").await {
+                    Ok(socket) => {
+                        if let Err(e) = socket.connect(&target_addr).await {
+                             error!("Failed to connect to target (UDP): {}", e);
+                             self.send_connect_error(
+                                connect_request.request_id,
+                                format!("Failed to connect UDP: {}", e),
+                             ).await?;
+                             return Ok(());
+                        }
+
+                        info!("Connected to target (UDP): {}", target_addr);
+
+                        let connect_response = ConnectResponse {
+                            request_id: connect_request.request_id.clone(),
+                            success: true,
+                            message: "Connected".to_string(),
+                        };
+
+                        self.send_response(ProxyResponse::Connect(connect_response))
+                            .await?;
+
+                        self.relay_udp(connect_request.request_id, socket).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to bind UDP socket: {}", e);
+                        self.send_connect_error(
+                            connect_request.request_id,
+                            format!("Failed to bind UDP: {}", e),
+                        )
+                        .await?;
+                    }
+                }
             }
         }
 
+        Ok(())
+    }
+
+    async fn relay_udp(&mut self, stream_id: String, udp_socket: UdpSocket) -> Result<()> {
+        let username = self.user_config.as_ref().map(|c| c.username.clone());
+        let monitor_stream = self.bandwidth_monitor.clone();
+        let username_stream = username.clone();
+
+        // Use a custom Sink implementation
+        let sink = BytesToProxyResponseSink {
+            inner: &mut self.writer,
+            stream_id: stream_id.clone(),
+            username: username.clone(),
+            bandwidth_monitor: self.bandwidth_monitor.clone(),
+        };
+
+        let stream = (&mut self.reader).filter_map(move |res| {
+            let user = username_stream.as_ref();
+            let monitor = &monitor_stream;
+
+            let result = match res {
+                Ok(ProxyRequest::Data(packet)) => {
+                    if !packet.data.is_empty() {
+                        if let Some(u) = user {
+                            monitor.record_received(u, packet.data.len() as u64);
+                        }
+                        Some(io::Result::Ok(Bytes::from(packet.data)))
+                    } else {
+                        None
+                    }
+                },
+                Ok(_) => None,
+                Err(e) => Some(Err(io::Error::other(e))),
+            };
+
+            futures::future::ready(result)
+        });
+
+        let writer = SinkWriter::new(sink);
+        let reader = StreamReader::new(stream);
+
+        let agent_io = AgentIo { reader, writer };
+
+        let udp_socket = Arc::new(udp_socket);
+        let udp_recv = udp_socket.clone();
+        let udp_send = udp_socket.clone();
+
+        let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
+
+        let agent_to_udp = async {
+            let mut buf = [0u8; 65535];
+            loop {
+                match agent_reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                         if let Err(e) = udp_send.send(&buf[..n]).await {
+                             debug!("UDP send error: {}", e);
+                             break;
+                         }
+                    }
+                    Err(e) => {
+                        debug!("Agent read error: {}", e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        let udp_to_agent = async {
+             let mut buf = [0u8; 65535];
+             loop {
+                 match udp_recv.recv(&mut buf).await {
+                     Ok(n) => {
+                         if let Err(e) = agent_writer.write_all(&buf[..n]).await {
+                             debug!("Agent write error: {}", e);
+                             break;
+                         }
+                     }
+                     Err(e) => {
+                         debug!("UDP recv error: {}", e);
+                         break;
+                     }
+                 }
+             }
+        };
+
+        tokio::select! {
+            _ = agent_to_udp => {},
+            _ = udp_to_agent => {}
+        }
+
+        debug!("UDP Relay finished");
         Ok(())
     }
 
