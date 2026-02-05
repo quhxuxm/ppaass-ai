@@ -10,7 +10,7 @@ use crate::error::{ProxyError, Result};
 use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
 use protocol::{
     Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, ProxyRequest,
-    ProxyResponse, ServerCodec, TransportProtocol,
+    ProxyResponse, ServerCodec, TransportProtocol, CompressionMode,
     crypto::{AesGcmCipher, RsaKeyPair},
     CipherState,
 };
@@ -36,8 +36,8 @@ pub struct ProxyConnection {
 }
 
 impl ProxyConnection {
-    pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>) -> Self {
-        let cipher_state = Arc::new(CipherState::new());
+    pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>, compression_mode: CompressionMode) -> Self {
+        let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = Framed::new(stream, ServerCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
 
