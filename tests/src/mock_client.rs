@@ -120,75 +120,38 @@ impl MockSocks5Client {
     pub async fn send_receive(&self, target_host: &str, target_port: u16, data: &[u8]) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
         
-        let mut stream = TcpStream::connect(&self.agent_addr)
-            .await
-            .context("Failed to connect to agent")?;
-        
-        // SOCKS5 handshake
-        stream.write_all(&[0x05, 0x01, 0x00]).await?; // Version 5, 1 method, no auth
-        
-        let mut buf = [0u8; 2];
-        stream.read_exact(&mut buf).await?;
-        if buf[0] != 0x05 || buf[1] != 0x00 {
-            anyhow::bail!("SOCKS5 handshake failed");
-        }
-        
-        // Send connection request
-        let mut request = vec![0x05, 0x01, 0x00, 0x03]; // Version, Connect, Reserved, Domain name
-        request.push(target_host.len() as u8);
-        request.extend_from_slice(target_host.as_bytes());
-        request.extend_from_slice(&target_port.to_be_bytes());
-        
-        stream.write_all(&request).await?;
-        
-        // Read connection response
-        let mut response = [0u8; 4];
-        stream.read_exact(&mut response).await?;
-        if response[1] != 0x00 {
-            anyhow::bail!("SOCKS5 connection failed: status={}", response[1]);
-        }
-        
-        
-        // Read remaining address (skip it)
-        match response[3] {
-            0x01 => { // IPv4
-                let mut addr = [0u8; 6]; // 4 bytes IP + 2 bytes port
-                stream.read_exact(&mut addr).await?;
-            }
-            0x03 => { // Domain
-                let mut len = [0u8; 1];
-                stream.read_exact(&mut len).await?;
-                let mut addr = vec![0u8; len[0] as usize + 2];
-                stream.read_exact(&mut addr).await?;
-            }
-            0x04 => { // IPv6
-                let mut addr = [0u8; 18]; // 16 bytes IP + 2 bytes port
-                stream.read_exact(&mut addr).await?;
-            }
-            _ => anyhow::bail!("Unknown address type"),
-        }
-        
+        // Use async-socks5 for TCP connect
+        let proxy_addr = &self.agent_addr;
+
+        // 1. Connect to the proxy
+        let mut stream = TcpStream::connect(proxy_addr).await
+            .context("Failed to connect to proxy")?;
+
+        // 2. Perform SOCKS5 handshake (CONNECT)
+        let _ = async_socks5::connect(&mut stream, (target_host.to_string(), target_port), None).await
+            .context("Failed to connect via SOCKS5")?;
+
         // Now connected, send data
         stream.write_all(data).await?;
         stream.flush().await?;
-        
+        stream.shutdown().await?;
+
         // Receive response with timeout
-        let mut response_data = vec![0u8; 4096]; // Reduced buffer size
-        let n = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            stream.read(&mut response_data)
+        let mut response_data = Vec::new();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream.read_to_end(&mut response_data)
         ).await {
-            Ok(Ok(n)) => n,
+            Ok(Ok(_)) => {},
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => anyhow::bail!("Read timeout"),
         };
-        response_data.truncate(n);
-        
+
         let duration = start.elapsed();
         
         debug!("SOCKS5 {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}", 
-              target_host, target_port, data.len(), n, duration);
-        
+              target_host, target_port, data.len(), response_data.len(), duration);
+
         Ok((duration, response_data))
     }
 
@@ -196,121 +159,52 @@ impl MockSocks5Client {
     pub async fn udp_send_receive(&self, target_host: &str, target_port: u16, data: &[u8]) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
 
-        // 1. Establish TCP connection to SOCKS5 server
-        let mut stream = TcpStream::connect(&self.agent_addr)
+        // Use async-socks5 crate for UDP Associate
+
+        // 1. Establish TCP connection to SOCKS5 server (proxy)
+        let stream = TcpStream::connect(&self.agent_addr)
             .await
             .context("Failed to connect to agent")?;
 
-        // 2. Client greeting
-        stream.write_all(&[0x05, 0x01, 0x00]).await?;
+        // 2. Bind a local UDP socket
+        let socket = UdpSocket::bind("0.0.0.0:0").await
+            .context("Failed to bind local UDP socket")?;
 
-        let mut buf = [0u8; 2];
-        stream.read_exact(&mut buf).await?;
-        if buf[0] != 0x05 || buf[1] != 0x00 {
-            anyhow::bail!("SOCKS5 handshake failed");
-        }
+        // 3. Associate with the proxy
+        // associate(stream, socket, auth, target)
+        let datagram = async_socks5::SocksDatagram::associate(
+            stream,
+            socket,
+            None, // No auth
+            None::<std::net::SocketAddr>, // Target address optional
+        ).await.context("Failed to associate via SOCKS5")?;
 
-        // 3. Send UDP ASSOCIATE request
-        // CMD=0x03 (UDP ASSOCIATE)
-        // ADDR/PORT should be 0.0.0.0:0 usually, or the client's address
-        let request = vec![
-            0x05, // VER
-            0x03, // CMD = UDP ASSOCIATE
-            0x00, // RSV
-            0x01, // ATYP = IPv4
-            0x00, 0x00, 0x00, 0x00, // 0.0.0.0
-            0x00, 0x00 // Port 0
-        ];
+        let target_addr = format!("{}:{}", target_host, target_port);
+        let target_socket_addr: std::net::SocketAddr = target_addr.parse()
+            .context("Failed to parse target address")?;
 
-        stream.write_all(&request).await?;
+        // 4. Send data
+        datagram.send_to(data, target_socket_addr).await
+            .context("Failed to send UDP data via proxy")?;
 
-        // 4. Read UDP ASSOCIATE response
-        let mut response = [0u8; 4];
-        stream.read_exact(&mut response).await?;
-        if response[1] != 0x00 {
-             anyhow::bail!("SOCKS5 UDP Associate failed: status={}", response[1]);
-        }
-
-        // Parse bind address from response (where we should send UDP packets)
-        let bind_addr = match response[3] {
-            0x01 => { // IPv4
-                let mut addr = [0u8; 6];
-                stream.read_exact(&mut addr).await?;
-                format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], u16::from_be_bytes([addr[4], addr[5]]))
-            }
-            0x03 => { // Domain
-                let mut len = [0u8; 1];
-                stream.read_exact(&mut len).await?;
-                let mut addr = vec![0u8; len[0] as usize + 2];
-                stream.read_exact(&mut addr).await?;
-                let host = String::from_utf8_lossy(&addr[..len[0] as usize]);
-                let port = u16::from_be_bytes([addr[addr.len()-2], addr[addr.len()-1]]);
-                format!("{}:{}", host, port)
-            }
-            0x04 => { // IPv6
-                let mut addr = [0u8; 18];
-                stream.read_exact(&mut addr).await?;
-                // Simplified...
-                "0.0.0.0:0".to_string()
-            }
-            _ => anyhow::bail!("Unknown address type"),
-        };
-
-        debug!("SOCKS5 UDP Associate success, bind addr: {}", bind_addr);
-
-        // 5. Send UDP packet to bind_addr
-        // The packet must be encapsulated with SOCKS5 UDP header
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
-
-        // Construct SOCKS5 UDP header + Data
-        // RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR | DST.PORT | DATA
-        let mut packet = vec![0x00, 0x00, 0x00, 0x03]; // RSV, FRAG, ATYP=Domain
-
-        packet.push(target_host.len() as u8);
-        packet.extend_from_slice(target_host.as_bytes());
-        packet.extend_from_slice(&target_port.to_be_bytes());
-        packet.extend_from_slice(data);
-
-        socket.send_to(&packet, &bind_addr).await?;
-
-        // 6. Receive response
-        let mut recv_buf = [0u8; 4096];
+        // 5. Receive response
+        let mut buf = vec![0u8; 4096];
         let (n, _src) = match tokio::time::timeout(
-             std::time::Duration::from_secs(5),
-             socket.recv_from(&mut recv_buf)
+             std::time::Duration::from_secs(10),
+             datagram.recv_from(&mut buf)
         ).await {
              Ok(Ok(res)) => res,
              Ok(Err(e)) => return Err(e.into()),
              Err(_) => anyhow::bail!("Read timeout"),
         };
 
-        // Parse response header
-        if n < 10 {
-             anyhow::bail!("Response too short");
-        }
-
-        // RSV(2) FRAG(1) ATYP(1)
-        if recv_buf[0] != 0 || recv_buf[1] != 0 || recv_buf[2] != 0 {
-             anyhow::bail!("Invalid response header");
-        }
-
-        let header_len = match recv_buf[3] {
-            0x01 => 10,
-            0x03 => 7 + recv_buf[4] as usize,
-            0x04 => 22,
-            _ => anyhow::bail!("Unknown address type in response"),
-        };
-
-        let response_data = recv_buf[header_len..n].to_vec();
+        buf.truncate(n);
         let duration = start.elapsed();
 
-        // Keep TCP stream alive until end
-        drop(stream);
-
         debug!("SOCKS5 UDP {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}",
-              target_host, target_port, data.len(), response_data.len(), duration);
+              target_host, target_port, data.len(), n, duration);
 
-        Ok((duration, response_data))
+        Ok((duration, buf))
     }
 }
 
