@@ -171,24 +171,24 @@ impl MockSocks5Client {
         // Now connected, send data
         stream.write_all(data).await?;
         stream.flush().await?;
-        
+        stream.shutdown().await?;
+
         // Receive response with timeout
-        let mut response_data = vec![0u8; 4096]; // Reduced buffer size
-        let n = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            stream.read(&mut response_data)
+        let mut response_data = Vec::new();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream.read_to_end(&mut response_data)
         ).await {
-            Ok(Ok(n)) => n,
+            Ok(Ok(_)) => {},
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => anyhow::bail!("Read timeout"),
         };
-        response_data.truncate(n);
-        
+
         let duration = start.elapsed();
         
         debug!("SOCKS5 {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}", 
-              target_host, target_port, data.len(), n, duration);
-        
+              target_host, target_port, data.len(), response_data.len(), duration);
+
         Ok((duration, response_data))
     }
 
@@ -256,6 +256,12 @@ impl MockSocks5Client {
             _ => anyhow::bail!("Unknown address type"),
         };
 
+        let bind_addr = if bind_addr.starts_with("0.0.0.0") {
+            bind_addr.replace("0.0.0.0", "127.0.0.1")
+        } else {
+            bind_addr
+        };
+
         debug!("SOCKS5 UDP Associate success, bind addr: {}", bind_addr);
 
         // 5. Send UDP packet to bind_addr
@@ -263,11 +269,17 @@ impl MockSocks5Client {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
         // Construct SOCKS5 UDP header + Data
-        // RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR | DST.PORT | DATA
-        let mut packet = vec![0x00, 0x00, 0x00, 0x03]; // RSV, FRAG, ATYP=Domain
+        let mut packet = vec![0x00, 0x00, 0x00]; // RSV, FRAG
 
-        packet.push(target_host.len() as u8);
-        packet.extend_from_slice(target_host.as_bytes());
+        if let Ok(ip) = target_host.parse::<std::net::Ipv4Addr>() {
+             packet.push(0x01); // ATYP IPv4
+             packet.extend_from_slice(&ip.octets());
+        } else {
+             packet.push(0x03); // ATYP Domain
+             packet.push(target_host.len() as u8);
+             packet.extend_from_slice(target_host.as_bytes());
+        }
+
         packet.extend_from_slice(&target_port.to_be_bytes());
         packet.extend_from_slice(data);
 
@@ -276,7 +288,7 @@ impl MockSocks5Client {
         // 6. Receive response
         let mut recv_buf = [0u8; 4096];
         let (n, _src) = match tokio::time::timeout(
-             std::time::Duration::from_secs(5),
+             std::time::Duration::from_secs(10),
              socket.recv_from(&mut recv_buf)
         ).await {
              Ok(Ok(res)) => res,

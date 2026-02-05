@@ -91,7 +91,7 @@ impl MockUdpServer {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let addr: SocketAddr = format!("0.0.0.0:{}", self.port).parse()?;
+        let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let socket = UdpSocket::bind(addr).await?;
         let socket = Arc::new(socket);
         info!("Mock UDP echo server listening on {}", addr);
