@@ -4,6 +4,7 @@ use crate::config::ProxyConfig;
 use crate::connection::ProxyConnection;
 use crate::error::Result;
 use crate::user_manager::UserManager;
+use protocol::CompressionMode;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info};
@@ -67,8 +68,9 @@ impl ProxyServer {
                             info!("Accepted connection from {}", addr);
                             let user_manager = self.user_manager.clone();
                             let bandwidth_monitor = self.bandwidth_monitor.clone();
+                            let compression_mode = self.config.get_compression_mode();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, user_manager, bandwidth_monitor).await {
+                                if let Err(e) = handle_connection(stream, user_manager, bandwidth_monitor, compression_mode).await {
                                     error!("Error handling connection: {}", e);
                                 }
                             });
@@ -96,8 +98,9 @@ async fn handle_connection(
     stream: TcpStream,
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    compression_mode: CompressionMode,
 ) -> Result<()> {
-    let mut connection = ProxyConnection::new(stream, bandwidth_monitor);
+    let mut connection = ProxyConnection::new(stream, bandwidth_monitor, compression_mode);
 
     // First, peek at the auth request to get the username
     let username = match connection.peek_auth_username().await {

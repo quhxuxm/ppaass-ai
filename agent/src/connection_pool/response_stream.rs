@@ -34,7 +34,7 @@ impl Stream for ResponseStream {
             let reader = Pin::new(&mut self.reader);
             match reader.poll_next(cx) {
                 Poll::Ready(Some(Ok(response))) => {
-                    // Response is already deserialized and decrypted by codec
+                    // Response is already deserialized, decrypted, and decompressed by codec
                     match response {
                         ProxyResponse::Data(packet) => {
                             if packet.stream_id == self.stream_id {

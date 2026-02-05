@@ -19,6 +19,13 @@ log_level = "error"
 # Log directory for file-based logging (better performance than console)
 log_dir = "logs"
 
+# Compression mode for data transfer: none, zstd, lz4, gzip
+# - none: No compression (default)
+# - zstd: Zstandard compression - good balance of speed and ratio
+# - lz4: LZ4 compression - fastest, lower compression ratio
+# - gzip: Gzip compression - widely compatible, slower
+compression_mode = "none"
+
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 # runtime_threads = 4
 
