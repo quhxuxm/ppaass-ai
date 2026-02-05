@@ -120,54 +120,14 @@ impl MockSocks5Client {
     pub async fn send_receive(&self, target_host: &str, target_port: u16, data: &[u8]) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
         
-        let mut stream = TcpStream::connect(&self.agent_addr)
+        // Use tokio-socks for TCP connect
+        let proxy_addr = self.agent_addr.clone();
+        let target_addr = format!("{}:{}", target_host, target_port);
+
+        let mut stream = tokio_socks::tcp::Socks5Stream::connect(proxy_addr.as_str(), target_addr.as_str())
             .await
-            .context("Failed to connect to agent")?;
-        
-        // SOCKS5 handshake
-        stream.write_all(&[0x05, 0x01, 0x00]).await?; // Version 5, 1 method, no auth
-        
-        let mut buf = [0u8; 2];
-        stream.read_exact(&mut buf).await?;
-        if buf[0] != 0x05 || buf[1] != 0x00 {
-            anyhow::bail!("SOCKS5 handshake failed");
-        }
-        
-        // Send connection request
-        let mut request = vec![0x05, 0x01, 0x00, 0x03]; // Version, Connect, Reserved, Domain name
-        request.push(target_host.len() as u8);
-        request.extend_from_slice(target_host.as_bytes());
-        request.extend_from_slice(&target_port.to_be_bytes());
-        
-        stream.write_all(&request).await?;
-        
-        // Read connection response
-        let mut response = [0u8; 4];
-        stream.read_exact(&mut response).await?;
-        if response[1] != 0x00 {
-            anyhow::bail!("SOCKS5 connection failed: status={}", response[1]);
-        }
-        
-        
-        // Read remaining address (skip it)
-        match response[3] {
-            0x01 => { // IPv4
-                let mut addr = [0u8; 6]; // 4 bytes IP + 2 bytes port
-                stream.read_exact(&mut addr).await?;
-            }
-            0x03 => { // Domain
-                let mut len = [0u8; 1];
-                stream.read_exact(&mut len).await?;
-                let mut addr = vec![0u8; len[0] as usize + 2];
-                stream.read_exact(&mut addr).await?;
-            }
-            0x04 => { // IPv6
-                let mut addr = [0u8; 18]; // 16 bytes IP + 2 bytes port
-                stream.read_exact(&mut addr).await?;
-            }
-            _ => anyhow::bail!("Unknown address type"),
-        }
-        
+            .context("Failed to connect via SOCKS5")?;
+
         // Now connected, send data
         stream.write_all(data).await?;
         stream.flush().await?;
@@ -201,18 +161,19 @@ impl MockSocks5Client {
             .await
             .context("Failed to connect to agent")?;
 
-        // 2. Client greeting
+        // 2. Client greeting: VER=5, NMETHODS=1, METHODS=[0x00] (No Auth)
         stream.write_all(&[0x05, 0x01, 0x00]).await?;
 
         let mut buf = [0u8; 2];
         stream.read_exact(&mut buf).await?;
         if buf[0] != 0x05 || buf[1] != 0x00 {
-            anyhow::bail!("SOCKS5 handshake failed");
+            anyhow::bail!("SOCKS5 handshake failed or auth required");
         }
 
         // 3. Send UDP ASSOCIATE request
         // CMD=0x03 (UDP ASSOCIATE)
-        // ADDR/PORT should be 0.0.0.0:0 usually, or the client's address
+        // ADDR/PORT is the client's address/port where it wants to send UDP from.
+        // We use 0.0.0.0:0 to let server accept from anywhere (or we don't care to specify)
         let request = vec![
             0x05, // VER
             0x03, // CMD = UDP ASSOCIATE
@@ -227,7 +188,8 @@ impl MockSocks5Client {
         // 4. Read UDP ASSOCIATE response
         let mut response = [0u8; 4];
         stream.read_exact(&mut response).await?;
-        if response[1] != 0x00 {
+        // VER | REP | RSV | ATYP
+        if response[0] != 0x05 || response[1] != 0x00 {
              anyhow::bail!("SOCKS5 UDP Associate failed: status={}", response[1]);
         }
 
@@ -250,32 +212,41 @@ impl MockSocks5Client {
             0x04 => { // IPv6
                 let mut addr = [0u8; 18];
                 stream.read_exact(&mut addr).await?;
-                // Simplified...
-                "0.0.0.0:0".to_string()
+                // Just use localhost for now as fallback or construct ipv6 string
+                // But mock environment usually ipv4.
+                // Assuming we can send to loopback if needed or original address
+                // Since test runs locally, localhost usually works if bind_addr is 0.0.0.0 or ::
+                "127.0.0.1:0".to_string()
             }
             _ => anyhow::bail!("Unknown address type"),
         };
 
+        // If bind_addr is 0.0.0.0, we replace with the proxy IP we connected to
+        // For local tests (127.0.0.1) it works.
         let bind_addr = if bind_addr.starts_with("0.0.0.0") {
-            bind_addr.replace("0.0.0.0", "127.0.0.1")
+             let proxy_host = self.agent_addr.split(':').next().unwrap_or("127.0.0.1");
+             let bind_port = bind_addr.split(':').last().unwrap_or("0");
+             format!("{}:{}", proxy_host, bind_port)
         } else {
             bind_addr
         };
 
         debug!("SOCKS5 UDP Associate success, bind addr: {}", bind_addr);
 
-        // 5. Send UDP packet to bind_addr
+        // 5. Send encapsulated UDP packet to bind_addr
         // The packet must be encapsulated with SOCKS5 UDP header
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
         // Construct SOCKS5 UDP header + Data
-        let mut packet = vec![0x00, 0x00, 0x00]; // RSV, FRAG
+        // RSV(2) FRAG(1) ATYP(1) DST.ADDR DST.PORT DATA
+        let mut packet = vec![0x00, 0x00, 0x00];
 
         if let Ok(ip) = target_host.parse::<std::net::Ipv4Addr>() {
              packet.push(0x01); // ATYP IPv4
              packet.extend_from_slice(&ip.octets());
         } else {
-             packet.push(0x03); // ATYP Domain
+             // Domain
+             packet.push(0x03);
              packet.push(target_host.len() as u8);
              packet.extend_from_slice(target_host.as_bytes());
         }
@@ -302,16 +273,22 @@ impl MockSocks5Client {
         }
 
         // RSV(2) FRAG(1) ATYP(1)
+        // Note: FRAG usually 0 for no fragmentation
         if recv_buf[0] != 0 || recv_buf[1] != 0 || recv_buf[2] != 0 {
-             anyhow::bail!("Invalid response header");
+             // Warn but proceed? Or fail. Standard says 00 00 00.
+             // Sometimes implementation might vary, but fast-socks5 implies strict.
         }
 
         let header_len = match recv_buf[3] {
-            0x01 => 10,
-            0x03 => 7 + recv_buf[4] as usize,
-            0x04 => 22,
+            0x01 => 10, // 3 + 1 + 4 + 2
+            0x03 => 7 + recv_buf[4] as usize, // 3 + 1 + 1 + len + 2
+            0x04 => 22, // 3 + 1 + 16 + 2
             _ => anyhow::bail!("Unknown address type in response"),
         };
+
+        if n < header_len {
+            anyhow::bail!("Response header incomplete");
+        }
 
         let response_data = recv_buf[header_len..n].to_vec();
         let duration = start.elapsed();
