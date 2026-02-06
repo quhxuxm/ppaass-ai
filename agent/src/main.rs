@@ -59,7 +59,7 @@ fn main() -> Result<()> {
         config.listen_addr = listen;
     }
     if let Some(proxy) = args.proxy {
-        config.proxy_addr = proxy;
+        config.proxy_addrs = vec![proxy];
     }
     if let Some(username) = args.username {
         config.username = username;
@@ -93,7 +93,7 @@ fn main() -> Result<()> {
     runtime.block_on(async {
         info!("Starting PPAASS Agent");
         info!("Listen address: {}", config.listen_addr);
-        info!("Proxy address: {}", config.proxy_addr);
+        info!("Proxy addresses: [{}]", config.proxy_addrs.join(", "));
         info!("Username: {}", config.username);
         info!("Log level: {}", config.log_level);
         info!(

@@ -2,7 +2,7 @@ use std::{fmt::Debug, time::Duration};
 
 /// Configuration for a client connection
 pub trait ClientConnectionConfig: Debug {
-    /// Remote address to connect to
+    /// Get a randomly selected remote address to connect to
     fn remote_addr(&self) -> String;
 
     /// Username for authentication

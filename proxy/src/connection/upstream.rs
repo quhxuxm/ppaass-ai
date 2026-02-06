@@ -4,7 +4,7 @@ use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
 use common::{ClientConnection, ClientConnectionConfig, ClientStream};
 use protocol::{Address, TransportProtocol};
-use std::fmt::Debug;
+use std::{fmt::Debug, fs::read_to_string, time::Duration};
 use tracing::debug;
 
 /// Configuration adapter for ClientConnection trait
@@ -15,9 +15,15 @@ struct ProxyClientConfig<'a> {
 
 impl<'a> ProxyClientConfig<'a> {
     fn new(config: &'a ProxyConfig) -> Result<Self> {
-        config.upstream_proxy_addr.as_ref().ok_or_else(|| {
-            ProxyError::Configuration("Upstream proxy address not configured".to_string())
-        })?;
+        config
+            .upstream_proxy_addrs
+            .as_ref()
+            .and_then(|addrs| if addrs.is_empty() { None } else { Some(()) })
+            .ok_or_else(|| {
+                ProxyError::Configuration(
+                    "Upstream proxy addresses not configured or empty".to_string(),
+                )
+            })?;
         config.upstream_username.as_ref().ok_or_else(|| {
             ProxyError::Configuration("Upstream username not configured".to_string())
         })?;
@@ -31,10 +37,12 @@ impl<'a> ProxyClientConfig<'a> {
 
 impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     fn remote_addr(&self) -> String {
+        use rand::prelude::*;
+        let mut rng = rand::rng();
         self.config
-            .upstream_proxy_addr
+            .upstream_proxy_addrs
             .as_ref()
-            .cloned()
+            .and_then(|addrs| addrs.choose(&mut rng).cloned())
             .unwrap_or_default()
     }
 
@@ -53,11 +61,11 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
             .as_ref()
             .ok_or_else(|| "Private key path not configured".to_string())?;
 
-        std::fs::read_to_string(path).map_err(|e| e.to_string())
+        read_to_string(path).map_err(|e| e.to_string())
     }
 
-    fn timeout_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.config.connect_timeout_secs)
+    fn timeout_duration(&self) -> Duration {
+        Duration::from_secs(self.config.connect_timeout_secs)
     }
 }
 

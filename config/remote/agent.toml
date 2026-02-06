@@ -2,14 +2,14 @@
 # This configuration is for demo purposes with real RSA keys
 
 listen_addr = "127.0.0.1:10080"
-proxy_addr = "140.82.30.214:80"
+proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 pool_size = 50
 connect_timeout_secs = 20
 
 # Log level: trace, debug, info, warn, error
-log_level = "debug"
+log_level = "error"
 
 # Log directory for file-based logging (better performance than console)
 log_dir = "logs"
