@@ -12,8 +12,8 @@ pub struct AgentConfig {
     #[serde(default = "default_pool_size")]
     pub pool_size: usize,
 
-    #[serde(default = "default_pool_timeout")]
-    pub pool_timeout_secs: u64,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_secs: u64,
 
     #[serde(default)]
     pub console_port: Option<u16>,
@@ -35,7 +35,7 @@ fn default_pool_size() -> usize {
     10
 }
 
-fn default_pool_timeout() -> u64 {
+fn default_connect_timeout() -> u64 {
     30
 }
 

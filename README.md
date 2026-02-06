@@ -1,6 +1,7 @@
 # PPAASS - Secure Proxy Application
 
-A high-performance, secure proxy application built with Rust, featuring HTTP and SOCKS5 protocol support with end-to-end encryption.
+A high-performance, secure proxy application built with Rust, featuring HTTP and SOCKS5 protocol support with end-to-end
+encryption.
 
 ## Features
 
@@ -43,6 +44,7 @@ cargo build --release -p proxy
 ### Configuration
 
 1. Copy example configurations:
+
 ```bash
 mkdir -p config keys
 cp config/agent.toml.example config/agent.toml
@@ -50,11 +52,13 @@ cp config/proxy.toml.example config/proxy.toml
 ```
 
 2. Start the proxy server:
+
 ```bash
 cargo run --release -p proxy -- --config config/proxy.toml
 ```
 
 3. Add a user via API:
+
 ```bash
 curl -X POST http://localhost:8081/api/users \
   -H "Content-Type: application/json" \
@@ -69,6 +73,7 @@ curl -X POST http://localhost:8081/api/users \
 5. Update `config/agent.toml` with your username and key path
 
 6. Start the agent:
+
 ```bash
 cargo run --release -p agent -- --config config/agent.toml
 ```
@@ -80,6 +85,7 @@ cargo run --release -p agent -- --config config/agent.toml
 The proxy exposes a REST API on port 8081 (configurable):
 
 ### Add User
+
 ```bash
 POST /api/users
 {
@@ -89,6 +95,7 @@ POST /api/users
 ```
 
 ### Remove User
+
 ```bash
 DELETE /api/users
 {
@@ -97,26 +104,31 @@ DELETE /api/users
 ```
 
 ### List Users
+
 ```bash
 GET /api/users
 ```
 
 ### Get Bandwidth Statistics
+
 ```bash
 GET /api/stats/bandwidth
 ```
 
 ### Health Check
+
 ```bash
 GET /health
 ```
 
 ### Get Configuration
+
 ```bash
 GET /api/config
 ```
 
 ### Update Configuration
+
 ```bash
 PUT /api/config
 {
@@ -136,9 +148,9 @@ proxy_addr = "proxy.example.com:8080" # Remote proxy address
 username = "user1"                    # Your username
 password = "password123"              # Your password
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-pool_size = 10                        # Connection pool size
-pool_timeout_secs = 30                # Connection timeout
-console_port = 6669                   # Optional: tokio-console port
+pool_size = 50                      # Connection pool size
+connect_timeout_secs = 30                # Connection timeout
+console_port = 3000                   # Optional: Console port for management
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)
@@ -196,6 +208,7 @@ Enable tokio-console for detailed runtime monitoring:
 ### Logging
 
 Set log level via environment variable:
+
 ```bash
 RUST_LOG=info cargo run -p proxy
 RUST_LOG=debug cargo run -p agent
@@ -276,6 +289,7 @@ Contributions are welcome! Please submit pull requests or open issues on GitHub.
 ## Acknowledgments
 
 Built with these excellent Rust crates:
+
 - tokio - Async runtime
 - hyper - HTTP implementation
 - fast-socks5 - SOCKS5 protocol
