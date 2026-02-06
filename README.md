@@ -149,7 +149,7 @@ username = "user1"                    # Your username
 password = "password123"              # Your password
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
 pool_size = 50                      # Connection pool size
-connect_timeout_secs = 30                # Connection timeout
+connection_timeout_secs = 30                # Connection timeout
 console_port = 3000                   # Optional: Console port for management
 ```
 

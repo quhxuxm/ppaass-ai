@@ -12,7 +12,7 @@ pub struct AgentConfig {
     #[serde(default = "default_pool_size")]
     pub pool_size: usize,
 
-    #[serde(default = "default_connect_timeout")]
+    #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
     #[serde(default)]
@@ -23,8 +23,7 @@ pub struct AgentConfig {
     pub log_level: String,
 
     /// Log directory for file-based logging (improves performance vs console)
-    #[serde(default = "default_log_dir")]
-    pub log_dir: String,
+    pub log_dir: Option<String>,
 
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
@@ -35,16 +34,12 @@ fn default_pool_size() -> usize {
     10
 }
 
-fn default_connect_timeout() -> u64 {
+fn default_connect_timeout_secs() -> u64 {
     30
 }
 
 fn default_log_level() -> String {
     "info".to_string()
-}
-
-fn default_log_dir() -> String {
-    "logs".to_string()
 }
 
 impl AgentConfig {
