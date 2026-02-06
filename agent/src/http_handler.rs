@@ -1,7 +1,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use bytes::Bytes;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -110,7 +110,10 @@ async fn handle_connect(
     };
 
     // Get connected stream from pool
-    let connected_stream = match pool.get_connected_stream(address, TransportProtocol::Tcp).await {
+    let connected_stream = match pool
+        .get_connected_stream(address, TransportProtocol::Tcp)
+        .await
+    {
         Ok(stream) => {
             info!(
                 "Got connected stream from pool, stream_id: {}",
@@ -122,7 +125,9 @@ async fn handle_connect(
             error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(boxed(Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {})))
+                .body(boxed(
+                    Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {}),
+                ))
                 .unwrap());
         }
     };
@@ -192,7 +197,9 @@ async fn handle_regular_request(
     if host.is_empty() {
         return Ok(Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(boxed(Full::new(Bytes::from("Missing host")).map_err(|e| match e {})))
+            .body(boxed(
+                Full::new(Bytes::from("Missing host")).map_err(|e| match e {}),
+            ))
             .unwrap());
     }
 
@@ -202,13 +209,18 @@ async fn handle_regular_request(
     };
 
     // Get connected stream from pool
-    let connected_stream = match pool.get_connected_stream(address, TransportProtocol::Tcp).await {
+    let connected_stream = match pool
+        .get_connected_stream(address, TransportProtocol::Tcp)
+        .await
+    {
         Ok(stream) => stream,
         Err(e) => {
             error!("Failed to get stream from pool: {}", e);
             return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(boxed(Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {})))
+                .body(boxed(
+                    Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {}),
+                ))
                 .unwrap());
         }
     };
@@ -217,7 +229,11 @@ async fn handle_regular_request(
     let proxy_io = connected_stream.into_async_io();
 
     // Fix up the URI to be a relative path (origin-form) for the target server
-    let path = req.uri().path_and_query().map(|pq: &hyper::http::uri::PathAndQuery| pq.as_str()).unwrap_or("/");
+    let path = req
+        .uri()
+        .path_and_query()
+        .map(|pq: &hyper::http::uri::PathAndQuery| pq.as_str())
+        .unwrap_or("/");
 
     if let Ok(new_uri) = Uri::from_str(path) {
         *req.uri_mut() = new_uri;
@@ -255,4 +271,3 @@ where
 fn empty() -> AgentBody {
     boxed(Full::new(Bytes::new()).map_err(|e| match e {}))
 }
-

@@ -1,9 +1,9 @@
 //! Tool to generate RSA keys for demo configuration
 
 use rsa::{
+    RsaPrivateKey,
     pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::OsRng,
-    RsaPrivateKey,
 };
 
 fn main() {

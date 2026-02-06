@@ -2,15 +2,15 @@ mod config;
 mod connection_pool;
 mod error;
 mod http_handler;
-mod socks5_handler;
 mod server;
+mod socks5_handler;
 
-use anyhow::Result;
-use clap::Parser;
-use tracing::info;
-use common::init_tracing;
 use crate::config::AgentConfig;
 use crate::server::AgentServer;
+use anyhow::Result;
+use clap::Parser;
+use common::init_tracing;
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -72,7 +72,7 @@ fn main() -> Result<()> {
 
     // Create log directory if it doesn't exist
     std::fs::create_dir_all(&config.log_dir)?;
-    let _guard=init_tracing(&config.log_dir, "agent.log", &config.log_level);
+    let _guard = init_tracing(&config.log_dir, "agent.log", &config.log_level);
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.enable_all();

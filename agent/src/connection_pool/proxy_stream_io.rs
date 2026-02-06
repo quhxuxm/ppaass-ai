@@ -1,6 +1,7 @@
 use super::data_packet_sink::DataPacketSink;
 use super::response_stream::ResponseStream;
 use bytes::Bytes;
+use futures::stream::{SplitSink, SplitStream};
 use protocol::{AgentCodec, ProxyRequest};
 use std::io;
 use std::pin::Pin;
@@ -9,7 +10,6 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use futures::stream::{SplitSink, SplitStream};
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
@@ -27,8 +27,7 @@ impl ProxyStreamIo {
         framed_reader: FramedReader,
         stream_id: String,
     ) -> Self {
-        let response_stream =
-            ResponseStream::new(framed_reader, stream_id.clone());
+        let response_stream = ResponseStream::new(framed_reader, stream_id.clone());
         let data_sink = DataPacketSink::new(framed_writer, stream_id);
 
         Self {

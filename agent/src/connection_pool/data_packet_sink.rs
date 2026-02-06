@@ -1,11 +1,11 @@
 use futures::Sink;
+use futures::stream::SplitSink;
 use protocol::{AgentCodec, DataPacket, ProxyRequest};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
-use futures::stream::SplitSink;
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 
@@ -18,10 +18,7 @@ pub struct DataPacketSink {
 
 impl DataPacketSink {
     pub fn new(writer: FramedWriter, stream_id: String) -> Self {
-        Self {
-            writer,
-            stream_id,
-        }
+        Self { writer, stream_id }
     }
 
     fn create_data_request(&self, data: &[u8], is_end: bool) -> ProxyRequest {

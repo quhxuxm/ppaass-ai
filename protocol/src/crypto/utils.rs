@@ -1,5 +1,5 @@
 use crate::error::{ProtocolError, Result};
-use rsa::{rand_core::OsRng, traits::PublicKeyParts, BigUint, Pkcs1v15Encrypt, RsaPublicKey};
+use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey, rand_core::OsRng, traits::PublicKeyParts};
 use sha2::{Digest, Sha256};
 
 pub fn hash_password(password: &str, salt: &[u8]) -> Vec<u8> {

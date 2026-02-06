@@ -1,8 +1,8 @@
 use crate::error::{ProtocolError, Result};
 use rsa::{
+    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::OsRng,
-    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
 };
 
 pub struct RsaKeyPair {
@@ -67,8 +67,8 @@ impl RsaKeyPair {
     /// Encrypt data with private key (can be decrypted with public key)
     /// This uses raw RSA private key operation: c = m^d mod n
     pub fn encrypt_with_private_key(&self, data: &[u8]) -> Result<Vec<u8>> {
-        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
         use rsa::BigUint;
+        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 
         // Add PKCS#1 v1.5 signature padding: 0x00 0x01 [0xFF padding] 0x00 [data]
         let key_size = self.private_key.size();

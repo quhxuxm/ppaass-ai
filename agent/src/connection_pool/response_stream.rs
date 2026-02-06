@@ -1,12 +1,12 @@
 use bytes::Bytes;
 use futures::Stream;
+use futures::stream::SplitStream;
 use protocol::{AgentCodec, ProxyResponse};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
-use futures::stream::SplitStream;
 
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
@@ -19,10 +19,7 @@ pub struct ResponseStream {
 
 impl ResponseStream {
     pub fn new(reader: FramedReader, stream_id: String) -> Self {
-        Self {
-            reader,
-            stream_id,
-        }
+        Self { reader, stream_id }
     }
 }
 
