@@ -48,6 +48,10 @@ replay_attack_tolerance = 300
 # Path to the private key for authenticating with the upstream proxy
 # upstream_private_key_path = "keys/user2.pem"
 
+# List of upstream proxy addresses for load balancing and failover
+# When multiple addresses are specified, one will be randomly selected for each connection
+# upstream_proxy_addrs = ["upstream-proxy1:8080", "upstream-proxy2:8080"]
+
 # Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
 # connect_timeout_secs = 30
 

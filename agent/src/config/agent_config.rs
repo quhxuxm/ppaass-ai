@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub listen_addr: String,
-    pub proxy_addr: String,
+    pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
 

@@ -34,7 +34,7 @@ pub struct ProxyConfig {
     pub forward_mode: bool,
 
     #[serde(default)]
-    pub upstream_proxy_addr: Option<String>,
+    pub upstream_proxy_addrs: Option<Vec<String>>,
 
     #[serde(default)]
     pub upstream_username: Option<String>,

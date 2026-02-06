@@ -21,7 +21,13 @@ impl<'a> AgentClientConfig<'a> {
 
 impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     fn remote_addr(&self) -> String {
-        self.config.proxy_addr.clone()
+        use rand::prelude::*;
+        let mut rng = rand::rng();
+        self.config
+            .proxy_addrs
+            .choose(&mut rng)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn username(&self) -> String {
@@ -48,7 +54,12 @@ impl ProxyConnection {
     /// This performs just the authentication handshake without connecting to a target
     /// Used for connection pool prewarming
     pub async fn new(config: &AgentConfig) -> Result<Self> {
-        debug!("Creating new proxy connection: {}", config.proxy_addr);
+        let addr_display = if config.proxy_addrs.len() == 1 {
+            config.proxy_addrs[0].clone()
+        } else {
+            format!("[{}]", config.proxy_addrs.join(", "))
+        };
+        debug!("Creating new proxy connection to: {}", addr_display);
         let config_adapter = AgentClientConfig::new(config);
 
         let auth_conn = AuthenticatedConnection::authenticate_only(&config_adapter)
