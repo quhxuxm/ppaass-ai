@@ -1,3 +1,5 @@
+use std::{fs::read_to_string, time::Duration};
+
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
@@ -27,13 +29,11 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     }
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
-        std::fs::read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
+        read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
     }
 
-    fn timeout_duration(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs(
-            self.config.connect_timeout_secs,
-        ))
+    fn timeout_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(self.config.connect_timeout_secs))
     }
 }
 

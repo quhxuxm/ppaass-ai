@@ -1,9 +1,9 @@
 use crate::bandwidth::BandwidthMonitor;
 use futures::{Sink, stream::SplitSink};
 use protocol::{DataPacket, ProxyResponse, ServerCodec};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::{pin::Pin, result::Result};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -19,14 +19,11 @@ pub struct BytesToProxyResponseSink<'a> {
 impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     type Error = std::io::Error;
 
-    fn poll_ready(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut self.inner).poll_ready(cx)
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::result::Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> Result<(), Self::Error> {
         let stream_id = self.stream_id.clone();
 
         if let Some(user) = &self.username {
@@ -42,17 +39,11 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
         Pin::new(&mut self.inner).start_send(ProxyResponse::Data(packet))
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
-    fn poll_close(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut self.inner).poll_close(cx)
     }
 }

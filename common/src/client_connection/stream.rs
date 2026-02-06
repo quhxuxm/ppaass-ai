@@ -1,8 +1,8 @@
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, Stream};
 use protocol::{AgentCodec, ProxyRequest, ProxyResponse};
-use std::pin::Pin;
 use std::task::Poll;
+use std::{pin::Pin, task::Context};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -28,7 +28,7 @@ impl ClientStream {
 impl tokio::io::AsyncRead for ClientStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         // If we have buffered data, return it first
@@ -69,7 +69,7 @@ impl tokio::io::AsyncRead for ClientStream {
 impl tokio::io::AsyncWrite for ClientStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         if buf.is_empty() {
@@ -94,10 +94,7 @@ impl tokio::io::AsyncWrite for ClientStream {
         }
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match Pin::new(&mut self.writer).poll_flush(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),
@@ -105,10 +102,7 @@ impl tokio::io::AsyncWrite for ClientStream {
         }
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         // Send end-of-stream packet
         let end_packet = protocol::DataPacket {
             stream_id: self.stream_id.clone(),
