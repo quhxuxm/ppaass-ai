@@ -3,11 +3,11 @@ use crate::config::ProxyConfig;
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use axum::{
+    Router,
     extract::{Json, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -128,16 +128,16 @@ async fn add_user(
 ) -> impl IntoResponse {
     info!("API: Add user request for {}", request.username);
 
-    match state.user_manager.add_user(
-        request.username.clone(),
-        request.bandwidth_limit_mbps,
-    ).await {
+    match state
+        .user_manager
+        .add_user(request.username.clone(), request.bandwidth_limit_mbps)
+        .await
+    {
         Ok((private_key, public_key)) => {
             // Register user in bandwidth monitor
-            state.bandwidth_monitor.register_user(
-                request.username.clone(),
-                request.bandwidth_limit_mbps,
-            );
+            state
+                .bandwidth_monitor
+                .register_user(request.username.clone(), request.bandwidth_limit_mbps);
 
             (
                 StatusCode::OK,
@@ -187,10 +187,7 @@ async fn remove_user(
 
 async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
     match state.user_manager.list_users().await {
-        Ok(users) => (
-            StatusCode::OK,
-            Json(UsersListResponse { users }),
-        ),
+        Ok(users) => (StatusCode::OK, Json(UsersListResponse { users })),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(UsersListResponse { users: vec![] }),

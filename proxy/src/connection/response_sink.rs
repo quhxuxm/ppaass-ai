@@ -28,11 +28,11 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
 
     fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> std::result::Result<(), Self::Error> {
         let stream_id = self.stream_id.clone();
-        
+
         if let Some(user) = &self.username {
             self.bandwidth_monitor.record_sent(user, item.len() as u64);
         }
-        
+
         // Compression is handled at the codec level
         let packet = DataPacket {
             stream_id,

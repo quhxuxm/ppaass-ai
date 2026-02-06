@@ -4,8 +4,8 @@ use crate::config::AgentConfig;
 use crate::error::Result;
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
@@ -167,7 +167,11 @@ impl ConnectionPool {
 
     /// Get a connection and connect to target
     /// The connection is consumed (not returned to pool)
-    pub async fn get_connected_stream(&self, address: Address, transport: TransportProtocol) -> Result<ConnectedStream> {
+    pub async fn get_connected_stream(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<ConnectedStream> {
         // Request refill in background using notify
         self.refill_notify.notify_one();
 

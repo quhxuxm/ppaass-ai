@@ -9,13 +9,13 @@ use crate::config::{ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
-    stream::{SplitSink, SplitStream}, SinkExt,
-    StreamExt,
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
-    ConnectRequest, ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec,
-    TransportProtocol,
+    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
+    ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
+    crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::io;
 use std::sync::Arc;
@@ -214,7 +214,7 @@ impl ProxyConnection {
                                 connect_request.request_id, connect_request.address
                             );
                             self.handle_connect(connect_request).await?;
-                            // After relay finishes (connection closed), 
+                            // After relay finishes (connection closed),
                             // we return to close connection
                             return Ok(());
                         }
@@ -369,7 +369,7 @@ impl ProxyConnection {
                         if let Some(u) = user {
                             monitor.record_received(u, packet.data.len() as u64);
                         }
-                        Some(io::Result::Ok(Bytes::from(packet.data)))
+                        Some(Ok(Bytes::from(packet.data)))
                     } else {
                         None
                     }
@@ -461,7 +461,7 @@ impl ProxyConnection {
                         if let Some(u) = user {
                             monitor.record_received(u, packet.data.len() as u64);
                         }
-                        Some(io::Result::Ok(Bytes::from(packet.data)))
+                        Some(Ok(Bytes::from(packet.data)))
                     } else {
                         // Empty data or is_end=true: ignore, let TCP FIN handle EOF
                         None

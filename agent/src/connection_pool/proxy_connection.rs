@@ -1,16 +1,15 @@
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
-    Address, AgentCodec, AuthRequest, ConnectRequest, ProxyRequest, ProxyResponse,
+    Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
     crypto::{AesGcmCipher, RsaKeyPair},
-    CipherState,
 };
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
-use futures::stream::{SplitSink, SplitStream};
 use tracing::{debug, info};
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
@@ -98,10 +97,7 @@ impl ProxyConnection {
             }
         }
 
-        Ok(Self {
-            writer,
-            reader,
-        })
+        Ok(Self { writer, reader })
     }
 
     /// Connect to a target address and return a bidirectional stream handle
@@ -120,9 +116,12 @@ impl ProxyConnection {
 
         // Encryption and serialization is now handled by the codec
         debug!("[CONNECT] Sending connect request for {:?}", address);
-        self.writer.send(ProxyRequest::Connect(connect_request)).await.map_err(|e| {
-            AgentError::Connection(format!("Failed to send connect request: {}", e))
-        })?;
+        self.writer
+            .send(ProxyRequest::Connect(connect_request))
+            .await
+            .map_err(|e| {
+                AgentError::Connection(format!("Failed to send connect request: {}", e))
+            })?;
 
         // Wait for connect response with timeout
         let response = match tokio::time::timeout(

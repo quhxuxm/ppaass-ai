@@ -1,15 +1,15 @@
 use anyhow::Result;
 use bytes::Bytes;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing::{error, info};
-use std::sync::Arc;
 
 /// Mock HTTP target server that responds to various test endpoints
 pub struct MockHttpServer {
@@ -104,9 +104,9 @@ impl MockUdpServer {
                     let socket_clone = socket.clone();
                     let data = buf[..n].to_vec();
                     tokio::spawn(async move {
-                         if let Err(e) = socket_clone.send_to(&data, client_addr).await {
-                              error!("Failed to send UDP echo to {}: {}", client_addr, e);
-                         }
+                        if let Err(e) = socket_clone.send_to(&data, client_addr).await {
+                            error!("Failed to send UDP echo to {}: {}", client_addr, e);
+                        }
                     });
                 }
                 Err(e) => {
@@ -132,21 +132,21 @@ async fn handle_http_request(
             let body = req.collect().await?.to_bytes();
             Response::builder()
                 .status(StatusCode::OK)
-                .body(BoxBody::new(Full::new(body).map_err(|e| match e {})))? 
+                .body(BoxBody::new(Full::new(body).map_err(|e| match e {})))?
         }
         "/large" => {
             // Return a large response for throughput testing
             let data = vec![b'A'; 1024 * 1024]; // 1MB
             Response::builder()
                 .status(StatusCode::OK)
-                .body(full_body(data))? 
+                .body(full_body(data))?
         }
         "/json" => {
             let json_data = r#"{"status":"success","message":"Mock target response"}"#;
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
-                .body(full_body(json_data))? 
+                .body(full_body(json_data))?
         }
         _ => Response::builder()
             .status(StatusCode::NOT_FOUND)

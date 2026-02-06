@@ -16,7 +16,7 @@ impl AgentServer {
     pub async fn new(config: AgentConfig) -> Result<Self> {
         let config = Arc::new(config);
         let pool = Arc::new(ConnectionPool::new(config.clone()));
-        
+
         // Prewarm the pool
         pool.prewarm().await;
 
@@ -55,7 +55,9 @@ async fn handle_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Resu
         // SOCKS5 version byte is 0x05
         0x05 => handle_socks5_connection(stream, pool).await,
         // HTTP methods start with letters (G, P, C, etc.)
-        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => handle_http_connection(stream, pool).await,
+        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
+            handle_http_connection(stream, pool).await
+        }
         _ => {
             error!("Unknown protocol, first byte: 0x{:02x}", buffer[0]);
             Ok(())

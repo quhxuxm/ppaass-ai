@@ -131,7 +131,6 @@ async fn handle_connection(
     // Now authenticate with the correct user config
     connection.authenticate(proxy_config, user_config).await?;
     connection.handle_request().await?;
-    
 
     Ok(())
 }

@@ -1,8 +1,8 @@
 use super::proxy_stream_io::ProxyStreamIo;
+use futures::stream::{SplitSink, SplitStream};
 use protocol::{AgentCodec, ProxyRequest};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
-use futures::stream::{SplitSink, SplitStream};
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;

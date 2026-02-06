@@ -1,6 +1,6 @@
 use super::CipherState;
-use crate::compression::{compress, decompress, CompressionMode};
-use crate::message::{Message, MessageType, MAX_MESSAGE_SIZE};
+use crate::compression::{CompressionMode, compress, decompress};
+use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
@@ -41,7 +41,10 @@ impl Decoder for ProxyCodec {
     type Item = Message;
     type Error = io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         // Use LengthDelimitedCodec to handle framing
         match self.inner.decode(src)? {
             Some(frame) => {
@@ -56,20 +59,30 @@ impl Decoder for ProxyCodec {
                 // Decompress payload if compression flag is set
                 let compression_mode = CompressionMode::from_flag(message.compression);
                 if compression_mode != CompressionMode::None {
-                    let decompressed = decompress(&message.payload, compression_mode).map_err(|e| {
-                        io::Error::new(io::ErrorKind::InvalidData, format!("Decompression failed: {}", e))
-                    })?;
+                    let decompressed =
+                        decompress(&message.payload, compression_mode).map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("Decompression failed: {}", e),
+                            )
+                        })?;
                     message.payload = decompressed;
                 }
 
                 // Decrypt payload if cipher is present and message type requires encryption
                 if let Some(cipher) = self.state.cipher.get()
-                    && !matches!(message.message_type, MessageType::AuthRequest | MessageType::AuthResponse)
+                    && !matches!(
+                        message.message_type,
+                        MessageType::AuthRequest | MessageType::AuthResponse
+                    )
                 {
-                     let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
-                         io::Error::new(io::ErrorKind::InvalidData, format!("Decryption failed: {}", e))
-                     })?;
-                     message.payload = decrypted;
+                    let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Decryption failed: {}", e),
+                        )
+                    })?;
+                    message.payload = decrypted;
                 }
 
                 Ok(Some(message))
@@ -82,15 +95,25 @@ impl Decoder for ProxyCodec {
 impl Encoder<Message> for ProxyCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, mut item: Message, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
+    fn encode(
+        &mut self,
+        mut item: Message,
+        dst: &mut BytesMut,
+    ) -> std::result::Result<(), Self::Error> {
         // Encrypt payload if cipher is present and message type requires encryption
         if let Some(cipher) = self.state.cipher.get()
-            && !matches!(item.message_type, MessageType::AuthRequest | MessageType::AuthResponse)
+            && !matches!(
+                item.message_type,
+                MessageType::AuthRequest | MessageType::AuthResponse
+            )
         {
-             let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
-                 io::Error::new(io::ErrorKind::InvalidData, format!("Encryption failed: {}", e))
-             })?;
-             item.payload = encrypted;
+            let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Encryption failed: {}", e),
+                )
+            })?;
+            item.payload = encrypted;
         }
 
         // Compress payload if compression is enabled and payload is large enough

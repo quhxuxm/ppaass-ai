@@ -1,7 +1,7 @@
 use super::user_bandwidth::UserBandwidth;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct BandwidthMonitor {

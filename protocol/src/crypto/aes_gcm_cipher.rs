@@ -1,8 +1,8 @@
 use super::values::{AES_KEY_SIZE, NONCE_SIZE};
 use crate::error::{ProtocolError, Result};
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, AeadCore, KeyInit},
 };
 use rsa::rand_core::{OsRng, RngCore};
 
