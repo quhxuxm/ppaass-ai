@@ -4,8 +4,8 @@ use crate::error::{AgentError, Result};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
-    Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
-    crypto::{AesGcmCipher, RsaKeyPair},
+    crypto::{AesGcmCipher, RsaKeyPair}, Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest,
+    ProxyResponse,
 };
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -20,16 +20,23 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 pub struct ProxyConnection {
     writer: FramedWriter,
     reader: FramedReader,
+    timeout: std::time::Duration,
 }
 
 impl ProxyConnection {
     /// Create a new authenticated connection to the proxy
     pub async fn new(config: &AgentConfig) -> Result<Self> {
         debug!("Creating new connection to proxy: {}", config.proxy_addr);
+        let timeout_duration = std::time::Duration::from_secs(config.connect_timeout_secs);
 
-        let stream = TcpStream::connect(&config.proxy_addr)
-            .await
-            .map_err(|e| AgentError::Connection(e.to_string()))?;
+        let stream =
+            match tokio::time::timeout(timeout_duration, TcpStream::connect(&config.proxy_addr))
+                .await
+            {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => return Err(AgentError::Connection(e.to_string())),
+                Err(_) => return Err(AgentError::Connection("Connection timeout".to_string())),
+            };
 
         let cipher_state = Arc::new(CipherState::new());
         let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
@@ -61,24 +68,23 @@ impl ProxyConnection {
             .map_err(|e| AgentError::Connection(format!("Failed to send auth request: {}", e)))?;
 
         // Wait for auth response with timeout
-        let response =
-            match tokio::time::timeout(std::time::Duration::from_secs(10), reader.next()).await {
-                Ok(Some(Ok(resp))) => resp,
-                Ok(Some(Err(e))) => {
-                    return Err(AgentError::Connection(format!(
-                        "Failed to read auth response: {}",
-                        e
-                    )));
-                }
-                Ok(None) => {
-                    return Err(AgentError::Connection(
-                        "Connection closed during auth".to_string(),
-                    ));
-                }
-                Err(_) => {
-                    return Err(AgentError::Authentication("Auth timeout".to_string()));
-                }
-            };
+        let response = match tokio::time::timeout(timeout_duration, reader.next()).await {
+            Ok(Some(Ok(resp))) => resp,
+            Ok(Some(Err(e))) => {
+                return Err(AgentError::Connection(format!(
+                    "Failed to read auth response: {}",
+                    e
+                )));
+            }
+            Ok(None) => {
+                return Err(AgentError::Connection(
+                    "Connection closed during auth".to_string(),
+                ));
+            }
+            Err(_) => {
+                return Err(AgentError::Authentication("Auth timeout".to_string()));
+            }
+        };
 
         match response {
             ProxyResponse::Auth(auth_resp) => {
@@ -97,7 +103,11 @@ impl ProxyConnection {
             }
         }
 
-        Ok(Self { writer, reader })
+        Ok(Self {
+            writer,
+            reader,
+            timeout: timeout_duration,
+        })
     }
 
     /// Connect to a target address and return a bidirectional stream handle
@@ -124,12 +134,7 @@ impl ProxyConnection {
             })?;
 
         // Wait for connect response with timeout
-        let response = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.reader.next(),
-        )
-        .await
-        {
+        let response = match tokio::time::timeout(self.timeout, self.reader.next()).await {
             Ok(Some(Ok(resp))) => resp,
             Ok(Some(Err(e))) => {
                 return Err(AgentError::Connection(format!(

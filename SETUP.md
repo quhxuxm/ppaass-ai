@@ -17,17 +17,20 @@ If you received this as source code, ensure all files are in place.
 ### 2. Build the Project
 
 #### On Windows:
+
 ```powershell
 .\build.ps1
 ```
 
 #### On Linux/macOS:
+
 ```bash
 chmod +x build.sh
 ./build.sh
 ```
 
 Or build directly with cargo:
+
 ```bash
 cargo build --release --workspace
 ```
@@ -44,6 +47,7 @@ mkdir -p config keys
 ### Step 1: Start the Proxy Server
 
 1. Edit `config/proxy.toml` if needed:
+
 ```toml
 listen_addr = "0.0.0.0:8080"
 api_addr = "0.0.0.0:8081"
@@ -52,6 +56,7 @@ keys_dir = "keys"
 ```
 
 2. Start the proxy server:
+
 ```bash
 # On Windows
 .\target\release\proxy.exe --config config\proxy.toml
@@ -61,6 +66,7 @@ keys_dir = "keys"
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
+
 If you deploy the binaries and configs alongside the scripts, use:
 
 ```bash
@@ -87,6 +93,7 @@ curl -X POST http://localhost:8081/api/users \
 ```
 
 The response will include:
+
 - `private_key`: Save this to `keys/myuser.pem`
 - `public_key`: Automatically saved in the proxy configuration
 
@@ -95,17 +102,18 @@ The response will include:
 1. Save the private key from the previous step to `keys/myuser.pem`
 
 2. Edit `config/agent.toml`:
+
 ```toml
 listen_addr = "127.0.0.1:1080"
 proxy_addr = "your.proxy.server:8080"  # Change to your proxy address
 username = "myuser"
-password = "password123"
 private_key_path = "keys/myuser.pem"
 pool_size = 10
-pool_timeout_secs = 30
+connect_timeout_secs = 30
 ```
 
 3. Start the agent:
+
 ```bash
 # On Windows
 .\target\release\agent.exe --config config\agent.toml
@@ -115,6 +123,7 @@ pool_timeout_secs = 30
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
+
 If you deploy the binaries and configs alongside the scripts, use:
 
 ```powershell
@@ -132,21 +141,25 @@ If you deploy the binaries and configs alongside the scripts, use:
 Configure your applications to use the proxy:
 
 **For SOCKS5:**
+
 - Host: 127.0.0.1
 - Port: 1080
 - Type: SOCKS5
 
 **For HTTP:**
+
 - Proxy: http://127.0.0.1:1080
 
 ## Testing
 
 ### Test with curl (HTTP):
+
 ```bash
 curl -x http://127.0.0.1:1080 http://example.com
 ```
 
 ### Test with curl (SOCKS5):
+
 ```bash
 curl --socks5 127.0.0.1:1080 http://example.com
 ```
@@ -154,21 +167,25 @@ curl --socks5 127.0.0.1:1080 http://example.com
 ## API Usage
 
 ### Check Health
+
 ```bash
 curl http://localhost:8081/health
 ```
 
 ### List Users
+
 ```bash
 curl http://localhost:8081/api/users
 ```
 
 ### Get Bandwidth Statistics
+
 ```bash
 curl http://localhost:8081/api/stats/bandwidth
 ```
 
 ### Remove User
+
 ```bash
 curl -X DELETE http://localhost:8081/api/users \
   -H "Content-Type: application/json" \
@@ -180,37 +197,38 @@ curl -X DELETE http://localhost:8081/api/users \
 ### Connection Issues
 
 1. **Check if proxy is running:**
+
 ```bash
 curl http://localhost:8081/health
 ```
 
 2. **Check firewall settings:**
-   - Ensure ports 8080 and 8081 are open on the proxy server
-   - Ensure port 1080 is available on the client machine
+    - Ensure ports 8080 and 8081 are open on the proxy server
+    - Ensure port 1080 is available on the client machine
 
 3. **Check logs:**
-   - Agent and proxy output detailed logs
-   - Set log level: `RUST_LOG=debug ./target/release/agent`
+    - Agent and proxy output detailed logs
+    - Set log level: `RUST_LOG=debug ./target/release/agent`
 
 ### Authentication Issues
 
 1. **Verify private key:**
-   - Ensure the private key file exists and is readable
-   - Verify the key format (should be PEM format)
+    - Ensure the private key file exists and is readable
+    - Verify the key format (should be PEM format)
 
 2. **Check user configuration:**
-   - Verify the username in agent config matches the proxy
-   - Check that the user exists: `curl http://localhost:8081/api/users`
+    - Verify the username in agent config matches the proxy
+    - Check that the user exists: `curl http://localhost:8081/api/users`
 
 ### Performance Issues
 
 1. **Increase pool size:**
-   - Edit `pool_size` in `config/agent.toml`
-   - Recommended: 10-50 depending on load
+    - Edit `pool_size` in `config/agent.toml`
+    - Recommended: 10-50 depending on load
 
 2. **Check bandwidth limits:**
-   - Review user bandwidth limits in the API
-   - Monitor with: `curl http://localhost:8081/api/stats/bandwidth`
+    - Review user bandwidth limits in the API
+    - Monitor with: `curl http://localhost:8081/api/stats/bandwidth`
 
 ## Security Notes
 
@@ -224,18 +242,21 @@ curl http://localhost:8081/health
 ### Enable tokio-console (for debugging)
 
 1. Build with console feature:
+
 ```bash
 cargo build --release --features console -p agent
 cargo build --release --features console -p proxy
 ```
 
 2. Add to config:
+
 ```toml
 console_port = 6669  # for agent
 console_port = 6670  # for proxy
 ```
 
 3. Connect with tokio-console:
+
 ```bash
 tokio-console http://localhost:6669
 ```
@@ -259,6 +280,7 @@ curl -X POST http://localhost:8081/api/users \
 ## Support
 
 For issues and questions:
+
 1. Check logs with `RUST_LOG=debug`
 2. Review the main README.md
 3. Check firewall and network configuration
@@ -267,26 +289,31 @@ For issues and questions:
 ## Quick Reference
 
 **Start Proxy:**
+
 ```bash
 ./target/release/proxy --config config/proxy.toml
 ```
 
 **Start Agent:**
+
 ```bash
 ./target/release/agent --config config/agent.toml
 ```
 
 **Add User:**
+
 ```bash
 curl -X POST http://localhost:8081/api/users -H "Content-Type: application/json" -d '{"username": "user1"}'
 ```
 
 **Check Status:**
+
 ```bash
 curl http://localhost:8081/health
 ```
 
 **Test Connection:**
+
 ```bash
 curl --socks5 127.0.0.1:1080 http://example.com
 ```

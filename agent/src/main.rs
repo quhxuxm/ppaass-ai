@@ -9,8 +9,12 @@ use crate::config::AgentConfig;
 use crate::server::AgentServer;
 use anyhow::Result;
 use clap::Parser;
+use mimalloc::MiMalloc;
 use common::init_tracing;
 use tracing::info;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

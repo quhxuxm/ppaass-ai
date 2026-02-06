@@ -5,8 +5,8 @@ listen_addr = "127.0.0.1:10080"
 proxy_addr = "140.82.30.214:80"
 username = "user1"
 private_key_path = "keys/user1.pem"
-pool_size = 1
-pool_timeout_secs = 30
+pool_size = 50
+connect_timeout_secs = 20
 
 # Log level: trace, debug, info, warn, error
 log_level = "debug"
