@@ -41,6 +41,10 @@ pub struct ProxyConfig {
 
     #[serde(default)]
     pub upstream_private_key_path: Option<String>,
+
+    /// Connection timeout in seconds for upstream proxy connections
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
 }
 
 fn default_log_level() -> String {
@@ -53,6 +57,10 @@ fn default_compression_mode() -> String {
 
 fn default_replay_attack_tolerance() -> i64 {
     300
+}
+
+fn default_connect_timeout_secs() -> u64 {
+    30
 }
 
 impl ProxyConfig {
