@@ -4,7 +4,7 @@ use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
 use common::{ClientConnection, ClientConnectionConfig, ClientStream};
 use protocol::{Address, TransportProtocol};
-use std::fmt::Debug;
+use std::{fmt::Debug, time::Duration};
 use tracing::debug;
 
 /// Configuration adapter for ClientConnection trait
@@ -56,8 +56,8 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
         std::fs::read_to_string(path).map_err(|e| e.to_string())
     }
 
-    fn timeout_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.config.connect_timeout_secs)
+    fn timeout_duration(&self) -> Duration {
+        Duration::from_secs(self.config.connect_timeout_secs)
     }
 }
 
