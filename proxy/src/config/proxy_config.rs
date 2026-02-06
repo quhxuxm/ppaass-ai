@@ -29,6 +29,18 @@ pub struct ProxyConfig {
 
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
+
+    #[serde(default)]
+    pub forward_mode: bool,
+
+    #[serde(default)]
+    pub upstream_proxy_addr: Option<String>,
+
+    #[serde(default)]
+    pub upstream_username: Option<String>,
+
+    #[serde(default)]
+    pub upstream_private_key_path: Option<String>,
 }
 
 fn default_log_level() -> String {

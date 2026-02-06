@@ -32,5 +32,20 @@ runtime_threads = 64
 # Tolerance time in seconds for replay attack prevention
 replay_attack_tolerance = 300
 
+# Forward Mode Configuration
+# --------------------------
+# If enabled, this proxy will forward all traffic to another PPAASS proxy
+# instead of connecting directly to the target.
+# forward_mode = false
+
+# Upstream proxy address (required if forward_mode = true)
+# upstream_proxy_addr = "upstream-proxy:8080"
+
+# Username to authenticate with the upstream proxy
+# upstream_username = "user2"
+
+# Path to the private key for authenticating with the upstream proxy
+# upstream_private_key_path = "keys/user2.pem"
+
 # Optional: Enable tokio-console for debugging
 # console_port = 6670

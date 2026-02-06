@@ -1,12 +1,16 @@
+pub mod client_connection;
 pub mod error;
 
+pub use client_connection::{
+    AuthenticatedConnection, ClientConnection, ClientConnectionConfig, ClientStream,
+};
 pub use error::{CommonError, Result};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 pub fn current_timestamp() -> i64 {
     SystemTime::now()

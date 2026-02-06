@@ -12,6 +12,7 @@ pub enum AgentError {
     Connection(String),
 
     #[error("Authentication error: {0}")]
+    #[allow(dead_code)]
     Authentication(String),
 
     #[error("SOCKS5 error: {0}")]

@@ -17,6 +17,9 @@ pub enum ProxyError {
     #[error("User not found: {0}")]
     UserNotFound(String),
 
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+
     #[error("Database error: {0}")]
     Database(#[from] sea_orm::DbErr),
 }
