@@ -1,7 +1,7 @@
 use crate::api::ApiServer;
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::ProxyConfig;
-use crate::connection::ProxyConnection;
+use crate::connection::ServerConnection;
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use protocol::CompressionMode;
@@ -100,7 +100,12 @@ async fn handle_connection(
     bandwidth_monitor: Arc<BandwidthMonitor>,
     compression_mode: CompressionMode,
 ) -> Result<()> {
-    let mut connection = ProxyConnection::new(stream, bandwidth_monitor, compression_mode);
+    let mut connection = ServerConnection::new(
+        stream,
+        bandwidth_monitor,
+        compression_mode,
+        proxy_config.clone().into(),
+    );
 
     // First, peek at the auth request to get the username
     let username = match connection.peek_auth_username().await {

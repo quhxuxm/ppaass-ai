@@ -1,0 +1,93 @@
+/// Connection to an upstream proxy
+/// Acts as a client (Agent) to the next hop
+use crate::config::ProxyConfig;
+use crate::error::{ProxyError, Result};
+use common::{ClientConnection, ClientConnectionConfig, ClientStream};
+use protocol::{Address, TransportProtocol};
+use std::fmt::Debug;
+use tracing::debug;
+
+/// Configuration adapter for ClientConnection trait
+#[derive(Debug)]
+struct ProxyClientConfig<'a> {
+    config: &'a ProxyConfig,
+}
+
+impl<'a> ProxyClientConfig<'a> {
+    fn new(config: &'a ProxyConfig) -> Result<Self> {
+        config.upstream_proxy_addr.as_ref().ok_or_else(|| {
+            ProxyError::Configuration("Upstream proxy address not configured".to_string())
+        })?;
+        config.upstream_username.as_ref().ok_or_else(|| {
+            ProxyError::Configuration("Upstream username not configured".to_string())
+        })?;
+        config.upstream_private_key_path.as_ref().ok_or_else(|| {
+            ProxyError::Configuration("Upstream private key path not configured".to_string())
+        })?;
+
+        Ok(Self { config })
+    }
+}
+
+impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
+    fn remote_addr(&self) -> String {
+        self.config
+            .upstream_proxy_addr
+            .as_ref()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn username(&self) -> String {
+        self.config
+            .upstream_username
+            .as_ref()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn private_key_pem(&self) -> std::result::Result<String, String> {
+        let path = self
+            .config
+            .upstream_private_key_path
+            .as_ref()
+            .ok_or_else(|| "Private key path not configured".to_string())?;
+
+        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    }
+
+    fn timeout_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// Connection to an upstream proxy
+pub struct UpstreamConnection {
+    stream: ClientStream,
+}
+
+impl UpstreamConnection {
+    /// Establish a connection to the upstream proxy
+    pub async fn connect(
+        config: &ProxyConfig,
+        target_address: Address,
+        transport: TransportProtocol,
+    ) -> Result<Self> {
+        let config_adapter = ProxyClientConfig::new(config)?;
+
+        debug!("Connecting to upstream proxy");
+
+        let client_conn = ClientConnection::connect(&config_adapter, target_address, transport)
+            .await
+            .map_err(|e| ProxyError::Connection(e.to_string()))?;
+
+        Ok(Self {
+            stream: client_conn.into_stream(),
+        })
+    }
+
+    /// Convert into an AsyncRead + AsyncWrite stream
+    pub fn into_stream(self) -> ClientStream {
+        self.stream
+    }
+}
