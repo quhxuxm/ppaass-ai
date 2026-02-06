@@ -56,8 +56,8 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
         std::fs::read_to_string(path).map_err(|e| e.to_string())
     }
 
-    fn timeout_duration(&self) -> Option<std::time::Duration> {
-        None
+    fn timeout_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.config.connect_timeout_secs)
     }
 }
 

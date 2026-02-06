@@ -48,5 +48,8 @@ replay_attack_tolerance = 300
 # Path to the private key for authenticating with the upstream proxy
 # upstream_private_key_path = "keys/user2.pem"
 
+# Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
+# connect_timeout_secs = 30
+
 # Optional: Enable tokio-console for debugging
 # console_port = 6670

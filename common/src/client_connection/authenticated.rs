@@ -37,19 +37,15 @@ impl AuthenticatedConnection {
         debug!("Connecting to remote proxy: {}", remote_addr);
 
         // 1. TCP Connect
-        let stream = if let Some(timeout_duration) = timeout {
-            match tokio::time::timeout(timeout_duration, TcpStream::connect(&remote_addr)).await {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "Connection timeout",
-                    ));
-                }
+        let stream = match tokio::time::timeout(timeout, TcpStream::connect(&remote_addr)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Connection timeout",
+                ));
             }
-        } else {
-            TcpStream::connect(&remote_addr).await?
         };
 
         // 2. Setup Codec
@@ -85,34 +81,21 @@ impl AuthenticatedConnection {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // 5. Read Auth Response
-        let response = if let Some(timeout_duration) = timeout {
-            match tokio::time::timeout(timeout_duration, reader.next()).await {
-                Ok(Some(Ok(resp))) => resp,
-                Ok(Some(Err(e))) => return Err(e),
-                Ok(None) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionAborted,
-                        "Remote closed connection during auth",
-                    ));
-                }
-                Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "Auth response timeout",
-                    ));
-                }
+        let response = match tokio::time::timeout(timeout, reader.next()).await {
+            Ok(Some(Ok(resp))) => resp,
+            Ok(Some(Err(e))) => return Err(e),
+            Ok(None) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Remote closed connection during auth",
+                ));
             }
-        } else {
-            reader
-                .next()
-                .await
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::ConnectionAborted,
-                        "Remote closed connection during auth",
-                    )
-                })
-                .and_then(|r| r)?
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Auth response timeout",
+                ));
+            }
         };
 
         if let ProxyResponse::Auth(auth_resp) = response {

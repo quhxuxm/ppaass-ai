@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, time::Duration};
 
 /// Configuration for a client connection
 pub trait ClientConnectionConfig: Debug {
@@ -11,8 +11,6 @@ pub trait ClientConnectionConfig: Debug {
     /// Private key PEM for encryption
     fn private_key_pem(&self) -> Result<String, String>;
 
-    /// Optional timeout duration for connection operations
-    fn timeout_duration(&self) -> Option<std::time::Duration> {
-        None
-    }
+    /// Timeout duration for connection operations (required)
+    fn timeout_duration(&self) -> Duration;
 }

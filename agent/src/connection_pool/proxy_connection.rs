@@ -32,8 +32,8 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
         read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
     }
 
-    fn timeout_duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(self.config.connect_timeout_secs))
+    fn timeout_duration(&self) -> Duration {
+        Duration::from_secs(self.config.connect_timeout_secs)
     }
 }
 
