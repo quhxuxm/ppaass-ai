@@ -109,7 +109,7 @@ proxy_addr = "your.proxy.server:8080"  # Change to your proxy address
 username = "myuser"
 private_key_path = "keys/myuser.pem"
 pool_size = 10
-connect_timeout_secs = 30
+connection_timeout_secs = 30
 ```
 
 3. Start the agent:

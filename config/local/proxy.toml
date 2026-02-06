@@ -14,10 +14,10 @@ database_path = "config/local/data/users.db"
 keys_dir = "config/local/keys"
 
 # Log level: trace, debug, info, warn, error
-log_level = "error"
+log_level = "debug"
 
 # Log directory for file-based logging (better performance than console)
-log_dir = "logs"
+# log_dir = "logs"
 
 # Compression mode for data transfer: none, zstd, lz4, gzip
 # - none: No compression (default)

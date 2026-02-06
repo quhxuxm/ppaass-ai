@@ -9,8 +9,8 @@ use crate::config::AgentConfig;
 use crate::server::AgentServer;
 use anyhow::Result;
 use clap::Parser;
-use mimalloc::MiMalloc;
 use common::init_tracing;
+use mimalloc::MiMalloc;
 use tracing::info;
 
 #[global_allocator]
@@ -68,15 +68,17 @@ fn main() -> Result<()> {
         config.log_level = log_level;
     }
     if let Some(log_dir) = args.log_dir {
-        config.log_dir = log_dir;
+        config.log_dir = Some(log_dir);
     }
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
 
     // Create log directory if it doesn't exist
-    std::fs::create_dir_all(&config.log_dir)?;
-    let _guard = init_tracing(&config.log_dir, "agent.log", &config.log_level);
+    if let Some(ref log_dir) = config.log_dir {
+        std::fs::create_dir_all(log_dir)?;
+    }
+    let _guard = init_tracing(config.log_dir.as_deref(), "agent.log", &config.log_level);
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.enable_all();
@@ -94,7 +96,10 @@ fn main() -> Result<()> {
         info!("Proxy address: {}", config.proxy_addr);
         info!("Username: {}", config.username);
         info!("Log level: {}", config.log_level);
-        info!("Log directory: {}", config.log_dir);
+        info!(
+            "Log directory: {}",
+            config.log_dir.as_deref().unwrap_or("Console")
+        );
         if let Some(threads) = config.runtime_threads {
             info!("Runtime threads: {}", threads);
         } else {

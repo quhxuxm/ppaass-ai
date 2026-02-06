@@ -12,7 +12,7 @@ connect_timeout_secs = 20
 log_level = "debug"
 
 # Log directory for file-based logging (better performance than console)
-log_dir = "logs"
+# log_dir = "logs"
 
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 # runtime_threads = 4

@@ -17,8 +17,7 @@ pub struct ProxyConfig {
     pub log_level: String,
 
     /// Log directory for file-based logging (improves performance vs console)
-    #[serde(default = "default_log_dir")]
-    pub log_dir: String,
+    pub log_dir: Option<String>,
 
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
@@ -34,10 +33,6 @@ pub struct ProxyConfig {
 
 fn default_log_level() -> String {
     "info".to_string()
-}
-
-fn default_log_dir() -> String {
-    "logs".to_string()
 }
 
 fn default_compression_mode() -> String {
