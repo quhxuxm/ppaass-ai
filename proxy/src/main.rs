@@ -7,14 +7,13 @@ mod error;
 mod server;
 mod user_manager;
 
-use anyhow::Result;
-use clap::Parser;
-use tracing::info;
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-
 use crate::config::{ProxyConfig, UsersConfig};
 use crate::server::ProxyServer;
 use crate::user_manager::UserManager;
+use anyhow::Result;
+use clap::Parser;
+use common::init_tracing;
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -73,26 +72,7 @@ fn main() -> Result<()> {
 
     // Create log directory if it doesn't exist
     std::fs::create_dir_all(&config.log_dir)?;
-
-    // Initialize file-based logging for better performance
-    let file_appender = tracing_appender::rolling::daily(&config.log_dir, "proxy.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            fmt::layer()
-                .with_writer(non_blocking)
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_line_number(true)
-                .with_ansi(false),
-        )
-        .init();
-
+    let _guard = init_tracing(&config.log_dir, "proxy.log", &config.log_level);
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.enable_all();
