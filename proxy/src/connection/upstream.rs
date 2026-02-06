@@ -4,7 +4,7 @@ use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
 use common::{ClientConnection, ClientConnectionConfig, ClientStream};
 use protocol::{Address, TransportProtocol};
-use std::{fmt::Debug, time::Duration};
+use std::{fmt::Debug, fs::read_to_string, time::Duration};
 use tracing::debug;
 
 /// Configuration adapter for ClientConnection trait
@@ -53,7 +53,7 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
             .as_ref()
             .ok_or_else(|| "Private key path not configured".to_string())?;
 
-        std::fs::read_to_string(path).map_err(|e| e.to_string())
+        read_to_string(path).map_err(|e| e.to_string())
     }
 
     fn timeout_duration(&self) -> Duration {
