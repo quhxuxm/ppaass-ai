@@ -1,9 +1,9 @@
 use futures::Sink;
 use futures::stream::SplitSink;
 use protocol::{AgentCodec, DataPacket, ProxyRequest};
-use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{io, result::Result};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -35,38 +35,26 @@ impl DataPacketSink {
 impl<'a> Sink<&'a [u8]> for DataPacketSink {
     type Error = io::Error;
 
-    fn poll_ready(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut self.writer)
             .poll_ready(cx)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
-    fn start_send(
-        mut self: Pin<&mut Self>,
-        item: &'a [u8],
-    ) -> std::result::Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: &'a [u8]) -> Result<(), Self::Error> {
         let request = self.create_data_request(item, false);
         Pin::new(&mut self.writer)
             .start_send(request)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Pin::new(&mut self.writer)
             .poll_flush(cx)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
-    fn poll_close(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // First, send end-of-stream message
         let this = self.as_mut().get_mut();
         let request = this.create_data_request(&[], true);
