@@ -12,8 +12,12 @@ use crate::server::ProxyServer;
 use crate::user_manager::UserManager;
 use anyhow::Result;
 use clap::Parser;
+use mimalloc::MiMalloc;
 use common::init_tracing;
 use tracing::info;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

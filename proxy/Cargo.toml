@@ -33,7 +33,7 @@ rsa.workspace = true
 base64.workspace = true
 sea-orm.workspace = true
 chrono.workspace = true
-
+mimalloc.workspace = true
 [features]
 default = []
 console = ["dep:console-subscriber"]

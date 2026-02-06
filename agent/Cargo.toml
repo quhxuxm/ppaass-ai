@@ -31,7 +31,7 @@ toml.workspace = true
 async-trait.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
-
+mimalloc.workspace = true
 [features]
 default = []
 console = ["dep:console-subscriber"]
