@@ -5,23 +5,25 @@ pub use agent_io::AgentIo;
 pub use response_sink::BytesToProxyResponseSink;
 
 use crate::bandwidth::BandwidthMonitor;
-use crate::config::UserConfig;
+use crate::config::{ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
-use futures::{SinkExt, StreamExt, stream::{SplitSink, SplitStream}};
-use protocol::{
-    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, ProxyRequest,
-    ProxyResponse, ServerCodec, TransportProtocol, CompressionMode,
-    crypto::{AesGcmCipher, RsaKeyPair},
-    CipherState,
+use bytes::Bytes;
+use futures::{
+    stream::{SplitSink, SplitStream}, SinkExt,
+    StreamExt,
 };
+use protocol::{
+    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
+    ConnectRequest, ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec,
+    TransportProtocol,
+};
+use std::io;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info};
-use bytes::Bytes;
-use std::io;
 
 type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
@@ -36,7 +38,11 @@ pub struct ProxyConnection {
 }
 
 impl ProxyConnection {
-    pub fn new(stream: TcpStream, bandwidth_monitor: Arc<BandwidthMonitor>, compression_mode: CompressionMode) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        bandwidth_monitor: Arc<BandwidthMonitor>,
+        compression_mode: CompressionMode,
+    ) -> Self {
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = Framed::new(stream, ServerCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
@@ -97,7 +103,11 @@ impl ProxyConnection {
         self.send_response(ProxyResponse::Auth(auth_response)).await
     }
 
-    pub async fn authenticate(&mut self, user_config: UserConfig) -> Result<()> {
+    pub async fn authenticate(
+        &mut self,
+        proxy_config: &ProxyConfig,
+        user_config: UserConfig,
+    ) -> Result<()> {
         info!(
             "Authenticating connection for user: {}",
             user_config.username
@@ -125,7 +135,7 @@ impl ProxyConnection {
 
         // Verify timestamp to prevent replay attacks
         let current_time = common::current_timestamp();
-        if (current_time - auth_request.timestamp).abs() > 300 {
+        if (current_time - auth_request.timestamp).abs() > proxy_config.replay_attack_tolerance {
             // 5 minutes tolerance
             self.send_auth_error("Timestamp expired").await?;
             return Err(ProxyError::Authentication("Timestamp expired".to_string()));
@@ -171,7 +181,8 @@ impl ProxyConnection {
             auth_response.session_id
         );
 
-        self.send_response(ProxyResponse::Auth(auth_response)).await?;
+        self.send_response(ProxyResponse::Auth(auth_response))
+            .await?;
 
         self.user_config = Some(user_config);
 
@@ -190,11 +201,7 @@ impl ProxyConnection {
         Ok(())
     }
 
-    pub async fn handle_request(&mut self) -> Result<bool> {
-        self.process().await
-    }
-
-    pub async fn process(&mut self) -> Result<bool> {
+    pub async fn handle_request(&mut self) -> Result<()> {
         // Only loops for initial requests (Auth, Connect)
         // Once connected, it hands over to relay and returns.
         loop {
@@ -207,11 +214,15 @@ impl ProxyConnection {
                                 connect_request.request_id, connect_request.address
                             );
                             self.handle_connect(connect_request).await?;
-                            // After relay finishes (connection closed), we return false to close connection
-                            return Ok(false);
+                            // After relay finishes (connection closed), 
+                            // we return to close connection
+                            return Ok(());
                         }
                         ProxyRequest::Auth(auth_request) => {
-                            debug!("Unexpected Auth request in process loop: {:?}", auth_request.username);
+                            debug!(
+                                "Unexpected Auth request in process loop: {:?}",
+                                auth_request.username
+                            );
                         }
                         _ => {
                             error!("Unexpected request type before Connect");
@@ -219,7 +230,7 @@ impl ProxyConnection {
                     }
                 }
                 Some(Err(e)) => return Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
-                None => return Ok(false), // Agent connection closed
+                None => return Ok(()), // Agent connection closed
             }
         }
     }
@@ -280,7 +291,8 @@ impl ProxyConnection {
                             .await?;
 
                         // Handover to bidirectional relay
-                        self.relay(connect_request.request_id, &mut target_stream).await?;
+                        self.relay(connect_request.request_id, &mut target_stream)
+                            .await?;
                     }
                     Err(e) => {
                         error!("Failed to connect to target (TCP): {}", e);
@@ -297,12 +309,13 @@ impl ProxyConnection {
                 match UdpSocket::bind("0.0.0.0:0").await {
                     Ok(socket) => {
                         if let Err(e) = socket.connect(&target_addr).await {
-                             error!("Failed to connect to target (UDP): {}", e);
-                             self.send_connect_error(
+                            error!("Failed to connect to target (UDP): {}", e);
+                            self.send_connect_error(
                                 connect_request.request_id,
                                 format!("Failed to connect UDP: {}", e),
-                             ).await?;
-                             return Ok(());
+                            )
+                            .await?;
+                            return Ok(());
                         }
 
                         info!("Connected to target (UDP): {}", target_addr);
@@ -360,7 +373,7 @@ impl ProxyConnection {
                     } else {
                         None
                     }
-                },
+                }
                 Ok(_) => None,
                 Err(e) => Some(Err(io::Error::other(e))),
             };
@@ -385,10 +398,10 @@ impl ProxyConnection {
                 match agent_reader.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                         if let Err(e) = udp_send.send(&buf[..n]).await {
-                             debug!("UDP send error: {}", e);
-                             break;
-                         }
+                        if let Err(e) = udp_send.send(&buf[..n]).await {
+                            debug!("UDP send error: {}", e);
+                            break;
+                        }
                     }
                     Err(e) => {
                         debug!("Agent read error: {}", e);
@@ -399,21 +412,21 @@ impl ProxyConnection {
         };
 
         let udp_to_agent = async {
-             let mut buf = [0u8; 65535];
-             loop {
-                 match udp_recv.recv(&mut buf).await {
-                     Ok(n) => {
-                         if let Err(e) = agent_writer.write_all(&buf[..n]).await {
-                             debug!("Agent write error: {}", e);
-                             break;
-                         }
-                     }
-                     Err(e) => {
-                         debug!("UDP recv error: {}", e);
-                         break;
-                     }
-                 }
-             }
+            let mut buf = [0u8; 65535];
+            loop {
+                match udp_recv.recv(&mut buf).await {
+                    Ok(n) => {
+                        if let Err(e) = agent_writer.write_all(&buf[..n]).await {
+                            debug!("Agent write error: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("UDP recv error: {}", e);
+                        break;
+                    }
+                }
+            }
         };
 
         tokio::select! {
@@ -453,7 +466,7 @@ impl ProxyConnection {
                         // Empty data or is_end=true: ignore, let TCP FIN handle EOF
                         None
                     }
-                },
+                }
                 Ok(_) => None, // Ignore non-Data packets
                 Err(e) => Some(Err(io::Error::other(e))),
             };

@@ -29,5 +29,8 @@ compression_mode = "lz4"
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 runtime_threads = 64
 
+# Tolerance time in seconds for replay attack prevention
+replay_attack_tolerance = 300
+
 # Optional: Enable tokio-console for debugging
 # console_port = 6670
