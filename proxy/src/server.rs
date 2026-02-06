@@ -20,10 +20,8 @@ impl ProxyServer {
         let config = Arc::new(config);
 
         // Initialize user manager with SQLite database
-        let user_manager = Arc::new(UserManager::new(
-            &config.database_path,
-            &config.keys_dir,
-        ).await?);
+        let user_manager =
+            Arc::new(UserManager::new(&config.database_path, &config.keys_dir).await?);
 
         // Initialize bandwidth monitor
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
@@ -69,8 +67,9 @@ impl ProxyServer {
                             let user_manager = self.user_manager.clone();
                             let bandwidth_monitor = self.bandwidth_monitor.clone();
                             let compression_mode = self.config.get_compression_mode();
+                            let proxy_config=self.config.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, user_manager, bandwidth_monitor, compression_mode).await {
+                                if let Err(e) = handle_connection(&proxy_config, stream, user_manager, bandwidth_monitor, compression_mode).await {
                                     error!("Error handling connection: {}", e);
                                 }
                             });
@@ -95,6 +94,7 @@ impl ProxyServer {
 }
 
 async fn handle_connection(
+    proxy_config: &ProxyConfig,
     stream: TcpStream,
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
@@ -129,22 +129,9 @@ async fn handle_connection(
     };
 
     // Now authenticate with the correct user config
-    connection.authenticate(user_config).await?;
-
-    // Handle requests in a loop
-    loop {
-        match connection.handle_request().await {
-            Ok(should_continue) => {
-                if !should_continue {
-                    break;
-                }
-            }
-            Err(e) => {
-                error!("Error handling request: {}", e);
-                break;
-            }
-        }
-    }
+    connection.authenticate(proxy_config, user_config).await?;
+    connection.handle_request().await?;
+    
 
     Ok(())
 }

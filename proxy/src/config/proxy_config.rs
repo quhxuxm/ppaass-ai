@@ -27,6 +27,9 @@ pub struct ProxyConfig {
     /// Compression mode for data transfer: none, zstd, lz4, gzip
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
+
+    #[serde(default = "default_replay_attack_tolerance")]
+    pub replay_attack_tolerance: i64,
 }
 
 fn default_log_level() -> String {
@@ -39,6 +42,10 @@ fn default_log_dir() -> String {
 
 fn default_compression_mode() -> String {
     "none".to_string()
+}
+
+fn default_replay_attack_tolerance() -> i64 {
+    300
 }
 
 impl ProxyConfig {
