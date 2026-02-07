@@ -54,7 +54,7 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Debug Agent (Release)",
+            "name": "Debug Agent (Forward)",
             "type": "lldb",
             "request": "launch",
             "cargo": {
@@ -62,7 +62,6 @@
                     "build",
                     "--package",
                     "agent",
-                    "--release"
                 ],
                 "filter": {
                     "name": "agent",
@@ -71,7 +70,7 @@
             },
             "args": [
                 "--config",
-                "config/local/agent.toml"
+                "config/local/agent-forward.toml"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
@@ -81,7 +80,7 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Debug Proxy (Release)",
+            "name": "Debug Proxy (Forward)",
             "type": "lldb",
             "request": "launch",
             "cargo": {
@@ -89,7 +88,6 @@
                     "build",
                     "--package",
                     "proxy",
-                    "--release"
                 ],
                 "filter": {
                     "name": "proxy",
@@ -98,7 +96,7 @@
             },
             "args": [
                 "--config",
-                "config/local/proxy.toml"
+                "config/local/proxy-forward.toml"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
@@ -117,10 +115,11 @@
             ]
         },
         {
-            "name": "Debug Agent & Proxy (Release)",
+            "name": "Debug Agent & Proxy (Forward)",
             "configurations": [
-                "Debug Agent (Release)",
-                "Debug Proxy (Release)"
+                "Debug Agent (Forward)",
+                "Debug Proxy (Forward)",
+                "Debug Proxy"
             ]
         }
     ]
