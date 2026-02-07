@@ -3,6 +3,29 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabasePoolConfig {
+    /// Maximum number of concurrent connections
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+
+    /// Minimum number of connections to maintain
+    #[serde(default = "default_min_connections")]
+    pub min_connections: u32,
+
+    /// Connection timeout in seconds
+    #[serde(default = "default_db_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+
+    /// Idle timeout in seconds (idle connections are closed)
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+
+    /// Maximum lifetime of a connection in seconds
+    #[serde(default = "default_max_lifetime_secs")]
+    pub max_lifetime_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub listen_addr: String,
     pub api_addr: String,
@@ -15,6 +38,10 @@ pub struct ProxyConfig {
     /// Enable REST API server for user management and monitoring (default: false)
     #[serde(default)]
     pub enable_api: bool,
+
+    /// Database connection pool configuration
+    #[serde(default = "default_db_pool_config")]
+    pub db_pool: DatabasePoolConfig,
 
     /// Log level: trace, debug, info, warn, error
     #[serde(default = "default_log_level")]
@@ -65,6 +92,36 @@ fn default_replay_attack_tolerance() -> i64 {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_max_connections() -> u32 {
+    32
+}
+
+fn default_min_connections() -> u32 {
+    5
+}
+
+fn default_db_connect_timeout_secs() -> u64 {
+    8
+}
+
+fn default_idle_timeout_secs() -> u64 {
+    300
+}
+
+fn default_max_lifetime_secs() -> u64 {
+    3600
+}
+
+fn default_db_pool_config() -> DatabasePoolConfig {
+    DatabasePoolConfig {
+        max_connections: default_max_connections(),
+        min_connections: default_min_connections(),
+        connect_timeout_secs: default_db_connect_timeout_secs(),
+        idle_timeout_secs: default_idle_timeout_secs(),
+        max_lifetime_secs: default_max_lifetime_secs(),
+    }
 }
 
 impl ProxyConfig {

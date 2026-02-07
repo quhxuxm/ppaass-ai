@@ -5,7 +5,7 @@ use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use common::{AuthenticatedConnection, ClientConnectionConfig};
 use protocol::Address;
-use tracing::{debug, info};
+use tracing::{debug, info, instrument};
 
 /// Configuration adapter for ClientConnection trait
 #[derive(Debug)]
@@ -53,6 +53,7 @@ impl ProxyConnection {
     /// Create a new authenticated connection to the proxy
     /// This performs just the authentication handshake without connecting to a target
     /// Used for connection pool prewarming
+    #[instrument(skip(config))]
     pub async fn new(config: &AgentConfig) -> Result<Self> {
         let addr_display = if config.proxy_addrs.len() == 1 {
             config.proxy_addrs[0].clone()
@@ -72,6 +73,7 @@ impl ProxyConnection {
     }
 
     /// Connect to a target address and return a bidirectional stream handle
+    #[instrument(skip(self))]
     pub async fn connect_target(
         self,
         address: Address,

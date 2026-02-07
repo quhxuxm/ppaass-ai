@@ -5,7 +5,10 @@ use protocol::crypto::RsaKeyPair;
 use sea_orm::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use std::time::Duration;
+use tracing::{info, instrument};
+
+use crate::config::DatabasePoolConfig;
 
 pub struct UserManager {
     db: DatabaseConnection,
@@ -13,7 +16,12 @@ pub struct UserManager {
 }
 
 impl UserManager {
-    pub async fn new<P: AsRef<Path>>(database_path: P, keys_dir: P) -> Result<Self> {
+    #[instrument(skip(database_path, keys_dir, db_pool_config))]
+    pub async fn new<P: AsRef<Path>>(
+        database_path: P,
+        keys_dir: P,
+        db_pool_config: &DatabasePoolConfig,
+    ) -> Result<Self> {
         let database_path = database_path.as_ref();
         let keys_dir = keys_dir.as_ref().to_path_buf();
 
@@ -25,9 +33,17 @@ impl UserManager {
             fs::create_dir_all(parent)?;
         }
 
-        // Connect to SQLite database
+        // Connect to SQLite database with connection pool configuration from config
         let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
-        let db = Database::connect(&database_url).await?;
+        let mut opt = ConnectOptions::new(database_url);
+        opt.max_connections(db_pool_config.max_connections)
+            .min_connections(db_pool_config.min_connections)
+            .connect_timeout(Duration::from_secs(db_pool_config.connect_timeout_secs))
+            .idle_timeout(Duration::from_secs(db_pool_config.idle_timeout_secs))
+            .max_lifetime(Duration::from_secs(db_pool_config.max_lifetime_secs))
+            .sqlx_logging(false);
+
+        let db = Database::connect(opt).await?;
 
         // Create table if not exists
         let create_table_sql = r#"
@@ -50,6 +66,7 @@ impl UserManager {
         Ok(Self { db, keys_dir })
     }
 
+    #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
         let user = user::Entity::find_by_id(username.to_string())
             .one(&self.db)
@@ -62,6 +79,7 @@ impl UserManager {
         }))
     }
 
+    #[instrument(skip(self))]
     pub async fn add_user(
         &self,
         username: String,
@@ -94,6 +112,7 @@ impl UserManager {
         Ok((private_key_pem, public_key_pem))
     }
 
+    #[instrument(skip(self))]
     pub async fn remove_user(&self, username: &str) -> Result<()> {
         info!("Removing user: {}", username);
 
@@ -115,12 +134,14 @@ impl UserManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn list_users(&self) -> Result<Vec<String>> {
         let users = user::Entity::find().all(&self.db).await?;
         Ok(users.into_iter().map(|u| u.username).collect())
     }
 
     /// Import a user with an existing public key (for migration from TOML config)
+    #[instrument(skip(self))]
     pub async fn import_user(
         &self,
         username: String,
@@ -146,6 +167,7 @@ impl UserManager {
     }
 
     #[allow(dead_code)]
+    #[instrument(skip(self))]
     pub async fn update_user_bandwidth(
         &self,
         username: &str,

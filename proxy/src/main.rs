@@ -14,7 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 use common::init_tracing;
 use mimalloc::MiMalloc;
-use tracing::info;
+use tracing::{info, instrument};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -127,13 +127,15 @@ fn main() -> Result<()> {
     })
 }
 
+#[instrument(skip(config))]
 async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
     // Load users from TOML file
     let users_config = UsersConfig::load(users_toml_path)?;
     info!("Found {} users in TOML file", users_config.users.len());
 
     // Initialize user manager (this creates the database if needed)
-    let user_manager = UserManager::new(&config.database_path, &config.keys_dir).await?;
+    let user_manager =
+        UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?;
 
     // Import each user
     for (username, user_config) in users_config.users {

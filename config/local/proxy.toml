@@ -32,8 +32,27 @@ compression_mode = "none"
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 # runtime_threads = 4
 
+# Database Connection Pool Configuration
+# ========================================
+# Configuration for SQLite database connection pooling
 
-# Tolerance time in seconds for replay attack prevention
+[db_pool]
+# Maximum number of concurrent database connections (default: 32)
+max_connections = 32
+
+# Minimum number of connections to maintain in the pool (default: 5)
+min_connections = 5
+
+# Connection timeout in seconds (default: 8)
+connect_timeout_secs = 8
+
+# Idle timeout in seconds - connections idle longer than this are closed (default: 300 = 5 minutes)
+idle_timeout_secs = 300
+
+# Maximum lifetime of a connection in seconds before it's recycled (default: 3600 = 1 hour)
+max_lifetime_secs = 3600
+
+
 replay_attack_tolerance = 300
 
 # Forward Mode Configuration

@@ -13,7 +13,7 @@ use protocol::TransportProtocol;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Extract host and port from HTTP request, handling IPv6 addresses correctly
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
@@ -59,6 +59,7 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     (host, port)
 }
 
+#[instrument(skip(stream, pool))]
 pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling HTTP connection");
 
@@ -81,6 +82,7 @@ pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>
     Ok(())
 }
 
+#[instrument(skip(pool))]
 async fn handle_http_request(
     req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
@@ -94,6 +96,7 @@ async fn handle_http_request(
     }
 }
 
+#[instrument(skip(req, pool))]
 async fn handle_connect(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
@@ -111,6 +114,7 @@ async fn handle_connect(
 
     // Get connected stream from pool
     let connected_stream = match pool
+        .as_ref()
         .get_connected_stream(address, TransportProtocol::Tcp)
         .await
     {
@@ -183,6 +187,7 @@ async fn tunnel(
     Ok(())
 }
 
+#[instrument(skip(req, pool))]
 async fn handle_regular_request(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
@@ -210,6 +215,7 @@ async fn handle_regular_request(
 
     // Get connected stream from pool
     let connected_stream = match pool
+        .as_ref()
         .get_connected_stream(address, TransportProtocol::Tcp)
         .await
     {

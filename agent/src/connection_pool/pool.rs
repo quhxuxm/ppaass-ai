@@ -7,7 +7,7 @@ use protocol::{Address, TransportProtocol};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// Connection pool using deadpool::unmanaged for prewarming connections
 /// Connections are NOT reused - each connection is taken from the pool and consumed
@@ -57,6 +57,7 @@ impl ConnectionPool {
         }
     }
 
+    #[instrument(skip(refill_notify, pool, config, available))]
     async fn refill_task(
         refill_notify: Arc<Notify>,
         pool: Pool<ProxyConnection>,
@@ -122,6 +123,7 @@ impl ConnectionPool {
     }
 
     /// Prewarm the pool with initial connections
+    #[instrument(skip(self))]
     pub async fn prewarm(&self) {
         info!(
             "Prewarming connection pool with {} connections",
@@ -167,6 +169,7 @@ impl ConnectionPool {
 
     /// Get a connection and connect to target
     /// The connection is consumed (not returned to pool)
+    #[instrument(skip(self))]
     pub async fn get_connected_stream(
         &self,
         address: Address,
