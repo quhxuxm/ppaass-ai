@@ -2,7 +2,7 @@ mod proxy_config;
 mod user_config;
 mod users_config;
 
-pub use proxy_config::ProxyConfig;
+pub use proxy_config::{DatabasePoolConfig, ProxyConfig};
 pub use user_config::UserConfig;
 pub use users_config::UsersConfig;
 

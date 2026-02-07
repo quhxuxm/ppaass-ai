@@ -35,7 +35,8 @@
                 "args": [
                     "build",
                     "--package",
-                    "proxy"
+                    "proxy",
+                    "--release"
                 ],
                 "filter": {
                     "name": "proxy",
@@ -45,6 +46,60 @@
             "args": [
                 "--config",
                 "config/local/proxy.toml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Run Mock Target",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "integration-tests"
+                ],
+                "filter": {
+                    "name": "integration-tests",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "mock-target"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Run Integration Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "integration-tests"
+                ],
+                "filter": {
+                    "name": "integration-tests",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "integration",
+                "--agent-addr",
+                "127.0.0.1:7070",
+                "--proxy-addr",
+                "127.0.0.1:8080"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
@@ -111,7 +166,7 @@
             "name": "Debug Agent & Proxy",
             "configurations": [
                 "Debug Agent",
-                "Debug Proxy"
+                "Debug Proxy",
             ]
         },
         {

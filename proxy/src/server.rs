@@ -21,8 +21,9 @@ impl ProxyServer {
         let config = Arc::new(config);
 
         // Initialize user manager with SQLite database
-        let user_manager =
-            Arc::new(UserManager::new(&config.database_path, &config.keys_dir).await?);
+        let user_manager = Arc::new(
+            UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?,
+        );
 
         // Initialize bandwidth monitor
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
