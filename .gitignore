@@ -6,7 +6,6 @@ Cargo.lock
 /logs
 /config/*.local.toml
 .idea
-.vscode
 *.swp
 *.swo
 .DS_Store
