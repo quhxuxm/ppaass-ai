@@ -5,7 +5,7 @@ use protocol::crypto::RsaKeyPair;
 use sea_orm::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, instrument};
 
 pub struct UserManager {
     db: DatabaseConnection,
@@ -13,6 +13,7 @@ pub struct UserManager {
 }
 
 impl UserManager {
+    #[instrument(skip(database_path, keys_dir))]
     pub async fn new<P: AsRef<Path>>(database_path: P, keys_dir: P) -> Result<Self> {
         let database_path = database_path.as_ref();
         let keys_dir = keys_dir.as_ref().to_path_buf();
@@ -50,6 +51,7 @@ impl UserManager {
         Ok(Self { db, keys_dir })
     }
 
+    #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
         let user = user::Entity::find_by_id(username.to_string())
             .one(&self.db)
@@ -62,6 +64,7 @@ impl UserManager {
         }))
     }
 
+    #[instrument(skip(self))]
     pub async fn add_user(
         &self,
         username: String,
@@ -94,6 +97,7 @@ impl UserManager {
         Ok((private_key_pem, public_key_pem))
     }
 
+    #[instrument(skip(self))]
     pub async fn remove_user(&self, username: &str) -> Result<()> {
         info!("Removing user: {}", username);
 
@@ -115,12 +119,14 @@ impl UserManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn list_users(&self) -> Result<Vec<String>> {
         let users = user::Entity::find().all(&self.db).await?;
         Ok(users.into_iter().map(|u| u.username).collect())
     }
 
     /// Import a user with an existing public key (for migration from TOML config)
+    #[instrument(skip(self))]
     pub async fn import_user(
         &self,
         username: String,
@@ -146,6 +152,7 @@ impl UserManager {
     }
 
     #[allow(dead_code)]
+    #[instrument(skip(self))]
     pub async fn update_user_bandwidth(
         &self,
         username: &str,

@@ -26,7 +26,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
@@ -63,6 +63,7 @@ impl ServerConnection {
         }
     }
 
+    #[instrument(skip(self))]
     async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
         match self.reader.next().await {
             Some(Ok(req)) => Ok(Some(req)),
@@ -72,6 +73,7 @@ impl ServerConnection {
     }
 
     /// Peek at the auth request to get the username without completing authentication
+    #[instrument(skip(self))]
     pub async fn peek_auth_username(&mut self) -> Result<String> {
         // Receive auth request
         // First request is always AuthRequest?
@@ -99,6 +101,7 @@ impl ServerConnection {
     }
 
     /// Send an authentication error response
+    #[instrument(skip(self))]
     pub async fn send_auth_error(&mut self, message: &str) -> Result<()> {
         let auth_response = AuthResponse {
             success: false,
@@ -109,6 +112,7 @@ impl ServerConnection {
         self.send_response(ProxyResponse::Auth(auth_response)).await
     }
 
+    #[instrument(skip(self, proxy_config, user_config))]
     pub async fn authenticate(
         &mut self,
         proxy_config: &ProxyConfig,
@@ -199,6 +203,7 @@ impl ServerConnection {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn send_response(&mut self, response: ProxyResponse) -> Result<()> {
         self.writer
             .send(response)
@@ -207,6 +212,7 @@ impl ServerConnection {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn handle_request(&mut self) -> Result<()> {
         // Only loops for initial requests (Auth, Connect)
         // Once connected, it hands over to relay and returns.
@@ -241,6 +247,7 @@ impl ServerConnection {
         }
     }
 
+    #[instrument(skip(self))]
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("Connect request: {:?}", connect_request.address);
 
@@ -394,6 +401,7 @@ impl ServerConnection {
         Ok(())
     }
 
+    #[instrument(skip(self, udp_socket))]
     async fn relay_udp(&mut self, stream_id: String, udp_socket: UdpSocket) -> Result<()> {
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
@@ -486,6 +494,7 @@ impl ServerConnection {
         Ok(())
     }
 
+    #[instrument(skip(self, target_stream))]
     async fn relay<S>(&mut self, stream_id: String, target_stream: &mut S) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,

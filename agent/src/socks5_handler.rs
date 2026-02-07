@@ -12,8 +12,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
+#[instrument(skip(stream, pool))]
 pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling SOCKS5 connection");
 
@@ -49,6 +50,7 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     }
 }
 
+#[instrument(skip(protocol, pool))]
 async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
@@ -59,6 +61,7 @@ async fn handle_tcp_connect(
 
     // Get a connected stream from the pool
     let connected_stream = match pool
+        .as_ref()
         .get_connected_stream(address, TransportProtocol::Tcp)
         .await
     {
@@ -89,6 +92,7 @@ async fn handle_tcp_connect(
     relay_data(&mut client_stream, connected_stream).await
 }
 
+#[instrument(skip(protocol, pool))]
 async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     _target_addr: TargetAddr,
@@ -142,6 +146,7 @@ async fn handle_udp_associate(
     Ok(())
 }
 
+#[instrument(skip(udp_socket, pool))]
 async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPool>) -> Result<()> {
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<String, tokio::sync::mpsc::Sender<Vec<u8>>>;
@@ -176,6 +181,7 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
         if !streams.contains_key(&dest_key) {
             info!("New UDP session for destination: {:?}", dest_addr);
             match pool
+                .as_ref()
                 .get_connected_stream(dest_addr.clone(), TransportProtocol::Udp)
                 .await
             {
@@ -267,6 +273,7 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
     }
 }
 
+#[instrument(skip(client_stream, connected_stream))]
 async fn relay_data(
     client_stream: &mut TcpStream,
     connected_stream: ConnectedStream,

@@ -7,7 +7,7 @@ use crate::user_manager::UserManager;
 use protocol::CompressionMode;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 pub struct ProxyServer {
     config: Arc<ProxyConfig>,
@@ -16,6 +16,7 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
+    #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
 
@@ -27,7 +28,7 @@ impl ProxyServer {
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
 
         // Register all users in bandwidth monitor
-        for username in user_manager.list_users().await? {
+        for username in user_manager.as_ref().list_users().await? {
             if let Some(user_config) = user_manager.get_user(&username).await? {
                 bandwidth_monitor.register_user(username, user_config.bandwidth_limit_mbps);
             }
@@ -40,6 +41,7 @@ impl ProxyServer {
         })
     }
 
+    #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         // Start API server if enabled
         let api_handle = if self.config.enable_api {
@@ -102,6 +104,7 @@ impl ProxyServer {
     }
 }
 
+#[instrument(skip(proxy_config, stream, user_manager, bandwidth_monitor))]
 async fn handle_connection(
     proxy_config: &ProxyConfig,
     stream: TcpStream,
@@ -128,7 +131,7 @@ async fn handle_connection(
     info!("Authentication request from user: {}", username);
 
     // Look up the user config for this username
-    let user_config = match user_manager.get_user(&username).await {
+    let user_config = match user_manager.as_ref().get_user(&username).await {
         Ok(Some(config)) => config,
         Ok(None) => {
             error!("User not found: {}", username);

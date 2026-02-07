@@ -5,7 +5,7 @@ use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 pub struct AgentServer {
     config: Arc<AgentConfig>,
@@ -13,6 +13,7 @@ pub struct AgentServer {
 }
 
 impl AgentServer {
+    #[instrument(skip(config))]
     pub async fn new(config: AgentConfig) -> Result<Self> {
         let config = Arc::new(config);
         let pool = Arc::new(ConnectionPool::new(config.clone()));
@@ -23,6 +24,7 @@ impl AgentServer {
         Ok(Self { config, pool })
     }
 
+    #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
         info!("Agent server listening on {}", self.config.listen_addr);
@@ -46,6 +48,7 @@ impl AgentServer {
     }
 }
 
+#[instrument(skip(stream, pool))]
 async fn handle_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     // Detect protocol by peeking at the first byte
     let mut buffer = [0u8; 1];

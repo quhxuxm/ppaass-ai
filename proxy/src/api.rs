@@ -12,7 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, instrument};
 
 pub struct ApiServer {
     config: Arc<ProxyConfig>,
@@ -88,6 +88,7 @@ impl ApiServer {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         let app_state = AppState {
             config: self.config.clone(),
@@ -122,6 +123,7 @@ async fn health_check() -> impl IntoResponse {
     })
 }
 
+#[instrument(skip(state))]
 async fn add_user(
     State(state): State<AppState>,
     Json(request): Json<AddUserRequest>,
@@ -130,6 +132,7 @@ async fn add_user(
 
     match state
         .user_manager
+        .as_ref()
         .add_user(request.username.clone(), request.bandwidth_limit_mbps)
         .await
     {
@@ -161,13 +164,19 @@ async fn add_user(
     }
 }
 
+#[instrument(skip(state))]
 async fn remove_user(
     State(state): State<AppState>,
     Json(request): Json<RemoveUserRequest>,
 ) -> impl IntoResponse {
     info!("API: Remove user request for {}", request.username);
 
-    match state.user_manager.remove_user(&request.username).await {
+    match state
+        .user_manager
+        .as_ref()
+        .remove_user(&request.username)
+        .await
+    {
         Ok(_) => (
             StatusCode::OK,
             Json(GenericResponse {
@@ -185,8 +194,9 @@ async fn remove_user(
     }
 }
 
+#[instrument(skip(state))]
 async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
-    match state.user_manager.list_users().await {
+    match state.user_manager.as_ref().list_users().await {
         Ok(users) => (StatusCode::OK, Json(UsersListResponse { users })),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -195,6 +205,7 @@ async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+#[instrument(skip(state))]
 async fn get_bandwidth_stats(State(state): State<AppState>) -> impl IntoResponse {
     let stats = state
         .bandwidth_monitor
@@ -214,6 +225,7 @@ async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.config.as_ref().clone())
 }
 
+#[instrument(skip(_state, _new_config))]
 async fn update_config(
     State(_state): State<AppState>,
     Json(_new_config): Json<ProxyConfig>,

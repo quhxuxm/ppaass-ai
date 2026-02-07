@@ -14,7 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 use common::init_tracing;
 use mimalloc::MiMalloc;
-use tracing::info;
+use tracing::{info, instrument};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -127,6 +127,7 @@ fn main() -> Result<()> {
     })
 }
 
+#[instrument(skip(config))]
 async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
     // Load users from TOML file
     let users_config = UsersConfig::load(users_toml_path)?;
