@@ -21,7 +21,9 @@
                 "config/local/agent.toml"
             ],
             "cwd": "${workspaceFolder}",
-            "sourceLanguages": ["rust"],
+            "sourceLanguages": [
+                "rust"
+            ],
             "stopOnEntry": false,
             "console": "integratedTerminal"
         },
@@ -45,7 +47,9 @@
                 "config/local/proxy.toml"
             ],
             "cwd": "${workspaceFolder}",
-            "sourceLanguages": ["rust"],
+            "sourceLanguages": [
+                "rust"
+            ],
             "stopOnEntry": false,
             "console": "integratedTerminal"
         },
@@ -70,7 +74,9 @@
                 "config/local/agent.toml"
             ],
             "cwd": "${workspaceFolder}",
-            "sourceLanguages": ["rust"],
+            "sourceLanguages": [
+                "rust"
+            ],
             "stopOnEntry": false,
             "console": "integratedTerminal"
         },
@@ -95,7 +101,9 @@
                 "config/local/proxy.toml"
             ],
             "cwd": "${workspaceFolder}",
-            "sourceLanguages": ["rust"],
+            "sourceLanguages": [
+                "rust"
+            ],
             "stopOnEntry": false,
             "console": "integratedTerminal"
         }
@@ -103,11 +111,17 @@
     "compounds": [
         {
             "name": "Debug Agent & Proxy",
-            "configurations": ["Debug Agent", "Debug Proxy"]
+            "configurations": [
+                "Debug Agent",
+                "Debug Proxy"
+            ]
         },
         {
             "name": "Debug Agent & Proxy (Release)",
-            "configurations": ["Debug Agent (Release)", "Debug Proxy (Release)"]
+            "configurations": [
+                "Debug Agent (Release)",
+                "Debug Proxy (Release)"
+            ]
         }
     ]
 }
