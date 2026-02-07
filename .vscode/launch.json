@@ -1,0 +1,126 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Agent",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "agent"
+                ],
+                "filter": {
+                    "name": "agent",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config",
+                "config/local/agent.toml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Proxy",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "proxy"
+                ],
+                "filter": {
+                    "name": "proxy",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config",
+                "config/local/proxy.toml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Agent (Forward)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "agent",
+                ],
+                "filter": {
+                    "name": "agent",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config",
+                "config/local/agent-forward.toml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Proxy (Forward)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "proxy",
+                ],
+                "filter": {
+                    "name": "proxy",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config",
+                "config/local/proxy-forward.toml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "stopOnEntry": false,
+            "console": "integratedTerminal"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Debug Agent & Proxy",
+            "configurations": [
+                "Debug Agent",
+                "Debug Proxy"
+            ]
+        },
+        {
+            "name": "Debug Agent & Proxy (Forward)",
+            "configurations": [
+                "Debug Agent (Forward)",
+                "Debug Proxy (Forward)",
+                "Debug Proxy"
+            ]
+        }
+    ]
+}

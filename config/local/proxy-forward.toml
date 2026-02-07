@@ -2,25 +2,22 @@
 # This configuration is for demo purposes with real RSA keys
 
 # Address to listen for incoming agent connections
-listen_addr = "0.0.0.0:80"
+listen_addr = "0.0.0.0:9090"
 
 # Address for REST API (user management, monitoring)
-api_addr = "0.0.0.0:8080"
-
-# Enable REST API server for user management and monitoring (default: false)
-enable_api = false
+api_addr = "0.0.0.0:9091"
 
 # Path to SQLite database for user management
-database_path = "data/users.db"
+database_path = "config/local/data/users.db"
 
 # Directory where RSA keys are stored
-keys_dir = "keys"
+keys_dir = "config/local/keys"
 
 # Log level: trace, debug, info, warn, error
-log_level = "error"
+log_level = "debug"
 
 # Log directory for file-based logging (better performance than console)
-log_dir = "logs"
+# log_dir = "logs"
 
 # Compression mode for data transfer: none, zstd, lz4, gzip
 # - none: No compression (default)
@@ -30,7 +27,8 @@ log_dir = "logs"
 compression_mode = "lz4"
 
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
-runtime_threads = 64
+# runtime_threads = 4
+
 
 # Tolerance time in seconds for replay attack prevention
 replay_attack_tolerance = 300
@@ -39,23 +37,23 @@ replay_attack_tolerance = 300
 # --------------------------
 # If enabled, this proxy will forward all traffic to another PPAASS proxy
 # instead of connecting directly to the target.
-# forward_mode = false
+forward_mode = true
 
 # Upstream proxy address (required if forward_mode = true)
-# upstream_proxy_addr = "upstream-proxy:8080"
+upstream_proxy_addr = "127.0.0.1:9090"
 
 # Username to authenticate with the upstream proxy
-# upstream_username = "user2"
+upstream_username = "user2"
 
 # Path to the private key for authenticating with the upstream proxy
-# upstream_private_key_path = "keys/user2.pem"
+upstream_private_key_path = "keys/user2.pem"
 
 # List of upstream proxy addresses for load balancing and failover
 # When multiple addresses are specified, one will be randomly selected for each connection
-# upstream_proxy_addrs = ["upstream-proxy1:8080", "upstream-proxy2:8080"]
+upstream_proxy_addrs = ["127.0.0.1:8080"]
 
 # Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
-# connect_timeout_secs = 30
+connect_timeout_secs = 30
 
 # Optional: Enable tokio-console for debugging
 # console_port = 6670

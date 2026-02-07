@@ -12,6 +12,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub console_port: Option<u16>,
 
+    /// Enable REST API server for user management and monitoring (default: false)
+    #[serde(default)]
+    pub enable_api: bool,
+
     /// Log level: trace, debug, info, warn, error
     #[serde(default = "default_log_level")]
     pub log_level: String,

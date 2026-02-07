@@ -41,18 +41,27 @@ impl ProxyServer {
     }
 
     pub async fn run(self) -> Result<()> {
-        // Start API server
-        let api_server = ApiServer::new(
-            self.config.clone(),
-            self.user_manager.clone(),
-            self.bandwidth_monitor.clone(),
-        );
+        // Start API server if enabled
+        let api_handle = if self.config.enable_api {
+            info!("API server enabled, listening on {}", self.config.api_addr);
+            let api_server = ApiServer::new(
+                self.config.clone(),
+                self.user_manager.clone(),
+                self.bandwidth_monitor.clone(),
+            );
 
-        let api_handle = tokio::spawn(async move {
-            if let Err(e) = api_server.run().await {
-                error!("API server error: {}", e);
-            }
-        });
+            tokio::spawn(async move {
+                if let Err(e) = api_server.run().await {
+                    error!("API server error: {}", e);
+                }
+            })
+        } else {
+            info!("API server is disabled");
+            // Create a handle that never completes
+            tokio::spawn(async {
+                std::future::pending::<()>().await;
+            })
+        };
 
         // Start proxy server
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
