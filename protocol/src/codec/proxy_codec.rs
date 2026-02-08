@@ -1,65 +1,69 @@
-use crate::message::{MAX_MESSAGE_SIZE, Message};
-use bytes::{Bytes, BytesMut};
+use super::{CipherState, CryptoMessageCodec};
+use crate::message::{Message, MessageType, ProxyRequest, ProxyResponse};
+use bytes::BytesMut;
 use std::io;
-use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
-use tracing::error;
+use std::sync::Arc;
+use tokio_util::codec::{Decoder, Encoder};
 
-/// Codec for proxy protocol messages using length-delimited framing.
-/// Wraps tokio-util's LengthDelimitedCodec for reliable message framing.
-/// Handles serialization and deserialization only.
 pub struct ProxyCodec {
-    inner: LengthDelimitedCodec,
+    inner: CryptoMessageCodec,
 }
 
 impl ProxyCodec {
-    pub fn new() -> Self {
-        let inner = LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_MESSAGE_SIZE)
-            .length_field_type::<u32>()
-            .big_endian()
-            .new_codec();
-        Self { inner }
-    }
-}
-
-impl Default for ProxyCodec {
-    fn default() -> Self {
-        Self::new()
+    pub fn new(state: Option<Arc<CipherState>>) -> Self {
+        Self {
+            inner: CryptoMessageCodec::new(state),
+        }
     }
 }
 
 impl Decoder for ProxyCodec {
-    type Item = Message;
+    type Item = ProxyRequest;
     type Error = io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
-            Some(frame) => {
-                let message: Message = bitcode::deserialize(&frame).map_err(|e| {
-                    error!("Failed to deserialize message: {}", e);
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Failed to deserialize message: {}", e),
-                    )
-                })?;
-                Ok(Some(message))
+            Some(message) => {
+                let request: ProxyRequest =
+                    bitcode::deserialize(&message.payload).map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Failed to deserialize proxy request: {}", e),
+                        )
+                    })?;
+                Ok(Some(request))
             }
             None => Ok(None),
         }
     }
 }
 
-impl Encoder<Message> for ProxyCodec {
+impl Encoder<ProxyResponse> for ProxyCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let data = bitcode::serialize(&item).map_err(|e| {
-            error!("Serialization failed: {}", e);
+    fn encode(
+        &mut self,
+        item: ProxyResponse,
+        dst: &mut BytesMut,
+    ) -> std::result::Result<(), Self::Error> {
+        let message_type = match &item {
+            ProxyResponse::Auth(_) => MessageType::AuthResponse,
+            ProxyResponse::Connect(_) => MessageType::ConnectResponse,
+            ProxyResponse::Data(_) => MessageType::Data,
+            ProxyResponse::Error { .. } => MessageType::Data, // Fallback, though Error unused in logic
+        };
+
+        let payload = bitcode::serialize(&item).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Failed to serialize message: {}", e),
+                format!("Failed to serialize proxy response: {}", e),
             )
         })?;
-        self.inner.encode(Bytes::from(data), dst)
+
+        let message = Message::new(message_type, payload);
+        self.inner.encode(message, dst)
     }
 }

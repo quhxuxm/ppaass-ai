@@ -1,13 +1,13 @@
 use crate::bandwidth::BandwidthMonitor;
 use futures::{Sink, stream::SplitSink};
-use protocol::{DataPacket, ProxyResponse, ServerCodec};
+use protocol::{DataPacket, ProxyCodec, ProxyResponse};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{pin::Pin, result::Result};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
+type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 
 pub struct BytesToProxyResponseSink<'a> {
     pub inner: &'a mut FramedWriter,

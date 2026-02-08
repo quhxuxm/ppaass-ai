@@ -16,8 +16,8 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, CompressionMode, ConnectRequest, ConnectResponse,
-    ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
+    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
+    ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::io;
@@ -28,14 +28,15 @@ use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info, instrument};
 
-type FramedWriter = SplitSink<Framed<TcpStream, ServerCodec>, ProxyResponse>;
-type FramedReader = SplitStream<Framed<TcpStream, ServerCodec>>;
+type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
+type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 
 pub struct ServerConnection {
     writer: FramedWriter,
     reader: FramedReader,
     user_config: Option<UserConfig>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    cipher_state: Arc<CipherState>,
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
 }
@@ -44,10 +45,11 @@ impl ServerConnection {
     pub fn new(
         stream: TcpStream,
         bandwidth_monitor: Arc<BandwidthMonitor>,
-        _compression_mode: CompressionMode,
+        compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
     ) -> Self {
-        let framed = Framed::new(stream, ServerCodec::new());
+        let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
+        let framed = Framed::new(stream, ProxyCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
 
         Self {
@@ -55,6 +57,7 @@ impl ServerConnection {
             reader,
             user_config: None,
             bandwidth_monitor,
+            cipher_state,
             pending_auth_request: None,
             proxy_config,
         }
@@ -171,7 +174,7 @@ impl ServerConnection {
             .try_into()
             .map_err(|_| ProxyError::Authentication("Invalid AES key length".to_string()))?;
 
-        let _aes_cipher = AesGcmCipher::from_key(aes_key);
+        let aes_cipher = AesGcmCipher::from_key(aes_key);
 
         let session_id = common::generate_id();
 
@@ -191,6 +194,9 @@ impl ServerConnection {
             .await?;
 
         self.user_config = Some(user_config);
+
+        // Update cipher state for future messages
+        self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
         info!("Authentication successful");
         Ok(())
