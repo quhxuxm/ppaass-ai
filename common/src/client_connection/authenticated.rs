@@ -1,11 +1,10 @@
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
-    Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
+    Address, AgentCodec, AuthRequest, ConnectRequest, ProxyRequest, ProxyResponse,
     TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
-use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use tracing::{debug, info};
@@ -49,8 +48,7 @@ impl AuthenticatedConnection {
         };
 
         // 2. Setup Codec
-        let cipher_state = Arc::new(CipherState::new());
-        let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
+        let framed = Framed::new(stream, AgentCodec::new());
         let (mut writer, mut reader) = framed.split();
 
         // 3. Prepare Auth
@@ -106,7 +104,6 @@ impl AuthenticatedConnection {
                 ));
             }
             info!("Authenticated with remote proxy");
-            cipher_state.set_cipher(Arc::new(aes_cipher));
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

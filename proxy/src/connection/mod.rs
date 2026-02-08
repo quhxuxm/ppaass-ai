@@ -16,8 +16,8 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
-    ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
+    Address, AuthRequest, AuthResponse, CompressionMode, ConnectRequest, ConnectResponse,
+    ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::io;
@@ -36,7 +36,6 @@ pub struct ServerConnection {
     reader: FramedReader,
     user_config: Option<UserConfig>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
-    cipher_state: Arc<CipherState>,
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
 }
@@ -45,11 +44,10 @@ impl ServerConnection {
     pub fn new(
         stream: TcpStream,
         bandwidth_monitor: Arc<BandwidthMonitor>,
-        compression_mode: CompressionMode,
+        _compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
     ) -> Self {
-        let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
-        let framed = Framed::new(stream, ServerCodec::new(Some(cipher_state.clone())));
+        let framed = Framed::new(stream, ServerCodec::new());
         let (writer, reader) = framed.split();
 
         Self {
@@ -57,7 +55,6 @@ impl ServerConnection {
             reader,
             user_config: None,
             bandwidth_monitor,
-            cipher_state,
             pending_auth_request: None,
             proxy_config,
         }
@@ -174,7 +171,7 @@ impl ServerConnection {
             .try_into()
             .map_err(|_| ProxyError::Authentication("Invalid AES key length".to_string()))?;
 
-        let aes_cipher = AesGcmCipher::from_key(aes_key);
+        let _aes_cipher = AesGcmCipher::from_key(aes_key);
 
         let session_id = common::generate_id();
 
@@ -194,9 +191,6 @@ impl ServerConnection {
             .await?;
 
         self.user_config = Some(user_config);
-
-        // Update cipher state for future messages
-        self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
         info!("Authentication successful");
         Ok(())
