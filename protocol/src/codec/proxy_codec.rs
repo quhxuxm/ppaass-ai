@@ -1,4 +1,4 @@
-use super::{CipherState, CryptoMessageCodec};
+use super::{CipherState, MessageCodec};
 use crate::message::{Message, MessageType, ProxyRequest, ProxyResponse};
 use bytes::BytesMut;
 use std::io;
@@ -6,13 +6,13 @@ use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder};
 
 pub struct ProxyCodec {
-    inner: CryptoMessageCodec,
+    inner: MessageCodec,
 }
 
 impl ProxyCodec {
     pub fn new(state: Option<Arc<CipherState>>) -> Self {
         Self {
-            inner: CryptoMessageCodec::new(state),
+            inner: MessageCodec::new(state),
         }
     }
 }
