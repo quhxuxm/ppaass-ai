@@ -2,8 +2,8 @@ use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use dashmap::DashMap;
 use fast_socks5::server::{
-    states::{CommandRead, Opened}, NoAuthentication, Socks5ServerProtocol,
-    SocksServerError,
+    NoAuthentication, Socks5ServerProtocol, SocksServerError,
+    states::{CommandRead, Opened},
 };
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument};
 
 #[instrument(skip(stream, pool))]
@@ -192,6 +192,7 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                     let streams_clone = streams.clone();
                     let dest_key_clone = dest_key.clone();
                     tokio::spawn(async move {
+                        // Use the AsyncRead + AsyncWrite wrapper to properly encode data as DataPacket messages
                         let proxy_io = connected_stream.into_async_io();
                         let (mut reader, mut writer) = tokio::io::split(proxy_io);
                         let write_task = async {

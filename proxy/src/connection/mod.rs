@@ -12,13 +12,13 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
-    stream::{SplitSink, SplitStream}, SinkExt,
-    StreamExt,
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
-    ConnectRequest, ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec,
-    TransportProtocol,
+    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
+    ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
+    crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::io;
 use std::sync::Arc;
@@ -402,6 +402,7 @@ impl ServerConnection {
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
         let username_stream = username.clone();
+        let stream_id_filter = stream_id.clone();
 
         // Use a custom Sink implementation
         let sink = BytesToProxyResponseSink {
@@ -417,7 +418,8 @@ impl ServerConnection {
 
             let result = match res {
                 Ok(ProxyRequest::Data(packet)) => {
-                    if !packet.data.is_empty() {
+                    // Only process data packets for this stream
+                    if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
                         if let Some(u) = user {
                             monitor.record_received(u, packet.data.len() as u64);
                         }
@@ -509,6 +511,7 @@ impl ServerConnection {
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
         let username_stream = username.clone();
+        let stream_id_filter = stream_id.clone();
 
         // Use a custom Sink implementation to avoid HRTB issues with SinkExt::with and closures
         let sink = BytesToProxyResponseSink {
@@ -524,13 +527,19 @@ impl ServerConnection {
 
             let result = match res {
                 Ok(ProxyRequest::Data(packet)) => {
-                    if !packet.data.is_empty() {
-                        if let Some(u) = user {
-                            monitor.record_received(u, packet.data.len() as u64);
+                    // Only process data packets for this stream
+                    if packet.stream_id == stream_id_filter {
+                        if !packet.data.is_empty() {
+                            if let Some(u) = user {
+                                monitor.record_received(u, packet.data.len() as u64);
+                            }
+                            Some(Ok(Bytes::from(packet.data)))
+                        } else {
+                            // Empty data or is_end=true: ignore, let TCP FIN handle EOF
+                            None
                         }
-                        Some(Ok(Bytes::from(packet.data)))
                     } else {
-                        // Empty data or is_end=true: ignore, let TCP FIN handle EOF
+                        // Data for a different stream, skip it
                         None
                     }
                 }
