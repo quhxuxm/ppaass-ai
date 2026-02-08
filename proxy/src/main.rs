@@ -81,6 +81,7 @@ fn main() -> Result<()> {
     let _guard = init_tracing(config.log_dir.as_deref(), "proxy.log", &config.log_level);
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 *1024);
     runtime_builder.enable_all();
 
     if let Some(threads) = config.runtime_threads {

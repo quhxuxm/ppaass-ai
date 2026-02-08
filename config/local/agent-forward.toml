@@ -11,6 +11,9 @@ connect_timeout_secs = 20
 # Log level: trace, debug, info, warn, error
 log_level = "debug"
 
+# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+async_runtime_stack_size_mb = 4
+
 # Log directory for file-based logging (better performance than console)
 # log_dir = "logs"
 

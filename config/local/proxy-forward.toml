@@ -33,6 +33,9 @@ compression_mode = "lz4"
 # Tolerance time in seconds for replay attack prevention
 replay_attack_tolerance = 300
 
+# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+async_runtime_stack_size_mb = 4
+
 # Forward Mode Configuration
 # --------------------------
 # If enabled, this proxy will forward all traffic to another PPAASS proxy
