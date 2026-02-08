@@ -8,6 +8,8 @@ pub struct AgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
+    #[serde(default="default_async_runtime_stack_size_mb")]
+    pub async_runtime_stack_size_mb: usize,
 
     #[serde(default = "default_pool_size")]
     pub pool_size: usize,
@@ -40,6 +42,10 @@ fn default_connect_timeout_secs() -> u64 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_async_runtime_stack_size_mb() -> usize {
+    4
 }
 
 impl AgentConfig {

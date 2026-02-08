@@ -52,8 +52,11 @@ idle_timeout_secs = 300
 # Maximum lifetime of a connection in seconds before it's recycled (default: 3600 = 1 hour)
 max_lifetime_secs = 3600
 
-
+# Tolerance time in seconds for replay attack prevention
 replay_attack_tolerance = 300
+
+# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+async_runtime_stack_size_mb = 4
 
 # Forward Mode Configuration
 # --------------------------

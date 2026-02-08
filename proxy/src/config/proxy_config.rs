@@ -31,6 +31,8 @@ pub struct ProxyConfig {
     pub api_addr: String,
     pub database_path: String,
     pub keys_dir: String,
+    #[serde(default="default_async_runtime_stack_size_mb")]
+    pub async_runtime_stack_size_mb: usize,
 
     #[serde(default)]
     pub console_port: Option<u16>,
@@ -112,6 +114,10 @@ fn default_idle_timeout_secs() -> u64 {
 
 fn default_max_lifetime_secs() -> u64 {
     3600
+}
+
+fn default_async_runtime_stack_size_mb() -> usize {
+    4
 }
 
 fn default_db_pool_config() -> DatabasePoolConfig {
