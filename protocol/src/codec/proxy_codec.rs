@@ -45,7 +45,7 @@ impl Decoder for ProxyCodec {
     fn decode(
         &mut self,
         src: &mut BytesMut,
-    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    ) -> Result<Option<Self::Item>, Self::Error> {
         // Use LengthDelimitedCodec to handle framing
         match self.inner.decode(src)? {
             Some(frame) => {
@@ -103,7 +103,7 @@ impl Encoder<Message> for ProxyCodec {
         &mut self,
         mut item: Message,
         dst: &mut BytesMut,
-    ) -> std::result::Result<(), Self::Error> {
+    ) -> Result<(), Self::Error> {
         // Encrypt payload if cipher is present and message type requires encryption
         if let Some(cipher) = self.state.cipher.get()
             && !matches!(
