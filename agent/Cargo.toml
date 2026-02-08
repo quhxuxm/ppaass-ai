@@ -33,6 +33,7 @@ parking_lot.workspace = true
 dashmap.workspace = true
 mimalloc.workspace = true
 rand.workspace = true
+pretty-hex.workspace = true
 [features]
 default = []
 console = ["dep:console-subscriber"]

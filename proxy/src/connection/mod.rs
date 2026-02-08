@@ -12,13 +12,13 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
+    stream::{SplitSink, SplitStream}, SinkExt,
+    StreamExt,
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
-    ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec, TransportProtocol,
-    crypto::{AesGcmCipher, RsaKeyPair},
+    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
+    ConnectRequest, ConnectResponse, ProxyRequest, ProxyResponse, ServerCodec,
+    TransportProtocol,
 };
 use std::io;
 use std::sync::Arc;
@@ -63,7 +63,6 @@ impl ServerConnection {
         }
     }
 
-    #[instrument(skip(self))]
     async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
         match self.reader.next().await {
             Some(Ok(req)) => Ok(Some(req)),
@@ -203,7 +202,6 @@ impl ServerConnection {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     async fn send_response(&mut self, response: ProxyResponse) -> Result<()> {
         self.writer
             .send(response)
@@ -212,7 +210,6 @@ impl ServerConnection {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     pub async fn handle_request(&mut self) -> Result<()> {
         // Only loops for initial requests (Auth, Connect)
         // Once connected, it hands over to relay and returns.
@@ -247,7 +244,6 @@ impl ServerConnection {
         }
     }
 
-    #[instrument(skip(self))]
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("Connect request: {:?}", connect_request.address);
 
@@ -494,7 +490,6 @@ impl ServerConnection {
         Ok(())
     }
 
-    #[instrument(skip(self, target_stream))]
     async fn relay<S>(&mut self, stream_id: String, target_stream: &mut S) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
