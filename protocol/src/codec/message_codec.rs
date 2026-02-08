@@ -1,6 +1,6 @@
 use super::CipherState;
-use crate::compression::{CompressionMode, compress, decompress};
-use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
+use crate::compression::{compress, decompress, CompressionMode};
+use crate::message::{Message, MessageType, MAX_MESSAGE_SIZE};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
@@ -13,12 +13,12 @@ const MIN_COMPRESSION_SIZE: usize = 64;
 /// Codec for proxy protocol messages using length-delimited framing.
 /// Wraps tokio-util's LengthDelimitedCodec for reliable message framing.
 /// Handles encryption, decryption, compression, and decompression.
-pub struct CryptoMessageCodec {
+pub struct MessageCodec {
     inner: LengthDelimitedCodec,
     state: Arc<CipherState>,
 }
 
-impl CryptoMessageCodec {
+impl MessageCodec {
     pub fn new(state: Option<Arc<CipherState>>) -> Self {
         let inner = LengthDelimitedCodec::builder()
             .max_frame_length(MAX_MESSAGE_SIZE)
@@ -44,13 +44,13 @@ impl CryptoMessageCodec {
     }
 }
 
-impl Default for CryptoMessageCodec {
+impl Default for MessageCodec {
     fn default() -> Self {
         Self::new(None)
     }
 }
 
-impl Decoder for CryptoMessageCodec {
+impl Decoder for MessageCodec {
     type Item = Message;
     type Error = io::Error;
 
@@ -83,7 +83,7 @@ impl Decoder for CryptoMessageCodec {
     }
 }
 
-impl Encoder<Message> for CryptoMessageCodec {
+impl Encoder<Message> for MessageCodec {
     type Error = io::Error;
 
     fn encode(&mut self, mut item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
