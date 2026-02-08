@@ -8,7 +8,7 @@ pub struct AgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
-    #[serde(default="default_async_runtime_stack_size_mb")]
+    #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
     #[serde(default = "default_pool_size")]
