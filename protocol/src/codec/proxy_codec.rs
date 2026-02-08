@@ -5,6 +5,7 @@ use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
+use tracing::error;
 
 /// Minimum payload size to apply compression (avoid overhead for small messages)
 const MIN_COMPRESSION_SIZE: usize = 64;
@@ -50,6 +51,7 @@ impl Decoder for ProxyCodec {
             Some(frame) => {
                 // Deserialize the message from the frame
                 let mut message: Message = bitcode::deserialize(&frame).map_err(|e| {
+                    error!("Failed to deserialize message: {}", e);
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Failed to deserialize message: {}", e),
@@ -61,6 +63,7 @@ impl Decoder for ProxyCodec {
                 if compression_mode != CompressionMode::None {
                     let decompressed =
                         decompress(&message.payload, compression_mode).map_err(|e| {
+                            error!("Decompression failed: {}", e);
                             io::Error::new(
                                 io::ErrorKind::InvalidData,
                                 format!("Decompression failed: {}", e),
@@ -77,6 +80,7 @@ impl Decoder for ProxyCodec {
                     )
                 {
                     let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
+                        error!("Decryption failed: {}", e);
                         io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("Decryption failed: {}", e),
@@ -108,6 +112,7 @@ impl Encoder<Message> for ProxyCodec {
             )
         {
             let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
+                error!("Encryption failed: {}", e);
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("Encryption failed: {}", e),
@@ -127,14 +132,16 @@ impl Encoder<Message> for ProxyCodec {
                         item.compression = compression_mode.to_flag();
                     }
                 }
-                Err(_) => {
+                Err(e) => {
                     // Fall back to uncompressed on error
+                    error!("Compression failed: {}", e);
                 }
             }
         }
 
         // Serialize the message
         let data = bitcode::serialize(&item).map_err(|e| {
+            error!("Serialization failed: {}", e);
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to serialize message: {}", e),
