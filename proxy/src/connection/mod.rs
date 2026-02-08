@@ -450,7 +450,13 @@ impl ServerConnection {
                 match agent_reader.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        if let Err(e) = udp_send.send(&buf[..n]).await {
+                        let data = &buf[..n];
+                        debug!(
+                            "Receive UDP data from agent for target: {:?}\n{}",
+                            udp_socket.peer_addr(),
+                            pretty_hex::pretty_hex(&data)
+                        );
+                        if let Err(e) = udp_send.send(data).await {
                             debug!("UDP send error: {}", e);
                             break;
                         }
@@ -468,7 +474,13 @@ impl ServerConnection {
             loop {
                 match udp_recv.recv(&mut buf).await {
                     Ok(n) => {
-                        if let Err(e) = agent_writer.write_all(&buf[..n]).await {
+                        let data = &buf[..n];
+                        debug!(
+                            "Receive UDP data from target to agent: {:?}\n{}",
+                            udp_socket.peer_addr(),
+                            pretty_hex::pretty_hex(&data)
+                        );
+                        if let Err(e) = agent_writer.write_all(data).await {
                             debug!("Agent write error: {}", e);
                             break;
                         }
