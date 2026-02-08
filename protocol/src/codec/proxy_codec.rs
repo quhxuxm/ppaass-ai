@@ -1,40 +1,30 @@
-use super::CipherState;
-use crate::compression::{CompressionMode, compress, decompress};
-use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
+use crate::message::{MAX_MESSAGE_SIZE, Message};
 use bytes::{Bytes, BytesMut};
 use std::io;
-use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 use tracing::error;
 
-/// Minimum payload size to apply compression (avoid overhead for small messages)
-const MIN_COMPRESSION_SIZE: usize = 64;
-
 /// Codec for proxy protocol messages using length-delimited framing.
-/// Uses tokio-util's LengthDelimitedCodec for reliable message framing.
-/// Handles encryption, decryption, compression, and decompression transparently.
+/// Wraps tokio-util's LengthDelimitedCodec for reliable message framing.
+/// Handles serialization and deserialization only.
 pub struct ProxyCodec {
     inner: LengthDelimitedCodec,
-    state: Arc<CipherState>,
 }
 
 impl ProxyCodec {
-    pub fn new(state: Option<Arc<CipherState>>) -> Self {
+    pub fn new() -> Self {
         let inner = LengthDelimitedCodec::builder()
             .max_frame_length(MAX_MESSAGE_SIZE)
             .length_field_type::<u32>()
             .big_endian()
             .new_codec();
-        Self {
-            inner,
-            state: state.unwrap_or_default(),
-        }
+        Self { inner }
     }
 }
 
 impl Default for ProxyCodec {
     fn default() -> Self {
-        Self::new(None)
+        Self::new()
     }
 }
 
@@ -42,53 +32,16 @@ impl Decoder for ProxyCodec {
     type Item = Message;
     type Error = io::Error;
 
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        // Use LengthDelimitedCodec to handle framing
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
             Some(frame) => {
-                // Deserialize the message from the frame
-                let mut message: Message = bitcode::deserialize(&frame).map_err(|e| {
+                let message: Message = bitcode::deserialize(&frame).map_err(|e| {
                     error!("Failed to deserialize message: {}", e);
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("Failed to deserialize message: {}", e),
                     )
                 })?;
-
-                // Decompress payload if compression flag is set
-                let compression_mode = CompressionMode::from_flag(message.compression);
-                if compression_mode != CompressionMode::None {
-                    let decompressed =
-                        decompress(&message.payload, compression_mode).map_err(|e| {
-                            error!("Decompression failed: {}", e);
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("Decompression failed: {}", e),
-                            )
-                        })?;
-                    message.payload = decompressed;
-                }
-
-                // Decrypt payload if cipher is present and message type requires encryption
-                if let Some(cipher) = self.state.cipher.get()
-                    && !matches!(
-                        message.message_type,
-                        MessageType::AuthRequest | MessageType::AuthResponse
-                    )
-                {
-                    let decrypted = cipher.decrypt(&message.payload).map_err(|e| {
-                        error!("Decryption failed: {}", e);
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Decryption failed: {}", e),
-                        )
-                    })?;
-                    message.payload = decrypted;
-                }
-
                 Ok(Some(message))
             }
             None => Ok(None),
@@ -99,47 +52,7 @@ impl Decoder for ProxyCodec {
 impl Encoder<Message> for ProxyCodec {
     type Error = io::Error;
 
-    fn encode(
-        &mut self,
-        mut item: Message,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
-        // Encrypt payload if cipher is present and message type requires encryption
-        if let Some(cipher) = self.state.cipher.get()
-            && !matches!(
-                item.message_type,
-                MessageType::AuthRequest | MessageType::AuthResponse
-            )
-        {
-            let encrypted = cipher.encrypt(&item.payload).map_err(|e| {
-                error!("Encryption failed: {}", e);
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Encryption failed: {}", e),
-                )
-            })?;
-            item.payload = encrypted;
-        }
-
-        // Compress payload if compression is enabled and payload is large enough
-        let compression_mode = self.state.compression_mode();
-        if compression_mode != CompressionMode::None && item.payload.len() >= MIN_COMPRESSION_SIZE {
-            match compress(&item.payload, compression_mode) {
-                Ok(compressed) => {
-                    // Only use compressed data if it's actually smaller
-                    if compressed.len() < item.payload.len() {
-                        item.payload = compressed;
-                        item.compression = compression_mode.to_flag();
-                    }
-                }
-                Err(e) => {
-                    // Fall back to uncompressed on error
-                    error!("Compression failed: {}", e);
-                }
-            }
-        }
-
-        // Serialize the message
+    fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let data = bitcode::serialize(&item).map_err(|e| {
             error!("Serialization failed: {}", e);
             io::Error::new(
@@ -147,8 +60,6 @@ impl Encoder<Message> for ProxyCodec {
                 format!("Failed to serialize message: {}", e),
             )
         })?;
-
-        // Use LengthDelimitedCodec to handle framing
         self.inner.encode(Bytes::from(data), dst)
     }
 }
