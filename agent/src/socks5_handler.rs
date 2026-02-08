@@ -2,8 +2,8 @@ use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use dashmap::DashMap;
 use fast_socks5::server::{
-    NoAuthentication, Socks5ServerProtocol, SocksServerError,
-    states::{CommandRead, Opened},
+    states::{CommandRead, Opened}, NoAuthentication, Socks5ServerProtocol,
+    SocksServerError,
 };
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, error, info, instrument};
 
 #[instrument(skip(stream, pool))]
@@ -50,7 +51,6 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     }
 }
 
-#[instrument(skip(protocol, pool))]
 async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
@@ -92,7 +92,6 @@ async fn handle_tcp_connect(
     relay_data(&mut client_stream, connected_stream).await
 }
 
-#[instrument(skip(protocol, pool))]
 async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     _target_addr: TargetAddr,
@@ -146,10 +145,9 @@ async fn handle_udp_associate(
     Ok(())
 }
 
-#[instrument(skip(udp_socket, pool))]
 async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPool>) -> Result<()> {
     let mut buf = [0u8; 65535];
-    type StreamMap = DashMap<String, tokio::sync::mpsc::Sender<Vec<u8>>>;
+    type StreamMap = DashMap<String, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
 
     loop {
@@ -178,6 +176,7 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
         };
         let payload = packet_data[3 + header_len..].to_vec();
         let dest_key = format!("{:?}", dest_addr);
+        debug!("Parse UDP destination address: {:?}", dest_addr);
         if !streams.contains_key(&dest_key) {
             info!("New UDP session for destination: {:?}", dest_addr);
             match pool
@@ -186,7 +185,7 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                 .await
             {
                 Ok(connected_stream) => {
-                    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+                    let (tx, mut rx) = channel::<Vec<u8>>(32);
                     streams.insert(dest_key.clone(), tx);
                     let udp_socket_clone = udp_socket.clone();
                     let dest_addr_clone = dest_addr.clone();
@@ -198,6 +197,10 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                         let write_task = async {
                             while let Some(data) = rx.recv().await {
                                 use tokio::io::AsyncWriteExt;
+                                debug!(
+                                    "Write UDP data to proxy for target: {dest_addr:?}\n{}",
+                                    pretty_hex::pretty_hex(&data)
+                                );
                                 if let Err(e) = writer.write_all(&data).await {
                                     error!("Failed to write to proxy UDP stream: {}", e);
                                     break;
@@ -211,6 +214,10 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                                     Ok(0) => break,
                                     Ok(len) => {
                                         let data = &read_buf[..len];
+                                        debug!(
+                                            "Read UDP data from proxy for target: {dest_addr:?}\n{}",
+                                            pretty_hex::pretty_hex(&data)
+                                        );
                                         match create_udp_packet(&dest_addr_clone, data) {
                                             Ok(packet) => {
                                                 if let Err(e) = udp_socket_clone
@@ -273,7 +280,6 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
     }
 }
 
-#[instrument(skip(client_stream, connected_stream))]
 async fn relay_data(
     client_stream: &mut TcpStream,
     connected_stream: ConnectedStream,

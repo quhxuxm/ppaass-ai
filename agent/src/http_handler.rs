@@ -1,7 +1,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -82,7 +82,6 @@ pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>
     Ok(())
 }
 
-#[instrument(skip(pool))]
 async fn handle_http_request(
     req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
@@ -96,7 +95,6 @@ async fn handle_http_request(
     }
 }
 
-#[instrument(skip(req, pool))]
 async fn handle_connect(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
@@ -187,7 +185,6 @@ async fn tunnel(
     Ok(())
 }
 
-#[instrument(skip(req, pool))]
 async fn handle_regular_request(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
