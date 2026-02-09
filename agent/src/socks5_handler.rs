@@ -11,7 +11,7 @@ use protocol::{Address, TransportProtocol};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, error, info, instrument};
 
@@ -41,13 +41,8 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
 
     match command {
         Socks5Command::TCPConnect => handle_tcp_connect(protocol, target_addr, pool).await,
+        Socks5Command::TCPBind => handle_tcp_bind(protocol, target_addr, pool).await,
         Socks5Command::UDPAssociate => handle_udp_associate(protocol, target_addr, pool).await,
-        _ => {
-            let _ = protocol.reply_error(&ReplyError::CommandNotSupported).await;
-            Err(AgentError::Socks5(
-                "Only CONNECT and UDP ASSOCIATE commands are supported".to_string(),
-            ))
-        }
     }
 }
 
@@ -90,6 +85,81 @@ async fn handle_tcp_connect(
 
     // Start bidirectional data relay
     relay_data(&mut client_stream, connected_stream).await
+}
+
+async fn handle_tcp_bind(
+    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    target_addr: TargetAddr,
+    pool: Arc<ConnectionPool>,
+) -> Result<()> {
+    info!("Handling SOCKS5 BIND command for target: {:?}", target_addr);
+
+    // Convert target address to protocol Address
+    let address = convert_target_addr(&target_addr);
+
+    // Bind a TCP socket on a random port to accept incoming connections
+    let listener = TcpListener::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| AgentError::Socks5(format!("Failed to bind TCP socket: {}", e)))?;
+
+    let bind_addr = listener
+        .local_addr()
+        .map_err(|e| AgentError::Socks5(format!("Failed to get local addr: {}", e)))?;
+
+    info!("SOCKS5 BIND listening on {}", bind_addr);
+
+    // Send first success reply with the bind address
+    let _tcp_stream = protocol
+        .reply_success(bind_addr)
+        .await
+        .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+    // Wait for an incoming connection on the bind address
+    match tokio::time::timeout(std::time::Duration::from_secs(30), listener.accept()).await {
+        Ok(Ok((mut incoming_stream, peer_addr))) => {
+            info!(
+                "SOCKS5 BIND: Accepted connection from {} for target {:?}",
+                peer_addr, address
+            );
+
+            // Get a connected stream from the pool for the target
+            let connected_stream = match pool
+                .as_ref()
+                .get_connected_stream(address, TransportProtocol::Tcp)
+                .await
+            {
+                Ok(stream) => {
+                    info!(
+                        "Got connected stream from pool, stream_id: {}",
+                        stream.stream_id()
+                    );
+                    stream
+                }
+                Err(e) => {
+                    error!("Failed to get stream from pool: {}", e);
+                    return Err(e);
+                }
+            };
+
+            info!("SOCKS5 BIND tunnel established, starting data relay");
+
+            // Start bidirectional data relay
+            relay_data(&mut incoming_stream, connected_stream).await
+        }
+        Ok(Err(e)) => {
+            error!("Failed to accept incoming connection: {}", e);
+            Err(AgentError::Socks5(format!(
+                "Failed to accept connection: {}",
+                e
+            )))
+        }
+        Err(_) => {
+            error!("SOCKS5 BIND: Timeout waiting for incoming connection");
+            Err(AgentError::Socks5(
+                "Timeout waiting for incoming connection".to_string(),
+            ))
+        }
+    }
 }
 
 async fn handle_udp_associate(
