@@ -2,7 +2,7 @@ name: Build and Run Integration Tests
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
 
 jobs:
@@ -27,5 +27,14 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Start mock target
+        run: cargo run -p integration-tests -- mock-target
+
+      - name: Start proxy
+        run: cargo run --package proxy --bin proxy -- --config config/local/proxy.toml
+
+      - name: Start agent
+        run: cargo run --package agent --bin agent -- --config config/local/agent.toml
+
       - name: Integration Tests
-        run: cargo test -p tests
+        run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080

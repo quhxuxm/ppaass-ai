@@ -12,13 +12,13 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
+    stream::{SplitSink, SplitStream}, SinkExt,
+    StreamExt,
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
-    ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
-    crypto::{AesGcmCipher, RsaKeyPair},
+    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
+    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse,
+    TransportProtocol,
 };
 use std::io;
 use std::sync::Arc;
@@ -219,8 +219,10 @@ impl ServerConnection {
                     match req {
                         ProxyRequest::Connect(connect_request) => {
                             debug!(
-                                "[CONNECT REQUEST] request_id={}, address={:?}",
-                                connect_request.request_id, connect_request.address
+                                "[CONNECT REQUEST] request_id={}, address={:?}, transport={:?}",
+                                connect_request.request_id,
+                                connect_request.address,
+                                connect_request.transport
                             );
                             self.handle_connect(connect_request).await?;
                             // After relay finishes (connection closed),
@@ -356,6 +358,7 @@ impl ServerConnection {
                 }
             }
             TransportProtocol::Udp => {
+                debug!("Handling UDP connect request: {connect_request:?}");
                 // Bind to any available port
                 match UdpSocket::bind("0.0.0.0:0").await {
                     Ok(socket) => {
@@ -376,9 +379,12 @@ impl ServerConnection {
                             success: true,
                             message: "Connected".to_string(),
                         };
-
+                        debug!("Begin to send UDP connect response to agent: {connect_response:?}");
                         self.send_response(ProxyResponse::Connect(connect_response))
                             .await?;
+                        debug!(
+                            "Success send UDP connect response to agent, begin to relay UDP data."
+                        );
 
                         self.relay_udp(connect_request.request_id, socket).await?;
                     }
@@ -419,6 +425,10 @@ impl ServerConnection {
             let result = match res {
                 Ok(ProxyRequest::Data(packet)) => {
                     // Only process data packets for this stream
+                    debug!(
+                        packet.stream_id,
+                        stream_id_filter, "Receive UDP data packet from agent: {packet:?}"
+                    );
                     if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
                         if let Some(u) = user {
                             monitor.record_received(u, packet.data.len() as u64);
@@ -484,6 +494,10 @@ impl ServerConnection {
                         );
                         if let Err(e) = agent_writer.write_all(data).await {
                             debug!("Agent write error: {}", e);
+                            break;
+                        }
+                        if let Err(e) = agent_writer.flush().await {
+                            debug!("Agent flush error: {}", e);
                             break;
                         }
                     }

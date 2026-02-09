@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -100,9 +100,13 @@ impl MockUdpServer {
         loop {
             match socket.recv_from(&mut buf).await {
                 Ok((n, client_addr)) => {
-                    info!("Received UDP from {}", client_addr);
                     let socket_clone = socket.clone();
                     let data = buf[..n].to_vec();
+                    info!(
+                        "Received UDP from {}:\n{}",
+                        client_addr,
+                        pretty_hex::pretty_hex(&data)
+                    );
                     tokio::spawn(async move {
                         if let Err(e) = socket_clone.send_to(&data, client_addr).await {
                             error!("Failed to send UDP echo to {}: {}", client_addr, e);

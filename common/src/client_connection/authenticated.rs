@@ -131,6 +131,7 @@ impl AuthenticatedConnection {
             transport,
         };
 
+        debug!("Send connect request to remote proxy: {connect_request:?}");
         self.writer
             .send(ProxyRequest::Connect(connect_request))
             .await
@@ -148,7 +149,7 @@ impl AuthenticatedConnection {
                 )
             })
             .and_then(|r| r)?;
-
+        debug!("Connected to target through remote proxy: {response:?}");
         if let ProxyResponse::Connect(connect_resp) = response {
             if !connect_resp.success {
                 return Err(std::io::Error::new(
