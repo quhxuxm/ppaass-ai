@@ -28,13 +28,13 @@ jobs:
         name: Cache Cargo
 
       - name: Start mock target
-        run: nohup cargo run -p integration-tests -- mock-target > logs/mock-target.out 2>&1 &
+        run: nohup cargo run -p integration-tests -- mock-target > mock-target.out 2>&1 &
 
       - name: Start proxy
-        run: nohup cargo run --package proxy --bin proxy -- --config config/local/proxy.toml > logs/proxy.out 2>&1 &
+        run: nohup cargo run --package proxy --bin proxy -- --config config/local/proxy.toml > proxy.out 2>&1 &
 
       - name: Start agent
-        run: nohup cargo run --package agent --bin agent -- --config config/local/agent.toml > logs/agent.out 2>&1 &
+        run: nohup cargo run --package agent --bin agent -- --config config/local/agent.toml > agent.out 2>&1 &
 
       - uses: JarvusInnovations/background-action@v1
         name: Integration Tests
