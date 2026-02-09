@@ -10,7 +10,7 @@ use fast_socks5::{ReplyError, Socks5Command};
 use protocol::{Address, TransportProtocol};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, error, info, instrument};
