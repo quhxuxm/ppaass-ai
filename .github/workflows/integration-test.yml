@@ -28,24 +28,21 @@ jobs:
         name: Cache Cargo
 
       - name: Start mock target
-        run: nohup cargo run -p integration-tests -- mock-target > mock-target.out 2>&1 &
+        run: |
+          cargo run -p integration-tests -- mock-target &
+          npx wait-on http://localhost:9090/health --timeout 60000
 
       - name: Start proxy
-        run: nohup cargo run --package proxy --bin proxy -- --config config/local/proxy.toml > proxy.out 2>&1 &
+        run: |
+          cargo run --package proxy --bin proxy -- --config config/local/proxy.toml &
+          npx wait-on tcp://localhost:8080 --timeout 60000
 
       - name: Start agent
-        run: nohup cargo run --package agent --bin agent -- --config config/local/agent.toml > agent.out 2>&1 &
+        run: |
+          cargo run --package agent --bin agent -- --config config/local/agent.toml &
+          npx wait-on tcp://localhost:7070 --timeout 60000
 
-      - uses: JarvusInnovations/background-action@v1
-        name: Integration Tests
-        with:
-          run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
+      - name: Integration Tests
+        run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
 
-          wait-on: |
-            tcp:localhost:7070
-            tcp://localhost:8080
-
-          tail: true
-
-          wait-for: 5m
 
