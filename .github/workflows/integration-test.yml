@@ -28,13 +28,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Start mock target
-        run: cargo run -p integration-tests -- mock-target
+        run: nohup cargo run -p integration-tests -- mock-target > logs/mock-target.out 2>&1 &
 
       - name: Start proxy
-        run: cargo run --package proxy --bin proxy -- --config config/local/proxy.toml
+        run: nohup cargo run --package proxy --bin proxy -- --config config/local/proxy.toml > logs/proxy.out 2>&1 &
 
       - name: Start agent
-        run: cargo run --package agent --bin agent -- --config config/local/agent.toml
+        run: nohup cargo run --package agent --bin agent -- --config config/local/agent.toml > logs/agent.out 2>&1 &
 
       - name: Integration Tests
+        uses: JarvusInnovations/background-action@v1
         run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
+        wait-on: |
+          tcp:localhost:7070
+          tcp://localhost:8080
+
