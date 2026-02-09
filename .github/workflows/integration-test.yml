@@ -40,9 +40,12 @@ jobs:
         name: Integration Tests
         with:
           run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
+
           wait-on: |
             tcp:localhost:7070
             tcp://localhost:8080
+
           tail: true
+
           wait-for: 5m
 
