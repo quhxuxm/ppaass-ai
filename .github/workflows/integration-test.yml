@@ -43,4 +43,6 @@ jobs:
           wait-on: |
             tcp:localhost:7070
             tcp://localhost:8080
+          tail: true
+          wait-for: 5m
 
