@@ -24,7 +24,7 @@ impl Decoder for ProxyCodec {
     fn decode(
         &mut self,
         src: &mut BytesMut,
-    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    ) -> Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
             Some(message) => {
                 let request: ProxyRequest =
@@ -48,7 +48,7 @@ impl Encoder<ProxyResponse> for ProxyCodec {
         &mut self,
         item: ProxyResponse,
         dst: &mut BytesMut,
-    ) -> std::result::Result<(), Self::Error> {
+    ) -> Result<(), Self::Error> {
         let message_type = match &item {
             ProxyResponse::Auth(_) => MessageType::AuthResponse,
             ProxyResponse::Connect(_) => MessageType::ConnectResponse,

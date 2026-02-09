@@ -2,17 +2,17 @@ use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use dashmap::DashMap;
 use fast_socks5::server::{
-    NoAuthentication, Socks5ServerProtocol, SocksServerError,
-    states::{CommandRead, Opened},
+    states::{CommandRead, Opened}, NoAuthentication, Socks5ServerProtocol,
+    SocksServerError,
 };
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
 use protocol::{Address, TransportProtocol};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc::{Sender, channel};
+use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, error, info, instrument};
 
 #[instrument(skip(stream, pool))]
@@ -193,6 +193,7 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                     let dest_key_clone = dest_key.clone();
                     tokio::spawn(async move {
                         // Use the AsyncRead + AsyncWrite wrapper to properly encode data as DataPacket messages
+
                         let proxy_io = connected_stream.into_async_io();
                         let (mut reader, mut writer) = tokio::io::split(proxy_io);
                         let write_task = async {
@@ -206,11 +207,16 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
                                     error!("Failed to write to proxy UDP stream: {}", e);
                                     break;
                                 }
+                                if let Err(e) = writer.flush().await {
+                                    error!("Failed to flush to proxy UDP stream: {}", e);
+                                    break;
+                                }
                             }
                         };
                         let read_task = async {
                             let mut read_buf = [0u8; 65535];
                             loop {
+                                debug!("Waiting for UDP packet from target: {dest_addr:?}",);
                                 match reader.read(&mut read_buf).await {
                                     Ok(0) => break,
                                     Ok(len) => {

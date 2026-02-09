@@ -4,7 +4,7 @@ use bytes::BytesMut;
 use std::sync::Arc;
 use std::{io, result::Result};
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::error;
+use tracing::{debug, error};
 
 pub struct AgentCodec {
     inner: MessageCodec,
@@ -44,6 +44,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: ProxyRequest, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        debug!("Begin to encode proxy request: {item:?}");
         let message_type = match &item {
             ProxyRequest::Auth(_) => MessageType::AuthRequest,
             ProxyRequest::Connect(_) => MessageType::ConnectRequest,
@@ -59,6 +60,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
         })?;
 
         let message = Message::new(message_type, payload);
+        debug!("Convert proxy request to message: {message:?}");
         self.inner.encode(message, dst)
     }
 }
