@@ -31,7 +31,7 @@ pub struct ProxyConfig {
     pub api_addr: String,
     pub database_path: String,
     pub keys_dir: String,
-    #[serde(default="default_async_runtime_stack_size_mb")]
+    #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
     #[serde(default)]

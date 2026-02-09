@@ -1,7 +1,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use bytes::Bytes;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;

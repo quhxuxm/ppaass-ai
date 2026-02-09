@@ -1,6 +1,6 @@
 use super::CipherState;
-use crate::compression::{compress, decompress, CompressionMode};
-use crate::message::{Message, MessageType, MAX_MESSAGE_SIZE};
+use crate::compression::{CompressionMode, compress, decompress};
+use crate::message::{MAX_MESSAGE_SIZE, Message};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
@@ -31,13 +31,6 @@ impl MessageCodec {
         }
     }
 
-    fn needs_crypto(message_type: MessageType) -> bool {
-        !matches!(
-            message_type,
-            MessageType::AuthRequest | MessageType::AuthResponse
-        )
-    }
-
     fn io_error(context: &str, err: impl std::fmt::Display) -> io::Error {
         error!("{}: {}", context, err);
         io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", context, err))
@@ -63,9 +56,7 @@ impl Decoder for MessageCodec {
         let mut message: Message = bitcode::deserialize(&frame)
             .map_err(|e| Self::io_error("Failed to deserialize message", e))?;
 
-        if let Some(cipher) = self.state.cipher.get()
-            && Self::needs_crypto(message.message_type)
-        {
+        if let Some(cipher) = self.state.cipher.get() {
             let decrypted = cipher
                 .decrypt(&message.payload)
                 .map_err(|e| Self::io_error("Decryption failed", e))?;
@@ -100,9 +91,7 @@ impl Encoder<Message> for MessageCodec {
             }
         }
 
-        if let Some(cipher) = self.state.cipher.get()
-            && Self::needs_crypto(item.message_type)
-        {
+        if let Some(cipher) = self.state.cipher.get() {
             let encrypted = cipher
                 .encrypt(&item.payload)
                 .map_err(|e| Self::io_error("Encryption failed", e))?;
