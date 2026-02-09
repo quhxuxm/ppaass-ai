@@ -18,10 +18,10 @@ jobs:
         run: |
           apt-get update
           apt-get install -y curl build-essential gcc pkg-config libssl-dev
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      #      - name: Setup Node.js
+      #        uses: actions/setup-node@v4
+      #        with:
+      #          node-version: '20'
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,17 +33,17 @@ jobs:
       - name: Start mock target
         run: |
           cargo run -p integration-tests -- mock-target &
-          npx wait-on http://localhost:9090/health --timeout 60000
+      #          npx wait-on http://localhost:9090/health --timeout 60000
 
       - name: Start proxy
         run: |
           cargo run --package proxy --bin proxy -- --config config/local/proxy.toml &
-          npx wait-on tcp://localhost:8080 --timeout 60000
+      #          npx wait-on tcp://localhost:8080 --timeout 60000
 
       - name: Start agent
         run: |
           cargo run --package agent --bin agent -- --config config/local/agent.toml &
-          npx wait-on tcp://localhost:7070 --timeout 60000
+      #          npx wait-on tcp://localhost:7070 --timeout 60000
 
       - name: Integration Tests
         run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
