@@ -24,8 +24,8 @@ jobs:
         with:
           toolchain: "1.93.0"
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+        name: Cache Cargo
 
       - name: Start mock target
         run: nohup cargo run -p integration-tests -- mock-target > logs/mock-target.out 2>&1 &
@@ -36,10 +36,11 @@ jobs:
       - name: Start agent
         run: nohup cargo run --package agent --bin agent -- --config config/local/agent.toml > logs/agent.out 2>&1 &
 
-      - name: Integration Tests
-        uses: JarvusInnovations/background-action@v1
-        run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
-        wait-on: |
-          tcp:localhost:7070
-          tcp://localhost:8080
+      - uses: JarvusInnovations/background-action@v1
+        name: Integration Tests
+        with:
+          run: cargo run --package integration-tests --bin integration-tests -- integration --agent-addr 127.0.0.1:7070 --proxy-addr 127.0.0.1:8080
+          wait-on: |
+            tcp:localhost:7070
+            tcp://localhost:8080
 
