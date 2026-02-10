@@ -8,7 +8,7 @@ use fast_socks5::server::{
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
 use protocol::{Address, TransportProtocol};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -18,6 +18,7 @@ use tracing::{debug, error, info, instrument};
 #[instrument(skip(stream, pool))]
 pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
     info!("Handling SOCKS5 connection");
+    let control_local_ip = stream.local_addr().ok().map(|addr| addr.ip());
 
     // Using the new fast-socks5 1.0 API with Socks5ServerProtocol
     let protocol: Socks5ServerProtocol<TcpStream, Opened> = Socks5ServerProtocol::start(stream);
@@ -42,7 +43,9 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     match command {
         Socks5Command::TCPConnect => handle_tcp_connect(protocol, target_addr, pool).await,
         Socks5Command::TCPBind => handle_tcp_bind(protocol, target_addr, pool).await,
-        Socks5Command::UDPAssociate => handle_udp_associate(protocol, target_addr, pool).await,
+        Socks5Command::UDPAssociate => {
+            handle_udp_associate(protocol, target_addr, pool, control_local_ip).await
+        }
     }
 }
 
@@ -166,23 +169,29 @@ async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     _target_addr: TargetAddr,
     pool: Arc<ConnectionPool>,
+    control_local_ip: Option<IpAddr>,
 ) -> Result<()> {
     info!("Handling UDP ASSOCIATE");
 
     // Bind a UDP socket on a random port
-    let udp_socket = UdpSocket::bind("0.0.0.0:0")
+    let udp_bind_addr = udp_associate_bind_addr(control_local_ip);
+    let udp_socket = UdpSocket::bind(udp_bind_addr)
         .await
         .map_err(|e| AgentError::Socks5(format!("Failed to bind UDP socket: {}", e)))?;
 
     let bind_addr = udp_socket
         .local_addr()
         .map_err(|e| AgentError::Socks5(format!("Failed to get local addr: {}", e)))?;
+    let reply_addr = resolve_udp_associate_reply_addr(bind_addr, control_local_ip);
 
-    info!("UDP Associate bound to {}", bind_addr);
+    info!(
+        "UDP Associate bound to {}, replying with {}",
+        bind_addr, reply_addr
+    );
 
     // Reply success with the bind address
     let mut tcp_stream = protocol
-        .reply_success(bind_addr)
+        .reply_success(reply_addr)
         .await
         .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
@@ -213,6 +222,35 @@ async fn handle_udp_associate(
     }
 
     Ok(())
+}
+
+fn udp_associate_bind_addr(control_local_ip: Option<IpAddr>) -> SocketAddr {
+    match control_local_ip {
+        Some(IpAddr::V6(_)) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        _ => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+    }
+}
+
+fn resolve_udp_associate_reply_addr(
+    bind_addr: SocketAddr,
+    control_local_ip: Option<IpAddr>,
+) -> SocketAddr {
+    if !bind_addr.ip().is_unspecified() {
+        return bind_addr;
+    }
+
+    let bind_is_v4 = bind_addr.is_ipv4();
+    let fallback_ip = if bind_is_v4 {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        IpAddr::V6(Ipv6Addr::LOCALHOST)
+    };
+
+    let reply_ip = control_local_ip
+        .filter(|ip| ip.is_ipv4() == bind_is_v4)
+        .unwrap_or(fallback_ip);
+
+    SocketAddr::new(reply_ip, bind_addr.port())
 }
 
 async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPool>) -> Result<()> {
@@ -460,4 +498,45 @@ fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> {
     }
     packet.extend_from_slice(data);
     Ok(packet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_udp_reply_uses_control_ip_for_unspecified_bind_addr() {
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53000);
+        let control_local_ip = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+        let reply_addr = resolve_udp_associate_reply_addr(bind_addr, control_local_ip);
+
+        assert_eq!(
+            reply_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53000)
+        );
+    }
+
+    #[test]
+    fn resolve_udp_reply_keeps_specific_bind_addr() {
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), 53000);
+        let control_local_ip = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+        let reply_addr = resolve_udp_associate_reply_addr(bind_addr, control_local_ip);
+
+        assert_eq!(reply_addr, bind_addr);
+    }
+
+    #[test]
+    fn resolve_udp_reply_uses_family_safe_fallback() {
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53000);
+        let control_local_ip = Some(IpAddr::V6(Ipv6Addr::LOCALHOST));
+
+        let reply_addr = resolve_udp_associate_reply_addr(bind_addr, control_local_ip);
+
+        assert_eq!(
+            reply_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53000)
+        );
+    }
 }
