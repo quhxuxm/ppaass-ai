@@ -19,6 +19,9 @@ log_level = "debug"
 # Log directory for file-based logging (better performance than console)
 # log_dir = "logs"
 
+# Log file name (used only when log_dir is set)
+# log_file = "proxy.log"
+
 # Compression mode for data transfer: none, zstd, lz4, gzip
 # - none: No compression (default)
 # - zstd: Zstandard compression - good balance of speed and ratio

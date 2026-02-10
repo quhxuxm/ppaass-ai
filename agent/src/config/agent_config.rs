@@ -27,6 +27,10 @@ pub struct AgentConfig {
     /// Log directory for file-based logging (improves performance vs console)
     pub log_dir: Option<String>,
 
+    /// Log file name for file-based logging
+    #[serde(default = "default_log_file")]
+    pub log_file: String,
+
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
     pub runtime_threads: Option<usize>,
@@ -42,6 +46,10 @@ fn default_connect_timeout_secs() -> u64 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_log_file() -> String {
+    "agent.log".to_string()
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {
