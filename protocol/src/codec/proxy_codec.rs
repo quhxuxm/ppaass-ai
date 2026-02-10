@@ -21,10 +21,7 @@ impl Decoder for ProxyCodec {
     type Item = ProxyRequest;
     type Error = io::Error;
 
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
             Some(message) => {
                 let request: ProxyRequest =
@@ -44,11 +41,7 @@ impl Decoder for ProxyCodec {
 impl Encoder<ProxyResponse> for ProxyCodec {
     type Error = io::Error;
 
-    fn encode(
-        &mut self,
-        item: ProxyResponse,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: ProxyResponse, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let message_type = match &item {
             ProxyResponse::Auth(_) => MessageType::AuthResponse,
             ProxyResponse::Connect(_) => MessageType::ConnectResponse,

@@ -42,8 +42,10 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
         self.config
             .upstream_proxy_addrs
             .as_ref()
-            .and_then(|addrs| addrs.choose(&mut rng).cloned())
-            .unwrap_or_default()
+            .expect("validated in ProxyClientConfig::new")
+            .choose(&mut rng)
+            .cloned()
+            .expect("validated non-empty in ProxyClientConfig::new")
     }
 
     fn username(&self) -> String {
@@ -51,7 +53,7 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
             .upstream_username
             .as_ref()
             .cloned()
-            .unwrap_or_default()
+            .expect("validated in ProxyClientConfig::new")
     }
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {

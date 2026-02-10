@@ -12,13 +12,13 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
-    stream::{SplitSink, SplitStream}, SinkExt,
-    StreamExt,
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    crypto::{AesGcmCipher, RsaKeyPair}, Address, AuthRequest, AuthResponse, CipherState, CompressionMode,
-    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse,
-    TransportProtocol,
+    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
+    ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
+    crypto::{AesGcmCipher, RsaKeyPair},
 };
 use std::io;
 use std::sync::Arc;
@@ -214,33 +214,28 @@ impl ServerConnection {
         // Only loops for initial requests (Auth, Connect)
         // Once connected, it hands over to relay and returns.
         loop {
-            match self.reader.next().await {
-                Some(Ok(req)) => {
-                    match req {
-                        ProxyRequest::Connect(connect_request) => {
-                            debug!(
-                                "[CONNECT REQUEST] request_id={}, address={:?}, transport={:?}",
-                                connect_request.request_id,
-                                connect_request.address,
-                                connect_request.transport
-                            );
-                            self.handle_connect(connect_request).await?;
-                            // After relay finishes (connection closed),
-                            // we return to close connection
-                            return Ok(());
-                        }
-                        ProxyRequest::Auth(auth_request) => {
-                            debug!(
-                                "Unexpected Auth request in process loop: {:?}",
-                                auth_request.username
-                            );
-                        }
-                        _ => {
-                            error!("Unexpected request type before Connect");
-                        }
-                    }
+            match self.read_request().await? {
+                Some(ProxyRequest::Connect(connect_request)) => {
+                    debug!(
+                        "[CONNECT REQUEST] request_id={}, address={:?}, transport={:?}",
+                        connect_request.request_id,
+                        connect_request.address,
+                        connect_request.transport
+                    );
+                    self.handle_connect(connect_request).await?;
+                    // After relay finishes (connection closed),
+                    // we return to close connection
+                    return Ok(());
                 }
-                Some(Err(e)) => return Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
+                Some(ProxyRequest::Auth(auth_request)) => {
+                    debug!(
+                        "Unexpected Auth request in process loop: {:?}",
+                        auth_request.username
+                    );
+                }
+                Some(_) => {
+                    error!("Unexpected request type before Connect");
+                }
                 None => return Ok(()), // Agent connection closed
             }
         }
@@ -266,137 +261,107 @@ impl ServerConnection {
 
         // Check if forwarding mode is enabled
         if self.proxy_config.forward_mode {
-            info!("Forwarding request to upstream proxy");
-
-            // Connect to upstream proxy
-            match UpstreamConnection::connect(
-                &self.proxy_config,
-                connect_request.address.clone(),
-                connect_request.transport,
-            )
-            .await
-            {
-                Ok(upstream_conn) => {
-                    info!("Connected to upstream proxy");
-
-                    let connect_response = ConnectResponse {
-                        request_id: connect_request.request_id.clone(),
-                        success: true,
-                        message: "Connected through upstream".to_string(),
-                    };
-
-                    self.send_response(ProxyResponse::Connect(connect_response))
-                        .await?;
-
-                    // Convert upstream connection to IO stream
-                    let mut stream = upstream_conn.into_stream();
-
-                    // Relay data
-                    self.relay(connect_request.request_id, &mut stream).await?;
-                }
-                Err(e) => {
-                    error!("Failed to connect to upstream: {}", e);
-                    self.send_connect_error(
-                        connect_request.request_id,
-                        format!("Upstream error: {}", e),
-                    )
-                    .await?;
-                }
-            }
-            return Ok(());
+            return self.handle_upstream_connect(connect_request).await;
         }
 
-        // Connect to target
-        let target_addr = match &connect_request.address {
-            Address::Domain { host, port } => format!("{}:{}", host, port),
-            Address::Ipv4 { addr, port } => {
-                format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], port)
-            }
-            Address::Ipv6 { addr, port } => {
-                format!(
-                    "[{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}]:{}",
-                    u16::from_be_bytes([addr[0], addr[1]]),
-                    u16::from_be_bytes([addr[2], addr[3]]),
-                    u16::from_be_bytes([addr[4], addr[5]]),
-                    u16::from_be_bytes([addr[6], addr[7]]),
-                    u16::from_be_bytes([addr[8], addr[9]]),
-                    u16::from_be_bytes([addr[10], addr[11]]),
-                    u16::from_be_bytes([addr[12], addr[13]]),
-                    u16::from_be_bytes([addr[14], addr[15]]),
-                    port
-                )
-            }
-        };
-
+        let target_addr = format_target_addr(&connect_request.address);
         match connect_request.transport {
-            TransportProtocol::Tcp => {
-                match TcpStream::connect(&target_addr).await {
-                    Ok(mut target_stream) => {
-                        info!("Connected to target (TCP): {}", target_addr);
+            TransportProtocol::Tcp => self.handle_tcp_connect(connect_request, &target_addr).await,
+            TransportProtocol::Udp => self.handle_udp_connect(connect_request, &target_addr).await,
+        }
+    }
 
-                        let connect_response = ConnectResponse {
-                            request_id: connect_request.request_id.clone(),
-                            success: true,
-                            message: "Connected".to_string(),
-                        };
+    async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
+        info!("Forwarding request to upstream proxy");
 
-                        self.send_response(ProxyResponse::Connect(connect_response))
-                            .await?;
+        match UpstreamConnection::connect(
+            &self.proxy_config,
+            connect_request.address.clone(),
+            connect_request.transport,
+        )
+        .await
+        {
+            Ok(upstream_conn) => {
+                info!("Connected to upstream proxy");
+                self.send_connect_success(
+                    connect_request.request_id.clone(),
+                    "Connected through upstream",
+                )
+                .await?;
 
-                        // Handover to bidirectional relay
-                        self.relay(connect_request.request_id, &mut target_stream)
-                            .await?;
-                    }
-                    Err(e) => {
-                        error!("Failed to connect to target (TCP): {}", e);
-                        self.send_connect_error(
-                            connect_request.request_id,
-                            format!("Failed to connect: {}", e),
-                        )
-                        .await?;
-                    }
-                }
+                let mut stream = upstream_conn.into_stream();
+                self.relay(connect_request.request_id, &mut stream).await?;
             }
-            TransportProtocol::Udp => {
-                debug!("Handling UDP connect request: {connect_request:?}");
-                // Bind to any available port
-                match UdpSocket::bind("0.0.0.0:0").await {
-                    Ok(socket) => {
-                        if let Err(e) = socket.connect(&target_addr).await {
-                            error!("Failed to connect to target (UDP): {}", e);
-                            self.send_connect_error(
-                                connect_request.request_id,
-                                format!("Failed to connect UDP: {}", e),
-                            )
-                            .await?;
-                            return Ok(());
-                        }
+            Err(e) => {
+                error!("Failed to connect to upstream: {}", e);
+                self.send_connect_error(
+                    connect_request.request_id,
+                    format!("Upstream error: {}", e),
+                )
+                .await?;
+            }
+        }
 
-                        info!("Connected to target (UDP): {}", target_addr);
+        Ok(())
+    }
 
-                        let connect_response = ConnectResponse {
-                            request_id: connect_request.request_id.clone(),
-                            success: true,
-                            message: "Connected".to_string(),
-                        };
-                        debug!("Begin to send UDP connect response to agent: {connect_response:?}");
-                        self.send_response(ProxyResponse::Connect(connect_response))
-                            .await?;
-                        debug!(
-                            "Success send UDP connect response to agent, begin to relay UDP data."
-                        );
+    async fn handle_tcp_connect(
+        &mut self,
+        connect_request: ConnectRequest,
+        target_addr: &str,
+    ) -> Result<()> {
+        match TcpStream::connect(target_addr).await {
+            Ok(mut target_stream) => {
+                info!("Connected to target (TCP): {}", target_addr);
+                self.send_connect_success(connect_request.request_id.clone(), "Connected")
+                    .await?;
+                self.relay(connect_request.request_id, &mut target_stream)
+                    .await?;
+            }
+            Err(e) => {
+                error!("Failed to connect to target (TCP): {}", e);
+                self.send_connect_error(
+                    connect_request.request_id,
+                    format!("Failed to connect: {}", e),
+                )
+                .await?;
+            }
+        }
 
-                        self.relay_udp(connect_request.request_id, socket).await?;
-                    }
-                    Err(e) => {
-                        error!("Failed to bind UDP socket: {}", e);
-                        self.send_connect_error(
-                            connect_request.request_id,
-                            format!("Failed to bind UDP: {}", e),
-                        )
-                        .await?;
-                    }
+        Ok(())
+    }
+
+    async fn handle_udp_connect(
+        &mut self,
+        connect_request: ConnectRequest,
+        target_addr: &str,
+    ) -> Result<()> {
+        debug!("Handling UDP connect request: {connect_request:?}");
+
+        match UdpSocket::bind("0.0.0.0:0").await {
+            Ok(socket) => {
+                if let Err(e) = socket.connect(target_addr).await {
+                    error!("Failed to connect to target (UDP): {}", e);
+                    self.send_connect_error(
+                        connect_request.request_id,
+                        format!("Failed to connect UDP: {}", e),
+                    )
+                    .await?;
+                    return Ok(());
                 }
+
+                info!("Connected to target (UDP): {}", target_addr);
+                self.send_connect_success(connect_request.request_id.clone(), "Connected")
+                    .await?;
+                self.relay_udp(connect_request.request_id, socket).await?;
+            }
+            Err(e) => {
+                error!("Failed to bind UDP socket: {}", e);
+                self.send_connect_error(
+                    connect_request.request_id,
+                    format!("Failed to bind UDP: {}", e),
+                )
+                .await?;
             }
         }
 
@@ -586,5 +551,39 @@ impl ServerConnection {
 
         self.send_response(ProxyResponse::Connect(connect_response))
             .await
+    }
+
+    async fn send_connect_success(&mut self, request_id: String, message: &str) -> Result<()> {
+        let connect_response = ConnectResponse {
+            request_id,
+            success: true,
+            message: message.to_string(),
+        };
+
+        self.send_response(ProxyResponse::Connect(connect_response))
+            .await
+    }
+}
+
+fn format_target_addr(address: &Address) -> String {
+    match address {
+        Address::Domain { host, port } => format!("{}:{}", host, port),
+        Address::Ipv4 { addr, port } => {
+            format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], port)
+        }
+        Address::Ipv6 { addr, port } => {
+            format!(
+                "[{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}]:{}",
+                u16::from_be_bytes([addr[0], addr[1]]),
+                u16::from_be_bytes([addr[2], addr[3]]),
+                u16::from_be_bytes([addr[4], addr[5]]),
+                u16::from_be_bytes([addr[6], addr[7]]),
+                u16::from_be_bytes([addr[8], addr[9]]),
+                u16::from_be_bytes([addr[10], addr[11]]),
+                u16::from_be_bytes([addr[12], addr[13]]),
+                u16::from_be_bytes([addr[14], addr[15]]),
+                port
+            )
+        }
     }
 }
