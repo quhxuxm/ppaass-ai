@@ -42,6 +42,10 @@ struct Args {
     #[arg(long)]
     log_dir: Option<String>,
 
+    /// Override log file name
+    #[arg(long)]
+    log_file: Option<String>,
+
     /// Override number of runtime worker threads
     #[arg(long)]
     runtime_threads: Option<usize>,
@@ -70,6 +74,9 @@ fn main() -> Result<()> {
     if let Some(log_dir) = args.log_dir {
         config.log_dir = Some(log_dir);
     }
+    if let Some(log_file) = args.log_file {
+        config.log_file = log_file;
+    }
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
@@ -78,7 +85,11 @@ fn main() -> Result<()> {
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
-    let _guard = init_tracing(config.log_dir.as_deref(), "proxy.log", &config.log_level);
+    let _guard = init_tracing(
+        config.log_dir.as_deref(),
+        &config.log_file,
+        &config.log_level,
+    );
     // Build Tokio runtime with configurable thread count
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
@@ -100,6 +111,9 @@ fn main() -> Result<()> {
             "Log directory: {}",
             config.log_dir.as_deref().unwrap_or("Console")
         );
+        if config.log_dir.is_some() {
+            info!("Log file: {}", config.log_file);
+        }
         if let Some(threads) = config.runtime_threads {
             info!("Runtime threads: {}", threads);
         } else {

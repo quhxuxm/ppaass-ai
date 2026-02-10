@@ -17,6 +17,9 @@ async_runtime_stack_size_mb = 4
 # Log directory for file-based logging (better performance than console)
 # log_dir = "logs"
 
+# Log file name (used only when log_dir is set)
+# log_file = "agent.log"
+
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 # runtime_threads = 4
 

@@ -14,6 +14,9 @@ log_level = "error"
 # Log directory for file-based logging (better performance than console)
 log_dir = "logs"
 
+# Log file name (used only when log_dir is set)
+log_file = "agent.log"
+
 # Maximum size of the async runtime stack in megabytes (default: 4 MB)
 async_runtime_stack_size_mb = 4
 
