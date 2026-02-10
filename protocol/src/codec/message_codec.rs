@@ -1,6 +1,6 @@
 use super::CipherState;
-use crate::compression::{compress, decompress, CompressionMode};
-use crate::message::{Message, MessageType, MAX_MESSAGE_SIZE};
+use crate::compression::{CompressionMode, compress, decompress};
+use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
