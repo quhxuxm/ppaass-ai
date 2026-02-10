@@ -21,9 +21,9 @@ echo Starting Agent...
 if not exist "logs" mkdir "logs"
 
 if defined CONFIG_PATH (
-  start "" /B "%~dp0agent.exe" --config "%CONFIG_PATH%" > "%~dp0logs\agent.out" 2>&1
+  start "" /B "%~dp0agent.exe" --config "%CONFIG_PATH%"
 ) else (
-  start "" /B "%~dp0agent.exe" > "%~dp0logs\agent.out" 2>&1
+  start "" /B "%~dp0agent.exe"
 )
 
 endlocal

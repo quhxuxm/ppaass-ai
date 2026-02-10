@@ -1,5 +1,6 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
+use crate::telemetry;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
@@ -135,11 +136,12 @@ async fn handle_connect(
     };
 
     // Spawn a task to handle the upgraded connection
+    let target = format!("{host}:{port}");
     tokio::spawn(async move {
         match hyper::upgrade::on(&mut req).await {
             Ok(upgraded) => {
                 info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
-                if let Err(e) = tunnel(upgraded, connected_stream).await {
+                if let Err(e) = tunnel(upgraded, connected_stream, target).await {
                     error!("Tunnel error: {}", e);
                 }
             }
@@ -159,6 +161,7 @@ async fn handle_connect(
 async fn tunnel(
     upgraded: Upgraded,
     connected_stream: ConnectedStream,
+    target: String,
 ) -> std::result::Result<(), AgentError> {
     // Convert to AsyncRead + AsyncWrite compatible types
     let mut client_io = TokioIo::new(upgraded);
@@ -175,6 +178,7 @@ async fn tunnel(
                 "CONNECT tunnel closed: {} bytes client->proxy, {} bytes proxy->client",
                 client_to_proxy, proxy_to_client
             );
+            telemetry::emit_traffic("HTTP CONNECT", target, client_to_proxy, proxy_to_client);
         }
         Err(e) => {
             // Connection errors are expected when client closes connection

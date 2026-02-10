@@ -31,8 +31,8 @@ fi
 echo "Starting Agent..."
 mkdir -p logs
 if [ -n "$CONFIG_PATH" ]; then
-    nohup ./agent --config "$CONFIG_PATH" > logs/agent.out 2>&1 &
+    nohup ./agent --config "$CONFIG_PATH"
 else
-    nohup ./agent > logs/agent.out 2>&1 &
+    nohup ./agent
 fi
 echo "Agent started with PID $!"
