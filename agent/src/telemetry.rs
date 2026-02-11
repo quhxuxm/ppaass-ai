@@ -80,12 +80,54 @@ pub fn init_tracing(
     log_file: &str,
     log_level: &str,
     ui_tx: UnboundedSender<UiEvent>,
+    console_port: Option<u16>,
 ) -> Option<WorkerGuard> {
     let ui_writer = UiLogMakeWriter::new(ui_tx);
+
+    #[cfg(feature = "console")]
+    let console_layer = console_port.map(|port| {
+        console_subscriber::ConsoleLayer::builder()
+            .server_addr((std::net::Ipv4Addr::LOCALHOST, port))
+            .spawn()
+    });
+
+    #[cfg(not(feature = "console"))]
+    if console_port.is_some() {
+        eprintln!(
+            "console_port is configured but agent is not built with --features console; tokio-console is disabled"
+        );
+    }
 
     if let Some(log_dir) = log_dir {
         let file_appender = tracing_appender::rolling::daily(log_dir, log_file);
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+        #[cfg(feature = "console")]
+        if let Some(console_layer) = console_layer {
+            tracing_subscriber::registry()
+                .with(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
+                )
+                .with(console_layer)
+                .with(
+                    fmt::layer()
+                        .with_writer(non_blocking)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_line_number(true)
+                        .with_ansi(false),
+                )
+                .with(
+                    fmt::layer()
+                        .with_writer(ui_writer)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_line_number(true)
+                        .with_ansi(false),
+                )
+                .init();
+            return Some(guard);
+        }
 
         tracing_subscriber::registry()
             .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
@@ -108,6 +150,25 @@ pub fn init_tracing(
             .init();
         Some(guard)
     } else {
+        #[cfg(feature = "console")]
+        if let Some(console_layer) = console_layer {
+            tracing_subscriber::registry()
+                .with(
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
+                )
+                .with(console_layer)
+                .with(
+                    fmt::layer()
+                        .with_writer(ui_writer)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_line_number(true)
+                        .with_ansi(false),
+                )
+                .init();
+            return None;
+        }
+
         tracing_subscriber::registry()
             .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
             .with(

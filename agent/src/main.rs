@@ -91,6 +91,7 @@ fn main() -> Result<()> {
         &config.log_file,
         &config.log_level,
         ui_tx,
+        config.console_port,
     );
 
     // Build Tokio runtime with configurable thread count

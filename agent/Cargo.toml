@@ -22,6 +22,8 @@ thiserror.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 console-subscriber = { workspace = true, optional = true }
+console-api = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
 fast-socks5.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -37,5 +39,5 @@ pretty-hex.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 [features]
-default = []
-console = ["dep:console-subscriber"]
+default = ["console"]
+console = ["dep:console-subscriber", "dep:console-api", "dep:tonic"]

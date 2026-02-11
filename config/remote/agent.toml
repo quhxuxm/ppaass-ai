@@ -23,5 +23,6 @@ async_runtime_stack_size_mb = 4
 # Number of Tokio runtime worker threads (defaults to CPU cores if not set)
 # runtime_threads = 4
 
-# Optional: Enable tokio-console for debugging
-# console_port = 6669
+# tokio-console is enabled by default on port 6669
+# Set a custom port if needed
+# console_port = 6679

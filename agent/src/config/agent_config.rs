@@ -17,7 +17,7 @@ pub struct AgentConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    #[serde(default)]
+    #[serde(default = "default_console_port")]
     pub console_port: Option<u16>,
 
     /// Log level: trace, debug, info, warn, error
@@ -46,6 +46,10 @@ fn default_connect_timeout_secs() -> u64 {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_console_port() -> Option<u16> {
+    Some(6669)
 }
 
 fn default_log_file() -> String {
