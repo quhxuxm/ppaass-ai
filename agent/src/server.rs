@@ -5,6 +5,7 @@ use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument};
 
 pub struct AgentServer {
@@ -25,26 +26,36 @@ impl AgentServer {
     }
 
     #[instrument(skip(self))]
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
         info!("Agent server listening on {}", self.config.listen_addr);
 
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    info!("Accepted connection from {}", addr);
-                    let pool = self.pool.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, pool).await {
-                            error!("Error handling connection: {}", e);
-                        }
-                    });
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    info!("Shutdown signal received, stopping listener");
+                    break;
                 }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, addr)) => {
+                            info!("Accepted connection from {}", addr);
+                            let pool = self.pool.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_connection(stream, pool).await {
+                                    error!("Error handling connection: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                        }
+                    }
                 }
             }
         }
+
+        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
+use crate::telemetry;
 use dashmap::DashMap;
 use fast_socks5::server::{
     NoAuthentication, Socks5ServerProtocol, SocksServerError,
@@ -54,6 +55,8 @@ async fn handle_tcp_connect(
     target_addr: TargetAddr,
     pool: Arc<ConnectionPool>,
 ) -> Result<()> {
+    let target_label = format_target_addr(&target_addr);
+
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
 
@@ -87,7 +90,13 @@ async fn handle_tcp_connect(
     info!("SOCKS5 tunnel established, starting data relay");
 
     // Start bidirectional data relay
-    relay_data(&mut client_stream, connected_stream).await
+    relay_data(
+        &mut client_stream,
+        connected_stream,
+        "SOCKS5 CONNECT",
+        target_label,
+    )
+    .await
 }
 
 async fn handle_tcp_bind(
@@ -96,6 +105,7 @@ async fn handle_tcp_bind(
     pool: Arc<ConnectionPool>,
 ) -> Result<()> {
     info!("Handling SOCKS5 BIND command for target: {:?}", target_addr);
+    let target_label = format_target_addr(&target_addr);
 
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
@@ -147,7 +157,13 @@ async fn handle_tcp_bind(
             info!("SOCKS5 BIND tunnel established, starting data relay");
 
             // Start bidirectional data relay
-            relay_data(&mut incoming_stream, connected_stream).await
+            relay_data(
+                &mut incoming_stream,
+                connected_stream,
+                "SOCKS5 BIND",
+                target_label,
+            )
+            .await
         }
         Ok(Err(e)) => {
             error!("Failed to accept incoming connection: {}", e);
@@ -395,9 +411,18 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
     }
 }
 
+fn format_target_addr(target: &TargetAddr) -> String {
+    match target {
+        TargetAddr::Ip(addr) => addr.to_string(),
+        TargetAddr::Domain(host, port) => format!("{host}:{port}"),
+    }
+}
+
 async fn relay_data(
     client_stream: &mut TcpStream,
     connected_stream: ConnectedStream,
+    protocol: &str,
+    target: String,
 ) -> Result<()> {
     // Convert to AsyncRead + AsyncWrite compatible types
     let mut proxy_io = connected_stream.into_async_io();
@@ -413,6 +438,7 @@ async fn relay_data(
                 "SOCKS5 relay completed: {} bytes client->proxy, {} bytes proxy->client",
                 client_to_proxy, proxy_to_client
             );
+            telemetry::emit_traffic(protocol, target, client_to_proxy, proxy_to_client);
         }
         Err(e) => {
             // Connection errors are expected when client closes connection
