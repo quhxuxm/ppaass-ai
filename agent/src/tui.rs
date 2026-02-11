@@ -11,10 +11,13 @@ use crossterm::{
 };
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Cell, Paragraph, Row, Sparkline, Table, Tabs, Wrap},
+    widgets::{
+        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
+        Table, Tabs, Wrap,
+    },
 };
 use std::cmp::Ordering;
 #[cfg(feature = "console")]
@@ -489,6 +492,10 @@ impl App {
     }
 
     fn start_agent(&mut self) {
+        if !self.reload_config_from_file_internal(true) {
+            return;
+        }
+
         if self.server_task.is_some() {
             return;
         }
@@ -554,6 +561,8 @@ impl App {
     }
 
     fn request_stop(&mut self) {
+        let _ = self.reload_config_from_file_internal(true);
+
         if self.server_task.is_none() {
             return;
         }
@@ -1663,9 +1672,13 @@ impl App {
     }
 
     fn reload_config_from_file(&mut self) {
+        let _ = self.reload_config_from_file_internal(false);
+    }
+
+    fn reload_config_from_file_internal(&mut self, for_agent_action: bool) -> bool {
         if self.config_is_editing {
             self.set_config_message("Finish editing first (Enter or Esc).", true);
-            return;
+            return false;
         }
 
         match AgentConfig::load(&self.config_path) {
@@ -1673,16 +1686,28 @@ impl App {
                 self.config = config;
                 self.config_dirty = false;
                 self.sync_ui_state_with_config();
-                self.set_config_message(
-                    format!("Reloaded configuration from {}", self.config_path),
-                    false,
-                );
+                if for_agent_action {
+                    self.set_config_message(
+                        format!(
+                            "Reloaded configuration from {} before agent action",
+                            self.config_path
+                        ),
+                        false,
+                    );
+                } else {
+                    self.set_config_message(
+                        format!("Reloaded configuration from {}", self.config_path),
+                        false,
+                    );
+                }
+                true
             }
             Err(err) => {
                 self.set_config_message(
                     format!("Failed to reload {}: {}", self.config_path, err),
                     true,
                 );
+                false
             }
         }
     }
@@ -1993,6 +2018,14 @@ impl App {
             .scroll((scroll_y, 0))
             .wrap(Wrap { trim: false });
         frame.render_widget(log_view, area);
+        render_vertical_scrollbar(
+            frame,
+            area,
+            self.logs.len(),
+            viewport_lines,
+            scroll_top,
+            Color::Cyan,
+        );
     }
 
     fn render_trends(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -2100,6 +2133,14 @@ impl App {
         .column_spacing(1);
 
         frame.render_widget(table, area);
+        render_vertical_scrollbar(
+            frame,
+            area,
+            self.traffic.len(),
+            viewport_rows,
+            self.traffic_scroll_from_top,
+            Color::Yellow,
+        );
     }
 
     fn last_traffic_samples(&self, max_points: usize) -> Vec<&TrafficRecord> {
@@ -2302,6 +2343,14 @@ impl App {
             .block(Block::bordered().title("Fields"))
             .column_spacing(1);
         frame.render_widget(table, layout.fields_table);
+        render_vertical_scrollbar(
+            frame,
+            layout.fields_table,
+            fields.len(),
+            viewport_rows,
+            self.config_scroll_from_top,
+            Color::Cyan,
+        );
 
         let editor_text = if self.config_is_editing {
             let value_width = layout.editor.width.saturating_sub(12) as usize;
@@ -2512,6 +2561,14 @@ impl App {
         .block(Block::bordered().title(table_title))
         .column_spacing(1);
         frame.render_widget(table, layout.tasks_table);
+        render_vertical_scrollbar(
+            frame,
+            layout.tasks_table,
+            visible_tasks.len(),
+            viewport_rows,
+            self.console_task_scroll_from_top,
+            Color::Cyan,
+        );
 
         let details_text = self.render_console_task_details_text();
         let details_panel = Paragraph::new(details_text)
@@ -2647,6 +2704,36 @@ fn tokio_tasks_table_viewport_rows(area: Rect) -> usize {
 
 fn config_table_viewport_rows(area: Rect) -> usize {
     area.height.saturating_sub(3) as usize
+}
+
+fn render_vertical_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content_length: usize,
+    viewport_length: usize,
+    position: usize,
+    color: Color,
+) {
+    if area.width < 3 || area.height < 4 || content_length <= viewport_length.max(1) {
+        return;
+    }
+
+    let mut scrollbar_state = ScrollbarState::new(content_length)
+        .viewport_content_length(viewport_length.max(1))
+        .position(position.min(content_length.saturating_sub(1)));
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .thumb_style(Style::default().fg(color))
+        .track_style(Style::default().fg(Color::DarkGray));
+    frame.render_stateful_widget(
+        scrollbar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut scrollbar_state,
+    );
 }
 
 fn format_hhmmss(timestamp_secs: u64) -> String {
