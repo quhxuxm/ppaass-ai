@@ -31,6 +31,10 @@ pub struct AgentConfig {
     #[serde(default = "default_log_file")]
     pub log_file: String,
 
+    /// Maximum number of log lines retained in the TUI buffer
+    #[serde(default = "default_log_buffer_lines")]
+    pub log_buffer_lines: usize,
+
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
     pub runtime_threads: Option<usize>,
@@ -56,6 +60,10 @@ fn default_log_file() -> String {
     "agent.log".to_string()
 }
 
+fn default_log_buffer_lines() -> usize {
+    1_000
+}
+
 fn default_async_runtime_stack_size_mb() -> usize {
     4
 }
@@ -65,5 +73,11 @@ impl AgentConfig {
         let content = fs::read_to_string(path)?;
         let config: AgentConfig = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
     }
 }
