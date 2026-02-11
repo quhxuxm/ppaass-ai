@@ -1,6 +1,6 @@
 use crate::config::AgentConfig;
 use crate::server::AgentServer;
-use crate::telemetry::{RuntimeStatus, TrafficRecord, UiEvent, emit_status};
+use crate::telemetry::{RuntimeStatus, TrafficRecord, UiEvent, emit_status, reload_log_level};
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -1683,6 +1683,16 @@ impl App {
 
         match AgentConfig::load(&self.config_path) {
             Ok(config) => {
+                if let Err(err) = reload_log_level(&config.log_level) {
+                    self.set_config_message(
+                        format!(
+                            "Failed to apply log_level from {}: {}",
+                            self.config_path, err
+                        ),
+                        true,
+                    );
+                    return false;
+                }
                 self.config = config;
                 self.config_dirty = false;
                 self.sync_ui_state_with_config();
