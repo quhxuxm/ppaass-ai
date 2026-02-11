@@ -5,8 +5,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 #[derive(Debug, Clone)]
 pub enum RuntimeStatus {
@@ -46,6 +47,8 @@ pub enum UiEvent {
 }
 
 static UI_EVENT_TX: OnceLock<UnboundedSender<UiEvent>> = OnceLock::new();
+type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
+static FILTER_RELOAD_HANDLE: OnceLock<FilterReloadHandle> = OnceLock::new();
 
 pub fn install_event_sender(tx: UnboundedSender<UiEvent>) {
     let _ = UI_EVENT_TX.set(tx);
@@ -104,10 +107,10 @@ pub fn init_tracing(
 
         #[cfg(feature = "console")]
         if let Some(console_layer) = console_layer {
+            let (filter_layer, filter_handle) = reload_filter_layer(log_level);
+            let _ = FILTER_RELOAD_HANDLE.set(filter_handle);
             tracing_subscriber::registry()
-                .with(
-                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
-                )
+                .with(filter_layer)
                 .with(console_layer)
                 .with(
                     fmt::layer()
@@ -129,8 +132,10 @@ pub fn init_tracing(
             return Some(guard);
         }
 
+        let (filter_layer, filter_handle) = reload_filter_layer(log_level);
+        let _ = FILTER_RELOAD_HANDLE.set(filter_handle);
         tracing_subscriber::registry()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
+            .with(filter_layer)
             .with(
                 fmt::layer()
                     .with_writer(non_blocking)
@@ -152,10 +157,10 @@ pub fn init_tracing(
     } else {
         #[cfg(feature = "console")]
         if let Some(console_layer) = console_layer {
+            let (filter_layer, filter_handle) = reload_filter_layer(log_level);
+            let _ = FILTER_RELOAD_HANDLE.set(filter_handle);
             tracing_subscriber::registry()
-                .with(
-                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
-                )
+                .with(filter_layer)
                 .with(console_layer)
                 .with(
                     fmt::layer()
@@ -169,8 +174,10 @@ pub fn init_tracing(
             return None;
         }
 
+        let (filter_layer, filter_handle) = reload_filter_layer(log_level);
+        let _ = FILTER_RELOAD_HANDLE.set(filter_handle);
         tracing_subscriber::registry()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
+            .with(filter_layer)
             .with(
                 fmt::layer()
                     .with_writer(ui_writer)
@@ -182,6 +189,25 @@ pub fn init_tracing(
             .init();
         None
     }
+}
+
+fn reload_filter_layer(
+    log_level: &str,
+) -> (reload::Layer<EnvFilter, Registry>, FilterReloadHandle) {
+    let initial_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
+    reload::Layer::new(initial_filter)
+}
+
+pub fn reload_log_level(log_level: &str) -> std::result::Result<(), String> {
+    let Some(handle) = FILTER_RELOAD_HANDLE.get() else {
+        return Err("log filter reload handle is not initialized".to_string());
+    };
+    let filter = EnvFilter::try_new(log_level)
+        .map_err(|err| format!("invalid log_level '{}': {err}", log_level))?;
+    handle
+        .reload(filter)
+        .map_err(|err| format!("failed to reload log filter: {err}"))
 }
 
 fn now_secs() -> u64 {

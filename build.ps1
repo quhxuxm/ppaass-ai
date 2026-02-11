@@ -1,6 +1,13 @@
 # Build all components
 Write-Host "Building PPAASS project..." -ForegroundColor Green
 
+# tokio-console task instrumentation requires tokio_unstable at compile time.
+if ($env:RUSTFLAGS) {
+    $env:RUSTFLAGS = "$env:RUSTFLAGS --cfg tokio_unstable"
+} else {
+    $env:RUSTFLAGS = "--cfg tokio_unstable"
+}
+
 # Build protocol first
 Write-Host "`nBuilding protocol..." -ForegroundColor Cyan
 cargo build --release -p protocol

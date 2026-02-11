@@ -2,6 +2,9 @@
 
 echo "Building PPAASS project..."
 
+# tokio-console task instrumentation requires tokio_unstable at compile time.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg tokio_unstable"
+
 # Build protocol first
 echo -e "\nBuilding protocol..."
 cargo build --release -p protocol

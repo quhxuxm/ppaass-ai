@@ -48,6 +48,10 @@ struct Args {
     #[arg(long)]
     log_file: Option<String>,
 
+    /// Override TUI log buffer line limit (minimum: 1)
+    #[arg(long)]
+    log_buffer_lines: Option<usize>,
+
     /// Override number of runtime worker threads
     #[arg(long)]
     runtime_threads: Option<usize>,
@@ -77,6 +81,9 @@ fn main() -> Result<()> {
     if let Some(log_file) = args.log_file {
         config.log_file = log_file;
     }
+    if let Some(log_buffer_lines) = args.log_buffer_lines {
+        config.log_buffer_lines = log_buffer_lines.max(1);
+    }
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
@@ -105,5 +112,6 @@ fn main() -> Result<()> {
     }
 
     let runtime = runtime_builder.build()?;
-    runtime.block_on(async { tui::run(config, ui_rx).await })
+    let config_path = args.config;
+    runtime.block_on(async { tui::run(config, config_path, ui_rx).await })
 }
