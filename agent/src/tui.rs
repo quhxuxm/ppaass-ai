@@ -15,8 +15,8 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{
-        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
-        Table, Tabs, Wrap,
+        Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Sparkline, Table, Tabs, Wrap,
     },
 };
 use std::cmp::Ordering;
@@ -417,6 +417,8 @@ struct App {
     log_height_percent: u16,
     is_resizing_trends_split: bool,
     is_resizing_log_split: bool,
+    is_hovering_trends_split: bool,
+    is_hovering_log_split: bool,
     log_scroll_from_bottom: usize,
     traffic_scroll_from_top: usize,
     config_selected_index: usize,
@@ -471,6 +473,8 @@ impl App {
             log_height_percent: LOG_HEIGHT_DEFAULT_PERCENT,
             is_resizing_trends_split: false,
             is_resizing_log_split: false,
+            is_hovering_trends_split: false,
+            is_hovering_log_split: false,
             log_scroll_from_bottom: 0,
             traffic_scroll_from_top: 0,
             config_selected_index: 0,
@@ -781,6 +785,8 @@ impl App {
         let left_release = matches!(mouse_event.kind, MouseEventKind::Up(MouseButton::Left));
 
         if self.active_tab == AppTab::TokioConsole {
+            self.is_hovering_trends_split = false;
+            self.is_hovering_log_split = false;
             if let Some(layout) = self.current_tokio_console_layout_rects() {
                 match mouse_event.kind {
                     MouseEventKind::ScrollUp
@@ -821,6 +827,8 @@ impl App {
         }
 
         if self.active_tab == AppTab::Config {
+            self.is_hovering_trends_split = false;
+            self.is_hovering_log_split = false;
             if let Some(layout) = self.current_config_layout_rects() {
                 match mouse_event.kind {
                     MouseEventKind::ScrollUp
@@ -862,6 +870,8 @@ impl App {
         }
 
         let Some(layout) = self.current_agent_layout_rects() else {
+            self.is_hovering_trends_split = false;
+            self.is_hovering_log_split = false;
             if left_release {
                 self.is_resizing_trends_split = false;
                 self.is_resizing_log_split = false;
@@ -871,6 +881,8 @@ impl App {
 
         let body = layout.body;
         if body.width < 10 || body.height < 6 {
+            self.is_hovering_trends_split = false;
+            self.is_hovering_log_split = false;
             if left_release {
                 self.is_resizing_trends_split = false;
                 self.is_resizing_log_split = false;
@@ -880,17 +892,19 @@ impl App {
 
         let split_y = layout.logs.y;
         let split_x = layout.sessions.x;
+        let in_top_rows = mouse_event.row >= layout.top.y
+            && mouse_event.row < layout.top.y.saturating_add(layout.top.height);
+        let near_vertical_split = mouse_event.column >= split_x.saturating_sub(1)
+            && mouse_event.column <= split_x.saturating_add(1);
+        let in_body_cols = mouse_event.column >= body.x
+            && mouse_event.column < body.x.saturating_add(body.width);
+        let near_horizontal_split = mouse_event.row >= split_y.saturating_sub(1)
+            && mouse_event.row <= split_y.saturating_add(1);
+        self.is_hovering_trends_split = in_top_rows && near_vertical_split;
+        self.is_hovering_log_split = in_body_cols && near_horizontal_split;
 
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let in_top_rows = mouse_event.row >= layout.top.y
-                    && mouse_event.row < layout.top.y.saturating_add(layout.top.height);
-                let near_vertical_split = mouse_event.column >= split_x.saturating_sub(1)
-                    && mouse_event.column <= split_x.saturating_add(1);
-                let in_body_cols = mouse_event.column >= body.x
-                    && mouse_event.column < body.x.saturating_add(body.width);
-                let near_horizontal_split = mouse_event.row >= split_y.saturating_sub(1)
-                    && mouse_event.row <= split_y.saturating_add(1);
                 if in_top_rows && near_vertical_split {
                     self.is_resizing_trends_split = true;
                     self.is_resizing_log_split = false;
@@ -902,6 +916,14 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.is_resizing_trends_split {
+                    self.update_trends_width_from_mouse(mouse_event.column, layout.top);
+                } else if self.is_resizing_log_split {
+                    self.update_log_height_from_mouse(mouse_event.row, body);
+                }
+            }
+            MouseEventKind::Moved => {
+                // Some terminals emit Moved (instead of Drag) while the left button is held.
                 if self.is_resizing_trends_split {
                     self.update_trends_width_from_mouse(mouse_event.column, layout.top);
                 } else if self.is_resizing_log_split {
@@ -1923,9 +1945,12 @@ impl App {
         match self.active_tab {
             AppTab::Agent => {
                 let layout = self.agent_layout_from_body(root[2]);
+                let highlight_trends_split =
+                    self.is_hovering_trends_split || self.is_resizing_trends_split;
+                let highlight_log_split = self.is_hovering_log_split || self.is_resizing_log_split;
                 self.render_trends(frame, layout.trends);
-                self.render_traffic_table(frame, layout.sessions_table);
-                self.render_logs(frame, layout.logs);
+                self.render_traffic_table(frame, layout.sessions_table, highlight_trends_split);
+                self.render_logs(frame, layout.logs, highlight_log_split);
             }
             AppTab::TokioConsole => self.render_tokio_console_tab(frame, root[2]),
             AppTab::Config => self.render_config_tab(frame, root[2]),
@@ -1995,7 +2020,7 @@ impl App {
         frame.render_widget(widget, area);
     }
 
-    fn render_logs(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_logs(&mut self, frame: &mut Frame, area: ratatui::layout::Rect, highlight_edge: bool) {
         let viewport_lines = area.height.saturating_sub(2) as usize;
         let max_scroll = self.max_log_scroll(viewport_lines);
         self.clamp_log_scroll(viewport_lines);
@@ -2028,6 +2053,14 @@ impl App {
             .scroll((scroll_y, 0))
             .wrap(Wrap { trim: false });
         frame.render_widget(log_view, area);
+        if highlight_edge {
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(Color::LightCyan)),
+                area,
+            );
+        }
         render_vertical_scrollbar(
             frame,
             area,
@@ -2078,7 +2111,12 @@ impl App {
         frame.render_widget(inbound_graph, sections[1]);
     }
 
-    fn render_traffic_table(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_traffic_table(
+        &mut self,
+        frame: &mut Frame,
+        area: ratatui::layout::Rect,
+        highlight_edge: bool,
+    ) {
         let viewport_rows = traffic_table_viewport_rows(area);
         self.clamp_traffic_scroll(viewport_rows);
 
@@ -2143,6 +2181,14 @@ impl App {
         .column_spacing(1);
 
         frame.render_widget(table, area);
+        if highlight_edge {
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_style(Style::default().fg(Color::LightCyan)),
+                area,
+            );
+        }
         render_vertical_scrollbar(
             frame,
             area,
