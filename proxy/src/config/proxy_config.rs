@@ -145,6 +145,12 @@ impl ProxyConfig {
         Ok(config)
     }
 
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+
     /// Get the compression mode as a protocol CompressionMode
     pub fn get_compression_mode(&self) -> protocol::CompressionMode {
         self.compression_mode.parse().unwrap_or_default()

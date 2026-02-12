@@ -10,6 +10,7 @@ use crate::bandwidth::BandwidthMonitor;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
+use crate::telemetry;
 use bytes::Bytes;
 use futures::{
     SinkExt, StreamExt,
@@ -22,6 +23,7 @@ use protocol::{
 };
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
@@ -273,11 +275,13 @@ impl ServerConnection {
 
     async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("Forwarding request to upstream proxy");
+        let target_addr = format_target_addr(&connect_request.address);
+        let transport = connect_request.transport;
 
         match UpstreamConnection::connect(
             &self.proxy_config,
             connect_request.address.clone(),
-            connect_request.transport,
+            transport,
         )
         .await
         {
@@ -290,7 +294,14 @@ impl ServerConnection {
                 .await?;
 
                 let mut stream = upstream_conn.into_stream();
-                self.relay(connect_request.request_id, &mut stream).await?;
+                let protocol = format!("UPSTREAM-{transport:?}");
+                self.relay(
+                    connect_request.request_id,
+                    &mut stream,
+                    protocol.as_str(),
+                    &target_addr,
+                )
+                .await?;
             }
             Err(e) => {
                 error!("Failed to connect to upstream: {}", e);
@@ -315,8 +326,13 @@ impl ServerConnection {
                 info!("Connected to target (TCP): {}", target_addr);
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
-                self.relay(connect_request.request_id, &mut target_stream)
-                    .await?;
+                self.relay(
+                    connect_request.request_id,
+                    &mut target_stream,
+                    "TCP",
+                    target_addr,
+                )
+                .await?;
             }
             Err(e) => {
                 error!("Failed to connect to target (TCP): {}", e);
@@ -353,7 +369,8 @@ impl ServerConnection {
                 info!("Connected to target (UDP): {}", target_addr);
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
-                self.relay_udp(connect_request.request_id, socket).await?;
+                self.relay_udp(connect_request.request_id, socket, target_addr)
+                    .await?;
             }
             Err(e) => {
                 error!("Failed to bind UDP socket: {}", e);
@@ -369,11 +386,18 @@ impl ServerConnection {
     }
 
     #[instrument(skip(self, udp_socket))]
-    async fn relay_udp(&mut self, stream_id: String, udp_socket: UdpSocket) -> Result<()> {
+    async fn relay_udp(
+        &mut self,
+        stream_id: String,
+        udp_socket: UdpSocket,
+        target_addr: &str,
+    ) -> Result<()> {
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
+        let agent_to_target_bytes = Arc::new(AtomicU64::new(0));
+        let target_to_agent_bytes = Arc::new(AtomicU64::new(0));
 
         // Use a custom Sink implementation
         let sink = BytesToProxyResponseSink {
@@ -418,6 +442,8 @@ impl ServerConnection {
         let udp_socket = Arc::new(udp_socket);
         let udp_recv = udp_socket.clone();
         let udp_send = udp_socket.clone();
+        let agent_to_target_counter = agent_to_target_bytes.clone();
+        let target_to_agent_counter = target_to_agent_bytes.clone();
 
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
 
@@ -437,6 +463,7 @@ impl ServerConnection {
                             debug!("UDP send error: {}", e);
                             break;
                         }
+                        agent_to_target_counter.fetch_add(n as u64, Ordering::Relaxed);
                     }
                     Err(e) => {
                         debug!("Agent read error: {}", e);
@@ -465,6 +492,7 @@ impl ServerConnection {
                             debug!("Agent flush error: {}", e);
                             break;
                         }
+                        target_to_agent_counter.fetch_add(n as u64, Ordering::Relaxed);
                     }
                     Err(e) => {
                         debug!("UDP recv error: {}", e);
@@ -479,11 +507,23 @@ impl ServerConnection {
             _ = udp_to_agent => {}
         }
 
+        telemetry::emit_traffic(
+            "UDP",
+            target_addr,
+            agent_to_target_bytes.load(Ordering::Relaxed),
+            target_to_agent_bytes.load(Ordering::Relaxed),
+        );
         debug!("UDP Relay finished");
         Ok(())
     }
 
-    async fn relay<S>(&mut self, stream_id: String, target_stream: &mut S) -> Result<()>
+    async fn relay<S>(
+        &mut self,
+        stream_id: String,
+        target_stream: &mut S,
+        protocol: &str,
+        target_addr: &str,
+    ) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
@@ -535,7 +575,13 @@ impl ServerConnection {
         let mut agent_io = AgentIo { reader, writer };
 
         match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
-            Ok((up, down)) => debug!("Relay finished: {} up, {} down", up, down),
+            Ok((target_to_agent, agent_to_target)) => {
+                telemetry::emit_traffic(protocol, target_addr, agent_to_target, target_to_agent);
+                debug!(
+                    "Relay finished for {} {}: outbound={}, inbound={}",
+                    protocol, target_addr, agent_to_target, target_to_agent
+                );
+            }
             Err(e) => debug!("Relay error: {}", e),
         }
 

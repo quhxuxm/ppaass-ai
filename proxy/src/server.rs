@@ -7,6 +7,7 @@ use crate::user_manager::UserManager;
 use protocol::CompressionMode;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument};
 
 pub struct ProxyServer {
@@ -43,7 +44,7 @@ impl ProxyServer {
     }
 
     #[instrument(skip(self))]
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
         // Start API server if enabled
         let api_handle = if self.config.enable_api {
             info!("API server enabled, listening on {}", self.config.api_addr);
@@ -53,17 +54,15 @@ impl ProxyServer {
                 self.bandwidth_monitor.clone(),
             );
 
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 if let Err(e) = api_server.run().await {
                     error!("API server error: {}", e);
                 }
-            })
+            });
+            Some(handle)
         } else {
             info!("API server is disabled");
-            // Create a handle that never completes
-            tokio::spawn(async {
-                std::future::pending::<()>().await;
-            })
+            None
         };
 
         // Start proxy server
@@ -72,6 +71,10 @@ impl ProxyServer {
 
         loop {
             tokio::select! {
+                _ = shutdown.cancelled() => {
+                    info!("Shutdown signal received, stopping listener");
+                    break;
+                }
                 result = listener.accept() => {
                     match result {
                         Ok((stream, addr)) => {
@@ -91,15 +94,13 @@ impl ProxyServer {
                         }
                     }
                 }
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Received shutdown signal");
-                    break;
-                }
             }
         }
 
-        // Wait for API server to finish
-        let _ = api_handle.await;
+        if let Some(api_handle) = api_handle {
+            api_handle.abort();
+            let _ = api_handle.await;
+        }
 
         Ok(())
     }

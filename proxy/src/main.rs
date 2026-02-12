@@ -5,10 +5,12 @@ mod connection;
 mod entity;
 mod error;
 mod server;
+mod telemetry;
+mod tui;
 mod user_manager;
 
 use crate::config::{ProxyConfig, UsersConfig};
-use crate::server::ProxyServer;
+use crate::telemetry::UiEvent;
 use crate::user_manager::UserManager;
 use anyhow::Result;
 use clap::Parser;
@@ -85,12 +87,37 @@ fn main() -> Result<()> {
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
-    let _guard = init_tracing(
-        config.log_dir.as_deref(),
-        &config.log_file,
-        &config.log_level,
-    );
-    // Build Tokio runtime with configurable thread count
+
+    if let Some(users_toml_path) = args.migrate_users {
+        let _guard = init_tracing(
+            config.log_dir.as_deref(),
+            &config.log_file,
+            &config.log_level,
+        );
+        let runtime = build_runtime(&config)?;
+        runtime.block_on(async {
+            info!("Migrating users from {} to database", users_toml_path);
+            migrate_users_from_toml(&config, &users_toml_path).await?;
+            info!("User migration completed successfully");
+            Ok(())
+        })
+    } else {
+        let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<UiEvent>();
+        telemetry::install_event_sender(ui_tx.clone());
+        let _guard = telemetry::init_tracing(
+            config.log_dir.as_deref(),
+            &config.log_file,
+            &config.log_level,
+            ui_tx,
+            config.console_port,
+        );
+        let runtime = build_runtime(&config)?;
+        let config_path = args.config;
+        runtime.block_on(async { tui::run(config, config_path, ui_rx).await })
+    }
+}
+
+fn build_runtime(config: &ProxyConfig) -> Result<tokio::runtime::Runtime> {
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
     runtime_builder.enable_all();
@@ -100,46 +127,7 @@ fn main() -> Result<()> {
         runtime_builder.worker_threads(threads);
     }
 
-    let runtime = runtime_builder.build()?;
-
-    runtime.block_on(async {
-        info!("Starting PPAASS Proxy");
-        info!("Listen address: {}", config.listen_addr);
-        info!("API address: {}", config.api_addr);
-        info!("Log level: {}", config.log_level);
-        info!(
-            "Log directory: {}",
-            config.log_dir.as_deref().unwrap_or("Console")
-        );
-        if config.log_dir.is_some() {
-            info!("Log file: {}", config.log_file);
-        }
-        if let Some(threads) = config.runtime_threads {
-            info!("Runtime threads: {}", threads);
-        } else {
-            info!("Runtime threads: default (CPU cores)");
-        }
-
-        // Handle user migration if requested
-        if let Some(users_toml_path) = args.migrate_users {
-            info!("Migrating users from {} to database", users_toml_path);
-            migrate_users_from_toml(&config, &users_toml_path).await?;
-            info!("User migration completed successfully");
-            return Ok(());
-        }
-
-        // Initialize tokio-console if configured
-        #[cfg(feature = "console")]
-        if let Some(console_port) = config.console_port {
-            info!("Starting tokio-console on port {}", console_port);
-            console_subscriber::init();
-        }
-
-        // Start proxy server
-        let server = ProxyServer::new(config).await?;
-        server.run().await?;
-        Ok(())
-    })
+    runtime_builder.build().map_err(Into::into)
 }
 
 #[instrument(skip(config))]

@@ -36,6 +36,8 @@ chrono.workspace = true
 mimalloc.workspace = true
 rand.workspace = true
 pretty-hex.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
 [features]
 default = []
 console = ["dep:console-subscriber"]
