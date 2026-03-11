@@ -14,6 +14,7 @@ pub struct BytesToProxyResponseSink<'a> {
     pub stream_id: String,
     pub username: Option<String>,
     pub bandwidth_monitor: Arc<BandwidthMonitor>,
+    pub end_sent: bool,
 }
 
 impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
@@ -44,6 +45,22 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if !self.end_sent {
+            match Pin::new(&mut self.inner).poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    let packet = DataPacket {
+                        stream_id: self.stream_id.clone(),
+                        data: Vec::new(),
+                        is_end: true,
+                    };
+                    Pin::new(&mut self.inner).start_send(ProxyResponse::Data(packet))?;
+                    self.end_sent = true;
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         Pin::new(&mut self.inner).poll_close(cx)
     }
 }

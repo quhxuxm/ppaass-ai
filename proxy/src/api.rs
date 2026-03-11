@@ -177,13 +177,16 @@ async fn remove_user(
         .remove_user(&request.username)
         .await
     {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(GenericResponse {
-                success: true,
-                message: format!("User {} removed successfully", request.username),
-            }),
-        ),
+        Ok(_) => {
+            state.bandwidth_monitor.unregister_user(&request.username);
+            (
+                StatusCode::OK,
+                Json(GenericResponse {
+                    success: true,
+                    message: format!("User {} removed successfully", request.username),
+                }),
+            )
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(GenericResponse {
