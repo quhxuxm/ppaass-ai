@@ -381,34 +381,49 @@ impl ServerConnection {
             stream_id: stream_id.clone(),
             username: username.clone(),
             bandwidth_monitor: self.bandwidth_monitor.clone(),
+            end_sent: false,
         };
 
-        let stream = (&mut self.reader).filter_map(move |res| {
-            let user = username_stream.as_ref();
-            let monitor = &monitor_stream;
-
-            let result = match res {
-                Ok(ProxyRequest::Data(packet)) => {
-                    // Only process data packets for this stream
-                    debug!(
-                        packet.stream_id,
-                        stream_id_filter, "Receive UDP data packet from agent: {packet:?}"
-                    );
-                    if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
-                        if let Some(u) = user {
-                            monitor.record_received(u, packet.data.len() as u64);
-                        }
-                        Some(Ok(Bytes::from(packet.data)))
-                    } else {
-                        None
+        let stream_id_stop = stream_id.clone();
+        let stream = (&mut self.reader)
+            .take_while(move |res| {
+                let continue_stream = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        !(packet.stream_id == stream_id_stop
+                            && packet.is_end
+                            && packet.data.is_empty())
                     }
-                }
-                Ok(_) => None,
-                Err(e) => Some(Err(io::Error::other(e))),
-            };
+                    Ok(_) => true,
+                    Err(_) => true,
+                };
+                futures::future::ready(continue_stream)
+            })
+            .filter_map(move |res| {
+                let user = username_stream.as_ref();
+                let monitor = &monitor_stream;
 
-            futures::future::ready(result)
-        });
+                let result = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        // Only process data packets for this stream
+                        debug!(
+                            packet.stream_id,
+                            stream_id_filter, "Receive UDP data packet from agent: {packet:?}"
+                        );
+                        if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
+                            if let Some(u) = user {
+                                monitor.record_received(u, packet.data.len() as u64);
+                            }
+                            Some(Ok(Bytes::from(packet.data)))
+                        } else {
+                            None
+                        }
+                    }
+                    Ok(_) => None,
+                    Err(e) => Some(Err(io::Error::other(e))),
+                };
+
+                futures::future::ready(result)
+            });
 
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
@@ -498,36 +513,50 @@ impl ServerConnection {
             stream_id: stream_id.clone(),
             username: username.clone(),
             bandwidth_monitor: self.bandwidth_monitor.clone(),
+            end_sent: false,
         };
 
-        let stream = (&mut self.reader).filter_map(move |res| {
-            let user = username_stream.as_ref();
-            let monitor = &monitor_stream;
+        let stream_id_stop = stream_id.clone();
+        let stream = (&mut self.reader)
+            .take_while(move |res| {
+                let continue_stream = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        !(packet.stream_id == stream_id_stop
+                            && packet.is_end
+                            && packet.data.is_empty())
+                    }
+                    Ok(_) => true,
+                    Err(_) => true,
+                };
+                futures::future::ready(continue_stream)
+            })
+            .filter_map(move |res| {
+                let user = username_stream.as_ref();
+                let monitor = &monitor_stream;
 
-            let result = match res {
-                Ok(ProxyRequest::Data(packet)) => {
-                    // Only process data packets for this stream
-                    if packet.stream_id == stream_id_filter {
-                        if !packet.data.is_empty() {
-                            if let Some(u) = user {
-                                monitor.record_received(u, packet.data.len() as u64);
+                let result = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        // Only process data packets for this stream
+                        if packet.stream_id == stream_id_filter {
+                            if !packet.data.is_empty() {
+                                if let Some(u) = user {
+                                    monitor.record_received(u, packet.data.len() as u64);
+                                }
+                                Some(Ok(Bytes::from(packet.data)))
+                            } else {
+                                None
                             }
-                            Some(Ok(Bytes::from(packet.data)))
                         } else {
-                            // Empty data or is_end=true: ignore, let TCP FIN handle EOF
+                            // Data for a different stream, skip it
                             None
                         }
-                    } else {
-                        // Data for a different stream, skip it
-                        None
                     }
-                }
-                Ok(_) => None, // Ignore non-Data packets
-                Err(e) => Some(Err(io::Error::other(e))),
-            };
+                    Ok(_) => None, // Ignore non-Data packets
+                    Err(e) => Some(Err(io::Error::other(e))),
+                };
 
-            futures::future::ready(result)
-        });
+                futures::future::ready(result)
+            });
 
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);

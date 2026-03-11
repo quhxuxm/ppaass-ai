@@ -32,6 +32,10 @@ impl BandwidthMonitor {
         self.user_bandwidth.insert(username, user_bandwidth);
     }
 
+    pub fn unregister_user(&self, username: &str) -> bool {
+        self.user_bandwidth.remove(username).is_some()
+    }
+
     pub fn record_sent(&self, username: &str, bytes: u64) {
         if let Some(entry) = self.user_bandwidth.get(username) {
             entry.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
@@ -93,5 +97,23 @@ impl BandwidthMonitor {
 impl Default for BandwidthMonitor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BandwidthMonitor;
+
+    #[test]
+    fn unregister_user_removes_bandwidth_entry() {
+        let monitor = BandwidthMonitor::new();
+        monitor.register_user("alice".to_string(), Some(100));
+        monitor.record_sent("alice", 64);
+        monitor.record_received("alice", 32);
+
+        assert_eq!(monitor.get_all_stats().len(), 1);
+        assert!(monitor.unregister_user("alice"));
+        assert!(monitor.get_all_stats().is_empty());
+        assert!(!monitor.unregister_user("alice"));
     }
 }
