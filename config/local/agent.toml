@@ -29,3 +29,38 @@ async_runtime_stack_size_mb = 4
 # tokio-console is enabled by default on port 6669
 # Set a custom port if needed
 # console_port = 6679
+
+# Direct Access Configuration
+# ============================
+# Controls whether certain targets are accessed directly (bypassing proxy)
+# or through the proxy tunnel.
+#
+# mode options:
+#   "proxy_all"  - All traffic goes through proxy (default, no bypass)
+#   "direct_all" - All traffic is accessed directly (proxy is not used)
+#   "rules"      - Use the rules list to decide per-target
+#
+# rules format (only used when mode = "rules"):
+#   - Exact domain:    "localhost", "example.com"
+#   - Wildcard domain: "*.local", "*.internal.company.com"
+#   - Exact IP:        "127.0.0.1", "::1"
+#   - CIDR range:      "10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"
+
+# [direct_access]
+# mode = "rules"
+# rules = [
+#    "localhost",
+#    "*.local",
+#    "*.isoftbet.com",
+#    "*.lab.wagerworks.com",
+#    "*.corp.wagerworks.com",
+#    "*.igt.com",
+#    "10.76.0.0/16",
+#    "127.0.0.0/8",
+#    "10.0.0.0/8",
+#    "172.16.0.0/12",
+#    "192.168.0.0/16",
+#    "::1",
+#    "63.183.31.0/8",
+# ]
+

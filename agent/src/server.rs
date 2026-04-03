@@ -1,5 +1,6 @@
 use crate::config::AgentConfig;
 use crate::connection_pool::ConnectionPool;
+use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
@@ -11,18 +12,24 @@ use tracing::{error, info, instrument};
 pub struct AgentServer {
     config: Arc<AgentConfig>,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 }
 
 impl AgentServer {
     #[instrument(skip(config))]
     pub async fn new(config: AgentConfig) -> Result<Self> {
+        let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
         let pool = Arc::new(ConnectionPool::new(config.clone()));
 
         // Prewarm the pool
         pool.prewarm().await;
 
-        Ok(Self { config, pool })
+        Ok(Self {
+            config,
+            pool,
+            direct_checker,
+        })
     }
 
     #[instrument(skip(self))]
@@ -41,8 +48,9 @@ impl AgentServer {
                         Ok((stream, addr)) => {
                             info!("Accepted connection from {}", addr);
                             let pool = self.pool.clone();
+                            let direct_checker = self.direct_checker.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, pool).await {
+                                if let Err(e) = handle_connection(stream, pool, direct_checker).await {
                                     error!("Error handling connection: {}", e);
                                 }
                             });
@@ -59,18 +67,22 @@ impl AgentServer {
     }
 }
 
-#[instrument(skip(stream, pool))]
-async fn handle_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
+#[instrument(skip(stream, pool, direct_checker))]
+async fn handle_connection(
+    stream: TcpStream,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
     // Detect protocol by peeking at the first byte
     let mut buffer = [0u8; 1];
     stream.peek(&mut buffer).await?;
 
     match buffer[0] {
         // SOCKS5 version byte is 0x05
-        0x05 => handle_socks5_connection(stream, pool).await,
+        0x05 => handle_socks5_connection(stream, pool, direct_checker).await,
         // HTTP methods start with letters (G, P, C, etc.)
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
-            handle_http_connection(stream, pool).await
+            handle_http_connection(stream, pool, direct_checker).await
         }
         _ => {
             error!("Unknown protocol, first byte: 0x{:02x}", buffer[0]);

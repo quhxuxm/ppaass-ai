@@ -1,4 +1,5 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
+use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use bytes::Bytes;
@@ -60,16 +61,22 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     (host, port)
 }
 
-#[instrument(skip(stream, pool))]
-pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
+#[instrument(skip(stream, pool, direct_checker))]
+pub async fn handle_http_connection(
+    stream: TcpStream,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
     info!("Handling HTTP connection");
 
     let io = TokioIo::new(stream);
     let pool_clone = pool.clone();
+    let checker_clone = direct_checker.clone();
 
     let service = service_fn(move |req| {
         let pool = pool_clone.clone();
-        async move { handle_http_request(req, pool).await }
+        let checker = checker_clone.clone();
+        async move { handle_http_request(req, pool, checker).await }
     });
 
     let conn = http1::Builder::new()
@@ -86,19 +93,21 @@ pub async fn handle_http_connection(stream: TcpStream, pool: Arc<ConnectionPool>
 async fn handle_http_request(
     req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("HTTP request: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
-        handle_connect(req, pool).await
+        handle_connect(req, pool, direct_checker).await
     } else {
-        handle_regular_request(req, pool).await
+        handle_regular_request(req, pool, direct_checker).await
     }
 }
 
 async fn handle_connect(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri().clone();
     let host = uri.host().unwrap_or("").to_string();
@@ -111,51 +120,79 @@ async fn handle_connect(
         port,
     };
 
-    // Get connected stream from pool
-    let connected_stream = match pool
-        .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
-        .await
-    {
-        Ok(stream) => {
-            info!(
-                "Got connected stream from pool, stream_id: {}",
-                stream.stream_id()
-            );
-            stream
-        }
-        Err(e) => {
-            error!("Failed to get stream from pool: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(boxed(
-                    Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {}),
-                ))
-                .unwrap());
-        }
-    };
-
-    // Spawn a task to handle the upgraded connection
     let target = format!("{host}:{port}");
-    tokio::spawn(async move {
-        match hyper::upgrade::on(&mut req).await {
-            Ok(upgraded) => {
-                info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
-                if let Err(e) = tunnel(upgraded, connected_stream, target).await {
-                    error!("Tunnel error: {}", e);
+
+    if direct_checker.is_direct(&address) {
+        // === Direct access path: connect to target directly ===
+        info!("CONNECT using DIRECT connection to {}", target);
+
+        let target_for_spawn = target.clone();
+        tokio::spawn(async move {
+            match hyper::upgrade::on(&mut req).await {
+                Ok(upgraded) => {
+                    info!(
+                        "HTTP CONNECT upgrade successful (direct) for {}:{}",
+                        host, port
+                    );
+                    if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
+                        error!("Direct tunnel error: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!("HTTP CONNECT upgrade failed: {}", e);
                 }
             }
-            Err(e) => {
-                error!("HTTP CONNECT upgrade failed: {}", e);
-            }
-        }
-    });
+        });
 
-    // Send 200 Connection Established response
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .body(empty())
-        .unwrap())
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(empty())
+            .unwrap())
+    } else {
+        // === Proxy access path: connect through proxy tunnel ===
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
+        {
+            Ok(stream) => {
+                info!(
+                    "Got connected stream from pool, stream_id: {}",
+                    stream.stream_id()
+                );
+                stream
+            }
+            Err(e) => {
+                error!("Failed to get stream from pool: {}", e);
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(boxed(
+                        Full::new(Bytes::from("Failed to connect to proxy"))
+                            .map_err(|e| match e {}),
+                    ))
+                    .unwrap());
+            }
+        };
+
+        tokio::spawn(async move {
+            match hyper::upgrade::on(&mut req).await {
+                Ok(upgraded) => {
+                    info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
+                    if let Err(e) = tunnel(upgraded, connected_stream, target).await {
+                        error!("Tunnel error: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!("HTTP CONNECT upgrade failed: {}", e);
+                }
+            }
+        });
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(empty())
+            .unwrap())
+    }
 }
 
 async fn tunnel(
@@ -189,9 +226,39 @@ async fn tunnel(
     Ok(())
 }
 
+/// Direct tunnel: connect to target directly without proxy
+async fn tunnel_direct(
+    upgraded: Upgraded,
+    target: &str,
+) -> std::result::Result<(), AgentError> {
+    let mut client_io = TokioIo::new(upgraded);
+    let mut target_stream = TcpStream::connect(target).await?;
+
+    match tokio::io::copy_bidirectional(&mut client_io, &mut target_stream).await {
+        Ok((client_to_target, target_to_client)) => {
+            info!(
+                "Direct CONNECT tunnel closed: {} bytes client->target, {} bytes target->client",
+                client_to_target, target_to_client
+            );
+            telemetry::emit_traffic(
+                "HTTP CONNECT (direct)",
+                target,
+                client_to_target,
+                target_to_client,
+            );
+        }
+        Err(e) => {
+            debug!("Direct CONNECT tunnel ended: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_regular_request(
     mut req: Request<Incoming>,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri();
 
@@ -214,27 +281,6 @@ async fn handle_regular_request(
         port,
     };
 
-    // Get connected stream from pool
-    let connected_stream = match pool
-        .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
-        .await
-    {
-        Ok(stream) => stream,
-        Err(e) => {
-            error!("Failed to get stream from pool: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(boxed(
-                    Full::new(Bytes::from("Failed to connect to proxy")).map_err(|e| match e {}),
-                ))
-                .unwrap());
-        }
-    };
-
-    // Convert into async IO
-    let proxy_io = connected_stream.into_async_io();
-
     // Fix up the URI to be a relative path (origin-form) for the target server
     let path = req
         .uri()
@@ -246,23 +292,82 @@ async fn handle_regular_request(
         *req.uri_mut() = new_uri;
     }
 
-    // Handshake with the target (via proxy tunnel)
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
+    if direct_checker.is_direct(&address) {
+        // === Direct access path: connect to target directly ===
+        let target = address_to_string(&address);
+        info!("HTTP request using DIRECT connection to {}", target);
 
-    tokio::spawn(async move {
-        if let Err(err) = conn.await {
-            error!("Connection failed: {:?}", err);
-        }
-    });
+        let target_stream = match TcpStream::connect(&target).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to connect directly to {}: {}", target, e);
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(boxed(
+                        Full::new(Bytes::from("Failed to connect to target"))
+                            .map_err(|e| match e {}),
+                    ))
+                    .unwrap());
+            }
+        };
 
-    // Send the request
-    let response = sender.send_request(req).await?;
+        // Handshake with the target directly
+        let (mut sender, conn) =
+            hyper::client::conn::http1::handshake(TokioIo::new(target_stream)).await?;
 
-    // Convert the response body to our BoxBody type
-    let (parts, body) = response.into_parts();
-    let body = boxed(body);
+        tokio::spawn(async move {
+            if let Err(err) = conn.await {
+                error!("Direct connection failed: {:?}", err);
+            }
+        });
 
-    Ok(Response::from_parts(parts, body))
+        let response = sender.send_request(req).await?;
+        let (parts, body) = response.into_parts();
+        let body = boxed(body);
+
+        Ok(Response::from_parts(parts, body))
+    } else {
+        // === Proxy access path: connect through proxy tunnel ===
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("Failed to get stream from pool: {}", e);
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(boxed(
+                        Full::new(Bytes::from("Failed to connect to proxy"))
+                            .map_err(|e| match e {}),
+                    ))
+                    .unwrap());
+            }
+        };
+
+        // Convert into async IO
+        let proxy_io = connected_stream.into_async_io();
+
+        // Handshake with the target (via proxy tunnel)
+        let (mut sender, conn) =
+            hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
+
+        tokio::spawn(async move {
+            if let Err(err) = conn.await {
+                error!("Connection failed: {:?}", err);
+            }
+        });
+
+        // Send the request
+        let response = sender.send_request(req).await?;
+
+        // Convert the response body to our BoxBody type
+        let (parts, body) = response.into_parts();
+        let body = boxed(body);
+
+        Ok(Response::from_parts(parts, body))
+    }
 }
 
 // Helper for unknown body

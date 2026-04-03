@@ -1,4 +1,5 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
+use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use dashmap::DashMap;
@@ -16,8 +17,12 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument};
 
-#[instrument(skip(stream, pool))]
-pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPool>) -> Result<()> {
+#[instrument(skip(stream, pool, direct_checker))]
+pub async fn handle_socks5_connection(
+    stream: TcpStream,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
     info!("Handling SOCKS5 connection");
     let control_local_ip = stream.local_addr().ok().map(|addr| addr.ip());
 
@@ -42,10 +47,15 @@ pub async fn handle_socks5_connection(stream: TcpStream, pool: Arc<ConnectionPoo
     info!("SOCKS5 command: {:?}, target: {:?}", command, target_addr);
 
     match command {
-        Socks5Command::TCPConnect => handle_tcp_connect(protocol, target_addr, pool).await,
-        Socks5Command::TCPBind => handle_tcp_bind(protocol, target_addr, pool).await,
+        Socks5Command::TCPConnect => {
+            handle_tcp_connect(protocol, target_addr, pool, direct_checker).await
+        }
+        Socks5Command::TCPBind => {
+            handle_tcp_bind(protocol, target_addr, pool, direct_checker).await
+        }
         Socks5Command::UDPAssociate => {
-            handle_udp_associate(protocol, target_addr, pool, control_local_ip).await
+            handle_udp_associate(protocol, target_addr, pool, control_local_ip, direct_checker)
+                .await
         }
     }
 }
@@ -54,55 +64,105 @@ async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
 
     // Convert target address to protocol Address
     let address = convert_target_addr(&target_addr);
 
-    // Get a connected stream from the pool
-    let connected_stream = match pool
-        .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
-        .await
-    {
-        Ok(stream) => {
-            info!(
-                "Got connected stream from pool, stream_id: {}",
-                stream.stream_id()
-            );
-            stream
+    if direct_checker.is_direct(&address) {
+        // === Direct access path ===
+        let target_str = address_to_string(&address);
+        info!(
+            "SOCKS5 CONNECT using DIRECT connection to {}",
+            target_str
+        );
+
+        match TcpStream::connect(&target_str).await {
+            Ok(mut target_stream) => {
+                let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+                let mut client_stream = protocol
+                    .reply_success(bind_addr)
+                    .await
+                    .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+                info!("SOCKS5 direct tunnel established, starting data relay");
+
+                match tokio::io::copy_bidirectional(&mut client_stream, &mut target_stream).await {
+                    Ok((client_to_target, target_to_client)) => {
+                        info!(
+                            "Direct SOCKS5 relay completed: {} bytes out, {} bytes in",
+                            client_to_target, target_to_client
+                        );
+                        telemetry::emit_traffic(
+                            "SOCKS5 CONNECT (direct)",
+                            target_label,
+                            client_to_target,
+                            target_to_client,
+                        );
+                    }
+                    Err(e) => {
+                        debug!("Direct SOCKS5 relay ended: {}", e);
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to connect directly to {}: {}", target_str, e);
+                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
+                Err(AgentError::Connection(format!(
+                    "Direct connect failed: {}",
+                    e
+                )))
+            }
         }
-        Err(e) => {
-            error!("Failed to get stream from pool: {}", e);
-            let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
-            return Err(e);
-        }
-    };
+    } else {
+        // === Proxy access path ===
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
+        {
+            Ok(stream) => {
+                info!(
+                    "Got connected stream from pool, stream_id: {}",
+                    stream.stream_id()
+                );
+                stream
+            }
+            Err(e) => {
+                error!("Failed to get stream from pool: {}", e);
+                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
+                return Err(e);
+            }
+        };
 
-    // Send success reply with a dummy bind address
-    let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let mut client_stream = protocol
-        .reply_success(bind_addr)
+        // Send success reply with a dummy bind address
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut client_stream = protocol
+            .reply_success(bind_addr)
+            .await
+            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+        info!("SOCKS5 tunnel established, starting data relay");
+
+        // Start bidirectional data relay
+        relay_data(
+            &mut client_stream,
+            connected_stream,
+            "SOCKS5 CONNECT",
+            target_label,
+        )
         .await
-        .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
-
-    info!("SOCKS5 tunnel established, starting data relay");
-
-    // Start bidirectional data relay
-    relay_data(
-        &mut client_stream,
-        connected_stream,
-        "SOCKS5 CONNECT",
-        target_label,
-    )
-    .await
+    }
 }
 
 async fn handle_tcp_bind(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
     pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("Handling SOCKS5 BIND command for target: {:?}", target_addr);
     let target_label = format_target_addr(&target_addr);
@@ -135,35 +195,79 @@ async fn handle_tcp_bind(
                 peer_addr, address
             );
 
-            // Get a connected stream from the pool for the target
-            let connected_stream = match pool
-                .as_ref()
-                .get_connected_stream(address, TransportProtocol::Tcp)
+            if direct_checker.is_direct(&address) {
+                // === Direct access path ===
+                let target_str = address_to_string(&address);
+                info!(
+                    "SOCKS5 BIND using DIRECT connection to {}",
+                    target_str
+                );
+
+                match TcpStream::connect(&target_str).await {
+                    Ok(mut target_stream) => {
+                        info!("SOCKS5 BIND direct tunnel established, starting data relay");
+                        match tokio::io::copy_bidirectional(
+                            &mut incoming_stream,
+                            &mut target_stream,
+                        )
+                        .await
+                        {
+                            Ok((c2t, t2c)) => {
+                                info!(
+                                    "Direct SOCKS5 BIND relay completed: {} bytes out, {} bytes in",
+                                    c2t, t2c
+                                );
+                                telemetry::emit_traffic(
+                                    "SOCKS5 BIND (direct)",
+                                    target_label,
+                                    c2t,
+                                    t2c,
+                                );
+                            }
+                            Err(e) => {
+                                debug!("Direct SOCKS5 BIND relay ended: {}", e);
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        error!("Failed to connect directly to target: {}", e);
+                        Err(AgentError::Connection(format!(
+                            "Direct connect failed: {}",
+                            e
+                        )))
+                    }
+                }
+            } else {
+                // === Proxy access path ===
+                let connected_stream = match pool
+                    .as_ref()
+                    .get_connected_stream(address, TransportProtocol::Tcp)
+                    .await
+                {
+                    Ok(stream) => {
+                        info!(
+                            "Got connected stream from pool, stream_id: {}",
+                            stream.stream_id()
+                        );
+                        stream
+                    }
+                    Err(e) => {
+                        error!("Failed to get stream from pool: {}", e);
+                        return Err(e);
+                    }
+                };
+
+                info!("SOCKS5 BIND tunnel established, starting data relay");
+
+                relay_data(
+                    &mut incoming_stream,
+                    connected_stream,
+                    "SOCKS5 BIND",
+                    target_label,
+                )
                 .await
-            {
-                Ok(stream) => {
-                    info!(
-                        "Got connected stream from pool, stream_id: {}",
-                        stream.stream_id()
-                    );
-                    stream
-                }
-                Err(e) => {
-                    error!("Failed to get stream from pool: {}", e);
-                    return Err(e);
-                }
-            };
-
-            info!("SOCKS5 BIND tunnel established, starting data relay");
-
-            // Start bidirectional data relay
-            relay_data(
-                &mut incoming_stream,
-                connected_stream,
-                "SOCKS5 BIND",
-                target_label,
-            )
-            .await
+            }
         }
         Ok(Err(e)) => {
             error!("Failed to accept incoming connection: {}", e);
@@ -186,6 +290,7 @@ async fn handle_udp_associate(
     _target_addr: TargetAddr,
     pool: Arc<ConnectionPool>,
     control_local_ip: Option<IpAddr>,
+    direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("Handling UDP ASSOCIATE");
 
@@ -224,7 +329,7 @@ async fn handle_udp_associate(
         debug!("UDP Associate TCP control channel closed");
     };
 
-    let udp_handler = process_udp_traffic(udp_socket, pool);
+    let udp_handler = process_udp_traffic(udp_socket, pool, direct_checker);
 
     tokio::select! {
         _ = keep_alive => {
@@ -269,7 +374,11 @@ fn resolve_udp_associate_reply_addr(
     SocketAddr::new(reply_ip, bind_addr.port())
 }
 
-async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPool>) -> Result<()> {
+async fn process_udp_traffic(
+    udp_socket: Arc<UdpSocket>,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<String, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
@@ -303,85 +412,195 @@ async fn process_udp_traffic(udp_socket: Arc<UdpSocket>, pool: Arc<ConnectionPoo
         debug!("Parse UDP destination address: {:?}", dest_addr);
         if !streams.contains_key(&dest_key) {
             info!("New UDP session for destination: {:?}", dest_addr);
-            match pool
-                .as_ref()
-                .get_connected_stream(dest_addr.clone(), TransportProtocol::Udp)
-                .await
-            {
-                Ok(connected_stream) => {
-                    let (tx, mut rx) = channel::<Vec<u8>>(32);
-                    streams.insert(dest_key.clone(), tx);
-                    let udp_socket_clone = udp_socket.clone();
-                    let dest_addr_clone = dest_addr.clone();
-                    let streams_clone = streams.clone();
-                    let dest_key_clone = dest_key.clone();
-                    tokio::spawn(async move {
-                        // Use the AsyncRead + AsyncWrite wrapper to properly encode data as DataPacket messages
 
-                        let proxy_io = connected_stream.into_async_io();
-                        let (mut reader, mut writer) = tokio::io::split(proxy_io);
-                        let write_task = async {
-                            while let Some(data) = rx.recv().await {
-                                use tokio::io::AsyncWriteExt;
-                                debug!(
-                                    "Write UDP data to proxy for target: {dest_addr:?}\n{}",
-                                    pretty_hex::pretty_hex(&data)
-                                );
-                                if let Err(e) = writer.write_all(&data).await {
-                                    error!("Failed to write to proxy UDP stream: {}", e);
-                                    break;
+            if direct_checker.is_direct(&dest_addr) {
+                // === Direct UDP path ===
+                let target_str = address_to_string(&dest_addr);
+                info!(
+                    "UDP session using DIRECT connection to {}",
+                    target_str
+                );
+
+                let (tx, mut rx) = channel::<Vec<u8>>(32);
+                streams.insert(dest_key.clone(), tx);
+                let udp_client = udp_socket.clone();
+                let dest_addr_clone = dest_addr.clone();
+                let streams_clone = streams.clone();
+                let dest_key_clone = dest_key.clone();
+
+                tokio::spawn(async move {
+                    // Bind a local UDP socket and connect to target directly
+                    let target_socket = match UdpSocket::bind("0.0.0.0:0").await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Failed to bind direct UDP socket: {}", e);
+                            streams_clone.remove(&dest_key_clone);
+                            return;
+                        }
+                    };
+                    if let Err(e) = target_socket.connect(&target_str).await {
+                        error!(
+                            "Failed to connect direct UDP socket to {}: {}",
+                            target_str, e
+                        );
+                        streams_clone.remove(&dest_key_clone);
+                        return;
+                    }
+
+                    let write_task = async {
+                        while let Some(data) = rx.recv().await {
+                            debug!(
+                                "Direct UDP send to target: {:?}\n{}",
+                                dest_addr_clone,
+                                pretty_hex::pretty_hex(&data)
+                            );
+                            if let Err(e) = target_socket.send(&data).await {
+                                debug!("Direct UDP send error: {}", e);
+                                break;
+                            }
+                        }
+                    };
+
+                    let read_task = async {
+                        let mut read_buf = [0u8; 65535];
+                        loop {
+                            match target_socket.recv(&mut read_buf).await {
+                                Ok(len) => {
+                                    let data = &read_buf[..len];
+                                    debug!(
+                                        "Direct UDP recv from target: {:?}\n{}",
+                                        dest_addr_clone,
+                                        pretty_hex::pretty_hex(&data)
+                                    );
+                                    match create_udp_packet(&dest_addr_clone, data) {
+                                        Ok(packet) => {
+                                            if let Err(e) =
+                                                udp_client.send_to(&packet, client_addr).await
+                                            {
+                                                error!(
+                                                    "Failed to send UDP packet to client: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to create UDP packet: {}", e);
+                                        }
+                                    }
                                 }
-                                if let Err(e) = writer.flush().await {
-                                    error!("Failed to flush to proxy UDP stream: {}", e);
+                                Err(e) => {
+                                    debug!("Direct UDP recv error: {}", e);
                                     break;
                                 }
                             }
-                        };
-                        let read_task = async {
-                            let mut read_buf = [0u8; 65535];
-                            loop {
-                                debug!("Waiting for UDP packet from target: {dest_addr:?}",);
-                                match reader.read(&mut read_buf).await {
-                                    Ok(0) => break,
-                                    Ok(len) => {
-                                        let data = &read_buf[..len];
-                                        debug!(
-                                            "Read UDP data from proxy for target: {dest_addr:?}\n{}",
-                                            pretty_hex::pretty_hex(&data)
+                        }
+                    };
+
+                    tokio::select! {
+                        _ = write_task => {}
+                        _ = read_task => {}
+                    }
+                    streams_clone.remove(&dest_key_clone);
+                    info!("Direct UDP session finished: {:?}", dest_addr_clone);
+                });
+            } else {
+                // === Proxy UDP path (existing logic) ===
+                match pool
+                    .as_ref()
+                    .get_connected_stream(dest_addr.clone(), TransportProtocol::Udp)
+                    .await
+                {
+                    Ok(connected_stream) => {
+                        let (tx, mut rx) = channel::<Vec<u8>>(32);
+                        streams.insert(dest_key.clone(), tx);
+                        let udp_socket_clone = udp_socket.clone();
+                        let dest_addr_clone = dest_addr.clone();
+                        let streams_clone = streams.clone();
+                        let dest_key_clone = dest_key.clone();
+                        tokio::spawn(async move {
+                            // Use the AsyncRead + AsyncWrite wrapper to properly encode data as DataPacket messages
+
+                            let proxy_io = connected_stream.into_async_io();
+                            let (mut reader, mut writer) = tokio::io::split(proxy_io);
+                            let write_task = async {
+                                while let Some(data) = rx.recv().await {
+                                    use tokio::io::AsyncWriteExt;
+                                    debug!(
+                                        "Write UDP data to proxy for target: {dest_addr:?}\n{}",
+                                        pretty_hex::pretty_hex(&data)
+                                    );
+                                    if let Err(e) = writer.write_all(&data).await {
+                                        error!(
+                                            "Failed to write to proxy UDP stream: {}",
+                                            e
                                         );
-                                        match create_udp_packet(&dest_addr_clone, data) {
-                                            Ok(packet) => {
-                                                if let Err(e) = udp_socket_clone
-                                                    .send_to(&packet, client_addr)
-                                                    .await
-                                                {
+                                        break;
+                                    }
+                                    if let Err(e) = writer.flush().await {
+                                        error!(
+                                            "Failed to flush to proxy UDP stream: {}",
+                                            e
+                                        );
+                                        break;
+                                    }
+                                }
+                            };
+                            let read_task = async {
+                                let mut read_buf = [0u8; 65535];
+                                loop {
+                                    debug!(
+                                        "Waiting for UDP packet from target: {dest_addr:?}",
+                                    );
+                                    match reader.read(&mut read_buf).await {
+                                        Ok(0) => break,
+                                        Ok(len) => {
+                                            let data = &read_buf[..len];
+                                            debug!(
+                                                "Read UDP data from proxy for target: {dest_addr:?}\n{}",
+                                                pretty_hex::pretty_hex(&data)
+                                            );
+                                            match create_udp_packet(&dest_addr_clone, data) {
+                                                Ok(packet) => {
+                                                    if let Err(e) = udp_socket_clone
+                                                        .send_to(&packet, client_addr)
+                                                        .await
+                                                    {
+                                                        error!(
+                                                            "Failed to send UDP packet to client: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
                                                     error!(
-                                                        "Failed to send UDP packet to client: {}",
+                                                        "Failed to create UDP packet: {}",
                                                         e
                                                     );
                                                 }
                                             }
-                                            Err(e) => error!("Failed to create UDP packet: {}", e),
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Error reading from proxy UDP stream: {}",
+                                                e
+                                            );
+                                            break;
                                         }
                                     }
-                                    Err(e) => {
-                                        error!("Error reading from proxy UDP stream: {}", e);
-                                        break;
-                                    }
                                 }
+                            };
+                            tokio::select! {
+                                _ = write_task => {}
+                                _ = read_task => {}
                             }
-                        };
-                        tokio::select! {
-                            _ = write_task => {}
-                            _ = read_task => {}
-                        }
-                        streams_clone.remove(&dest_key_clone);
-                        info!("UDP session finished: {:?}", dest_addr_clone);
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to connect to proxy for UDP: {}", e);
-                    continue;
+                            streams_clone.remove(&dest_key_clone);
+                            info!("UDP session finished: {:?}", dest_addr_clone);
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to connect to proxy for UDP: {}", e);
+                        continue;
+                    }
                 }
             }
         }

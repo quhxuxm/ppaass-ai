@@ -1,3 +1,4 @@
+use crate::direct_access::DirectAccessConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -38,6 +39,11 @@ pub struct AgentConfig {
     /// Number of Tokio runtime worker threads (defaults to CPU cores)
     #[serde(default)]
     pub runtime_threads: Option<usize>,
+
+    /// Direct access configuration: determines which targets are accessed
+    /// directly (bypassing proxy) vs through the proxy tunnel
+    #[serde(default)]
+    pub direct_access: DirectAccessConfig,
 }
 
 fn default_pool_size() -> usize {
