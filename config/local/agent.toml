@@ -49,12 +49,18 @@ async_runtime_stack_size_mb = 4
 # [direct_access]
 # mode = "rules"
 # rules = [
-#     "localhost",
-#     "*.local",
-#     "127.0.0.0/8",
-#     "10.0.0.0/8",
-#     "172.16.0.0/12",
-#     "192.168.0.0/16",
-#     "::1",
+#    "localhost",
+#    "*.local",
+#    "*.isoftbet.com",
+#    "*.lab.wagerworks.com",
+#    "*.corp.wagerworks.com",
+#    "*.igt.com",
+#    "10.76.0.0/16",
+#    "127.0.0.0/8",
+#    "10.0.0.0/8",
+#    "172.16.0.0/12",
+#    "192.168.0.0/16",
+#    "::1",
+#    "63.183.31.0/8",
 # ]
 
