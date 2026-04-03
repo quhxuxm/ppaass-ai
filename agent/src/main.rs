@@ -1,5 +1,6 @@
 mod config;
 mod connection_pool;
+mod direct_access;
 mod error;
 mod http_handler;
 mod server;
