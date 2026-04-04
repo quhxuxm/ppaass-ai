@@ -121,34 +121,55 @@ async fn handle_connection(
         proxy_config.clone().into(),
     );
 
-    // First, peek at the auth request to get the username
-    let username = match connection.peek_auth_username().await {
-        Ok(username) => username,
-        Err(e) => {
-            error!("Failed to get username from auth request: {}", e);
-            return Err(e);
+    // Apply auth timeout to the entire authentication phase to prevent zombie
+    // connections from agents that open a TCP connection but never complete
+    // the auth handshake (e.g. half-open connections, port scanners, or
+    // misbehaving clients).
+    let auth_timeout = Duration::from_secs(proxy_config.auth_timeout_secs);
+    let username = match tokio::time::timeout(auth_timeout, async {
+        // First, peek at the auth request to get the username
+        let username = match connection.peek_auth_username().await {
+            Ok(username) => username,
+            Err(e) => {
+                error!("Failed to get username from auth request: {}", e);
+                return Err(e);
+            }
+        };
+
+        info!("Authentication request from user: {}", username);
+
+        // Look up the user config for this username
+        let user_config = match user_manager.as_ref().get_user(&username).await {
+            Ok(Some(config)) => config,
+            Ok(None) => {
+                error!("User not found: {}", username);
+                connection.send_auth_error("User not found").await?;
+                return Err(crate::error::ProxyError::UserNotFound(username));
+            }
+            Err(e) => {
+                error!("Database error looking up user: {}", e);
+                connection.send_auth_error("Internal error").await?;
+                return Err(e);
+            }
+        };
+
+        // Now authenticate with the correct user config
+        connection.authenticate(proxy_config, user_config).await?;
+
+        Ok(username)
+    })
+    .await
+    {
+        Ok(Ok(username)) => username,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            warn!(
+                "Connection timed out after {}s during authentication phase - closing zombie connection",
+                proxy_config.auth_timeout_secs
+            );
+            return Ok(());
         }
     };
-
-    info!("Authentication request from user: {}", username);
-
-    // Look up the user config for this username
-    let user_config = match user_manager.as_ref().get_user(&username).await {
-        Ok(Some(config)) => config,
-        Ok(None) => {
-            error!("User not found: {}", username);
-            connection.send_auth_error("User not found").await?;
-            return Err(crate::error::ProxyError::UserNotFound(username));
-        }
-        Err(e) => {
-            error!("Database error looking up user: {}", e);
-            connection.send_auth_error("Internal error").await?;
-            return Err(e);
-        }
-    };
-
-    // Now authenticate with the correct user config
-    connection.authenticate(proxy_config, user_config).await?;
 
     // Apply idle timeout to handle_request - this prevents connection leaks from
     // prewarmed connections that never send a Connect request
