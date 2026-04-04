@@ -6,6 +6,7 @@ use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 
@@ -19,6 +20,10 @@ pub struct ConnectionPool {
     refill_notify: Arc<Notify>,
     /// Tracks number of available connections in the pool
     available: Arc<AtomicUsize>,
+    /// Maximum age a connection may sit in the pool before being discarded.
+    /// Computed once from `config.pool_max_connection_age_secs` to avoid
+    /// repeated conversions on the hot path.
+    max_connection_age: Duration,
 }
 
 impl ConnectionPool {
@@ -31,29 +36,20 @@ impl ConnectionPool {
         // Create refill notification mechanism instead of channel
         let refill_notify = Arc::new(Notify::new());
 
-        let pool_clone = pool.clone();
-        let config_clone = config.clone();
         let available = Arc::new(AtomicUsize::new(0));
-        let available_clone = available.clone();
-        let refill_notify_clone = refill_notify.clone();
 
-        // Spawn background refill task
-        tokio::spawn(async move {
-            Self::refill_task(
-                refill_notify_clone,
-                pool_clone,
-                config_clone,
-                available_clone,
-                pool_size,
-            )
-            .await;
-        });
+        let max_connection_age = Duration::from_secs(config.pool_max_connection_age_secs);
 
+        // NOTE: The background refill task is NOT started here.
+        // It is started by `prewarm()` after the initial connections are created,
+        // preventing a race where both prewarm and the refill task create connections
+        // simultaneously and overflow the pool.
         Self {
             pool,
             config,
             refill_notify,
             available,
+            max_connection_age,
         }
     }
 
@@ -105,16 +101,25 @@ impl ConnectionPool {
                                 available.fetch_add(1, Ordering::Release);
                                 debug!("Added prewarmed connection to pool");
                             } else {
-                                debug!("Pool is full, stopping refill");
-                                // If pool is full, we can discard the rest of the tasks or let them finish and fail to add
-                                // We'll let them finish but stop adding if pool is actually full (try_add fails)
+                                // Pool is already full — abort all remaining in-flight
+                                // connection tasks so we don't create more connections to
+                                // the proxy than the pool can hold (they would be
+                                // immediately dropped, leaving the proxy with short-lived
+                                // authenticated connections that waste resources).
+                                debug!(
+                                    "Pool is full during refill, aborting remaining tasks"
+                                );
+                                set.abort_all();
+                                break;
                             }
                         }
                         Ok(Err(e)) => {
                             warn!("Failed to create prewarmed connection: {}", e);
                         }
                         Err(e) => {
-                            warn!("Refill task join error: {}", e);
+                            if !e.is_cancelled() {
+                                warn!("Refill task join error: {}", e);
+                            }
                         }
                     }
                 }
@@ -122,7 +127,11 @@ impl ConnectionPool {
         }
     }
 
-    /// Prewarm the pool with initial connections
+    /// Prewarm the pool with initial connections, then start the background refill task.
+    ///
+    /// The refill task is started AFTER prewarm completes so that both do not create
+    /// connections concurrently, which would overflow the pool and create unnecessary
+    /// connections on the proxy side.
     #[instrument(skip(self))]
     pub async fn prewarm(&self) {
         info!(
@@ -165,29 +174,61 @@ impl ConnectionPool {
         }
 
         info!("Pool prewarmed with {} connections", success_count);
+
+        // Start the background refill task AFTER prewarm has completed.
+        // Starting it before prewarm would cause both to create connections at the same
+        // time (if prewarm takes longer than the 5-second refill timer), leading to
+        // double the expected connections on the proxy side.
+        let pool_clone = self.pool.clone();
+        let config_clone = self.config.clone();
+        let available_clone = self.available.clone();
+        let refill_notify_clone = self.refill_notify.clone();
+        let pool_size = self.config.pool_size;
+        tokio::spawn(async move {
+            Self::refill_task(
+                refill_notify_clone,
+                pool_clone,
+                config_clone,
+                available_clone,
+                pool_size,
+            )
+            .await;
+        });
     }
 
-    /// Get a connection and connect to target
-    /// The connection is consumed (not returned to pool)
+    /// Get a connection and connect to target.
+    /// The connection is consumed (not returned to pool).
     #[instrument(skip(self))]
     pub async fn get_connected_stream(
         &self,
         address: Address,
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
-        // Request refill in background using notify
-        self.refill_notify.notify_one();
+        // Try to get a fresh prewarmed connection from the pool, discarding any
+        // connections that are too old (the proxy may have already closed them due to
+        // its own idle timeout).
+        let conn = loop {
+            match self.pool.try_remove() {
+                Ok(conn) => {
+                    self.available.fetch_sub(1, Ordering::AcqRel);
+                    // Notify refill AFTER decrementing so the refill task reads an
+                    // accurate count and creates exactly the right number of connections.
+                    self.refill_notify.notify_one();
 
-        // Try to get a prewarmed connection from the pool
-        let conn = match self.pool.try_remove() {
-            Ok(conn) => {
-                self.available.fetch_sub(1, Ordering::AcqRel);
-                debug!("Using prewarmed connection from pool");
-                conn
-            }
-            Err(_) => {
-                debug!("No prewarmed connection available, creating new one");
-                ProxyConnection::new(&self.config).await?
+                    if conn.is_expired(self.max_connection_age) {
+                        debug!("Discarding expired pooled connection, will try next or create new");
+                        // conn is dropped here, closing the TCP connection gracefully
+                        continue;
+                    }
+                    debug!("Using prewarmed connection from pool");
+                    break conn;
+                }
+                Err(_) => {
+                    // Pool is empty — signal refill and create a fresh connection directly.
+                    self.refill_notify.notify_one();
+                    debug!("No prewarmed connection available, creating new one");
+                    break ProxyConnection::new(&self.config).await?;
+                }
             }
         };
 

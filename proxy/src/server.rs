@@ -6,8 +6,9 @@ use crate::error::Result;
 use crate::user_manager::UserManager;
 use protocol::CompressionMode;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 pub struct ProxyServer {
     config: Arc<ProxyConfig>,
@@ -148,7 +149,18 @@ async fn handle_connection(
 
     // Now authenticate with the correct user config
     connection.authenticate(proxy_config, user_config).await?;
-    connection.handle_request().await?;
 
-    Ok(())
+    // Apply idle timeout to handle_request - this prevents connection leaks from
+    // prewarmed connections that never send a Connect request
+    let idle_timeout = Duration::from_secs(proxy_config.idle_connection_timeout_secs);
+    match tokio::time::timeout(idle_timeout, connection.handle_request()).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(
+                "Connection from user '{}' timed out after {}s waiting for request - closing to prevent leak",
+                username, proxy_config.idle_connection_timeout_secs
+            );
+            Ok(())
+        }
+    }
 }

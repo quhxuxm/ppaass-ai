@@ -82,6 +82,11 @@ pub struct ProxyConfig {
     /// Connection timeout in seconds for upstream proxy connections
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
+
+    /// Idle connection timeout in seconds - connections from agent that don't send
+    /// a Connect request within this time will be closed (prevents connection leaks)
+    #[serde(default = "default_idle_connection_timeout_secs")]
+    pub idle_connection_timeout_secs: u64,
 }
 
 fn default_log_level() -> String {
@@ -102,6 +107,10 @@ fn default_replay_attack_tolerance() -> i64 {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_idle_connection_timeout_secs() -> u64 {
+    120
 }
 
 fn default_max_connections() -> u32 {
