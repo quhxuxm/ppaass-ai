@@ -1,4 +1,4 @@
-use std::{fs::read_to_string, time::Duration};
+use std::{fs::read_to_string, time::Duration, time::Instant};
 
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
@@ -47,6 +47,10 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
 /// This connection is used for one request and then discarded
 pub struct ProxyConnection {
     auth_conn: AuthenticatedConnection,
+    /// The time at which this connection was created, used to enforce a maximum
+    /// pool connection age and avoid using connections that the proxy may have
+    /// already closed due to its own idle timeout.
+    created_at: Instant,
 }
 
 impl ProxyConnection {
@@ -69,7 +73,17 @@ impl ProxyConnection {
 
         info!("Authentication successful");
 
-        Ok(Self { auth_conn })
+        Ok(Self {
+            auth_conn,
+            created_at: Instant::now(),
+        })
+    }
+
+    /// Returns true if this connection has been sitting in the pool longer than
+    /// `max_age`, meaning the proxy may have already closed it due to its idle
+    /// connection timeout.  Expired connections should be discarded rather than used.
+    pub fn is_expired(&self, max_age: Duration) -> bool {
+        self.created_at.elapsed() >= max_age
     }
 
     /// Connect to a target address and return a bidirectional stream handle

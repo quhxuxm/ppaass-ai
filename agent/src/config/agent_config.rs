@@ -18,6 +18,15 @@ pub struct AgentConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
+    /// Maximum age in seconds for a pooled connection.  Connections older than
+    /// this are discarded and replaced with a fresh one rather than being used,
+    /// preventing failures caused by the proxy's own idle-connection timeout
+    /// closing the connection before the agent can use it.
+    /// Should be set to a value less than the proxy's `idle_connection_timeout_secs`
+    /// (default: 90 seconds, proxy default is 120 seconds).
+    #[serde(default = "default_pool_max_connection_age_secs")]
+    pub pool_max_connection_age_secs: u64,
+
     #[serde(default = "default_console_port")]
     pub console_port: Option<u16>,
 
@@ -52,6 +61,13 @@ fn default_pool_size() -> usize {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_pool_max_connection_age_secs() -> u64 {
+    // Default to 90 seconds — below the proxy's default idle_connection_timeout_secs
+    // of 120 seconds.  This ensures pool connections are retired before the proxy
+    // closes them, avoiding failed requests due to stale connections.
+    90
 }
 
 fn default_log_level() -> String {

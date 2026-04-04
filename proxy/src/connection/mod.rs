@@ -394,7 +394,8 @@ impl ServerConnection {
                             && packet.data.is_empty())
                     }
                     Ok(_) => true,
-                    Err(_) => true,
+                    // Stop the stream on errors to prevent connection leaks
+                    Err(_) => false,
                 };
                 futures::future::ready(continue_stream)
             })
@@ -526,7 +527,8 @@ impl ServerConnection {
                             && packet.data.is_empty())
                     }
                     Ok(_) => true,
-                    Err(_) => true,
+                    // Stop the stream on errors to prevent connection leaks
+                    Err(_) => false,
                 };
                 futures::future::ready(continue_stream)
             })
