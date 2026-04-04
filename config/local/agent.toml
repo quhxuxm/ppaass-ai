@@ -12,7 +12,7 @@ connect_timeout_secs = 20
 # discarded and replaced.  This should be less than the proxy's
 # `idle_connection_timeout_secs` (default 120 s) so that the agent proactively
 # replaces connections before the proxy closes them.
-# pool_max_connection_age_secs = 90
+pool_max_connection_age_secs = 90
 
 # Log level: trace, debug, info, warn, error
 log_level = "debug"

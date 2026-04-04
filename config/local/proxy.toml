@@ -83,5 +83,14 @@ async_runtime_stack_size_mb = 4
 # Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
 # connect_timeout_secs = 30
 
+# Authentication timeout in seconds - connections that don't complete the
+# authentication handshake within this time will be closed. Prevents zombie
+# connections from half-open TCP connections, port scanners, etc. (default: 30)
+auth_timeout_secs = 30
+
+# Idle connection timeout in seconds - authenticated connections that don't
+# send a Connect request within this time will be closed (default: 120)
+idle_connection_timeout_secs = 120
+
 # Optional: Enable tokio-console for debugging
 # console_port = 6670

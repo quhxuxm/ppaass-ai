@@ -87,6 +87,13 @@ pub struct ProxyConfig {
     /// a Connect request within this time will be closed (prevents connection leaks)
     #[serde(default = "default_idle_connection_timeout_secs")]
     pub idle_connection_timeout_secs: u64,
+
+    /// Authentication timeout in seconds - connections that don't complete the
+    /// authentication handshake within this time will be closed. This prevents
+    /// zombie connections from agents that connect via TCP but never send an
+    /// auth request (e.g. half-open connections, port scanners, misbehaving clients).
+    #[serde(default = "default_auth_timeout_secs")]
+    pub auth_timeout_secs: u64,
 }
 
 fn default_log_level() -> String {
@@ -111,6 +118,10 @@ fn default_connect_timeout_secs() -> u64 {
 
 fn default_idle_connection_timeout_secs() -> u64 {
     120
+}
+
+fn default_auth_timeout_secs() -> u64 {
+    30
 }
 
 fn default_max_connections() -> u32 {
