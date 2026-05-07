@@ -17,4 +17,6 @@ pub enum AgentError {
 
     #[error("SOCKS5 error: {0}")]
     Socks5(String),
+    #[error("Hyper error: {0}")]
+    HyperError(#[from] hyper::Error),
 }
