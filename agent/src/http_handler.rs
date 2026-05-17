@@ -67,8 +67,7 @@ pub async fn handle_http_connection(
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
-    info!("Handling HTTP connection");
-
+    info!("Handling HTTP connection: {stream:?}");
     let io = TokioIo::new(stream);
     let pool_clone = pool.clone();
     let checker_clone = direct_checker.clone();
@@ -85,6 +84,7 @@ pub async fn handle_http_connection(
 
     if let Err(e) = conn.await {
         error!("Error serving HTTP connection: {}", e);
+        return Err(AgentError::HyperError(e));
     }
 
     Ok(())
@@ -227,10 +227,7 @@ async fn tunnel(
 }
 
 /// Direct tunnel: connect to target directly without proxy
-async fn tunnel_direct(
-    upgraded: Upgraded,
-    target: &str,
-) -> std::result::Result<(), AgentError> {
+async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
 
