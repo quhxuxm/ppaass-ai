@@ -4,21 +4,16 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tracing::{debug, info};
 
 /// 确定是直连目标还是通过代理访问的模式
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DirectAccessMode {
     /// 所有流量通过代理（默认，现有行为）
+    #[default]
     ProxyAll,
     /// 所有流量直连（完全绕过代理）
     DirectAll,
     /// 使用规则确定直连还是代理访问
     Rules,
-}
-
-impl Default for DirectAccessMode {
-    fn default() -> Self {
-        Self::ProxyAll
-    }
 }
 
 /// 直连访问规则配置

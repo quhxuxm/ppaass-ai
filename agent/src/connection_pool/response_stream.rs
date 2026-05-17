@@ -33,13 +33,13 @@ impl Stream for ResponseStream {
                 Poll::Ready(Some(Ok(response))) => {
                     // 响应已由编解码器完成反序列化、解密和解压
                     match response {
-                        ProxyResponse::Data(packet) => {
-                            if packet.stream_id == self.stream_id {
-                                if packet.is_end && packet.data.is_empty() {
-                                    return Poll::Ready(None);
-                                }
-                                return Poll::Ready(Some(Ok(Bytes::from(packet.data))));
+                        ProxyResponse::Data(packet) if packet.stream_id == self.stream_id => {
+                            if packet.is_end && packet.data.is_empty() {
+                                return Poll::Ready(None);
                             }
+                            return Poll::Ready(Some(Ok(Bytes::from(packet.data))));
+                        }
+                        ProxyResponse::Data(_) => {
                             // 不是目标流，继续轮询
                         }
                         _ => {
