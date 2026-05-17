@@ -3,11 +3,11 @@ use crate::crypto::AesGcmCipher;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
-/// Shared state for the cipher key and compression mode
+/// 加密密钥与压缩模式的共享状态
 #[derive(Debug, Default)]
 pub struct CipherState {
     pub cipher: OnceLock<Arc<AesGcmCipher>>,
-    /// Compression mode: 0=None, 1=Zstd, 2=Lz4, 3=Gzip
+    /// 压缩模式：0=None，1=Zstd，2=Lz4，3=Gzip
     compression: AtomicU8,
 }
 

@@ -1,10 +1,11 @@
 mod agent_io;
+mod egress;
 mod response_sink;
 mod upstream;
 
 pub use agent_io::AgentIo;
 pub use response_sink::BytesToProxyResponseSink;
-// UpstreamConnection is exported at the end of the file after ServerConnection definition
+// UpstreamConnection 在 ServerConnection 定义之后于文件末尾导出
 
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::{ProxyConfig, UserConfig};
@@ -20,13 +21,15 @@ use protocol::{
     ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
+use std::fs;
 use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
 
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
@@ -67,15 +70,15 @@ impl ServerConnection {
         match self.reader.next().await {
             Some(Ok(req)) => Ok(Some(req)),
             Some(Err(e)) => Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
-            None => Ok(None), // Connection closed
+            None => Ok(None), // 连接已关闭
         }
     }
 
-    /// Peek at the auth request to get the username without completing authentication
+    /// 在不完成认证的情况下窥探认证请求并获取用户名
     #[instrument(skip(self))]
     pub async fn peek_auth_username(&mut self) -> Result<String> {
-        // Receive auth request
-        // First request is always AuthRequest?
+        // 接收认证请求
+        // 第一个请求始终应为 AuthRequest（认证请求）？
         let request = match self.read_request().await? {
             Some(req) => req,
             None => return Err(ProxyError::Connection("Connection closed".to_string())),
@@ -84,12 +87,12 @@ impl ServerConnection {
         if let ProxyRequest::Auth(auth_request) = request {
             let username = auth_request.username.clone();
             debug!(
-                "[AUTH REQUEST] username={}, timestamp={}, encrypted_aes_key_len={}",
+                "[认证请求] username={}, timestamp={}, encrypted_aes_key_len={}",
                 auth_request.username,
                 auth_request.timestamp,
                 auth_request.encrypted_aes_key.len()
             );
-            // Store the auth request for later use
+            // 保存认证请求，稍后继续使用
             self.pending_auth_request = Some(auth_request);
             Ok(username)
         } else {
@@ -99,7 +102,7 @@ impl ServerConnection {
         }
     }
 
-    /// Send an authentication error response
+    /// 发送认证错误响应
     #[instrument(skip(self))]
     pub async fn send_auth_error(&mut self, message: &str) -> Result<()> {
         let auth_response = AuthResponse {
@@ -117,40 +120,37 @@ impl ServerConnection {
         proxy_config: &ProxyConfig,
         user_config: UserConfig,
     ) -> Result<()> {
-        info!(
-            "Authenticating connection for user: {}",
-            user_config.username
-        );
+        info!("正在认证用户连接：{}", user_config.username);
 
-        // Use the pending auth request that was read in peek_auth_username
+        // 使用 peek_auth_username 中读取到的待处理认证请求
         let auth_request = self
             .pending_auth_request
             .take()
             .ok_or_else(|| ProxyError::Authentication("No pending auth request".to_string()))?;
 
         debug!(
-            "[AUTH REQUEST] Processing: username={}, timestamp={}, encrypted_aes_key_len={}, encrypted_aes_key_hex={}",
+            "[认证请求] 正在处理：username={}, timestamp={}, encrypted_aes_key_len={}, encrypted_aes_key_hex={}",
             auth_request.username,
             auth_request.timestamp,
             auth_request.encrypted_aes_key.len(),
             hex::encode(&auth_request.encrypted_aes_key)
         );
 
-        // Verify username matches
+        // 校验用户名是否匹配
         if auth_request.username != user_config.username {
             self.send_auth_error("Username mismatch").await?;
             return Err(ProxyError::Authentication("Username mismatch".to_string()));
         }
 
-        // Verify timestamp to prevent replay attacks
+        // 校验时间戳以防止重放攻击
         let current_time = common::current_timestamp();
         if (current_time - auth_request.timestamp).abs() > proxy_config.replay_attack_tolerance {
-            // 5 minutes tolerance
+            // 5 分钟容忍窗口
             self.send_auth_error("Timestamp expired").await?;
             return Err(ProxyError::Authentication("Timestamp expired".to_string()));
         }
 
-        // Decrypt AES key using user's public key
+        // 使用用户公钥解密 AES 密钥
         let user_public_key = RsaKeyPair::from_public_key_pem(&user_config.public_key_pem)
             .map_err(|e| ProxyError::Authentication(format!("Invalid public key: {}", e)))?;
 
@@ -159,17 +159,17 @@ impl ServerConnection {
             &auth_request.encrypted_aes_key,
         )
         .map_err(|e| {
-            error!("Failed to decrypt AES key: {}", e);
+            error!("解密 AES 密钥失败：{}", e);
             ProxyError::Authentication(format!("Failed to decrypt AES key: {}", e))
         })?;
 
         debug!(
-            "[AUTH REQUEST] Decrypted AES key_len={}, aes_key_hex={}",
+            "[认证请求] 已解密 AES key_len={}, aes_key_hex={}",
             aes_key_bytes.len(),
             hex::encode(&aes_key_bytes)
         );
 
-        // Convert to fixed-size array
+        // 转换为固定长度数组
         let aes_key: [u8; 32] = aes_key_bytes
             .try_into()
             .map_err(|_| ProxyError::Authentication("Invalid AES key length".to_string()))?;
@@ -178,7 +178,7 @@ impl ServerConnection {
 
         let session_id = common::generate_id();
 
-        // Send auth response
+        // 发送认证响应
         let auth_response = AuthResponse {
             success: true,
             message: "Authentication successful".to_string(),
@@ -186,7 +186,7 @@ impl ServerConnection {
         };
 
         debug!(
-            "[AUTH RESPONSE] Sending: success=true, session_id={:?}",
+            "[认证响应] 正在发送：成功=true，会话 ID={:?}",
             auth_response.session_id
         );
 
@@ -195,10 +195,10 @@ impl ServerConnection {
 
         self.user_config = Some(user_config);
 
-        // Update cipher state for future messages
+        // 更新后续消息使用的加密状态
         self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
-        info!("Authentication successful");
+        info!("认证成功");
         Ok(())
     }
 
@@ -211,40 +211,36 @@ impl ServerConnection {
     }
 
     pub async fn handle_request(&mut self) -> Result<()> {
-        // Only loops for initial requests (Auth, Connect)
-        // Once connected, it hands over to relay and returns.
+        // 只循环处理初始请求（认证、连接）。
+        // 一旦连接成功，就移交给中继并返回。
         loop {
             match self.read_request().await? {
                 Some(ProxyRequest::Connect(connect_request)) => {
                     debug!(
-                        "[CONNECT REQUEST] request_id={}, address={:?}, transport={:?}",
+                        "[连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
                         connect_request.request_id,
                         connect_request.address,
                         connect_request.transport
                     );
                     self.handle_connect(connect_request).await?;
-                    // After relay finishes (connection closed),
-                    // we return to close connection
+                    // 中继结束（连接关闭）后，返回以关闭连接
                     return Ok(());
                 }
                 Some(ProxyRequest::Auth(auth_request)) => {
-                    debug!(
-                        "Unexpected Auth request in process loop: {:?}",
-                        auth_request.username
-                    );
+                    debug!("处理循环中收到意外认证请求：{:?}", auth_request.username);
                 }
                 Some(_) => {
-                    error!("Unexpected request type before Connect");
+                    error!("连接请求之前收到意外请求类型");
                 }
-                None => return Ok(()), // Agent connection closed
+                None => return Ok(()), // Agent 连接已关闭
             }
         }
     }
 
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        info!("Connect request: {:?}", connect_request.address);
+        info!("连接请求：{:?}", connect_request.address);
 
-        // Check user bandwidth limit
+        // 检查用户带宽限制
         if let Some(user_config) = &self.user_config
             && !self
                 .bandwidth_monitor
@@ -259,20 +255,54 @@ impl ServerConnection {
                 .await;
         }
 
-        // Check if forwarding mode is enabled
+        // 检查是否启用了转发模式
         if self.proxy_config.forward_mode {
             return self.handle_upstream_connect(connect_request).await;
         }
 
-        let target_addr = format_target_addr(&connect_request.address);
+        let target_addr = self.target_addr_for_request(&connect_request.address)?;
         match connect_request.transport {
             TransportProtocol::Tcp => self.handle_tcp_connect(connect_request, &target_addr).await,
             TransportProtocol::Udp => self.handle_udp_connect(connect_request, &target_addr).await,
         }
     }
 
+    fn target_addr_for_request(&self, address: &Address) -> Result<String> {
+        match address {
+            Address::ProxyDns { port } => self.proxy_dns_target_addr(*port),
+            _ => Ok(format_target_addr(address)),
+        }
+    }
+
+    fn proxy_dns_target_addr(&self, port: u16) -> Result<String> {
+        if let Some(addr) = self
+            .proxy_config
+            .dns_upstream_addr
+            .as_deref()
+            .map(str::trim)
+            .filter(|addr| !addr.is_empty())
+        {
+            let target = endpoint_with_port(addr, port);
+            info!("DNS 请求使用 proxy 配置的上游 DNS：{target}");
+            return Ok(target);
+        }
+
+        let resolv_conf = fs::read_to_string("/etc/resolv.conf").map_err(|e| {
+            ProxyError::Configuration(format!("读取系统 DNS 配置 /etc/resolv.conf 失败：{e}"))
+        })?;
+        let nameserver = resolv_conf
+            .lines()
+            .find_map(parse_resolv_nameserver)
+            .ok_or_else(|| {
+                ProxyError::Configuration("系统 DNS 配置中没有可用的 nameserver".to_string())
+            })?;
+        let target = endpoint_with_port(nameserver, port);
+        info!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
+        Ok(target)
+    }
+
     async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        info!("Forwarding request to upstream proxy");
+        info!("正在将请求转发到上游代理");
 
         match UpstreamConnection::connect(
             &self.proxy_config,
@@ -282,7 +312,7 @@ impl ServerConnection {
         .await
         {
             Ok(upstream_conn) => {
-                info!("Connected to upstream proxy");
+                info!("已连接到上游代理");
                 self.send_connect_success(
                     connect_request.request_id.clone(),
                     "Connected through upstream",
@@ -293,7 +323,7 @@ impl ServerConnection {
                 self.relay(connect_request.request_id, &mut stream).await?;
             }
             Err(e) => {
-                error!("Failed to connect to upstream: {}", e);
+                error!("连接上游代理失败：{}", e);
                 self.send_connect_error(
                     connect_request.request_id,
                     format!("Upstream error: {}", e),
@@ -310,16 +340,26 @@ impl ServerConnection {
         connect_request: ConnectRequest,
         target_addr: &str,
     ) -> Result<()> {
-        match TcpStream::connect(target_addr).await {
+        match egress::connect_tcp(target_addr, self.proxy_config.outbound_interface.as_deref())
+            .await
+        {
             Ok(mut target_stream) => {
-                info!("Connected to target (TCP): {}", target_addr);
+                info!(
+                    "已连接到目标（TCP）：{}，出站设备={}",
+                    target_addr,
+                    self.proxy_config
+                        .outbound_interface
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or("默认路由")
+                );
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
                 self.relay(connect_request.request_id, &mut target_stream)
                     .await?;
             }
             Err(e) => {
-                error!("Failed to connect to target (TCP): {}", e);
+                error!("连接目标失败（TCP）：{}", e);
                 self.send_connect_error(
                     connect_request.request_id,
                     format!("Failed to connect: {}", e),
@@ -336,30 +376,30 @@ impl ServerConnection {
         connect_request: ConnectRequest,
         target_addr: &str,
     ) -> Result<()> {
-        debug!("Handling UDP connect request: {connect_request:?}");
+        debug!("正在处理 UDP 连接请求：{connect_request:?}");
 
-        match UdpSocket::bind("0.0.0.0:0").await {
+        match egress::connect_udp(target_addr, self.proxy_config.outbound_interface.as_deref())
+            .await
+        {
             Ok(socket) => {
-                if let Err(e) = socket.connect(target_addr).await {
-                    error!("Failed to connect to target (UDP): {}", e);
-                    self.send_connect_error(
-                        connect_request.request_id,
-                        format!("Failed to connect UDP: {}", e),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-
-                info!("Connected to target (UDP): {}", target_addr);
+                info!(
+                    "已连接到目标（UDP）：{}，出站设备={}",
+                    target_addr,
+                    self.proxy_config
+                        .outbound_interface
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or("默认路由")
+                );
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
                 self.relay_udp(connect_request.request_id, socket).await?;
             }
             Err(e) => {
-                error!("Failed to bind UDP socket: {}", e);
+                error!("连接目标失败（UDP）：{}", e);
                 self.send_connect_error(
                     connect_request.request_id,
-                    format!("Failed to bind UDP: {}", e),
+                    format!("Failed to connect UDP: {}", e),
                 )
                 .await?;
             }
@@ -375,7 +415,7 @@ impl ServerConnection {
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
-        // Use a custom Sink implementation
+        // 使用自定义 Sink 实现
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
@@ -394,7 +434,7 @@ impl ServerConnection {
                             && packet.data.is_empty())
                     }
                     Ok(_) => true,
-                    // Stop the stream on errors to prevent connection leaks
+                    // 出错时停止流，防止连接泄漏
                     Err(_) => false,
                 };
                 futures::future::ready(continue_stream)
@@ -405,10 +445,10 @@ impl ServerConnection {
 
                 let result = match res {
                     Ok(ProxyRequest::Data(packet)) => {
-                        // Only process data packets for this stream
-                        debug!(
+                        // 只处理该流的数据包
+                        trace!(
                             packet.stream_id,
-                            stream_id_filter, "Receive UDP data packet from agent: {packet:?}"
+                            stream_id_filter, "从 agent 收到 UDP 数据包：{packet:?}"
                         );
                         if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
                             if let Some(u) = user {
@@ -444,18 +484,18 @@ impl ServerConnection {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = &buf[..n];
-                        debug!(
-                            "Receive UDP data from agent for target: {:?}\n{}",
+                        trace!(
+                            "从 agent 收到发往目标的 UDP 数据：{:?}\n{}",
                             udp_socket.peer_addr(),
                             pretty_hex::pretty_hex(&data)
                         );
                         if let Err(e) = udp_send.send(data).await {
-                            debug!("UDP send error: {}", e);
+                            debug!("UDP 发送错误：{}", e);
                             break;
                         }
                     }
                     Err(e) => {
-                        debug!("Agent read error: {}", e);
+                        debug!("读取 agent 数据错误：{}", e);
                         break;
                     }
                 }
@@ -468,22 +508,22 @@ impl ServerConnection {
                 match udp_recv.recv(&mut buf).await {
                     Ok(n) => {
                         let data = &buf[..n];
-                        debug!(
-                            "Receive UDP data from target to agent: {:?}\n{}",
+                        trace!(
+                            "从目标收到发往 agent 的 UDP 数据：{:?}\n{}",
                             udp_socket.peer_addr(),
                             pretty_hex::pretty_hex(&data)
                         );
                         if let Err(e) = agent_writer.write_all(data).await {
-                            debug!("Agent write error: {}", e);
+                            debug!("写入 agent 数据错误：{}", e);
                             break;
                         }
                         if let Err(e) = agent_writer.flush().await {
-                            debug!("Agent flush error: {}", e);
+                            debug!("刷新 agent 写入缓冲错误：{}", e);
                             break;
                         }
                     }
                     Err(e) => {
-                        debug!("UDP recv error: {}", e);
+                        debug!("UDP 接收错误：{}", e);
                         break;
                     }
                 }
@@ -495,7 +535,7 @@ impl ServerConnection {
             _ = udp_to_agent => {}
         }
 
-        debug!("UDP Relay finished");
+        debug!("UDP 中继已结束");
         Ok(())
     }
 
@@ -508,7 +548,7 @@ impl ServerConnection {
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
-        // Use a custom Sink implementation to avoid HRTB issues with SinkExt::with and closures
+        // 使用自定义 Sink 实现，避免 SinkExt::with 与闭包引发 HRTB 问题
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
@@ -527,7 +567,7 @@ impl ServerConnection {
                             && packet.data.is_empty())
                     }
                     Ok(_) => true,
-                    // Stop the stream on errors to prevent connection leaks
+                    // 出错时停止流，防止连接泄漏
                     Err(_) => false,
                 };
                 futures::future::ready(continue_stream)
@@ -538,7 +578,7 @@ impl ServerConnection {
 
                 let result = match res {
                     Ok(ProxyRequest::Data(packet)) => {
-                        // Only process data packets for this stream
+                        // 只处理该流的数据包
                         if packet.stream_id == stream_id_filter {
                             if !packet.data.is_empty() {
                                 if let Some(u) = user {
@@ -549,11 +589,11 @@ impl ServerConnection {
                                 None
                             }
                         } else {
-                            // Data for a different stream, skip it
+                            // 其他流的数据，跳过
                             None
                         }
                     }
-                    Ok(_) => None, // Ignore non-Data packets
+                    Ok(_) => None, // 忽略非 Data 数据包
                     Err(e) => Some(Err(io::Error::other(e))),
                 };
 
@@ -566,8 +606,8 @@ impl ServerConnection {
         let mut agent_io = AgentIo { reader, writer };
 
         match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
-            Ok((up, down)) => debug!("Relay finished: {} up, {} down", up, down),
-            Err(e) => debug!("Relay error: {}", e),
+            Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
+            Err(e) => debug!("中继错误：{}", e),
         }
 
         Ok(())
@@ -616,5 +656,47 @@ fn format_target_addr(address: &Address) -> String {
                 port
             )
         }
+        Address::ProxyDns { port } => format!("proxy-dns:{port}"),
     }
+}
+
+fn parse_resolv_nameserver(line: &str) -> Option<&str> {
+    let line = line.split(['#', ';']).next()?.trim();
+    let mut parts = line.split_whitespace();
+    if parts.next()? != "nameserver" {
+        return None;
+    }
+
+    parts.next()
+}
+
+fn endpoint_with_port(value: &str, default_port: u16) -> String {
+    let value = value.trim();
+    if has_explicit_port(value) {
+        return value.to_string();
+    }
+
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return SocketAddr::new(ip, default_port).to_string();
+    }
+
+    if value.contains(':') {
+        format!("[{value}]:{default_port}")
+    } else {
+        format!("{value}:{default_port}")
+    }
+}
+
+fn has_explicit_port(value: &str) -> bool {
+    if let Some(rest) = value.strip_prefix('[')
+        && let Some((_, port)) = rest.rsplit_once("]:")
+    {
+        return port.parse::<u16>().is_ok();
+    }
+
+    if let Some((host, port)) = value.rsplit_once(':') {
+        return !host.contains(':') && port.parse::<u16>().is_ok();
+    }
+
+    false
 }

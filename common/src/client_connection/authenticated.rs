@@ -5,10 +5,11 @@ use protocol::{
     TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::config::ClientConnectionConfig;
 use super::stream::ClientStream;
@@ -16,16 +17,16 @@ use super::stream::ClientStream;
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
-/// An authenticated client connection to a remote proxy
-/// Can be used to send connect requests to the remote proxy, or converted into a stream
+/// 已认证的客户端连接，用于连接远端代理
+/// 可用于发送连接请求到远端代理，或转换为流
 pub struct AuthenticatedConnection {
     writer: FramedWriter,
     reader: FramedReader,
 }
 
 impl AuthenticatedConnection {
-    /// Establish an authenticated connection to a remote proxy without immediately connecting to a target
-    /// This is useful for connection pooling where connections are prewarmed with just authentication
+    /// 建立到远端代理的已认证连接，但不立即连接目标
+    /// 适用于连接池场景，仅预热认证
     pub async fn authenticate_only<C>(config: &C) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
@@ -34,26 +35,31 @@ impl AuthenticatedConnection {
         let username = config.username();
         let timeout = config.timeout_duration();
 
-        debug!("Connecting to remote proxy: {}", remote_addr);
+        debug!("正在连接远端代理: {}", remote_addr);
 
-        // 1. TCP Connect
-        let stream = match tokio::time::timeout(timeout, TcpStream::connect(&remote_addr)).await {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "Connection timeout",
-                ));
+        // 1. TCP 连接 — 可选绑定到指定本地地址，
+        //    以绕过可能存在的 TUN 默认路由。
+        let stream = if let Some(bind) = config.bind_addr() {
+            connect_bound(&remote_addr, bind, timeout).await?
+        } else {
+            match tokio::time::timeout(timeout, TcpStream::connect(&remote_addr)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "连接超时",
+                    ));
+                }
             }
         };
 
-        // 2. Setup Codec
+        // 2. 设置编解码器
         let cipher_state = Arc::new(CipherState::new());
         let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
         let (mut writer, mut reader) = framed.split();
 
-        // 3. Prepare Auth
+        // 3. 准备认证
         let aes_cipher = AesGcmCipher::new();
         let aes_key = *aes_cipher.key();
 
@@ -74,26 +80,26 @@ impl AuthenticatedConnection {
             encrypted_aes_key,
         };
 
-        // 4. Send Auth
+        // 4. 发送认证请求
         writer
             .send(ProxyRequest::Auth(auth_request))
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        // 5. Read Auth Response
+        // 5. 读取认证响应
         let response = match tokio::time::timeout(timeout, reader.next()).await {
             Ok(Some(Ok(resp))) => resp,
             Ok(Some(Err(e))) => return Err(e),
             Ok(None) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionAborted,
-                    "Remote closed connection during auth",
+                    "认证期间远端关闭了连接",
                 ));
             }
             Err(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "Auth response timeout",
+                    "认证响应超时",
                 ));
             }
         };
@@ -102,28 +108,28 @@ impl AuthenticatedConnection {
             if !auth_resp.success {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    format!("Auth failed: {}", auth_resp.message),
+                    format!("认证失败: {}", auth_resp.message),
                 ));
             }
-            info!("Authenticated with remote proxy");
+            info!("已通过远端代理认证");
             cipher_state.set_cipher(Arc::new(aes_cipher));
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Expected AuthResponse",
+                "期望收到 AuthResponse",
             ));
         }
 
         Ok(Self { writer, reader })
     }
 
-    /// Connect to a target through the authenticated connection
+    /// 通过已认证的连接连接到目标
     pub async fn connect_to_target(
         mut self,
         address: Address,
         transport: TransportProtocol,
     ) -> Result<(ClientStream, String), std::io::Error> {
-        // 6. Send Connect Request
+        // 6. 发送连接请求
         let request_id = crate::generate_id();
         let connect_request = ConnectRequest {
             request_id: request_id.clone(),
@@ -131,13 +137,13 @@ impl AuthenticatedConnection {
             transport,
         };
 
-        debug!("Send connect request to remote proxy: {connect_request:?}");
+        debug!("向远端代理发送连接请求：{connect_request:?}");
         self.writer
             .send(ProxyRequest::Connect(connect_request))
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        // 7. Read Connect Response
+        // 7. 读取连接响应
         let response = self
             .reader
             .next()
@@ -145,23 +151,23 @@ impl AuthenticatedConnection {
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::ConnectionAborted,
-                    "Remote closed connection during connect",
+                    "连接期间远端关闭了连接",
                 )
             })
             .and_then(|r| r)?;
-        debug!("Connected to target through remote proxy: {response:?}");
+        debug!("已通过远端代理连接到目标: {response:?}");
         if let ProxyResponse::Connect(connect_resp) = response {
             if !connect_resp.success {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
-                    format!("Connect failed: {}", connect_resp.message),
+                    format!("连接失败: {}", connect_resp.message),
                 ));
             }
-            info!("Connected to target through remote proxy");
+            info!("已通过远端代理连接到目标");
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Expected ConnectResponse",
+                "期望收到 ConnectResponse",
             ));
         }
 
@@ -176,4 +182,86 @@ impl AuthenticatedConnection {
             request_id,
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// 辅助函数
+// ---------------------------------------------------------------------------
+
+/// 连接到 `remote_addr`，同时将套接字绑定到 `bind`。
+///
+/// 确保连接使用拥有 `bind.ip()` 的网络接口，而非操作系统根据当前路由表
+/// 自动选择的接口——这在 TUN 模式下至关重要，可防止代理连接回环到 TUN 设备。
+///
+/// 如果所有绑定连接尝试都失败，则直接返回错误。
+/// TUN 模式依赖这个绑定来防止代理连接回环进入 TUN，不能静默回退到普通连接。
+async fn connect_bound(
+    remote_addr: &str,
+    bind: SocketAddr,
+    timeout: std::time::Duration,
+) -> std::io::Result<TcpStream> {
+    // 异步解析远端主机名
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(remote_addr)
+        .await
+        .map(|it| it.collect())
+        .unwrap_or_default();
+
+    let mut last_error = None;
+    let mut has_matching_addr = false;
+
+    for dst in &addrs {
+        // 跳过 IP 版本与绑定地址不匹配的地址
+        let version_match = (bind.is_ipv4() && dst.is_ipv4()) || (bind.is_ipv6() && dst.is_ipv6());
+        if !version_match {
+            continue;
+        }
+        has_matching_addr = true;
+
+        let socket = if dst.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        };
+        let socket = match socket {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("创建 TcpSocket 失败 (dst={}): {e}", dst);
+                last_error = Some(e);
+                continue;
+            }
+        };
+        if let Err(e) = socket.bind(bind) {
+            warn!("TcpSocket::bind({bind}) 失败: {e}");
+            last_error = Some(e);
+            continue;
+        }
+        match tokio::time::timeout(timeout, socket.connect(*dst)).await {
+            Ok(Ok(stream)) => {
+                debug!("已通过绑定套接字连接到 {dst} (本地={bind})");
+                return Ok(stream);
+            }
+            Ok(Err(e)) => {
+                warn!("绑定连接到 {dst} 失败: {e}");
+                last_error = Some(e);
+            }
+            Err(_) => {
+                warn!("绑定连接到 {dst} 超时");
+                last_error = Some(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("绑定连接到 {dst} 超时"),
+                ));
+            }
+        }
+    }
+
+    if !has_matching_addr {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("代理地址 {remote_addr} 没有与绑定地址 {bind} 匹配的 IP 版本"),
+        ));
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::other(format!("所有到 {remote_addr} 的绑定连接尝试均失败"))
+    }))
 }

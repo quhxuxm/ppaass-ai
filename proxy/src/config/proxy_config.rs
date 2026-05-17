@@ -4,23 +4,23 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabasePoolConfig {
-    /// Maximum number of concurrent connections
+    /// 最大并发连接数
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 
-    /// Minimum number of connections to maintain
+    /// 保持的最小连接数
     #[serde(default = "default_min_connections")]
     pub min_connections: u32,
 
-    /// Connection timeout in seconds
+    /// 连接超时时间（秒）
     #[serde(default = "default_db_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Idle timeout in seconds (idle connections are closed)
+    /// 空闲超时时间（秒，空闲连接会被关闭）
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
 
-    /// Maximum lifetime of a connection in seconds
+    /// 连接最长生命周期（秒）
     #[serde(default = "default_max_lifetime_secs")]
     pub max_lifetime_secs: u64,
 }
@@ -37,30 +37,30 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub console_port: Option<u16>,
 
-    /// Enable REST API server for user management and monitoring (default: false)
+    /// 启用用于用户管理和监控的 REST API 服务（默认：false）
     #[serde(default)]
     pub enable_api: bool,
 
-    /// Database connection pool configuration
+    /// 数据库连接池配置
     #[serde(default = "default_db_pool_config")]
     pub db_pool: DatabasePoolConfig,
 
-    /// Log level: trace, debug, info, warn, error
+    /// 日志级别：trace、debug、info、warn、error
     #[serde(default = "default_log_level")]
     pub log_level: String,
 
-    /// Log directory for file-based logging (improves performance vs console)
+    /// 文件日志目录（相比控制台输出性能更好）
     pub log_dir: Option<String>,
 
-    /// Log file name for file-based logging
+    /// 文件日志名
     #[serde(default = "default_log_file")]
     pub log_file: String,
 
-    /// Number of Tokio runtime worker threads (defaults to CPU cores)
+    /// Tokio 运行时工作线程数（默认使用 CPU 核心数）
     #[serde(default)]
     pub runtime_threads: Option<usize>,
 
-    /// Compression mode for data transfer: none, zstd, lz4, gzip
+    /// 数据传输压缩模式：none、zstd、lz4、gzip
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
@@ -79,19 +79,28 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub upstream_private_key_path: Option<String>,
 
-    /// Connection timeout in seconds for upstream proxy connections
+    /// 连接目标服务器时绑定的出站网络设备名。
+    /// 为空时使用系统默认路由。
+    #[serde(default)]
+    pub outbound_interface: Option<String>,
+
+    /// proxy 端处理 DNS 请求时使用的上游 DNS。
+    /// 为空时读取系统默认 DNS。
+    #[serde(default)]
+    pub dns_upstream_addr: Option<String>,
+
+    /// 上游代理连接超时时间（秒）
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Idle connection timeout in seconds - connections from agent that don't send
-    /// a Connect request within this time will be closed (prevents connection leaks)
+    /// 空闲连接超时时间（秒）- agent 连接若在该时间内未发送
+    /// 连接请求，将被关闭（防止连接泄漏）
     #[serde(default = "default_idle_connection_timeout_secs")]
     pub idle_connection_timeout_secs: u64,
 
-    /// Authentication timeout in seconds - connections that don't complete the
-    /// authentication handshake within this time will be closed. This prevents
-    /// zombie connections from agents that connect via TCP but never send an
-    /// auth request (e.g. half-open connections, port scanners, misbehaving clients).
+    /// 认证超时时间（秒）- 未在该时间内完成认证握手的连接将被关闭。
+    /// 这可以防止 agent 通过 TCP 建连后从未发送认证请求造成僵尸连接
+    /// （例如半开连接、端口扫描器、异常客户端）。
     #[serde(default = "default_auth_timeout_secs")]
     pub auth_timeout_secs: u64,
 }
@@ -165,7 +174,7 @@ impl ProxyConfig {
         Ok(config)
     }
 
-    /// Get the compression mode as a protocol CompressionMode
+    /// 获取协议层的压缩模式
     pub fn get_compression_mode(&self) -> protocol::CompressionMode {
         self.compression_mode.parse().unwrap_or_default()
     }

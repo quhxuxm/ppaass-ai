@@ -1,72 +1,86 @@
-# PPAASS Agent Configuration
-# This configuration is for demo purposes with real RSA keys
+# PPAASS Agent 配置
+# 该配置用于演示，包含真实 RSA 密钥
 
 listen_addr = "127.0.0.1:7070"
-proxy_addrs = ["127.0.0.1:8080", "127.0.0.1:8080"]
+# proxy_addrs = ["140.82.30.214:80"]
+proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-pool_size = 10
+pool_size = 5
 connect_timeout_secs = 20
 
-# Maximum age in seconds for a connection sitting in the pool before it is
-# discarded and replaced.  This should be less than the proxy's
-# `idle_connection_timeout_secs` (default 120 s) so that the agent proactively
-# replaces connections before the proxy closes them.
+# 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
+# 该值应小于代理端的 `idle_connection_timeout_secs`（默认 120 秒），
+# 使 agent 在代理关闭连接前主动替换连接。
 pool_max_connection_age_secs = 90
 
-# Log level: trace, debug, info, warn, error
-log_level = "debug"
+# 日志级别：trace、debug、info、warn、error
+log_level = "info"
 
-# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+# 异步运行时栈的最大大小，单位 MB（默认：4 MB）
 async_runtime_stack_size_mb = 4
 
-# Log directory for file-based logging (better performance than console)
+# 文件日志目录（相比控制台输出性能更好）
 # log_dir = "logs"
 
-# Log file name (used only when log_dir is set)
+# 日志文件名（仅在设置 log_dir 时使用）
 # log_file = "agent.log"
 
-# Maximum number of log lines retained in TUI memory (default: 1000)
-# log_buffer_lines = 1000
-
-# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 # runtime_threads = 4
 
-# tokio-console is enabled by default on port 6669
-# Set a custom port if needed
-# console_port = 6679
 
-# Direct Access Configuration
+# TUN 模式配置
 # ============================
-# Controls whether certain targets are accessed directly (bypassing proxy)
-# or through the proxy tunnel.
+# 启用后，agent 会打开 TUN 设备，并通过用户空间网络栈（netstack-smoltcp）
+# 将该接口捕获的所有 IP 流量转发到代理。TUN 模式下不会启动
+# `listen_addr` 上的 SOCKS5/HTTP 监听器，TUN 设备会完全替代它。
 #
-# mode options:
-#   "proxy_all"  - All traffic goes through proxy (default, no bypass)
-#   "direct_all" - All traffic is accessed directly (proxy is not used)
-#   "rules"      - Use the rules list to decide per-target
+# agent 启动时会自动改写系统路由表：
+#   * 每个 `proxy_addrs` 条目都会通过当前默认网关安装一条 /32（或 /128）
+#     旁路路由，确保代理流量不会回环进入 TUN。
+#   * 添加两条指向 TUN 的 split-default 路由（0.0.0.0/1 和 128.0.0.0/1），
+#     它们优先级高于现有默认路由。原默认路由不会被修改。
+# 关闭时会自动删除所有已安装的路由（转发器退出或 panic 时会释放 guard）。
 #
-# rules format (only used when mode = "rules"):
-#   - Exact domain:    "localhost", "example.com"
-#   - Wildcard domain: "*.local", "*.internal.company.com"
-#   - Exact IP:        "127.0.0.1", "::1"
-#   - CIDR range:      "10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"
+# 注意：创建 TUN 设备并修改路由表需要提升权限
+#（macOS/Linux 上为 root，Windows 上为管理员）。
 
-# [direct_access]
-# mode = "rules"
-# rules = [
-#    "localhost",
-#    "*.local",
-#    "*.isoftbet.com",
-#    "*.lab.wagerworks.com",
-#    "*.corp.wagerworks.com",
-#    "*.igt.com",
-#    "10.76.0.0/16",
-#    "127.0.0.0/8",
-#    "10.0.0.0/8",
-#    "172.16.0.0/12",
-#    "192.168.0.0/16",
-#    "::1",
-#    "63.183.31.0/8",
-# ]
+[tun]
+enabled = true
+name = "utun8"         # Linux 上通常为 "tun0"
+ipv4 = "10.10.10.1/24"
+# ipv6 = "fd00:dead:beef::1/64"
+mtu = 1500
+# DNS 请求交给 proxy 端默认 DNS 处理。
+proxy_dns = true
 
+# 直连访问配置
+#
+# mode 选项：
+#   "proxy_all"  - 所有流量都走代理（默认，不旁路）
+#   "direct_all" - 所有流量都直连访问（不使用代理）
+#   "rules"      - 使用规则列表按目标决定
+#
+# rules 格式（仅在 mode = "rules" 时使用）：
+#   - 精确域名： "localhost", "example.com"
+#   - 通配符域名： "*.local", "*.internal.company.com"
+#   - 精确 IP： "127.0.0.1", "::1"
+#   - CIDR 范围： "10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"
+
+[direct_access]
+mode = "rules"
+rules = [
+   "localhost",
+   "*.local",
+   "127.0.0.0/8",
+   "169.254.0.0/16",
+   "10.0.0.0/8",
+   "172.16.0.0/12",
+   "192.168.0.0/16",
+   "100.64.0.0/10",
+   "224.0.0.0/4",
+   "::1",
+   "fc00::/7",
+   "fe80::/10",
+]

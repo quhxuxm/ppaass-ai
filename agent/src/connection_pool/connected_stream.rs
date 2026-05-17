@@ -7,8 +7,8 @@ use tokio_util::codec::Framed;
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
-/// A connected stream to a target through the proxy
-/// This handles bidirectional data transfer
+/// 通过代理连接到目标的已连接流
+/// 处理双向数据传输
 pub struct ConnectedStream {
     writer: FramedWriter,
     reader: FramedReader,
@@ -28,7 +28,7 @@ impl ConnectedStream {
         &self.stream_id
     }
 
-    /// Convert to an AsyncRead + AsyncWrite compatible stream for use with copy_bidirectional
+    /// 转换为兼容 AsyncRead + AsyncWrite 的流，用于 copy_bidirectional
     pub fn into_async_io(self) -> ProxyStreamIo {
         ProxyStreamIo::new(self.writer, self.reader, self.stream_id)
     }

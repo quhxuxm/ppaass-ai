@@ -5,23 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::str::FromStr;
 
-/// Compression mode for data transfer between agent and proxy
+/// agent 与 proxy 之间数据传输的压缩模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionMode {
-    /// No compression
+    /// 不压缩
     #[default]
     None,
-    /// Zstandard compression - good balance of speed and ratio
+    /// Zstandard 压缩 - 速度与压缩率较均衡
     Zstd,
-    /// LZ4 compression - fastest, lower compression ratio
+    /// LZ4 压缩 - 速度最快，压缩率较低
     Lz4,
-    /// Gzip compression - widely compatible, slower
+    /// Gzip 压缩 - 兼容性广，速度较慢
     Gzip,
 }
 
 impl CompressionMode {
-    /// Get the compression mode from a u8 flag
+    /// 从 u8 标志获取压缩模式
     pub fn from_flag(flag: u8) -> Self {
         match flag {
             1 => CompressionMode::Zstd,
@@ -31,7 +31,7 @@ impl CompressionMode {
         }
     }
 
-    /// Convert to a u8 flag for protocol messages
+    /// 转换为协议消息使用的 u8 标志
     pub fn to_flag(self) -> u8 {
         match self {
             CompressionMode::None => 0,
@@ -66,12 +66,12 @@ impl std::fmt::Display for CompressionMode {
     }
 }
 
-/// Compress data using the specified compression mode
+/// 使用指定压缩模式压缩数据
 pub fn compress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> {
     match mode {
         CompressionMode::None => Ok(data.to_vec()),
         CompressionMode::Zstd => {
-            zstd::encode_all(data, 3) // Level 3 is a good balance
+            zstd::encode_all(data, 3) // level 3 是较均衡的选择
         }
         CompressionMode::Lz4 => Ok(lz4_flex::compress_prepend_size(data)),
         CompressionMode::Gzip => {
@@ -82,7 +82,7 @@ pub fn compress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> 
     }
 }
 
-/// Decompress data using the specified compression mode
+/// 使用指定压缩模式解压数据
 pub fn decompress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> {
     match mode {
         CompressionMode::None => Ok(data.to_vec()),

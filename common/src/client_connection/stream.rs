@@ -9,7 +9,7 @@ use tokio_util::codec::Framed;
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
-/// A stream wrapper that converts between ProxyRequest/Response and AsyncRead/AsyncWrite
+/// 流包装器，在 ProxyRequest/Response 与 AsyncRead/AsyncWrite 之间转换
 pub struct ClientStream {
     pub writer: FramedWriter,
     pub reader: FramedReader,
@@ -19,7 +19,7 @@ pub struct ClientStream {
 }
 
 impl ClientStream {
-    /// Get the stream ID
+    /// 获取流 ID
     pub fn stream_id(&self) -> &str {
         &self.stream_id
     }
@@ -31,7 +31,7 @@ impl tokio::io::AsyncRead for ClientStream {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        // If we have buffered data, return it first
+        // 如果有缓冲数据，优先返回
         if self.read_pos < self.read_buf.len() {
             let remaining = &self.read_buf[self.read_pos..];
             let to_read = std::cmp::min(remaining.len(), buf.remaining());
@@ -40,11 +40,11 @@ impl tokio::io::AsyncRead for ClientStream {
             return Poll::Ready(Ok(()));
         }
 
-        // Clear buffer and try to read next response
+        // 清空缓冲区并尝试读取下一个响应
         self.read_buf.clear();
         self.read_pos = 0;
 
-        // Poll the reader for the next response
+        // 轮询读取器获取下一个响应
         match Pin::new(&mut self.reader).poll_next(cx) {
             Poll::Ready(Some(Ok(ProxyResponse::Data(packet)))) => {
                 if !packet.data.is_empty() {
@@ -56,11 +56,11 @@ impl tokio::io::AsyncRead for ClientStream {
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Some(Ok(_))) => {
-                // Ignore non-data responses and try to read the next one
+                // 忽略非数据响应，继续读取下一个
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::other(e))),
-            Poll::Ready(None) => Poll::Ready(Ok(())), // EOF
+            Poll::Ready(None) => Poll::Ready(Ok(())), // 到达流末尾
             Poll::Pending => Poll::Pending,
         }
     }
@@ -103,7 +103,7 @@ impl tokio::io::AsyncWrite for ClientStream {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        // Send end-of-stream packet
+        // 发送流结束数据包
         let end_packet = protocol::DataPacket {
             stream_id: self.stream_id.clone(),
             data: vec![],
@@ -123,5 +123,5 @@ impl tokio::io::AsyncWrite for ClientStream {
     }
 }
 
-// Implement Unpin to allow used in contexts that require Unpin
+// 实现 Unpin 以允许在需要 Unpin 的上下文中使用
 impl Unpin for ClientStream {}

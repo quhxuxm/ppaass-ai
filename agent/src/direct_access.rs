@@ -3,15 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tracing::{debug, info};
 
-/// Mode for determining whether to access targets directly or through proxy
+/// 确定是直连目标还是通过代理访问的模式
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DirectAccessMode {
-    /// All traffic goes through proxy (default, existing behavior)
+    /// 所有流量通过代理（默认，现有行为）
     ProxyAll,
-    /// All traffic is accessed directly (bypass proxy completely)
+    /// 所有流量直连（完全绕过代理）
     DirectAll,
-    /// Use rules to determine direct vs proxy access
+    /// 使用规则确定直连还是代理访问
     Rules,
 }
 
@@ -21,49 +21,48 @@ impl Default for DirectAccessMode {
     }
 }
 
-/// Configuration for direct access rules
+/// 直连访问规则配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DirectAccessConfig {
-    /// Access mode: proxy_all, direct_all, or rules
+    /// 访问模式: proxy_all、direct_all 或 rules
     #[serde(default)]
     pub mode: DirectAccessMode,
 
-    /// List of rules for direct access (used when mode = "rules")
+    /// 直连访问规则列表（当 mode = "rules" 时使用）
     ///
-    /// Supported formats:
-    /// - Exact domain: "localhost", "example.com"
-    /// - Wildcard domain: "*.local", "*.example.com"
-    /// - Exact IP: "127.0.0.1", "::1"
-    /// - CIDR range: "10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"
+    /// 支持的格式:
+    /// - 精确域名: "localhost"、"example.com"
+    /// - 通配符域名: "*.local"、"*.example.com"
+    /// - 精确 IP: "127.0.0.1"、"::1"
+    /// - CIDR 范围: "10.0.0.0/8"、"192.168.0.0/16"、"172.16.0.0/12"
     #[serde(default)]
     pub rules: Vec<String>,
 }
 
-/// A parsed rule for efficient matching at runtime
+/// 运行时高效匹配的已解析规则
 #[derive(Debug)]
 enum ParsedRule {
-    /// Exact domain match: "localhost", "example.com"
+    /// 精确域名匹配: "localhost"、"example.com"
     ExactDomain(String),
-    /// Wildcard domain suffix: "*.local" -> ".local"
+    /// 通配符域名后缀: "*.local" -> ".local"
     WildcardDomain(String),
-    /// Exact IP address match
+    /// 精确 IP 地址匹配
     ExactIp(IpAddr),
-    /// IPv4 CIDR range
+    /// IPv4 CIDR 范围
     CidrV4 { network: u32, mask: u32 },
-    /// IPv6 CIDR range
+    /// IPv6 CIDR 范围
     CidrV6 { network: u128, mask: u128 },
 }
 
-/// Checker that determines whether a target address should be accessed directly
-/// (bypassing the proxy) or through the proxy tunnel.
+/// 检查器，用于确定目标地址应该直连（绕过代理）还是通过代理隧道访问
 pub struct DirectAccessChecker {
     mode: DirectAccessMode,
     rules: Vec<ParsedRule>,
 }
 
 impl DirectAccessChecker {
-    /// Create a new checker from configuration.
-    /// Rules are parsed once at construction time for efficient matching.
+    /// 从配置创建新的检查器。
+    /// 规则在构造时一次性解析，以实现高效匹配。
     pub fn new(config: &DirectAccessConfig) -> Self {
         let rules: Vec<ParsedRule> = config
             .rules
@@ -72,12 +71,12 @@ impl DirectAccessChecker {
             .collect();
 
         info!(
-            "DirectAccessChecker initialized: mode={:?}, {} rules loaded",
+            "直连访问检查器已初始化: 模式={:?}, 已加载 {} 条规则",
             config.mode,
             rules.len()
         );
         for (i, rule) in rules.iter().enumerate() {
-            debug!("  Rule[{}]: {:?}", i, rule);
+            debug!("  规则[{}]: {:?}", i, rule);
         }
 
         Self {
@@ -86,14 +85,14 @@ impl DirectAccessChecker {
         }
     }
 
-    /// Parse a rule string into a typed ParsedRule
+    /// 将规则字符串解析为类型化的 ParsedRule
     fn parse_rule(rule: &str) -> Option<ParsedRule> {
         let rule = rule.trim();
         if rule.is_empty() {
             return None;
         }
 
-        // Try CIDR notation (contains '/')
+        // 尝试 CIDR 表示法（包含 '/'）
         if let Some(slash_pos) = rule.find('/') {
             let ip_str = &rule[..slash_pos];
             let prefix_str = &rule[slash_pos + 1..];
@@ -137,23 +136,26 @@ impl DirectAccessChecker {
             return None;
         }
 
-        // Try exact IP address
+        // 尝试精确 IP 地址
         if let Ok(ip) = rule.parse::<IpAddr>() {
             return Some(ParsedRule::ExactIp(ip));
         }
 
-        // Wildcard domain: "*.example.com"
+        // 通配符域名: "*.example.com"
         if let Some(suffix) = rule.strip_prefix("*.") {
-            // Store as ".example.com" for suffix matching
-            return Some(ParsedRule::WildcardDomain(format!(".{}", suffix.to_lowercase())));
+            // 存储为 ".example.com" 用于后缀匹配
+            return Some(ParsedRule::WildcardDomain(format!(
+                ".{}",
+                suffix.to_lowercase()
+            )));
         }
 
-        // Exact domain
+        // 精确域名
         Some(ParsedRule::ExactDomain(rule.to_lowercase()))
     }
 
-    /// Check if the given address should be accessed directly (bypassing proxy).
-    /// Returns `true` for direct access, `false` for proxy access.
+    /// 检查给定地址是否应该直连（绕过代理）。
+    /// 直连返回 `true`，代理访问返回 `false`。
     pub fn is_direct(&self, address: &Address) -> bool {
         let result = match self.mode {
             DirectAccessMode::ProxyAll => false,
@@ -162,27 +164,27 @@ impl DirectAccessChecker {
         };
 
         debug!(
-            "Direct access check for {:?}: {}",
+            "直连访问检查 {:?}: {}",
             address,
-            if result { "DIRECT" } else { "PROXY" }
+            if result { "直连" } else { "代理" }
         );
 
         result
     }
 
-    /// Check if the address matches any of the configured rules
+    /// 检查地址是否匹配任何已配置的规则
     fn matches_any_rule(&self, address: &Address) -> bool {
         match address {
             Address::Domain { host, .. } => {
                 let host_lower = host.to_lowercase();
 
-                // First, try to parse the domain as an IP address
-                // (sometimes domains are passed as IP strings like "10.0.0.1")
+                // 首先尝试将域名解析为 IP 地址
+                // （有时域名会以 IP 字符串形式传入，如 "10.0.0.1"）
                 if let Ok(ip) = host_lower.parse::<IpAddr>() {
                     return self.rules.iter().any(|rule| Self::match_ip(rule, &ip));
                 }
 
-                // Match against domain rules
+                // 与域名规则进行匹配
                 self.rules
                     .iter()
                     .any(|rule| Self::match_domain(rule, &host_lower))
@@ -195,6 +197,7 @@ impl DirectAccessChecker {
                 let ip = IpAddr::V6(Ipv6Addr::from(*addr));
                 self.rules.iter().any(|rule| Self::match_ip(rule, &ip))
             }
+            Address::ProxyDns { .. } => false,
         }
     }
 
@@ -202,8 +205,8 @@ impl DirectAccessChecker {
         match rule {
             ParsedRule::ExactDomain(domain) => host == domain,
             ParsedRule::WildcardDomain(suffix) => {
-                // "*.example.com" (suffix=".example.com") matches "sub.example.com"
-                // but NOT "example.com" itself. This follows standard wildcard convention.
+                // "*.example.com"（suffix=".example.com"）匹配 "sub.example.com"
+                // 但不匹配 "example.com" 本身。遵循标准通配符约定。
                 host.ends_with(suffix.as_str()) && host.len() > suffix.len()
             }
             _ => false,
@@ -226,8 +229,8 @@ impl DirectAccessChecker {
     }
 }
 
-/// Convert a protocol Address to a connectable address string
-/// suitable for TcpStream::connect() or UdpSocket::connect()
+/// 将协议 Address 转换为可连接的地址字符串，
+/// 适用于 TcpStream::connect() 或 UdpSocket::connect()
 pub fn address_to_string(address: &Address) -> String {
     match address {
         Address::Domain { host, port } => format!("{}:{}", host, port),
@@ -238,6 +241,7 @@ pub fn address_to_string(address: &Address) -> String {
             let ipv6 = Ipv6Addr::from(*addr);
             format!("[{}]:{}", ipv6, port)
         }
+        Address::ProxyDns { port } => format!("proxy-dns:{port}"),
     }
 }
 
@@ -307,7 +311,7 @@ mod tests {
             host: "myhost.local".to_string(),
             port: 80,
         }));
-        // "*.local" does NOT match "local" itself, only subdomains
+        // "*.local" 不匹配 "local" 本身，只匹配子域名
         assert!(!checker.is_direct(&Address::Domain {
             host: "local".to_string(),
             port: 80,
@@ -316,7 +320,7 @@ mod tests {
             host: "sub.example.com".to_string(),
             port: 80,
         }));
-        // "*.example.com" does NOT match "example.com" itself
+        // "*.example.com" 不匹配 "example.com" 本身
         assert!(!checker.is_direct(&Address::Domain {
             host: "example.com".to_string(),
             port: 80,
@@ -398,7 +402,7 @@ mod tests {
         };
         let checker = DirectAccessChecker::new(&config);
 
-        // Domain that is actually an IP string should match CIDR rules
+        // 实际为 IP 字符串的域名应匹配 CIDR 规则
         assert!(checker.is_direct(&Address::Domain {
             host: "10.1.2.3".to_string(),
             port: 80,
@@ -424,7 +428,7 @@ mod tests {
         };
         let checker = DirectAccessChecker::new(&config);
 
-        // Domain matches
+        // 域名匹配
         assert!(checker.is_direct(&Address::Domain {
             host: "localhost".to_string(),
             port: 80,
@@ -433,7 +437,7 @@ mod tests {
             host: "mypc.local".to_string(),
             port: 80,
         }));
-        // IP matches
+        // IP 匹配
         assert!(checker.is_direct(&Address::Ipv4 {
             addr: [127, 0, 0, 1],
             port: 80,
@@ -446,7 +450,7 @@ mod tests {
             addr: [192, 168, 1, 1],
             port: 80,
         }));
-        // Should go through proxy
+        // 应通过代理访问
         assert!(!checker.is_direct(&Address::Domain {
             host: "google.com".to_string(),
             port: 443,
@@ -508,7 +512,7 @@ mod tests {
         };
         let checker = DirectAccessChecker::new(&config);
 
-        // With no rules in Rules mode, nothing should be direct
+        // 规则模式下没有规则时，任何地址都不应直连
         assert!(!checker.is_direct(&Address::Domain {
             host: "localhost".to_string(),
             port: 80,
@@ -521,19 +525,16 @@ mod tests {
             mode: DirectAccessMode::Rules,
             rules: vec![
                 "".to_string(),
-                "10.0.0.0/99".to_string(), // invalid prefix
-                "localhost".to_string(),    // valid
+                "10.0.0.0/99".to_string(), // 无效前缀
+                "localhost".to_string(),   // 有效规则
             ],
         };
         let checker = DirectAccessChecker::new(&config);
 
-        // Only the valid rule should work
+        // 只有有效规则应生效
         assert!(checker.is_direct(&Address::Domain {
             host: "localhost".to_string(),
             port: 80,
         }));
     }
 }
-
-
-

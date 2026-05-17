@@ -57,3 +57,8 @@ hex = "0.4"
 pretty-hex = "0.4.1"
 ratatui = "0.30"
 crossterm = "0.29"
+tun-rs = { version = "2", features = ["async_tokio"] }
+netstack-smoltcp = "0.2"
+route_manager = "0.2"
+socket2 = { version = "0.6", features = ["all"] }
+if-addrs = "0.13"

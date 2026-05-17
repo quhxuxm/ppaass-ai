@@ -37,13 +37,13 @@ impl AesGcmCipher {
     }
 
     pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits; unique per message
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96 位；每条消息唯一
         let ciphertext = self
             .cipher
             .encrypt(&nonce, data)
             .map_err(|e| ProtocolError::Encryption(e.to_string()))?;
 
-        // Prepend nonce to ciphertext
+        // 将 nonce 前置到密文
         let mut result = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
         result.extend_from_slice(&nonce);
         result.extend_from_slice(&ciphertext);

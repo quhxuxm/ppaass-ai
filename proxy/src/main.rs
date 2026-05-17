@@ -22,35 +22,39 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to configuration file
+    /// 配置文件路径
     #[arg(short, long, default_value = "proxy.toml")]
     config: String,
 
-    /// Override listen address
+    /// 覆盖监听地址
     #[arg(short, long)]
     listen: Option<String>,
 
-    /// Override API address
+    /// 覆盖 API 地址
     #[arg(short, long)]
     api: Option<String>,
 
-    /// Override log level (trace, debug, info, warn, error)
+    /// 覆盖日志级别（trace、debug、info、warn、error）
     #[arg(long)]
     log_level: Option<String>,
 
-    /// Override log directory
+    /// 覆盖日志目录
     #[arg(long)]
     log_dir: Option<String>,
 
-    /// Override log file name
+    /// 覆盖日志文件名
     #[arg(long)]
     log_file: Option<String>,
 
-    /// Override number of runtime worker threads
+    /// 覆盖运行时工作线程数
     #[arg(long)]
     runtime_threads: Option<usize>,
 
-    /// Migrate users from a TOML file to the SQLite database
+    /// 覆盖 proxy 连接目标服务器时使用的出站网络设备名
+    #[arg(long)]
+    outbound_interface: Option<String>,
+
+    /// 将用户从 TOML 文件迁移到 SQLite 数据库
     #[arg(long)]
     migrate_users: Option<String>,
 }
@@ -58,10 +62,10 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Load configuration first
+    // 先加载配置
     let mut config = ProxyConfig::load(&args.config)?;
 
-    // Override with command line arguments
+    // 使用命令行参数覆盖配置
     if let Some(listen) = args.listen {
         config.listen_addr = listen;
     }
@@ -80,8 +84,11 @@ fn main() -> Result<()> {
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
+    if let Some(outbound_interface) = args.outbound_interface {
+        config.outbound_interface = Some(outbound_interface);
+    }
 
-    // Create log directory if it doesn't exist
+    // 如果日志目录不存在，则创建
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
@@ -90,52 +97,60 @@ fn main() -> Result<()> {
         &config.log_file,
         &config.log_level,
     );
-    // Build Tokio runtime with configurable thread count
+    // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
     runtime_builder.enable_all();
 
     if let Some(threads) = config.runtime_threads {
-        info!("Configuring Tokio runtime with {} worker threads", threads);
+        info!("配置 Tokio 运行时工作线程数：{}", threads);
         runtime_builder.worker_threads(threads);
     }
 
     let runtime = runtime_builder.build()?;
 
     runtime.block_on(async {
-        info!("Starting PPAASS Proxy");
-        info!("Listen address: {}", config.listen_addr);
-        info!("API address: {}", config.api_addr);
-        info!("Log level: {}", config.log_level);
+        info!("PPAASS Proxy 启动中");
+        info!("监听地址：{}", config.listen_addr);
+        info!("API 地址：{}", config.api_addr);
+        info!("日志级别：{}", config.log_level);
         info!(
-            "Log directory: {}",
-            config.log_dir.as_deref().unwrap_or("Console")
+            "日志目录：{}",
+            config.log_dir.as_deref().unwrap_or("控制台")
         );
         if config.log_dir.is_some() {
-            info!("Log file: {}", config.log_file);
+            info!("日志文件：{}", config.log_file);
         }
         if let Some(threads) = config.runtime_threads {
-            info!("Runtime threads: {}", threads);
+            info!("运行时线程数：{}", threads);
         } else {
-            info!("Runtime threads: default (CPU cores)");
+            info!("运行时线程数：默认（CPU 核心数）");
         }
+        info!(
+            "出站网络设备：{}",
+            config
+                .outbound_interface
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("默认路由")
+        );
 
-        // Handle user migration if requested
+        // 如果请求了用户迁移，则执行迁移
         if let Some(users_toml_path) = args.migrate_users {
-            info!("Migrating users from {} to database", users_toml_path);
+            info!("正在将用户从 {} 迁移到数据库", users_toml_path);
             migrate_users_from_toml(&config, &users_toml_path).await?;
-            info!("User migration completed successfully");
+            info!("用户迁移成功完成");
             return Ok(());
         }
 
-        // Initialize tokio-console if configured
+        // 如果配置了 tokio-console，则初始化
         #[cfg(feature = "console")]
         if let Some(console_port) = config.console_port {
-            info!("Starting tokio-console on port {}", console_port);
+            info!("正在端口 {} 启动 tokio-console", console_port);
             console_subscriber::init();
         }
 
-        // Start proxy server
+        // 启动代理服务器
         let server = ProxyServer::new(config).await?;
         server.run().await?;
         Ok(())
@@ -144,25 +159,25 @@ fn main() -> Result<()> {
 
 #[instrument(skip(config))]
 async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
-    // Load users from TOML file
+    // 从 TOML 文件加载用户
     let users_config = UsersConfig::load(users_toml_path)?;
-    info!("Found {} users in TOML file", users_config.users.len());
+    info!("在 TOML 文件中找到 {} 个用户", users_config.users.len());
 
-    // Initialize user manager (this creates the database if needed)
+    // 初始化用户管理器（必要时会创建数据库）
     let user_manager =
         UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?;
 
-    // Import each user
+    // 逐个导入用户
     for (username, user_config) in users_config.users {
-        info!("Importing user: {}", username);
+        info!("正在导入用户：{}", username);
 
-        // Check if user already exists
+        // 检查用户是否已存在
         if let Ok(Some(_)) = user_manager.get_user(&username).await {
-            info!("User {} already exists, skipping", username);
+            info!("用户 {} 已存在，跳过", username);
             continue;
         }
 
-        // Import user directly with their existing public key
+        // 使用用户现有公钥直接导入
         user_manager
             .import_user(
                 username.clone(),
@@ -171,7 +186,7 @@ async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) ->
             )
             .await?;
 
-        info!("User {} imported successfully", username);
+        info!("用户 {} 导入成功", username);
     }
 
     Ok(())

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Message {
     pub version: u8,
     pub message_type: MessageType,
-    /// Compression mode flag: 0=None, 1=Zstd, 2=Lz4, 3=Gzip
+    /// 压缩模式标志：0=None，1=Zstd，2=Lz4，3=Gzip
     #[serde(default)]
     pub compression: u8,
     pub payload: Vec<u8>,

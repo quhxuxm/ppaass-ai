@@ -36,6 +36,9 @@ chrono.workspace = true
 mimalloc.workspace = true
 rand.workspace = true
 pretty-hex.workspace = true
+socket2.workspace = true
+if-addrs.workspace = true
+route_manager.workspace = true
 [features]
 default = []
 console = ["dep:console-subscriber"]

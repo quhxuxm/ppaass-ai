@@ -57,7 +57,7 @@ impl BandwidthMonitor {
             let elapsed_ms = now.saturating_sub(last_reset);
 
             if elapsed_ms >= 1000 {
-                // Reset counters every second using compare-and-swap
+                // 使用 compare-and-swap 每秒重置计数器
                 if entry
                     .last_reset_millis
                     .compare_exchange(last_reset, now, Ordering::AcqRel, Ordering::Relaxed)
@@ -73,7 +73,7 @@ impl BandwidthMonitor {
             let bytes_received = entry.bytes_received.load(Ordering::Relaxed);
             let total_bytes = bytes_sent + bytes_received;
 
-            // Convert limit from Mbps to bytes per second
+            // 将 Mbps 限制转换为每秒字节数
             let limit_bytes_per_sec = (limit_mbps * 1_000_000) / 8;
 
             return total_bytes < limit_bytes_per_sec;

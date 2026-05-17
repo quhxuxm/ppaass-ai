@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "integration-tests")]
-#[command(about = "Integration and performance testing tool for PPAASS proxy")]
+#[command(about = "PPAASS 代理的集成与性能测试工具")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -18,49 +18,49 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run integration tests
+    /// 运行集成测试
     Integration {
-        /// Proxy server address (e.g., "127.0.0.1:8080")
+        /// 代理服务器地址（例如 "127.0.0.1:8080"）
         #[arg(short, long, default_value = "127.0.0.1:8080")]
         proxy_addr: String,
 
-        /// Agent server address (e.g., "127.0.0.1:7070")
+        /// Agent 服务器地址（例如 "127.0.0.1:7070"）
         #[arg(short, long, default_value = "127.0.0.1:7070")]
         agent_addr: String,
     },
-    /// Run performance tests
+    /// 运行性能测试
     Performance {
-        /// Proxy server address
+        /// 代理服务器地址
         #[arg(short, long, default_value = "127.0.0.1:8080")]
         proxy_addr: String,
 
-        /// Agent server address
+        /// Agent 服务器地址
         #[arg(short, long, default_value = "127.0.0.1:7070")]
         agent_addr: String,
 
-        /// Number of concurrent connections to test
+        /// 要测试的并发连接数
         #[arg(short, long, default_value = "100")]
         concurrency: usize,
 
-        /// Duration of test in seconds
+        /// 测试持续时间（秒）
         #[arg(short, long, default_value = "60")]
         duration: u64,
 
-        /// Output report file path
+        /// 输出报告文件路径
         #[arg(short, long, default_value = "performance-report.html")]
         output: String,
     },
-    /// Start mock target servers
+    /// 启动模拟目标服务器
     MockTarget {
-        /// HTTP server port
+        /// HTTP 服务器端口
         #[arg(long, default_value = "9090")]
         http_port: u16,
 
-        /// TCP echo server port
+        /// TCP 回显服务器端口
         #[arg(long, default_value = "9091")]
         tcp_port: u16,
 
-        /// UDP echo server port
+        /// UDP 回显服务器端口
         #[arg(long, default_value = "9092")]
         udp_port: u16,
     },
@@ -68,7 +68,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
+    // 初始化 tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -82,8 +82,8 @@ async fn main() -> Result<()> {
             proxy_addr,
             agent_addr,
         } => {
-            tracing::info!("Running integration tests");
-            tracing::info!("Proxy: {}, Agent: {}", proxy_addr, agent_addr);
+            tracing::info!("正在运行集成测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
             integration_tests::run_all_tests(&agent_addr).await?;
         }
         Commands::Performance {
@@ -93,16 +93,16 @@ async fn main() -> Result<()> {
             duration,
             output,
         } => {
-            tracing::info!("Running performance tests");
-            tracing::info!("Proxy: {}, Agent: {}", proxy_addr, agent_addr);
-            tracing::info!("Concurrency: {}, Duration: {}s", concurrency, duration);
+            tracing::info!("正在运行性能测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!("并发数：{}，持续时间：{} 秒", concurrency, duration);
 
             let results =
                 performance_tests::run_performance_tests(&agent_addr, concurrency, duration)
                     .await?;
 
             report::generate_reports(&results, &output)?;
-            tracing::info!("Performance report generated: {}", output);
+            tracing::info!("性能报告已生成：{}", output);
         }
         Commands::MockTarget {
             http_port,
@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
             udp_port,
         } => {
             tracing::info!(
-                "Starting mock target servers on ports: HTTP={}, TCP={}, UDP={}",
+                "正在端口上启动模拟目标服务器：HTTP={}，TCP={}，UDP={}",
                 http_port,
                 tcp_port,
                 udp_port

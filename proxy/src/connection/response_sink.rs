@@ -31,7 +31,7 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
             self.bandwidth_monitor.record_sent(user, item.len() as u64);
         }
 
-        // Compression is handled at the codec level
+        // 压缩在编解码层处理
         let packet = DataPacket {
             stream_id,
             data: item.to_vec(),

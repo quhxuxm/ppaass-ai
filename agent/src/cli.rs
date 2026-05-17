@@ -3,35 +3,57 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliArgs {
-    /// Path to configuration file
+    /// 配置文件路径
     #[arg(short, long, default_value = "config/agent.toml")]
     pub config: String,
 
-    /// Override listen address
+    /// 覆盖监听地址
     #[arg(short, long)]
     pub listen: Option<String>,
 
-    /// Override proxy server address
+    /// 覆盖代理服务器地址
     #[arg(short, long)]
     pub proxy: Option<String>,
 
-    /// Override username
+    /// 覆盖用户名
     #[arg(short, long)]
     pub username: Option<String>,
 
-    /// Override log level (trace, debug, info, warn, error)
+    /// 覆盖日志级别（trace、debug、info、warn、error）
     #[arg(long)]
     pub log_level: Option<String>,
 
-    /// Override log directory
+    /// 覆盖日志目录
     #[arg(long)]
     pub log_dir: Option<String>,
 
-    /// Override log file name
+    /// 覆盖日志文件名
     #[arg(long)]
     pub log_file: Option<String>,
 
-    /// Override number of runtime worker threads
+    /// 覆盖运行时工作线程数
     #[arg(long)]
     pub runtime_threads: Option<usize>,
+
+    // ── TUN 模式 ──────────────────────────────────────────────────────────────
+
+    /// 启用 TUN 模式（将所有系统流量通过 TUN 设备转发）
+    #[arg(long)]
+    pub tun_enabled: bool,
+
+    /// 覆盖 TUN 设备名称（macOS 如 utun8，Linux 如 tun0）
+    #[arg(long)]
+    pub tun_name: Option<String>,
+
+    /// 覆盖 TUN IPv4 CIDR（如 10.10.10.1/24）
+    #[arg(long)]
+    pub tun_ipv4: Option<String>,
+
+    /// 覆盖 TUN IPv6 CIDR（如 fd00::1/64）
+    #[arg(long)]
+    pub tun_ipv6: Option<String>,
+
+    /// 覆盖 TUN MTU
+    #[arg(long)]
+    pub tun_mtu: Option<u16>,
 }

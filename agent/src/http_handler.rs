@@ -17,19 +17,19 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info, instrument};
 
-/// Extract host and port from HTTP request, handling IPv6 addresses correctly
+/// 从 HTTP 请求中提取主机和端口，正确处理 IPv6 地址
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
-    // Try to get from Host header first
+    // 首先尝试从 Host 头获取
     if let Some(host_header) = req
         .headers()
         .get(hyper::header::HOST)
-        // Explicitly annotate closure argument type to help inference
+        // 显式标注闭包参数类型以帮助类型推断
         .and_then(|h: &hyper::header::HeaderValue| h.to_str().ok())
     {
         let host_header: &str = host_header;
-        // Handle IPv6 addresses: [::1]:8080
+        // 处理 IPv6 地址: [::1]:8080
         if host_header.starts_with('[') {
-            // IPv6 format
+            // IPv6 格式
             if let Some(bracket_end) = host_header.find(']') {
                 let host = host_header[1..bracket_end].to_string();
                 let port = if host_header.len() > bracket_end + 2
@@ -43,19 +43,19 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
             }
         }
 
-        // Regular host:port format
+        // 常规 host:port 格式
         if let Some(colon_pos) = host_header.rfind(':') {
-            // Check if there's a port number after the colon
+            // 检查冒号后是否有端口号
             if let Ok(port) = host_header[colon_pos + 1..].parse::<u16>() {
                 return (host_header[..colon_pos].to_string(), port);
             }
         }
 
-        // No port in header
+        // 头部中没有端口
         return (host_header.to_string(), uri.port_u16().unwrap_or(80));
     }
 
-    // Fall back to URI
+    // 回退到 URI
     let host = uri.host().unwrap_or("").to_string();
     let port = uri.port_u16().unwrap_or(80);
     (host, port)
@@ -67,7 +67,7 @@ pub async fn handle_http_connection(
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
-    info!("Handling HTTP connection: {stream:?}");
+    info!("处理 HTTP 连接: {stream:?}");
     let io = TokioIo::new(stream);
     let pool_clone = pool.clone();
     let checker_clone = direct_checker.clone();
@@ -83,7 +83,7 @@ pub async fn handle_http_connection(
         .with_upgrades();
 
     if let Err(e) = conn.await {
-        error!("Error serving HTTP connection: {}", e);
+        error!("HTTP 连接服务出错: {}", e);
         return Err(AgentError::HyperError(e));
     }
 
@@ -95,7 +95,7 @@ async fn handle_http_request(
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    info!("HTTP request: {} {}", req.method(), req.uri());
+    info!("HTTP 请求: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
         handle_connect(req, pool, direct_checker).await
@@ -113,7 +113,7 @@ async fn handle_connect(
     let host = uri.host().unwrap_or("").to_string();
     let port = uri.port_u16().unwrap_or(443);
 
-    info!("CONNECT request to {}:{}", host, port);
+    info!("CONNECT 请求到 {}:{}", host, port);
 
     let address = Address::Domain {
         host: host.clone(),
@@ -123,23 +123,23 @@ async fn handle_connect(
     let target = format!("{host}:{port}");
 
     if direct_checker.is_direct(&address) {
-        // === Direct access path: connect to target directly ===
-        info!("CONNECT using DIRECT connection to {}", target);
+        // === 直连路径: 直接连接目标 ===
+        info!("CONNECT 使用直连连接到 {}", target);
 
         let target_for_spawn = target.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     info!(
-                        "HTTP CONNECT upgrade successful (direct) for {}:{}",
+                        "HTTP CONNECT 升级成功（直连） {}:{}",
                         host, port
                     );
                     if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
-                        error!("Direct tunnel error: {}", e);
+                        error!("直连隧道错误: {}", e);
                     }
                 }
                 Err(e) => {
-                    error!("HTTP CONNECT upgrade failed: {}", e);
+                    error!("HTTP CONNECT 升级失败: {}", e);
                 }
             }
         });
@@ -149,7 +149,7 @@ async fn handle_connect(
             .body(empty())
             .unwrap())
     } else {
-        // === Proxy access path: connect through proxy tunnel ===
+        // === 代理路径: 通过代理隧道连接 ===
         let connected_stream = match pool
             .as_ref()
             .get_connected_stream(address, TransportProtocol::Tcp)
@@ -157,13 +157,13 @@ async fn handle_connect(
         {
             Ok(stream) => {
                 info!(
-                    "Got connected stream from pool, stream_id: {}",
+                    "从连接池获取已连接流, stream_id: {}",
                     stream.stream_id()
                 );
                 stream
             }
             Err(e) => {
-                error!("Failed to get stream from pool: {}", e);
+                error!("从连接池获取流失败: {}", e);
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(boxed(
@@ -177,13 +177,13 @@ async fn handle_connect(
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    info!("HTTP CONNECT upgrade successful for {}:{}", host, port);
+                    info!("HTTP CONNECT 升级成功 {}:{}", host, port);
                     if let Err(e) = tunnel(upgraded, connected_stream, target).await {
-                        error!("Tunnel error: {}", e);
+                        error!("隧道错误: {}", e);
                     }
                 }
                 Err(e) => {
-                    error!("HTTP CONNECT upgrade failed: {}", e);
+                    error!("HTTP CONNECT 升级失败: {}", e);
                 }
             }
         });
@@ -200,33 +200,33 @@ async fn tunnel(
     connected_stream: ConnectedStream,
     target: String,
 ) -> std::result::Result<(), AgentError> {
-    // Convert to AsyncRead + AsyncWrite compatible types
+    // 转换为 AsyncRead + AsyncWrite 兼容类型
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 
-    // Use tokio's optimized bidirectional copy
-    // This is more efficient than manual select loops as it:
-    // 1. Uses zero-copy when possible
-    // 2. Has optimized buffering
-    // 3. Handles backpressure properly
+    // 使用 tokio 优化的双向拷贝
+    // 比手动 select 循环更高效：
+    // 1. 尽可能使用零拷贝
+    // 2. 优化的缓冲区
+    // 3. 正确处理背压
     match tokio::io::copy_bidirectional(&mut client_io, &mut proxy_io).await {
         Ok((client_to_proxy, proxy_to_client)) => {
             info!(
-                "CONNECT tunnel closed: {} bytes client->proxy, {} bytes proxy->client",
+                "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端",
                 client_to_proxy, proxy_to_client
             );
             telemetry::emit_traffic("HTTP CONNECT", target, client_to_proxy, proxy_to_client);
         }
         Err(e) => {
-            // Connection errors are expected when client closes connection
-            debug!("CONNECT tunnel ended: {}", e);
+            // 客户端关闭连接时出现的连接错误是预期的
+            debug!("CONNECT 隧道结束: {}", e);
         }
     }
 
     Ok(())
 }
 
-/// Direct tunnel: connect to target directly without proxy
+/// 直连隧道: 不通过代理直接连接目标
 async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
@@ -234,7 +234,7 @@ async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<
     match tokio::io::copy_bidirectional(&mut client_io, &mut target_stream).await {
         Ok((client_to_target, target_to_client)) => {
             info!(
-                "Direct CONNECT tunnel closed: {} bytes client->target, {} bytes target->client",
+                "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端",
                 client_to_target, target_to_client
             );
             telemetry::emit_traffic(
@@ -245,7 +245,7 @@ async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<
             );
         }
         Err(e) => {
-            debug!("Direct CONNECT tunnel ended: {}", e);
+            debug!("直连 CONNECT 隧道结束: {}", e);
         }
     }
 
@@ -259,10 +259,10 @@ async fn handle_regular_request(
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri();
 
-    // Extract host and port from Host header or URI
+    // 从 Host 头或 URI 中提取主机和端口
     let (host, port) = extract_host_port(&req, uri);
 
-    info!("HTTP request to {}:{}", host, port);
+    info!("HTTP 请求到 {}:{}", host, port);
 
     if host.is_empty() {
         return Ok(Response::builder()
@@ -278,7 +278,7 @@ async fn handle_regular_request(
         port,
     };
 
-    // Fix up the URI to be a relative path (origin-form) for the target server
+    // 将 URI 修正为目标服务器的相对路径（origin-form）
     let path = req
         .uri()
         .path_and_query()
@@ -290,14 +290,14 @@ async fn handle_regular_request(
     }
 
     if direct_checker.is_direct(&address) {
-        // === Direct access path: connect to target directly ===
+        // === 直连路径: 直接连接目标 ===
         let target = address_to_string(&address);
-        info!("HTTP request using DIRECT connection to {}", target);
+        info!("HTTP 请求使用直连连接到 {}", target);
 
         let target_stream = match TcpStream::connect(&target).await {
             Ok(s) => s,
             Err(e) => {
-                error!("Failed to connect directly to {}: {}", target, e);
+                error!("直连到 {} 失败: {}", target, e);
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(boxed(
@@ -308,13 +308,13 @@ async fn handle_regular_request(
             }
         };
 
-        // Handshake with the target directly
+        // 直接与目标进行握手
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(target_stream)).await?;
 
         tokio::spawn(async move {
             if let Err(err) = conn.await {
-                error!("Direct connection failed: {:?}", err);
+                error!("直连连接失败: {:?}", err);
             }
         });
 
@@ -324,7 +324,7 @@ async fn handle_regular_request(
 
         Ok(Response::from_parts(parts, body))
     } else {
-        // === Proxy access path: connect through proxy tunnel ===
+        // === 代理路径: 通过代理隧道连接 ===
         let connected_stream = match pool
             .as_ref()
             .get_connected_stream(address, TransportProtocol::Tcp)
@@ -332,7 +332,7 @@ async fn handle_regular_request(
         {
             Ok(stream) => stream,
             Err(e) => {
-                error!("Failed to get stream from pool: {}", e);
+                error!("从连接池获取流失败: {}", e);
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(boxed(
@@ -343,23 +343,23 @@ async fn handle_regular_request(
             }
         };
 
-        // Convert into async IO
+        // 转换为异步 IO
         let proxy_io = connected_stream.into_async_io();
 
-        // Handshake with the target (via proxy tunnel)
+        // 通过代理隧道与目标进行握手
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
 
         tokio::spawn(async move {
             if let Err(err) = conn.await {
-                error!("Connection failed: {:?}", err);
+                error!("连接失败: {:?}", err);
             }
         });
 
-        // Send the request
+        // 发送请求
         let response = sender.send_request(req).await?;
 
-        // Convert the response body to our BoxBody type
+        // 将响应体转换为 BoxBody 类型
         let (parts, body) = response.into_parts();
         let body = boxed(body);
 
@@ -367,7 +367,7 @@ async fn handle_regular_request(
     }
 }
 
-// Helper for unknown body
+// 未知体的辅助类型
 type AgentBody = BoxBody<Bytes, hyper::Error>;
 
 fn boxed<B>(body: B) -> AgentBody

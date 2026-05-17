@@ -16,9 +16,9 @@ pub struct TestResult {
     pub duration_ms: u128,
 }
 
-/// Run all integration tests
+/// 运行所有集成测试
 pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
-    info!("=== Starting Integration Tests ===");
+    info!("=== 开始集成测试 ===");
 
     let mut results = IntegrationTestResults {
         total_tests: 0,
@@ -27,30 +27,30 @@ pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
         test_details: Vec::new(),
     };
 
-    // Test HTTP health endpoint
+    // 测试 HTTP 健康检查端点
     results.add_test(test_http_health(agent_addr).await);
 
-    // Test HTTP echo endpoint
+    // 测试 HTTP 回显端点
     results.add_test(test_http_echo(agent_addr).await);
 
-    // Test HTTP large response
+    // 测试 HTTP 大响应
     results.add_test(test_http_large_response(agent_addr).await);
 
-    // Test HTTP JSON response
+    // 测试 HTTP JSON 响应
     results.add_test(test_http_json(agent_addr).await);
 
-    // Test SOCKS5 connection
+    // 测试 SOCKS5 连接
     results.add_test(test_socks5_echo(agent_addr).await);
 
-    // Test SOCKS5 large data transfer
+    // 测试 SOCKS5 大数据传输
     results.add_test(test_socks5_large_data(agent_addr).await);
 
-    // Test SOCKS5 UDP Associate
+    // 测试 SOCKS5 UDP 关联
     results.add_test(test_socks5_udp(agent_addr).await);
 
-    info!("=== Integration Tests Complete ===");
+    info!("=== 集成测试完成 ===");
     info!(
-        "Total: {}, Passed: {}, Failed: {}",
+        "总数：{}，通过：{}，失败：{}",
         results.total_tests, results.passed, results.failed
     );
 
@@ -62,16 +62,16 @@ impl IntegrationTestResults {
         self.total_tests += 1;
         if result.passed {
             self.passed += 1;
-            info!("✓ {} - PASSED ({} ms)", result.name, result.duration_ms);
+            info!("✓ {} - 通过（{} ms）", result.name, result.duration_ms);
         } else {
             self.failed += 1;
             error!(
-                "✗ {} - FAILED: {}",
+                "✗ {} - 失败：{}",
                 result.name,
                 result
                     .error
                     .as_ref()
-                    .unwrap_or(&"Unknown error".to_string())
+                    .unwrap_or(&"未知错误".to_string())
             );
         }
         self.test_details.push(result);
@@ -80,7 +80,7 @@ impl IntegrationTestResults {
 
 async fn test_http_health(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "HTTP Health Check".to_string();
+    let name = "HTTP 健康检查".to_string();
 
     let client = MockHttpClient::new(agent_addr.to_string());
 
@@ -91,7 +91,7 @@ async fn test_http_health(agent_addr: &str) -> TestResult {
                 name,
                 passed,
                 error: if !passed {
-                    Some("Response didn't contain 'OK'".to_string())
+                    Some("响应未包含 'OK'".to_string())
                 } else {
                     None
                 },
@@ -109,7 +109,7 @@ async fn test_http_health(agent_addr: &str) -> TestResult {
 
 async fn test_http_echo(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "HTTP Echo".to_string();
+    let name = "HTTP 回显".to_string();
 
     let client = MockHttpClient::new(agent_addr.to_string());
     let test_data = b"Hello, World!".to_vec();
@@ -124,7 +124,7 @@ async fn test_http_echo(agent_addr: &str) -> TestResult {
                 name,
                 passed,
                 error: if !passed {
-                    Some("Echo response didn't match request".to_string())
+                    Some("回显响应与请求不匹配".to_string())
                 } else {
                     None
                 },
@@ -142,18 +142,18 @@ async fn test_http_echo(agent_addr: &str) -> TestResult {
 
 async fn test_http_large_response(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "HTTP Large Response".to_string();
+    let name = "HTTP 大响应".to_string();
 
     let client = MockHttpClient::new(agent_addr.to_string());
 
     match client.get("http://127.0.0.1:9090/large").await {
         Ok((_, body)) => {
-            let passed = body.len() >= 1024 * 1024; // Should be at least 1MB
+            let passed = body.len() >= 1024 * 1024; // 至少应为 1 MB
             TestResult {
                 name,
                 passed,
                 error: if !passed {
-                    Some(format!("Response too small: {} bytes", body.len()))
+                    Some(format!("响应过小：{} 字节", body.len()))
                 } else {
                     None
                 },
@@ -171,7 +171,7 @@ async fn test_http_large_response(agent_addr: &str) -> TestResult {
 
 async fn test_http_json(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "HTTP JSON Response".to_string();
+    let name = "HTTP JSON 响应".to_string();
 
     let client = MockHttpClient::new(agent_addr.to_string());
 
@@ -182,7 +182,7 @@ async fn test_http_json(agent_addr: &str) -> TestResult {
                 name,
                 passed,
                 error: if !passed {
-                    Some("JSON response invalid".to_string())
+                    Some("JSON 响应无效".to_string())
                 } else {
                     None
                 },
@@ -200,7 +200,7 @@ async fn test_http_json(agent_addr: &str) -> TestResult {
 
 async fn test_socks5_echo(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "SOCKS5 TCP Echo".to_string();
+    let name = "SOCKS5 TCP 回显".to_string();
 
     let client = MockSocks5Client::new(agent_addr.to_string());
     let test_data = b"SOCKS5 Echo Test";
@@ -212,7 +212,7 @@ async fn test_socks5_echo(agent_addr: &str) -> TestResult {
                 name,
                 passed,
                 error: if !passed {
-                    Some("Echo response didn't match request".to_string())
+                    Some("回显响应与请求不匹配".to_string())
                 } else {
                     None
                 },
@@ -230,7 +230,7 @@ async fn test_socks5_echo(agent_addr: &str) -> TestResult {
 
 async fn test_socks5_large_data(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "SOCKS5 Large Data Transfer".to_string();
+    let name = "SOCKS5 大数据传输".to_string();
 
     let client = MockSocks5Client::new(agent_addr.to_string());
     let test_data: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
@@ -243,7 +243,7 @@ async fn test_socks5_large_data(agent_addr: &str) -> TestResult {
                 passed,
                 error: if !passed {
                     Some(format!(
-                        "Data transfer failed. Sent {}, Recv {}",
+                        "数据传输失败。已发送 {}，已接收 {}",
                         test_data.len(),
                         response.len()
                     ))
@@ -264,7 +264,7 @@ async fn test_socks5_large_data(agent_addr: &str) -> TestResult {
 
 async fn test_socks5_udp(agent_addr: &str) -> TestResult {
     let start = std::time::Instant::now();
-    let name = "SOCKS5 UDP Associate".to_string();
+    let name = "SOCKS5 UDP 关联".to_string();
 
     let client = MockSocks5Client::new(agent_addr.to_string());
     let test_data = b"SOCKS5 UDP Echo Test";
@@ -277,7 +277,7 @@ async fn test_socks5_udp(agent_addr: &str) -> TestResult {
                 passed,
                 error: if !passed {
                     Some(format!(
-                        "Echo response didn't match request. Sent: {:?}, Recv: {:?}",
+                        "回显响应与请求不匹配。已发送：{:?}，已接收：{:?}",
                         test_data, response
                     ))
                 } else {

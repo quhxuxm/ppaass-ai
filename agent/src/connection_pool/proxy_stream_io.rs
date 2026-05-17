@@ -14,8 +14,8 @@ use tokio_util::io::{SinkWriter, StreamReader};
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
-/// A wrapper that implements AsyncRead + AsyncWrite for use with tokio::io::copy_bidirectional
-/// This uses SinkWriter and StreamReader from tokio_util for better performance
+/// 实现 AsyncRead + AsyncWrite 的包装器，用于 tokio::io::copy_bidirectional
+/// 使用 tokio_util 的 SinkWriter 与 StreamReader 以获得更好性能
 pub struct ProxyStreamIo {
     reader: StreamReader<ResponseStream, Bytes>,
     writer: SinkWriter<DataPacketSink>,

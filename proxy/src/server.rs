@@ -21,15 +21,15 @@ impl ProxyServer {
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
 
-        // Initialize user manager with SQLite database
+        // 使用 SQLite 数据库初始化用户管理器
         let user_manager = Arc::new(
             UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?,
         );
 
-        // Initialize bandwidth monitor
+        // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
 
-        // Register all users in bandwidth monitor
+        // 将所有用户注册到带宽监控器
         for username in user_manager.as_ref().list_users().await? {
             if let Some(user_config) = user_manager.get_user(&username).await? {
                 bandwidth_monitor.register_user(username, user_config.bandwidth_limit_mbps);
@@ -45,9 +45,9 @@ impl ProxyServer {
 
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
-        // Start API server if enabled
+        // 如果启用了 API 服务，则启动它
         let api_handle = if self.config.enable_api {
-            info!("API server enabled, listening on {}", self.config.api_addr);
+            info!("API 服务已启用，监听 {}", self.config.api_addr);
             let api_server = ApiServer::new(
                 self.config.clone(),
                 self.user_manager.clone(),
@@ -56,50 +56,50 @@ impl ProxyServer {
 
             tokio::spawn(async move {
                 if let Err(e) = api_server.run().await {
-                    error!("API server error: {}", e);
+                    error!("API 服务错误：{}", e);
                 }
             })
         } else {
-            info!("API server is disabled");
-            // Create a handle that never completes
+            info!("API 服务已禁用");
+            // 创建一个永不完成的 handle
             tokio::spawn(async {
                 std::future::pending::<()>().await;
             })
         };
 
-        // Start proxy server
+        // 启动代理服务器
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
-        info!("Proxy server listening on {}", self.config.listen_addr);
+        info!("代理服务器正在监听 {}", self.config.listen_addr);
 
         loop {
             tokio::select! {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, addr)) => {
-                            info!("Accepted connection from {}", addr);
+                            info!("接受来自 {} 的连接", addr);
                             let user_manager = self.user_manager.clone();
                             let bandwidth_monitor = self.bandwidth_monitor.clone();
                             let compression_mode = self.config.get_compression_mode();
                             let proxy_config=self.config.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_connection(&proxy_config, stream, user_manager, bandwidth_monitor, compression_mode).await {
-                                    error!("Error handling connection: {}", e);
+                                    error!("处理连接时出错：{}", e);
                                 }
                             });
                         }
                         Err(e) => {
-                            error!("Failed to accept connection: {}", e);
+                            error!("接受连接失败：{}", e);
                         }
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
-                    info!("Received shutdown signal");
+                    info!("收到关闭信号");
                     break;
                 }
             }
         }
 
-        // Wait for API server to finish
+        // 等待 API 服务结束
         let _ = api_handle.await;
 
         Ok(())
@@ -121,39 +121,37 @@ async fn handle_connection(
         proxy_config.clone().into(),
     );
 
-    // Apply auth timeout to the entire authentication phase to prevent zombie
-    // connections from agents that open a TCP connection but never complete
-    // the auth handshake (e.g. half-open connections, port scanners, or
-    // misbehaving clients).
+    // 将认证超时应用到整个认证阶段，防止 agent 打开 TCP 连接后
+    // 一直不完成认证握手而留下僵尸连接（例如半开连接、端口扫描器或异常客户端）。
     let auth_timeout = Duration::from_secs(proxy_config.auth_timeout_secs);
     let username = match tokio::time::timeout(auth_timeout, async {
-        // First, peek at the auth request to get the username
+        // 先窥探认证请求以获取用户名
         let username = match connection.peek_auth_username().await {
             Ok(username) => username,
             Err(e) => {
-                error!("Failed to get username from auth request: {}", e);
+                error!("从认证请求获取用户名失败：{}", e);
                 return Err(e);
             }
         };
 
-        info!("Authentication request from user: {}", username);
+        info!("收到用户 {} 的认证请求", username);
 
-        // Look up the user config for this username
+        // 查找该用户名对应的用户配置
         let user_config = match user_manager.as_ref().get_user(&username).await {
             Ok(Some(config)) => config,
             Ok(None) => {
-                error!("User not found: {}", username);
+                error!("用户不存在：{}", username);
                 connection.send_auth_error("User not found").await?;
                 return Err(crate::error::ProxyError::UserNotFound(username));
             }
             Err(e) => {
-                error!("Database error looking up user: {}", e);
+                error!("查找用户时发生数据库错误：{}", e);
                 connection.send_auth_error("Internal error").await?;
                 return Err(e);
             }
         };
 
-        // Now authenticate with the correct user config
+        // 使用正确的用户配置执行认证
         connection.authenticate(proxy_config, user_config).await?;
 
         Ok(username)
@@ -164,21 +162,20 @@ async fn handle_connection(
         Ok(Err(e)) => return Err(e),
         Err(_) => {
             warn!(
-                "Connection timed out after {}s during authentication phase - closing zombie connection",
+                "连接在认证阶段超时（{} 秒），正在关闭僵尸连接",
                 proxy_config.auth_timeout_secs
             );
             return Ok(());
         }
     };
 
-    // Apply idle timeout to handle_request - this prevents connection leaks from
-    // prewarmed connections that never send a Connect request
+    // 对 handle_request 应用空闲超时，防止预热连接从未发送连接请求导致连接泄漏
     let idle_timeout = Duration::from_secs(proxy_config.idle_connection_timeout_secs);
     match tokio::time::timeout(idle_timeout, connection.handle_request()).await {
         Ok(result) => result,
         Err(_) => {
             warn!(
-                "Connection from user '{}' timed out after {}s waiting for request - closing to prevent leak",
+                "用户 '{}' 的连接等待请求超时（{} 秒），正在关闭以防止泄漏",
                 username, proxy_config.idle_connection_timeout_secs
             );
             Ok(())

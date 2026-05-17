@@ -1,4 +1,4 @@
-//! Tool to generate RSA keys for demo configuration
+//! 为演示配置生成 RSA 密钥的工具
 
 use rsa::{
     RsaPrivateKey,
@@ -7,7 +7,7 @@ use rsa::{
 };
 
 fn main() {
-    println!("Generating RSA-2048 key pair for demo user...\n");
+    println!("正在为演示用户生成 RSA-2048 密钥对...\n");
 
     let mut rng = OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate key");
@@ -21,9 +21,9 @@ fn main() {
         .to_public_key_pem(LineEnding::LF)
         .expect("Failed to encode public key");
 
-    println!("=== PRIVATE KEY (save to keys/user1.pem) ===");
+    println!("=== 私钥（保存到 keys/user1.pem）===");
     println!("{}", private_key_pem.as_str());
 
-    println!("\n=== PUBLIC KEY (for users.toml) ===");
+    println!("\n=== 公钥（用于 users.toml）===");
     println!("{}", public_key_pem);
 }

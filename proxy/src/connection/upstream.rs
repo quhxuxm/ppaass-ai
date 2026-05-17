@@ -1,5 +1,5 @@
-/// Connection to an upstream proxy
-/// Acts as a client (Agent) to the next hop
+/// 到上游代理的连接
+/// 作为客户端（Agent）连接到下一跳
 use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
 use common::{ClientConnection, ClientConnectionConfig, ClientStream};
@@ -7,7 +7,7 @@ use protocol::{Address, TransportProtocol};
 use std::{fmt::Debug, fs::read_to_string, time::Duration};
 use tracing::debug;
 
-/// Configuration adapter for ClientConnection trait
+/// ClientConnection 特征的配置适配器
 #[derive(Debug)]
 struct ProxyClientConfig<'a> {
     config: &'a ProxyConfig,
@@ -71,13 +71,13 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     }
 }
 
-/// Connection to an upstream proxy
+/// 到上游代理的连接
 pub struct UpstreamConnection {
     stream: ClientStream,
 }
 
 impl UpstreamConnection {
-    /// Establish a connection to the upstream proxy
+    /// 建立到上游代理的连接
     pub async fn connect(
         config: &ProxyConfig,
         target_address: Address,
@@ -85,7 +85,7 @@ impl UpstreamConnection {
     ) -> Result<Self> {
         let config_adapter = ProxyClientConfig::new(config)?;
 
-        debug!("Connecting to upstream proxy");
+        debug!("正在连接上游代理");
 
         let client_conn = ClientConnection::connect(&config_adapter, target_address, transport)
             .await
@@ -96,7 +96,7 @@ impl UpstreamConnection {
         })
     }
 
-    /// Convert into an AsyncRead + AsyncWrite stream
+    /// 转换为 AsyncRead + AsyncWrite 流
     pub fn into_stream(self) -> ClientStream {
         self.stream
     }

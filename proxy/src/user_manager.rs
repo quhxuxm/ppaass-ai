@@ -25,15 +25,15 @@ impl UserManager {
         let database_path = database_path.as_ref();
         let keys_dir = keys_dir.as_ref().to_path_buf();
 
-        // Create keys directory if it doesn't exist
+        // 如果密钥目录不存在，则创建
         fs::create_dir_all(&keys_dir)?;
 
-        // Create parent directory for database if it doesn't exist
+        // 如果数据库父目录不存在，则创建
         if let Some(parent) = database_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Connect to SQLite database with connection pool configuration from config
+        // 使用配置中的连接池参数连接 SQLite 数据库
         let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
         let mut opt = ConnectOptions::new(database_url);
         opt.max_connections(db_pool_config.max_connections)
@@ -45,7 +45,7 @@ impl UserManager {
 
         let db = Database::connect(opt).await?;
 
-        // Create table if not exists
+        // 如果表不存在，则创建
         let create_table_sql = r#"
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY NOT NULL,
@@ -61,7 +61,7 @@ impl UserManager {
         ))
         .await?;
 
-        info!("Connected to SQLite database: {}", database_path.display());
+        info!("已连接到 SQLite 数据库：{}", database_path.display());
 
         Ok(Self { db, keys_dir })
     }
@@ -85,18 +85,18 @@ impl UserManager {
         username: String,
         bandwidth_limit_mbps: Option<u64>,
     ) -> Result<(String, String)> {
-        info!("Adding user: {}", username);
+        info!("正在添加用户：{}", username);
 
-        // Generate RSA key pair
+        // 生成 RSA 密钥对
         let keypair = RsaKeyPair::generate(2048)?;
         let private_key_pem = keypair.private_key_to_pem()?;
         let public_key_pem = keypair.public_key_to_pem()?;
 
-        // Save private key to file
+        // 将私钥保存到文件
         let private_key_path = self.keys_dir.join(format!("{}.pem", username));
         fs::write(&private_key_path, &private_key_pem)?;
 
-        // Create user in database
+        // 在数据库中创建用户
         let now = chrono::Utc::now().naive_utc();
         let user = user::ActiveModel {
             username: Set(username.clone()),
@@ -108,13 +108,13 @@ impl UserManager {
 
         user::Entity::insert(user).exec(&self.db).await?;
 
-        info!("User {} added successfully", username);
+        info!("用户 {} 添加成功", username);
         Ok((private_key_pem, public_key_pem))
     }
 
     #[instrument(skip(self))]
     pub async fn remove_user(&self, username: &str) -> Result<()> {
-        info!("Removing user: {}", username);
+        info!("正在删除用户：{}", username);
 
         let result = user::Entity::delete_by_id(username.to_string())
             .exec(&self.db)
@@ -124,13 +124,13 @@ impl UserManager {
             return Err(ProxyError::UserNotFound(username.to_string()));
         }
 
-        // Delete private key file
+        // 删除私钥文件
         let private_key_path = self.keys_dir.join(format!("{}.pem", username));
         if private_key_path.exists() {
             fs::remove_file(private_key_path)?;
         }
 
-        info!("User {} removed successfully", username);
+        info!("用户 {} 删除成功", username);
         Ok(())
     }
 
@@ -140,7 +140,7 @@ impl UserManager {
         Ok(users.into_iter().map(|u| u.username).collect())
     }
 
-    /// Import a user with an existing public key (for migration from TOML config)
+    /// 使用现有公钥导入用户（用于从 TOML 配置迁移）
     #[instrument(skip(self))]
     pub async fn import_user(
         &self,
@@ -148,9 +148,9 @@ impl UserManager {
         public_key_pem: String,
         bandwidth_limit_mbps: Option<u64>,
     ) -> Result<()> {
-        info!("Importing user: {}", username);
+        info!("正在导入用户：{}", username);
 
-        // Create user in database
+        // 在数据库中创建用户
         let now = chrono::Utc::now().naive_utc();
         let user = user::ActiveModel {
             username: Set(username.clone()),
@@ -162,7 +162,7 @@ impl UserManager {
 
         user::Entity::insert(user).exec(&self.db).await?;
 
-        info!("User {} imported successfully", username);
+        info!("用户 {} 导入成功", username);
         Ok(())
     }
 
@@ -173,7 +173,7 @@ impl UserManager {
         username: &str,
         bandwidth_limit_mbps: Option<u64>,
     ) -> Result<()> {
-        info!("Updating bandwidth for user: {}", username);
+        info!("正在更新用户 {} 的带宽限制", username);
 
         let user = user::Entity::find_by_id(username.to_string())
             .one(&self.db)
@@ -189,7 +189,7 @@ impl UserManager {
                     ..Default::default()
                 };
                 user::Entity::update(update).exec(&self.db).await?;
-                info!("User {} bandwidth updated successfully", username);
+                info!("用户 {} 的带宽限制更新成功", username);
                 Ok(())
             }
             None => Err(ProxyError::UserNotFound(username.to_string())),

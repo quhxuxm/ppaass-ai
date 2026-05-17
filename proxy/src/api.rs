@@ -107,7 +107,7 @@ impl ApiServer {
             .layer(TraceLayer::new_for_http())
             .with_state(app_state);
 
-        info!("Starting API server on {}", self.config.api_addr);
+        info!("正在 {} 启动 API 服务", self.config.api_addr);
 
         let listener = tokio::net::TcpListener::bind(&self.config.api_addr).await?;
         axum::serve(listener, app).await?;
@@ -128,7 +128,7 @@ async fn add_user(
     State(state): State<AppState>,
     Json(request): Json<AddUserRequest>,
 ) -> impl IntoResponse {
-    info!("API: Add user request for {}", request.username);
+    info!("API：请求添加用户 {}", request.username);
 
     match state
         .user_manager
@@ -137,7 +137,7 @@ async fn add_user(
         .await
     {
         Ok((private_key, public_key)) => {
-            // Register user in bandwidth monitor
+            // 将用户注册到带宽监控器
             state
                 .bandwidth_monitor
                 .register_user(request.username.clone(), request.bandwidth_limit_mbps);
@@ -169,7 +169,7 @@ async fn remove_user(
     State(state): State<AppState>,
     Json(request): Json<RemoveUserRequest>,
 ) -> impl IntoResponse {
-    info!("API: Remove user request for {}", request.username);
+    info!("API：请求删除用户 {}", request.username);
 
     match state
         .user_manager
@@ -233,9 +233,9 @@ async fn update_config(
     State(_state): State<AppState>,
     Json(_new_config): Json<ProxyConfig>,
 ) -> impl IntoResponse {
-    // In a real implementation, you would update the configuration
-    // and potentially reload parts of the system
-    info!("API: Update config request");
+    // 在真实实现中，这里会更新配置，
+    // 并可能重新加载系统的部分组件
+    info!("API：请求更新配置");
 
     (
         StatusCode::OK,

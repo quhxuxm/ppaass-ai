@@ -48,16 +48,16 @@ pub async fn run_performance_tests(
     concurrency: usize,
     duration_secs: u64,
 ) -> Result<PerformanceTestResults> {
-    info!("=== Starting Performance Tests ===");
+    info!("=== 开始性能测试 ===");
     info!(
-        "Agent: {}, Concurrency: {}, Duration: {}s",
+        "Agent：{}，并发数：{}，持续时间：{} 秒",
         agent_addr, concurrency, duration_secs
     );
 
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration_secs);
 
-    // Shared state for metrics collection
+    // 指标采集的共享状态
     let http_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
     let socks5_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
     let http_success = Arc::new(AtomicUsize::new(0));
@@ -66,21 +66,21 @@ pub async fn run_performance_tests(
     let socks5_failed = Arc::new(AtomicUsize::new(0));
     let total_bytes = Arc::new(AtomicU64::new(0));
 
-    // System monitoring
+    // 系统监控
     let mut system = System::new_all();
     system.refresh_all();
     let initial_memory = system.used_memory();
     let peak_memory = Arc::new(AtomicU64::new(initial_memory));
 
-    // Add semaphore to limit concurrent requests and reduce memory usage
-    let max_concurrent = std::cmp::min(concurrency * 2, 200); // Cap at 200 concurrent
+    // 增加信号量以限制并发请求并降低内存使用
+    let max_concurrent = std::cmp::min(concurrency * 2, 200); // 最大并发限制为 200
     let semaphore = Arc::new(Semaphore::new(max_concurrent));
-    info!("Limiting max concurrent requests to: {}", max_concurrent);
+    info!("最大并发请求数限制为：{}", max_concurrent);
 
-    // Spawn worker tasks
+    // 启动工作任务
     let mut handles = Vec::new();
 
-    // HTTP workers (60% of concurrency)
+    // HTTP 工作任务（占并发数的 60%）
     let http_workers = (concurrency as f32 * 0.6) as usize;
     for _ in 0..http_workers {
         let addr = agent_addr.to_string();
@@ -96,7 +96,7 @@ pub async fn run_performance_tests(
         handles.push(handle);
     }
 
-    // SOCKS5 workers (40% of concurrency)
+    // SOCKS5 工作任务（占并发数的 40%）
     let socks5_workers = concurrency - http_workers;
     for _ in 0..socks5_workers {
         let addr = agent_addr.to_string();
@@ -112,7 +112,7 @@ pub async fn run_performance_tests(
         handles.push(handle);
     }
 
-    // System monitoring task
+    // 系统监控任务
     let peak_mem = peak_memory.clone();
     let monitor_handle = tokio::spawn(async move {
         let mut sys = System::new_all();
@@ -124,7 +124,7 @@ pub async fn run_performance_tests(
         }
     });
 
-    // Wait for all workers to complete
+    // 等待所有工作任务完成
     for handle in handles {
         let _ = handle.await;
     }
@@ -132,7 +132,7 @@ pub async fn run_performance_tests(
 
     let actual_duration = start_time.elapsed();
 
-    // Collect results
+    // 收集结果
     let http_hist = http_histogram.lock().await;
     let socks5_hist = socks5_histogram.lock().await;
     let http_succ = http_success.load(Ordering::Relaxed);
@@ -153,7 +153,7 @@ pub async fn run_performance_tests(
     let throughput_mbps =
         (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
 
-    // Final system metrics
+    // 最终系统指标
     system.refresh_all();
     let cpu_usage = system.global_cpu_usage();
     let memory_usage_mb = system.used_memory() / 1024 / 1024;
@@ -175,18 +175,18 @@ pub async fn run_performance_tests(
         },
     };
 
-    info!("=== Performance Tests Complete ===");
-    info!("Total Requests: {}", total_requests);
+    info!("=== 性能测试完成 ===");
+    info!("总请求数：{}", total_requests);
     if total_requests > 0 {
         info!(
-            "Success Rate: {:.2}%",
+            "成功率：{:.2}%",
             (successful_requests as f64 / total_requests as f64) * 100.0
         );
     } else {
-        info!("Success Rate: N/A (no requests completed)");
+        info!("成功率：N/A（没有已完成请求）");
     }
-    info!("Requests/sec: {:.2}", requests_per_second);
-    info!("Throughput: {:.2} Mbps", throughput_mbps);
+    info!("每秒请求数：{:.2}", requests_per_second);
+    info!("吞吐量：{:.2} Mbps", throughput_mbps);
 
     Ok(results)
 }
@@ -208,17 +208,17 @@ async fn http_worker(
     ];
     let mut url_idx = 0;
     let mut consecutive_failures = 0;
-    let mut latencies = Vec::with_capacity(100); // Batch histogram updates
+    let mut latencies = Vec::with_capacity(100); // 批量更新直方图
 
     while Instant::now() < end_time {
         let url = urls[url_idx % urls.len()];
         url_idx += 1;
 
-        // Acquire semaphore permit before making request
+        // 发送请求前获取信号量许可
         let _permit = match semaphore.try_acquire() {
             Ok(p) => p,
             Err(_) => {
-                // If can't acquire, wait a bit and try again
+                // 如果无法获取，则稍等后重试
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             }
@@ -231,7 +231,7 @@ async fn http_worker(
                 total_bytes.fetch_add(body.len() as u64, Ordering::Relaxed);
                 consecutive_failures = 0;
 
-                // Batch update histogram every 100 requests
+                // 每 100 个请求批量更新一次直方图
                 if latencies.len() >= 100 {
                     let mut hist = histogram.lock().await;
                     for latency in latencies.drain(..) {
@@ -240,11 +240,11 @@ async fn http_worker(
                 }
             }
             Err(e) => {
-                warn!("HTTP request failed: {}", e);
+                warn!("HTTP 请求失败：{}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
                 consecutive_failures += 1;
 
-                // Add exponential backoff for consecutive failures
+                // 对连续失败增加指数退避
                 if consecutive_failures > 0 {
                     let delay_ms = std::cmp::min(100, consecutive_failures * 10);
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -253,7 +253,7 @@ async fn http_worker(
         }
     }
 
-    // Flush remaining latencies
+    // 刷新剩余延迟数据
     if !latencies.is_empty() {
         let mut hist = histogram.lock().await;
         for latency in latencies {
@@ -274,14 +274,14 @@ async fn socks5_worker(
     let client = MockSocks5Client::new(agent_addr);
     let test_data = b"Performance test data";
     let mut consecutive_failures = 0;
-    let mut latencies = Vec::with_capacity(100); // Batch histogram updates
+    let mut latencies = Vec::with_capacity(100); // 批量更新直方图
 
     while Instant::now() < end_time {
-        // Acquire semaphore permit before making request
+        // 发送请求前获取信号量许可
         let _permit = match semaphore.try_acquire() {
             Ok(p) => p,
             Err(_) => {
-                // If can't acquire, wait a bit and try again
+                // 如果无法获取，则稍等后重试
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             }
@@ -294,7 +294,7 @@ async fn socks5_worker(
                 total_bytes.fetch_add((test_data.len() + response.len()) as u64, Ordering::Relaxed);
                 consecutive_failures = 0;
 
-                // Batch update histogram every 100 requests
+                // 每 100 个请求批量更新一次直方图
                 if latencies.len() >= 100 {
                     let mut hist = histogram.lock().await;
                     for latency in latencies.drain(..) {
@@ -303,11 +303,11 @@ async fn socks5_worker(
                 }
             }
             Err(e) => {
-                warn!("SOCKS5 request failed: {}", e);
+                warn!("SOCKS5 请求失败：{}", e);
                 failed.fetch_add(1, Ordering::Relaxed);
                 consecutive_failures += 1;
 
-                // Add exponential backoff for consecutive failures
+                // 对连续失败增加指数退避
                 if consecutive_failures > 0 {
                     let delay_ms = std::cmp::min(100, consecutive_failures * 10);
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -316,7 +316,7 @@ async fn socks5_worker(
         }
     }
 
-    // Flush remaining latencies
+    // 刷新剩余延迟数据
     if !latencies.is_empty() {
         let mut hist = histogram.lock().await;
         for latency in latencies {
@@ -357,7 +357,7 @@ fn calculate_metrics(
         p50_latency_ms: histogram.value_at_quantile(0.5) as f64,
         p95_latency_ms: histogram.value_at_quantile(0.95) as f64,
         p99_latency_ms: histogram.value_at_quantile(0.99) as f64,
-        total_bytes_transferred: 0, // Calculated separately
+        total_bytes_transferred: 0, // 单独计算
     }
 }
 

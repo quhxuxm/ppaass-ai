@@ -1,97 +1,104 @@
-# PPAASS Proxy Server Configuration
-# This configuration is for demo purposes with real RSA keys
+# PPAASS Proxy 服务器配置
+# 该配置用于演示，包含真实 RSA 密钥
 
-# Address to listen for incoming agent connections
+# 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:80"
 
-# Address for REST API (user management, monitoring)
+# REST API 地址（用户管理、监控）
 api_addr = "0.0.0.0:8080"
 
-# Enable REST API server for user management and monitoring (default: false)
+# 启用用于用户管理和监控的 REST API 服务（默认：false）
 enable_api = false
 
-# Path to SQLite database for user management
+# 用户管理所用 SQLite 数据库路径
 database_path = "data/users.db"
 
-# Directory where RSA keys are stored
+# RSA 密钥存储目录
 keys_dir = "keys"
 
-# Log level: trace, debug, info, warn, error
+# 日志级别：trace、debug、info、warn、error
 log_level = "error"
 
-# Log directory for file-based logging (better performance than console)
+# 文件日志目录（相比控制台输出性能更好）
 log_dir = "logs"
 
-# Log file name (used only when log_dir is set)
+# 日志文件名（仅在设置 log_dir 时使用）
 log_file = "proxy.log"
 
-# Compression mode for data transfer: none, zstd, lz4, gzip
-# - none: No compression (default)
-# - zstd: Zstandard compression - good balance of speed and ratio
-# - lz4: LZ4 compression - fastest, lower compression ratio
-# - gzip: Gzip compression - widely compatible, slower
+# 数据传输压缩模式：none、zstd、lz4、gzip
+# - none：不压缩（默认）
+# - zstd：Zstandard 压缩，速度与压缩率较均衡
+# - lz4：LZ4 压缩，速度最快，压缩率较低
+# - gzip：Gzip 压缩，兼容性广，速度较慢
 compression_mode = "lz4"
 
-# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# 连接目标服务器时使用的出站网络设备名。
+# 不设置时使用系统默认路由，例如：outbound_interface = "eth0"
+# outbound_interface = "eth0"
+
+# proxy 端处理 DNS 请求时使用的上游 DNS。
+# 不设置时读取系统默认 DNS（/etc/resolv.conf）
+# dns_upstream_addr = "8.8.8.8:53"
+
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 runtime_threads = 64
 
-# Database Connection Pool Configuration
+# 数据库连接池配置
 # ========================================
-# Configuration for SQLite database connection pooling
+# SQLite 数据库连接池配置
 
 [db_pool]
-# Maximum number of concurrent database connections (default: 32)
+# 最大并发数据库连接数（默认：32）
 max_connections = 32
 
-# Minimum number of connections to maintain in the pool (default: 5)
+# 池中保持的最小连接数（默认：5）
 min_connections = 5
 
-# Connection timeout in seconds (default: 8)
+# 连接超时时间，单位秒（默认：8）
 connect_timeout_secs = 8
 
-# Idle timeout in seconds - connections idle longer than this are closed (default: 300 = 5 minutes)
+# 空闲超时时间，单位秒；空闲超过该时间的连接会被关闭（默认：300 = 5 分钟）
 idle_timeout_secs = 300
 
-# Maximum lifetime of a connection in seconds before it's recycled (default: 3600 = 1 hour)
+# 连接被回收前的最长生命周期，单位秒（默认：3600 = 1 小时）
 max_lifetime_secs = 3600
 
 
-# Tolerance time in seconds for replay attack prevention
+# 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300
 
-# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+# 异步运行时栈的最大大小，单位 MB（默认：4 MB）
 async_runtime_stack_size_mb = 4
 
-# Forward Mode Configuration
+# 转发模式配置
 # --------------------------
-# If enabled, this proxy will forward all traffic to another PPAASS proxy
-# instead of connecting directly to the target.
+# 启用后，该代理会将所有流量转发到另一个 PPAASS 代理，
+# 而不是直接连接目标。
 # forward_mode = false
 
-# Upstream proxy address (required if forward_mode = true)
+# 上游代理地址（forward_mode = true 时必填）
 # upstream_proxy_addr = "upstream-proxy:8080"
 
-# Username to authenticate with the upstream proxy
+# 连接上游代理时使用的认证用户名
 # upstream_username = "user2"
 
-# Path to the private key for authenticating with the upstream proxy
+# 连接上游代理时用于认证的私钥路径
 # upstream_private_key_path = "keys/user2.pem"
 
-# List of upstream proxy addresses for load balancing and failover
-# When multiple addresses are specified, one will be randomly selected for each connection
+# 上游代理地址列表，用于负载均衡和故障切换
+# 指定多个地址时，每个连接会随机选择其中一个
 # upstream_proxy_addrs = ["upstream-proxy1:8080", "upstream-proxy2:8080"]
 
-# Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
+# 上游代理连接超时时间，单位秒（默认：30 秒）
 # connect_timeout_secs = 30
 
-# Authentication timeout in seconds - connections that don't complete the
-# authentication handshake within this time will be closed. Prevents zombie
-# connections from half-open TCP connections, port scanners, etc. (default: 30)
+# 认证超时时间，单位秒；未在该时间内完成认证握手的连接会被关闭。
+# 用于防止半开 TCP 连接、端口扫描器等造成僵尸连接（默认：30）。
 auth_timeout_secs = 30
 
-# Idle connection timeout in seconds - authenticated connections that don't
-# send a Connect request within this time will be closed (default: 120)
+# 空闲连接超时时间，单位秒；已认证连接若未在该时间内
+# 发送连接请求，将被关闭（默认：120）
 idle_connection_timeout_secs = 120
 
-# Optional: Enable tokio-console for debugging
+# 可选：启用 tokio-console 用于调试
 # console_port = 6670

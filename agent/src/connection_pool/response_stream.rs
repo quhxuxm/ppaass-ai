@@ -10,8 +10,8 @@ use tokio_util::codec::Framed;
 
 type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
-/// A stream adapter that extracts data from proxy protocol messages
-/// This implements Stream<Item = Result<Bytes, io::Error>> for use with StreamReader
+/// 从代理协议消息中提取数据的 stream 适配器
+/// 实现 Stream<Item = Result<Bytes, io::Error>> 以供 StreamReader 使用
 pub struct ResponseStream {
     reader: FramedReader,
     stream_id: String,
@@ -31,7 +31,7 @@ impl Stream for ResponseStream {
             let reader = Pin::new(&mut self.reader);
             match reader.poll_next(cx) {
                 Poll::Ready(Some(Ok(response))) => {
-                    // Response is already deserialized, decrypted, and decompressed by codec
+                    // 响应已由编解码器完成反序列化、解密和解压
                     match response {
                         ProxyResponse::Data(packet) => {
                             if packet.stream_id == self.stream_id {
@@ -40,10 +40,10 @@ impl Stream for ResponseStream {
                                 }
                                 return Poll::Ready(Some(Ok(Bytes::from(packet.data))));
                             }
-                            // Wrong stream, continue polling
+                            // 不是目标流，继续轮询
                         }
                         _ => {
-                            // Ignore other responses, continue polling
+                            // 忽略其他响应，继续轮询
                         }
                     }
                 }

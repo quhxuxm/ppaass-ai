@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Data packet for transferring data between agent and proxy
+/// agent 与 proxy 之间传输数据的数据包
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataPacket {
     pub stream_id: String,

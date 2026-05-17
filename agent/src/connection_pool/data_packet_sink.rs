@@ -9,8 +9,8 @@ use tokio_util::codec::Framed;
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 
-/// A sink adapter that wraps data into proxy protocol messages
-/// This implements Sink<&[u8], Error = io::Error> for use with SinkWriter
+/// 将数据包装为代理协议消息的 sink 适配器
+/// 实现 Sink<&[u8], Error = io::Error> 以供 SinkWriter 使用
 pub struct DataPacketSink {
     writer: FramedWriter,
     stream_id: String,
@@ -55,7 +55,7 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // First, send end-of-stream message
+        // 首先发送流结束消息
         let this = self.as_mut().get_mut();
         let request = this.create_data_request(&[], true);
 
@@ -75,7 +75,7 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
             }
         }
 
-        // Then close the underlying writer
+        // 然后关闭底层 writer
         Pin::new(&mut self.writer)
             .poll_close(cx)
             .map_err(|e| io::Error::other(e.to_string()))
