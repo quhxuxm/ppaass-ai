@@ -9,7 +9,6 @@ pub use users_config::UsersConfig;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -91,30 +90,6 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
         let config = UsersConfig::load(file.path()).unwrap();
 
         assert!(config.users.is_empty());
-    }
-
-    #[test]
-    fn save_and_load_users_config_roundtrip() {
-        let mut users = BTreeMap::new();
-        users.insert(
-            "testuser".to_string(),
-            UserConfig {
-                username: "testuser".to_string(),
-                public_key_pem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----"
-                    .to_string(),
-                bandwidth_limit_mbps: Some(200),
-            },
-        );
-        let original = UsersConfig { users };
-
-        let file = NamedTempFile::new().unwrap();
-        original.save(file.path()).unwrap();
-        let loaded = UsersConfig::load(file.path()).unwrap();
-
-        assert_eq!(loaded.users.len(), 1);
-        let user = loaded.users.get("testuser").unwrap();
-        assert_eq!(user.username, "testuser");
-        assert_eq!(user.bandwidth_limit_mbps, Some(200));
     }
 
     #[test]

@@ -15,10 +15,4 @@ impl UsersConfig {
         let config: UsersConfig = toml::from_str(&content)?;
         Ok(config)
     }
-
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
-        let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
-        Ok(())
-    }
 }

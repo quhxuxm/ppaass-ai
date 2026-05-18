@@ -17,9 +17,6 @@ pub enum ProxyError {
     #[error("User not found: {0}")]
     UserNotFound(String),
 
-    #[error("User already exists: {0}")]
-    UserAlreadyExists(String),
-
     #[error("Configuration error: {0}")]
     Configuration(String),
 }

@@ -1,4 +1,3 @@
-mod api;
 mod bandwidth;
 mod config;
 mod connection;
@@ -28,10 +27,6 @@ struct Args {
     /// 覆盖监听地址
     #[arg(short, long)]
     listen: Option<String>,
-
-    /// 覆盖 API 地址
-    #[arg(short, long)]
-    api: Option<String>,
 
     /// 覆盖日志级别（trace、debug、info、warn、error）
     #[arg(long)]
@@ -63,9 +58,6 @@ fn main() -> Result<()> {
     // 使用命令行参数覆盖配置
     if let Some(listen) = args.listen {
         config.listen_addr = listen;
-    }
-    if let Some(api) = args.api {
-        config.api_addr = api;
     }
     if let Some(log_level) = args.log_level {
         config.log_level = log_level;
@@ -109,7 +101,6 @@ fn main() -> Result<()> {
     runtime.block_on(async {
         info!("PPAASS Proxy 启动中");
         info!("监听地址：{}", config.listen_addr);
-        info!("API 地址：{}", config.api_addr);
         info!("日志级别：{}", config.log_level);
         info!(
             "日志目录：{}",
@@ -151,19 +142,21 @@ fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
     };
 
     if interface.eq_ignore_ascii_case("auto") {
+        info!("自动绑定出站网络设备：{}", interface);
         return Ok(());
     }
-
     let interfaces = if_addrs::get_if_addrs()
         .map_err(|e| anyhow!("读取本机网络设备列表失败：{e}"))?
         .into_iter()
         .map(|iface| iface.name)
         .collect::<BTreeSet<_>>();
-
+    info!(
+        "本机网络设备列表：{}",
+        interfaces.iter().cloned().collect::<Vec<_>>().join(", ")
+    );
     if interfaces.contains(interface) {
         return Ok(());
     }
-
     let available = if interfaces.is_empty() {
         "<未发现可用网络设备>".to_string()
     } else {

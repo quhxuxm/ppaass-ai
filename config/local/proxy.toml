@@ -4,20 +4,11 @@
 # 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:8080"
 
-# REST API 地址（用户管理、监控）
-api_addr = "0.0.0.0:8081"
-
-# 启用用于用户管理和监控的 REST API 服务（默认：false）
-enable_api = true
-
 # 用户配置文件路径
 users_path = "config/local/users.toml"
 
-# API 添加用户时生成的 RSA 私钥存储目录
-keys_dir = "config/local/keys"
-
 # 日志级别：trace、debug、info、warn、error
-log_level = "error"
+log_level = "info"
 
 # 文件日志目录（相比控制台输出性能更好）
 # log_dir = "logs"
@@ -35,7 +26,7 @@ compression_mode = "none"
 # 连接目标服务器时使用的出站网络设备名。
 # 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时建议使用 "auto"，
 # proxy 会绑定到原始默认路由对应的物理网卡，避免出站流量回到 TUN。
-outbound_interface = "auto"
+outbound_interface = "以太网 5"
 
 # proxy 端处理 DNS 请求时使用的上游 DNS。
 # 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
@@ -79,4 +70,3 @@ auth_timeout_secs = 30
 # 空闲连接超时时间，单位秒；已认证连接若未在该时间内
 # 发送连接请求，将被关闭（默认：120）
 idle_connection_timeout_secs = 120
-

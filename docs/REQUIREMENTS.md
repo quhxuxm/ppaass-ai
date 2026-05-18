@@ -25,15 +25,6 @@ You are an expert Rust developer, specializing in network application developing
   - The connection pool size
   - The log level
 
-- In proxy side there should REST api to:
-
-  - Add user, including generate RSA private key and public key by user, and also can let user download their private key.
-  - Remove user, when remove the user, the related private key should be deleted also.
-  - Query the current connections and user bandwidth usage.
-  - Check proxy configuration
-  - Update proxy configuration without restart the proxy service.
-  - Monitor the health status of the proxy service.
-
 ## Architecture requirements
 
 The communication between agent and proxy should be secure, using RSA encryption for key exchange and AES for encrypting the traffic.

@@ -1,4 +1,3 @@
-use crate::api::ApiServer;
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::ProxyConfig;
 use crate::connection::ServerConnection;
@@ -22,7 +21,7 @@ impl ProxyServer {
         let config = Arc::new(config);
 
         // 使用用户配置文件初始化用户管理器
-        let user_manager = Arc::new(UserManager::new(&config.users_path, &config.keys_dir)?);
+        let user_manager = Arc::new(UserManager::new(&config.users_path)?);
 
         // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
@@ -43,28 +42,6 @@ impl ProxyServer {
 
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
-        // 如果启用了 API 服务，则启动它
-        let api_handle = if self.config.enable_api {
-            info!("API 服务已启用，监听 {}", self.config.api_addr);
-            let api_server = ApiServer::new(
-                self.config.clone(),
-                self.user_manager.clone(),
-                self.bandwidth_monitor.clone(),
-            );
-
-            tokio::spawn(async move {
-                if let Err(e) = api_server.run().await {
-                    error!("API 服务错误：{}", e);
-                }
-            })
-        } else {
-            info!("API 服务已禁用");
-            // 创建一个永不完成的 handle
-            tokio::spawn(async {
-                std::future::pending::<()>().await;
-            })
-        };
-
         // 启动代理服务器
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
         info!("代理服务器正在监听 {}", self.config.listen_addr);
@@ -96,9 +73,6 @@ impl ProxyServer {
                 }
             }
         }
-
-        // 等待 API 服务结束
-        let _ = api_handle.await;
 
         Ok(())
     }

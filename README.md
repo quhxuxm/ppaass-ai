@@ -9,10 +9,9 @@ encryption.
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair with bandwidth limits
 - **Connection Pooling**: Efficient connection reuse with multiplexing
-- **REST API**: Comprehensive API for user management and monitoring
 - **Bandwidth Management**: Per-user bandwidth limits and monitoring
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
-- **Production Ready**: Built with tokio, includes health monitoring and graceful shutdown
+- **Production Ready**: Built with tokio and graceful shutdown
 
 ## Architecture
 
@@ -57,86 +56,17 @@ cp config/proxy.toml.example config/proxy.toml
 cargo run --release -p proxy -- --config config/proxy.toml
 ```
 
-3. Add a user via API:
+3. Add the user's public key and bandwidth limit to `config/users.toml`
 
-```bash
-curl -X POST http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "user1",
-    "bandwidth_limit_mbps": 100
-  }'
-```
+4. Update `config/agent.toml` with your username and private key path
 
-4. Save the returned private key to `keys/user1.pem`
-
-5. Update `config/agent.toml` with your username and key path
-
-6. Start the agent:
+5. Start the agent:
 
 ```bash
 cargo run --release -p agent -- --config config/agent.toml
 ```
 
-7. Configure your applications to use the proxy at `127.0.0.1:1080`
-
-## REST API
-
-The proxy exposes a REST API on port 8081 (configurable):
-
-### Add User
-
-```bash
-POST /api/users
-{
-  "username": "user1",
-  "bandwidth_limit_mbps": 100
-}
-```
-
-### Remove User
-
-```bash
-DELETE /api/users
-{
-  "username": "user1"
-}
-```
-
-### List Users
-
-```bash
-GET /api/users
-```
-
-### Get Bandwidth Statistics
-
-```bash
-GET /api/stats/bandwidth
-```
-
-### Health Check
-
-```bash
-GET /health
-```
-
-### Get Configuration
-
-```bash
-GET /api/config
-```
-
-### Update Configuration
-
-```bash
-PUT /api/config
-{
-  "listen_addr": "0.0.0.0:8080",
-  "api_addr": "0.0.0.0:8081",
-  ...
-}
-```
+6. Configure your applications to use the proxy at `127.0.0.1:1080`
 
 ## Configuration
 
@@ -156,9 +86,7 @@ connection_timeout_secs = 30                # Connection timeout
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
-api_addr = "0.0.0.0:8081"                 # API listen address
 users_path = "config/users.toml"          # Users configuration file
-keys_dir = "keys"                         # Directory for storing keys
 ```
 
 ## Security
@@ -250,7 +178,7 @@ cargo audit
 ### Connection Issues
 
 1. Check firewall settings
-2. Verify proxy server is running: `curl http://proxy:8081/health`
+2. Verify proxy server process is running and listening on the configured proxy port
 3. Check logs for authentication errors
 4. Ensure private key matches user's public key
 
@@ -283,5 +211,4 @@ Built with these excellent Rust crates:
 - hyper - HTTP implementation
 - fast-socks5 - SOCKS5 protocol
 - rsa, aes-gcm - Cryptography
-- axum - Web framework for API
 - deadpool - Connection pooling

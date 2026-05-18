@@ -57,7 +57,6 @@ cargo run --release -p proxy -- --config config/proxy.toml
 ```
 [2024-01-31T02:00:00Z INFO  proxy] Starting proxy server
 [2024-01-31T02:00:00Z INFO  proxy::server] Proxy server listening on 0.0.0.0:8080
-[2024-01-31T02:00:00Z INFO  proxy::api] API server listening on 0.0.0.0:8081
 ```
 
 ### Terminal 3: Start Agent Server
@@ -211,7 +210,7 @@ cargo build --release -p integration-tests
 
 **Solution:** Make sure all three components are running:
 1. Check mock target servers: `curl http://127.0.0.1:9090/health`
-2. Check proxy health: `curl http://127.0.0.1:8081/health`
+2. Check proxy logs and confirm the proxy listen port is open
 3. Check agent is listening: `netstat -an | grep 7070`
 
 ### Issue: "Authentication failed"

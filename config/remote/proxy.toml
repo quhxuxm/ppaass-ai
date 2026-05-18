@@ -4,17 +4,8 @@
 # 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:80"
 
-# REST API 地址（用户管理、监控）
-api_addr = "0.0.0.0:8080"
-
-# 启用用于用户管理和监控的 REST API 服务（默认：false）
-enable_api = false
-
 # 用户配置文件路径
 users_path = "users.toml"
-
-# API 添加用户时生成的 RSA 私钥存储目录
-keys_dir = "keys"
 
 # 日志级别：trace、debug、info、warn、error
 log_level = "error"

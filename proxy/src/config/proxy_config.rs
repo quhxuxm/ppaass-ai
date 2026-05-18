@@ -5,21 +5,13 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub listen_addr: String,
-    pub api_addr: String,
 
     /// 用户配置文件路径。
     #[serde(default = "default_users_path")]
     pub users_path: String,
 
-    /// API 添加用户时生成的私钥存储目录。
-    pub keys_dir: String,
-
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
-
-    /// 启用用于用户管理和监控的 REST API 服务（默认：false）
-    #[serde(default)]
-    pub enable_api: bool,
 
     /// 日志级别：trace、debug、info、warn、error
     #[serde(default = "default_log_level")]

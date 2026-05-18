@@ -4,14 +4,8 @@
 # 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:9090"
 
-# REST API 地址（用户管理、监控）
-api_addr = "0.0.0.0:9091"
-
 # 用户配置文件路径
 users_path = "config/local/users.toml"
-
-# API 添加用户时生成的 RSA 私钥存储目录
-keys_dir = "config/local/keys"
 
 # 日志级别：trace、debug、info、warn、error
 log_level = "debug"

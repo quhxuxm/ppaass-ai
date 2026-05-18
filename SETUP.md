@@ -50,9 +50,7 @@ mkdir -p config keys
 
 ```toml
 listen_addr = "0.0.0.0:8080"
-api_addr = "0.0.0.0:8081"
-users_config_path = "config/users.toml"
-keys_dir = "keys"
+users_path = "config/users.toml"
 ```
 
 2. Start the proxy server:
@@ -79,27 +77,24 @@ If you deploy the binaries and configs alongside the scripts, use:
 .\start-proxy.bat
 ```
 
-### Step 2: Add a User via API
+### Step 2: Add a User in `users.toml`
 
-Use curl or any HTTP client:
+Add the user's public key and optional bandwidth limit to the proxy users file:
 
-```bash
-curl -X POST http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "myuser",
-    "bandwidth_limit_mbps": 100
-  }'
+```toml
+[users.myuser]
+username = "myuser"
+public_key_pem = """
+-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----
+"""
+bandwidth_limit_mbps = 100
 ```
-
-The response will include:
-
-- `private_key`: Save this to `keys/myuser.pem`
-- `public_key`: Automatically saved in the proxy configuration
 
 ### Step 3: Configure the Agent
 
-1. Save the private key from the previous step to `keys/myuser.pem`
+1. Save the matching private key to `keys/myuser.pem`
 
 2. Edit `config/agent.toml`:
 
@@ -164,46 +159,16 @@ curl -x http://127.0.0.1:1080 http://example.com
 curl --socks5 127.0.0.1:1080 http://example.com
 ```
 
-## API Usage
-
-### Check Health
-
-```bash
-curl http://localhost:8081/health
-```
-
-### List Users
-
-```bash
-curl http://localhost:8081/api/users
-```
-
-### Get Bandwidth Statistics
-
-```bash
-curl http://localhost:8081/api/stats/bandwidth
-```
-
-### Remove User
-
-```bash
-curl -X DELETE http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"username": "myuser"}'
-```
-
 ## Troubleshooting
 
 ### Connection Issues
 
 1. **Check if proxy is running:**
 
-```bash
-curl http://localhost:8081/health
-```
+Use `netstat`, `ss`, or the process manager to verify the proxy is listening on its configured port.
 
 2. **Check firewall settings:**
-    - Ensure ports 8080 and 8081 are open on the proxy server
+    - Ensure the proxy listen port is open on the proxy server
     - Ensure port 1080 is available on the client machine
 
 3. **Check logs:**
@@ -218,7 +183,7 @@ curl http://localhost:8081/health
 
 2. **Check user configuration:**
     - Verify the username in agent config matches the proxy
-    - Check that the user exists: `curl http://localhost:8081/api/users`
+    - Check that the user exists in the proxy `users.toml`
 
 ### Performance Issues
 
@@ -227,33 +192,18 @@ curl http://localhost:8081/health
     - Recommended: 10-50 depending on load
 
 2. **Check bandwidth limits:**
-    - Review user bandwidth limits in the API
-    - Monitor with: `curl http://localhost:8081/api/stats/bandwidth`
+    - Review user bandwidth limits in `users.toml`
 
 ## Security Notes
 
 - **Private Keys:** Keep private keys secure and never share them
 - **Configuration Files:** Protect configuration files with appropriate permissions
 - **Network:** Use firewall rules to restrict access to the proxy
-- **HTTPS:** Consider putting the API behind a reverse proxy with HTTPS
-
 ## Advanced Configuration
 
 ### Multiple Users
 
-You can add multiple users with different bandwidth limits:
-
-```bash
-# Add user1 with 100 Mbps limit
-curl -X POST http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user1", "bandwidth_limit_mbps": 100}'
-
-# Add user2 with 50 Mbps limit
-curl -X POST http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user2", "bandwidth_limit_mbps": 50}'
-```
+You can add multiple users with different bandwidth limits by adding multiple `[users.<name>]` sections to `users.toml`.
 
 ## Support
 
@@ -276,18 +226,6 @@ For issues and questions:
 
 ```bash
 ./target/release/agent --config config/agent.toml
-```
-
-**Add User:**
-
-```bash
-curl -X POST http://localhost:8081/api/users -H "Content-Type: application/json" -d '{"username": "user1"}'
-```
-
-**Check Status:**
-
-```bash
-curl http://localhost:8081/health
 ```
 
 **Test Connection:**
