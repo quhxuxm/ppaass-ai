@@ -90,7 +90,7 @@ pub async fn run_tun_mode(
     let tcp_task = spawn_tcp_listener(
         tcp_listener,
         pool.clone(),
-        direct_checker.clone(),
+        direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
         shutdown.clone(),
@@ -98,7 +98,7 @@ pub async fn run_tun_mode(
     let udp_task = spawn_udp_sessions(
         udp_socket,
         pool.clone(),
-        direct_checker.clone(),
+        direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
         shutdown.clone(),
