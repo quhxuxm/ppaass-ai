@@ -84,6 +84,10 @@ pub struct TunConfig {
     #[serde(default)]
     pub proxy_dns: bool,
 
+    /// 是否阻断 UDP/443 QUIC 流量，让浏览器回退到 TCP/TLS。
+    #[serde(default = "default_tun_block_quic")]
+    pub block_quic: bool,
+
     /// Windows TUN 模式所需的 wintun.dll 路径。
     /// 不设置时会依次检查 agent.exe 同目录、当前目录和 PATH。
     #[serde(default)]
@@ -99,6 +103,7 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
+            block_quic: default_tun_block_quic(),
             wintun_file: None,
         }
     }
@@ -125,6 +130,10 @@ fn default_tun_ipv4() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+fn default_tun_block_quic() -> bool {
+    true
 }
 
 fn default_pool_size() -> usize {

@@ -2,7 +2,7 @@ pub mod client_connection;
 pub mod error;
 
 pub use client_connection::{
-    AuthenticatedConnection, ClientConnection, ClientConnectionConfig, ClientStream,
+    AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
 };
 pub use error::{CommonError, Result};
 

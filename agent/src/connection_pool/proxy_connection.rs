@@ -8,7 +8,7 @@ use std::{
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{AuthenticatedConnection, ClientConnectionConfig};
+use common::{AuthenticatedConnection, BindInterface, ClientConnectionConfig};
 use protocol::Address;
 use tracing::{debug, info, instrument};
 
@@ -19,11 +19,20 @@ struct AgentClientConfig<'a> {
     /// 当为 `Some` 时，TCP 套接字在连接前会绑定到此地址，
     /// 强制连接通过物理接口出，绕过可能存在的 TUN 默认路由。
     bind_ip: Option<IpAddr>,
+    bind_interface: Option<BindInterface>,
 }
 
 impl<'a> AgentClientConfig<'a> {
-    fn new(config: &'a AgentConfig, bind_ip: Option<IpAddr>) -> Self {
-        Self { config, bind_ip }
+    fn new(
+        config: &'a AgentConfig,
+        bind_ip: Option<IpAddr>,
+        bind_interface: Option<BindInterface>,
+    ) -> Self {
+        Self {
+            config,
+            bind_ip,
+            bind_interface,
+        }
     }
 }
 
@@ -58,6 +67,10 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
         // 端口 0 ⇒ OS 自动选择临时端口
         self.bind_ip.map(|ip| SocketAddr::new(ip, 0))
     }
+
+    fn bind_interface(&self) -> Option<BindInterface> {
+        self.bind_interface.clone()
+    }
 }
 
 /// 到代理的一次性认证连接。
@@ -75,14 +88,21 @@ impl ProxyConnection {
     /// `bind_ip` — 当为 `Some` 时，出站 TCP 套接字会绑定到该 IP 地址。
     /// TUN 模式下调用方在此传入物理网卡 IP，使连接绕过 TUN 路由。
     #[instrument(skip(config))]
-    pub async fn new(config: &AgentConfig, bind_ip: Option<IpAddr>) -> Result<Self> {
+    pub async fn new(
+        config: &AgentConfig,
+        bind_ip: Option<IpAddr>,
+        bind_interface: Option<BindInterface>,
+    ) -> Result<Self> {
         let addr_display = if config.proxy_addrs.len() == 1 {
             config.proxy_addrs[0].clone()
         } else {
             format!("[{}]", config.proxy_addrs.join(", "))
         };
-        debug!("正在创建代理连接：{} (bind_ip={:?})", addr_display, bind_ip);
-        let config_adapter = AgentClientConfig::new(config, bind_ip);
+        debug!(
+            "正在创建代理连接：{} (bind_ip={:?}, bind_interface={:?})",
+            addr_display, bind_ip, bind_interface
+        );
+        let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
 
         // 这里只完成到 proxy 的认证，不立即发送目标连接请求。
         let auth_conn = AuthenticatedConnection::authenticate_only(&config_adapter)

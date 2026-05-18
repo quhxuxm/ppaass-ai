@@ -2,6 +2,7 @@ use super::connected_stream::ConnectedStream;
 use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
 use crate::error::Result;
+use common::BindInterface;
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
@@ -27,6 +28,8 @@ pub struct ConnectionPool {
     /// 每个新建的代理 TCP 连接都会绑定到该 IP，确保流量从物理接口出，
     /// 而不会回环进入 TUN 设备。
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+    /// TUN 模式激活时保存物理出口接口。
+    proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
 }
 
 impl ConnectionPool {
@@ -44,6 +47,7 @@ impl ConnectionPool {
             available,
             max_connection_age,
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
+            proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -59,14 +63,35 @@ impl ConnectionPool {
         }
     }
 
+    /// 设置代理连接应当绑定的物理出口接口。
+    pub fn set_proxy_bind_interface(&self, interface: Option<BindInterface>) {
+        if let Ok(mut guard) = self.proxy_bind_interface.write() {
+            *guard = interface;
+        }
+    }
+
     fn get_proxy_bind_ip(&self) -> Option<IpAddr> {
         // 读取失败时保守退回不绑定，让连接错误暴露给上层日志。
         self.proxy_bind_ip.read().ok().and_then(|g| *g)
     }
 
+    fn get_proxy_bind_interface(&self) -> Option<BindInterface> {
+        self.proxy_bind_interface
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
     // ── 内部辅助 ─────────────────────────────────────────────────────────────
 
-    #[instrument(skip(refill_notify, pool, config, available, proxy_bind_ip))]
+    #[instrument(skip(
+        refill_notify,
+        pool,
+        config,
+        available,
+        proxy_bind_ip,
+        proxy_bind_interface
+    ))]
     async fn refill_task(
         refill_notify: Arc<Notify>,
         pool: Pool<ProxyConnection>,
@@ -74,6 +99,7 @@ impl ConnectionPool {
         available: Arc<AtomicUsize>,
         target_size: usize,
         proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+        proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     ) {
         loop {
             // 补充任务既响应显式通知，也周期性自检，避免通知丢失后池子长期为空。
@@ -100,10 +126,11 @@ impl ConnectionPool {
                     let config = config.clone();
                     let semaphore = semaphore.clone();
                     let bind_ip = proxy_bind_ip.read().ok().and_then(|g| *g);
+                    let bind_interface = proxy_bind_interface.read().ok().and_then(|g| g.clone());
                     set.spawn(async move {
                         // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();
-                        ProxyConnection::new(&config, bind_ip).await
+                        ProxyConnection::new(&config, bind_ip, bind_interface).await
                     });
                 }
 
@@ -144,8 +171,9 @@ impl ConnectionPool {
             let pool = self.pool.clone();
             let available = self.available.clone();
             let bind_ip = self.get_proxy_bind_ip();
+            let bind_interface = self.get_proxy_bind_interface();
             handles.push(tokio::spawn(async move {
-                match ProxyConnection::new(&config, bind_ip).await {
+                match ProxyConnection::new(&config, bind_ip, bind_interface).await {
                     Ok(conn) => {
                         if pool.try_add(conn).is_ok() {
                             available.fetch_add(1, Ordering::Release);
@@ -180,6 +208,7 @@ impl ConnectionPool {
         let refill_notify_clone = self.refill_notify.clone();
         let pool_size = self.config.pool_size;
         let proxy_bind_ip_clone = self.proxy_bind_ip.clone();
+        let proxy_bind_interface_clone = self.proxy_bind_interface.clone();
         tokio::spawn(async move {
             Self::refill_task(
                 refill_notify_clone,
@@ -188,6 +217,7 @@ impl ConnectionPool {
                 available_clone,
                 pool_size,
                 proxy_bind_ip_clone,
+                proxy_bind_interface_clone,
             )
             .await;
         });
@@ -219,7 +249,12 @@ impl ConnectionPool {
                     // 池为空时走按需创建，保证请求不依赖预热成功。
                     self.refill_notify.notify_one();
                     debug!("无可用预热连接，创建新连接");
-                    break ProxyConnection::new(&self.config, self.get_proxy_bind_ip()).await?;
+                    break ProxyConnection::new(
+                        &self.config,
+                        self.get_proxy_bind_ip(),
+                        self.get_proxy_bind_interface(),
+                    )
+                    .await?;
                 }
             }
         };

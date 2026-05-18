@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
+use tokio::time::{Duration, timeout};
 use tracing::{debug, info};
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
@@ -17,6 +18,7 @@ pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteH
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
+    pub(super) block_quic: bool,
     pub(super) netstack_tx: UdpWriter,
     pub(super) pool: Arc<ConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
@@ -32,6 +34,7 @@ pub(super) async fn handle_tun_udp(
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
+        block_quic,
         netstack_tx,
         pool,
         direct_checker,
@@ -40,6 +43,11 @@ pub(super) async fn handle_tun_udp(
     // UDP 目标同样先处理 proxy DNS 虚拟地址。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
     if !proxy_dns_request {
+        if tun_networks.is_ipv4_broadcast(target.ip()) {
+            debug!("TUN UDP 广播已丢弃 -> {}", target);
+            drain_dropped_udp(rx).await;
+            return Ok(());
+        }
         // 普通 UDP 目标不能指向 TUN 自身网段。
         reject_tun_target("UDP", client, target, tun_networks)?;
     }
@@ -48,6 +56,15 @@ pub(super) async fn handle_tun_udp(
     } else {
         target.to_string()
     };
+
+    if block_quic && !proxy_dns_request && target.port() == 443 {
+        info!(
+            "TUN UDP/443 QUIC 已阻断 -> {}，等待应用回退 TCP",
+            target_label
+        );
+        drain_dropped_udp(rx).await;
+        return Ok(());
+    }
 
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
@@ -163,4 +180,10 @@ async fn relay_direct_udp(
     }
     telemetry::emit_traffic("TUN UDP (直连)", target_label, 0, 0);
     Ok(())
+}
+
+async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
+    while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {
+        // Keep the session alive briefly so repeated dropped UDP retries do not spin up tasks.
+    }
 }

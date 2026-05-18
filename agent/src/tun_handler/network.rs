@@ -29,6 +29,20 @@ impl TunNetworks {
                 .is_some_and(|(network, prefix)| ipv6_in_cidr(ip, network, prefix)),
         }
     }
+
+    pub(super) fn is_ipv4_broadcast(self, ip: IpAddr) -> bool {
+        let IpAddr::V4(ip) = ip else {
+            return false;
+        };
+        if self.ipv4_prefix >= 31 {
+            return false;
+        }
+
+        let mask = ipv4_mask(self.ipv4_prefix);
+        let network = u32::from(self.ipv4) & mask;
+        let broadcast = network | !mask;
+        u32::from(ip) == broadcast
+    }
 }
 
 pub(super) fn reject_tun_target(
@@ -104,12 +118,16 @@ pub(super) fn parse_cidr_v6(s: &str) -> Result<(Ipv6Addr, u8)> {
 
 fn ipv4_in_cidr(ip: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
     // prefix 为 0 时整段 IPv4 地址空间都匹配。
-    let mask = if prefix == 0 {
+    let mask = ipv4_mask(prefix);
+    (u32::from(ip) & mask) == (u32::from(network) & mask)
+}
+
+fn ipv4_mask(prefix: u8) -> u32 {
+    if prefix == 0 {
         0
     } else {
         u32::MAX << (32 - prefix)
-    };
-    (u32::from(ip) & mask) == (u32::from(network) & mask)
+    }
 }
 
 fn ipv6_in_cidr(ip: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {

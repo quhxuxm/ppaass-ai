@@ -6,6 +6,7 @@
 //! [`ConnectionPool`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
+mod dns;
 mod network;
 mod route;
 mod tasks;
@@ -16,9 +17,10 @@ use crate::config::TunConfig;
 use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
+use dns::DnsGuard;
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
-use route::{RouteGuard, detect_outbound_ip, resolve_proxy_ips};
+use route::{RouteGuard, detect_proxy_route, resolve_proxy_ips};
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,6 +46,10 @@ pub async fn run_tun_mode(
     if proxy_dns {
         info!("TUN DNS 请求将交给 proxy 端默认 DNS 处理");
     }
+    let block_quic = config.block_quic;
+    if block_quic {
+        info!("TUN UDP/443 QUIC 流量将被阻断，浏览器会回退到 TCP/TLS");
+    }
 
     // 先解析 TUN 网段，后续会用它识别异常回环目标。
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
@@ -64,8 +70,7 @@ pub async fn run_tun_mode(
     );
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
-    configure_proxy_routing(&config, &proxy_addrs, &pool).await;
-    let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
+    let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &pool).await;
 
     // netstack-smoltcp 在用户空间接收 TUN 包并暴露 TCP/UDP 流接口。
     let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
@@ -101,8 +106,11 @@ pub async fn run_tun_mode(
         direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
+        block_quic,
         shutdown.clone(),
     );
+    let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
+    let dns_guard = DnsGuard::install(proxy_dns, proxy_bind_interface.as_ref(), ipv4);
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
@@ -110,6 +118,8 @@ pub async fn run_tun_mode(
 
     // 清掉连接池绑定 IP，并通过 RouteGuard::drop 恢复系统路由。
     pool.set_proxy_bind_ip(None);
+    pool.set_proxy_bind_interface(None);
+    drop(dns_guard);
     drop(route_guard);
 
     info!("TUN 模式转发器已停止");
@@ -313,17 +323,25 @@ async fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
     pool: &ConnectionPool,
-) {
+) -> Option<common::BindInterface> {
     // 通过 OS 路由决策探测物理出口 IP，用于后续 proxy 连接 bind。
-    let outbound_ip = detect_outbound_ip(proxy_addrs);
-    if let Some(ip) = outbound_ip {
-        info!("检测到物理出口 IP：{}；代理连接将绑定到该地址", ip);
-        pool.set_proxy_bind_ip(Some(ip));
+    let proxy_route = detect_proxy_route(proxy_addrs);
+    let mut bind_interface = None;
+    if let Some(route) = proxy_route {
+        bind_interface = route.bind_interface.clone();
+        info!(
+            "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口",
+            route.local_ip, route.bind_interface
+        );
+        pool.set_proxy_bind_ip(Some(route.local_ip));
+        pool.set_proxy_bind_interface(route.bind_interface);
     } else {
         warn!(
             "无法检测物理出口 IP — 代理连接可能会回环进入 TUN。\
              请确保启动 TUN 模式前代理服务器可达。"
         );
+        pool.set_proxy_bind_ip(None);
+        pool.set_proxy_bind_interface(None);
     }
 
     // 必须在设置绑定 IP 后、劫持默认路由前预热连接池。
@@ -333,6 +351,8 @@ async fn configure_proxy_routing(
         "TUN 路由预配置完成：设备={} ipv4={} mtu={}",
         config.name, config.ipv4, config.mtu
     );
+
+    bind_interface
 }
 
 fn install_route_guard(

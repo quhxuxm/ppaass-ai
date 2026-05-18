@@ -1,16 +1,27 @@
 use super::network::parse_cidr_v6;
 use crate::error::{AgentError, Result};
+use common::BindInterface;
 use route_manager::{Route, RouteManager};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use tracing::{debug, info, warn};
 
-/// 检测 OS 当前使用哪个本地 IP 来到达代理服务器。
+#[derive(Debug, Clone)]
+pub(super) struct ProxyRoute {
+    pub(super) local_ip: IpAddr,
+    pub(super) bind_interface: Option<BindInterface>,
+}
+
+/// 检测 OS 当前使用哪个本地出口来到达代理服务器。
 ///
 /// 创建一个 connected UDP 套接字（实际不发送数据包），让 OS 告知它会使用哪个
 /// 本地地址。因为此操作在安装任何 TUN 路由规则之前运行，所以结果是物理网卡
-/// 的 IP。将该 IP 存入 `ConnectionPool::set_proxy_bind_ip` 可确保即使
-/// split-default TUN 路由生效后，代理 TCP 连接仍绑定到物理网卡，防止路由回环。
-pub(super) fn detect_outbound_ip(proxy_addrs: &[String]) -> Option<IpAddr> {
+/// 的 IP；同时读取当前最佳路由的接口信息。后续代理 TCP 连接会绑定到这个
+/// IP/接口，防止 split-default TUN 路由生效后控制连接回环进入 TUN。
+pub(super) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
+    let routes = RouteManager::new()
+        .and_then(|mut manager| manager.list())
+        .ok();
+
     for entry in proxy_addrs {
         // 缺省端口只用于触发 OS 路由选择，不会真正发包。
         let candidate = if entry.contains(':') {
@@ -27,7 +38,25 @@ pub(super) fn detect_outbound_ip(proxy_addrs: &[String]) -> Option<IpAddr> {
                 && sock.connect(dst).is_ok()
                 && let Ok(local) = sock.local_addr()
             {
-                return Some(local.ip());
+                let route_interface = routes
+                    .as_deref()
+                    .and_then(|routes| best_route(routes, dst.ip()))
+                    .and_then(route_bind_interface);
+                let local_interface = interface_for_local_ip(local.ip());
+                if let (Some(local_interface), Some(route_interface)) =
+                    (&local_interface, &route_interface)
+                    && local_interface != route_interface
+                {
+                    debug!(
+                        "本地地址接口 {:?} 与路由表接口 {:?} 不一致；优先使用本地地址接口",
+                        local_interface, route_interface
+                    );
+                }
+                let bind_interface = local_interface.or(route_interface);
+                return Some(ProxyRoute {
+                    local_ip: local.ip(),
+                    bind_interface,
+                });
             }
         }
     }
@@ -170,17 +199,15 @@ impl Drop for RouteGuard {
 fn install_ipv4_split_routes(
     mgr: &mut RouteManager,
     tun_if_index: u32,
-    tun_ipv4: Ipv4Addr,
+    _tun_ipv4: Ipv4Addr,
     installed: &mut Vec<Route>,
 ) {
     // 0.0.0.0/1 + 128.0.0.0/1 等价于默认路由，但优先级通常高于原 /0。
+    // TUN/utun 是三层接口，这里使用接口路由；把 TUN 自己的 IP 当 gateway
+    // 会在部分系统上导致路由不可用或回环。
     let v4_splits = [
-        Route::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1)
-            .with_if_index(tun_if_index)
-            .with_gateway(IpAddr::V4(tun_ipv4)),
-        Route::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)), 1)
-            .with_if_index(tun_if_index)
-            .with_gateway(IpAddr::V4(tun_ipv4)),
+        Route::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1).with_if_index(tun_if_index),
+        Route::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)), 1).with_if_index(tun_if_index),
     ];
     for route in v4_splits {
         match mgr.add(&route) {
@@ -203,18 +230,15 @@ fn install_ipv6_split_routes(
         return;
     };
     // IPv6 未正确配置时跳过，不影响 IPv4 TUN 模式。
-    let Ok((tun_ipv6, _)) = parse_cidr_v6(v6_cidr) else {
+    let Ok((_tun_ipv6, _)) = parse_cidr_v6(v6_cidr) else {
         return;
     };
 
     // ::/1 + 8000::/1 是 IPv6 的 split-default。
     let v6_splits = [
-        Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)
-            .with_if_index(tun_if_index)
-            .with_gateway(IpAddr::V6(tun_ipv6)),
+        Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1).with_if_index(tun_if_index),
         Route::new(IpAddr::V6(Ipv6Addr::new(0x8000, 0, 0, 0, 0, 0, 0, 0)), 1)
-            .with_if_index(tun_if_index)
-            .with_gateway(IpAddr::V6(tun_ipv6)),
+            .with_if_index(tun_if_index),
     ];
     for route in v6_splits {
         match mgr.add(&route) {
@@ -249,4 +273,52 @@ fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpAddr>, Optio
         return (r.gateway(), r.if_index());
     }
     (None, None)
+}
+
+fn best_route(routes: &[Route], dst: IpAddr) -> Option<&Route> {
+    routes
+        .iter()
+        .filter(|route| route.destination().is_ipv4() == dst.is_ipv4() && route.contains(&dst))
+        .max_by_key(|route| route.prefix())
+}
+
+fn route_bind_interface(route: &Route) -> Option<BindInterface> {
+    let name = route.if_name().cloned();
+    let index = route.if_index();
+    if name.is_none() && index.is_none() {
+        return None;
+    }
+
+    Some(BindInterface { name, index })
+}
+
+fn interface_for_local_ip(local_ip: IpAddr) -> Option<BindInterface> {
+    // connected UDP socket 已经给出了内核实际选择的本地源地址；这里再反查
+    // 拥有该地址的接口，比直接从路由表选最长匹配更可靠。
+    let interfaces = match if_addrs::get_if_addrs() {
+        Ok(interfaces) => interfaces,
+        Err(e) => {
+            debug!("列出本机网络接口失败：{e}");
+            return None;
+        }
+    };
+
+    let mut fallback = None;
+    for interface in interfaces {
+        if interface.ip() != local_ip {
+            continue;
+        }
+
+        let is_oper_up = interface.is_oper_up();
+        let bind_interface = BindInterface {
+            name: Some(interface.name),
+            index: interface.index,
+        };
+        if is_oper_up {
+            return Some(bind_interface);
+        }
+        fallback.get_or_insert(bind_interface);
+    }
+
+    fallback
 }

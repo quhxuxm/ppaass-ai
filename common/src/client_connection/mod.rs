@@ -8,5 +8,5 @@ pub mod stream;
 // 重新导出公共项
 pub use authenticated::AuthenticatedConnection;
 pub use client::ClientConnection;
-pub use config::ClientConnectionConfig;
+pub use config::{BindInterface, ClientConnectionConfig};
 pub use stream::ClientStream;

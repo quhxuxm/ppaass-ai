@@ -5,13 +5,22 @@ use protocol::{
     TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::SocketAddr;
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
 
-use super::config::ClientConnectionConfig;
+use super::config::{BindInterface, ClientConnectionConfig};
 use super::stream::ClientStream;
 
 type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
@@ -40,7 +49,7 @@ impl AuthenticatedConnection {
         // 1. TCP 连接 — 可选绑定到指定本地地址，
         //    以绕过可能存在的 TUN 默认路由。
         let stream = if let Some(bind) = config.bind_addr() {
-            connect_bound(&remote_addr, bind, timeout).await?
+            connect_bound(&remote_addr, bind, config.bind_interface(), timeout).await?
         } else {
             match tokio::time::timeout(timeout, TcpStream::connect(&remote_addr)).await {
                 Ok(Ok(s)) => s,
@@ -198,6 +207,7 @@ impl AuthenticatedConnection {
 async fn connect_bound(
     remote_addr: &str,
     bind: SocketAddr,
+    bind_interface: Option<BindInterface>,
     timeout: std::time::Duration,
 ) -> std::io::Result<TcpStream> {
     // 异步解析远端主机名
@@ -217,12 +227,8 @@ async fn connect_bound(
         }
         has_matching_addr = true;
 
-        let socket = if dst.is_ipv4() {
-            TcpSocket::new_v4()
-        } else {
-            TcpSocket::new_v6()
-        };
-        let socket = match socket {
+        let socket = match Socket::new(Domain::for_address(*dst), Type::STREAM, Some(Protocol::TCP))
+        {
             Ok(s) => s,
             Err(e) => {
                 warn!("创建 TcpSocket 失败 (dst={}): {e}", dst);
@@ -230,11 +236,23 @@ async fn connect_bound(
                 continue;
             }
         };
-        if let Err(e) = socket.bind(bind) {
+        if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
+            warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
+            last_error = Some(e);
+            continue;
+        }
+        if let Err(e) = socket.bind(&SockAddr::from(bind)) {
             warn!("TcpSocket::bind({bind}) 失败: {e}");
             last_error = Some(e);
             continue;
         }
+        if let Err(e) = socket.set_nonblocking(true) {
+            warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
+            last_error = Some(e);
+            continue;
+        }
+
+        let socket = TcpSocket::from_std_stream(socket.into());
         match tokio::time::timeout(timeout, socket.connect(*dst)).await {
             Ok(Ok(stream)) => {
                 debug!("已通过绑定套接字连接到 {dst} (本地={bind})");
@@ -264,4 +282,66 @@ async fn connect_bound(
     Err(last_error.unwrap_or_else(|| {
         std::io::Error::other(format!("所有到 {remote_addr} 的绑定连接尝试均失败"))
     }))
+}
+
+#[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+fn bind_socket_to_interface(
+    socket: &Socket,
+    bind_interface: Option<&BindInterface>,
+    _dst: SocketAddr,
+) -> std::io::Result<()> {
+    let Some(interface) = bind_interface.and_then(|interface| interface.name.as_deref()) else {
+        return Ok(());
+    };
+    if interface.as_bytes().contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "网络设备名不能包含 NUL 字节",
+        ));
+    }
+    socket.bind_device(Some(interface.as_bytes()))
+}
+
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
+fn bind_socket_to_interface(
+    socket: &Socket,
+    bind_interface: Option<&BindInterface>,
+    dst: SocketAddr,
+) -> std::io::Result<()> {
+    let Some(index) = bind_interface.and_then(|interface| interface.index) else {
+        return Ok(());
+    };
+    let Some(index) = NonZeroU32::new(index) else {
+        return Ok(());
+    };
+
+    if dst.is_ipv4() {
+        socket.bind_device_by_index_v4(Some(index))
+    } else {
+        socket.bind_device_by_index_v6(Some(index))
+    }
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "fuchsia",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+)))]
+fn bind_socket_to_interface(
+    _socket: &Socket,
+    _bind_interface: Option<&BindInterface>,
+    _dst: SocketAddr,
+) -> std::io::Result<()> {
+    Ok(())
 }

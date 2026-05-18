@@ -129,6 +129,7 @@ pub(super) fn spawn_udp_sessions(
     direct_checker: Arc<DirectAccessChecker>,
     tun_networks: TunNetworks,
     proxy_dns: bool,
+    block_quic: bool,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -160,6 +161,7 @@ pub(super) fn spawn_udp_sessions(
                     let context = UdpSessionContext {
                         tun_networks,
                         proxy_dns,
+                        block_quic,
                         netstack_tx: udp_tx.clone(),
                         pool,
                         direct_checker: checker,
