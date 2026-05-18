@@ -1,82 +1,53 @@
-use crate::config::UserConfig;
-use crate::entity::user;
+use crate::config::{UserConfig, UsersConfig};
 use crate::error::{ProxyError, Result};
+use parking_lot::RwLock;
 use protocol::crypto::RsaKeyPair;
-use sea_orm::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tracing::{info, instrument};
 
-use crate::config::DatabasePoolConfig;
-
 pub struct UserManager {
-    db: DatabaseConnection,
+    users_path: PathBuf,
     keys_dir: PathBuf,
+    users: RwLock<UsersConfig>,
 }
 
 impl UserManager {
-    #[instrument(skip(database_path, keys_dir, db_pool_config))]
-    pub async fn new<P: AsRef<Path>>(
-        database_path: P,
-        keys_dir: P,
-        db_pool_config: &DatabasePoolConfig,
-    ) -> Result<Self> {
-        let database_path = database_path.as_ref();
+    #[instrument(skip(users_path, keys_dir))]
+    pub fn new<P: AsRef<Path>>(users_path: P, keys_dir: P) -> Result<Self> {
+        let users_path = users_path.as_ref().to_path_buf();
         let keys_dir = keys_dir.as_ref().to_path_buf();
 
-        // 如果密钥目录不存在，则创建
-        fs::create_dir_all(&keys_dir)?;
-
-        // 如果数据库父目录不存在，则创建
-        if let Some(parent) = database_path.parent() {
+        if let Some(parent) = users_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
+        fs::create_dir_all(&keys_dir)?;
 
-        // 使用配置中的连接池参数连接 SQLite 数据库
-        let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
-        let mut opt = ConnectOptions::new(database_url);
-        opt.max_connections(db_pool_config.max_connections)
-            .min_connections(db_pool_config.min_connections)
-            .connect_timeout(Duration::from_secs(db_pool_config.connect_timeout_secs))
-            .idle_timeout(Duration::from_secs(db_pool_config.idle_timeout_secs))
-            .max_lifetime(Duration::from_secs(db_pool_config.max_lifetime_secs))
-            .sqlx_logging(false);
+        if !users_path.exists() {
+            fs::write(&users_path, "[users]\n")?;
+        }
 
-        let db = Database::connect(opt).await?;
+        let users = load_users(&users_path)?;
+        validate_users(&users)?;
+        info!(
+            "已加载用户配置：{}（{} 个用户）",
+            users_path.display(),
+            users.users.len()
+        );
 
-        // 如果表不存在，则创建
-        let create_table_sql = r#"
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY NOT NULL,
-                public_key_pem TEXT NOT NULL,
-                bandwidth_limit_mbps INTEGER,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        "#;
-        db.execute(Statement::from_string(
-            db.get_database_backend(),
-            create_table_sql.to_string(),
-        ))
-        .await?;
-
-        info!("已连接到 SQLite 数据库：{}", database_path.display());
-
-        Ok(Self { db, keys_dir })
+        Ok(Self {
+            users_path,
+            keys_dir,
+            users: RwLock::new(users),
+        })
     }
 
     #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
-        let user = user::Entity::find_by_id(username.to_string())
-            .one(&self.db)
-            .await?;
-
-        Ok(user.map(|u| UserConfig {
-            username: u.username,
-            public_key_pem: u.public_key_pem,
-            bandwidth_limit_mbps: u.bandwidth_limit_mbps.map(|v| v as u64),
-        }))
+        Ok(self.users.read().users.get(username).cloned())
     }
 
     #[instrument(skip(self))]
@@ -85,30 +56,41 @@ impl UserManager {
         username: String,
         bandwidth_limit_mbps: Option<u64>,
     ) -> Result<(String, String)> {
+        let username = normalize_username(username)?;
         info!("正在添加用户：{}", username);
 
-        // 生成 RSA 密钥对
+        let mut users = self.users.write();
+        if users.users.contains_key(&username) {
+            return Err(ProxyError::UserAlreadyExists(username));
+        }
+
         let keypair = RsaKeyPair::generate(2048)?;
         let private_key_pem = keypair.private_key_to_pem()?;
         let public_key_pem = keypair.public_key_to_pem()?;
 
-        // 将私钥保存到文件
-        let private_key_path = self.keys_dir.join(format!("{}.pem", username));
+        let private_key_path = self.private_key_path(&username);
         fs::write(&private_key_path, &private_key_pem)?;
 
-        // 在数据库中创建用户
-        let now = chrono::Utc::now().naive_utc();
-        let user = user::ActiveModel {
-            username: Set(username.clone()),
-            public_key_pem: Set(public_key_pem.clone()),
-            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
+        users.users.insert(
+            username.clone(),
+            UserConfig {
+                username: username.clone(),
+                public_key_pem: public_key_pem.clone(),
+                bandwidth_limit_mbps,
+            },
+        );
 
-        user::Entity::insert(user).exec(&self.db).await?;
+        if let Err(err) = save_users(&self.users_path, &users) {
+            users.users.remove(&username);
+            let _ = fs::remove_file(&private_key_path);
+            return Err(err);
+        }
 
-        info!("用户 {} 添加成功", username);
+        info!(
+            "用户 {} 添加成功，已写入 {}",
+            username,
+            self.users_path.display()
+        );
         Ok((private_key_pem, public_key_pem))
     }
 
@@ -116,54 +98,32 @@ impl UserManager {
     pub async fn remove_user(&self, username: &str) -> Result<()> {
         info!("正在删除用户：{}", username);
 
-        let result = user::Entity::delete_by_id(username.to_string())
-            .exec(&self.db)
-            .await?;
-
-        if result.rows_affected == 0 {
+        let mut users = self.users.write();
+        let Some(removed) = users.users.remove(username) else {
             return Err(ProxyError::UserNotFound(username.to_string()));
+        };
+
+        if let Err(err) = save_users(&self.users_path, &users) {
+            users.users.insert(username.to_string(), removed);
+            return Err(err);
         }
 
-        // 删除私钥文件
-        let private_key_path = self.keys_dir.join(format!("{}.pem", username));
+        let private_key_path = self.private_key_path(username);
         if private_key_path.exists() {
             fs::remove_file(private_key_path)?;
         }
 
-        info!("用户 {} 删除成功", username);
+        info!(
+            "用户 {} 删除成功，已写入 {}",
+            username,
+            self.users_path.display()
+        );
         Ok(())
     }
 
     #[instrument(skip(self))]
     pub async fn list_users(&self) -> Result<Vec<String>> {
-        let users = user::Entity::find().all(&self.db).await?;
-        Ok(users.into_iter().map(|u| u.username).collect())
-    }
-
-    /// 使用现有公钥导入用户（用于从 TOML 配置迁移）
-    #[instrument(skip(self))]
-    pub async fn import_user(
-        &self,
-        username: String,
-        public_key_pem: String,
-        bandwidth_limit_mbps: Option<u64>,
-    ) -> Result<()> {
-        info!("正在导入用户：{}", username);
-
-        // 在数据库中创建用户
-        let now = chrono::Utc::now().naive_utc();
-        let user = user::ActiveModel {
-            username: Set(username.clone()),
-            public_key_pem: Set(public_key_pem),
-            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-
-        user::Entity::insert(user).exec(&self.db).await?;
-
-        info!("用户 {} 导入成功", username);
-        Ok(())
+        Ok(self.users.read().users.keys().cloned().collect())
     }
 
     #[allow(dead_code)]
@@ -175,24 +135,66 @@ impl UserManager {
     ) -> Result<()> {
         info!("正在更新用户 {} 的带宽限制", username);
 
-        let user = user::Entity::find_by_id(username.to_string())
-            .one(&self.db)
-            .await?;
+        let mut users = self.users.write();
+        let Some(user) = users.users.get_mut(username) else {
+            return Err(ProxyError::UserNotFound(username.to_string()));
+        };
 
-        match user {
-            Some(_) => {
-                let now = chrono::Utc::now().naive_utc();
-                let update = user::ActiveModel {
-                    username: Set(username.to_string()),
-                    bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-                    updated_at: Set(now),
-                    ..Default::default()
-                };
-                user::Entity::update(update).exec(&self.db).await?;
-                info!("用户 {} 的带宽限制更新成功", username);
-                Ok(())
+        let previous = user.bandwidth_limit_mbps;
+        user.bandwidth_limit_mbps = bandwidth_limit_mbps;
+        if let Err(err) = save_users(&self.users_path, &users) {
+            if let Some(user) = users.users.get_mut(username) {
+                user.bandwidth_limit_mbps = previous;
             }
-            None => Err(ProxyError::UserNotFound(username.to_string())),
+            return Err(err);
+        }
+
+        info!("用户 {} 的带宽限制更新成功", username);
+        Ok(())
+    }
+
+    fn private_key_path(&self, username: &str) -> PathBuf {
+        self.keys_dir.join(format!("{username}.pem"))
+    }
+}
+
+fn load_users(path: &Path) -> Result<UsersConfig> {
+    UsersConfig::load(path).map_err(|e| {
+        ProxyError::Configuration(format!("读取用户配置 {} 失败：{e}", path.display()))
+    })
+}
+
+fn save_users(path: &Path, users: &UsersConfig) -> Result<()> {
+    users.save(path).map_err(|e| {
+        ProxyError::Configuration(format!("写入用户配置 {} 失败：{e}", path.display()))
+    })
+}
+
+fn validate_users(users: &UsersConfig) -> Result<()> {
+    for (key, user) in &users.users {
+        let normalized_username = normalize_username(user.username.clone())?;
+        if key != &normalized_username {
+            return Err(ProxyError::Configuration(format!(
+                "用户配置键 {key} 与 username 字段 {} 不一致",
+                user.username
+            )));
         }
     }
+    Ok(())
+}
+
+fn normalize_username(username: String) -> Result<String> {
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(ProxyError::Configuration("用户名不能为空".to_string()));
+    }
+    if username.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || username.contains("..")
+        || username.chars().any(char::is_control)
+    {
+        return Err(ProxyError::Configuration(format!(
+            "用户名包含非法路径字符：{username}"
+        )));
+    }
+    Ok(username.to_string())
 }

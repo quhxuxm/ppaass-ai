@@ -2,20 +2,18 @@ mod api;
 mod bandwidth;
 mod config;
 mod connection;
-mod entity;
 mod error;
 mod server;
 mod user_manager;
 
-use crate::config::{ProxyConfig, UsersConfig};
+use crate::config::ProxyConfig;
 use crate::server::ProxyServer;
-use crate::user_manager::UserManager;
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use common::init_tracing;
 use mimalloc::MiMalloc;
 use std::collections::BTreeSet;
-use tracing::{info, instrument};
+use tracing::info;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -54,10 +52,6 @@ struct Args {
     /// 覆盖 proxy 连接目标服务器时使用的出站网络设备名
     #[arg(long)]
     outbound_interface: Option<String>,
-
-    /// 将用户从 TOML 文件迁移到 SQLite 数据库
-    #[arg(long)]
-    migrate_users: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -137,14 +131,7 @@ fn main() -> Result<()> {
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or("默认路由")
         );
-
-        // 如果请求了用户迁移，则执行迁移
-        if let Some(users_toml_path) = args.migrate_users {
-            info!("正在将用户从 {} 迁移到数据库", users_toml_path);
-            migrate_users_from_toml(&config, &users_toml_path).await?;
-            info!("用户迁移成功完成");
-            return Ok(());
-        }
+        info!("用户配置文件：{}", config.users_path);
 
         // 如果配置了 tokio-console，则初始化
         #[cfg(feature = "console")]
@@ -195,39 +182,4 @@ fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
          改为当前机器上的设备名，或设置 outbound_interface = \"auto\" 自动绑定原始默认路由设备。\
          可用设备：{available}"
     ))
-}
-
-#[instrument(skip(config))]
-async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
-    // 从 TOML 文件加载用户
-    let users_config = UsersConfig::load(users_toml_path)?;
-    info!("在 TOML 文件中找到 {} 个用户", users_config.users.len());
-
-    // 初始化用户管理器（必要时会创建数据库）
-    let user_manager =
-        UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?;
-
-    // 逐个导入用户
-    for (username, user_config) in users_config.users {
-        info!("正在导入用户：{}", username);
-
-        // 检查用户是否已存在
-        if let Ok(Some(_)) = user_manager.get_user(&username).await {
-            info!("用户 {} 已存在，跳过", username);
-            continue;
-        }
-
-        // 使用用户现有公钥直接导入
-        user_manager
-            .import_user(
-                username.clone(),
-                user_config.public_key_pem.clone(),
-                user_config.bandwidth_limit_mbps,
-            )
-            .await?;
-
-        info!("用户 {} 导入成功", username);
-    }
-
-    Ok(())
 }

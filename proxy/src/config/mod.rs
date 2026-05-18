@@ -2,14 +2,14 @@ mod proxy_config;
 mod user_config;
 mod users_config;
 
-pub use proxy_config::{DatabasePoolConfig, ProxyConfig};
+pub use proxy_config::ProxyConfig;
 pub use user_config::UserConfig;
 pub use users_config::UsersConfig;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -95,7 +95,7 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
 
     #[test]
     fn save_and_load_users_config_roundtrip() {
-        let mut users = HashMap::new();
+        let mut users = BTreeMap::new();
         users.insert(
             "testuser".to_string(),
             UserConfig {

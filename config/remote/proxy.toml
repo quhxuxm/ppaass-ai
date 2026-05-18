@@ -10,10 +10,10 @@ api_addr = "0.0.0.0:8080"
 # 启用用于用户管理和监控的 REST API 服务（默认：false）
 enable_api = false
 
-# 用户管理所用 SQLite 数据库路径
-database_path = "data/users.db"
+# 用户配置文件路径
+users_path = "users.toml"
 
-# RSA 密钥存储目录
+# API 添加用户时生成的 RSA 私钥存储目录
 keys_dir = "keys"
 
 # 日志级别：trace、debug、info、warn、error
@@ -43,27 +43,6 @@ compression_mode = "lz4"
 
 # Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 runtime_threads = 64
-
-# 数据库连接池配置
-# ========================================
-# SQLite 数据库连接池配置
-
-[db_pool]
-# 最大并发数据库连接数（默认：32）
-max_connections = 32
-
-# 池中保持的最小连接数（默认：5）
-min_connections = 5
-
-# 连接超时时间，单位秒（默认：8）
-connect_timeout_secs = 8
-
-# 空闲超时时间，单位秒；空闲超过该时间的连接会被关闭（默认：300 = 5 分钟）
-idle_timeout_secs = 300
-
-# 连接被回收前的最长生命周期，单位秒（默认：3600 = 1 小时）
-max_lifetime_secs = 3600
-
 
 # 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300

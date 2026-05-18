@@ -3,34 +3,17 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabasePoolConfig {
-    /// 最大并发连接数
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-
-    /// 保持的最小连接数
-    #[serde(default = "default_min_connections")]
-    pub min_connections: u32,
-
-    /// 连接超时时间（秒）
-    #[serde(default = "default_db_connect_timeout_secs")]
-    pub connect_timeout_secs: u64,
-
-    /// 空闲超时时间（秒，空闲连接会被关闭）
-    #[serde(default = "default_idle_timeout_secs")]
-    pub idle_timeout_secs: u64,
-
-    /// 连接最长生命周期（秒）
-    #[serde(default = "default_max_lifetime_secs")]
-    pub max_lifetime_secs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub listen_addr: String,
     pub api_addr: String,
-    pub database_path: String,
+
+    /// 用户配置文件路径。
+    #[serde(default = "default_users_path")]
+    pub users_path: String,
+
+    /// API 添加用户时生成的私钥存储目录。
     pub keys_dir: String,
+
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
@@ -40,10 +23,6 @@ pub struct ProxyConfig {
     /// 启用用于用户管理和监控的 REST API 服务（默认：false）
     #[serde(default)]
     pub enable_api: bool,
-
-    /// 数据库连接池配置
-    #[serde(default = "default_db_pool_config")]
-    pub db_pool: DatabasePoolConfig,
 
     /// 日志级别：trace、debug、info、warn、error
     #[serde(default = "default_log_level")]
@@ -113,6 +92,10 @@ fn default_log_file() -> String {
     "proxy.log".to_string()
 }
 
+fn default_users_path() -> String {
+    "users.toml".to_string()
+}
+
 fn default_compression_mode() -> String {
     "none".to_string()
 }
@@ -133,38 +116,8 @@ fn default_auth_timeout_secs() -> u64 {
     30
 }
 
-fn default_max_connections() -> u32 {
-    32
-}
-
-fn default_min_connections() -> u32 {
-    5
-}
-
-fn default_db_connect_timeout_secs() -> u64 {
-    8
-}
-
-fn default_idle_timeout_secs() -> u64 {
-    300
-}
-
-fn default_max_lifetime_secs() -> u64 {
-    3600
-}
-
 fn default_async_runtime_stack_size_mb() -> usize {
     4
-}
-
-fn default_db_pool_config() -> DatabasePoolConfig {
-    DatabasePoolConfig {
-        max_connections: default_max_connections(),
-        min_connections: default_min_connections(),
-        connect_timeout_secs: default_db_connect_timeout_secs(),
-        idle_timeout_secs: default_idle_timeout_secs(),
-        max_lifetime_secs: default_max_lifetime_secs(),
-    }
 }
 
 impl ProxyConfig {

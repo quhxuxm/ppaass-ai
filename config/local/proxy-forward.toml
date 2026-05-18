@@ -7,10 +7,10 @@ listen_addr = "0.0.0.0:9090"
 # REST API 地址（用户管理、监控）
 api_addr = "0.0.0.0:9091"
 
-# 用户管理所用 SQLite 数据库路径
-database_path = "config/local/data/users.db"
+# 用户配置文件路径
+users_path = "config/local/users.toml"
 
-# RSA 密钥存储目录
+# API 添加用户时生成的 RSA 私钥存储目录
 keys_dir = "config/local/keys"
 
 # 日志级别：trace、debug、info、warn、error

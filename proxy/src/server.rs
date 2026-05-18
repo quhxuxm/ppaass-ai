@@ -21,10 +21,8 @@ impl ProxyServer {
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
 
-        // 使用 SQLite 数据库初始化用户管理器
-        let user_manager = Arc::new(
-            UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?,
-        );
+        // 使用用户配置文件初始化用户管理器
+        let user_manager = Arc::new(UserManager::new(&config.users_path, &config.keys_dir)?);
 
         // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
@@ -145,7 +143,7 @@ async fn handle_connection(
                 return Err(crate::error::ProxyError::UserNotFound(username));
             }
             Err(e) => {
-                error!("查找用户时发生数据库错误：{}", e);
+                error!("查找用户配置时出错：{}", e);
                 connection.send_auth_error("Internal error").await?;
                 return Err(e);
             }

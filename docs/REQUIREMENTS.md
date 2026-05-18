@@ -50,7 +50,7 @@ The network package encoding and decoding should use the `Encoder` and `Decoder`
 
 The UI of agent should use `tauri 2`, `typescript` and `vue3`, and `primevue` should be used as the component library of `vue3` .
 
-The user management in proxy side should use `SeaORM` to access `sqlite` to do CRUD.
+The user management in proxy side should use the proxy users TOML configuration file to do CRUD.
 
 ## Implementation details
 
@@ -86,7 +86,7 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
   - The startup script should first stop the current running process and start a new process.
   - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
   - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
-  - The CRUD for user in proxy side should from `sqlite` with `SeaORM`
+  - The CRUD for user in proxy side should read and write the proxy users TOML configuration file.
   - The `Data forwarding process` should use `tokio::io::copy_bidirectional` to forward data between client, agent, proxy and target.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:

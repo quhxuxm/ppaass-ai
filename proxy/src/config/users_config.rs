@@ -1,12 +1,12 @@
 use super::user_config::UserConfig;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsersConfig {
-    pub users: HashMap<String, UserConfig>,
+    pub users: BTreeMap<String, UserConfig>,
 }
 
 impl UsersConfig {
@@ -16,7 +16,6 @@ impl UsersConfig {
         Ok(config)
     }
 
-    #[allow(dead_code)]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
