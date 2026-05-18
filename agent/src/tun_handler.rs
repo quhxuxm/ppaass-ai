@@ -19,6 +19,8 @@ use crate::error::{AgentError, Result};
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
 use route::{RouteGuard, detect_outbound_ip, resolve_proxy_ips};
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
 use tokio_util::sync::CancellationToken;
@@ -46,16 +48,7 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
-    let mut builder = DeviceBuilder::new()
-        .name(&config.name)
-        .mtu(config.mtu)
-        .ipv4(ipv4, ipv4_prefix, None);
-    if let Some((ipv6, ipv6_prefix)) = ipv6_config {
-        builder = builder.ipv6(ipv6, ipv6_prefix);
-    }
-    let device = builder
-        .build_async()
-        .map_err(|e| AgentError::Connection(format!("创建 TUN 设备失败：{e}")))?;
+    let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
     let tun_name = device
         .name()
         .map_err(|e| AgentError::Connection(format!("读取 TUN 设备名失败：{e}")))?;
@@ -114,6 +107,186 @@ pub async fn run_tun_mode(
 
     info!("TUN 模式转发器已停止");
     Ok(())
+}
+
+fn create_tun_device(
+    config: &TunConfig,
+    ipv4: std::net::Ipv4Addr,
+    ipv4_prefix: u8,
+    ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
+) -> Result<tun_rs::AsyncDevice> {
+    let mut builder = DeviceBuilder::new()
+        .name(&config.name)
+        .mtu(config.mtu)
+        .ipv4(ipv4, ipv4_prefix, None);
+    if let Some((ipv6, ipv6_prefix)) = ipv6_config {
+        builder = builder.ipv6(ipv6, ipv6_prefix);
+    }
+
+    build_tun_device(builder, config)
+}
+
+#[cfg(windows)]
+fn build_tun_device(builder: DeviceBuilder, config: &TunConfig) -> Result<tun_rs::AsyncDevice> {
+    let wintun_file = resolve_wintun_file(config)?;
+    ensure_windows_tun_privileges()?;
+    info!("使用 Windows TUN 运行库：{}", wintun_file.display());
+    builder
+        .wintun_file(wintun_file.to_string_lossy().into_owned())
+        .build_async()
+        .map_err(|e| windows_tun_create_error(e, &wintun_file))
+}
+
+#[cfg(not(windows))]
+fn build_tun_device(builder: DeviceBuilder, _config: &TunConfig) -> Result<tun_rs::AsyncDevice> {
+    builder
+        .build_async()
+        .map_err(|e| AgentError::Connection(format!("创建 TUN 设备失败：{e}")))
+}
+
+#[cfg(windows)]
+fn ensure_windows_tun_privileges() -> Result<()> {
+    if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
+        return Ok(());
+    }
+
+    Err(AgentError::Connection(
+        "创建 TUN 设备失败：当前进程没有管理员权限。Windows TUN 模式需要以管理员身份运行，\
+         才能创建/打开 Wintun 适配器并修改系统路由。请右键以管理员身份打开 PowerShell/终端后启动 agent，\
+         或使用 start-agent.bat 触发 UAC 提权。"
+            .to_string(),
+    ))
+}
+
+#[cfg(windows)]
+fn resolve_wintun_file(config: &TunConfig) -> Result<PathBuf> {
+    if let Some(path) = config
+        .wintun_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        let path = absolute_wintun_path(Path::new(path));
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(missing_wintun_error(&[path], true));
+    }
+
+    let candidates = default_wintun_candidates();
+    if let Some(path) = candidates.iter().find(|path| path.is_file()) {
+        return Ok(path.clone());
+    }
+
+    Err(missing_wintun_error(&candidates, false))
+}
+
+#[cfg(windows)]
+fn absolute_wintun_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
+}
+
+#[cfg(windows)]
+fn default_wintun_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            push_wintun_candidate(&mut candidates, dir.join("wintun.dll"));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        push_wintun_candidate(&mut candidates, cwd.join("wintun.dll"));
+    }
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            push_wintun_candidate(&mut candidates, dir.join("wintun.dll"));
+        }
+    }
+
+    candidates
+}
+
+#[cfg(windows)]
+fn push_wintun_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.iter().any(|candidate| candidate == &path) {
+        candidates.push(path);
+    }
+}
+
+#[cfg(windows)]
+fn missing_wintun_error(candidates: &[PathBuf], explicit: bool) -> AgentError {
+    let checked = format_wintun_candidates(candidates);
+    let reason = if explicit {
+        "配置的 wintun_file 不存在"
+    } else {
+        "未找到 Windows TUN 运行库 wintun.dll"
+    };
+
+    AgentError::Connection(format!(
+        "创建 TUN 设备失败：{reason}。TUN 模式需要与 agent.exe 同架构的 wintun.dll（当前进程架构：{}）。\
+         请从 https://www.wintun.net/ 下载对应架构的 DLL，放到 agent.exe 同目录，或在 [tun] 中设置 wintun_file。\
+         已检查：{}",
+        windows_arch_label(),
+        checked
+    ))
+}
+
+#[cfg(windows)]
+fn windows_tun_create_error(error: std::io::Error, wintun_file: &Path) -> AgentError {
+    let hint = if error.raw_os_error() == Some(5) {
+        "Windows 返回拒绝访问。请确认当前进程是 elevated 管理员令牌；如果已经提权，检查是否有同名 Wintun 适配器被其他进程占用，或安全策略拦截驱动安装/打开。"
+    } else {
+        "如果 DLL 存在但仍加载失败，请确认它与 agent.exe 架构一致，并以管理员身份运行。"
+    };
+
+    AgentError::Connection(format!(
+        "创建 TUN 设备失败：{error}。已使用 wintun.dll：{}。\
+         {hint}（当前进程架构：{}）",
+        wintun_file.display(),
+        windows_arch_label()
+    ))
+}
+
+#[cfg(windows)]
+fn format_wintun_candidates(candidates: &[PathBuf]) -> String {
+    let mut checked: Vec<String> = candidates
+        .iter()
+        .take(8)
+        .map(|path| path.display().to_string())
+        .collect();
+
+    if candidates.len() > checked.len() {
+        checked.push(format!(
+            "另有 {} 个 PATH 位置",
+            candidates.len() - checked.len()
+        ));
+    }
+
+    if checked.is_empty() {
+        "<无可用搜索路径>".to_string()
+    } else {
+        checked.join("; ")
+    }
+}
+
+#[cfg(windows)]
+fn windows_arch_label() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64/amd64",
+        "x86" => "x86",
+        "aarch64" => "ARM64",
+        "arm" => "ARM",
+        other => other,
+    }
 }
 
 async fn configure_proxy_routing(

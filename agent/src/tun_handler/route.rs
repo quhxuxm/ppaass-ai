@@ -48,6 +48,10 @@ pub(super) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                 Ok(iter) => {
                     for sa in iter {
                         let ip = sa.ip();
+                        if ip.is_loopback() {
+                            debug!("代理地址 {entry} 解析为回环地址 {ip}；跳过 TUN 旁路路由");
+                            continue;
+                        }
                         if !out.contains(&ip) {
                             out.push(ip);
                         }

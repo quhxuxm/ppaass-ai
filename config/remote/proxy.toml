@@ -33,11 +33,12 @@ log_file = "proxy.log"
 compression_mode = "lz4"
 
 # 连接目标服务器时使用的出站网络设备名。
-# 不设置时使用系统默认路由，例如：outbound_interface = "eth0"
-# outbound_interface = "eth0"
+# 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时可设置为 "auto"，
+# proxy 会绑定到原始默认路由对应的物理网卡，避免出站流量回到 TUN。
+# outbound_interface = "auto"
 
 # proxy 端处理 DNS 请求时使用的上游 DNS。
-# 不设置时读取系统默认 DNS（/etc/resolv.conf）
+# 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
 # dns_upstream_addr = "8.8.8.8:53"
 
 # Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）

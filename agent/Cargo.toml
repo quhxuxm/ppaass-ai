@@ -36,3 +36,6 @@ pretty-hex.workspace = true
 tun-rs.workspace = true
 netstack-smoltcp.workspace = true
 route_manager.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

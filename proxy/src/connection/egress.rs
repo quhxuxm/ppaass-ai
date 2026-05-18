@@ -1,13 +1,7 @@
 use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, get_if_addrs};
-#[cfg(any(
-    target_os = "ios",
-    target_os = "macos",
-    target_os = "tvos",
-    target_os = "visionos",
-    target_os = "watchos",
-))]
 use route_manager::{Route, RouteManager};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::borrow::Cow;
 #[cfg(any(
     target_os = "ios",
     target_os = "macos",
@@ -18,6 +12,13 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
 use std::num::NonZeroU32;
 use std::pin::Pin;
 #[cfg(any(
@@ -88,7 +89,14 @@ pub async fn connect_tcp(
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
-        let sources = match interface_bind_addrs(interface, dst) {
+        let interface = match interface_for_dst(interface, dst) {
+            Ok(interface) => interface,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        let sources = match interface_bind_addrs(&interface, dst) {
             Ok(sources) => sources,
             Err(err) => {
                 last_error = Some(err);
@@ -97,10 +105,10 @@ pub async fn connect_tcp(
         };
 
         for source in sources {
-            match connect_tcp_addr(dst, interface, source).await {
+            match connect_tcp_addr(dst, &interface, source).await {
                 Ok(stream) => return Ok(stream),
                 Err(err) => {
-                    last_error = Some(connect_context_error(interface, source.addr, dst, err));
+                    last_error = Some(connect_context_error(&interface, source.addr, dst, err));
                 }
             }
         }
@@ -124,7 +132,14 @@ pub async fn connect_udp(target_addr: &str, interface: Option<&str>) -> io::Resu
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
-        let sources = match interface_bind_addrs(interface, dst) {
+        let interface = match interface_for_dst(interface, dst) {
+            Ok(interface) => interface,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        let sources = match interface_bind_addrs(&interface, dst) {
             Ok(sources) => sources,
             Err(err) => {
                 last_error = Some(err);
@@ -133,10 +148,10 @@ pub async fn connect_udp(target_addr: &str, interface: Option<&str>) -> io::Resu
         };
 
         for source in sources {
-            match connect_udp_addr(dst, interface, source).await {
+            match connect_udp_addr(dst, &interface, source).await {
                 Ok(socket) => return Ok(socket),
                 Err(err) => {
-                    last_error = Some(connect_context_error(interface, source.addr, dst, err));
+                    last_error = Some(connect_context_error(&interface, source.addr, dst, err));
                 }
             }
         }
@@ -153,6 +168,18 @@ pub async fn connect_udp(target_addr: &str, interface: Option<&str>) -> io::Resu
 
 fn normalize_interface(interface: Option<&str>) -> Option<&str> {
     interface.map(str::trim).filter(|name| !name.is_empty())
+}
+
+fn interface_for_dst(interface: &str, dst: SocketAddr) -> io::Result<Cow<'_, str>> {
+    if is_auto_interface(interface) {
+        auto_interface_for_dst(dst.ip()).map(Cow::Owned)
+    } else {
+        Ok(Cow::Borrowed(interface))
+    }
+}
+
+pub fn is_auto_interface(interface: &str) -> bool {
+    interface.eq_ignore_ascii_case("auto")
 }
 
 async fn connect_tcp_addr(
@@ -437,6 +464,87 @@ fn route_matches_interface(route: &Route, interface: &str, interface_index: u32)
 ))]
 fn host_prefix(ip: IpAddr) -> u8 {
     if ip.is_ipv4() { 32 } else { 128 }
+}
+
+fn auto_interface_for_dst(dst_ip: IpAddr) -> io::Result<String> {
+    let mut manager = RouteManager::new()
+        .map_err(|e| io::Error::other(format!("RouteManager 初始化失败：{e}")))?;
+    let routes = manager
+        .list()
+        .map_err(|e| io::Error::other(format!("读取路由表失败：{e}")))?;
+    let route = default_route(&routes, dst_ip.is_ipv6()).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("没有找到用于 auto 出站设备选择的默认路由：{dst_ip}"),
+        )
+    })?;
+
+    interface_name_for_route(route, dst_ip)
+}
+
+fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
+    routes.iter().find(|route| {
+        if route.prefix() != 0 {
+            return false;
+        }
+
+        match route.destination() {
+            IpAddr::V4(ip) => !want_v6 && ip.is_unspecified(),
+            IpAddr::V6(ip) => want_v6 && ip.is_unspecified(),
+        }
+    })
+}
+
+fn interface_name_for_route(route: &Route, dst_ip: IpAddr) -> io::Result<String> {
+    if let Some(name) = route.if_name()
+        && interface_has_reachable_addr(name, dst_ip)?
+    {
+        return Ok(name.to_string());
+    }
+
+    let Some(index) = route.if_index() else {
+        return Err(io::Error::other(format!(
+            "默认路由没有可用于绑定的网络设备信息：{route}"
+        )));
+    };
+
+    let mut fallback = None;
+    for iface in get_if_addrs()? {
+        if iface.index != Some(index) {
+            continue;
+        }
+
+        fallback.get_or_insert_with(|| iface.name.clone());
+        if iface_addr_matches_dst(&iface.addr, dst_ip) {
+            return Ok(iface.name);
+        }
+    }
+
+    if let Some(name) = fallback {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("auto 选择的出站设备 {name} 没有匹配 {dst_ip} 地址族的本地地址"),
+        ));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("默认路由引用的网络设备 if_index={index} 不存在"),
+    ))
+}
+
+fn interface_has_reachable_addr(name: &str, dst_ip: IpAddr) -> io::Result<bool> {
+    Ok(get_if_addrs()?
+        .into_iter()
+        .any(|iface| iface.name == name && iface_addr_matches_dst(&iface.addr, dst_ip)))
+}
+
+fn iface_addr_matches_dst(addr: &IfAddr, dst_ip: IpAddr) -> bool {
+    match (addr, dst_ip) {
+        (IfAddr::V4(addr), IpAddr::V4(dst)) => ipv4_source_score(addr, dst).is_some(),
+        (IfAddr::V6(addr), IpAddr::V6(dst)) => ipv6_source_score(addr, dst).is_some(),
+        _ => false,
+    }
 }
 
 fn interface_bind_addrs(interface: &str, dst: SocketAddr) -> io::Result<Vec<BoundSource>> {

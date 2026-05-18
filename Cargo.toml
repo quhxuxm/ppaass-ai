@@ -62,3 +62,10 @@ netstack-smoltcp = "0.2"
 route_manager = "0.2"
 socket2 = { version = "0.6", features = ["all"] }
 if-addrs = "0.13"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_UI_Shell",
+] }

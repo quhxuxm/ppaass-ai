@@ -10,6 +10,13 @@ if not exist "agent.exe" (
   exit /b 1
 )
 
+fltmc >nul 2>&1
+if errorlevel 1 (
+  echo Requesting Administrator privileges for TUN mode...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
+  exit /b
+)
+
 set "CONFIG_PATH=agent.toml"
 
 for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq agent.exe" ^| findstr /I "agent.exe"') do (

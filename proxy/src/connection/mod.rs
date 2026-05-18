@@ -21,15 +21,33 @@ use protocol::{
     ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
     crypto::{AesGcmCipher, RsaKeyPair},
 };
+#[cfg(not(windows))]
 use std::fs;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+#[cfg(windows)]
+use std::net::{Ipv4Addr, Ipv6Addr};
+#[cfg(windows)]
+use std::ptr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info, instrument, trace};
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+#[cfg(windows)]
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses,
+    IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL, IP_ADAPTER_ADDRESSES_LH,
+};
+#[cfg(windows)]
+use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+#[cfg(windows)]
+use windows_sys::Win32::Networking::WinSock::{
+    AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_IN6, SOCKET_ADDRESS,
+};
 
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
@@ -287,16 +305,8 @@ impl ServerConnection {
             return Ok(target);
         }
 
-        let resolv_conf = fs::read_to_string("/etc/resolv.conf").map_err(|e| {
-            ProxyError::Configuration(format!("读取系统 DNS 配置 /etc/resolv.conf 失败：{e}"))
-        })?;
-        let nameserver = resolv_conf
-            .lines()
-            .find_map(parse_resolv_nameserver)
-            .ok_or_else(|| {
-                ProxyError::Configuration("系统 DNS 配置中没有可用的 nameserver".to_string())
-            })?;
-        let target = endpoint_with_port(nameserver, port);
+        let nameserver = system_dns_nameserver()?;
+        let target = endpoint_with_port(&nameserver, port);
         info!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
         Ok(target)
     }
@@ -660,6 +670,193 @@ fn format_target_addr(address: &Address) -> String {
     }
 }
 
+#[cfg(not(windows))]
+fn system_dns_nameserver() -> Result<String> {
+    let resolv_conf = fs::read_to_string("/etc/resolv.conf").map_err(|e| {
+        ProxyError::Configuration(format!("读取系统 DNS 配置 /etc/resolv.conf 失败：{e}"))
+    })?;
+    resolv_conf
+        .lines()
+        .find_map(parse_resolv_nameserver)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ProxyError::Configuration("系统 DNS 配置中没有可用的 nameserver".to_string())
+        })
+}
+
+#[cfg(windows)]
+fn system_dns_nameserver() -> Result<String> {
+    const INITIAL_BUFFER_SIZE: u32 = 15_000;
+    const MAX_ATTEMPTS: usize = 3;
+
+    let preferred_if_indices = windows_default_route_if_indices();
+    let mut buffer_size = INITIAL_BUFFER_SIZE;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let mut buffer = vec![0u8; buffer_size as usize];
+        let adapters = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        let status = unsafe {
+            GetAdaptersAddresses(
+                0,
+                GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                ptr::null(),
+                adapters,
+                &mut buffer_size,
+            )
+        };
+
+        if status == ERROR_BUFFER_OVERFLOW {
+            continue;
+        }
+
+        if status != ERROR_SUCCESS {
+            return Err(ProxyError::Configuration(format!(
+                "读取 Windows 系统 DNS 配置失败：GetAdaptersAddresses 返回 {status}"
+            )));
+        }
+
+        if let Some(ip) = unsafe { find_windows_dns_server(adapters, &preferred_if_indices) } {
+            return Ok(ip.to_string());
+        }
+
+        return Err(ProxyError::Configuration(
+            "Windows 系统 DNS 配置中没有可用的 nameserver；可在 proxy.toml 中设置 dns_upstream_addr".to_string(),
+        ));
+    }
+
+    Err(ProxyError::Configuration(
+        "读取 Windows 系统 DNS 配置失败：网卡信息缓冲区持续不足".to_string(),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_default_route_if_indices() -> Vec<u32> {
+    let Ok(mut route_manager) = route_manager::RouteManager::new() else {
+        return Vec::new();
+    };
+    let Ok(routes) = route_manager.list() else {
+        return Vec::new();
+    };
+
+    let mut indices = Vec::new();
+    for route in routes {
+        if route.prefix() != 0 {
+            continue;
+        }
+
+        let is_default = match route.destination() {
+            IpAddr::V4(addr) => addr.is_unspecified(),
+            IpAddr::V6(addr) => addr.is_unspecified(),
+        };
+        if !is_default {
+            continue;
+        }
+
+        if let Some(if_index) = route.if_index()
+            && !indices.contains(&if_index)
+        {
+            indices.push(if_index);
+        }
+    }
+
+    indices
+}
+
+#[cfg(windows)]
+unsafe fn find_windows_dns_server(
+    adapters: *mut IP_ADAPTER_ADDRESSES_LH,
+    preferred_if_indices: &[u32],
+) -> Option<IpAddr> {
+    for preferred_only in [true, false] {
+        let mut adapter = adapters;
+        while !adapter.is_null() {
+            let adapter_ref = unsafe { &*adapter };
+            let is_preferred = windows_adapter_matches_if_index(adapter_ref, preferred_if_indices);
+
+            if windows_adapter_can_resolve(adapter_ref)
+                && (!preferred_only || is_preferred || preferred_if_indices.is_empty())
+            {
+                let mut dns = adapter_ref.FirstDnsServerAddress;
+                while !dns.is_null() {
+                    let dns_ref = unsafe { &*dns };
+                    if let Some(ip) = unsafe { socket_address_to_ip(dns_ref.Address) }
+                        && dns_ip_is_usable(ip)
+                    {
+                        return Some(ip);
+                    }
+                    dns = dns_ref.Next;
+                }
+            }
+
+            adapter = adapter_ref.Next;
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn windows_adapter_can_resolve(adapter: &IP_ADAPTER_ADDRESSES_LH) -> bool {
+    adapter.OperStatus == IfOperStatusUp
+        && adapter.IfType != IF_TYPE_SOFTWARE_LOOPBACK
+        && adapter.IfType != IF_TYPE_TUNNEL
+}
+
+#[cfg(windows)]
+fn windows_adapter_matches_if_index(
+    adapter: &IP_ADAPTER_ADDRESSES_LH,
+    preferred_if_indices: &[u32],
+) -> bool {
+    if preferred_if_indices.is_empty() {
+        return false;
+    }
+
+    let if_index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
+    preferred_if_indices.contains(&if_index)
+        || (adapter.Ipv6IfIndex != 0 && preferred_if_indices.contains(&adapter.Ipv6IfIndex))
+}
+
+#[cfg(windows)]
+fn dns_ip_is_usable(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast(),
+        IpAddr::V6(ip) => {
+            !ip.is_unspecified()
+                && !ip.is_loopback()
+                && !ip.is_multicast()
+                && !ip.is_unicast_link_local()
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn socket_address_to_ip(address: SOCKET_ADDRESS) -> Option<IpAddr> {
+    if address.lpSockaddr.is_null() {
+        return None;
+    }
+
+    let family = unsafe { (*address.lpSockaddr).sa_family };
+    match family {
+        AF_INET if address.iSockaddrLength as usize >= std::mem::size_of::<SOCKADDR_IN>() => {
+            let sockaddr = unsafe { &*(address.lpSockaddr.cast::<SOCKADDR_IN>()) };
+            let octets = unsafe { sockaddr.sin_addr.S_un.S_un_b };
+            Some(IpAddr::V4(Ipv4Addr::new(
+                octets.s_b1,
+                octets.s_b2,
+                octets.s_b3,
+                octets.s_b4,
+            )))
+        }
+        AF_INET6 if address.iSockaddrLength as usize >= std::mem::size_of::<SOCKADDR_IN6>() => {
+            let sockaddr = unsafe { &*(address.lpSockaddr.cast::<SOCKADDR_IN6>()) };
+            let octets = unsafe { sockaddr.sin6_addr.u.Byte };
+            Some(IpAddr::V6(Ipv6Addr::from(octets)))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
 fn parse_resolv_nameserver(line: &str) -> Option<&str> {
     let line = line.split(['#', ';']).next()?.trim();
     let mut parts = line.split_whitespace();

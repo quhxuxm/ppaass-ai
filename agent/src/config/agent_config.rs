@@ -62,7 +62,7 @@ pub struct TunConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// TUN 设备名称（macOS 如 "utun8"，Linux 如 "tun0"）。
+    /// TUN 设备名称（Windows 如 "ppaass-tun"，macOS 如 "utun8"，Linux 如 "tun0"）。
     /// macOS 上设备名大多为建议性质 — 内核会分配下一个空闲的 utun。
     #[serde(default = "default_tun_name")]
     pub name: String,
@@ -83,6 +83,11 @@ pub struct TunConfig {
     /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy。
     #[serde(default)]
     pub proxy_dns: bool,
+
+    /// Windows TUN 模式所需的 wintun.dll 路径。
+    /// 不设置时会依次检查 agent.exe 同目录、当前目录和 PATH。
+    #[serde(default)]
+    pub wintun_file: Option<String>,
 }
 
 impl Default for TunConfig {
@@ -94,12 +99,24 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
+            wintun_file: None,
         }
     }
 }
 
 fn default_tun_name() -> String {
-    "utun8".to_string()
+    #[cfg(target_os = "windows")]
+    {
+        "ppaass-tun".to_string()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "utun8".to_string()
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        "tun0".to_string()
+    }
 }
 
 fn default_tun_ipv4() -> String {

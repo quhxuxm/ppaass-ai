@@ -10,10 +10,11 @@ mod user_manager;
 use crate::config::{ProxyConfig, UsersConfig};
 use crate::server::ProxyServer;
 use crate::user_manager::UserManager;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use common::init_tracing;
 use mimalloc::MiMalloc;
+use std::collections::BTreeSet;
 use tracing::{info, instrument};
 
 #[global_allocator]
@@ -97,6 +98,8 @@ fn main() -> Result<()> {
         &config.log_file,
         &config.log_level,
     );
+    validate_outbound_interface(&config)?;
+
     // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
@@ -155,6 +158,43 @@ fn main() -> Result<()> {
         server.run().await?;
         Ok(())
     })
+}
+
+fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
+    let Some(interface) = config
+        .outbound_interface
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(());
+    };
+
+    if interface.eq_ignore_ascii_case("auto") {
+        return Ok(());
+    }
+
+    let interfaces = if_addrs::get_if_addrs()
+        .map_err(|e| anyhow!("读取本机网络设备列表失败：{e}"))?
+        .into_iter()
+        .map(|iface| iface.name)
+        .collect::<BTreeSet<_>>();
+
+    if interfaces.contains(interface) {
+        return Ok(());
+    }
+
+    let available = if interfaces.is_empty() {
+        "<未发现可用网络设备>".to_string()
+    } else {
+        interfaces.into_iter().collect::<Vec<_>>().join(", ")
+    };
+
+    Err(anyhow!(
+        "配置的出站网络设备不存在：{interface}。请删除 outbound_interface 以使用系统默认路由，\
+         改为当前机器上的设备名，或设置 outbound_interface = \"auto\" 自动绑定原始默认路由设备。\
+         可用设备：{available}"
+    ))
 }
 
 #[instrument(skip(config))]

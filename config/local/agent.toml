@@ -48,12 +48,15 @@ async_runtime_stack_size_mb = 4
 
 [tun]
 enabled = true
-name = "utun8"         # Linux 上通常为 "tun0"
+name = "ppaass-tun"    # Windows 如 "ppaass-tun"，macOS 如 "utun8"，Linux 如 "tun0"
 ipv4 = "10.10.10.1/24"
 # ipv6 = "fd00:dead:beef::1/64"
 mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理。
 proxy_dns = true
+# Windows TUN 模式需要 wintun.dll。默认会检查 agent.exe 同目录、当前目录和 PATH；
+# 也可以显式指定，例如：wintun_file = "wintun.dll"
+wintun_file = "wintun.dll"
 
 # 直连访问配置
 #

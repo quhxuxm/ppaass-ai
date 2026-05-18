@@ -36,12 +36,11 @@ pub struct CliArgs {
     pub runtime_threads: Option<usize>,
 
     // ── TUN 模式 ──────────────────────────────────────────────────────────────
-
     /// 启用 TUN 模式（将所有系统流量通过 TUN 设备转发）
     #[arg(long)]
     pub tun_enabled: bool,
 
-    /// 覆盖 TUN 设备名称（macOS 如 utun8，Linux 如 tun0）
+    /// 覆盖 TUN 设备名称（Windows 如 ppaass-tun，macOS 如 utun8，Linux 如 tun0）
     #[arg(long)]
     pub tun_name: Option<String>,
 
@@ -56,4 +55,8 @@ pub struct CliArgs {
     /// 覆盖 TUN MTU
     #[arg(long)]
     pub tun_mtu: Option<u16>,
+
+    /// 覆盖 Windows TUN 运行库 wintun.dll 路径
+    #[arg(long)]
+    pub tun_wintun_file: Option<String>,
 }

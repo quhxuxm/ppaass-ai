@@ -65,14 +65,20 @@ fn main() -> Result<()> {
     if let Some(tun_mtu) = args.tun_mtu {
         config.tun.mtu = tun_mtu;
     }
+    if let Some(tun_wintun_file) = args.tun_wintun_file {
+        config.tun.wintun_file = Some(tun_wintun_file);
+    }
 
     // 如有需要，创建日志目录
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
 
-    let _log_guard =
-        telemetry::init_tracing(config.log_dir.as_deref(), &config.log_file, &config.log_level);
+    let _log_guard = telemetry::init_tracing(
+        config.log_dir.as_deref(),
+        &config.log_file,
+        &config.log_level,
+    );
 
     // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
