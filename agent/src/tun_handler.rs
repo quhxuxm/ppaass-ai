@@ -28,12 +28,12 @@ use tracing::{debug, info, instrument, warn};
 use tun_rs::DeviceBuilder;
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(pool, direct_checker, shutdown))]
+#[instrument(skip(pool, direct_access_checker, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
     proxy_addrs: Vec<String>,
     pool: Arc<ConnectionPool>,
-    direct_checker: Arc<DirectAccessChecker>,
+    direct_access_checker: Arc<DirectAccessChecker>,
     shutdown: CancellationToken,
 ) -> Result<()> {
     info!(

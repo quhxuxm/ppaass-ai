@@ -13,14 +13,14 @@ use tracing::{error, info, instrument};
 pub struct AgentServer {
     config: Arc<AgentConfig>,
     pool: Arc<ConnectionPool>,
-    direct_checker: Arc<DirectAccessChecker>,
+    direct_access_checker: Arc<DirectAccessChecker>,
 }
 
 impl AgentServer {
     #[instrument(skip(config))]
     pub async fn new(config: AgentConfig) -> Result<Self> {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
-        let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
+        let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
         // 连接池负责维护到 proxy 的已认证预热连接。
         let pool = Arc::new(ConnectionPool::new(config.clone()));
@@ -28,7 +28,7 @@ impl AgentServer {
         Ok(Self {
             config,
             pool,
-            direct_checker,
+            direct_access_checker,
         })
     }
 
@@ -44,8 +44,10 @@ impl AgentServer {
             let tun_cfg = self.config.tun.clone();
             let proxy_addrs = self.config.proxy_addrs.clone();
             let pool = self.pool.clone();
-            let checker = self.direct_checker.clone();
-            if let Err(e) = run_tun_mode(tun_cfg, proxy_addrs, pool, checker, shutdown).await {
+            let direct_access_checker = self.direct_access_checker.clone();
+            if let Err(e) =
+                run_tun_mode(tun_cfg, proxy_addrs, pool, direct_access_checker, shutdown).await
+            {
                 error!("TUN 模式转发器异常停止：{}", e);
                 return Err(e);
             }
@@ -71,7 +73,7 @@ impl AgentServer {
                             info!("接受来自 {} 的连接", addr);
                             // 每个客户端连接独立处理，复用共享连接池和直连规则。
                             let pool = self.pool.clone();
-                            let direct_checker = self.direct_checker.clone();
+                            let direct_checker = self.direct_access_checker.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_connection(stream, pool, direct_checker).await {
                                     error!("处理连接时出错：{}", e);
