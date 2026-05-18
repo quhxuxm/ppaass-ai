@@ -15,6 +15,7 @@ struct ProxyClientConfig<'a> {
 
 impl<'a> ProxyClientConfig<'a> {
     fn new(config: &'a ProxyConfig) -> Result<Self> {
+        // 转发模式依赖三项配置；提前校验能把错误定位在连接上游之前。
         config
             .upstream_proxy_addrs
             .as_ref()
@@ -37,6 +38,7 @@ impl<'a> ProxyClientConfig<'a> {
 
 impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     fn remote_addr(&self) -> String {
+        // 每次上游连接随机选择一个地址，提供简单的负载分散和故障绕行。
         use rand::prelude::*;
         let mut rng = rand::rng();
         self.config
@@ -49,6 +51,7 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     }
 
     fn username(&self) -> String {
+        // new() 已验证配置存在，这里按 ClientConnectionConfig trait 返回 owned 值。
         self.config
             .upstream_username
             .as_ref()
@@ -57,6 +60,7 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     }
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
+        // 私钥仍从文件读取，避免把敏感内容常驻在 ProxyConfig 里。
         let path = self
             .config
             .upstream_private_key_path
@@ -67,6 +71,7 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
     }
 
     fn timeout_duration(&self) -> Duration {
+        // 上游连接复用 proxy 的连接超时配置。
         Duration::from_secs(self.config.connect_timeout_secs)
     }
 }
@@ -83,6 +88,7 @@ impl UpstreamConnection {
         target_address: Address,
         transport: TransportProtocol,
     ) -> Result<Self> {
+        // proxy 在转发模式下复用 agent 客户端握手逻辑连接下一跳 proxy。
         let config_adapter = ProxyClientConfig::new(config)?;
 
         debug!("正在连接上游代理");

@@ -17,6 +17,7 @@ pub struct ConnectedStream {
 
 impl ConnectedStream {
     pub fn new(writer: FramedWriter, reader: FramedReader, stream_id: String) -> Self {
+        // writer/reader 仍共享同一条 proxy TCP 连接，由 stream_id 区分目标流。
         Self {
             writer,
             reader,
@@ -30,6 +31,7 @@ impl ConnectedStream {
 
     /// 转换为兼容 AsyncRead + AsyncWrite 的流，用于 copy_bidirectional
     pub fn into_async_io(self) -> ProxyStreamIo {
+        // 后续 HTTP/SOCKS/TUN 中继都使用统一的 AsyncRead/AsyncWrite 视图。
         ProxyStreamIo::new(self.writer, self.reader, self.stream_id)
     }
 }

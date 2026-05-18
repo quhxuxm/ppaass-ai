@@ -72,6 +72,7 @@ pub async fn handle_http_connection(
     let pool_clone = pool.clone();
     let checker_clone = direct_checker.clone();
 
+    // 每个 HTTP 请求都共享连接池和直连规则，service_fn 只做轻量克隆。
     let service = service_fn(move |req| {
         let pool = pool_clone.clone();
         let checker = checker_clone.clone();
@@ -98,8 +99,10 @@ async fn handle_http_request(
     info!("HTTP 请求: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
+        // CONNECT 需要升级为原始双向字节流，常用于 HTTPS。
         handle_connect(req, pool, direct_checker).await
     } else {
+        // 普通 HTTP 请求走 hyper client handshake 转发。
         handle_regular_request(req, pool, direct_checker).await
     }
 }
@@ -141,6 +144,7 @@ async fn handle_connect(
             }
         });
 
+        // 先回复 200，随后升级任务接管底层 TCP 流。
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(empty())
@@ -168,6 +172,7 @@ async fn handle_connect(
             }
         };
 
+        // proxy 连接已建立后再升级客户端连接，避免给客户端过早成功响应。
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
@@ -182,6 +187,7 @@ async fn handle_connect(
             }
         });
 
+        // CONNECT 成功响应本身没有 body，数据随后走 upgraded stream。
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(empty())
@@ -222,6 +228,7 @@ async fn tunnel(
 
 /// 直连隧道: 不通过代理直接连接目标
 async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
+    // 直连 CONNECT 跳过 proxy，直接把 upgraded client 和目标 TCP 流相连。
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
 
@@ -259,6 +266,7 @@ async fn handle_regular_request(
     info!("HTTP 请求到 {}:{}", host, port);
 
     if host.is_empty() {
+        // HTTP/1.1 请求缺少 Host 无法确定目标。
         return Ok(Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body(boxed(
@@ -273,6 +281,7 @@ async fn handle_regular_request(
     };
 
     // 将 URI 修正为目标服务器的相对路径（origin-form）
+    // 代理收到的请求可能是 absolute-form，发给 origin server 时应转成 path/query。
     let path = req
         .uri()
         .path_and_query()
@@ -306,6 +315,7 @@ async fn handle_regular_request(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(target_stream)).await?;
 
+        // hyper connection future 驱动读写状态机，必须放到后台持续运行。
         tokio::spawn(async move {
             if let Err(err) = conn.await {
                 error!("直连连接失败: {:?}", err);
@@ -344,6 +354,7 @@ async fn handle_regular_request(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
 
+        // 代理路径也需要后台驱动 hyper client connection。
         tokio::spawn(async move {
             if let Err(err) = conn.await {
                 error!("连接失败: {:?}", err);
@@ -368,9 +379,11 @@ fn boxed<B>(body: B) -> AgentBody
 where
     B: hyper::body::Body<Data = Bytes, Error = hyper::Error> + Send + Sync + 'static,
 {
+    // 统一响应 body 类型，便于不同分支返回同一个 Response 类型。
     BoxBody::new(body)
 }
 
 fn empty() -> AgentBody {
+    // CONNECT 成功响应使用空 body。
     boxed(Full::new(Bytes::new()).map_err(|e| match e {}))
 }

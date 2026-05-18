@@ -13,12 +13,14 @@ use tracing_subscriber::{EnvFilter, fmt};
 pub fn init_tracing(log_dir: Option<&str>, log_file: &str, log_level: &str) -> Option<WorkerGuard> {
     let filter = EnvFilter::new(log_level);
 
+    // 标准输出始终开启，方便前台运行时直接观察连接和流量。
     let stdout_layer = fmt::layer()
         .with_target(true)
         .with_thread_ids(true)
         .with_line_number(true);
 
     if let Some(log_dir) = log_dir {
+        // 文件日志使用 non_blocking writer，guard 必须存活以 flush 后台缓冲。
         let file_appender = tracing_appender::rolling::daily(log_dir, log_file);
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         let file_layer = fmt::layer()
@@ -34,6 +36,7 @@ pub fn init_tracing(log_dir: Option<&str>, log_file: &str, log_level: &str) -> O
             .init();
         Some(guard)
     } else {
+        // 未配置日志目录时只初始化 stdout layer。
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)

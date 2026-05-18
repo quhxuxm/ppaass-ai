@@ -132,6 +132,7 @@ fn main() -> Result<()> {
 }
 
 fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
+    // 未配置出站设备时不做校验，运行时交给系统默认路由处理。
     let Some(interface) = config
         .outbound_interface
         .as_deref()
@@ -142,9 +143,11 @@ fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
     };
 
     if interface.eq_ignore_ascii_case("auto") {
+        // auto 是逻辑设备名，不需要出现在系统网卡列表中。
         info!("自动绑定出站网络设备：{}", interface);
         return Ok(());
     }
+    // 显式设备名在启动时提前校验，避免连接到来后才报“设备不存在”。
     let interfaces = if_addrs::get_if_addrs()
         .map_err(|e| anyhow!("读取本机网络设备列表失败：{e}"))?
         .into_iter()
@@ -157,6 +160,7 @@ fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
     if interfaces.contains(interface) {
         return Ok(());
     }
+    // 报错中列出本机设备名，便于用户在 Windows/macOS 上修正配置。
     let available = if interfaces.is_empty() {
         "<未发现可用网络设备>".to_string()
     } else {

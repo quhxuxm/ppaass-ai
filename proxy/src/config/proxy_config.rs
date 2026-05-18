@@ -111,6 +111,7 @@ fn default_async_runtime_stack_size_mb() -> usize {
 
 impl ProxyConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        // 配置文件只负责反序列化和默认值填充，语义校验放在启动流程中做。
         let content = fs::read_to_string(path)?;
         let config: ProxyConfig = toml::from_str(&content)?;
         Ok(config)
@@ -118,6 +119,7 @@ impl ProxyConfig {
 
     /// 获取协议层的压缩模式
     pub fn get_compression_mode(&self) -> protocol::CompressionMode {
+        // 未知压缩值回退到协议默认值，避免错误配置直接导致启动失败。
         self.compression_mode.parse().unwrap_or_default()
     }
 }

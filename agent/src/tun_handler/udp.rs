@@ -28,6 +28,7 @@ pub(super) async fn handle_tun_udp(
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     context: UdpSessionContext,
 ) -> Result<()> {
+    // 将会话上下文拆出，后续分支可分别移动到读写任务里。
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
@@ -36,8 +37,10 @@ pub(super) async fn handle_tun_udp(
         direct_checker,
     } = context;
 
+    // UDP 目标同样先处理 proxy DNS 虚拟地址。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
     if !proxy_dns_request {
+        // 普通 UDP 目标不能指向 TUN 自身网段。
         reject_tun_target("UDP", client, target, tun_networks)?;
     }
     let target_label = if proxy_dns_request {
@@ -47,12 +50,14 @@ pub(super) async fn handle_tun_udp(
     };
 
     if !proxy_dns_request && direct_checker.is_direct(&address) {
+        // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         let target_str = address_to_string(&address);
         info!("TUN UDP 直连 -> {}", target_str);
         relay_direct_udp(client, target, target_str, target_label, rx, netstack_tx).await?;
         return Ok(());
     }
 
+    // 代理 UDP 路径通过连接池建立一个 UDP 语义的 proxy stream。
     if proxy_dns_request {
         info!("TUN UDP DNS -> 代理 -> {}", target_label);
     } else {
@@ -65,6 +70,7 @@ pub(super) async fn handle_tun_udp(
     let proxy_io = connected.into_async_io();
     let (mut reader, mut writer) = tokio::io::split(proxy_io);
 
+    // 写方向：同一 UDP 会话的 payload 从 channel 进入 proxy stream。
     let write = async move {
         while let Some(data) = rx.recv().await {
             if let Err(e) = writer.write_all(&data).await {
@@ -75,6 +81,7 @@ pub(super) async fn handle_tun_udp(
         }
     };
     let netstack_tx_r = netstack_tx.clone();
+    // 读方向：proxy 返回的 payload 重新写回 netstack 的 UDP 发送半边。
     let read = async move {
         let mut buf = vec![0u8; 65535];
         loop {
@@ -95,6 +102,7 @@ pub(super) async fn handle_tun_udp(
             }
         }
     };
+    // 任一方向结束即结束本会话，下一包会重新创建会话。
     tokio::select! {
         _ = write => {}
         _ = read => {}
@@ -112,11 +120,13 @@ async fn relay_direct_udp(
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
 ) -> Result<()> {
+    // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     socket.connect(&target_str).await?;
     let socket = Arc::new(socket);
 
     let socket_w = socket.clone();
+    // 写方向：TUN 会话 payload 发往真实目标。
     let write = async move {
         while let Some(data) = rx.recv().await {
             if let Err(e) = socket_w.send(&data).await {
@@ -126,6 +136,7 @@ async fn relay_direct_udp(
         }
     };
     let netstack_tx_r = netstack_tx.clone();
+    // 读方向：真实目标回复写回 netstack，并保持原 source/target 方向。
     let read = async move {
         let mut buf = vec![0u8; 65535];
         loop {
@@ -145,6 +156,7 @@ async fn relay_direct_udp(
             }
         }
     };
+    // 直连会话和代理会话一样，任一方向结束就释放会话。
     tokio::select! {
         _ = write => {}
         _ = read => {}

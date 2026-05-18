@@ -72,6 +72,7 @@ impl ServerConnection {
         proxy_config: Arc<ProxyConfig>,
         egress_state: Arc<EgressState>,
     ) -> Self {
+        // 每条 agent TCP 连接都有独立的编解码器和加密状态。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = Framed::new(stream, ProxyCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
@@ -89,6 +90,7 @@ impl ServerConnection {
     }
 
     async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
+        // 统一把协议层读错误转换为 proxy 错误，调用方只处理业务分支。
         match self.reader.next().await {
             Some(Ok(req)) => Ok(Some(req)),
             Some(Err(e)) => Err(ProxyError::Protocol(protocol::ProtocolError::Io(e))),
@@ -107,6 +109,7 @@ impl ServerConnection {
         };
 
         if let ProxyRequest::Auth(auth_request) = request {
+            // 先取出用户名用于查配置，完整 AuthRequest 留到 authenticate 中校验。
             let username = auth_request.username.clone();
             debug!(
                 "[认证请求] username={}, timestamp={}, encrypted_aes_key_len={}",
@@ -225,6 +228,7 @@ impl ServerConnection {
     }
 
     async fn send_response(&mut self, response: ProxyResponse) -> Result<()> {
+        // 所有响应都经过 framed writer，统一走协议编码、压缩和加密。
         self.writer
             .send(response)
             .await
@@ -290,6 +294,7 @@ impl ServerConnection {
     }
 
     fn target_addr_for_request(&self, address: &Address) -> Result<String> {
+        // ProxyDns 是特殊地址类型，需要在 proxy 端决定真正的 DNS 上游。
         match address {
             Address::ProxyDns { port } => self.proxy_dns_target_addr(*port),
             _ => Ok(format_target_addr(address)),
@@ -297,6 +302,7 @@ impl ServerConnection {
     }
 
     fn proxy_dns_target_addr(&self, port: u16) -> Result<String> {
+        // 显式配置优先，适合 Windows 或容器环境中系统 DNS 不可靠的情况。
         if let Some(addr) = self
             .proxy_config
             .dns_upstream_addr
@@ -309,6 +315,7 @@ impl ServerConnection {
             return Ok(target);
         }
 
+        // 未配置时按当前系统 DNS 解析，保持默认行为贴近操作系统。
         let nameserver = system_dns_nameserver()?;
         let target = endpoint_with_port(&nameserver, port);
         info!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
@@ -318,6 +325,7 @@ impl ServerConnection {
     async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         info!("正在将请求转发到上游代理");
 
+        // 转发模式下 proxy 作为客户端连接下一跳 proxy，再把 agent 流量接过去。
         match UpstreamConnection::connect(
             &self.proxy_config,
             connect_request.address.clone(),
@@ -327,6 +335,7 @@ impl ServerConnection {
         {
             Ok(upstream_conn) => {
                 info!("已连接到上游代理");
+                // 只有上游连接成功后才回复 agent 连接成功。
                 self.send_connect_success(
                     connect_request.request_id.clone(),
                     "Connected through upstream",
@@ -334,6 +343,7 @@ impl ServerConnection {
                 .await?;
 
                 let mut stream = upstream_conn.into_stream();
+                // 上游连接也是一个 AsyncRead/AsyncWrite，复用普通 TCP 中继逻辑。
                 self.relay(connect_request.request_id, &mut stream).await?;
             }
             Err(e) => {
@@ -354,6 +364,7 @@ impl ServerConnection {
         connect_request: ConnectRequest,
         target_addr: &str,
     ) -> Result<()> {
+        // 通过启动时共享的出站状态连接目标，避免每次请求重新读取路由表。
         match self.egress_state.connect_tcp(target_addr).await {
             Ok(mut target_stream) => {
                 info!(
@@ -390,6 +401,7 @@ impl ServerConnection {
     ) -> Result<()> {
         debug!("正在处理 UDP 连接请求：{connect_request:?}");
 
+        // UDP 也复用同一份出站状态，保持 TCP/UDP 的出口选择一致。
         match self.egress_state.connect_udp(target_addr).await {
             Ok(socket) => {
                 info!(
@@ -420,12 +432,13 @@ impl ServerConnection {
 
     #[instrument(skip(self, udp_socket))]
     async fn relay_udp(&mut self, stream_id: String, udp_socket: UdpSocket) -> Result<()> {
+        // UDP 没有天然字节流，这里用 StreamReader/SinkWriter 拼成类流式中继。
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
-        // 使用自定义 Sink 实现
+        // 使用自定义 Sink 将 UDP 响应数据重新封装成 proxy DataPacket。
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
@@ -435,6 +448,7 @@ impl ServerConnection {
         };
 
         let stream_id_stop = stream_id.clone();
+        // 从 agent 到 UDP 的方向只消费当前 stream_id 的数据包。
         let stream = (&mut self.reader)
             .take_while(move |res| {
                 let continue_stream = match res {
@@ -479,6 +493,7 @@ impl ServerConnection {
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
 
+        // AgentIo 把“从 agent 读”和“写回 agent”合成一个双向 IO。
         let agent_io = AgentIo { reader, writer };
 
         let udp_socket = Arc::new(udp_socket);
@@ -487,6 +502,7 @@ impl ServerConnection {
 
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
 
+        // agent_to_udp 负责把 agent 发来的 UDP payload 写到目标 socket。
         let agent_to_udp = async {
             let mut buf = [0u8; 65535];
             loop {
@@ -512,6 +528,7 @@ impl ServerConnection {
             }
         };
 
+        // udp_to_agent 负责把目标返回的 UDP payload 写回 agent。
         let udp_to_agent = async {
             let mut buf = [0u8; 65535];
             loop {
@@ -540,6 +557,7 @@ impl ServerConnection {
             }
         };
 
+        // 任一方向结束都关闭整个 UDP 中继，避免另一边无限等待。
         tokio::select! {
             _ = agent_to_udp => {},
             _ = udp_to_agent => {}
@@ -553,6 +571,7 @@ impl ServerConnection {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
+        // TCP 中继把 agent 数据包流和目标 TCP 流转换成双向字节拷贝。
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let monitor_stream = self.bandwidth_monitor.clone();
         let username_stream = username.clone();
@@ -568,6 +587,7 @@ impl ServerConnection {
         };
 
         let stream_id_stop = stream_id.clone();
+        // agent 数据流中可能混有其他消息，只取当前 stream 的 DataPacket。
         let stream = (&mut self.reader)
             .take_while(move |res| {
                 let continue_stream = match res {
@@ -613,8 +633,10 @@ impl ServerConnection {
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
 
+        // AgentIo 让 packet-based 的 agent 连接呈现为 AsyncRead/AsyncWrite。
         let mut agent_io = AgentIo { reader, writer };
 
+        // Tokio 负责双向复制，任意一端关闭都会结束中继。
         match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
             Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
             Err(e) => debug!("中继错误：{}", e),
@@ -624,6 +646,7 @@ impl ServerConnection {
     }
 
     async fn send_connect_error(&mut self, request_id: String, message: String) -> Result<()> {
+        // connect 失败也回给 agent，避免 agent 端一直等待。
         let connect_response = ConnectResponse {
             request_id,
             success: false,
@@ -635,6 +658,7 @@ impl ServerConnection {
     }
 
     async fn send_connect_success(&mut self, request_id: String, message: &str) -> Result<()> {
+        // connect 成功后，agent 才会开始发送该 stream 的数据。
         let connect_response = ConnectResponse {
             request_id,
             success: true,
@@ -647,6 +671,7 @@ impl ServerConnection {
 }
 
 fn format_target_addr(address: &Address) -> String {
+    // 协议地址统一转成 host:port，供 Tokio lookup_host/connect 使用。
     match address {
         Address::Domain { host, port } => format!("{}:{}", host, port),
         Address::Ipv4 { addr, port } => {
@@ -672,6 +697,7 @@ fn format_target_addr(address: &Address) -> String {
 
 #[cfg(not(windows))]
 fn system_dns_nameserver() -> Result<String> {
+    // Unix 系统优先读取 resolv.conf 中第一个 nameserver。
     let resolv_conf = fs::read_to_string("/etc/resolv.conf").map_err(|e| {
         ProxyError::Configuration(format!("读取系统 DNS 配置 /etc/resolv.conf 失败：{e}"))
     })?;
@@ -689,10 +715,12 @@ fn system_dns_nameserver() -> Result<String> {
     const INITIAL_BUFFER_SIZE: u32 = 15_000;
     const MAX_ATTEMPTS: usize = 3;
 
+    // Windows 下优先使用默认路由所在网卡的 DNS，避免误选 TUN/虚拟网卡 DNS。
     let preferred_if_indices = windows_default_route_if_indices();
     let mut buffer_size = INITIAL_BUFFER_SIZE;
 
     for _ in 0..MAX_ATTEMPTS {
+        // GetAdaptersAddresses 会在缓冲区不足时回填所需大小，最多重试几次。
         let mut buffer = vec![0u8; buffer_size as usize];
         let adapters = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
         let status = unsafe {
@@ -715,6 +743,7 @@ fn system_dns_nameserver() -> Result<String> {
             )));
         }
 
+        // 先找默认路由网卡 DNS，找不到再降级到其他可解析网卡。
         if let Some(ip) = unsafe { find_windows_dns_server(adapters, &preferred_if_indices) } {
             return Ok(ip.to_string());
         }
@@ -731,6 +760,7 @@ fn system_dns_nameserver() -> Result<String> {
 
 #[cfg(windows)]
 fn windows_default_route_if_indices() -> Vec<u32> {
+    // 读取当前默认路由的 if_index，用来给 DNS 网卡选择排序。
     let Ok(mut route_manager) = route_manager::RouteManager::new() else {
         return Vec::new();
     };
@@ -740,6 +770,7 @@ fn windows_default_route_if_indices() -> Vec<u32> {
 
     let mut indices = Vec::new();
     for route in routes {
+        // 只关心 IPv4/IPv6 默认路由。
         if route.prefix() != 0 {
             continue;
         }
@@ -767,6 +798,7 @@ unsafe fn find_windows_dns_server(
     adapters: *mut IP_ADAPTER_ADDRESSES_LH,
     preferred_if_indices: &[u32],
 ) -> Option<IpAddr> {
+    // 第一轮只查默认路由网卡，第二轮放宽到其他可用物理网卡。
     for preferred_only in [true, false] {
         let mut adapter = adapters;
         while !adapter.is_null() {
@@ -776,6 +808,7 @@ unsafe fn find_windows_dns_server(
             if windows_adapter_can_resolve(adapter_ref)
                 && (!preferred_only || is_preferred || preferred_if_indices.is_empty())
             {
+                // 同一网卡可能配置多个 DNS，返回第一个可用地址。
                 let mut dns = adapter_ref.FirstDnsServerAddress;
                 while !dns.is_null() {
                     let dns_ref = unsafe { &*dns };
@@ -797,6 +830,7 @@ unsafe fn find_windows_dns_server(
 
 #[cfg(windows)]
 fn windows_adapter_can_resolve(adapter: &IP_ADAPTER_ADDRESSES_LH) -> bool {
+    // 排除未启用、回环和隧道网卡，减少选到 TUN 的概率。
     adapter.OperStatus == IfOperStatusUp
         && adapter.IfType != IF_TYPE_SOFTWARE_LOOPBACK
         && adapter.IfType != IF_TYPE_TUNNEL
@@ -807,6 +841,7 @@ fn windows_adapter_matches_if_index(
     adapter: &IP_ADAPTER_ADDRESSES_LH,
     preferred_if_indices: &[u32],
 ) -> bool {
+    // IPv4 IfIndex 和 IPv6 Ipv6IfIndex 都可能对应默认路由。
     if preferred_if_indices.is_empty() {
         return false;
     }
@@ -818,6 +853,7 @@ fn windows_adapter_matches_if_index(
 
 #[cfg(windows)]
 fn dns_ip_is_usable(ip: IpAddr) -> bool {
+    // DNS 上游必须是可路由的单播地址。
     match ip {
         IpAddr::V4(ip) => !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast(),
         IpAddr::V6(ip) => {
@@ -831,6 +867,7 @@ fn dns_ip_is_usable(ip: IpAddr) -> bool {
 
 #[cfg(windows)]
 unsafe fn socket_address_to_ip(address: SOCKET_ADDRESS) -> Option<IpAddr> {
+    // Windows API 返回原始 sockaddr 指针，这里按地址族转换成 Rust IpAddr。
     if address.lpSockaddr.is_null() {
         return None;
     }
@@ -858,6 +895,7 @@ unsafe fn socket_address_to_ip(address: SOCKET_ADDRESS) -> Option<IpAddr> {
 
 #[cfg(not(windows))]
 fn parse_resolv_nameserver(line: &str) -> Option<&str> {
+    // 忽略注释和空白，只接受 nameserver 行的第二列。
     let line = line.split(['#', ';']).next()?.trim();
     let mut parts = line.split_whitespace();
     if parts.next()? != "nameserver" {
@@ -868,6 +906,7 @@ fn parse_resolv_nameserver(line: &str) -> Option<&str> {
 }
 
 fn endpoint_with_port(value: &str, default_port: u16) -> String {
+    // 配置值可只写 IP/域名，缺省端口由请求的 DNS 端口补齐。
     let value = value.trim();
     if has_explicit_port(value) {
         return value.to_string();
@@ -885,6 +924,7 @@ fn endpoint_with_port(value: &str, default_port: u16) -> String {
 }
 
 fn has_explicit_port(value: &str) -> bool {
+    // 支持 [IPv6]:port 和 host:port；裸 IPv6 不视为带端口。
     if let Some(rest) = value.strip_prefix('[')
         && let Some((_, port)) = rest.rsplit_once("]:")
     {

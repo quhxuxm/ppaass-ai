@@ -18,11 +18,13 @@ pub(super) fn interface_bind_addrs(
     interface: &str,
     dst: SocketAddr,
 ) -> io::Result<Vec<BoundSource>> {
+    // 遍历系统网卡地址，找出指定设备上能连接目标地址族的本地源地址。
     let mut interface_exists = false;
     let mut address_family_exists = false;
     let mut candidates = Vec::new();
 
     for iface in get_if_addrs()? {
+        // 只处理用户配置或 auto 选中的那一块网卡。
         if iface.name != interface {
             continue;
         }
@@ -31,6 +33,7 @@ pub(super) fn interface_bind_addrs(
         match (dst, &iface.addr) {
             (SocketAddr::V4(dst), IfAddr::V4(addr)) => {
                 address_family_exists = true;
+                // IPv4 候选按“同子网优先”打分。
                 if let Some(score) = ipv4_source_score(addr, *dst.ip()) {
                     candidates.push(SourceCandidate {
                         source: BoundSource {
@@ -43,6 +46,7 @@ pub(super) fn interface_bind_addrs(
             }
             (SocketAddr::V6(dst), IfAddr::V6(addr)) => {
                 address_family_exists = true;
+                // IPv6 候选需要处理 link-local scope id。
                 if let Some(score) = ipv6_source_score(addr, *dst.ip()) {
                     candidates.push(SourceCandidate {
                         source: BoundSource {
@@ -62,6 +66,7 @@ pub(super) fn interface_bind_addrs(
         }
     }
 
+    // 区分“设备不存在”和“设备存在但地址族不匹配”，便于排查配置。
     if !interface_exists {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -79,6 +84,7 @@ pub(super) fn interface_bind_addrs(
         return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, message));
     }
 
+    // 分数越低越适合，优先使用同子网地址再尝试其他可达地址。
     candidates.sort_by_key(|candidate| candidate.score);
     Ok(candidates
         .into_iter()
@@ -87,6 +93,7 @@ pub(super) fn interface_bind_addrs(
 }
 
 pub(super) fn iface_addr_matches_dst(addr: &IfAddr, dst_ip: IpAddr) -> bool {
+    // auto 模式只需要知道该网卡是否有目标地址族可用源地址。
     match (addr, dst_ip) {
         (IfAddr::V4(addr), IpAddr::V4(dst)) => ipv4_source_score(addr, dst).is_some(),
         (IfAddr::V6(addr), IpAddr::V6(dst)) => ipv6_source_score(addr, dst).is_some(),
@@ -95,6 +102,7 @@ pub(super) fn iface_addr_matches_dst(addr: &IfAddr, dst_ip: IpAddr) -> bool {
 }
 
 fn ipv4_source_score(addr: &Ifv4Addr, dst: Ipv4Addr) -> Option<u8> {
+    // 不使用未指定地址、回环地址或与公网目标不兼容的 link-local 地址。
     if addr.ip.is_unspecified() || addr.ip.is_loopback() {
         return None;
     }
@@ -103,6 +111,7 @@ fn ipv4_source_score(addr: &Ifv4Addr, dst: Ipv4Addr) -> Option<u8> {
         return None;
     }
 
+    // 同子网地址优先级最高，跨子网地址作为备选。
     if ipv4_same_subnet(addr.ip, addr.netmask, dst) {
         Some(0)
     } else {
@@ -111,10 +120,12 @@ fn ipv4_source_score(addr: &Ifv4Addr, dst: Ipv4Addr) -> Option<u8> {
 }
 
 fn ipv6_source_score(addr: &Ifv6Addr, dst: Ipv6Addr) -> Option<u8> {
+    // IPv6 同样拒绝未指定和回环地址。
     if addr.ip.is_unspecified() || addr.ip.is_loopback() {
         return None;
     }
 
+    // link-local 源地址只能连接 link-local 目标，反之亦然。
     let source_is_link_local = ipv6_is_unicast_link_local(addr.ip);
     let dst_is_link_local = ipv6_is_unicast_link_local(dst);
     if source_is_link_local != dst_is_link_local {
@@ -148,6 +159,7 @@ fn ipv6_is_unicast_link_local(ip: Ipv6Addr) -> bool {
 }
 
 fn ipv6_scope_id(ip: Ipv6Addr, interface_index: Option<u32>) -> u32 {
+    // IPv6 link-local 地址需要 scope id 才能唯一定位到网卡。
     if ipv6_is_unicast_link_local(ip) {
         interface_index.unwrap_or(0)
     } else {

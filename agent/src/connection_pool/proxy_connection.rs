@@ -29,6 +29,7 @@ impl<'a> AgentClientConfig<'a> {
 
 impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     fn remote_addr(&self) -> String {
+        // 每条代理连接随机选择一个 proxy 地址，实现简单负载分散。
         use rand::prelude::*;
         let mut rng = rand::rng();
         self.config
@@ -39,14 +40,17 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     }
 
     fn username(&self) -> String {
+        // common::AuthenticatedConnection 需要 owned 用户名。
         self.config.username.clone()
     }
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
+        // 私钥按连接读取，避免敏感内容被 AgentConfig 长期持有。
         read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
     }
 
     fn timeout_duration(&self) -> Duration {
+        // 认证 TCP 连接和握手共用配置的连接超时。
         Duration::from_secs(self.config.connect_timeout_secs)
     }
 
@@ -80,6 +84,7 @@ impl ProxyConnection {
         debug!("正在创建代理连接：{} (bind_ip={:?})", addr_display, bind_ip);
         let config_adapter = AgentClientConfig::new(config, bind_ip);
 
+        // 这里只完成到 proxy 的认证，不立即发送目标连接请求。
         let auth_conn = AuthenticatedConnection::authenticate_only(&config_adapter)
             .await
             .map_err(|e| AgentError::Connection(e.to_string()))?;
@@ -107,6 +112,7 @@ impl ProxyConnection {
     ) -> Result<ConnectedStream> {
         debug!("正在连接目标：{:?}", address);
 
+        // 预热连接被消费后发送一次目标 connect 请求，并取得对应 stream_id。
         let (stream, request_id) = self
             .auth_conn
             .connect_to_target(address.clone(), transport)

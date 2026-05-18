@@ -26,6 +26,7 @@ impl ProxyServer {
 
         // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
+        // 出站状态在启动时构建；auto 模式会在这里缓存路由表，避免每个连接重复读取。
         let egress_state = Arc::new(EgressState::new(config.outbound_interface.as_deref())?);
 
         // 将所有用户注册到带宽监控器
@@ -55,6 +56,7 @@ impl ProxyServer {
                     match result {
                         Ok((stream, addr)) => {
                             info!("接受来自 {} 的连接", addr);
+                            // 每个连接共享启动时创建的出站状态，连接内只做目标地址匹配。
                             let user_manager = self.user_manager.clone();
                             let bandwidth_monitor = self.bandwidth_monitor.clone();
                             let egress_state = self.egress_state.clone();
@@ -100,6 +102,7 @@ async fn handle_connection(
     egress_state: Arc<EgressState>,
     compression_mode: CompressionMode,
 ) -> Result<()> {
+    // ServerConnection 持有共享 EgressState，后续 TCP/UDP 请求都通过它出站。
     let mut connection = ServerConnection::new(
         stream,
         bandwidth_monitor,

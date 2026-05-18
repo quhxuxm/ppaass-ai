@@ -19,8 +19,10 @@ pub struct AgentServer {
 impl AgentServer {
     #[instrument(skip(config))]
     pub async fn new(config: AgentConfig) -> Result<Self> {
+        // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
+        // 连接池负责维护到 proxy 的已认证预热连接。
         let pool = Arc::new(ConnectionPool::new(config.clone()));
 
         Ok(Self {
@@ -53,6 +55,7 @@ impl AgentServer {
         // 非 TUN 模式可以直接预热连接池。
         self.pool.prewarm().await;
 
+        // 普通模式在同一端口上同时接受 SOCKS5 和 HTTP/CONNECT。
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
         info!("Agent 服务器正在监听 {}", self.config.listen_addr);
 
@@ -66,6 +69,7 @@ impl AgentServer {
                     match accept_result {
                         Ok((stream, addr)) => {
                             info!("接受来自 {} 的连接", addr);
+                            // 每个客户端连接独立处理，复用共享连接池和直连规则。
                             let pool = self.pool.clone();
                             let direct_checker = self.direct_checker.clone();
                             tokio::spawn(async move {
@@ -96,6 +100,7 @@ async fn handle_connection(
     let mut buffer = [0u8; 1];
     stream.peek(&mut buffer).await?;
 
+    // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。
     match buffer[0] {
         // SOCKS5 版本号为 0x05
         0x05 => handle_socks5_connection(stream, pool, direct_checker).await,

@@ -32,6 +32,7 @@ pub struct ConnectionPool {
 impl ConnectionPool {
     pub fn new(config: Arc<AgentConfig>) -> Self {
         let pool_size = config.pool_size;
+        // unmanaged pool 容量略大于目标值，给并发补充和消费留出余量。
         let pool = Pool::new((pool_size as f32 * 1.5) as usize);
         let refill_notify = Arc::new(Notify::new());
         let available = Arc::new(AtomicUsize::new(0));
@@ -52,12 +53,14 @@ impl ConnectionPool {
     /// 应在安装 TUN 路由规则之前调用，确保后续所有代理连接
     /// （包括补充任务创建的连接）都绕过 TUN。
     pub fn set_proxy_bind_ip(&self, ip: Option<IpAddr>) {
+        // TUN 模式启动/退出时会切换此值，后台补充任务创建新连接时读取它。
         if let Ok(mut guard) = self.proxy_bind_ip.write() {
             *guard = ip;
         }
     }
 
     fn get_proxy_bind_ip(&self) -> Option<IpAddr> {
+        // 读取失败时保守退回不绑定，让连接错误暴露给上层日志。
         self.proxy_bind_ip.read().ok().and_then(|g| *g)
     }
 
@@ -73,6 +76,7 @@ impl ConnectionPool {
         proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
     ) {
         loop {
+            // 补充任务既响应显式通知，也周期性自检，避免通知丢失后池子长期为空。
             tokio::select! {
                 _ = refill_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
@@ -80,6 +84,7 @@ impl ConnectionPool {
 
             let current_size = available.load(Ordering::Acquire);
             if current_size < target_size {
+                // available 只记录可消费连接数；过期或取出的连接会触发补充。
                 let to_create = target_size - current_size;
                 debug!(
                     "正在补充连接池：创建 {} 条连接（当前：{}）",
@@ -87,6 +92,7 @@ impl ConnectionPool {
                 );
 
                 const MAX_CONCURRENT_REFILL: usize = 10;
+                // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REFILL));
                 let mut set = tokio::task::JoinSet::new();
 
@@ -95,6 +101,7 @@ impl ConnectionPool {
                     let semaphore = semaphore.clone();
                     let bind_ip = proxy_bind_ip.read().ok().and_then(|g| *g);
                     set.spawn(async move {
+                        // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();
                         ProxyConnection::new(&config, bind_ip).await
                     });
@@ -103,6 +110,7 @@ impl ConnectionPool {
                 while let Some(res) = set.join_next().await {
                     match res {
                         Ok(Ok(conn)) => {
+                            // try_add 失败说明 pool 容量已满，剩余创建任务没有意义。
                             if pool.try_add(conn).is_ok() {
                                 available.fetch_add(1, Ordering::Release);
                                 debug!("已向池中添加预热连接");
@@ -129,6 +137,7 @@ impl ConnectionPool {
     pub async fn prewarm(&self) {
         info!("正在预热连接池，目标 {} 条连接", self.config.pool_size);
 
+        // 初始预热并发执行，降低 agent 启动后第一批请求等待时间。
         let mut handles = Vec::with_capacity(self.config.pool_size);
         for i in 0..self.config.pool_size {
             let config = self.config.clone();
@@ -195,8 +204,10 @@ impl ConnectionPool {
         let conn = loop {
             match self.pool.try_remove() {
                 Ok(conn) => {
+                    // 取出的连接会被本次请求消费，不再归还池中。
                     self.available.fetch_sub(1, Ordering::AcqRel);
                     self.refill_notify.notify_one();
+                    // 丢弃过期连接，避免拿到 proxy 已经按 idle timeout 关闭的连接。
                     if conn.is_expired(self.max_connection_age) {
                         debug!("丢弃过期的池连接，尝试下一条或创建新连接");
                         continue;
@@ -205,6 +216,7 @@ impl ConnectionPool {
                     break conn;
                 }
                 Err(_) => {
+                    // 池为空时走按需创建，保证请求不依赖预热成功。
                     self.refill_notify.notify_one();
                     debug!("无可用预热连接，创建新连接");
                     break ProxyConnection::new(&self.config, self.get_proxy_bind_ip()).await?;

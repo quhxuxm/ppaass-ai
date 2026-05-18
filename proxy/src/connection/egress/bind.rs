@@ -18,6 +18,7 @@ pub(super) fn bind_socket_to_interface(
     _interface_index: Option<u32>,
     _dst: SocketAddr,
 ) -> io::Result<()> {
+    // Linux/Android 通过 SO_BINDTODEVICE 将 socket 直接绑到设备名。
     if interface.as_bytes().contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -40,6 +41,7 @@ pub(super) fn bind_socket_to_interface(
     interface_index: Option<u32>,
     dst: SocketAddr,
 ) -> io::Result<()> {
+    // Apple 系统按 IPv4/IPv6 分别使用 if_index 绑定设备。
     let index = interface_index
         .and_then(NonZeroU32::new)
         .ok_or_else(|| io::Error::other(format!("网络设备 {interface} 没有有效 if_index")))?;
@@ -67,5 +69,6 @@ pub(super) fn bind_socket_to_interface(
     _interface_index: Option<u32>,
     _dst: SocketAddr,
 ) -> io::Result<()> {
+    // 其他平台没有统一的 socket 级设备绑定能力，只保留源地址绑定。
     Ok(())
 }

@@ -19,6 +19,7 @@ pub struct ResponseStream {
 
 impl ResponseStream {
     pub fn new(reader: FramedReader, stream_id: String) -> Self {
+        // Stream 只产出目标 stream_id 的数据，其他响应会被跳过。
         Self { reader, stream_id }
     }
 }
@@ -28,12 +29,14 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
+            // 持续轮询直到拿到目标流数据、结束包、错误或 Pending。
             let reader = Pin::new(&mut self.reader);
             match reader.poll_next(cx) {
                 Poll::Ready(Some(Ok(response))) => {
                     // 响应已由编解码器完成反序列化、解密和解压
                     match response {
                         ProxyResponse::Data(packet) if packet.stream_id == self.stream_id => {
+                            // 空 end 包表示目标流结束，映射成 Stream 结束。
                             if packet.is_end && packet.data.is_empty() {
                                 return Poll::Ready(None);
                             }

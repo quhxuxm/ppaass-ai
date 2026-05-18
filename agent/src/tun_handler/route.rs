@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 /// split-default TUN 路由生效后，代理 TCP 连接仍绑定到物理网卡，防止路由回环。
 pub(super) fn detect_outbound_ip(proxy_addrs: &[String]) -> Option<IpAddr> {
     for entry in proxy_addrs {
+        // 缺省端口只用于触发 OS 路由选择，不会真正发包。
         let candidate = if entry.contains(':') {
             entry.clone()
         } else {
@@ -20,6 +21,7 @@ pub(super) fn detect_outbound_ip(proxy_addrs: &[String]) -> Option<IpAddr> {
         if let Ok(mut iter) = candidate.to_socket_addrs()
             && let Some(dst) = iter.next()
         {
+            // connected UDP socket 会让 OS 选择本地出口地址。
             let bind_str = if dst.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
             if let Ok(sock) = std::net::UdpSocket::bind(bind_str)
                 && sock.connect(dst).is_ok()
@@ -37,6 +39,7 @@ pub(super) fn detect_outbound_ip(proxy_addrs: &[String]) -> Option<IpAddr> {
 pub(super) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
     let mut out: Vec<IpAddr> = Vec::new();
     for entry in proxy_addrs {
+        // route_manager 只需要 IP；域名在安装路由前尽力解析。
         let candidates: Vec<String> = if entry.contains(':') {
             vec![entry.clone()]
         } else {
@@ -48,6 +51,7 @@ pub(super) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                 Ok(iter) => {
                     for sa in iter {
                         let ip = sa.ip();
+                        // loopback proxy 不需要旁路路由，安装反而可能干扰本机访问。
                         if ip.is_loopback() {
                             debug!("代理地址 {entry} 解析为回环地址 {ip}；跳过 TUN 旁路路由");
                             continue;
@@ -108,6 +112,7 @@ impl RouteGuard {
         let mut installed: Vec<Route> = Vec::new();
 
         for ip in proxy_ips {
+            // 给每个 proxy IP 安装最具体的主机路由，使 agent 到 proxy 绕过 TUN。
             let route = match ip {
                 IpAddr::V4(v4) => {
                     let mut r = Route::new(IpAddr::V4(*v4), 32);
@@ -139,6 +144,7 @@ impl RouteGuard {
             }
         }
 
+        // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
         install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed);
         install_ipv6_split_routes(&mut mgr, tun_if_index, tun_ipv6_cidr, &mut installed);
 
@@ -167,6 +173,7 @@ fn install_ipv4_split_routes(
     tun_ipv4: Ipv4Addr,
     installed: &mut Vec<Route>,
 ) {
+    // 0.0.0.0/1 + 128.0.0.0/1 等价于默认路由，但优先级通常高于原 /0。
     let v4_splits = [
         Route::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1)
             .with_if_index(tun_if_index)
@@ -195,10 +202,12 @@ fn install_ipv6_split_routes(
     let Some(v6_cidr) = tun_ipv6_cidr else {
         return;
     };
+    // IPv6 未正确配置时跳过，不影响 IPv4 TUN 模式。
     let Ok((tun_ipv6, _)) = parse_cidr_v6(v6_cidr) else {
         return;
     };
 
+    // ::/1 + 8000::/1 是 IPv6 的 split-default。
     let v6_splits = [
         Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)
             .with_if_index(tun_if_index)

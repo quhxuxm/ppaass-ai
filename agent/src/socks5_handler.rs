@@ -24,6 +24,7 @@ pub async fn handle_socks5_connection(
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("处理 SOCKS5 连接");
+    // UDP ASSOCIATE 回复地址尽量沿用 TCP 控制连接的本地地址族。
     let control_local_ip = stream.local_addr().ok().map(|addr| addr.ip());
 
     // 使用新的 fast-socks5 1.0 API 和 Socks5ServerProtocol
@@ -47,12 +48,15 @@ pub async fn handle_socks5_connection(
     info!("SOCKS5 命令: {:?}, 目标: {:?}", command, target_addr);
 
     match command {
+        // CONNECT 是最常见路径：客户端要求 agent 主动连接目标。
         Socks5Command::TCPConnect => {
             handle_tcp_connect(protocol, target_addr, pool, direct_checker).await
         }
+        // BIND 让 agent 监听一个端口等待远端主动连入。
         Socks5Command::TCPBind => {
             handle_tcp_bind(protocol, target_addr, pool, direct_checker).await
         }
+        // UDP ASSOCIATE 通过 TCP 控制连接维持 UDP 会话生命周期。
         Socks5Command::UDPAssociate => {
             handle_udp_associate(
                 protocol,
@@ -84,6 +88,7 @@ async fn handle_tcp_connect(
 
         match TcpStream::connect(&target_str).await {
             Ok(mut target_stream) => {
+                // SOCKS5 要先回复成功，客户端才会开始发送 TCP payload。
                 let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
                 let mut client_stream = protocol
                     .reply_success(bind_addr)
@@ -136,6 +141,7 @@ async fn handle_tcp_connect(
         };
 
         // 发送成功回复，使用虚拟绑定地址
+        // 代理路径中真实出口在 proxy 端，agent 本地只返回占位绑定地址。
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let mut client_stream = protocol
             .reply_success(bind_addr)
@@ -185,6 +191,7 @@ async fn handle_tcp_bind(
         .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
     // 等待绑定地址上的传入连接
+    // BIND 不应无限等待远端连接，超时后释放监听端口。
     match tokio::time::timeout(std::time::Duration::from_secs(30), listener.accept()).await {
         Ok(Ok((mut incoming_stream, peer_addr))) => {
             info!(
@@ -326,6 +333,7 @@ async fn handle_udp_associate(
 }
 
 fn udp_associate_bind_addr(control_local_ip: Option<IpAddr>) -> SocketAddr {
+    // UDP 监听地址族跟随 TCP 控制连接，避免 IPv6 客户端收到 IPv4 回复地址。
     match control_local_ip {
         Some(IpAddr::V6(_)) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
         _ => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
@@ -336,10 +344,12 @@ fn resolve_udp_associate_reply_addr(
     bind_addr: SocketAddr,
     control_local_ip: Option<IpAddr>,
 ) -> SocketAddr {
+    // 若系统返回具体监听地址，直接告诉客户端即可。
     if !bind_addr.ip().is_unspecified() {
         return bind_addr;
     }
 
+    // 绑定通配地址时，用控制连接本地 IP 或本地址族 localhost 生成可用回复。
     let bind_is_v4 = bind_addr.is_ipv4();
     let fallback_ip = if bind_is_v4 {
         IpAddr::V4(Ipv4Addr::LOCALHOST)
@@ -364,6 +374,7 @@ async fn process_udp_traffic(
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
 
     loop {
+        // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。
         let (n, client_addr) = udp_socket
             .recv_from(&mut buf)
             .await
@@ -391,6 +402,7 @@ async fn process_udp_traffic(
         let dest_key = format!("{:?}", dest_addr);
         debug!("解析 UDP 目标地址: {:?}", dest_addr);
         if !streams.contains_key(&dest_key) {
+            // 首次看到目标时创建对应的直连或代理 UDP 会话。
             info!("新的 UDP 会话，目标: {:?}", dest_addr);
 
             if direct_checker.is_direct(&dest_addr) {
@@ -421,6 +433,7 @@ async fn process_udp_traffic(
                         return;
                     }
 
+                    // 客户端到目标方向：channel 收到 payload 后发给直连 UDP socket。
                     let write_task = async {
                         while let Some(data) = rx.recv().await {
                             trace!(
@@ -435,6 +448,7 @@ async fn process_udp_traffic(
                         }
                     };
 
+                    // 目标到客户端方向：目标回复重新封装 SOCKS5 UDP 头后发回客户端。
                     let read_task = async {
                         let mut read_buf = [0u8; 65535];
                         loop {
@@ -493,6 +507,7 @@ async fn process_udp_traffic(
 
                             let proxy_io = connected_stream.into_async_io();
                             let (mut reader, mut writer) = tokio::io::split(proxy_io);
+                            // 客户端 UDP payload 写入 proxy stream。
                             let write_task = async {
                                 while let Some(data) = rx.recv().await {
                                     use tokio::io::AsyncWriteExt;
@@ -510,6 +525,7 @@ async fn process_udp_traffic(
                                     }
                                 }
                             };
+                            // proxy 返回 payload 后加回 SOCKS5 UDP 头并发送给客户端。
                             let read_task = async {
                                 let mut read_buf = [0u8; 65535];
                                 loop {
@@ -561,6 +577,7 @@ async fn process_udp_traffic(
                 }
             }
         }
+        // 当前 datagram 投递给目标会话；若会话刚创建，首包也会走这里。
         let sender = streams.get(&dest_key).map(|s| s.clone());
         if let Some(sender) = sender {
             let _ = sender.send(payload).await;
@@ -569,6 +586,7 @@ async fn process_udp_traffic(
 }
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
+    // fast-socks5 的目标地址转换为项目内部协议地址。
     match target {
         TargetAddr::Ip(addr) => match addr {
             std::net::SocketAddr::V4(v4) => Address::Ipv4 {
@@ -588,6 +606,7 @@ fn convert_target_addr(target: &TargetAddr) -> Address {
 }
 
 fn format_target_addr(target: &TargetAddr) -> String {
+    // 用于日志和流量统计的人类可读目标地址。
     match target {
         TargetAddr::Ip(addr) => addr.to_string(),
         TargetAddr::Domain(host, port) => format!("{host}:{port}"),
@@ -626,6 +645,7 @@ async fn relay_data(
 }
 
 fn parse_udp_address(buf: &[u8]) -> Result<(Address, usize)> {
+    // 解析 SOCKS5 UDP request header 中的 ATYP + DST.ADDR + DST.PORT。
     if buf.is_empty() {
         return Err(AgentError::Socks5("无效的 UDP 头部".to_string()));
     }
@@ -675,6 +695,7 @@ fn parse_udp_address(buf: &[u8]) -> Result<(Address, usize)> {
 }
 
 fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> {
+    // 创建发回客户端的 SOCKS5 UDP response packet。
     let mut packet = Vec::with_capacity(10 + data.len());
     packet.extend_from_slice(&[0, 0, 0]);
     match addr {

@@ -18,10 +18,12 @@ pub struct DataPacketSink {
 
 impl DataPacketSink {
     pub fn new(writer: FramedWriter, stream_id: String) -> Self {
+        // Sink 绑定单个 stream_id，写入的字节都会发到同一个代理目标流。
         Self { writer, stream_id }
     }
 
     fn create_data_request(&self, data: &[u8], is_end: bool) -> ProxyRequest {
+        // 将裸字节转换成代理协议 DataPacket，编码/加密由 AgentCodec 处理。
         let data_packet = DataPacket {
             stream_id: self.stream_id.clone(),
             data: data.to_vec(),
@@ -36,12 +38,14 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
     type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // 背压直接透传到底层 framed writer。
         Pin::new(&mut self.writer)
             .poll_ready(cx)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: &'a [u8]) -> Result<(), Self::Error> {
+        // 普通写入不带结束标记。
         let request = self.create_data_request(item, false);
         Pin::new(&mut self.writer)
             .start_send(request)
@@ -49,13 +53,14 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // flush 保证 DataPacket 及时下发到 proxy。
         Pin::new(&mut self.writer)
             .poll_flush(cx)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // 首先发送流结束消息
+        // 首先发送流结束消息，让 proxy 关闭对应目标流。
         let this = self.as_mut().get_mut();
         let request = this.create_data_request(&[], true);
 
@@ -75,7 +80,7 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
             }
         }
 
-        // 然后关闭底层 writer
+        // 然后关闭底层 writer，完成 SinkWriter 的关闭语义。
         Pin::new(&mut self.writer)
             .poll_close(cx)
             .map_err(|e| io::Error::other(e.to_string()))

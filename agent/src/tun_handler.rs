@@ -45,9 +45,11 @@ pub async fn run_tun_mode(
         info!("TUN DNS 请求将交给 proxy 端默认 DNS 处理");
     }
 
+    // 先解析 TUN 网段，后续会用它识别异常回环目标。
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
+    // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
     let tun_name = device
         .name()
@@ -61,9 +63,11 @@ pub async fn run_tun_mode(
         tun_name, tun_if_index
     );
 
+    // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
     configure_proxy_routing(&config, &proxy_addrs, &pool).await;
     let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
 
+    // netstack-smoltcp 在用户空间接收 TUN 包并暴露 TCP/UDP 流接口。
     let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
         .enable_tcp(true)
         .enable_udp(true)
@@ -72,6 +76,7 @@ pub async fn run_tun_mode(
         .build()
         .map_err(|e| AgentError::Connection(format!("构建 netstack 失败：{e}")))?;
     if let Some(runner) = runner {
+        // runner 驱动协议栈定时器和内部状态机，必须持续运行。
         tokio::spawn(runner);
     }
     let tcp_listener =
@@ -79,6 +84,7 @@ pub async fn run_tun_mode(
     let udp_socket =
         udp_socket.ok_or_else(|| AgentError::Connection("netstack UDP 套接字不可用".into()))?;
 
+    // 三组任务分别桥接原始包、处理 TCP 流、维护 UDP 会话。
     let (tun_to_stack, stack_to_tun) =
         spawn_packet_bridge(device.clone(), stack, config.mtu as usize, shutdown.clone());
     let tcp_task = spawn_tcp_listener(
@@ -102,6 +108,7 @@ pub async fn run_tun_mode(
     info!("收到 TUN 模式关闭请求");
     let _ = tokio::join!(tun_to_stack, stack_to_tun, tcp_task, udp_task);
 
+    // 清掉连接池绑定 IP，并通过 RouteGuard::drop 恢复系统路由。
     pool.set_proxy_bind_ip(None);
     drop(route_guard);
 
@@ -115,6 +122,7 @@ fn create_tun_device(
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
 ) -> Result<tun_rs::AsyncDevice> {
+    // DeviceBuilder 负责设置地址、MTU 和平台相关参数。
     let mut builder = DeviceBuilder::new()
         .name(&config.name)
         .mtu(config.mtu)
@@ -128,6 +136,7 @@ fn create_tun_device(
 
 #[cfg(windows)]
 fn build_tun_device(builder: DeviceBuilder, config: &TunConfig) -> Result<tun_rs::AsyncDevice> {
+    // Windows 必须显式找到 wintun.dll，并要求管理员权限。
     let wintun_file = resolve_wintun_file(config)?;
     ensure_windows_tun_privileges()?;
     info!("使用 Windows TUN 运行库：{}", wintun_file.display());
@@ -139,6 +148,7 @@ fn build_tun_device(builder: DeviceBuilder, config: &TunConfig) -> Result<tun_rs
 
 #[cfg(not(windows))]
 fn build_tun_device(builder: DeviceBuilder, _config: &TunConfig) -> Result<tun_rs::AsyncDevice> {
+    // 非 Windows 平台由 tun-rs 直接创建系统 TUN 设备。
     builder
         .build_async()
         .map_err(|e| AgentError::Connection(format!("创建 TUN 设备失败：{e}")))
@@ -146,6 +156,7 @@ fn build_tun_device(builder: DeviceBuilder, _config: &TunConfig) -> Result<tun_r
 
 #[cfg(windows)]
 fn ensure_windows_tun_privileges() -> Result<()> {
+    // Wintun 适配器创建和路由修改都需要 elevated 管理员令牌。
     if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
         return Ok(());
     }
@@ -160,6 +171,7 @@ fn ensure_windows_tun_privileges() -> Result<()> {
 
 #[cfg(windows)]
 fn resolve_wintun_file(config: &TunConfig) -> Result<PathBuf> {
+    // 用户显式配置时只接受该路径，避免误用 PATH 中的其他 DLL。
     if let Some(path) = config
         .wintun_file
         .as_deref()
@@ -173,6 +185,7 @@ fn resolve_wintun_file(config: &TunConfig) -> Result<PathBuf> {
         return Err(missing_wintun_error(&[path], true));
     }
 
+    // 未配置时按 agent.exe 目录、当前目录、PATH 顺序搜索。
     let candidates = default_wintun_candidates();
     if let Some(path) = candidates.iter().find(|path| path.is_file()) {
         return Ok(path.clone());
@@ -183,6 +196,7 @@ fn resolve_wintun_file(config: &TunConfig) -> Result<PathBuf> {
 
 #[cfg(windows)]
 fn absolute_wintun_path(path: &Path) -> PathBuf {
+    // 相对路径按当前工作目录解析，便于配置文件本地部署。
     if path.is_absolute() {
         return path.to_path_buf();
     }
@@ -196,6 +210,7 @@ fn absolute_wintun_path(path: &Path) -> PathBuf {
 fn default_wintun_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
+    // agent.exe 同目录优先，最符合随二进制打包的部署方式。
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -206,6 +221,7 @@ fn default_wintun_candidates() -> Vec<PathBuf> {
         push_wintun_candidate(&mut candidates, cwd.join("wintun.dll"));
     }
 
+    // 最后才遍历 PATH，避免意外加载其他软件携带的 wintun.dll。
     if let Some(path_var) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
             push_wintun_candidate(&mut candidates, dir.join("wintun.dll"));
@@ -217,6 +233,7 @@ fn default_wintun_candidates() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn push_wintun_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    // 搜索路径可能重复，去重后错误信息更清楚。
     if !candidates.iter().any(|candidate| candidate == &path) {
         candidates.push(path);
     }
@@ -224,6 +241,7 @@ fn push_wintun_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 
 #[cfg(windows)]
 fn missing_wintun_error(candidates: &[PathBuf], explicit: bool) -> AgentError {
+    // 错误信息保留已检查路径和进程架构，方便用户定位 DLL 放置/架构问题。
     let checked = format_wintun_candidates(candidates);
     let reason = if explicit {
         "配置的 wintun_file 不存在"
@@ -242,6 +260,7 @@ fn missing_wintun_error(candidates: &[PathBuf], explicit: bool) -> AgentError {
 
 #[cfg(windows)]
 fn windows_tun_create_error(error: std::io::Error, wintun_file: &Path) -> AgentError {
+    // os error 5 单独提示管理员权限和适配器占用，这是 Windows 下最常见失败。
     let hint = if error.raw_os_error() == Some(5) {
         "Windows 返回拒绝访问。请确认当前进程是 elevated 管理员令牌；如果已经提权，检查是否有同名 Wintun 适配器被其他进程占用，或安全策略拦截驱动安装/打开。"
     } else {
@@ -258,6 +277,7 @@ fn windows_tun_create_error(error: std::io::Error, wintun_file: &Path) -> AgentE
 
 #[cfg(windows)]
 fn format_wintun_candidates(candidates: &[PathBuf]) -> String {
+    // PATH 可能很长，错误信息只展示前几个候选并汇总剩余数量。
     let mut checked: Vec<String> = candidates
         .iter()
         .take(8)
@@ -294,6 +314,7 @@ async fn configure_proxy_routing(
     proxy_addrs: &[String],
     pool: &ConnectionPool,
 ) {
+    // 通过 OS 路由决策探测物理出口 IP，用于后续 proxy 连接 bind。
     let outbound_ip = detect_outbound_ip(proxy_addrs);
     if let Some(ip) = outbound_ip {
         info!("检测到物理出口 IP：{}；代理连接将绑定到该地址", ip);
@@ -320,6 +341,7 @@ fn install_route_guard(
     tun_if_index: u32,
     proxy_addrs: &[String],
 ) -> Option<RouteGuard> {
+    // 解析 proxy IP 后安装旁路和 split-default 路由；失败时继续运行但不接管全局路由。
     let proxy_ips = resolve_proxy_ips(proxy_addrs);
     match RouteGuard::install(tun_if_index, tun_ipv4, config.ipv6.as_deref(), &proxy_ips) {
         Ok(guard) => Some(guard),

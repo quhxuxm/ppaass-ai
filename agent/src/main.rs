@@ -82,6 +82,7 @@ fn main() -> Result<()> {
 
     // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    // TUN/netstack 与大量中继任务会形成较深 async 栈，栈大小由配置控制。
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
     runtime_builder.enable_all();
     if let Some(threads) = config.runtime_threads {
@@ -109,6 +110,7 @@ fn main() -> Result<()> {
 
         let shutdown = CancellationToken::new();
         let shutdown_for_signal = shutdown.clone();
+        // Ctrl-C 只触发取消信号，真正的资源清理由各任务在收到 token 后完成。
         tokio::spawn(async move {
             if let Err(err) = tokio::signal::ctrl_c().await {
                 error!("安装 Ctrl-C 信号处理器失败：{err}");
@@ -120,6 +122,7 @@ fn main() -> Result<()> {
 
         match AgentServer::new(config).await {
             Ok(server) => {
+                // AgentServer::run 会根据模式启动 SOCKS/HTTP 或 TUN 转发器。
                 if let Err(err) = server.run(shutdown).await {
                     error!("Agent 服务器异常停止：{}", err);
                     return Err::<(), anyhow::Error>(err.into());

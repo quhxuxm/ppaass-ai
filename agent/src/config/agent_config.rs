@@ -155,6 +155,7 @@ fn default_async_runtime_stack_size_mb() -> usize {
 
 impl AgentConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        // 配置加载只做 TOML 反序列化和默认值填充，运行期语义由各模块校验。
         let content = fs::read_to_string(path)?;
         let config: AgentConfig = toml::from_str(&content)?;
         Ok(config)
@@ -162,6 +163,7 @@ impl AgentConfig {
 
     #[allow(dead_code)]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<()> {
+        // 测试/工具场景使用，主程序目前只读取配置。
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
         Ok(())

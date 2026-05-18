@@ -59,6 +59,7 @@ impl DirectAccessChecker {
     /// 从配置创建新的检查器。
     /// 规则在构造时一次性解析，以实现高效匹配。
     pub fn new(config: &DirectAccessConfig) -> Self {
+        // 无效规则会被跳过，避免一个坏规则让整个 agent 无法启动。
         let rules: Vec<ParsedRule> = config
             .rules
             .iter()
@@ -152,6 +153,7 @@ impl DirectAccessChecker {
     /// 检查给定地址是否应该直连（绕过代理）。
     /// 直连返回 `true`，代理访问返回 `false`。
     pub fn is_direct(&self, address: &Address) -> bool {
+        // 模式先决定大方向，rules 模式才进入具体匹配。
         let result = match self.mode {
             DirectAccessMode::ProxyAll => false,
             DirectAccessMode::DirectAll => true,
@@ -197,6 +199,7 @@ impl DirectAccessChecker {
     }
 
     fn match_domain(rule: &ParsedRule, host: &str) -> bool {
+        // 域名规则只匹配域名，不尝试反向解析 IP。
         match rule {
             ParsedRule::ExactDomain(domain) => host == domain,
             ParsedRule::WildcardDomain(suffix) => {
@@ -209,6 +212,7 @@ impl DirectAccessChecker {
     }
 
     fn match_ip(rule: &ParsedRule, ip: &IpAddr) -> bool {
+        // IP 规则支持精确地址和 CIDR 网段。
         match (rule, ip) {
             (ParsedRule::ExactIp(rule_ip), ip) => rule_ip == ip,
             (ParsedRule::CidrV4 { network, mask }, IpAddr::V4(v4)) => {
@@ -227,6 +231,7 @@ impl DirectAccessChecker {
 /// 将协议 Address 转换为可连接的地址字符串，
 /// 适用于 TcpStream::connect() 或 UdpSocket::connect()
 pub fn address_to_string(address: &Address) -> String {
+    // IPv6 必须加方括号才能形成合法 host:port。
     match address {
         Address::Domain { host, port } => format!("{}:{}", host, port),
         Address::Ipv4 { addr, port } => {
