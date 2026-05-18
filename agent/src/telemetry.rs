@@ -1,4 +1,4 @@
-//! 遥测模块：tracing 初始化（标准输出 + 可选文件）以及供协议处理器使用的
+//! 遥测模块：tracing 初始化（标准输出或文件）以及供协议处理器使用的
 //! 流量统计辅助函数 `emit_traffic`。
 
 use tracing::info;
@@ -8,16 +8,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 /// 初始化全局 tracing。
-/// 若 `log_dir` 不为空，日志除标准输出外还会按天滚动写入该目录下的文件。
+/// 若 `log_dir` 不为空，日志只会按天滚动写入该目录下的文件。
 /// 开启文件日志时，返回的 guard 必须在程序整个生命周期内保持存活。
 pub fn init_tracing(log_dir: Option<&str>, log_file: &str, log_level: &str) -> Option<WorkerGuard> {
     let filter = EnvFilter::new(log_level);
-
-    // 标准输出始终开启，方便前台运行时直接观察连接和流量。
-    let stdout_layer = fmt::layer()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_line_number(true);
 
     if let Some(log_dir) = log_dir {
         // 文件日志使用 non_blocking writer，guard 必须存活以 flush 后台缓冲。
@@ -31,12 +25,15 @@ pub fn init_tracing(log_dir: Option<&str>, log_file: &str, log_level: &str) -> O
             .with_ansi(false);
         tracing_subscriber::registry()
             .with(filter)
-            .with(stdout_layer)
             .with(file_layer)
             .init();
         Some(guard)
     } else {
         // 未配置日志目录时只初始化 stdout layer。
+        let stdout_layer = fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_line_number(true);
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
