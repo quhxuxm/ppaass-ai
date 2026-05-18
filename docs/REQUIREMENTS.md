@@ -44,8 +44,6 @@ The agent side should have a connection pool for proxy side, and the connection 
 
 The RSA keys should be generated using a secure random number generator, and the keys should be stored securely on both sides.
 
-The port of `tokio-console` should be configurable via the configuration file, and it is optional, if configured the `tokio-console` should be started when the application starts.
-
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
 
 The UI of agent should use `tauri 2`, `typescript` and `vue3`, and `primevue` should be used as the component library of `vue3` .
@@ -63,7 +61,6 @@ The user management in proxy side should use the proxy users TOML configuration 
   - Use `tracing` for logging.
   - Use `thiserror` to define errors.
   - Use `anyhow` to throw application level errors.
-  - Use `tokio-console` as the monitoring tool.
   - Use `tokio-codec` for network package encoding and decoding.
   - Use `fast-socks5` latest stable version to implement the socks5 protocol logic in agent side.
   - Use `hyper` latest stable version to implement the http protocol logic in agent side.

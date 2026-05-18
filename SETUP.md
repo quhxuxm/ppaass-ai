@@ -239,28 +239,6 @@ curl http://localhost:8081/health
 
 ## Advanced Configuration
 
-### Enable tokio-console (for debugging)
-
-1. Build with console feature:
-
-```bash
-cargo build --release --features console -p agent
-cargo build --release --features console -p proxy
-```
-
-2. Add to config:
-
-```toml
-console_port = 6669  # for agent
-console_port = 6670  # for proxy
-```
-
-3. Connect with tokio-console:
-
-```bash
-tokio-console http://localhost:6669
-```
-
 ### Multiple Users
 
 You can add multiple users with different bandwidth limits:

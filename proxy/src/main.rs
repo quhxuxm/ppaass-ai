@@ -133,13 +133,6 @@ fn main() -> Result<()> {
         );
         info!("用户配置文件：{}", config.users_path);
 
-        // 如果配置了 tokio-console，则初始化
-        #[cfg(feature = "console")]
-        if let Some(console_port) = config.console_port {
-            info!("正在端口 {} 启动 tokio-console", console_port);
-            console_subscriber::init();
-        }
-
         // 启动代理服务器
         let server = ProxyServer::new(config).await?;
         server.run().await?;

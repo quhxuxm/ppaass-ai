@@ -80,5 +80,3 @@ auth_timeout_secs = 30
 # 发送连接请求，将被关闭（默认：120）
 idle_connection_timeout_secs = 120
 
-# 可选：启用 tokio-console 用于调试
-# console_port = 6670

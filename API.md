@@ -175,9 +175,8 @@ Retrieve the current proxy configuration.
 {
   "listen_addr": "0.0.0.0:8080",
   "api_addr": "0.0.0.0:8081",
-  "users_config_path": "config/users.toml",
-  "keys_dir": "keys",
-  "console_port": null
+  "users_path": "config/users.toml",
+  "keys_dir": "keys"
 }
 ```
 
@@ -199,7 +198,7 @@ Update proxy configuration without restarting.
 {
   "listen_addr": "0.0.0.0:8080",
   "api_addr": "0.0.0.0:8081",
-  "users_config_path": "config/users.toml",
+  "users_path": "config/users.toml",
   "keys_dir": "keys"
 }
 ```

@@ -150,7 +150,6 @@ password = "password123"              # Your password
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
 pool_size = 50                      # Connection pool size
 connection_timeout_secs = 30                # Connection timeout
-console_port = 3000                   # Optional: Console port for management
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)
@@ -158,9 +157,8 @@ console_port = 3000                   # Optional: Console port for management
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 api_addr = "0.0.0.0:8081"                 # API listen address
-users_config_path = "config/users.toml"   # Users configuration file
+users_path = "config/users.toml"          # Users configuration file
 keys_dir = "keys"                         # Directory for storing keys
-console_port = 6670                       # Optional: tokio-console port
 ```
 
 ## Security
@@ -196,14 +194,6 @@ open performance-report-*.html
 See `tests/README.md` for detailed testing documentation.
 
 ## Monitoring
-
-### Tokio Console
-
-Enable tokio-console for detailed runtime monitoring:
-
-1. Set `console_port` in configuration
-2. Build with console feature: `cargo build --release --features console`
-3. Connect with tokio-console: `tokio-console http://localhost:6669`
 
 ### Logging
 
@@ -268,8 +258,7 @@ cargo audit
 
 1. Increase pool size in agent configuration
 2. Check bandwidth limits
-3. Monitor with tokio-console
-4. Review network latency
+3. Review network latency
 
 ### Authentication Failures
 

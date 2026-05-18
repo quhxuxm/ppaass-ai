@@ -17,9 +17,6 @@ pub struct ProxyConfig {
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
-    #[serde(default)]
-    pub console_port: Option<u16>,
-
     /// 启用用于用户管理和监控的 REST API 服务（默认：false）
     #[serde(default)]
     pub enable_api: bool,

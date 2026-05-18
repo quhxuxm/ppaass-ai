@@ -22,9 +22,6 @@ tracing-appender = "0.2"
 thiserror = "2.0"
 anyhow = "1.0"
 bytes = "1.11"
-console-subscriber = "0.5"
-console-api = "0.9"
-tonic = { version = "0.14", features = ["transport"] }
 fast-socks5 = "1.0"
 hyper = { version = "1.8", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
@@ -55,7 +52,7 @@ tun-rs = { version = "2", features = ["async_tokio"] }
 netstack-smoltcp = "0.2"
 route_manager = "0.2"
 socket2 = { version = "0.6", features = ["all"] }
-if-addrs = "0.13"
+if-addrs = "0.15"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
@@ -63,3 +60,4 @@ windows-sys = { version = "0.61", features = [
     "Win32_Networking_WinSock",
     "Win32_UI_Shell",
 ] }
+tempfile = "3.27.0"
