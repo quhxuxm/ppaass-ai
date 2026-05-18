@@ -26,7 +26,7 @@ compression_mode = "none"
 # 连接目标服务器时使用的出站网络设备名。
 # 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时建议使用 "auto"，
 # proxy 会绑定到原始默认路由对应的物理网卡，避免出站流量回到 TUN。
-outbound_interface = "以太网 5"
+outbound_interface = "auto"
 
 # proxy 端处理 DNS 请求时使用的上游 DNS。
 # 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）

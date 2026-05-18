@@ -2,7 +2,7 @@ use flate2::Compression as GzipLevel;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::str::FromStr;
 
 /// agent 与 proxy 之间数据传输的压缩模式
@@ -67,12 +67,10 @@ impl std::fmt::Display for CompressionMode {
 }
 
 /// 使用指定压缩模式压缩数据
-pub fn compress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> {
+pub fn compress(data: &[u8], mode: CompressionMode) -> io::Result<Vec<u8>> {
     match mode {
         CompressionMode::None => Ok(data.to_vec()),
-        CompressionMode::Zstd => {
-            zstd::encode_all(data, 3) // level 3 是较均衡的选择
-        }
+        CompressionMode::Zstd => compress_zstd(data),
         CompressionMode::Lz4 => Ok(lz4_flex::compress_prepend_size(data)),
         CompressionMode::Gzip => {
             let mut encoder = GzEncoder::new(Vec::new(), GzipLevel::fast());
@@ -83,12 +81,12 @@ pub fn compress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> 
 }
 
 /// 使用指定压缩模式解压数据
-pub fn decompress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>> {
+pub fn decompress(data: &[u8], mode: CompressionMode) -> io::Result<Vec<u8>> {
     match mode {
         CompressionMode::None => Ok(data.to_vec()),
-        CompressionMode::Zstd => zstd::decode_all(data),
+        CompressionMode::Zstd => decompress_zstd(data),
         CompressionMode::Lz4 => lz4_flex::decompress_size_prepended(data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
         CompressionMode::Gzip => {
             let mut decoder = GzDecoder::new(data);
             let mut decompressed = Vec::new();
@@ -96,6 +94,34 @@ pub fn decompress(data: &[u8], mode: CompressionMode) -> std::io::Result<Vec<u8>
             Ok(decompressed)
         }
     }
+}
+
+#[cfg(feature = "zstd-compression")]
+fn compress_zstd(data: &[u8]) -> io::Result<Vec<u8>> {
+    zstd::encode_all(data, 3)
+}
+
+#[cfg(not(feature = "zstd-compression"))]
+fn compress_zstd(_data: &[u8]) -> io::Result<Vec<u8>> {
+    Err(zstd_feature_disabled_error())
+}
+
+#[cfg(feature = "zstd-compression")]
+fn decompress_zstd(data: &[u8]) -> io::Result<Vec<u8>> {
+    zstd::decode_all(data)
+}
+
+#[cfg(not(feature = "zstd-compression"))]
+fn decompress_zstd(_data: &[u8]) -> io::Result<Vec<u8>> {
+    Err(zstd_feature_disabled_error())
+}
+
+#[cfg(not(feature = "zstd-compression"))]
+fn zstd_feature_disabled_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "zstd compression is disabled; rebuild with the zstd-compression feature",
+    )
 }
 
 #[cfg(test)]
@@ -106,12 +132,21 @@ mod tests {
     fn test_compression_roundtrip() {
         let data = b"Hello, World! This is a test of compression. ".repeat(100);
 
-        for mode in [
+        #[cfg(feature = "zstd-compression")]
+        let modes = [
             CompressionMode::None,
             CompressionMode::Zstd,
             CompressionMode::Lz4,
             CompressionMode::Gzip,
-        ] {
+        ];
+        #[cfg(not(feature = "zstd-compression"))]
+        let modes = [
+            CompressionMode::None,
+            CompressionMode::Lz4,
+            CompressionMode::Gzip,
+        ];
+
+        for mode in modes {
             let compressed = compress(&data, mode).unwrap();
             let decompressed = decompress(&compressed, mode).unwrap();
             assert_eq!(
@@ -167,5 +202,12 @@ mod tests {
             "invalid".parse::<CompressionMode>().unwrap(),
             CompressionMode::None
         );
+    }
+
+    #[cfg(not(feature = "zstd-compression"))]
+    #[test]
+    fn test_zstd_requires_feature() {
+        let err = compress(b"data", CompressionMode::Zstd).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 }

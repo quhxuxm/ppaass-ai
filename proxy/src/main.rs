@@ -10,10 +10,12 @@ use crate::server::ProxyServer;
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use common::init_tracing;
+#[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
 use std::collections::BTreeSet;
 use tracing::info;
 
+#[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 

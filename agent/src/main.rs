@@ -14,10 +14,12 @@ use crate::config::AgentConfig;
 use crate::server::AgentServer;
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+#[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 

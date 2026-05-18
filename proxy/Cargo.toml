@@ -3,6 +3,11 @@ name = "proxy"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+zstd-compression = ["protocol/zstd-compression"]
+mimalloc-allocator = ["dep:mimalloc"]
+
 [dependencies]
 protocol = { path = "../protocol" }
 common = { path = "../common" }
@@ -24,7 +29,7 @@ toml.workspace = true
 async-trait.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
-mimalloc.workspace = true
+mimalloc = { workspace = true, optional = true }
 rand.workspace = true
 pretty-hex.workspace = true
 socket2.workspace = true
