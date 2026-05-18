@@ -1,15 +1,28 @@
 use super::source::iface_addr_matches_dst;
 use if_addrs::get_if_addrs;
 use route_manager::{Route, RouteManager};
-use std::borrow::Cow;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use tracing::{debug, info};
 
-pub(super) fn interface_for_dst(interface: &str, dst: SocketAddr) -> io::Result<Cow<'_, str>> {
-    if is_auto_interface(interface) {
-        auto_interface_for_dst(dst.ip()).map(Cow::Owned)
-    } else {
-        Ok(Cow::Borrowed(interface))
+pub(super) struct AutoInterfaceSelector {
+    routes: Vec<Route>,
+}
+
+impl AutoInterfaceSelector {
+    pub(super) fn new() -> io::Result<Self> {
+        let mut manager = RouteManager::new()
+            .map_err(|e| io::Error::other(format!("RouteManager 初始化失败：{e}")))?;
+        let routes = manager
+            .list()
+            .map_err(|e| io::Error::other(format!("读取路由表失败：{e}")))?;
+        debug!("proxy 启动时读取的本机路由表：{routes:#?}");
+        info!("已缓存 proxy 启动时的路由表，共 {} 条", routes.len());
+        Ok(Self { routes })
+    }
+
+    pub(super) fn interface_for_dst(&self, dst: SocketAddr) -> io::Result<String> {
+        auto_interface_for_dst(&self.routes, dst.ip())
     }
 }
 
@@ -17,13 +30,8 @@ pub(super) fn is_auto_interface(interface: &str) -> bool {
     interface.eq_ignore_ascii_case("auto")
 }
 
-fn auto_interface_for_dst(dst_ip: IpAddr) -> io::Result<String> {
-    let mut manager = RouteManager::new()
-        .map_err(|e| io::Error::other(format!("RouteManager 初始化失败：{e}")))?;
-    let routes = manager
-        .list()
-        .map_err(|e| io::Error::other(format!("读取路由表失败：{e}")))?;
-    let route = default_route(&routes, dst_ip.is_ipv6()).ok_or_else(|| {
+fn auto_interface_for_dst(routes: &[Route], dst_ip: IpAddr) -> io::Result<String> {
+    let route = default_route(routes, dst_ip.is_ipv6()).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             format!("没有找到用于 auto 出站设备选择的默认路由：{dst_ip}"),

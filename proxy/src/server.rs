@@ -1,6 +1,6 @@
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::ProxyConfig;
-use crate::connection::ServerConnection;
+use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use protocol::CompressionMode;
@@ -13,6 +13,7 @@ pub struct ProxyServer {
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    egress_state: Arc<EgressState>,
 }
 
 impl ProxyServer {
@@ -25,6 +26,7 @@ impl ProxyServer {
 
         // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
+        let egress_state = Arc::new(EgressState::new(config.outbound_interface.as_deref())?);
 
         // 将所有用户注册到带宽监控器
         for username in user_manager.as_ref().list_users().await? {
@@ -37,6 +39,7 @@ impl ProxyServer {
             config,
             user_manager,
             bandwidth_monitor,
+            egress_state,
         })
     }
 
@@ -54,10 +57,20 @@ impl ProxyServer {
                             info!("接受来自 {} 的连接", addr);
                             let user_manager = self.user_manager.clone();
                             let bandwidth_monitor = self.bandwidth_monitor.clone();
+                            let egress_state = self.egress_state.clone();
                             let compression_mode = self.config.get_compression_mode();
-                            let proxy_config=self.config.clone();
+                            let proxy_config = self.config.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(&proxy_config, stream, user_manager, bandwidth_monitor, compression_mode).await {
+                                if let Err(e) = handle_connection(
+                                    &proxy_config,
+                                    stream,
+                                    user_manager,
+                                    bandwidth_monitor,
+                                    egress_state,
+                                    compression_mode,
+                                )
+                                .await
+                                {
                                     error!("处理连接时出错：{}", e);
                                 }
                             });
@@ -78,12 +91,13 @@ impl ProxyServer {
     }
 }
 
-#[instrument(skip(proxy_config, stream, user_manager, bandwidth_monitor))]
+#[instrument(skip(proxy_config, stream, user_manager, bandwidth_monitor, egress_state))]
 async fn handle_connection(
     proxy_config: &ProxyConfig,
     stream: TcpStream,
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    egress_state: Arc<EgressState>,
     compression_mode: CompressionMode,
 ) -> Result<()> {
     let mut connection = ServerConnection::new(
@@ -91,6 +105,7 @@ async fn handle_connection(
         bandwidth_monitor,
         compression_mode,
         proxy_config.clone().into(),
+        egress_state,
     );
 
     // 将认证超时应用到整个认证阶段，防止 agent 打开 TCP 连接后

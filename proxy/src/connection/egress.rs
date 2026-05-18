@@ -4,31 +4,83 @@ mod route_guard;
 mod source;
 mod stream;
 
-use auto::interface_for_dst;
+use auto::AutoInterfaceSelector;
 use bind::bind_socket_to_interface;
 use route_guard::TargetRouteGuard;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use source::{BoundSource, interface_bind_addrs};
+use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
 pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
-pub async fn connect_tcp(
+pub struct EgressState {
+    interface: Option<InterfaceSelection>,
+}
+
+enum InterfaceSelection {
+    Named(String),
+    Auto(AutoInterfaceSelector),
+}
+
+impl EgressState {
+    pub fn new(interface: Option<&str>) -> io::Result<Self> {
+        let interface = match normalize_interface(interface) {
+            Some(interface) if auto::is_auto_interface(interface) => {
+                Some(InterfaceSelection::Auto(AutoInterfaceSelector::new()?))
+            }
+            Some(interface) => Some(InterfaceSelection::Named(interface.to_string())),
+            None => None,
+        };
+
+        Ok(Self { interface })
+    }
+
+    pub async fn connect_tcp(&self, target_addr: &str) -> io::Result<EgressTcpStream> {
+        if self.interface.is_none() {
+            return TcpStream::connect(target_addr)
+                .await
+                .map(|stream| EgressTcpStream::new(stream, None));
+        }
+
+        connect_tcp_with_interface(target_addr, self).await
+    }
+
+    pub async fn connect_udp(&self, target_addr: &str) -> io::Result<UdpSocket> {
+        if self.interface.is_none() {
+            return connect_udp_default(target_addr).await;
+        }
+
+        connect_udp_with_interface(target_addr, self).await
+    }
+
+    fn interface_for_dst(&self, dst: SocketAddr) -> io::Result<Cow<'_, str>> {
+        match &self.interface {
+            Some(InterfaceSelection::Named(interface)) => Ok(Cow::Borrowed(interface.as_str())),
+            Some(InterfaceSelection::Auto(selector)) => {
+                selector.interface_for_dst(dst).map(Cow::Owned)
+            }
+            None => Err(io::Error::other("未配置出站网络设备")),
+        }
+    }
+}
+
+async fn connect_tcp_with_interface(
     target_addr: &str,
-    interface: Option<&str>,
+    egress_state: &EgressState,
 ) -> io::Result<EgressTcpStream> {
-    let Some(interface) = normalize_interface(interface) else {
+    if egress_state.interface.is_none() {
         return TcpStream::connect(target_addr)
             .await
             .map(|stream| EgressTcpStream::new(stream, None));
-    };
+    }
 
     let mut last_error = None;
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
-        let interface = match interface_for_dst(interface, dst) {
+        let interface = match egress_state.interface_for_dst(dst) {
             Ok(interface) => interface,
             Err(err) => {
                 last_error = Some(err);
@@ -62,16 +114,19 @@ pub async fn connect_tcp(
     }))
 }
 
-pub async fn connect_udp(target_addr: &str, interface: Option<&str>) -> io::Result<UdpSocket> {
-    let Some(interface) = normalize_interface(interface) else {
+async fn connect_udp_with_interface(
+    target_addr: &str,
+    egress_state: &EgressState,
+) -> io::Result<UdpSocket> {
+    if egress_state.interface.is_none() {
         return connect_udp_default(target_addr).await;
-    };
+    }
 
     let mut last_error = None;
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
-        let interface = match interface_for_dst(interface, dst) {
+        let interface = match egress_state.interface_for_dst(dst) {
             Ok(interface) => interface,
             Err(err) => {
                 last_error = Some(err);

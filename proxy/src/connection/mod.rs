@@ -4,6 +4,7 @@ mod response_sink;
 mod upstream;
 
 pub use agent_io::AgentIo;
+pub use egress::EgressState;
 pub use response_sink::BytesToProxyResponseSink;
 // UpstreamConnection 在 ServerConnection 定义之后于文件末尾导出
 
@@ -60,6 +61,7 @@ pub struct ServerConnection {
     cipher_state: Arc<CipherState>,
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
+    egress_state: Arc<EgressState>,
 }
 
 impl ServerConnection {
@@ -68,6 +70,7 @@ impl ServerConnection {
         bandwidth_monitor: Arc<BandwidthMonitor>,
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
+        egress_state: Arc<EgressState>,
     ) -> Self {
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = Framed::new(stream, ProxyCodec::new(Some(cipher_state.clone())));
@@ -81,6 +84,7 @@ impl ServerConnection {
             cipher_state,
             pending_auth_request: None,
             proxy_config,
+            egress_state,
         }
     }
 
@@ -350,9 +354,7 @@ impl ServerConnection {
         connect_request: ConnectRequest,
         target_addr: &str,
     ) -> Result<()> {
-        match egress::connect_tcp(target_addr, self.proxy_config.outbound_interface.as_deref())
-            .await
-        {
+        match self.egress_state.connect_tcp(target_addr).await {
             Ok(mut target_stream) => {
                 info!(
                     "已连接到目标（TCP）：{}，出站设备={}",
@@ -388,9 +390,7 @@ impl ServerConnection {
     ) -> Result<()> {
         debug!("正在处理 UDP 连接请求：{connect_request:?}");
 
-        match egress::connect_udp(target_addr, self.proxy_config.outbound_interface.as_deref())
-            .await
-        {
+        match self.egress_state.connect_udp(target_addr).await {
             Ok(socket) => {
                 info!(
                     "已连接到目标（UDP）：{}，出站设备={}",
