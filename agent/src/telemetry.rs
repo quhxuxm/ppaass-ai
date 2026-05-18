@@ -10,11 +10,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// 初始化全局 tracing。
 /// 若 `log_dir` 不为空，日志除标准输出外还会按天滚动写入该目录下的文件。
 /// 开启文件日志时，返回的 guard 必须在程序整个生命周期内保持存活。
-pub fn init_tracing(
-    log_dir: Option<&str>,
-    log_file: &str,
-    log_level: &str,
-) -> Option<WorkerGuard> {
+pub fn init_tracing(log_dir: Option<&str>, log_file: &str, log_level: &str) -> Option<WorkerGuard> {
     let filter = EnvFilter::new(log_level);
 
     let stdout_layer = fmt::layer()

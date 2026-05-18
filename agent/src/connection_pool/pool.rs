@@ -127,10 +127,7 @@ impl ConnectionPool {
     /// 用初始连接预热连接池，然后启动后台补充任务。
     #[instrument(skip(self))]
     pub async fn prewarm(&self) {
-        info!(
-            "正在预热连接池，目标 {} 条连接",
-            self.config.pool_size
-        );
+        info!("正在预热连接池，目标 {} 条连接", self.config.pool_size);
 
         let mut handles = Vec::with_capacity(self.config.pool_size);
         for i in 0..self.config.pool_size {

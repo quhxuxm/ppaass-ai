@@ -1,4 +1,9 @@
-use std::{fs::read_to_string, net::{IpAddr, SocketAddr}, time::Duration, time::Instant};
+use std::{
+    fs::read_to_string,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+    time::Instant,
+};
 
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
@@ -72,10 +77,7 @@ impl ProxyConnection {
         } else {
             format!("[{}]", config.proxy_addrs.join(", "))
         };
-        debug!(
-            "正在创建代理连接：{} (bind_ip={:?})",
-            addr_display, bind_ip
-        );
+        debug!("正在创建代理连接：{} (bind_ip={:?})", addr_display, bind_ip);
         let config_adapter = AgentClientConfig::new(config, bind_ip);
 
         let auth_conn = AuthenticatedConnection::authenticate_only(&config_adapter)

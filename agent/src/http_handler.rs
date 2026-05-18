@@ -130,10 +130,7 @@ async fn handle_connect(
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    info!(
-                        "HTTP CONNECT 升级成功（直连） {}:{}",
-                        host, port
-                    );
+                    info!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
                     if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
                         error!("直连隧道错误: {}", e);
                     }
@@ -156,10 +153,7 @@ async fn handle_connect(
             .await
         {
             Ok(stream) => {
-                info!(
-                    "从连接池获取已连接流, stream_id: {}",
-                    stream.stream_id()
-                );
+                info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
                 stream
             }
             Err(e) => {

@@ -196,10 +196,10 @@ fn absolute_wintun_path(path: &Path) -> PathBuf {
 fn default_wintun_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            push_wintun_candidate(&mut candidates, dir.join("wintun.dll"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        push_wintun_candidate(&mut candidates, dir.join("wintun.dll"));
     }
 
     if let Ok(cwd) = std::env::current_dir() {
