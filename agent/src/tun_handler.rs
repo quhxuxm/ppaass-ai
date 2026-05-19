@@ -7,6 +7,7 @@
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
 mod dns;
+mod dns_proxy;
 mod network;
 mod route;
 mod tasks;

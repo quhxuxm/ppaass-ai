@@ -1,4 +1,5 @@
 use super::TunForwardContext;
+use super::dns_proxy::DnsProxy;
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use futures::{SinkExt, StreamExt};
@@ -125,12 +126,22 @@ pub(super) fn spawn_udp_sessions(
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
+        let dns_proxy = context
+            .proxy_dns
+            .then(|| DnsProxy::spawn(context.pool.clone(), udp_tx.clone(), shutdown.clone()));
 
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 msg = udp_rx.next() => {
                     let Some((data, source_addr, target_addr)) = msg else { break };
+                    if context.proxy_dns && target_addr.port() == 53 {
+                        if let Some(dns_proxy) = &dns_proxy {
+                            dns_proxy.send(source_addr, target_addr, data).await;
+                        }
+                        continue;
+                    }
+
                     let key = (source_addr, target_addr);
                     // 已存在会话时只把新 payload 投递给该会话任务。
                     if let Some(tx) = sessions.get(&key).map(|t| t.clone()) {
