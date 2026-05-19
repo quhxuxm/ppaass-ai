@@ -17,6 +17,8 @@ struct ConnectionLimiterInner {
     users: DashMap<String, Arc<UserConnectionCounters>>,
     max_connections_per_user: usize,
     max_idle_connections_per_user: usize,
+    udp_relay_flows: AtomicUsize,
+    max_udp_relay_flows: usize,
 }
 
 struct UserConnectionCounters {
@@ -37,6 +39,10 @@ pub struct IdleConnectionPermit {
     counters: Arc<UserConnectionCounters>,
 }
 
+pub struct UdpRelayFlowPermit {
+    limiter: Arc<ConnectionLimiterInner>,
+}
+
 impl ConnectionLimiter {
     pub fn new(config: &ProxyConfig) -> Self {
         let global = if config.max_connections == 0 {
@@ -52,6 +58,8 @@ impl ConnectionLimiter {
                 users: DashMap::new(),
                 max_connections_per_user: config.max_connections_per_user,
                 max_idle_connections_per_user: config.max_idle_connections_per_user,
+                udp_relay_flows: AtomicUsize::new(0),
+                max_udp_relay_flows: config.max_udp_relay_flows,
             }),
         }
     }
@@ -84,6 +92,17 @@ impl ConnectionLimiter {
         self.inner.active_total.load(Ordering::Acquire)
     }
 
+    pub fn try_acquire_udp_relay_flow(&self) -> Option<UdpRelayFlowPermit> {
+        increment_limited(&self.inner.udp_relay_flows, self.inner.max_udp_relay_flows)?;
+        Some(UdpRelayFlowPermit {
+            limiter: self.inner.clone(),
+        })
+    }
+
+    pub fn active_udp_relay_flows(&self) -> usize {
+        self.inner.udp_relay_flows.load(Ordering::Acquire)
+    }
+
     fn user_counters(&self, username: &str) -> Arc<UserConnectionCounters> {
         self.inner
             .users
@@ -113,6 +132,12 @@ impl Drop for UserConnectionPermit {
 impl Drop for IdleConnectionPermit {
     fn drop(&mut self) {
         self.counters.idle.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Drop for UdpRelayFlowPermit {
+    fn drop(&mut self) {
+        self.limiter.udp_relay_flows.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -163,6 +188,7 @@ mod tests {
             max_connections_per_user,
             max_idle_connections_per_user,
             max_udp_relay_flows_per_connection: 2048,
+            max_udp_relay_flows: 4096,
         }
     }
 
@@ -212,5 +238,20 @@ mod tests {
         assert!(limiter.try_acquire_user("alice").is_some());
         assert!(limiter.try_acquire_idle("alice").is_some());
         assert!(limiter.try_acquire_idle("alice").is_some());
+    }
+
+    #[test]
+    fn udp_relay_flow_limit_releases_on_drop() {
+        let mut config = config(0, 0, 0);
+        config.max_udp_relay_flows = 1;
+        let limiter = ConnectionLimiter::new(&config);
+
+        let flow = limiter.try_acquire_udp_relay_flow().unwrap();
+        assert!(limiter.try_acquire_udp_relay_flow().is_none());
+        assert_eq!(limiter.active_udp_relay_flows(), 1);
+
+        drop(flow);
+        assert_eq!(limiter.active_udp_relay_flows(), 0);
+        assert!(limiter.try_acquire_udp_relay_flow().is_some());
     }
 }

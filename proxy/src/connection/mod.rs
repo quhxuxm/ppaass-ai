@@ -11,7 +11,7 @@ pub use response_sink::BytesToProxyResponseSink;
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::connection::upstream::UpstreamConnection;
-use crate::connection_limiter::IdleConnectionPermit;
+use crate::connection_limiter::{ConnectionLimiter, IdleConnectionPermit, UdpRelayFlowPermit};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -71,6 +72,7 @@ pub struct ServerConnection {
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
+    connection_limiter: ConnectionLimiter,
 }
 
 impl ServerConnection {
@@ -80,6 +82,7 @@ impl ServerConnection {
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
         egress_state: Arc<EgressState>,
+        connection_limiter: ConnectionLimiter,
     ) -> Self {
         // 每条 agent TCP 连接都有独立的编解码器和加密状态。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
@@ -95,6 +98,7 @@ impl ServerConnection {
             pending_auth_request: None,
             proxy_config,
             egress_state,
+            connection_limiter,
         }
     }
 
@@ -493,11 +497,21 @@ impl ServerConnection {
                             );
                             continue;
                         }
+                        let Some(flow_permit) = self.connection_limiter.try_acquire_udp_relay_flow() else {
+                            warn!(
+                                "proxy 全局 UDP relay flow 数已达上限（当前={}，上限={}），丢弃 flow {} 的数据包",
+                                self.connection_limiter.active_udp_relay_flows(),
+                                self.proxy_config.max_udp_relay_flows,
+                                relay_packet.flow_id
+                            );
+                            continue;
+                        };
                         match self.spawn_udp_relay_flow(
                             relay_packet.flow_id,
                             relay_packet.address.clone(),
                             response_tx.clone(),
                             flow_done_tx.clone(),
+                            flow_permit,
                         ).await {
                             Ok(flow) => {
                                 flows.insert(relay_packet.flow_id, flow);
@@ -512,13 +526,17 @@ impl ServerConnection {
                         }
                     }
 
-                    let send_result = if let Some(flow) = flows.get(&relay_packet.flow_id) {
-                        flow.tx.send(relay_packet.data).await
-                    } else {
-                        continue;
-                    };
-                    if send_result.is_err() {
-                        flows.remove(&relay_packet.flow_id);
+                    let flow_id = relay_packet.flow_id;
+                    if let Some(flow) = flows.get(&flow_id) {
+                        match flow.tx.try_send(relay_packet.data) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                debug!("UDP relay flow {flow_id} 发送队列已满，丢弃一个 UDP 数据包");
+                            }
+                            Err(TrySendError::Closed(_)) => {
+                                flows.remove(&flow_id);
+                            }
+                        }
                     }
                 }
                 response = response_rx.recv() => {
@@ -556,6 +574,7 @@ impl ServerConnection {
         address: Address,
         response_tx: tokio::sync::mpsc::Sender<UdpRelayPacket>,
         flow_done_tx: tokio::sync::mpsc::Sender<u64>,
+        flow_permit: UdpRelayFlowPermit,
     ) -> Result<UdpRelayFlow> {
         let target_addr = relay_target_addr(&address)?;
         let socket = self
@@ -569,6 +588,7 @@ impl ServerConnection {
         let response_address = address.clone();
 
         tokio::spawn(async move {
+            let _flow_permit = flow_permit;
             let mut buf = vec![0u8; 65535];
             let idle = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
             tokio::pin!(idle);
@@ -578,11 +598,22 @@ impl ServerConnection {
                     _ = &mut idle => break,
                     maybe_data = rx.recv() => {
                         let Some(data) = maybe_data else { break };
-                        if let Err(e) = socket.send(&data).await {
-                            debug!("UDP relay flow {flow_id} 发送失败：{e}");
-                            break;
+                        match tokio::time::timeout(UDP_RELAY_FLOW_IDLE, socket.send(&data)).await {
+                            Ok(Ok(_)) => {
+                                idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                            }
+                            Ok(Err(e)) => {
+                                debug!("UDP relay flow {flow_id} 发送失败：{e}");
+                                break;
+                            }
+                            Err(_) => {
+                                debug!(
+                                    "UDP relay flow {flow_id} 发送超过 {} 秒，关闭该 flow",
+                                    UDP_RELAY_FLOW_IDLE.as_secs()
+                                );
+                                break;
+                            }
                         }
-                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
                     }
                     read = socket.recv(&mut buf) => {
                         match read {
@@ -592,10 +623,16 @@ impl ServerConnection {
                                     address: response_address.clone(),
                                     data: buf[..n].to_vec(),
                                 };
-                                if response_tx.send(response).await.is_err() {
-                                    break;
+                                match response_tx.try_send(response) {
+                                    Ok(()) => {
+                                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                    }
+                                    Err(TrySendError::Full(_)) => {
+                                        debug!("UDP relay flow {flow_id} 响应队列已满，关闭该 flow 以释放 socket");
+                                        break;
+                                    }
+                                    Err(TrySendError::Closed(_)) => break,
                                 }
-                                idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
                             }
                             Err(e) => {
                                 debug!("UDP relay flow {flow_id} 接收失败：{e}");
@@ -605,7 +642,8 @@ impl ServerConnection {
                     }
                 }
             }
-            let _ = flow_done_tx.send(flow_id).await;
+            drop(socket);
+            let _ = flow_done_tx.try_send(flow_id);
             debug!("UDP relay flow {flow_id} 已结束");
         });
 
@@ -720,65 +758,84 @@ impl ServerConnection {
 
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
 
-        // agent_to_udp 负责把 agent 发来的 UDP payload 写到目标 socket。
-        let agent_to_udp = async {
-            let mut buf = [0u8; 65535];
-            loop {
-                match agent_reader.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = &buf[..n];
-                        trace!(
-                            "从 agent 收到发往目标的 UDP 数据：{:?}\n{}",
-                            udp_socket.peer_addr(),
-                            pretty_hex::pretty_hex(&data)
-                        );
-                        if let Err(e) = udp_send.send(data).await {
-                            debug!("UDP 发送错误：{}", e);
+        let idle_timeout = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
+        tokio::pin!(idle_timeout);
+        let mut agent_buf = [0u8; 65535];
+        let mut udp_buf = [0u8; 65535];
+
+        loop {
+            tokio::select! {
+                _ = &mut idle_timeout => {
+                    debug!(
+                        "UDP 中继空闲超过 {} 秒，关闭 socket",
+                        UDP_RELAY_FLOW_IDLE.as_secs()
+                    );
+                    break;
+                }
+                read = agent_reader.read(&mut agent_buf) => {
+                    match read {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let data = &agent_buf[..n];
+                            trace!(
+                                "从 agent 收到发往目标的 UDP 数据：{:?}\n{}",
+                                udp_socket.peer_addr(),
+                                pretty_hex::pretty_hex(&data)
+                            );
+                            match tokio::time::timeout(UDP_RELAY_FLOW_IDLE, udp_send.send(data)).await {
+                                Ok(Ok(_)) => {
+                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                }
+                                Ok(Err(e)) => {
+                                    debug!("UDP 发送错误：{}", e);
+                                    break;
+                                }
+                                Err(_) => {
+                                    debug!("UDP 发送超过 {} 秒，关闭 socket", UDP_RELAY_FLOW_IDLE.as_secs());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!("读取 agent 数据错误：{}", e);
                             break;
                         }
                     }
-                    Err(e) => {
-                        debug!("读取 agent 数据错误：{}", e);
-                        break;
+                }
+                recv = udp_recv.recv(&mut udp_buf) => {
+                    match recv {
+                        Ok(n) => {
+                            let data = &udp_buf[..n];
+                            trace!(
+                                "从目标收到发往 agent 的 UDP 数据：{:?}\n{}",
+                                udp_socket.peer_addr(),
+                                pretty_hex::pretty_hex(&data)
+                            );
+                            let write_result = tokio::time::timeout(UDP_RELAY_FLOW_IDLE, async {
+                                agent_writer.write_all(data).await?;
+                                agent_writer.flush().await
+                            }).await;
+                            match write_result {
+                                Ok(Ok(())) => {
+                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                }
+                                Ok(Err(e)) => {
+                                    debug!("写入 agent 数据错误：{}", e);
+                                    break;
+                                }
+                                Err(_) => {
+                                    debug!("写入 agent 超过 {} 秒，关闭 UDP 中继", UDP_RELAY_FLOW_IDLE.as_secs());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!("UDP 接收错误：{}", e);
+                            break;
+                        }
                     }
                 }
             }
-        };
-
-        // udp_to_agent 负责把目标返回的 UDP payload 写回 agent。
-        let udp_to_agent = async {
-            let mut buf = [0u8; 65535];
-            loop {
-                match udp_recv.recv(&mut buf).await {
-                    Ok(n) => {
-                        let data = &buf[..n];
-                        trace!(
-                            "从目标收到发往 agent 的 UDP 数据：{:?}\n{}",
-                            udp_socket.peer_addr(),
-                            pretty_hex::pretty_hex(&data)
-                        );
-                        if let Err(e) = agent_writer.write_all(data).await {
-                            debug!("写入 agent 数据错误：{}", e);
-                            break;
-                        }
-                        if let Err(e) = agent_writer.flush().await {
-                            debug!("刷新 agent 写入缓冲错误：{}", e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        debug!("UDP 接收错误：{}", e);
-                        break;
-                    }
-                }
-            }
-        };
-
-        // 任一方向结束都关闭整个 UDP 中继，避免另一边无限等待。
-        tokio::select! {
-            _ = agent_to_udp => {},
-            _ = udp_to_agent => {}
         }
 
         debug!("UDP 中继已结束");
