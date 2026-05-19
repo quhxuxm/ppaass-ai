@@ -1,0 +1,25 @@
+[package]
+name = "ppaass_android_agent"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+common = { path = "../../common" }
+protocol = { path = "../../protocol" }
+
+bytes.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+netstack-smoltcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+jni = "0.21"
+libc = "0.2"

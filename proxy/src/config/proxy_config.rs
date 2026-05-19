@@ -87,6 +87,10 @@ pub struct ProxyConfig {
     /// 单条 UDP relay TCP 连接中允许同时存在的目标 UDP flow 数；0 表示不限制。
     #[serde(default = "default_max_udp_relay_flows_per_connection")]
     pub max_udp_relay_flows_per_connection: usize,
+
+    /// proxy 全局同时存在的 UDP relay flow 数；每个 flow 持有一个 UDP socket，0 表示不限制。
+    #[serde(default = "default_max_udp_relay_flows")]
+    pub max_udp_relay_flows: usize,
 }
 
 fn default_log_level() -> String {
@@ -135,6 +139,10 @@ fn default_max_idle_connections_per_user() -> usize {
 
 fn default_max_udp_relay_flows_per_connection() -> usize {
     2048
+}
+
+fn default_max_udp_relay_flows() -> usize {
+    4096
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {

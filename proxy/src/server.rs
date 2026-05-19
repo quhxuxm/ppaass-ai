@@ -134,6 +134,7 @@ async fn handle_connection(
         compression_mode,
         proxy_config.clone(),
         egress_state,
+        connection_limiter.clone(),
     );
 
     // 将认证超时应用到整个认证阶段，防止 agent 打开 TCP 连接后
