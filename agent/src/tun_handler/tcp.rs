@@ -1,13 +1,12 @@
-use super::network::{TunNetworks, address_for_tun_target, reject_tun_target};
-use crate::connection_pool::ConnectionPool;
-use crate::direct_access::{DirectAccessChecker, address_to_string};
+use super::TunForwardContext;
+use super::network::{address_for_tun_target, reject_tun_target};
+use crate::direct_access::address_to_string;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{debug, info};
@@ -16,12 +15,16 @@ pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
     source: SocketAddr,
     target: SocketAddr,
-    tun_networks: TunNetworks,
-    proxy_dns: bool,
-    pool: Arc<ConnectionPool>,
-    direct_checker: Arc<DirectAccessChecker>,
-    direct_bind_interface: Option<BindInterface>,
+    context: TunForwardContext,
 ) -> Result<()> {
+    let TunForwardContext {
+        pool,
+        direct_checker,
+        tun_networks,
+        proxy_dns,
+        direct_bind_interface,
+    } = context;
+
     // 先把 TUN 目标地址转成代理协议地址，并处理 proxy DNS 特例。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
     if !proxy_dns_request {

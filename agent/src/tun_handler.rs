@@ -29,6 +29,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 use tun_rs::DeviceBuilder;
 
+#[derive(Clone)]
+struct TunForwardContext {
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+    tun_networks: TunNetworks,
+    proxy_dns: bool,
+    direct_bind_interface: Option<common::BindInterface>,
+}
+
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
 #[instrument(skip(pool, direct_access_checker, shutdown))]
 pub async fn run_tun_mode(
@@ -92,25 +101,15 @@ pub async fn run_tun_mode(
     // 三组任务分别桥接原始包、处理 TCP 流、维护 UDP 会话。
     let (tun_to_stack, stack_to_tun) =
         spawn_packet_bridge(device.clone(), stack, config.mtu as usize, shutdown.clone());
-    let tcp_task = spawn_tcp_listener(
-        tcp_listener,
-        pool.clone(),
-        direct_access_checker.clone(),
+    let forward_context = TunForwardContext {
+        pool: pool.clone(),
+        direct_checker: direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
-        proxy_bind_interface.clone(),
-        shutdown.clone(),
-    );
-    let udp_task = spawn_udp_sessions(
-        udp_socket,
-        pool.clone(),
-        direct_access_checker.clone(),
-        tun_networks,
-        proxy_dns,
-        block_quic,
-        proxy_bind_interface.clone(),
-        shutdown.clone(),
-    );
+        direct_bind_interface: proxy_bind_interface.clone(),
+    };
+    let tcp_task = spawn_tcp_listener(tcp_listener, forward_context.clone(), shutdown.clone());
+    let udp_task = spawn_udp_sessions(udp_socket, forward_context, block_quic, shutdown.clone());
     let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
     let dns_server = tun_dns_server(ipv4, ipv4_prefix);
     let dns_guard = DnsGuard::install(

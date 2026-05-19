@@ -1,9 +1,6 @@
-use super::network::TunNetworks;
+use super::TunForwardContext;
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
-use crate::connection_pool::ConnectionPool;
-use crate::direct_access::DirectAccessChecker;
-use common::BindInterface;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -86,11 +83,7 @@ pub(super) fn spawn_packet_bridge(
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
-    pool: Arc<ConnectionPool>,
-    direct_checker: Arc<DirectAccessChecker>,
-    tun_networks: TunNetworks,
-    proxy_dns: bool,
-    direct_bind_interface: Option<BindInterface>,
+    context: TunForwardContext,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -101,20 +94,14 @@ pub(super) fn spawn_tcp_listener(
                     // 每条 TUN TCP 流独立转发，避免慢连接阻塞后续 accept。
                     let Some((stream, source_addr, target_addr)) = accepted else { break };
                     debug!("TUN TCP {} -> {}", source_addr, target_addr);
-                    let pool = pool.clone();
-                    let checker = direct_checker.clone();
-                    let direct_bind_interface = direct_bind_interface.clone();
+                    let context = context.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
                             handle_tun_tcp(
                                 stream,
                                 source_addr,
                                 target_addr,
-                                tun_networks,
-                                proxy_dns,
-                                pool,
-                                checker,
-                                direct_bind_interface,
+                                context,
                             ).await
                         {
                             debug!("TUN TCP 流结束：{e}");
@@ -129,12 +116,8 @@ pub(super) fn spawn_tcp_listener(
 
 pub(super) fn spawn_udp_sessions(
     udp_socket: netstack_smoltcp::UdpSocket,
-    pool: Arc<ConnectionPool>,
-    direct_checker: Arc<DirectAccessChecker>,
-    tun_networks: TunNetworks,
-    proxy_dns: bool,
+    context: TunForwardContext,
     block_quic: bool,
-    direct_bind_interface: Option<BindInterface>,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -160,17 +143,15 @@ pub(super) fn spawn_udp_sessions(
                     sessions.insert(key, tx.clone());
                     let _ = tx.send(data).await;
 
-                    let pool = pool.clone();
-                    let checker = direct_checker.clone();
                     let sessions_c = sessions.clone();
                     let context = UdpSessionContext {
-                        tun_networks,
-                        proxy_dns,
+                        tun_networks: context.tun_networks,
+                        proxy_dns: context.proxy_dns,
                         block_quic,
                         netstack_tx: udp_tx.clone(),
-                        pool,
-                        direct_checker: checker,
-                        direct_bind_interface: direct_bind_interface.clone(),
+                        pool: context.pool.clone(),
+                        direct_checker: context.direct_checker.clone(),
+                        direct_bind_interface: context.direct_bind_interface.clone(),
                     };
                     tokio::spawn(async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
