@@ -9,7 +9,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
-use tracing::{debug, info};
+use tracing::debug;
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -40,7 +40,7 @@ pub(super) async fn handle_tun_tcp(
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = address_to_string(&address);
-        info!("TUN TCP 直连 -> {}", target_str);
+        debug!("TUN TCP 直连 -> {}", target_str);
         let mut target = connect_direct_tcp(target, direct_bind_interface.as_ref())
             .await
             .map_err(|e| AgentError::Connection(format!("直连 {target_str} 失败：{e}")))?;
@@ -56,9 +56,9 @@ pub(super) async fn handle_tun_tcp(
 
     // 默认路径通过连接池获取已认证 proxy 流，再做双向拷贝。
     if proxy_dns_request {
-        info!("TUN TCP DNS -> 代理 -> {}", target_label);
+        debug!("TUN TCP DNS -> 代理 -> {}", target_label);
     } else {
-        info!("TUN TCP -> 代理 -> {}", target_label);
+        debug!("TUN TCP -> 代理 -> {}", target_label);
     }
     let connected = pool
         .as_ref()

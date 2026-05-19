@@ -12,6 +12,8 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 
+const MAX_CONCURRENT_POOL_CONNECTS: usize = 10;
+
 /// 使用 deadpool::unmanaged 的连接池，用于预热代理连接。
 /// 连接不会被复用 — 每条连接取出后即消费。
 pub struct ConnectionPool {
@@ -117,9 +119,8 @@ impl ConnectionPool {
                     to_create, current_size
                 );
 
-                const MAX_CONCURRENT_REFILL: usize = 10;
                 // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
-                let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REFILL));
+                let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
                 let mut set = tokio::task::JoinSet::new();
 
                 for _ in 0..to_create {
@@ -164,15 +165,18 @@ impl ConnectionPool {
     pub async fn prewarm(&self) {
         info!("正在预热连接池，目标 {} 条连接", self.config.pool_size);
 
-        // 初始预热并发执行，降低 agent 启动后第一批请求等待时间。
-        let mut handles = Vec::with_capacity(self.config.pool_size);
+        // 初始预热并发执行，但限制认证连接并发，避免启动瞬间打满 proxy。
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
+        let mut set = tokio::task::JoinSet::new();
         for i in 0..self.config.pool_size {
             let config = self.config.clone();
             let pool = self.pool.clone();
             let available = self.available.clone();
             let bind_ip = self.get_proxy_bind_ip();
             let bind_interface = self.get_proxy_bind_interface();
-            handles.push(tokio::spawn(async move {
+            let semaphore = semaphore.clone();
+            set.spawn(async move {
+                let _permit = semaphore.acquire().await.ok();
                 match ProxyConnection::new(&config, bind_ip, bind_interface).await {
                     Ok(conn) => {
                         if pool.try_add(conn).is_ok() {
@@ -189,13 +193,16 @@ impl ConnectionPool {
                         false
                     }
                 }
-            }));
+            });
         }
 
         let mut success_count = 0;
-        for handle in handles {
-            if let Ok(true) = handle.await {
-                success_count += 1;
+        while let Some(result) = set.join_next().await {
+            match result {
+                Ok(true) => success_count += 1,
+                Ok(false) => {}
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => warn!("预热任务 join 错误：{}", e),
             }
         }
         info!("连接池已预热 {} 条连接", success_count);

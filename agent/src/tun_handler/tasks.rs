@@ -140,7 +140,7 @@ pub(super) fn spawn_udp_sessions(
                     let Some((data, source_addr, target_addr)) = msg else { break };
                     if context.proxy_dns && target_addr.port() == 53 {
                         if let Some(dns_proxy) = &dns_proxy {
-                            dns_proxy.send(source_addr, target_addr, data).await;
+                            dns_proxy.send(source_addr, target_addr, data);
                         }
                         continue;
                     }
@@ -164,21 +164,23 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
                     if !context.direct_checker.is_direct(&address) {
-                        udp_relay.send(source_addr, target_addr, data).await;
+                        udp_relay.send(source_addr, target_addr, data);
                         continue;
                     }
 
                     let key = (source_addr, target_addr);
                     // 已存在会话时只把新 payload 投递给该会话任务。
                     if let Some(tx) = sessions.get(&key).map(|t| t.clone()) {
-                        let _ = tx.send(data).await;
+                        if tx.try_send(data).is_err() {
+                            debug!("TUN UDP 会话队列已满，丢弃一个 UDP 包 -> {}", target_addr);
+                        }
                         continue;
                     }
 
                     // 新会话先入表，再发送首包，避免首包在任务启动前丢失。
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
                     sessions.insert(key, tx.clone());
-                    let _ = tx.send(data).await;
+                    let _ = tx.try_send(data);
 
                     let sessions_c = sessions.clone();
                     let context = UdpSessionContext {

@@ -8,13 +8,15 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 
 pub(super) struct UdpRelay {
     tx: mpsc::Sender<UdpRelayRequest>,
@@ -49,6 +51,7 @@ impl Hash for UdpFlowKey {
 struct UdpRelayState {
     flow_ids: HashMap<UdpFlowKey, u64>,
     flows: HashMap<u64, UdpFlowKey>,
+    last_seen: HashMap<u64, Instant>,
     next_flow_id: u64,
 }
 
@@ -57,6 +60,7 @@ impl UdpRelayState {
         Self {
             flow_ids: HashMap::new(),
             flows: HashMap::new(),
+            last_seen: HashMap::new(),
             next_flow_id: 1,
         }
     }
@@ -64,12 +68,14 @@ impl UdpRelayState {
     fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
         let key = UdpFlowKey { client, target };
         if let Some(id) = self.flow_ids.get(&key) {
+            self.last_seen.insert(*id, Instant::now());
             return *id;
         }
 
         let id = self.next_available_flow_id();
         self.flow_ids.insert(key, id);
         self.flows.insert(id, key);
+        self.last_seen.insert(id, Instant::now());
         id
     }
 
@@ -86,6 +92,22 @@ impl UdpRelayState {
             }
         }
     }
+
+    fn cleanup_expired(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<u64> = self
+            .last_seen
+            .iter()
+            .filter_map(|(id, last_seen)| ((*last_seen + UDP_FLOW_TTL) <= now).then_some(*id))
+            .collect();
+
+        for id in expired {
+            self.last_seen.remove(&id);
+            if let Some(key) = self.flows.remove(&id) {
+                self.flow_ids.remove(&key);
+            }
+        }
+    }
 }
 
 impl UdpRelay {
@@ -99,18 +121,15 @@ impl UdpRelay {
         Arc::new(Self { tx })
     }
 
-    pub(super) async fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
-        if self
-            .tx
-            .send(UdpRelayRequest {
-                client,
-                target,
-                packet,
-            })
-            .await
-            .is_err()
-        {
-            debug!("TUN UDP 共享转发器已关闭，丢弃请求");
+    pub(super) fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
+        match self.tx.try_send(UdpRelayRequest {
+            client,
+            target,
+            packet,
+        }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => debug!("TUN UDP 共享转发队列已满，丢弃一个 UDP 包"),
+            Err(TrySendError::Closed(_)) => debug!("TUN UDP 共享转发器已关闭，丢弃请求"),
         }
     }
 }
@@ -157,8 +176,10 @@ async fn run_udp_relay(
             }
         };
 
-        info!("TUN UDP 已建立共享 proxy 连接");
+        debug!("TUN UDP 已建立共享 proxy 连接");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
+        let mut cleanup = tokio::time::interval(Duration::from_secs(60));
+        cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
 
@@ -174,6 +195,7 @@ async fn run_udp_relay(
 
             tokio::select! {
                 _ = shutdown.cancelled() => return,
+                _ = cleanup.tick() => state.cleanup_expired(),
                 maybe_request = rx.recv() => {
                     let Some(request) = maybe_request else { return };
                     if let Err(e) = send_udp_request(&mut writer, &mut state, &request).await {

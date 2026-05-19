@@ -8,7 +8,7 @@ use protocol::CompressionMode;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 pub struct ProxyServer {
     config: Arc<ProxyConfig>,
@@ -78,7 +78,7 @@ impl ProxyServer {
                                 drop(stream);
                                 continue;
                             };
-                            info!("接受来自 {} 的连接", addr);
+                            debug!("接受来自 {} 的连接", addr);
                             // 每个连接共享启动时创建的出站状态，连接内只做目标地址匹配。
                             let context = ConnectionContext {
                                 proxy_config: self.config.clone(),
@@ -150,7 +150,7 @@ async fn handle_connection(
             }
         };
 
-        info!("收到用户 {} 的认证请求", username);
+        debug!("收到用户 {} 的认证请求", username);
 
         // 查找该用户名对应的用户配置
         let user_config = match user_manager.as_ref().get_user(&username).await {

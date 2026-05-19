@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
@@ -44,18 +45,15 @@ impl DnsProxy {
         Arc::new(Self { tx })
     }
 
-    pub(super) async fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
-        if self
-            .tx
-            .send(DnsProxyRequest {
-                client,
-                target,
-                packet,
-            })
-            .await
-            .is_err()
-        {
-            debug!("TUN UDP DNS 共享转发器已关闭，丢弃请求");
+    pub(super) fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
+        match self.tx.try_send(DnsProxyRequest {
+            client,
+            target,
+            packet,
+        }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => debug!("TUN UDP DNS 队列已满，丢弃请求"),
+            Err(TrySendError::Closed(_)) => debug!("TUN UDP DNS 共享转发器已关闭，丢弃请求"),
         }
     }
 }
@@ -103,7 +101,7 @@ async fn run_dns_proxy(
             }
         };
 
-        info!("TUN UDP DNS 已建立共享 proxy 连接");
+        debug!("TUN UDP DNS 已建立共享 proxy 连接");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(5));
         cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

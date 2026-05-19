@@ -15,7 +15,7 @@ use protocol::TransportProtocol;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 
 /// 从 HTTP 请求中提取主机和端口，正确处理 IPv6 地址
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
@@ -67,7 +67,7 @@ pub async fn handle_http_connection(
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
-    info!("处理 HTTP 连接: {stream:?}");
+    debug!("处理 HTTP 连接: {stream:?}");
     let io = TokioIo::new(stream);
     let pool_clone = pool.clone();
     let checker_clone = direct_checker.clone();
@@ -96,7 +96,7 @@ async fn handle_http_request(
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    info!("HTTP 请求: {} {}", req.method(), req.uri());
+    debug!("HTTP 请求: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
         // CONNECT 需要升级为原始双向字节流，常用于 HTTPS。
@@ -116,7 +116,7 @@ async fn handle_connect(
     let host = uri.host().unwrap_or("").to_string();
     let port = uri.port_u16().unwrap_or(443);
 
-    info!("CONNECT 请求到 {}:{}", host, port);
+    debug!("CONNECT 请求到 {}:{}", host, port);
 
     let address = Address::Domain {
         host: host.clone(),
@@ -127,13 +127,13 @@ async fn handle_connect(
 
     if direct_checker.is_direct(&address) {
         // === 直连路径: 直接连接目标 ===
-        info!("CONNECT 使用直连连接到 {}", target);
+        debug!("CONNECT 使用直连连接到 {}", target);
 
         let target_for_spawn = target.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    info!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
+                    debug!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
                     if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
                         error!("直连隧道错误: {}", e);
                     }
@@ -157,7 +157,7 @@ async fn handle_connect(
             .await
         {
             Ok(stream) => {
-                info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
                 stream
             }
             Err(e) => {
@@ -176,7 +176,7 @@ async fn handle_connect(
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    info!("HTTP CONNECT 升级成功 {}:{}", host, port);
+                    debug!("HTTP CONNECT 升级成功 {}:{}", host, port);
                     if let Err(e) = tunnel(upgraded, connected_stream, target).await {
                         error!("隧道错误: {}", e);
                     }
@@ -211,7 +211,7 @@ async fn tunnel(
     // 3. 正确处理背压
     match tokio::io::copy_bidirectional(&mut client_io, &mut proxy_io).await {
         Ok((client_to_proxy, proxy_to_client)) => {
-            info!(
+            debug!(
                 "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端",
                 client_to_proxy, proxy_to_client
             );
@@ -234,7 +234,7 @@ async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<
 
     match tokio::io::copy_bidirectional(&mut client_io, &mut target_stream).await {
         Ok((client_to_target, target_to_client)) => {
-            info!(
+            debug!(
                 "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端",
                 client_to_target, target_to_client
             );
@@ -263,7 +263,7 @@ async fn handle_regular_request(
     // 从 Host 头或 URI 中提取主机和端口
     let (host, port) = extract_host_port(&req, uri);
 
-    info!("HTTP 请求到 {}:{}", host, port);
+    debug!("HTTP 请求到 {}:{}", host, port);
 
     if host.is_empty() {
         // HTTP/1.1 请求缺少 Host 无法确定目标。
@@ -295,7 +295,7 @@ async fn handle_regular_request(
     if direct_checker.is_direct(&address) {
         // === 直连路径: 直接连接目标 ===
         let target = address_to_string(&address);
-        info!("HTTP 请求使用直连连接到 {}", target);
+        debug!("HTTP 请求使用直连连接到 {}", target);
 
         let target_stream = match TcpStream::connect(&target).await {
             Ok(s) => s,
