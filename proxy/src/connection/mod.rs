@@ -11,6 +11,7 @@ pub use response_sink::BytesToProxyResponseSink;
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::connection::upstream::UpstreamConnection;
+use crate::connection_limiter::IdleConnectionPermit;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use futures::{
@@ -248,6 +249,7 @@ impl ServerConnection {
         &mut self,
         initial_request_timeout: Duration,
         username: &str,
+        mut idle_permit: Option<IdleConnectionPermit>,
     ) -> Result<()> {
         // 只循环处理初始请求（认证、连接）。
         // 一旦连接成功，就移交给中继并返回。
@@ -267,6 +269,7 @@ impl ServerConnection {
 
             match request {
                 Some(ProxyRequest::Connect(connect_request)) => {
+                    drop(idle_permit.take());
                     debug!(
                         "[连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
                         connect_request.request_id,
@@ -442,7 +445,10 @@ impl ServerConnection {
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let (response_tx, mut response_rx) =
             tokio::sync::mpsc::channel::<UdpRelayPacket>(UDP_RELAY_CHANNEL_SIZE);
+        let (flow_done_tx, mut flow_done_rx) =
+            tokio::sync::mpsc::channel::<u64>(UDP_RELAY_CHANNEL_SIZE);
         let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
+        let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
         let stream_id = connect_request.request_id;
 
         loop {
@@ -480,10 +486,18 @@ impl ServerConnection {
                     };
 
                     if !flows.contains_key(&relay_packet.flow_id) {
+                        if max_flows != 0 && flows.len() >= max_flows {
+                            warn!(
+                                "UDP relay flow 数已达上限（{}），丢弃 flow {} 的数据包",
+                                max_flows, relay_packet.flow_id
+                            );
+                            continue;
+                        }
                         match self.spawn_udp_relay_flow(
                             relay_packet.flow_id,
                             relay_packet.address.clone(),
                             response_tx.clone(),
+                            flow_done_tx.clone(),
                         ).await {
                             Ok(flow) => {
                                 flows.insert(relay_packet.flow_id, flow);
@@ -525,6 +539,10 @@ impl ServerConnection {
                         .await
                         .map_err(|e| ProxyError::Connection(format!("Failed to send UDP relay response: {e}")))?;
                 }
+                done = flow_done_rx.recv() => {
+                    let Some(flow_id) = done else { break };
+                    flows.remove(&flow_id);
+                }
             }
         }
 
@@ -537,6 +555,7 @@ impl ServerConnection {
         flow_id: u64,
         address: Address,
         response_tx: tokio::sync::mpsc::Sender<UdpRelayPacket>,
+        flow_done_tx: tokio::sync::mpsc::Sender<u64>,
     ) -> Result<UdpRelayFlow> {
         let target_addr = relay_target_addr(&address)?;
         let socket = self
@@ -586,6 +605,7 @@ impl ServerConnection {
                     }
                 }
             }
+            let _ = flow_done_tx.send(flow_id).await;
             debug!("UDP relay flow {flow_id} 已结束");
         });
 

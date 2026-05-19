@@ -1,6 +1,7 @@
 mod bandwidth;
 mod config;
 mod connection;
+mod connection_limiter;
 mod error;
 mod server;
 mod user_manager;

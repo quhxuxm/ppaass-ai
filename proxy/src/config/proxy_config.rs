@@ -71,6 +71,22 @@ pub struct ProxyConfig {
     /// （例如半开连接、端口扫描器、异常客户端）。
     #[serde(default = "default_auth_timeout_secs")]
     pub auth_timeout_secs: u64,
+
+    /// proxy 同时接受的 agent TCP 连接总数上限；0 表示不限制。
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
+
+    /// 单个用户同时占用的 agent TCP 连接数上限；0 表示不限制。
+    #[serde(default = "default_max_connections_per_user")]
+    pub max_connections_per_user: usize,
+
+    /// 单个用户已认证但尚未发送 Connect 请求的预热连接数上限；0 表示不限制。
+    #[serde(default = "default_max_idle_connections_per_user")]
+    pub max_idle_connections_per_user: usize,
+
+    /// 单条 UDP relay TCP 连接中允许同时存在的目标 UDP flow 数；0 表示不限制。
+    #[serde(default = "default_max_udp_relay_flows_per_connection")]
+    pub max_udp_relay_flows_per_connection: usize,
 }
 
 fn default_log_level() -> String {
@@ -103,6 +119,22 @@ fn default_idle_connection_timeout_secs() -> u64 {
 
 fn default_auth_timeout_secs() -> u64 {
     30
+}
+
+fn default_max_connections() -> usize {
+    4096
+}
+
+fn default_max_connections_per_user() -> usize {
+    1024
+}
+
+fn default_max_idle_connections_per_user() -> usize {
+    128
+}
+
+fn default_max_udp_relay_flows_per_connection() -> usize {
+    2048
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {
