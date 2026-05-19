@@ -412,8 +412,11 @@ impl ServerConnection {
         target_addr: &str,
     ) -> Result<()> {
         // 通过启动时共享的出站状态连接目标，避免每次请求重新读取路由表。
-        match self.egress_state.connect_tcp(target_addr).await {
-            Ok(mut target_stream) => {
+        let connect_timeout = Duration::from_secs(self.proxy_config.connect_timeout_secs);
+        match tokio::time::timeout(connect_timeout, self.egress_state.connect_tcp(target_addr))
+            .await
+        {
+            Ok(Ok(mut target_stream)) => {
                 info!(
                     "已连接到目标（TCP）：{}，出站设备={}",
                     target_addr,
@@ -428,11 +431,25 @@ impl ServerConnection {
                 self.relay(connect_request.request_id, &mut target_stream)
                     .await?;
             }
-            Err(e) => {
-                error!("连接目标失败（TCP）：{}", e);
+            Ok(Err(e)) => {
+                warn!("连接目标失败（TCP）：{}，目标={}", e, target_addr);
                 self.send_connect_error(
                     connect_request.request_id,
                     format!("Failed to connect: {}", e),
+                )
+                .await?;
+            }
+            Err(_) => {
+                warn!(
+                    "连接目标超时（TCP）：目标={}，超时={} 秒",
+                    target_addr, self.proxy_config.connect_timeout_secs
+                );
+                self.send_connect_error(
+                    connect_request.request_id,
+                    format!(
+                        "Connect timeout after {} seconds",
+                        self.proxy_config.connect_timeout_secs
+                    ),
                 )
                 .await?;
             }
@@ -674,7 +691,7 @@ impl ServerConnection {
                 self.relay_udp(connect_request.request_id, socket).await?;
             }
             Err(e) => {
-                error!("连接目标失败（UDP）：{}", e);
+                warn!("连接目标失败（UDP）：{}，目标={}", e, target_addr);
                 self.send_connect_error(
                     connect_request.request_id,
                     format!("Failed to connect UDP: {}", e),
