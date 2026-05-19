@@ -51,6 +51,6 @@ Open the app, fill in:
 - RSA private key PEM, defaulting to the private key paired with `config/local/users.toml` `users.user1.public_key_pem`
 - TUN IPv4 CIDR, default `10.10.10.2/24`
 - TUN IPv6 CIDR, default empty. Keep IPv6 disabled unless the proxy path is known to support IPv6 egress.
-- applications that should use the VPN
+- applications that should use the VPN. The selector lists installed packages that request network access, including system packages; leaving the selection empty means every app except PPAASS Agent enters the VPN.
 
 Android is pointed at a routed DNS address inside the VPN network path; Rust maps UDP port 53 packets to `ProxyDns`, so the proxy machine selects the upstream DNS from its system configuration. QUIC is blocked by default to match the desktop TUN mode and make Google Play / YouTube fall back to TCP/TLS on proxy paths that do not handle UDP/443 reliably.

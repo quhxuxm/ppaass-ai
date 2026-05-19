@@ -1,19 +1,29 @@
 package com.ppaass.ai.agent;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
+import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -180,19 +190,26 @@ public class MainActivity extends Activity {
     }
 
     private void showAppSelector() {
-        List<AppEntry> apps = loadLaunchableApps();
+        List<AppEntry> apps = loadVpnCapableApps();
         Set<String> selected = selectedPackages();
-        String[] labels = new String[apps.size()];
         boolean[] checked = new boolean[apps.size()];
         for (int i = 0; i < apps.size(); i++) {
             AppEntry app = apps.get(i);
-            labels[i] = app.label + "\n" + app.packageName;
             checked[i] = selected.contains(app.packageName);
         }
 
+        AppListAdapter adapter = new AppListAdapter(apps, checked);
+        ListView list = new ListView(this);
+        list.setAdapter(adapter);
+        list.setFastScrollEnabled(true);
+        list.setOnItemClickListener((parent, view, position, id) -> {
+            checked[position] = !checked[position];
+            adapter.notifyDataSetChanged();
+        });
+
         new AlertDialog.Builder(this)
                 .setTitle("VPN apps")
-                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setView(list)
                 .setPositiveButton("OK", (dialog, which) -> {
                     Set<String> next = new HashSet<>();
                     for (int i = 0; i < apps.size(); i++) {
@@ -207,27 +224,58 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private List<AppEntry> loadLaunchableApps() {
+    private List<AppEntry> loadVpnCapableApps() {
         PackageManager pm = getPackageManager();
-        Intent launcher = new Intent(Intent.ACTION_MAIN);
-        launcher.addCategory(Intent.CATEGORY_LAUNCHER);
-
-        List<ResolveInfo> resolved = pm.queryIntentActivities(launcher, 0);
+        List<PackageInfo> installed = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS);
         List<AppEntry> apps = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (ResolveInfo info : resolved) {
-            if (info.activityInfo == null || info.activityInfo.packageName == null) {
+        for (PackageInfo info : installed) {
+            if (info.packageName == null) {
                 continue;
             }
-            String packageName = info.activityInfo.packageName;
-            if (getPackageName().equals(packageName) || !seen.add(packageName)) {
+            String packageName = info.packageName;
+            if (getPackageName().equals(packageName) || !requestsInternet(info)) {
                 continue;
             }
-            CharSequence label = info.loadLabel(pm);
-            apps.add(new AppEntry(label == null ? packageName : label.toString(), packageName));
+            ApplicationInfo appInfo = info.applicationInfo;
+            CharSequence label = appInfo == null ? null : appInfo.loadLabel(pm);
+            boolean systemApp = appInfo != null && (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+            Drawable icon = loadIcon(pm, appInfo);
+            apps.add(new AppEntry(label == null ? packageName : label.toString(), packageName, systemApp, icon));
         }
-        Collections.sort(apps, (left, right) -> left.label.compareToIgnoreCase(right.label));
+        Collections.sort(apps, (left, right) -> {
+            if (left.systemApp != right.systemApp) {
+                return left.systemApp ? 1 : -1;
+            }
+            int labelCompare = left.label.compareToIgnoreCase(right.label);
+            if (labelCompare != 0) {
+                return labelCompare;
+            }
+            return left.packageName.compareTo(right.packageName);
+        });
         return apps;
+    }
+
+    private boolean requestsInternet(PackageInfo info) {
+        if (info.requestedPermissions == null) {
+            return false;
+        }
+        for (String permission : info.requestedPermissions) {
+            if (Manifest.permission.INTERNET.equals(permission)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Drawable loadIcon(PackageManager pm, ApplicationInfo appInfo) {
+        if (appInfo == null) {
+            return pm.getDefaultActivityIcon();
+        }
+        try {
+            return appInfo.loadIcon(pm);
+        } catch (RuntimeException ignored) {
+            return pm.getDefaultActivityIcon();
+        }
     }
 
     private Set<String> selectedPackages() {
@@ -248,13 +296,113 @@ public class MainActivity extends Activity {
         selectedAppsSummary.setText(selected.size() + " app(s) selected.");
     }
 
+    private final class AppListAdapter extends BaseAdapter {
+        private final List<AppEntry> apps;
+        private final boolean[] checked;
+
+        AppListAdapter(List<AppEntry> apps, boolean[] checked) {
+            this.apps = apps;
+            this.checked = checked;
+        }
+
+        @Override
+        public int getCount() {
+            return apps.size();
+        }
+
+        @Override
+        public AppEntry getItem(int position) {
+            return apps.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            AppRow row;
+            if (convertView == null) {
+                LinearLayout container = new LinearLayout(MainActivity.this);
+                container.setOrientation(LinearLayout.HORIZONTAL);
+                container.setGravity(Gravity.CENTER_VERTICAL);
+                container.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+                ImageView icon = new ImageView(MainActivity.this);
+                LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+                iconParams.setMargins(0, 0, dp(12), 0);
+                container.addView(icon, iconParams);
+
+                LinearLayout textColumn = new LinearLayout(MainActivity.this);
+                textColumn.setOrientation(LinearLayout.VERTICAL);
+
+                TextView label = new TextView(MainActivity.this);
+                label.setSingleLine(true);
+                label.setEllipsize(TextUtils.TruncateAt.END);
+                label.setTextSize(15f);
+                textColumn.addView(label, matchWrap());
+
+                TextView packageName = new TextView(MainActivity.this);
+                packageName.setSingleLine(true);
+                packageName.setEllipsize(TextUtils.TruncateAt.END);
+                packageName.setTextSize(12f);
+                textColumn.addView(packageName, matchWrap());
+
+                LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f);
+                container.addView(textColumn, textParams);
+
+                CheckBox checkBox = new CheckBox(MainActivity.this);
+                checkBox.setClickable(false);
+                checkBox.setFocusable(false);
+                container.addView(checkBox, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                row = new AppRow(icon, label, packageName, checkBox);
+                container.setTag(row);
+                convertView = container;
+            } else {
+                row = (AppRow) convertView.getTag();
+            }
+
+            AppEntry app = getItem(position);
+            row.icon.setImageDrawable(app.icon);
+            row.label.setText(app.label + (app.systemApp ? " (system)" : ""));
+            row.packageName.setText(app.packageName);
+            row.checkBox.setChecked(checked[position]);
+            return convertView;
+        }
+    }
+
+    private static final class AppRow {
+        final ImageView icon;
+        final TextView label;
+        final TextView packageName;
+        final CheckBox checkBox;
+
+        AppRow(ImageView icon, TextView label, TextView packageName, CheckBox checkBox) {
+            this.icon = icon;
+            this.label = label;
+            this.packageName = packageName;
+            this.checkBox = checkBox;
+        }
+    }
+
     private static final class AppEntry {
         final String label;
         final String packageName;
+        final boolean systemApp;
+        final Drawable icon;
 
-        AppEntry(String label, String packageName) {
+        AppEntry(String label, String packageName, boolean systemApp, Drawable icon) {
             this.label = label;
             this.packageName = packageName;
+            this.systemApp = systemApp;
+            this.icon = icon;
         }
     }
 }
