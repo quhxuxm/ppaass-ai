@@ -7,12 +7,12 @@ use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 use tracing::error;
 
-/// Minimum payload size to apply compression (avoid overhead for small messages)
+/// 启用压缩的最小负载大小（避免小消息产生额外开销）
 const MIN_COMPRESSION_SIZE: usize = 64;
 
-/// Codec for proxy protocol messages using length-delimited framing.
-/// Wraps tokio-util's LengthDelimitedCodec for reliable message framing.
-/// Handles encryption, decryption, compression, and decompression.
+/// 使用长度分隔帧的代理协议消息编解码器。
+/// 封装 tokio-util 的 LengthDelimitedCodec 以实现可靠的消息分帧。
+/// 负责加密、解密、压缩与解压。
 pub struct MessageCodec {
     inner: LengthDelimitedCodec,
     state: Arc<CipherState>,
@@ -58,21 +58,21 @@ impl Decoder for MessageCodec {
         };
 
         let mut message: Message = bitcode::deserialize(&frame)
-            .map_err(|e| Self::io_error("Failed to deserialize message", e))?;
+            .map_err(|e| Self::io_error("消息反序列化失败", e))?;
 
         if let Some(cipher) = self.state.cipher.get()
             && Self::needs_crypto(message.message_type)
         {
             let decrypted = cipher
                 .decrypt(&message.payload)
-                .map_err(|e| Self::io_error("Decryption failed", e))?;
+                .map_err(|e| Self::io_error("解密失败", e))?;
             message.payload = decrypted;
         }
 
         let compression_mode = CompressionMode::from_flag(message.compression);
         if compression_mode != CompressionMode::None {
             let decompressed = decompress(&message.payload, compression_mode)
-                .map_err(|e| Self::io_error("Decompression failed", e))?;
+                .map_err(|e| Self::io_error("解压失败", e))?;
             message.payload = decompressed;
         }
 
@@ -93,7 +93,7 @@ impl Encoder<Message> for MessageCodec {
                         item.compression = compression_mode.to_flag();
                     }
                 }
-                Err(e) => error!("Compression failed: {}", e),
+                Err(e) => error!("压缩失败：{}", e),
             }
         }
 
@@ -102,12 +102,12 @@ impl Encoder<Message> for MessageCodec {
         {
             let encrypted = cipher
                 .encrypt(&item.payload)
-                .map_err(|e| Self::io_error("Encryption failed", e))?;
+                .map_err(|e| Self::io_error("加密失败", e))?;
             item.payload = encrypted;
         }
 
         let data = bitcode::serialize(&item)
-            .map_err(|e| Self::io_error("Failed to serialize message", e))?;
+            .map_err(|e| Self::io_error("消息序列化失败", e))?;
         self.inner.encode(Bytes::from(data), dst)
     }
 }

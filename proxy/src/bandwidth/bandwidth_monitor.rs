@@ -17,12 +17,14 @@ fn current_time_millis() -> u64 {
 
 impl BandwidthMonitor {
     pub fn new() -> Self {
+        // DashMap 允许不同用户的带宽计数并发更新，不需要全局锁。
         Self {
             user_bandwidth: Arc::new(DashMap::new()),
         }
     }
 
     pub fn register_user(&self, username: String, limit_mbps: Option<u64>) {
+        // 每个用户独立维护收发计数和重置时间，限速判断只影响该用户。
         let user_bandwidth = UserBandwidth {
             bytes_sent: AtomicU64::new(0),
             bytes_received: AtomicU64::new(0),
@@ -32,23 +34,22 @@ impl BandwidthMonitor {
         self.user_bandwidth.insert(username, user_bandwidth);
     }
 
-    pub fn unregister_user(&self, username: &str) -> bool {
-        self.user_bandwidth.remove(username).is_some()
-    }
-
     pub fn record_sent(&self, username: &str, bytes: u64) {
+        // 发送方向指 proxy 写回 agent 的字节数，用于下行限速统计。
         if let Some(entry) = self.user_bandwidth.get(username) {
             entry.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
     pub fn record_received(&self, username: &str, bytes: u64) {
+        // 接收方向指 proxy 从 agent 收到的字节数，用于上行限速统计。
         if let Some(entry) = self.user_bandwidth.get(username) {
             entry.bytes_received.fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
     pub async fn check_limit(&self, username: &str) -> bool {
+        // 未配置用户或未配置 limit_mbps 时直接放行。
         if let Some(entry) = self.user_bandwidth.get(username)
             && let Some(limit_mbps) = entry.limit_mbps
         {
@@ -57,7 +58,7 @@ impl BandwidthMonitor {
             let elapsed_ms = now.saturating_sub(last_reset);
 
             if elapsed_ms >= 1000 {
-                // Reset counters every second using compare-and-swap
+                // 使用 compare-and-swap 每秒重置计数器，避免多个连接同时清零。
                 if entry
                     .last_reset_millis
                     .compare_exchange(last_reset, now, Ordering::AcqRel, Ordering::Relaxed)
@@ -73,47 +74,17 @@ impl BandwidthMonitor {
             let bytes_received = entry.bytes_received.load(Ordering::Relaxed);
             let total_bytes = bytes_sent + bytes_received;
 
-            // Convert limit from Mbps to bytes per second
+            // 将 Mbps 限制转换为每秒字节数，收发方向合并做总量限制。
             let limit_bytes_per_sec = (limit_mbps * 1_000_000) / 8;
 
             return total_bytes < limit_bytes_per_sec;
         }
         true
     }
-
-    pub fn get_all_stats(&self) -> Vec<(String, u64, u64)> {
-        self.user_bandwidth
-            .iter()
-            .map(|entry| {
-                let username = entry.key().clone();
-                let bytes_sent = entry.bytes_sent.load(Ordering::Relaxed);
-                let bytes_received = entry.bytes_received.load(Ordering::Relaxed);
-                (username, bytes_sent, bytes_received)
-            })
-            .collect()
-    }
 }
 
 impl Default for BandwidthMonitor {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::BandwidthMonitor;
-
-    #[test]
-    fn unregister_user_removes_bandwidth_entry() {
-        let monitor = BandwidthMonitor::new();
-        monitor.register_user("alice".to_string(), Some(100));
-        monitor.record_sent("alice", 64);
-        monitor.record_received("alice", 32);
-
-        assert_eq!(monitor.get_all_stats().len(), 1);
-        assert!(monitor.unregister_user("alice"));
-        assert!(monitor.get_all_stats().is_empty());
-        assert!(!monitor.unregister_user("alice"));
     }
 }

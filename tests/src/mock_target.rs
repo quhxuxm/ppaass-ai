@@ -9,9 +9,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
-/// Mock HTTP target server that responds to various test endpoints
+/// 响应多个测试端点的模拟 HTTP 目标服务器
 pub struct MockHttpServer {
     port: u16,
 }
@@ -24,7 +24,7 @@ impl MockHttpServer {
     pub async fn run(&self) -> Result<()> {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let listener = TcpListener::bind(addr).await?;
-        info!("Mock HTTP server listening on {}", addr);
+        info!("模拟 HTTP 服务器正在监听 {}", addr);
 
         loop {
             match listener.accept().await {
@@ -35,19 +35,19 @@ impl MockHttpServer {
                             .serve_connection(io, service_fn(handle_http_request))
                             .await
                         {
-                            error!("Error serving connection: {}", e);
+                            error!("服务连接时出错：{}", e);
                         }
                     });
                 }
                 Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                    error!("接受连接失败：{}", e);
                 }
             }
         }
     }
 }
 
-/// Mock TCP echo server that echoes back whatever it receives
+/// 模拟 TCP 回显服务器，会回显收到的所有数据
 pub struct MockTcpServer {
     port: u16,
 }
@@ -60,27 +60,27 @@ impl MockTcpServer {
     pub async fn run(&self) -> Result<()> {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let listener = TcpListener::bind(addr).await?;
-        info!("Mock TCP echo server listening on {}", addr);
+        info!("模拟 TCP 回显服务器正在监听 {}", addr);
 
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    info!("TCP echo connection from {}", addr);
+                    info!("来自 {} 的 TCP 回显连接", addr);
                     tokio::spawn(async move {
                         if let Err(e) = handle_tcp_echo(stream).await {
-                            error!("TCP echo error: {}", e);
+                            error!("TCP 回显错误：{}", e);
                         }
                     });
                 }
                 Err(e) => {
-                    error!("Failed to accept TCP connection: {}", e);
+                    error!("接受 TCP 连接失败：{}", e);
                 }
             }
         }
     }
 }
 
-/// Mock UDP echo server
+/// 模拟 UDP 回显服务器
 pub struct MockUdpServer {
     port: u16,
 }
@@ -94,7 +94,7 @@ impl MockUdpServer {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let socket = UdpSocket::bind(addr).await?;
         let socket = Arc::new(socket);
-        info!("Mock UDP echo server listening on {}", addr);
+        info!("模拟 UDP 回显服务器正在监听 {}", addr);
 
         let mut buf = [0u8; 8192];
         loop {
@@ -102,19 +102,19 @@ impl MockUdpServer {
                 Ok((n, client_addr)) => {
                     let socket_clone = socket.clone();
                     let data = buf[..n].to_vec();
-                    info!(
-                        "Received UDP from {}:\n{}",
+                    trace!(
+                        "收到来自 {} 的 UDP 数据：\n{}",
                         client_addr,
                         pretty_hex::pretty_hex(&data)
                     );
                     tokio::spawn(async move {
                         if let Err(e) = socket_clone.send_to(&data, client_addr).await {
-                            error!("Failed to send UDP echo to {}: {}", client_addr, e);
+                            error!("向 {} 发送 UDP 回显失败：{}", client_addr, e);
                         }
                     });
                 }
                 Err(e) => {
-                    error!("Failed to receive UDP: {}", e);
+                    error!("接收 UDP 失败：{}", e);
                 }
             }
         }
@@ -125,22 +125,22 @@ async fn handle_http_request(
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
     let path = req.uri().path();
-    info!("HTTP request: {} {}", req.method(), path);
+    info!("HTTP 请求：{} {}", req.method(), path);
 
     let response = match path {
         "/health" => Response::builder()
             .status(StatusCode::OK)
             .body(full_body("OK"))?,
         "/echo" => {
-            // Echo back the request body
+            // 回显请求体
             let body = req.collect().await?.to_bytes();
             Response::builder()
                 .status(StatusCode::OK)
                 .body(BoxBody::new(Full::new(body).map_err(|e| match e {})))?
         }
         "/large" => {
-            // Return a large response for throughput testing
-            let data = vec![b'A'; 1024 * 1024]; // 1MB
+            // 返回用于吞吐测试的大响应
+            let data = vec![b'A'; 1024 * 1024]; // 1 MB
             Response::builder()
                 .status(StatusCode::OK)
                 .body(full_body(data))?
@@ -170,11 +170,11 @@ async fn handle_tcp_echo(mut stream: TcpStream) -> Result<()> {
     loop {
         let n = stream.read(&mut buffer).await?;
         if n == 0 {
-            // Connection closed
+            // 连接已关闭
             break;
         }
 
-        // Echo back
+        // 回显数据
         stream.write_all(&buffer[..n]).await?;
         stream.flush().await?;
     }
@@ -182,7 +182,7 @@ async fn handle_tcp_echo(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-/// Run mock servers
+/// 运行模拟服务器
 pub async fn run_mock_servers(http_port: u16, tcp_port: u16, udp_port: u16) -> Result<()> {
     let http_server = MockHttpServer::new(http_port);
     let tcp_server = MockTcpServer::new(tcp_port);
@@ -190,19 +190,19 @@ pub async fn run_mock_servers(http_port: u16, tcp_port: u16, udp_port: u16) -> R
 
     tokio::select! {
         res = http_server.run() => {
-            error!("HTTP server stopped: {:?}", res);
+            error!("HTTP 服务器已停止：{:?}", res);
             res
         }
         res = tcp_server.run() => {
-            error!("TCP server stopped: {:?}", res);
+            error!("TCP 服务器已停止：{:?}", res);
             res
         }
         res = udp_server.run() => {
-            error!("UDP server stopped: {:?}", res);
+            error!("UDP 服务器已停止：{:?}", res);
             res
         }
         _ = tokio::signal::ctrl_c() => {
-            info!("Received shutdown signal");
+            info!("收到关闭信号");
             Ok(())
         }
     }
@@ -214,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_http_server() {
-        // This is a basic test to ensure the server can be instantiated
+        // 这是一个基础测试，用于确保服务器可以实例化
         let server = MockHttpServer::new(19090);
         assert_eq!(server.port, 19090);
     }

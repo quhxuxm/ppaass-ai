@@ -30,8 +30,7 @@ ppaass-ai/
 │   │   ├── server.rs         # Server implementation
 │   │   ├── connection.rs     # Connection handler
 │   │   ├── user_manager.rs   # User management
-│   │   ├── bandwidth.rs      # Bandwidth monitoring
-│   │   └── api.rs            # REST API
+│   │   └── bandwidth.rs      # Bandwidth monitoring
 │   └── Cargo.toml
 │
 ├── protocol/           # Shared protocol definitions
@@ -60,7 +59,6 @@ ppaass-ai/
 ├── Cargo.toml          # Workspace definition
 ├── README.md           # Main documentation
 ├── SETUP.md            # Setup guide
-├── API.md              # API documentation
 ├── Makefile            # Build automation (Unix)
 ├── build.sh            # Build script (Unix)
 ├── build.ps1           # Build script (Windows)
@@ -84,9 +82,7 @@ ppaass-ai/
 - ✅ **Secure Key Storage**: Protected key files
 
 ### Management Features
-- ✅ **REST API**: User and configuration management
 - ✅ **Bandwidth Monitoring**: Per-user bandwidth tracking
-- ✅ **Health Checks**: Service status monitoring
 - ✅ **Dynamic Configuration**: TOML-based config with CLI overrides
 
 ### Performance Features
@@ -104,7 +100,6 @@ ppaass-ai/
 | HTTP | Hyper 1.5 + Hyper-util 0.1 |
 | SOCKS5 | fast-socks5 0.9 |
 | Encryption | RSA 0.9, AES-GCM 0.10 |
-| Web Framework | Axum 0.7 |
 | Serialization | Serde 1.0, JSON |
 | Configuration | Config 0.14, TOML 0.8 |
 | CLI | Clap 4.5 |
@@ -144,13 +139,8 @@ cargo build --release --workspace
 
 ### 3. Add a User
 
-```bash
-curl -X POST http://localhost:8081/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"username": "myuser", "bandwidth_limit_mbps": 100}'
-```
-
-Save the returned private key to `keys/myuser.pem`.
+Add the user's public key and optional bandwidth limit to `users.toml`.
+Save the matching private key to `keys/myuser.pem`.
 
 ### 4. Configure and Start the Agent
 
@@ -178,7 +168,6 @@ curl -x http://127.0.0.1:1080 http://example.com
 
 - **[README.md](README.md)**: Comprehensive project documentation
 - **[SETUP.md](SETUP.md)**: Detailed setup and troubleshooting guide
-- **[API.md](API.md)**: Complete REST API documentation
 - **[requirements.md](docs/requirements.md)**: Original requirements specification
 
 ## 🔍 Key Design Decisions
@@ -215,18 +204,14 @@ curl -x http://127.0.0.1:1080 http://example.com
 ### Current Limitations
 1. **SOCKS5 Implementation**: Simplified version (handshake only)
 2. **HTTP CONNECT**: Basic implementation without full tunneling
-3. **Authentication**: API endpoints are currently unauthenticated
-4. **Config Hot-Reload**: Update config endpoint is a placeholder
+3. **Config Hot-Reload**: Not currently implemented
 
 ### Recommended Improvements
 1. **Complete SOCKS5**: Full RFC 1928 implementation with proper tunneling
 2. **HTTP Proxy**: Complete HTTP/HTTPS proxy with CONNECT method
-3. **API Security**: Add JWT or API key authentication
-4. **Metrics**: Add Prometheus metrics export
-5. **Connection Management**: Track and manage active connections
-6. **WebSocket API**: Real-time monitoring and events
-7. **Database**: Store user data in a database instead of TOML
-8. **TLS**: Add TLS support for agent-proxy communication
+3. **Metrics**: Add Prometheus metrics export
+4. **Connection Management**: Track and manage active connections
+5. **TLS**: Add TLS support for agent-proxy communication
 
 ## 🧪 Testing
 
@@ -262,7 +247,6 @@ MIT License (as specified in Cargo.toml)
 ✅ Workspace organization
 ✅ Custom protocol design
 ✅ Secure encryption
-✅ REST API
 ✅ Multi-user support
 ✅ Bandwidth monitoring
 
@@ -270,7 +254,6 @@ MIT License (as specified in Cargo.toml)
 
 - [Tokio Documentation](https://tokio.rs/)
 - [Hyper Documentation](https://hyper.rs/)
-- [Axum Documentation](https://docs.rs/axum/)
 - [Rust Async Book](https://rust-lang.github.io/async-book/)
 
 ---

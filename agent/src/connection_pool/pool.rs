@@ -2,123 +2,155 @@ use super::connected_stream::ConnectedStream;
 use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
 use crate::error::Result;
+use common::BindInterface;
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 
-/// Connection pool using deadpool::unmanaged for prewarming connections
-/// Connections are NOT reused - each connection is taken from the pool and consumed
+/// 使用 deadpool::unmanaged 的连接池，用于预热代理连接。
+/// 连接不会被复用 — 每条连接取出后即消费。
 pub struct ConnectionPool {
-    /// The unmanaged pool of prewarmed connections
+    /// 预热连接的非托管池
     pool: Pool<ProxyConnection>,
     config: Arc<AgentConfig>,
-    /// Notification to request refill
+    /// 请求补充连接的通知机制
     refill_notify: Arc<Notify>,
-    /// Tracks number of available connections in the pool
+    /// 追踪池中可用连接数
     available: Arc<AtomicUsize>,
-    /// Maximum age a connection may sit in the pool before being discarded.
-    /// Computed once from `config.pool_max_connection_age_secs` to avoid
-    /// repeated conversions on the hot path.
+    /// 连接在池中停留的最长时间
     max_connection_age: Duration,
+    /// TUN 模式激活时保存物理网卡的 IP 地址。
+    /// 每个新建的代理 TCP 连接都会绑定到该 IP，确保流量从物理接口出，
+    /// 而不会回环进入 TUN 设备。
+    proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+    /// TUN 模式激活时保存物理出口接口。
+    proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
 }
 
 impl ConnectionPool {
     pub fn new(config: Arc<AgentConfig>) -> Self {
         let pool_size = config.pool_size;
-
-        // Create unmanaged pool with reasonable capacity (1.5x target size)
+        // unmanaged pool 容量略大于目标值，给并发补充和消费留出余量。
         let pool = Pool::new((pool_size as f32 * 1.5) as usize);
-
-        // Create refill notification mechanism instead of channel
         let refill_notify = Arc::new(Notify::new());
-
         let available = Arc::new(AtomicUsize::new(0));
-
         let max_connection_age = Duration::from_secs(config.pool_max_connection_age_secs);
-
-        // NOTE: The background refill task is NOT started here.
-        // It is started by `prewarm()` after the initial connections are created,
-        // preventing a race where both prewarm and the refill task create connections
-        // simultaneously and overflow the pool.
         Self {
             pool,
             config,
             refill_notify,
             available,
             max_connection_age,
+            proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
+            proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
-    #[instrument(skip(refill_notify, pool, config, available))]
+    // ── 绑定 IP 管理（TUN 模式）──────────────────────────────────────────────
+
+    /// 设置代理连接应当绑定的物理网卡 IP。
+    /// 应在安装 TUN 路由规则之前调用，确保后续所有代理连接
+    /// （包括补充任务创建的连接）都绕过 TUN。
+    pub fn set_proxy_bind_ip(&self, ip: Option<IpAddr>) {
+        // TUN 模式启动/退出时会切换此值，后台补充任务创建新连接时读取它。
+        if let Ok(mut guard) = self.proxy_bind_ip.write() {
+            *guard = ip;
+        }
+    }
+
+    /// 设置代理连接应当绑定的物理出口接口。
+    pub fn set_proxy_bind_interface(&self, interface: Option<BindInterface>) {
+        if let Ok(mut guard) = self.proxy_bind_interface.write() {
+            *guard = interface;
+        }
+    }
+
+    fn get_proxy_bind_ip(&self) -> Option<IpAddr> {
+        // 读取失败时保守退回不绑定，让连接错误暴露给上层日志。
+        self.proxy_bind_ip.read().ok().and_then(|g| *g)
+    }
+
+    fn get_proxy_bind_interface(&self) -> Option<BindInterface> {
+        self.proxy_bind_interface
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    // ── 内部辅助 ─────────────────────────────────────────────────────────────
+
+    #[instrument(skip(
+        refill_notify,
+        pool,
+        config,
+        available,
+        proxy_bind_ip,
+        proxy_bind_interface
+    ))]
     async fn refill_task(
         refill_notify: Arc<Notify>,
         pool: Pool<ProxyConnection>,
         config: Arc<AgentConfig>,
         available: Arc<AtomicUsize>,
         target_size: usize,
+        proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+        proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     ) {
         loop {
-            // Wait for refill request or periodic check
+            // 补充任务既响应显式通知，也周期性自检，避免通知丢失后池子长期为空。
             tokio::select! {
                 _ = refill_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             }
 
-            // Check current pool size
             let current_size = available.load(Ordering::Acquire);
-
-            // Refill if below target
             if current_size < target_size {
+                // available 只记录可消费连接数；过期或取出的连接会触发补充。
                 let to_create = target_size - current_size;
                 debug!(
-                    "Refilling pool: creating {} connections (current: {})",
+                    "正在补充连接池：创建 {} 条连接（当前：{}）",
                     to_create, current_size
                 );
 
-                // Limit concurrency to avoid overwhelming the system or proxy
                 const MAX_CONCURRENT_REFILL: usize = 10;
+                // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REFILL));
                 let mut set = tokio::task::JoinSet::new();
 
                 for _ in 0..to_create {
                     let config = config.clone();
                     let semaphore = semaphore.clone();
-
+                    let bind_ip = proxy_bind_ip.read().ok().and_then(|g| *g);
+                    let bind_interface = proxy_bind_interface.read().ok().and_then(|g| g.clone());
                     set.spawn(async move {
+                        // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();
-                        ProxyConnection::new(&config).await
+                        ProxyConnection::new(&config, bind_ip, bind_interface).await
                     });
                 }
 
                 while let Some(res) = set.join_next().await {
                     match res {
                         Ok(Ok(conn)) => {
+                            // try_add 失败说明 pool 容量已满，剩余创建任务没有意义。
                             if pool.try_add(conn).is_ok() {
                                 available.fetch_add(1, Ordering::Release);
-                                debug!("Added prewarmed connection to pool");
+                                debug!("已向池中添加预热连接");
                             } else {
-                                // Pool is already full — abort all remaining in-flight
-                                // connection tasks so we don't create more connections to
-                                // the proxy than the pool can hold (they would be
-                                // immediately dropped, leaving the proxy with short-lived
-                                // authenticated connections that waste resources).
-                                debug!(
-                                    "Pool is full during refill, aborting remaining tasks"
-                                );
+                                debug!("补充时池已满，中止剩余任务");
                                 set.abort_all();
                                 break;
                             }
                         }
-                        Ok(Err(e)) => {
-                            warn!("Failed to create prewarmed connection: {}", e);
-                        }
+                        Ok(Err(e)) => warn!("创建预热连接失败：{}", e),
                         Err(e) => {
                             if !e.is_cancelled() {
-                                warn!("Refill task join error: {}", e);
+                                warn!("补充任务 join 错误：{}", e);
                             }
                         }
                     }
@@ -127,39 +159,33 @@ impl ConnectionPool {
         }
     }
 
-    /// Prewarm the pool with initial connections, then start the background refill task.
-    ///
-    /// The refill task is started AFTER prewarm completes so that both do not create
-    /// connections concurrently, which would overflow the pool and create unnecessary
-    /// connections on the proxy side.
+    /// 用初始连接预热连接池，然后启动后台补充任务。
     #[instrument(skip(self))]
     pub async fn prewarm(&self) {
-        info!(
-            "Prewarming connection pool with {} connections",
-            self.config.pool_size
-        );
+        info!("正在预热连接池，目标 {} 条连接", self.config.pool_size);
 
-        // Create connections concurrently
+        // 初始预热并发执行，降低 agent 启动后第一批请求等待时间。
         let mut handles = Vec::with_capacity(self.config.pool_size);
-
         for i in 0..self.config.pool_size {
             let config = self.config.clone();
             let pool = self.pool.clone();
             let available = self.available.clone();
+            let bind_ip = self.get_proxy_bind_ip();
+            let bind_interface = self.get_proxy_bind_interface();
             handles.push(tokio::spawn(async move {
-                match ProxyConnection::new(&config).await {
+                match ProxyConnection::new(&config, bind_ip, bind_interface).await {
                     Ok(conn) => {
                         if pool.try_add(conn).is_ok() {
                             available.fetch_add(1, Ordering::Release);
-                            debug!("Prewarmed connection {}", i + 1);
+                            debug!("已预热连接 {}", i + 1);
                             true
                         } else {
-                            debug!("Pool full during prewarm");
+                            debug!("预热时池已满");
                             false
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to prewarm connection {}: {}", i + 1, e);
+                        warn!("预热连接 {} 失败：{}", i + 1, e);
                         false
                     }
                 }
@@ -172,18 +198,17 @@ impl ConnectionPool {
                 success_count += 1;
             }
         }
+        info!("连接池已预热 {} 条连接", success_count);
 
-        info!("Pool prewarmed with {} connections", success_count);
-
-        // Start the background refill task AFTER prewarm has completed.
-        // Starting it before prewarm would cause both to create connections at the same
-        // time (if prewarm takes longer than the 5-second refill timer), leading to
-        // double the expected connections on the proxy side.
+        // 预热完成后启动后台补充任务。
+        // 若在预热之前启动，两者会并发创建连接导致溢出。
         let pool_clone = self.pool.clone();
         let config_clone = self.config.clone();
         let available_clone = self.available.clone();
         let refill_notify_clone = self.refill_notify.clone();
         let pool_size = self.config.pool_size;
+        let proxy_bind_ip_clone = self.proxy_bind_ip.clone();
+        let proxy_bind_interface_clone = self.proxy_bind_interface.clone();
         tokio::spawn(async move {
             Self::refill_task(
                 refill_notify_clone,
@@ -191,48 +216,70 @@ impl ConnectionPool {
                 config_clone,
                 available_clone,
                 pool_size,
+                proxy_bind_ip_clone,
+                proxy_bind_interface_clone,
             )
             .await;
         });
     }
 
-    /// Get a connection and connect to target.
-    /// The connection is consumed (not returned to pool).
+    /// 从池中获取连接并连接到目标。
+    /// 连接被消费（不归还池）。
     #[instrument(skip(self))]
     pub async fn get_connected_stream(
         &self,
         address: Address,
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
-        // Try to get a fresh prewarmed connection from the pool, discarding any
-        // connections that are too old (the proxy may have already closed them due to
-        // its own idle timeout).
-        let conn = loop {
-            match self.pool.try_remove() {
+        loop {
+            let (conn, from_pool) = match self.pool.try_remove() {
                 Ok(conn) => {
+                    // 取出的连接会被本次请求消费，不再归还池中。
                     self.available.fetch_sub(1, Ordering::AcqRel);
-                    // Notify refill AFTER decrementing so the refill task reads an
-                    // accurate count and creates exactly the right number of connections.
                     self.refill_notify.notify_one();
-
+                    // 丢弃过期连接，避免拿到 proxy 已经按 idle timeout 关闭的连接。
                     if conn.is_expired(self.max_connection_age) {
-                        debug!("Discarding expired pooled connection, will try next or create new");
-                        // conn is dropped here, closing the TCP connection gracefully
+                        debug!("丢弃过期的池连接，尝试下一条或创建新连接");
                         continue;
                     }
-                    debug!("Using prewarmed connection from pool");
-                    break conn;
+                    debug!("使用池中的预热连接");
+                    (conn, true)
                 }
                 Err(_) => {
-                    // Pool is empty — signal refill and create a fresh connection directly.
+                    // 池为空时走按需创建，保证请求不依赖预热成功。
                     self.refill_notify.notify_one();
-                    debug!("No prewarmed connection available, creating new one");
-                    break ProxyConnection::new(&self.config).await?;
+                    debug!("无可用预热连接，创建新连接");
+                    (
+                        ProxyConnection::new(
+                            &self.config,
+                            self.get_proxy_bind_ip(),
+                            self.get_proxy_bind_interface(),
+                        )
+                        .await?,
+                        false,
+                    )
                 }
-            }
-        };
+            };
 
-        // Connect to target (consumes the connection)
-        conn.connect_target(address, transport).await
+            let connect_result = conn.connect_target(address.clone(), transport).await;
+            match connect_result {
+                Ok(stream) => return Ok(stream),
+                Err(err) if from_pool && should_retry_pooled_connect_error(&err) => {
+                    warn!("预热代理连接不可用，已丢弃并重试：{}", err);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+fn should_retry_pooled_connect_error(err: &crate::error::AgentError) -> bool {
+    match err {
+        // 代理明确返回 ConnectResponse 失败时，多半是目标不可达、带宽限制或上游错误，
+        // 重试同一个目标不会修复这类业务失败。
+        crate::error::AgentError::Connection(message) => !message.starts_with("连接失败:"),
+        crate::error::AgentError::Io(_) | crate::error::AgentError::Protocol(_) => true,
+        _ => false,
     }
 }

@@ -3,14 +3,19 @@ name = "agent"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+zstd-compression = ["protocol/zstd-compression"]
+mimalloc-allocator = ["dep:mimalloc"]
+
 [dependencies]
 protocol = { path = "../protocol" }
 common = { path = "../common" }
 
 tokio.workspace = true
 tokio-util.workspace = true
-futures = "0.3"
-hex = "0.4"
+futures.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 config.workspace = true
@@ -21,9 +26,6 @@ tracing-appender.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
-console-subscriber = { workspace = true, optional = true }
-console-api = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
 fast-socks5.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -33,11 +35,14 @@ toml.workspace = true
 async-trait.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
-mimalloc.workspace = true
+mimalloc = { workspace = true, optional = true }
 rand.workspace = true
 pretty-hex.workspace = true
-ratatui.workspace = true
-crossterm.workspace = true
-[features]
-default = ["console"]
-console = ["dep:console-subscriber", "dep:console-api", "dep:tonic"]
+tun-rs.workspace = true
+netstack-smoltcp.workspace = true
+route_manager.workspace = true
+if-addrs.workspace = true
+socket2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

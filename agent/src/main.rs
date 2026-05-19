@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod connection_pool;
 mod direct_access;
@@ -6,64 +7,28 @@ mod http_handler;
 mod server;
 mod socks5_handler;
 mod telemetry;
-mod tui;
+mod tun_handler;
 
+use crate::cli::CliArgs;
 use crate::config::AgentConfig;
-use crate::telemetry::UiEvent;
+use crate::server::AgentServer;
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
+#[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to configuration file
-    #[arg(short, long, default_value = "config/agent.toml")]
-    config: String,
-
-    /// Override listen address
-    #[arg(short, long)]
-    listen: Option<String>,
-
-    /// Override proxy server address
-    #[arg(short, long)]
-    proxy: Option<String>,
-
-    /// Override username
-    #[arg(short, long)]
-    username: Option<String>,
-
-    /// Override log level (trace, debug, info, warn, error)
-    #[arg(long)]
-    log_level: Option<String>,
-
-    /// Override log directory
-    #[arg(long)]
-    log_dir: Option<String>,
-
-    /// Override log file name
-    #[arg(long)]
-    log_file: Option<String>,
-
-    /// Override TUI log buffer line limit (minimum: 1)
-    #[arg(long)]
-    log_buffer_lines: Option<usize>,
-
-    /// Override number of runtime worker threads
-    #[arg(long)]
-    runtime_threads: Option<usize>,
-}
-
 fn main() -> Result<()> {
-    let args = Args::parse();
-    // Load configuration first
+    let args = CliArgs::parse();
+    // 加载配置文件
     let mut config = AgentConfig::load(&args.config)?;
 
-    // Override with command line arguments
+    // ── 基础参数覆盖 ──────────────────────────────────────────────────────────
     if let Some(listen) = args.listen {
         config.listen_addr = listen;
     }
@@ -82,37 +47,95 @@ fn main() -> Result<()> {
     if let Some(log_file) = args.log_file {
         config.log_file = log_file;
     }
-    if let Some(log_buffer_lines) = args.log_buffer_lines {
-        config.log_buffer_lines = log_buffer_lines.max(1);
-    }
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
-    // Create log directory if it doesn't exist
+
+    // ── TUN 参数覆盖 ──────────────────────────────────────────────────────────
+    if args.tun_enabled {
+        config.tun.enabled = true;
+    }
+    if let Some(tun_name) = args.tun_name {
+        config.tun.name = tun_name;
+    }
+    if let Some(tun_ipv4) = args.tun_ipv4 {
+        config.tun.ipv4 = tun_ipv4;
+    }
+    if let Some(tun_ipv6) = args.tun_ipv6 {
+        config.tun.ipv6 = Some(tun_ipv6);
+    }
+    if let Some(tun_mtu) = args.tun_mtu {
+        config.tun.mtu = tun_mtu;
+    }
+    if let Some(tun_wintun_file) = args.tun_wintun_file {
+        config.tun.wintun_file = Some(tun_wintun_file);
+    }
+
+    // 如有需要，创建日志目录
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
-    let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<UiEvent>();
-    telemetry::install_event_sender(ui_tx.clone());
-    let _guard = telemetry::init_tracing(
+
+    let _log_guard = telemetry::init_tracing(
         config.log_dir.as_deref(),
         &config.log_file,
         &config.log_level,
-        ui_tx,
-        config.console_port,
     );
 
-    // Build Tokio runtime with configurable thread count
+    // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    // TUN/netstack 与大量中继任务会形成较深 async 栈，栈大小由配置控制。
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
     runtime_builder.enable_all();
-
     if let Some(threads) = config.runtime_threads {
-        info!("Configuring Tokio runtime with {} worker threads", threads);
+        info!("配置 Tokio 运行时工作线程数：{}", threads);
         runtime_builder.worker_threads(threads);
     }
-
     let runtime = runtime_builder.build()?;
-    let config_path = args.config;
-    runtime.block_on(async { tui::run(config, config_path, ui_rx).await })
+
+    runtime.block_on(async move {
+        info!("PPAASS Agent 启动中");
+        info!("监听地址：    {}", config.listen_addr);
+        info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
+        info!("用户名：      {}", config.username);
+        info!("日志级别：    {}", config.log_level);
+        info!(
+            "日志目录：    {}",
+            config.log_dir.as_deref().unwrap_or("仅标准输出")
+        );
+        if config.tun.enabled {
+            info!(
+                "TUN 模式已启用：设备={} ipv4={} mtu={}",
+                config.tun.name, config.tun.ipv4, config.tun.mtu
+            );
+        }
+
+        let shutdown = CancellationToken::new();
+        let shutdown_for_signal = shutdown.clone();
+        // Ctrl-C 只触发取消信号，真正的资源清理由各任务在收到 token 后完成。
+        tokio::spawn(async move {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                error!("安装 Ctrl-C 信号处理器失败：{err}");
+                return;
+            }
+            info!("收到 Ctrl-C，正在请求关闭");
+            shutdown_for_signal.cancel();
+        });
+
+        match AgentServer::new(config).await {
+            Ok(server) => {
+                // AgentServer::run 会根据模式启动 SOCKS/HTTP 或 TUN 转发器。
+                if let Err(err) = server.run(shutdown).await {
+                    error!("Agent 服务器异常停止：{}", err);
+                    return Err::<(), anyhow::Error>(err.into());
+                }
+                info!("Agent 服务器已停止");
+                Ok(())
+            }
+            Err(err) => {
+                error!("Agent 服务器初始化失败：{}", err);
+                Err(err.into())
+            }
+        }
+    })
 }

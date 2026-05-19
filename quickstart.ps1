@@ -41,12 +41,9 @@ Write-Host @"
 1️⃣  Start the Proxy Server:
    .\target\release\proxy.exe --config config\proxy.toml
 
-2️⃣  In another terminal, add a user via API:
-   curl -X POST http://localhost:8081/api/users \
-     -H "Content-Type: application/json" \
-     -d '{\"username\": \"myuser\", \"bandwidth_limit_mbps\": 100}'
+2️⃣  Add the user's public key to config\users.toml
 
-3️⃣  Save the private key to keys\myuser.pem
+3️⃣  Save the matching private key to keys\myuser.pem
 
 4️⃣  Update config\agent.toml with your settings
 
@@ -62,7 +59,6 @@ Write-Host @"
 
 📖 README.md  - Comprehensive documentation
 📖 SETUP.md   - Detailed setup guide
-📖 API.md     - REST API documentation
 📖 SUMMARY.md - Project overview
 
 ╔══════════════════════════════════════════════════════════════╗
@@ -71,8 +67,6 @@ Write-Host @"
 
 Start Proxy:  .\target\release\proxy.exe --config config\proxy.toml
 Start Agent:  .\target\release\agent.exe --config config\agent.toml
-Check Health: curl http://localhost:8081/health
-List Users:   curl http://localhost:8081/api/users
 
 "@ -ForegroundColor White
 

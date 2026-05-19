@@ -25,15 +25,6 @@ You are an expert Rust developer, specializing in network application developing
   - The connection pool size
   - The log level
 
-- In proxy side there should REST api to:
-
-  - Add user, including generate RSA private key and public key by user, and also can let user download their private key.
-  - Remove user, when remove the user, the related private key should be deleted also.
-  - Query the current connections and user bandwidth usage.
-  - Check proxy configuration
-  - Update proxy configuration without restart the proxy service.
-  - Monitor the health status of the proxy service.
-
 ## Architecture requirements
 
 The communication between agent and proxy should be secure, using RSA encryption for key exchange and AES for encrypting the traffic.
@@ -44,13 +35,11 @@ The agent side should have a connection pool for proxy side, and the connection 
 
 The RSA keys should be generated using a secure random number generator, and the keys should be stored securely on both sides.
 
-The port of `tokio-console` should be configurable via the configuration file, and it is optional, if configured the `tokio-console` should be started when the application starts.
-
 The network package encoding and decoding should use the `Encoder` and `Decoder` trait form `tokio-codec` crate.
 
 The UI of agent should use `tauri 2`, `typescript` and `vue3`, and `primevue` should be used as the component library of `vue3` .
 
-The user management in proxy side should use `SeaORM` to access `sqlite` to do CRUD.
+The user management in proxy side should use the proxy users TOML configuration file to do CRUD.
 
 ## Implementation details
 
@@ -63,7 +52,6 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
   - Use `tracing` for logging.
   - Use `thiserror` to define errors.
   - Use `anyhow` to throw application level errors.
-  - Use `tokio-console` as the monitoring tool.
   - Use `tokio-codec` for network package encoding and decoding.
   - Use `fast-socks5` latest stable version to implement the socks5 protocol logic in agent side.
   - Use `hyper` latest stable version to implement the http protocol logic in agent side.
@@ -86,7 +74,7 @@ The user management in proxy side should use `SeaORM` to access `sqlite` to do C
   - The startup script should first stop the current running process and start a new process.
   - The agent will run in Windows and MacOS, so the startup script for agent should be a `bat` file for Windows and `sh` file for MacOS.
   - The proxy will run in Linux, so the startup script for proxy should be a `sh` file for Linux.
-  - The CRUD for user in proxy side should from `sqlite` with `SeaORM`
+  - The CRUD for user in proxy side should read and write the proxy users TOML configuration file.
   - The `Data forwarding process` should use `tokio::io::copy_bidirectional` to forward data between client, agent, proxy and target.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:

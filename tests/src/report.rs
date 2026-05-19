@@ -4,26 +4,26 @@ use std::fs::File;
 use std::io::Write;
 use tracing::info;
 
-/// Generate all performance reports (JSON, Markdown, and HTML)
+/// 生成所有性能报告（JSON、Markdown 和 HTML）
 pub fn generate_reports(results: &PerformanceTestResults, output_path: &str) -> Result<()> {
-    // Generate JSON report
+    // 生成 JSON 报告
     let json_path = output_path.replace(".html", ".json");
     generate_json_report(results, &json_path)?;
-    info!("JSON report generated: {}", json_path);
+    info!("JSON 报告已生成：{}", json_path);
 
-    // Generate Markdown report
+    // 生成 Markdown 报告
     let md_path = output_path.replace(".html", ".md");
     generate_markdown_report(results, &md_path)?;
-    info!("Markdown report generated: {}", md_path);
+    info!("Markdown 报告已生成：{}", md_path);
 
-    // Generate HTML report
+    // 生成 HTML 报告
     generate_html_report(results, output_path)?;
-    info!("HTML report generated: {}", output_path);
+    info!("HTML 报告已生成：{}", output_path);
 
     Ok(())
 }
 
-/// Generate JSON report
+/// 生成 JSON 报告
 fn generate_json_report(results: &PerformanceTestResults, path: &str) -> Result<()> {
     let json = serde_json::to_string_pretty(results)?;
     let mut file = File::create(path)?;
@@ -31,7 +31,7 @@ fn generate_json_report(results: &PerformanceTestResults, path: &str) -> Result<
     Ok(())
 }
 
-/// Generate Markdown report
+/// 生成 Markdown 报告
 fn generate_markdown_report(results: &PerformanceTestResults, path: &str) -> Result<()> {
     let mut content = String::new();
 
@@ -166,7 +166,7 @@ fn generate_markdown_report(results: &PerformanceTestResults, path: &str) -> Res
     Ok(())
 }
 
-/// Generate HTML report with charts
+/// 生成带图表的 HTML 报告
 fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<()> {
     let success_rate = if results.total_requests > 0 {
         (results.successful_requests as f64 / results.total_requests as f64) * 100.0
@@ -410,7 +410,7 @@ fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<
     </div>
 
     <script>
-        // Request Distribution Chart
+        // 请求分布图
         new Chart(document.getElementById('requestChart'), {{
             type: 'bar',
             data: {{
@@ -436,7 +436,7 @@ fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<
             }}
         }});
 
-        // HTTP Latency Distribution
+        // HTTP 延迟分布
         new Chart(document.getElementById('httpLatencyChart'), {{
             type: 'bar',
             data: {{
@@ -462,7 +462,7 @@ fn generate_html_report(results: &PerformanceTestResults, path: &str) -> Result<
             }}
         }});
 
-        // SOCKS5 Latency Distribution
+        // SOCKS5 延迟分布
         new Chart(document.getElementById('socks5LatencyChart'), {{
             type: 'bar',
             data: {{

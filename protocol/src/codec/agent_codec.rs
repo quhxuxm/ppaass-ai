@@ -4,7 +4,7 @@ use bytes::BytesMut;
 use std::sync::Arc;
 use std::{io, result::Result};
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, error};
+use tracing::{error, trace};
 
 pub struct AgentCodec {
     inner: MessageCodec,
@@ -27,7 +27,7 @@ impl Decoder for AgentCodec {
             Some(message) => {
                 let response: ProxyResponse =
                     bitcode::deserialize(&message.payload).map_err(|e| {
-                        error!("Failed to deserialize proxy response: {}", e);
+                        error!("代理响应反序列化失败：{}", e);
                         io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("Failed to deserialize proxy response: {}", e),
@@ -44,7 +44,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: ProxyRequest, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        debug!("Begin to encode proxy request: {item:?}");
+        trace!("开始编码代理请求：{item:?}");
         let message_type = match &item {
             ProxyRequest::Auth(_) => MessageType::AuthRequest,
             ProxyRequest::Connect(_) => MessageType::ConnectRequest,
@@ -52,7 +52,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
         };
 
         let payload = bitcode::serialize(&item).map_err(|e| {
-            error!("Failed to serialize proxy request: {}", e);
+            error!("代理请求序列化失败：{}", e);
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to serialize proxy request: {}", e),
@@ -60,7 +60,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
         })?;
 
         let message = Message::new(message_type, payload);
-        debug!("Convert proxy request to message: {message:?}");
+        trace!("将代理请求转换为消息：{message:?}");
         self.inner.encode(message, dst)
     }
 }

@@ -17,3 +17,7 @@ tracing-appender.workspace = true
 futures.workspace = true
 protocol = { path = "../protocol" }
 hex.workspace = true
+socket2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

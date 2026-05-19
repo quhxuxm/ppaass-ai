@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::debug;
 
-/// Mock HTTP client that sends requests through the agent
+/// 通过 agent 发送请求的模拟 HTTP 客户端
 pub struct MockHttpClient {
     agent_addr: String,
 }
@@ -18,11 +18,11 @@ impl MockHttpClient {
         Self { agent_addr }
     }
 
-    /// Send an HTTP GET request through the proxy
+    /// 通过代理发送 HTTP GET 请求
     pub async fn get(&self, url: &str) -> Result<(Duration, String)> {
         let start = Instant::now();
 
-        // Connect to agent
+        // 连接到 agent
         let stream = TcpStream::connect(&self.agent_addr)
             .await
             .context("Failed to connect to agent")?;
@@ -33,14 +33,14 @@ impl MockHttpClient {
             .await
             .context("HTTP handshake failed")?;
 
-        // Spawn connection handler
+        // 启动连接处理任务
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                debug!("Connection error: {}", e);
+                debug!("连接错误：{}", e);
             }
         });
 
-        // Build and send request
+        // 构建并发送请求
         let req = Request::builder()
             .uri(url)
             .body(Empty::<Bytes>::new())
@@ -58,18 +58,18 @@ impl MockHttpClient {
         let duration = start.elapsed();
 
         debug!(
-            "HTTP GET {} - Status: {} - Duration: {:?}",
+            "HTTP GET {} - 状态：{} - 耗时：{:?}",
             url, status, duration
         );
 
         Ok((duration, body))
     }
 
-    /// Send an HTTP POST request through the proxy
+    /// 通过代理发送 HTTP POST 请求
     pub async fn post(&self, url: &str, body: Vec<u8>) -> Result<(Duration, String)> {
         let start = Instant::now();
 
-        // For POST, create a new connection (can't reuse due to body type mismatch)
+        // POST 请求创建新连接（因 body 类型不匹配，无法复用）
         let stream = TcpStream::connect(&self.agent_addr)
             .await
             .context("Failed to connect to agent")?;
@@ -80,14 +80,14 @@ impl MockHttpClient {
             .await
             .context("HTTP handshake failed")?;
 
-        // Spawn connection handler
+        // 启动连接处理任务
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                debug!("Connection error: {}", e);
+                debug!("连接错误：{}", e);
             }
         });
 
-        // Build and send request
+        // 构建并发送请求
         let req = Request::builder()
             .method("POST")
             .uri(url)
@@ -106,7 +106,7 @@ impl MockHttpClient {
         let duration = start.elapsed();
 
         debug!(
-            "HTTP POST {} - Status: {} - Duration: {:?}",
+            "HTTP POST {} - 状态：{} - 耗时：{:?}",
             url, status, duration
         );
 
@@ -114,7 +114,7 @@ impl MockHttpClient {
     }
 }
 
-/// Mock SOCKS5 client that sends data through the agent
+/// 通过 agent 发送数据的模拟 SOCKS5 客户端
 pub struct MockSocks5Client {
     agent_addr: String,
 }
@@ -124,7 +124,7 @@ impl MockSocks5Client {
         Self { agent_addr }
     }
 
-    /// Connect to a target through SOCKS5 proxy and send/receive data
+    /// 通过 SOCKS5 代理连接目标并收发数据
     pub async fn send_receive(
         &self,
         target_host: &str,
@@ -133,25 +133,25 @@ impl MockSocks5Client {
     ) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
 
-        // Use async-socks5 for TCP connect
+        // 使用 async-socks5 建立 TCP 连接
         let proxy_addr = &self.agent_addr;
 
-        // 1. Connect to the proxy
+        // 1. 连接到代理
         let mut stream = TcpStream::connect(proxy_addr)
             .await
             .context("Failed to connect to proxy")?;
 
-        // 2. Perform SOCKS5 handshake (CONNECT)
+        // 2. 执行 SOCKS5 握手（CONNECT）
         let _ = async_socks5::connect(&mut stream, (target_host.to_string(), target_port), None)
             .await
             .context("Failed to connect via SOCKS5")?;
 
-        // Now connected, send data
+        // 连接成功后发送数据
         stream.write_all(data).await?;
         stream.flush().await?;
         stream.shutdown().await?;
 
-        // Receive response with timeout
+        // 带超时接收响应
         let mut response_data = Vec::new();
         match tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -167,7 +167,7 @@ impl MockSocks5Client {
         let duration = start.elapsed();
 
         debug!(
-            "SOCKS5 {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}",
+            "SOCKS5 {}:{} - 已发送 {} 字节，已接收 {} 字节 - 耗时：{:?}",
             target_host,
             target_port,
             data.len(),
@@ -178,7 +178,7 @@ impl MockSocks5Client {
         Ok((duration, response_data))
     }
 
-    /// Connect to a target through SOCKS5 proxy and send/receive data via UDP Associate
+    /// 通过 SOCKS5 代理连接目标，并经 UDP 关联收发数据
     pub async fn udp_send_receive(
         &self,
         target_host: &str,
@@ -187,25 +187,25 @@ impl MockSocks5Client {
     ) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
 
-        // Use async-socks5 crate for UDP Associate
+        // 使用 async-socks5 crate 执行 UDP 关联
 
-        // 1. Establish TCP connection to SOCKS5 server (proxy)
+        // 1. 与 SOCKS5 服务器（代理）建立 TCP 连接
         let stream = TcpStream::connect(&self.agent_addr)
             .await
             .context("Failed to connect to agent")?;
 
-        // 2. Bind a local UDP socket
+        // 2. 绑定本地 UDP 套接字
         let socket = UdpSocket::bind("0.0.0.0:0")
             .await
             .context("Failed to bind local UDP socket")?;
 
-        // 3. Associate with the proxy
-        // associate(stream, socket, auth, target)
+        // 3. 与代理建立关联
+        // 调用 associate(stream, socket, auth, target)
         let datagram = async_socks5::SocksDatagram::associate(
             stream,
             socket,
-            None,                         // No auth
-            None::<std::net::SocketAddr>, // Target address optional
+            None,                         // 无认证
+            None::<std::net::SocketAddr>, // 目标地址可选
         )
         .await
         .context("Failed to associate via SOCKS5")?;
@@ -215,13 +215,13 @@ impl MockSocks5Client {
             .parse()
             .context("Failed to parse target address")?;
 
-        // 4. Send data
+        // 4. 发送数据
         datagram
             .send_to(data, target_socket_addr)
             .await
             .context("Failed to send UDP data via proxy")?;
 
-        // 5. Receive response
+        // 5. 接收响应
         let mut buf = vec![0u8; 4096];
         let (n, _src) = match tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -238,7 +238,7 @@ impl MockSocks5Client {
         let duration = start.elapsed();
 
         debug!(
-            "SOCKS5 UDP {}:{} - Sent {} bytes, Received {} bytes - Duration: {:?}",
+            "SOCKS5 UDP {}:{} - 已发送 {} 字节，已接收 {} 字节 - 耗时：{:?}",
             target_host,
             target_port,
             data.len(),
@@ -250,7 +250,7 @@ impl MockSocks5Client {
     }
 }
 
-/// Simple TCP client for testing
+/// 用于测试的简单 TCP 客户端
 pub struct MockTcpClient {
     target_addr: String,
 }
@@ -260,7 +260,7 @@ impl MockTcpClient {
         Self { target_addr }
     }
 
-    /// Send data and receive response
+    /// 发送数据并接收响应
     pub async fn send_receive(&self, data: &[u8]) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();
 

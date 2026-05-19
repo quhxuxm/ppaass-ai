@@ -21,17 +21,20 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     type Error = std::io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // 背压由底层 framed writer 决定，避免向 agent 过量缓冲数据。
         Pin::new(&mut self.inner).poll_ready(cx)
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> Result<(), Self::Error> {
+        // 目标侧读到的裸字节被包装回协议 DataPacket。
         let stream_id = self.stream_id.clone();
 
+        // 下行流量在写回 agent 前计入带宽统计。
         if let Some(user) = &self.username {
             self.bandwidth_monitor.record_sent(user, item.len() as u64);
         }
 
-        // Compression is handled at the codec level
+        // 压缩在编解码层处理
         let packet = DataPacket {
             stream_id,
             data: item.to_vec(),
@@ -41,10 +44,12 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // flush 直接透传到底层 writer。
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // 关闭时发送一个空的 end 包，让 agent 明确知道该 stream 已结束。
         if !self.end_sent {
             match Pin::new(&mut self.inner).poll_ready(cx) {
                 Poll::Ready(Ok(())) => {

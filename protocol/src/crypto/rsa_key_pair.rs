@@ -64,13 +64,13 @@ impl RsaKeyPair {
             .map_err(|e| ProtocolError::Decryption(e.to_string()))
     }
 
-    /// Encrypt data with private key (can be decrypted with public key)
-    /// This uses raw RSA private key operation: c = m^d mod n
+    /// 使用私钥加密数据（可用公钥解密）
+    /// 这里使用原始 RSA 私钥操作：c = m^d mod n
     pub fn encrypt_with_private_key(&self, data: &[u8]) -> Result<Vec<u8>> {
         use rsa::BigUint;
         use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 
-        // Add PKCS#1 v1.5 signature padding: 0x00 0x01 [0xFF padding] 0x00 [data]
+        // 添加 PKCS#1 v1.5 签名填充：0x00 0x01 [0xFF 填充] 0x00 [数据]
         let key_size = self.private_key.size();
         if data.len() > key_size - 11 {
             return Err(ProtocolError::Encryption(
@@ -86,14 +86,14 @@ impl RsaKeyPair {
         padded.push(0x00);
         padded.extend_from_slice(data);
 
-        // Raw RSA private key operation: c = m^d mod n
+        // 原始 RSA 私钥操作：c = m^d mod n
         let m = BigUint::from_bytes_be(&padded);
         let d = self.private_key.d();
         let n = self.private_key.n();
 
         let c = m.modpow(d, n);
 
-        // Ensure output is key_size bytes (pad with leading zeros if needed)
+        // 确保输出为 key_size 字节（必要时用前导零填充）
         let c_bytes = c.to_bytes_be();
         let mut result = vec![0u8; key_size - c_bytes.len()];
         result.extend(c_bytes);

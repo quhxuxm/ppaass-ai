@@ -19,7 +19,4 @@ pub enum ProxyError {
 
     #[error("Configuration error: {0}")]
     Configuration(String),
-
-    #[error("Database error: {0}")]
-    Database(#[from] sea_orm::DbErr),
 }

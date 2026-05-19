@@ -1,72 +1,65 @@
-mod api;
 mod bandwidth;
 mod config;
 mod connection;
-mod entity;
 mod error;
 mod server;
 mod user_manager;
 
-use crate::config::{ProxyConfig, UsersConfig};
+use crate::config::ProxyConfig;
 use crate::server::ProxyServer;
-use crate::user_manager::UserManager;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use common::init_tracing;
+#[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
-use tracing::{info, instrument};
+use std::collections::BTreeSet;
+use tracing::info;
 
+#[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to configuration file
+    /// 配置文件路径
     #[arg(short, long, default_value = "proxy.toml")]
     config: String,
 
-    /// Override listen address
+    /// 覆盖监听地址
     #[arg(short, long)]
     listen: Option<String>,
 
-    /// Override API address
-    #[arg(short, long)]
-    api: Option<String>,
-
-    /// Override log level (trace, debug, info, warn, error)
+    /// 覆盖日志级别（trace、debug、info、warn、error）
     #[arg(long)]
     log_level: Option<String>,
 
-    /// Override log directory
+    /// 覆盖日志目录
     #[arg(long)]
     log_dir: Option<String>,
 
-    /// Override log file name
+    /// 覆盖日志文件名
     #[arg(long)]
     log_file: Option<String>,
 
-    /// Override number of runtime worker threads
+    /// 覆盖运行时工作线程数
     #[arg(long)]
     runtime_threads: Option<usize>,
 
-    /// Migrate users from a TOML file to the SQLite database
+    /// 覆盖 proxy 连接目标服务器时使用的出站网络设备名
     #[arg(long)]
-    migrate_users: Option<String>,
+    outbound_interface: Option<String>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Load configuration first
+    // 先加载配置
     let mut config = ProxyConfig::load(&args.config)?;
 
-    // Override with command line arguments
+    // 使用命令行参数覆盖配置
     if let Some(listen) = args.listen {
         config.listen_addr = listen;
-    }
-    if let Some(api) = args.api {
-        config.api_addr = api;
     }
     if let Some(log_level) = args.log_level {
         config.log_level = log_level;
@@ -80,8 +73,11 @@ fn main() -> Result<()> {
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
+    if let Some(outbound_interface) = args.outbound_interface {
+        config.outbound_interface = Some(outbound_interface);
+    }
 
-    // Create log directory if it doesn't exist
+    // 如果日志目录不存在，则创建
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
@@ -90,89 +86,92 @@ fn main() -> Result<()> {
         &config.log_file,
         &config.log_level,
     );
-    // Build Tokio runtime with configurable thread count
+    validate_outbound_interface(&config)?;
+
+    // 构建 Tokio 运行时，线程数可配置
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
     runtime_builder.enable_all();
 
     if let Some(threads) = config.runtime_threads {
-        info!("Configuring Tokio runtime with {} worker threads", threads);
+        info!("配置 Tokio 运行时工作线程数：{}", threads);
         runtime_builder.worker_threads(threads);
     }
 
     let runtime = runtime_builder.build()?;
 
     runtime.block_on(async {
-        info!("Starting PPAASS Proxy");
-        info!("Listen address: {}", config.listen_addr);
-        info!("API address: {}", config.api_addr);
-        info!("Log level: {}", config.log_level);
+        info!("PPAASS Proxy 启动中");
+        info!("监听地址：{}", config.listen_addr);
+        info!("日志级别：{}", config.log_level);
         info!(
-            "Log directory: {}",
-            config.log_dir.as_deref().unwrap_or("Console")
+            "日志目录：{}",
+            config.log_dir.as_deref().unwrap_or("控制台")
         );
         if config.log_dir.is_some() {
-            info!("Log file: {}", config.log_file);
+            info!("日志文件：{}", config.log_file);
         }
         if let Some(threads) = config.runtime_threads {
-            info!("Runtime threads: {}", threads);
+            info!("运行时线程数：{}", threads);
         } else {
-            info!("Runtime threads: default (CPU cores)");
+            info!("运行时线程数：默认（CPU 核心数）");
         }
+        info!(
+            "出站网络设备：{}",
+            config
+                .outbound_interface
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("默认路由")
+        );
+        info!("用户配置文件：{}", config.users_path);
 
-        // Handle user migration if requested
-        if let Some(users_toml_path) = args.migrate_users {
-            info!("Migrating users from {} to database", users_toml_path);
-            migrate_users_from_toml(&config, &users_toml_path).await?;
-            info!("User migration completed successfully");
-            return Ok(());
-        }
-
-        // Initialize tokio-console if configured
-        #[cfg(feature = "console")]
-        if let Some(console_port) = config.console_port {
-            info!("Starting tokio-console on port {}", console_port);
-            console_subscriber::init();
-        }
-
-        // Start proxy server
+        // 启动代理服务器
         let server = ProxyServer::new(config).await?;
         server.run().await?;
         Ok(())
     })
 }
 
-#[instrument(skip(config))]
-async fn migrate_users_from_toml(config: &ProxyConfig, users_toml_path: &str) -> Result<()> {
-    // Load users from TOML file
-    let users_config = UsersConfig::load(users_toml_path)?;
-    info!("Found {} users in TOML file", users_config.users.len());
+fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
+    // 未配置出站设备时不做校验，运行时交给系统默认路由处理。
+    let Some(interface) = config
+        .outbound_interface
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(());
+    };
 
-    // Initialize user manager (this creates the database if needed)
-    let user_manager =
-        UserManager::new(&config.database_path, &config.keys_dir, &config.db_pool).await?;
-
-    // Import each user
-    for (username, user_config) in users_config.users {
-        info!("Importing user: {}", username);
-
-        // Check if user already exists
-        if let Ok(Some(_)) = user_manager.get_user(&username).await {
-            info!("User {} already exists, skipping", username);
-            continue;
-        }
-
-        // Import user directly with their existing public key
-        user_manager
-            .import_user(
-                username.clone(),
-                user_config.public_key_pem.clone(),
-                user_config.bandwidth_limit_mbps,
-            )
-            .await?;
-
-        info!("User {} imported successfully", username);
+    if interface.eq_ignore_ascii_case("auto") {
+        // auto 是逻辑设备名，不需要出现在系统网卡列表中。
+        info!("自动绑定出站网络设备：{}", interface);
+        return Ok(());
     }
+    // 显式设备名在启动时提前校验，避免连接到来后才报“设备不存在”。
+    let interfaces = if_addrs::get_if_addrs()
+        .map_err(|e| anyhow!("读取本机网络设备列表失败：{e}"))?
+        .into_iter()
+        .map(|iface| iface.name)
+        .collect::<BTreeSet<_>>();
+    info!(
+        "本机网络设备列表：{}",
+        interfaces.iter().cloned().collect::<Vec<_>>().join(", ")
+    );
+    if interfaces.contains(interface) {
+        return Ok(());
+    }
+    // 报错中列出本机设备名，便于用户在 Windows/macOS 上修正配置。
+    let available = if interfaces.is_empty() {
+        "<未发现可用网络设备>".to_string()
+    } else {
+        interfaces.into_iter().collect::<Vec<_>>().join(", ")
+    };
 
-    Ok(())
+    Err(anyhow!(
+        "配置的出站网络设备不存在：{interface}。请删除 outbound_interface 以使用系统默认路由，\
+         改为当前机器上的设备名，或设置 outbound_interface = \"auto\" 自动绑定原始默认路由设备。\
+         可用设备：{available}"
+    ))
 }

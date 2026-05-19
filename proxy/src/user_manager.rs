@@ -1,198 +1,94 @@
-use crate::config::UserConfig;
-use crate::entity::user;
+use crate::config::{UserConfig, UsersConfig};
 use crate::error::{ProxyError, Result};
-use protocol::crypto::RsaKeyPair;
-use sea_orm::*;
+use parking_lot::RwLock;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::Path;
 use tracing::{info, instrument};
 
-use crate::config::DatabasePoolConfig;
-
 pub struct UserManager {
-    db: DatabaseConnection,
-    keys_dir: PathBuf,
+    users: RwLock<UsersConfig>,
 }
 
 impl UserManager {
-    #[instrument(skip(database_path, keys_dir, db_pool_config))]
-    pub async fn new<P: AsRef<Path>>(
-        database_path: P,
-        keys_dir: P,
-        db_pool_config: &DatabasePoolConfig,
-    ) -> Result<Self> {
-        let database_path = database_path.as_ref();
-        let keys_dir = keys_dir.as_ref().to_path_buf();
+    #[instrument(skip(users_path))]
+    pub fn new<P: AsRef<Path>>(users_path: P) -> Result<Self> {
+        let users_path = users_path.as_ref().to_path_buf();
 
-        // Create keys directory if it doesn't exist
-        fs::create_dir_all(&keys_dir)?;
-
-        // Create parent directory for database if it doesn't exist
-        if let Some(parent) = database_path.parent() {
+        // 用户配置允许放在尚不存在的目录下，启动时先补齐父目录。
+        if let Some(parent) = users_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
 
-        // Connect to SQLite database with connection pool configuration from config
-        let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
-        let mut opt = ConnectOptions::new(database_url);
-        opt.max_connections(db_pool_config.max_connections)
-            .min_connections(db_pool_config.min_connections)
-            .connect_timeout(Duration::from_secs(db_pool_config.connect_timeout_secs))
-            .idle_timeout(Duration::from_secs(db_pool_config.idle_timeout_secs))
-            .max_lifetime(Duration::from_secs(db_pool_config.max_lifetime_secs))
-            .sqlx_logging(false);
+        // 首次启动时创建一个空 users.toml，让 proxy 可以用配置文件方式管理用户。
+        if !users_path.exists() {
+            fs::write(&users_path, "[users]\n")?;
+        }
 
-        let db = Database::connect(opt).await?;
+        // 加载后立即做一致性校验，避免运行中认证阶段才发现配置错误。
+        let users = load_users(&users_path)?;
+        validate_users(&users)?;
+        info!(
+            "已加载用户配置：{}（{} 个用户）",
+            users_path.display(),
+            users.users.len()
+        );
 
-        // Create table if not exists
-        let create_table_sql = r#"
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY NOT NULL,
-                public_key_pem TEXT NOT NULL,
-                bandwidth_limit_mbps INTEGER,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        "#;
-        db.execute(Statement::from_string(
-            db.get_database_backend(),
-            create_table_sql.to_string(),
-        ))
-        .await?;
-
-        info!("Connected to SQLite database: {}", database_path.display());
-
-        Ok(Self { db, keys_dir })
+        Ok(Self {
+            users: RwLock::new(users),
+        })
     }
 
     #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
-        let user = user::Entity::find_by_id(username.to_string())
-            .one(&self.db)
-            .await?;
-
-        Ok(user.map(|u| UserConfig {
-            username: u.username,
-            public_key_pem: u.public_key_pem,
-            bandwidth_limit_mbps: u.bandwidth_limit_mbps.map(|v| v as u64),
-        }))
-    }
-
-    #[instrument(skip(self))]
-    pub async fn add_user(
-        &self,
-        username: String,
-        bandwidth_limit_mbps: Option<u64>,
-    ) -> Result<(String, String)> {
-        info!("Adding user: {}", username);
-
-        // Generate RSA key pair
-        let keypair = RsaKeyPair::generate(2048)?;
-        let private_key_pem = keypair.private_key_to_pem()?;
-        let public_key_pem = keypair.public_key_to_pem()?;
-
-        // Save private key to file
-        let private_key_path = self.keys_dir.join(format!("{}.pem", username));
-        fs::write(&private_key_path, &private_key_pem)?;
-
-        // Create user in database
-        let now = chrono::Utc::now().naive_utc();
-        let user = user::ActiveModel {
-            username: Set(username.clone()),
-            public_key_pem: Set(public_key_pem.clone()),
-            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-
-        user::Entity::insert(user).exec(&self.db).await?;
-
-        info!("User {} added successfully", username);
-        Ok((private_key_pem, public_key_pem))
-    }
-
-    #[instrument(skip(self))]
-    pub async fn remove_user(&self, username: &str) -> Result<()> {
-        info!("Removing user: {}", username);
-
-        let result = user::Entity::delete_by_id(username.to_string())
-            .exec(&self.db)
-            .await?;
-
-        if result.rows_affected == 0 {
-            return Err(ProxyError::UserNotFound(username.to_string()));
-        }
-
-        // Delete private key file
-        let private_key_path = self.keys_dir.join(format!("{}.pem", username));
-        if private_key_path.exists() {
-            fs::remove_file(private_key_path)?;
-        }
-
-        info!("User {} removed successfully", username);
-        Ok(())
+        // 认证路径只读用户配置，RwLock 让多个连接可以并发查询。
+        Ok(self.users.read().users.get(username).cloned())
     }
 
     #[instrument(skip(self))]
     pub async fn list_users(&self) -> Result<Vec<String>> {
-        let users = user::Entity::find().all(&self.db).await?;
-        Ok(users.into_iter().map(|u| u.username).collect())
+        // 启动阶段需要枚举所有用户，用于初始化带宽监控器。
+        Ok(self.users.read().users.keys().cloned().collect())
     }
+}
 
-    /// Import a user with an existing public key (for migration from TOML config)
-    #[instrument(skip(self))]
-    pub async fn import_user(
-        &self,
-        username: String,
-        public_key_pem: String,
-        bandwidth_limit_mbps: Option<u64>,
-    ) -> Result<()> {
-        info!("Importing user: {}", username);
+fn load_users(path: &Path) -> Result<UsersConfig> {
+    // 将底层 TOML/IO 错误包装成配置错误，日志里带上具体文件路径。
+    UsersConfig::load(path).map_err(|e| {
+        ProxyError::Configuration(format!("读取用户配置 {} 失败：{e}", path.display()))
+    })
+}
 
-        // Create user in database
-        let now = chrono::Utc::now().naive_utc();
-        let user = user::ActiveModel {
-            username: Set(username.clone()),
-            public_key_pem: Set(public_key_pem),
-            bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-
-        user::Entity::insert(user).exec(&self.db).await?;
-
-        info!("User {} imported successfully", username);
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    #[instrument(skip(self))]
-    pub async fn update_user_bandwidth(
-        &self,
-        username: &str,
-        bandwidth_limit_mbps: Option<u64>,
-    ) -> Result<()> {
-        info!("Updating bandwidth for user: {}", username);
-
-        let user = user::Entity::find_by_id(username.to_string())
-            .one(&self.db)
-            .await?;
-
-        match user {
-            Some(_) => {
-                let now = chrono::Utc::now().naive_utc();
-                let update = user::ActiveModel {
-                    username: Set(username.to_string()),
-                    bandwidth_limit_mbps: Set(bandwidth_limit_mbps.map(|v| v as i64)),
-                    updated_at: Set(now),
-                    ..Default::default()
-                };
-                user::Entity::update(update).exec(&self.db).await?;
-                info!("User {} bandwidth updated successfully", username);
-                Ok(())
-            }
-            None => Err(ProxyError::UserNotFound(username.to_string())),
+fn validate_users(users: &UsersConfig) -> Result<()> {
+    // TOML 表键和 username 必须一致，否则认证时会出现同一用户两个名字。
+    for (key, user) in &users.users {
+        let normalized_username = normalize_username(user.username.clone())?;
+        if key != &normalized_username {
+            return Err(ProxyError::Configuration(format!(
+                "用户配置键 {key} 与 username 字段 {} 不一致",
+                user.username
+            )));
         }
     }
+    Ok(())
+}
+
+fn normalize_username(username: String) -> Result<String> {
+    // 用户名会出现在配置键和日志里，先去掉首尾空白并拒绝空值。
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(ProxyError::Configuration("用户名不能为空".to_string()));
+    }
+    // 禁止路径控制字符，为后续可能的文件化用户资产保留安全边界。
+    if username.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || username.contains("..")
+        || username.chars().any(char::is_control)
+    {
+        return Err(ProxyError::Configuration(format!(
+            "用户名包含非法路径字符：{username}"
+        )));
+    }
+    Ok(username.to_string())
 }

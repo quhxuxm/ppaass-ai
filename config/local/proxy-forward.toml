@@ -1,65 +1,66 @@
-# PPAASS Proxy Server Configuration
-# This configuration is for demo purposes with real RSA keys
+# PPAASS Proxy 服务器配置
+# 该配置用于演示，包含真实 RSA 密钥
 
-# Address to listen for incoming agent connections
+# 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:9090"
 
-# Address for REST API (user management, monitoring)
-api_addr = "0.0.0.0:9091"
+# 用户配置文件路径
+users_path = "config/local/users.toml"
 
-# Path to SQLite database for user management
-database_path = "config/local/data/users.db"
-
-# Directory where RSA keys are stored
-keys_dir = "config/local/keys"
-
-# Log level: trace, debug, info, warn, error
+# 日志级别：trace、debug、info、warn、error
 log_level = "debug"
 
-# Log directory for file-based logging (better performance than console)
+# 文件日志目录（相比控制台输出性能更好）
 # log_dir = "logs"
 
-# Log file name (used only when log_dir is set)
+# 日志文件名（仅在设置 log_dir 时使用）
 # log_file = "proxy.log"
 
-# Compression mode for data transfer: none, zstd, lz4, gzip
-# - none: No compression (default)
-# - zstd: Zstandard compression - good balance of speed and ratio
-# - lz4: LZ4 compression - fastest, lower compression ratio
-# - gzip: Gzip compression - widely compatible, slower
+# 数据传输压缩模式：none、zstd、lz4、gzip
+# - none：不压缩（默认）
+# - zstd：Zstandard 压缩，速度与压缩率较均衡
+# - lz4：LZ4 压缩，速度最快，压缩率较低
+# - gzip：Gzip 压缩，兼容性广，速度较慢
 compression_mode = "lz4"
 
-# Number of Tokio runtime worker threads (defaults to CPU cores if not set)
+# 连接目标服务器时使用的出站网络设备名。
+# 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时可设置为 "auto"，
+# proxy 会绑定到原始默认路由对应的物理网卡，避免出站流量回到 TUN。
+# outbound_interface = "auto"
+
+# proxy 端处理 DNS 请求时使用的上游 DNS。
+# 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
+# dns_upstream_addr = "8.8.8.8:53"
+
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 # runtime_threads = 4
 
 
-# Tolerance time in seconds for replay attack prevention
+# 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300
 
-# Maximum size of the async runtime stack in megabytes (default: 4 MB)
+# 异步运行时栈的最大大小，单位 MB（默认：4 MB）
 async_runtime_stack_size_mb = 4
 
-# Forward Mode Configuration
+# 转发模式配置
 # --------------------------
-# If enabled, this proxy will forward all traffic to another PPAASS proxy
-# instead of connecting directly to the target.
+# 启用后，该代理会将所有流量转发到另一个 PPAASS 代理，
+# 而不是直接连接目标。
 forward_mode = true
 
-# Upstream proxy address (required if forward_mode = true)
+# 上游代理地址（forward_mode = true 时必填）
 upstream_proxy_addr = "127.0.0.1:9090"
 
-# Username to authenticate with the upstream proxy
+# 连接上游代理时使用的认证用户名
 upstream_username = "user2"
 
-# Path to the private key for authenticating with the upstream proxy
+# 连接上游代理时用于认证的私钥路径
 upstream_private_key_path = "keys/user2.pem"
 
-# List of upstream proxy addresses for load balancing and failover
-# When multiple addresses are specified, one will be randomly selected for each connection
+# 上游代理地址列表，用于负载均衡和故障切换
+# 指定多个地址时，每个连接会随机选择其中一个
 upstream_proxy_addrs = ["127.0.0.1:8080"]
 
-# Connection timeout in seconds for upstream proxy connections (default: 30 seconds)
+# 上游代理连接超时时间，单位秒（默认：30 秒）
 connect_timeout_secs = 30
 
-# Optional: Enable tokio-console for debugging
-# console_port = 6670
