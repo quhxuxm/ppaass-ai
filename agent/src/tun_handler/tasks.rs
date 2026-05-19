@@ -1,7 +1,9 @@
 use super::TunForwardContext;
 use super::dns_proxy::DnsProxy;
+use super::network::{address_for_tun_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
+use super::udp_relay::UdpRelay;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -129,6 +131,7 @@ pub(super) fn spawn_udp_sessions(
         let dns_proxy = context
             .proxy_dns
             .then(|| DnsProxy::spawn(context.pool.clone(), udp_tx.clone(), shutdown.clone()));
+        let udp_relay = UdpRelay::spawn(context.pool.clone(), udp_tx.clone(), shutdown.clone());
 
         loop {
             tokio::select! {
@@ -139,6 +142,29 @@ pub(super) fn spawn_udp_sessions(
                         if let Some(dns_proxy) = &dns_proxy {
                             dns_proxy.send(source_addr, target_addr, data).await;
                         }
+                        continue;
+                    }
+
+                    let (address, _) = address_for_tun_target(target_addr, context.proxy_dns);
+                    if context.tun_networks.is_ipv4_broadcast(target_addr.ip()) {
+                        debug!("TUN UDP 广播已丢弃 -> {}", target_addr);
+                        continue;
+                    }
+                    if let Err(e) = reject_tun_target(
+                        "UDP",
+                        source_addr,
+                        target_addr,
+                        context.tun_networks,
+                    ) {
+                        debug!("TUN UDP 目标已拒绝：{e}");
+                        continue;
+                    }
+                    if block_quic && target_addr.port() == 443 {
+                        debug!("TUN UDP/443 QUIC 已阻断 -> {}", target_addr);
+                        continue;
+                    }
+                    if !context.direct_checker.is_direct(&address) {
+                        udp_relay.send(source_addr, target_addr, data).await;
                         continue;
                     }
 

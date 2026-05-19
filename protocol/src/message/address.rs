@@ -6,6 +6,7 @@ pub enum Address {
     Ipv4 { addr: [u8; 4], port: u16 },
     Ipv6 { addr: [u8; 16], port: u16 },
     ProxyDns { port: u16 },
+    UdpRelay,
 }
 
 impl Address {
@@ -15,6 +16,7 @@ impl Address {
             Address::Ipv4 { port, .. } => *port,
             Address::Ipv6 { port, .. } => *port,
             Address::ProxyDns { port } => *port,
+            Address::UdpRelay => 0,
         }
     }
 }

@@ -13,6 +13,7 @@ mod route;
 mod tasks;
 mod tcp;
 mod udp;
+mod udp_relay;
 
 use crate::config::TunConfig;
 use crate::connection_pool::ConnectionPool;

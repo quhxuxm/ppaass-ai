@@ -8,6 +8,7 @@ mod envelope;
 mod message_type;
 mod proxy_request;
 mod proxy_response;
+mod udp_relay_packet;
 mod values;
 
 pub use address::Address;
@@ -20,4 +21,5 @@ pub use envelope::Message;
 pub use message_type::MessageType;
 pub use proxy_request::ProxyRequest;
 pub use proxy_response::ProxyResponse;
+pub use udp_relay_packet::UdpRelayPacket;
 pub use values::{MAX_MESSAGE_SIZE, PROTOCOL_VERSION};
