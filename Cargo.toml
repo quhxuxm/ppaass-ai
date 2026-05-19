@@ -1,5 +1,5 @@
 [workspace]
-members = ["agent", "proxy", "common", "protocol", "tests"]
+members = ["agent", "proxy", "common", "protocol", "tests", "android/native"]
 resolver = "2"
 
 [workspace.package]
