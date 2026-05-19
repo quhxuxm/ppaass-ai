@@ -39,7 +39,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
 #[cfg(windows)]
@@ -158,7 +158,7 @@ impl ServerConnection {
         proxy_config: &ProxyConfig,
         user_config: UserConfig,
     ) -> Result<()> {
-        info!("正在认证用户连接：{}", user_config.username);
+        debug!("正在认证用户连接：{}", user_config.username);
 
         // 使用 peek_auth_username 中读取到的待处理认证请求
         let auth_request = self
@@ -236,7 +236,7 @@ impl ServerConnection {
         // 更新后续消息使用的加密状态
         self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
-        info!("认证成功");
+        debug!("认证成功");
         Ok(())
     }
 
@@ -296,7 +296,7 @@ impl ServerConnection {
     }
 
     async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        info!("连接请求：{:?}", connect_request.address);
+        debug!("连接请求：{:?}", connect_request.address);
 
         // 检查用户带宽限制
         if let Some(user_config) = &self.user_config
@@ -358,19 +358,19 @@ impl ServerConnection {
             .filter(|addr| !addr.is_empty())
         {
             let target = endpoint_with_port(addr, port);
-            info!("DNS 请求使用 proxy 配置的上游 DNS：{target}");
+            debug!("DNS 请求使用 proxy 配置的上游 DNS：{target}");
             return Ok(target);
         }
 
         // 未配置时按当前系统 DNS 解析，保持默认行为贴近操作系统。
         let nameserver = system_dns_nameserver()?;
         let target = endpoint_with_port(&nameserver, port);
-        info!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
+        debug!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
         Ok(target)
     }
 
     async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        info!("正在将请求转发到上游代理");
+        debug!("正在将请求转发到上游代理");
 
         // 转发模式下 proxy 作为客户端连接下一跳 proxy，再把 agent 流量接过去。
         match UpstreamConnection::connect(
@@ -381,7 +381,7 @@ impl ServerConnection {
         .await
         {
             Ok(upstream_conn) => {
-                info!("已连接到上游代理");
+                debug!("已连接到上游代理");
                 // 只有上游连接成功后才回复 agent 连接成功。
                 self.send_connect_success(
                     connect_request.request_id.clone(),
@@ -417,7 +417,7 @@ impl ServerConnection {
             .await
         {
             Ok(Ok(mut target_stream)) => {
-                info!(
+                debug!(
                     "已连接到目标（TCP）：{}，出站设备={}",
                     target_addr,
                     self.proxy_config
@@ -459,7 +459,7 @@ impl ServerConnection {
     }
 
     async fn handle_udp_relay_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        info!("正在建立 UDP 共享中继");
+        debug!("正在建立 UDP 共享中继");
         self.send_connect_success(connect_request.request_id.clone(), "UDP relay connected")
             .await?;
 
@@ -677,7 +677,7 @@ impl ServerConnection {
         // UDP 也复用同一份出站状态，保持 TCP/UDP 的出口选择一致。
         match self.egress_state.connect_udp(target_addr).await {
             Ok(socket) => {
-                info!(
+                debug!(
                     "已连接到目标（UDP）：{}，出站设备={}",
                     target_addr,
                     self.proxy_config

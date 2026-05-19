@@ -89,14 +89,13 @@ impl tokio::io::AsyncWrite for ClientStream {
             return Poll::Ready(Ok(0));
         }
 
-        let packet = protocol::DataPacket {
-            stream_id: self.stream_id.clone(),
-            data: buf.to_vec(),
-            is_end: false,
-        };
-
         match Pin::new(&mut self.writer).poll_ready(cx) {
             Poll::Ready(Ok(())) => {
+                let packet = protocol::DataPacket {
+                    stream_id: self.stream_id.clone(),
+                    data: buf.to_vec(),
+                    is_end: false,
+                };
                 match Pin::new(&mut self.writer).start_send(ProxyRequest::Data(packet)) {
                     Ok(()) => Poll::Ready(Ok(buf.len())),
                     Err(e) => Poll::Ready(Err(std::io::Error::other(e))),

@@ -8,7 +8,7 @@ use crate::tun_handler::run_tun_mode;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 pub struct AgentServer {
     config: Arc<AgentConfig>,
@@ -70,7 +70,7 @@ impl AgentServer {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, addr)) => {
-                            info!("接受来自 {} 的连接", addr);
+                            debug!("接受来自 {} 的连接", addr);
                             // 每个客户端连接独立处理，复用共享连接池和直连规则。
                             let pool = self.pool.clone();
                             let direct_checker = self.direct_access_checker.clone();

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -62,7 +62,7 @@ pub(super) async fn handle_tun_udp(
     };
 
     if block_quic && !proxy_dns_request && target.port() == 443 {
-        info!(
+        debug!(
             "TUN UDP/443 QUIC 已阻断 -> {}，等待应用回退 TCP",
             target_label
         );
@@ -73,7 +73,7 @@ pub(super) async fn handle_tun_udp(
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         let target_str = address_to_string(&address);
-        info!("TUN UDP 直连 -> {}", target_str);
+        debug!("TUN UDP 直连 -> {}", target_str);
         relay_direct_udp(
             client,
             target,
@@ -88,9 +88,9 @@ pub(super) async fn handle_tun_udp(
 
     // 代理 UDP 路径通过连接池建立一个 UDP 语义的 proxy stream。
     if proxy_dns_request {
-        info!("TUN UDP DNS -> 代理 -> {}", target_label);
+        debug!("TUN UDP DNS -> 代理 -> {}", target_label);
     } else {
-        info!("TUN UDP -> 代理 -> {}", target_label);
+        debug!("TUN UDP -> 代理 -> {}", target_label);
     }
     let connected = pool
         .as_ref()
