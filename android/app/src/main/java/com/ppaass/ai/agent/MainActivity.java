@@ -8,6 +8,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.os.Build;
@@ -36,23 +37,29 @@ import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
+    private static final int COLOR_STOPPED = Color.rgb(46, 125, 50);
+    private static final int COLOR_RUNNING = Color.rgb(211, 47, 47);
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
     private EditText username;
     private EditText privateKey;
-    private EditText tunIpv4;
-    private EditText tunIpv6;
-    private EditText mtu;
     private Switch blockQuic;
     private TextView selectedAppsSummary;
-    private TextView status;
+    private Button selectAppsButton;
+    private Button vpnToggle;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
         buildUi();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateVpnToggle();
     }
 
     @Override
@@ -67,7 +74,7 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(20), dp(20), dp(28));
+        root.setPadding(dp(20), dp(32), dp(20), dp(28));
         scroll.addView(root);
 
         TextView title = new TextView(this);
@@ -83,54 +90,43 @@ public class MainActivity extends Activity {
                 DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
                 8,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        tunIpv4 = field(root, "TUN IPv4 CIDR", prefs.getString("tun_ipv4", DefaultConfig.TUN_IPV4));
-        tunIpv6 = field(root, "TUN IPv6 CIDR", prefs.getString("tun_ipv6", DefaultConfig.TUN_IPV6));
-        mtu = field(root, "MTU", prefs.getString("mtu", "1500"), 1, InputType.TYPE_CLASS_NUMBER);
 
         blockQuic = new Switch(this);
         blockQuic.setText("Block QUIC");
         blockQuic.setChecked(prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         root.addView(blockQuic, matchWrap());
 
-        Button selectApps = new Button(this);
-        selectApps.setText("Select VPN apps");
-        selectApps.setOnClickListener(view -> showAppSelector());
+        selectAppsButton = new Button(this);
+        selectAppsButton.setText("Select VPN apps");
+        selectAppsButton.setOnClickListener(view -> showAppSelector());
         selectedAppsSummary = new TextView(this);
         selectedAppsSummary.setTextSize(13f);
         selectedAppsSummary.setPadding(0, dp(4), 0, dp(10));
         updateSelectedAppsSummary();
-        root.addView(selectApps, matchWrap());
+        root.addView(selectAppsButton, matchWrap());
         root.addView(selectedAppsSummary, matchWrap());
 
-        Button start = new Button(this);
-        start.setText("Start");
-        start.setOnClickListener(view -> {
-            saveConfig();
-            Intent permissionIntent = VpnService.prepare(this);
-            if (permissionIntent != null) {
-                startActivityForResult(permissionIntent, VPN_PERMISSION_REQUEST);
-            } else {
-                startVpnService();
-            }
-        });
-
-        Button stop = new Button(this);
-        stop.setText("Stop");
-        stop.setOnClickListener(view -> {
-            Intent intent = new Intent(this, PpaassVpnService.class);
-            intent.setAction(PpaassVpnService.ACTION_STOP);
-            startService(intent);
-            status.setText("Stopped");
-        });
-
-        status = new TextView(this);
-        status.setText("Idle");
-        status.setTextSize(14f);
-        root.addView(start, matchWrap());
-        root.addView(stop, matchWrap());
-        root.addView(status, matchWrap());
+        vpnToggle = new Button(this);
+        vpnToggle.setOnClickListener(view -> toggleVpn());
+        updateVpnToggle();
+        root.addView(vpnToggle, matchWrap());
 
         setContentView(scroll);
+    }
+
+    private void toggleVpn() {
+        if (isVpnRunning()) {
+            stopVpnService();
+            return;
+        }
+
+        saveConfig();
+        Intent permissionIntent = VpnService.prepare(this);
+        if (permissionIntent != null) {
+            startActivityForResult(permissionIntent, VPN_PERMISSION_REQUEST);
+        } else {
+            startVpnService();
+        }
     }
 
     private void startVpnService() {
@@ -141,7 +137,58 @@ public class MainActivity extends Activity {
         } else {
             startService(intent);
         }
-        status.setText("Starting");
+        setVpnRunning(true);
+        updateVpnToggle();
+    }
+
+    private void stopVpnService() {
+        Intent intent = new Intent(this, PpaassVpnService.class);
+        intent.setAction(PpaassVpnService.ACTION_STOP);
+        startService(intent);
+        setVpnRunning(false);
+        updateVpnToggle();
+    }
+
+    private boolean isVpnRunning() {
+        return prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false);
+    }
+
+    private void setVpnRunning(boolean running) {
+        prefs.edit().putBoolean(PpaassVpnService.PREF_RUNNING, running).apply();
+    }
+
+    private void updateVpnToggle() {
+        if (vpnToggle == null) {
+            return;
+        }
+
+        boolean running = isVpnRunning();
+        vpnToggle.setText(running ? "Stop" : "Start");
+        vpnToggle.setTextColor(Color.WHITE);
+        vpnToggle.setBackgroundColor(running ? COLOR_RUNNING : COLOR_STOPPED);
+        updateConfigEditability(!running);
+    }
+
+    private void updateConfigEditability(boolean editable) {
+        updateEditTextEditable(proxyAddrs, editable);
+        updateEditTextEditable(username, editable);
+        updateEditTextEditable(privateKey, editable);
+        if (blockQuic != null) {
+            blockQuic.setEnabled(editable);
+        }
+        if (selectAppsButton != null) {
+            selectAppsButton.setEnabled(editable);
+        }
+    }
+
+    private void updateEditTextEditable(EditText editText, boolean editable) {
+        if (editText == null) {
+            return;
+        }
+        editText.setEnabled(editable);
+        editText.setFocusable(editable);
+        editText.setFocusableInTouchMode(editable);
+        editText.setCursorVisible(editable);
     }
 
     private void saveConfig() {
@@ -149,9 +196,9 @@ public class MainActivity extends Activity {
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
-                .putString("tun_ipv4", tunIpv4.getText().toString())
-                .putString("tun_ipv6", tunIpv6.getText().toString())
-                .putString("mtu", mtu.getText().toString())
+                .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
+                .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
+                .putString("mtu", "1500")
                 .putBoolean("block_quic", blockQuic.isChecked())
                 .apply();
     }
@@ -289,11 +336,11 @@ public class MainActivity extends Activity {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("All apps use VPN except PPAASS Agent.");
+            selectedAppsSummary.setText("No apps selected: all system traffic uses VPN. PPAASS Agent is excluded.");
             return;
         }
 
-        selectedAppsSummary.setText(selected.size() + " app(s) selected.");
+        selectedAppsSummary.setText(selected.size() + " app(s) selected: only selected apps use VPN.");
     }
 
     private final class AppListAdapter extends BaseAdapter {

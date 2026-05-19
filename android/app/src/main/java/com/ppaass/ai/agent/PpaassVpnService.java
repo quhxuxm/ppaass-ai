@@ -24,6 +24,7 @@ import java.util.Set;
 public class PpaassVpnService extends VpnService {
     public static final String ACTION_START = "com.ppaass.ai.agent.START";
     public static final String ACTION_STOP = "com.ppaass.ai.agent.STOP";
+    public static final String PREF_RUNNING = "vpn_running";
 
     private static final String CHANNEL_ID = "ppaass_vpn";
     private static final int NOTIFICATION_ID = 7001;
@@ -49,6 +50,7 @@ public class PpaassVpnService extends VpnService {
 
     private void startAgent() {
         if (nativeHandle != 0) {
+            setRunning(true);
             return;
         }
 
@@ -86,6 +88,7 @@ public class PpaassVpnService extends VpnService {
             int rawFd = tun.detachFd();
             tun = null;
             nativeHandle = NativeAgent.start(rawFd, config.toString());
+            setRunning(true);
         } catch (RuntimeException | JSONException error) {
             stopAgent();
             throw new IllegalStateException("Failed to start PPAASS VPN", error);
@@ -105,7 +108,15 @@ public class PpaassVpnService extends VpnService {
             tun = null;
         }
         stopForeground(STOP_FOREGROUND_REMOVE);
+        setRunning(false);
         stopSelf();
+    }
+
+    private void setRunning(boolean running) {
+        getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_RUNNING, running)
+                .apply();
     }
 
     private JSONObject buildConfigJson() throws JSONException {
@@ -132,6 +143,14 @@ public class PpaassVpnService extends VpnService {
         Set<String> selected = new HashSet<>(prefs.getStringSet("vpn_apps", Collections.emptySet()));
         selected.remove(getPackageName());
 
+        if (selected.isEmpty()) {
+            try {
+                builder.addDisallowedApplication(getPackageName());
+            } catch (PackageManager.NameNotFoundException ignored) {
+            }
+            return;
+        }
+
         int allowed = 0;
         for (String packageName : selected) {
             try {
@@ -142,10 +161,7 @@ public class PpaassVpnService extends VpnService {
         }
 
         if (allowed == 0) {
-            try {
-                builder.addDisallowedApplication(getPackageName());
-            } catch (PackageManager.NameNotFoundException ignored) {
-            }
+            throw new IllegalStateException("No selected VPN apps are installed");
         }
     }
 
