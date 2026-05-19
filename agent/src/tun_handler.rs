@@ -98,6 +98,7 @@ pub async fn run_tun_mode(
         direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
+        proxy_bind_interface.clone(),
         shutdown.clone(),
     );
     let udp_task = spawn_udp_sessions(
@@ -107,10 +108,17 @@ pub async fn run_tun_mode(
         tun_networks,
         proxy_dns,
         block_quic,
+        proxy_bind_interface.clone(),
         shutdown.clone(),
     );
     let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
-    let dns_guard = DnsGuard::install(proxy_dns, proxy_bind_interface.as_ref(), ipv4);
+    let dns_server = tun_dns_server(ipv4, ipv4_prefix);
+    let dns_guard = DnsGuard::install(
+        proxy_dns,
+        proxy_bind_interface.as_ref(),
+        tun_if_index,
+        dns_server,
+    );
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
@@ -124,6 +132,41 @@ pub async fn run_tun_mode(
 
     info!("TUN 模式转发器已停止");
     Ok(())
+}
+
+#[cfg(windows)]
+fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Addr {
+    // Windows treats the TUN adapter address itself as local, so DNS queries sent to
+    // that IP can be consumed by the host instead of entering Wintun. Pick another
+    // usable address in the same TUN subnet so packets are delivered to netstack.
+    if ipv4_prefix >= 31 {
+        return ipv4;
+    }
+
+    let mask = if ipv4_prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - ipv4_prefix)
+    };
+    let network = u32::from(ipv4) & mask;
+    let broadcast = network | !mask;
+    let local = u32::from(ipv4);
+
+    let candidates = [network.saturating_add(1), network.saturating_add(2)];
+    for candidate in candidates {
+        if candidate != network && candidate != broadcast && candidate != local {
+            let dns = std::net::Ipv4Addr::from(candidate);
+            info!("Windows TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
+            return dns;
+        }
+    }
+
+    ipv4
+}
+
+#[cfg(not(windows))]
+fn tun_dns_server(ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> std::net::Ipv4Addr {
+    ipv4
 }
 
 fn create_tun_device(

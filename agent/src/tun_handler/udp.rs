@@ -3,14 +3,16 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::Result;
 use crate::telemetry;
+use common::{BindInterface, bind_socket_to_interface};
 use futures::SinkExt;
 use protocol::TransportProtocol;
-use std::net::SocketAddr;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -22,6 +24,7 @@ pub(super) struct UdpSessionContext {
     pub(super) netstack_tx: UdpWriter,
     pub(super) pool: Arc<ConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
+    pub(super) direct_bind_interface: Option<BindInterface>,
 }
 
 pub(super) async fn handle_tun_udp(
@@ -38,6 +41,7 @@ pub(super) async fn handle_tun_udp(
         netstack_tx,
         pool,
         direct_checker,
+        direct_bind_interface,
     } = context;
 
     // UDP 目标同样先处理 proxy DNS 虚拟地址。
@@ -70,7 +74,15 @@ pub(super) async fn handle_tun_udp(
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         let target_str = address_to_string(&address);
         info!("TUN UDP 直连 -> {}", target_str);
-        relay_direct_udp(client, target, target_str, target_label, rx, netstack_tx).await?;
+        relay_direct_udp(
+            client,
+            target,
+            target_label,
+            rx,
+            netstack_tx,
+            direct_bind_interface,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -88,8 +100,14 @@ pub(super) async fn handle_tun_udp(
     let (mut reader, mut writer) = tokio::io::split(proxy_io);
 
     // 写方向：同一 UDP 会话的 payload 从 channel 进入 proxy stream。
+    let write_target = target_label.clone();
     let write = async move {
         while let Some(data) = rx.recv().await {
+            trace!(
+                "UDP 代理写入 payload -> {} bytes={}",
+                write_target,
+                data.len()
+            );
             if let Err(e) = writer.write_all(&data).await {
                 debug!("UDP 代理写入错误：{e}");
                 break;
@@ -98,6 +116,7 @@ pub(super) async fn handle_tun_udp(
         }
     };
     let netstack_tx_r = netstack_tx.clone();
+    let read_target = target_label.clone();
     // 读方向：proxy 返回的 payload 重新写回 netstack 的 UDP 发送半边。
     let read = async move {
         let mut buf = vec![0u8; 65535];
@@ -105,6 +124,10 @@ pub(super) async fn handle_tun_udp(
             match reader.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
+                    trace!(
+                        "UDP 代理读取回复 <- {} bytes={} 写回 {} -> {}",
+                        read_target, n, target, client
+                    );
                     let pkt = buf[..n].to_vec();
                     let mut s = netstack_tx_r.lock().await;
                     if let Err(e) = s.send((pkt, target, client)).await {
@@ -132,14 +155,14 @@ pub(super) async fn handle_tun_udp(
 async fn relay_direct_udp(
     client: SocketAddr,
     target: SocketAddr,
-    target_str: String,
     target_label: String,
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
+    direct_bind_interface: Option<BindInterface>,
 ) -> Result<()> {
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    socket.connect(&target_str).await?;
+    let socket = bind_direct_udp(target, direct_bind_interface.as_ref())?;
+    socket.connect(target).await?;
     let socket = Arc::new(socket);
 
     let socket_w = socket.clone();
@@ -180,6 +203,29 @@ async fn relay_direct_udp(
     }
     telemetry::emit_traffic("TUN UDP (直连)", target_label, 0, 0);
     Ok(())
+}
+
+fn bind_direct_udp(
+    target: SocketAddr,
+    bind_interface: Option<&BindInterface>,
+) -> std::io::Result<UdpSocket> {
+    let socket = Socket::new(
+        Domain::for_address(target),
+        Type::DGRAM,
+        Some(Protocol::UDP),
+    )?;
+    bind_socket_to_interface(&socket, bind_interface, target)?;
+
+    let bind_addr = if target.is_ipv4() {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+    } else {
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+    };
+    socket.bind(&SockAddr::from(bind_addr))?;
+    socket.set_nonblocking(true)?;
+
+    let std_socket: std::net::UdpSocket = socket.into();
+    UdpSocket::from_std(std_socket)
 }
 
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {

@@ -42,6 +42,7 @@ tun-rs.workspace = true
 netstack-smoltcp.workspace = true
 route_manager.workspace = true
 if-addrs.workspace = true
+socket2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

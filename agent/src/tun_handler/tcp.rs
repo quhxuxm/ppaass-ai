@@ -3,11 +3,13 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
+use common::{BindInterface, bind_socket_to_interface};
 use protocol::TransportProtocol;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tracing::{debug, info};
 
 pub(super) async fn handle_tun_tcp(
@@ -18,6 +20,7 @@ pub(super) async fn handle_tun_tcp(
     proxy_dns: bool,
     pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
+    direct_bind_interface: Option<BindInterface>,
 ) -> Result<()> {
     // 先把 TUN 目标地址转成代理协议地址，并处理 proxy DNS 特例。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
@@ -35,7 +38,7 @@ pub(super) async fn handle_tun_tcp(
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = address_to_string(&address);
         info!("TUN TCP 直连 -> {}", target_str);
-        let mut target = TcpStream::connect(&target_str)
+        let mut target = connect_direct_tcp(target, direct_bind_interface.as_ref())
             .await
             .map_err(|e| AgentError::Connection(format!("直连 {target_str} 失败：{e}")))?;
         match tokio::io::copy_bidirectional(&mut client, &mut target).await {
@@ -68,4 +71,20 @@ pub(super) async fn handle_tun_tcp(
     }
     let _ = client.shutdown().await;
     Ok(())
+}
+
+async fn connect_direct_tcp(
+    target: SocketAddr,
+    bind_interface: Option<&BindInterface>,
+) -> std::io::Result<TcpStream> {
+    let socket = Socket::new(
+        Domain::for_address(target),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    bind_socket_to_interface(&socket, bind_interface, target)?;
+    socket.set_nonblocking(true)?;
+
+    let socket = TcpSocket::from_std_stream(socket.into());
+    socket.connect(target).await
 }

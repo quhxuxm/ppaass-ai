@@ -119,20 +119,15 @@ impl RouteGuard {
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
 
-        let (default_v4_gw, default_v4_if) = match mgr.list() {
-            Ok(routes) => find_default_route(&routes, false),
+        let routes = match mgr.list() {
+            Ok(routes) => routes,
             Err(e) => {
                 warn!("无法列出当前路由：{e}");
-                (None, None)
+                Vec::new()
             }
         };
-        let (default_v6_gw, default_v6_if) = match mgr.list() {
-            Ok(routes) => find_default_route(&routes, true),
-            Err(e) => {
-                warn!("无法列出当前 IPv6 路由：{e}");
-                (None, None)
-            }
-        };
+        let (default_v4_gw, default_v4_if) = find_default_route(&routes, false);
+        let (default_v6_gw, default_v6_if) = find_default_route(&routes, true);
         info!(
             "现有默认路由：v4 网关={:?} 接口={:?}，v6 网关={:?} 接口={:?}",
             default_v4_gw, default_v4_if, default_v6_gw, default_v6_if
@@ -144,21 +139,25 @@ impl RouteGuard {
             // 给每个 proxy IP 安装最具体的主机路由，使 agent 到 proxy 绕过 TUN。
             let route = match ip {
                 IpAddr::V4(v4) => {
+                    let (gateway, if_index) =
+                        route_next_hop(&routes, *ip, default_v4_gw, default_v4_if);
                     let mut r = Route::new(IpAddr::V4(*v4), 32);
-                    if let Some(gw) = default_v4_gw {
+                    if let Some(gw) = gateway {
                         r = r.with_gateway(gw);
                     }
-                    if let Some(idx) = default_v4_if {
+                    if let Some(idx) = if_index {
                         r = r.with_if_index(idx);
                     }
                     r
                 }
                 IpAddr::V6(v6) => {
+                    let (gateway, if_index) =
+                        route_next_hop(&routes, *ip, default_v6_gw, default_v6_if);
                     let mut r = Route::new(IpAddr::V6(*v6), 128);
-                    if let Some(gw) = default_v6_gw {
+                    if let Some(gw) = gateway {
                         r = r.with_gateway(gw);
                     }
-                    if let Some(idx) = default_v6_if {
+                    if let Some(idx) = if_index {
                         r = r.with_if_index(idx);
                     }
                     r
@@ -255,31 +254,42 @@ fn install_ipv6_split_routes(
 /// 返回 (网关, if_index) 以供安装旁路路由使用。
 /// `want_v6 == true` 时查找 ::/0 而非 0.0.0.0/0。
 fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpAddr>, Option<u32>) {
-    for r in routes {
-        if r.prefix() != 0 {
-            continue;
-        }
-        let is_v6 = matches!(r.destination(), IpAddr::V6(_));
-        if is_v6 != want_v6 {
-            continue;
-        }
-        let dest_unspec = match r.destination() {
-            IpAddr::V4(v4) => v4.is_unspecified(),
-            IpAddr::V6(v6) => v6.is_unspecified(),
-        };
-        if !dest_unspec {
-            continue;
-        }
-        return (r.gateway(), r.if_index());
-    }
-    (None, None)
+    routes
+        .iter()
+        .filter(|route| {
+            if route.prefix() != 0 {
+                return false;
+            }
+            let is_v6 = matches!(route.destination(), IpAddr::V6(_));
+            if is_v6 != want_v6 {
+                return false;
+            }
+            match route.destination() {
+                IpAddr::V4(v4) => v4.is_unspecified(),
+                IpAddr::V6(v6) => v6.is_unspecified(),
+            }
+        })
+        .max_by(|left, right| left.cmp(right))
+        .map(|route| (route.gateway(), route.if_index()))
+        .unwrap_or((None, None))
+}
+
+fn route_next_hop(
+    routes: &[Route],
+    dst: IpAddr,
+    fallback_gateway: Option<IpAddr>,
+    fallback_if_index: Option<u32>,
+) -> (Option<IpAddr>, Option<u32>) {
+    best_route(routes, dst)
+        .map(|route| (route.gateway(), route.if_index()))
+        .unwrap_or((fallback_gateway, fallback_if_index))
 }
 
 fn best_route(routes: &[Route], dst: IpAddr) -> Option<&Route> {
     routes
         .iter()
         .filter(|route| route.destination().is_ipv4() == dst.is_ipv4() && route.contains(&dst))
-        .max_by_key(|route| route.prefix())
+        .max_by(|left, right| left.cmp(right))
 }
 
 fn route_bind_interface(route: &Route) -> Option<BindInterface> {

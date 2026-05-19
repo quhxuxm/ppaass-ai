@@ -5,16 +5,16 @@ REM Assumes agent.exe and agent.toml are in the same directory as this script.
 
 cd /d "%~dp0"
 
+fltmc >nul 2>&1
+if errorlevel 1 (
+  echo Requesting Administrator privileges...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
+  exit /b
+)
+
 if not exist "agent.exe" (
   echo Error: agent.exe not found in script directory.
   exit /b 1
-)
-
-fltmc >nul 2>&1
-if errorlevel 1 (
-  echo Requesting Administrator privileges for TUN mode...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
-  exit /b
 )
 
 set "CONFIG_PATH=agent.toml"

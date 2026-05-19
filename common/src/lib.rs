@@ -3,6 +3,7 @@ pub mod error;
 
 pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
+    bind_socket_to_interface,
 };
 pub use error::{CommonError, Result};
 
