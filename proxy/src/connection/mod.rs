@@ -31,11 +31,12 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(windows)]
 use std::ptr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
 #[cfg(windows)]
@@ -236,11 +237,28 @@ impl ServerConnection {
         Ok(())
     }
 
-    pub async fn handle_request(&mut self) -> Result<()> {
+    pub async fn handle_request(
+        &mut self,
+        initial_request_timeout: Duration,
+        username: &str,
+    ) -> Result<()> {
         // 只循环处理初始请求（认证、连接）。
         // 一旦连接成功，就移交给中继并返回。
         loop {
-            match self.read_request().await? {
+            let request =
+                match tokio::time::timeout(initial_request_timeout, self.read_request()).await {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        warn!(
+                            "用户 '{}' 的连接等待请求超时（{} 秒），正在关闭以防止泄漏",
+                            username,
+                            initial_request_timeout.as_secs()
+                        );
+                        return Ok(());
+                    }
+                };
+
+            match request {
                 Some(ProxyRequest::Connect(connect_request)) => {
                     debug!(
                         "[连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",

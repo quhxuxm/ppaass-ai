@@ -159,16 +159,8 @@ async fn handle_connection(
         }
     };
 
-    // 对 handle_request 应用空闲超时，防止预热连接从未发送连接请求导致连接泄漏
+    // 仅将空闲超时用于“已认证但尚未发送连接请求”的预热连接。
+    // 连接请求到达后，后续中继不应再受该超时限制。
     let idle_timeout = Duration::from_secs(proxy_config.idle_connection_timeout_secs);
-    match tokio::time::timeout(idle_timeout, connection.handle_request()).await {
-        Ok(result) => result,
-        Err(_) => {
-            warn!(
-                "用户 '{}' 的连接等待请求超时（{} 秒），正在关闭以防止泄漏",
-                username, proxy_config.idle_connection_timeout_secs
-            );
-            Ok(())
-        }
-    }
+    connection.handle_request(idle_timeout, &username).await
 }

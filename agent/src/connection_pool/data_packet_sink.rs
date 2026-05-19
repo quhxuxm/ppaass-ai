@@ -14,12 +14,17 @@ type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
 pub struct DataPacketSink {
     writer: FramedWriter,
     stream_id: String,
+    end_sent: bool,
 }
 
 impl DataPacketSink {
     pub fn new(writer: FramedWriter, stream_id: String) -> Self {
         // Sink 绑定单个 stream_id，写入的字节都会发到同一个代理目标流。
-        Self { writer, stream_id }
+        Self {
+            writer,
+            stream_id,
+            end_sent: false,
+        }
     }
 
     fn create_data_request(&self, data: &[u8], is_end: bool) -> ProxyRequest {
@@ -61,22 +66,25 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // 首先发送流结束消息，让 proxy 关闭对应目标流。
-        let this = self.as_mut().get_mut();
-        let request = this.create_data_request(&[], true);
+        if !self.end_sent {
+            let this = self.as_mut().get_mut();
+            let request = this.create_data_request(&[], true);
 
-        let writer = Pin::new(&mut this.writer);
-        match writer.poll_ready(cx) {
-            Poll::Ready(Ok(())) => {
-                let writer = Pin::new(&mut this.writer);
-                writer
-                    .start_send(request)
-                    .map_err(|e| io::Error::other(e.to_string()))?;
-            }
-            Poll::Ready(Err(e)) => {
-                return Poll::Ready(Err(io::Error::other(e.to_string())));
-            }
-            Poll::Pending => {
-                return Poll::Pending;
+            let writer = Pin::new(&mut this.writer);
+            match writer.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    let writer = Pin::new(&mut this.writer);
+                    writer
+                        .start_send(request)
+                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    this.end_sent = true;
+                }
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(io::Error::other(e.to_string())));
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
             }
         }
 

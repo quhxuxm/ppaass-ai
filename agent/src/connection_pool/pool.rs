@@ -231,8 +231,8 @@ impl ConnectionPool {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
-        let conn = loop {
-            match self.pool.try_remove() {
+        loop {
+            let (conn, from_pool) = match self.pool.try_remove() {
                 Ok(conn) => {
                     // 取出的连接会被本次请求消费，不再归还池中。
                     self.available.fetch_sub(1, Ordering::AcqRel);
@@ -243,22 +243,43 @@ impl ConnectionPool {
                         continue;
                     }
                     debug!("使用池中的预热连接");
-                    break conn;
+                    (conn, true)
                 }
                 Err(_) => {
                     // 池为空时走按需创建，保证请求不依赖预热成功。
                     self.refill_notify.notify_one();
                     debug!("无可用预热连接，创建新连接");
-                    break ProxyConnection::new(
-                        &self.config,
-                        self.get_proxy_bind_ip(),
-                        self.get_proxy_bind_interface(),
+                    (
+                        ProxyConnection::new(
+                            &self.config,
+                            self.get_proxy_bind_ip(),
+                            self.get_proxy_bind_interface(),
+                        )
+                        .await?,
+                        false,
                     )
-                    .await?;
                 }
-            }
-        };
+            };
 
-        conn.connect_target(address, transport).await
+            let connect_result = conn.connect_target(address.clone(), transport).await;
+            match connect_result {
+                Ok(stream) => return Ok(stream),
+                Err(err) if from_pool && should_retry_pooled_connect_error(&err) => {
+                    warn!("预热代理连接不可用，已丢弃并重试：{}", err);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+fn should_retry_pooled_connect_error(err: &crate::error::AgentError) -> bool {
+    match err {
+        // 代理明确返回 ConnectResponse 失败时，多半是目标不可达、带宽限制或上游错误，
+        // 重试同一个目标不会修复这类业务失败。
+        crate::error::AgentError::Connection(message) => !message.starts_with("连接失败:"),
+        crate::error::AgentError::Io(_) | crate::error::AgentError::Protocol(_) => true,
+        _ => false,
     }
 }

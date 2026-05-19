@@ -8,6 +8,7 @@ use protocol::{
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
@@ -24,6 +25,7 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 pub struct AuthenticatedConnection {
     writer: FramedWriter,
     reader: FramedReader,
+    timeout: Duration,
 }
 
 impl AuthenticatedConnection {
@@ -122,7 +124,11 @@ impl AuthenticatedConnection {
             ));
         }
 
-        Ok(Self { writer, reader })
+        Ok(Self {
+            writer,
+            reader,
+            timeout,
+        })
     }
 
     /// 通过已认证的连接连接到目标
@@ -140,23 +146,33 @@ impl AuthenticatedConnection {
         };
 
         debug!("向远端代理发送连接请求：{connect_request:?}");
-        self.writer
-            .send(ProxyRequest::Connect(connect_request))
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let response = match tokio::time::timeout(self.timeout, async {
+            self.writer
+                .send(ProxyRequest::Connect(connect_request))
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        // 7. 读取连接响应
-        let response = self
-            .reader
-            .next()
-            .await
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
-                    "连接期间远端关闭了连接",
-                )
-            })
-            .and_then(|r| r)?;
+            self.reader
+                .next()
+                .await
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::ConnectionAborted,
+                        "连接期间远端关闭了连接",
+                    )
+                })
+                .and_then(|r| r)
+        })
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "连接目标响应超时",
+                ));
+            }
+        };
         debug!("已通过远端代理连接到目标: {response:?}");
         if let ProxyResponse::Connect(connect_resp) = response {
             if !connect_resp.success {
@@ -177,6 +193,7 @@ impl AuthenticatedConnection {
             ClientStream {
                 writer: self.writer,
                 reader: self.reader,
+                end_sent: false,
                 stream_id: request_id.clone(),
                 read_buf: Vec::new(),
                 read_pos: 0,
