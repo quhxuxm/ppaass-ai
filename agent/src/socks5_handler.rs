@@ -9,13 +9,16 @@ use fast_socks5::server::{
 };
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
-use protocol::{Address, TransportProtocol};
+use protocol::{Address, TransportProtocol, UdpRelayPacket};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Sender, channel};
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[instrument(skip(stream, pool, direct_checker))]
 pub async fn handle_socks5_connection(
@@ -372,6 +375,7 @@ async fn process_udp_traffic(
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<String, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
+    let udp_relay = SocksUdpRelay::spawn(pool.clone(), udp_socket.clone());
 
     loop {
         // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。
@@ -489,92 +493,10 @@ async fn process_udp_traffic(
                     info!("直连 UDP 会话结束: {:?}", dest_addr_clone);
                 });
             } else {
-                // === 代理 UDP 路径（现有逻辑）===
-                match pool
-                    .as_ref()
-                    .get_connected_stream(dest_addr.clone(), TransportProtocol::Udp)
-                    .await
-                {
-                    Ok(connected_stream) => {
-                        let (tx, mut rx) = channel::<Vec<u8>>(32);
-                        streams.insert(dest_key.clone(), tx);
-                        let udp_socket_clone = udp_socket.clone();
-                        let dest_addr_clone = dest_addr.clone();
-                        let streams_clone = streams.clone();
-                        let dest_key_clone = dest_key.clone();
-                        tokio::spawn(async move {
-                            // 使用 AsyncRead + AsyncWrite 包装器将数据正确编码为 DataPacket 消息
-
-                            let proxy_io = connected_stream.into_async_io();
-                            let (mut reader, mut writer) = tokio::io::split(proxy_io);
-                            // 客户端 UDP payload 写入 proxy stream。
-                            let write_task = async {
-                                while let Some(data) = rx.recv().await {
-                                    use tokio::io::AsyncWriteExt;
-                                    trace!(
-                                        "写入 UDP 数据到代理，目标: {dest_addr:?}\n{}",
-                                        pretty_hex::pretty_hex(&data)
-                                    );
-                                    if let Err(e) = writer.write_all(&data).await {
-                                        error!("写入代理 UDP 流失败: {}", e);
-                                        break;
-                                    }
-                                    if let Err(e) = writer.flush().await {
-                                        error!("刷新代理 UDP 流失败: {}", e);
-                                        break;
-                                    }
-                                }
-                            };
-                            // proxy 返回 payload 后加回 SOCKS5 UDP 头并发送给客户端。
-                            let read_task = async {
-                                let mut read_buf = [0u8; 65535];
-                                loop {
-                                    debug!("等待从目标接收 UDP 数据包: {dest_addr:?}",);
-                                    match reader.read(&mut read_buf).await {
-                                        Ok(0) => break,
-                                        Ok(len) => {
-                                            let data = &read_buf[..len];
-                                            trace!(
-                                                "从代理读取 UDP 数据，目标: {dest_addr:?}\n{}",
-                                                pretty_hex::pretty_hex(&data)
-                                            );
-                                            match create_udp_packet(&dest_addr_clone, data) {
-                                                Ok(packet) => {
-                                                    if let Err(e) = udp_socket_clone
-                                                        .send_to(&packet, client_addr)
-                                                        .await
-                                                    {
-                                                        error!(
-                                                            "发送 UDP 数据包到客户端失败: {}",
-                                                            e
-                                                        );
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    error!("创建 UDP 数据包失败: {}", e);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("从代理 UDP 流读取错误: {}", e);
-                                            break;
-                                        }
-                                    }
-                                }
-                            };
-                            tokio::select! {
-                                _ = write_task => {}
-                                _ = read_task => {}
-                            }
-                            streams_clone.remove(&dest_key_clone);
-                            info!("UDP 会话结束: {:?}", dest_addr_clone);
-                        });
-                    }
-                    Err(e) => {
-                        error!("连接代理用于 UDP 失败: {}", e);
-                        continue;
-                    }
-                }
+                udp_relay
+                    .send(client_addr, dest_addr.clone(), payload)
+                    .await;
+                continue;
             }
         }
         // 当前 datagram 投递给目标会话；若会话刚创建，首包也会走这里。
@@ -583,6 +505,239 @@ async fn process_udp_traffic(
             let _ = sender.send(payload).await;
         }
     }
+}
+
+const SOCKS_UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+
+struct SocksUdpRelay {
+    tx: tokio::sync::mpsc::Sender<SocksUdpRelayRequest>,
+}
+
+#[derive(Clone)]
+struct SocksUdpRelayRequest {
+    client: SocketAddr,
+    target: Address,
+    packet: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq)]
+struct SocksUdpFlowKey {
+    client: SocketAddr,
+    target: String,
+}
+
+impl PartialEq for SocksUdpFlowKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.client == other.client && self.target == other.target
+    }
+}
+
+impl Hash for SocksUdpFlowKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.client.hash(state);
+        self.target.hash(state);
+    }
+}
+
+struct SocksUdpRelayState {
+    flow_ids: HashMap<SocksUdpFlowKey, u64>,
+    flows: HashMap<u64, (SocketAddr, Address)>,
+    next_flow_id: u64,
+}
+
+impl SocksUdpRelayState {
+    fn new() -> Self {
+        Self {
+            flow_ids: HashMap::new(),
+            flows: HashMap::new(),
+            next_flow_id: 1,
+        }
+    }
+
+    fn flow_id(&mut self, client: SocketAddr, target: &Address) -> u64 {
+        let key = SocksUdpFlowKey {
+            client,
+            target: format!("{target:?}"),
+        };
+        if let Some(id) = self.flow_ids.get(&key) {
+            return *id;
+        }
+
+        let id = self.next_available_flow_id();
+        self.flow_ids.insert(key, id);
+        self.flows.insert(id, (client, target.clone()));
+        id
+    }
+
+    fn flow(&self, flow_id: u64) -> Option<&(SocketAddr, Address)> {
+        self.flows.get(&flow_id)
+    }
+
+    fn next_available_flow_id(&mut self) -> u64 {
+        loop {
+            let id = self.next_flow_id;
+            self.next_flow_id = self.next_flow_id.wrapping_add(1).max(1);
+            if !self.flows.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+}
+
+impl SocksUdpRelay {
+    fn spawn(pool: Arc<ConnectionPool>, udp_socket: Arc<UdpSocket>) -> Arc<Self> {
+        let (tx, rx) = tokio::sync::mpsc::channel(SOCKS_UDP_RELAY_CHANNEL_SIZE);
+        tokio::spawn(run_socks_udp_relay(pool, udp_socket, rx));
+        Arc::new(Self { tx })
+    }
+
+    async fn send(&self, client: SocketAddr, target: Address, packet: Vec<u8>) {
+        if self
+            .tx
+            .send(SocksUdpRelayRequest {
+                client,
+                target,
+                packet,
+            })
+            .await
+            .is_err()
+        {
+            debug!("SOCKS5 UDP 共享转发器已关闭，丢弃请求");
+        }
+    }
+}
+
+async fn run_socks_udp_relay(
+    pool: Arc<ConnectionPool>,
+    udp_socket: Arc<UdpSocket>,
+    mut rx: tokio::sync::mpsc::Receiver<SocksUdpRelayRequest>,
+) {
+    let mut state = SocksUdpRelayState::new();
+    let mut retry_request = None;
+    let mut reconnect_delay = Duration::from_millis(200);
+
+    loop {
+        let first_request = match retry_request.take() {
+            Some(request) => request,
+            None => {
+                let Some(request) = rx.recv().await else {
+                    break;
+                };
+                request
+            }
+        };
+
+        let connected = connect_socks_udp_relay_stream(&pool).await;
+        let proxy_io = match connected {
+            Ok(proxy_io) => {
+                reconnect_delay = Duration::from_millis(200);
+                proxy_io
+            }
+            Err(e) => {
+                warn!("SOCKS5 UDP 共享连接创建失败：{e}");
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(5));
+                retry_request = Some(first_request);
+                continue;
+            }
+        };
+
+        info!("SOCKS5 UDP 已建立共享 proxy 连接");
+        let (mut reader, mut writer) = tokio::io::split(proxy_io);
+        retry_request = Some(first_request);
+        let mut response_buf = vec![0u8; 65535];
+
+        loop {
+            if let Some(request) = retry_request.take() {
+                if let Err(e) = send_socks_udp_request(&mut writer, &mut state, &request).await {
+                    debug!("SOCKS5 UDP 共享连接写入失败：{e}");
+                    retry_request = Some(request);
+                    break;
+                }
+                continue;
+            }
+
+            tokio::select! {
+                maybe_request = rx.recv() => {
+                    let Some(request) = maybe_request else { return };
+                    if let Err(e) = send_socks_udp_request(&mut writer, &mut state, &request).await {
+                        debug!("SOCKS5 UDP 共享连接写入失败：{e}");
+                        retry_request = Some(request);
+                        break;
+                    }
+                }
+                read = reader.read(&mut response_buf) => {
+                    match read {
+                        Ok(0) => {
+                            debug!("SOCKS5 UDP 共享连接已关闭");
+                            break;
+                        }
+                        Ok(n) => {
+                            if let Err(e) = handle_socks_udp_response(
+                                &udp_socket,
+                                &state,
+                                &response_buf[..n],
+                            ).await {
+                                debug!("SOCKS5 UDP 回复写回失败：{e}");
+                            }
+                        }
+                        Err(e) => {
+                            debug!("SOCKS5 UDP 共享连接读取失败：{e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("SOCKS5 UDP 共享转发器退出");
+}
+
+async fn connect_socks_udp_relay_stream(
+    pool: &ConnectionPool,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
+    let connected = pool
+        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+        .await?;
+    Ok(connected.into_async_io())
+}
+
+async fn send_socks_udp_request<W>(
+    writer: &mut W,
+    state: &mut SocksUdpRelayState,
+    request: &SocksUdpRelayRequest,
+) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let flow_id = state.flow_id(request.client, &request.target);
+    let packet = UdpRelayPacket {
+        flow_id,
+        address: request.target.clone(),
+        data: request.packet.clone(),
+    }
+    .encode()
+    .map_err(std::io::Error::other)?;
+
+    writer.write_all(&packet).await?;
+    writer.flush().await
+}
+
+async fn handle_socks_udp_response(
+    udp_socket: &UdpSocket,
+    state: &SocksUdpRelayState,
+    response: &[u8],
+) -> std::io::Result<()> {
+    let packet = UdpRelayPacket::decode(response).map_err(std::io::Error::other)?;
+    let Some((client, target)) = state.flow(packet.flow_id) else {
+        debug!("SOCKS5 UDP 收到无匹配 flow 的回复 id={}", packet.flow_id);
+        return Ok(());
+    };
+
+    let response = create_udp_packet(target, &packet.data).map_err(std::io::Error::other)?;
+    udp_socket.send_to(&response, client).await?;
+    Ok(())
 }
 
 fn convert_target_addr(target: &TargetAddr) -> Address {
@@ -721,6 +876,11 @@ fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> {
         Address::ProxyDns { .. } => {
             return Err(AgentError::Socks5(
                 "SOCKS5 UDP 不支持 proxy DNS 虚拟地址".to_string(),
+            ));
+        }
+        Address::UdpRelay => {
+            return Err(AgentError::Socks5(
+                "SOCKS5 UDP 不支持 UDP relay 虚拟地址".to_string(),
             ));
         }
     }

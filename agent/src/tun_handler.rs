@@ -7,11 +7,13 @@
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
 mod dns;
+mod dns_proxy;
 mod network;
 mod route;
 mod tasks;
 mod tcp;
 mod udp;
+mod udp_relay;
 
 use crate::config::TunConfig;
 use crate::connection_pool::ConnectionPool;

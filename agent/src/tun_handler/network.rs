@@ -140,7 +140,7 @@ fn ipv6_in_cidr(ip: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
     (u128::from_be_bytes(ip.octets()) & mask) == (u128::from_be_bytes(network.octets()) & mask)
 }
 
-fn socket_addr_to_address(addr: SocketAddr) -> Address {
+pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {
     // 保留 IP 字面量，避免已经解析出的 TUN 目标再次走 DNS。
     match addr.ip() {
         IpAddr::V4(v4) => Address::Ipv4 {
