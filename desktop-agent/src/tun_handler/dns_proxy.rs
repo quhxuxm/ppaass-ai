@@ -15,6 +15,7 @@ use tracing::{debug, warn};
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
+const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
@@ -105,6 +106,8 @@ async fn run_dns_proxy(
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(5));
         cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let idle = tokio::time::sleep(DNS_PROXY_CONNECTION_IDLE);
+        tokio::pin!(idle);
         pending.clear();
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
@@ -118,14 +121,30 @@ async fn run_dns_proxy(
                     retry_request = Some(request);
                     break;
                 }
+                idle.as_mut()
+                    .reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
                 continue;
             }
 
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                _ = shutdown.cancelled() => {
+                    let _ = writer.shutdown().await;
+                    return;
+                }
+                _ = &mut idle => {
+                    debug!(
+                        "TUN UDP DNS 共享连接空闲超过 {} 秒，主动关闭 proxy 连接",
+                        DNS_PROXY_CONNECTION_IDLE.as_secs()
+                    );
+                    let _ = writer.shutdown().await;
+                    break;
+                }
                 _ = cleanup.tick() => cleanup_pending_dns(&mut pending),
                 maybe_request = rx.recv() => {
-                    let Some(request) = maybe_request else { return };
+                    let Some(request) = maybe_request else {
+                        let _ = writer.shutdown().await;
+                        return;
+                    };
                     if let Err(e) = send_dns_request(
                         &mut writer,
                         &mut pending,
@@ -136,6 +155,7 @@ async fn run_dns_proxy(
                         retry_request = Some(request);
                         break;
                     }
+                    idle.as_mut().reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {
@@ -152,6 +172,7 @@ async fn run_dns_proxy(
                             ).await {
                                 debug!("TUN UDP DNS 回复写回失败：{e}");
                             }
+                            idle.as_mut().reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
                         }
                         Err(e) => {
                             debug!("TUN UDP DNS 共享连接读取失败：{e}");
