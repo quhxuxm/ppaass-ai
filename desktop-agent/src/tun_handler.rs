@@ -122,6 +122,7 @@ pub async fn run_tun_mode(
         proxy_bind_interface.as_ref(),
         tun_if_index,
         dns_server,
+        config.dns_state_file.as_deref(),
     );
 
     shutdown.cancelled().await;
@@ -130,8 +131,8 @@ pub async fn run_tun_mode(
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
     pool.set_proxy_bind_ip(None);
     pool.set_proxy_bind_interface(None);
-    drop(route_guard);
     drop(dns_guard);
+    drop(route_guard);
 
     let _ = tokio::join!(
         wait_tun_task("tun_to_stack", tun_to_stack),

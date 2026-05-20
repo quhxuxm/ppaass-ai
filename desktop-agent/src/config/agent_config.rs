@@ -97,6 +97,11 @@ pub struct TunConfig {
     /// 相对路径会放在当前运行目录下；不设置时使用 tun-routes.json。
     #[serde(default)]
     pub route_state_file: Option<String>,
+
+    /// TUN DNS 状态文件名或路径。
+    /// 相对路径会放在当前运行目录下；不设置时使用 tun-dns.json。
+    #[serde(default)]
+    pub dns_state_file: Option<String>,
 }
 
 impl Default for TunConfig {
@@ -111,6 +116,7 @@ impl Default for TunConfig {
             block_quic: default_tun_block_quic(),
             wintun_file: None,
             route_state_file: None,
+            dns_state_file: None,
         }
     }
 }
