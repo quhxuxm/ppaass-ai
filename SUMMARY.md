@@ -10,7 +10,7 @@ All components have been generated and compiled successfully!
 
 ```
 ppaass-ai/
-├── agent/              # Client-side proxy agent
+├── desktop-agent/      # Client-side desktop proxy agent
 │   ├── src/
 │   │   ├── main.rs           # Entry point
 │   │   ├── config.rs         # Configuration management
@@ -148,10 +148,10 @@ Edit `config/agent.toml` with your settings, then:
 
 ```bash
 # Windows
-.\target\release\agent.exe --config config\agent.toml
+.\target\release\desktop-agent.exe --config config\agent.toml
 
 # Linux/macOS
-./target/release/agent --config config/agent.toml
+./target/release/desktop-agent --config config/agent.toml
 ```
 
 ### 5. Test the Connection
@@ -192,7 +192,7 @@ curl -x http://127.0.0.1:1080 http://example.com
 ## 📊 Project Statistics
 
 - **Total Lines of Code**: ~2,500+ lines
-- **Crates**: 4 (agent, proxy, protocol, common)
+- **Crates**: 4 (desktop-agent, proxy, protocol, common)
 - **Source Files**: 20+ Rust files
 - **Dependencies**: 25+ external crates
 - **Configuration Files**: 3 TOML files

@@ -336,7 +336,7 @@ public class MainActivity extends Activity {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("No apps selected: all system traffic uses VPN. PPAASS Agent is excluded.");
+            selectedAppsSummary.setText("No apps selected: all system traffic uses VPN. PPAASS Android Agent is excluded.");
             return;
         }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PPAASS Agent UI Startup Script for macOS
+# PPAASS Desktop Agent UI Startup Script for macOS
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/agent-ui"
@@ -18,5 +18,5 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Run Tauri in development mode
-echo "Starting PPAASS Agent UI..."
+echo "Starting PPAASS Desktop Agent UI..."
 npm run tauri dev

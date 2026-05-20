@@ -10,7 +10,7 @@ The Android app owns the platform VPN layer:
 
 The Rust library owns the packet and protocol layer:
 
-- `android/native` wraps the VPN fd with `AsyncFd`.
+- `android-agent/native` wraps the VPN fd with `AsyncFd`.
 - `netstack-smoltcp` turns IP packets into TCP streams and UDP payload sessions.
 - TCP and UDP flows are forwarded to the existing PPAASS proxy protocol through the `common` and `protocol` crates.
 - Android's app allow-list decides which applications enter the VPN.
@@ -40,7 +40,7 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o app/src/main/jniLibs build --
 
 Use `-PskipRustBuild=true` only when prebuilt `.so` files already exist under `app/src/main/jniLibs`.
 
-The Android app layer is plain Java. Rust remains in `android/native` for the packet stack and proxy protocol bridge.
+The Android app layer is plain Java. Rust remains in `android-agent/native` for the packet stack and proxy protocol bridge.
 
 ## Runtime Config
 
@@ -49,6 +49,6 @@ Open the app, fill in:
 - proxy endpoints, comma or newline separated; the default is `140.82.30.214:80`
 - username, defaulting to `user1`
 - RSA private key PEM, defaulting to the private key paired with `config/local/users.toml` `users.user1.public_key_pem`
-- applications that should use the VPN. The selector lists installed packages that request network access, including system packages. Leaving the selection empty means all system traffic enters the VPN, with PPAASS Agent excluded to avoid looping its proxy connection. Selecting one or more apps switches to allow-list mode, so only selected apps enter the VPN.
+- applications that should use the VPN. The selector lists installed packages that request network access, including system packages. Leaving the selection empty means all system traffic enters the VPN, with PPAASS Android Agent excluded to avoid looping its proxy connection. Selecting one or more apps switches to allow-list mode, so only selected apps enter the VPN.
 
 The TUN address and MTU are fixed internal settings in the Android app (`10.10.10.2/24`, IPv6 disabled, MTU 1500), so they are not shown in the UI. Android is pointed at a routed DNS address inside the VPN network path; Rust maps UDP port 53 packets to `ProxyDns`, so the proxy machine selects the upstream DNS from its system configuration. QUIC is blocked by default to match the desktop TUN mode and make Google Play / YouTube fall back to TCP/TLS on proxy paths that do not handle UDP/443 reliably.

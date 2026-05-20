@@ -40,7 +40,7 @@ observability.
 - `send_auth_error()` - Called occasionally during auth failures
 - `authenticate()` - Called once per connection
 
-#### Agent Side - SOCKS5 Handler (`agent/src/socks5_handler.rs`)
+#### Agent Side - SOCKS5 Handler (`desktop-agent/src/socks5_handler.rs`)
 
 **Removed instrumentation from hot-path functions:**
 
@@ -53,7 +53,7 @@ observability.
 
 - `handle_socks5_connection()` - Called once per SOCKS5 connection
 
-#### Agent Side - HTTP Handler (`agent/src/http_handler.rs`)
+#### Agent Side - HTTP Handler (`desktop-agent/src/http_handler.rs`)
 
 **Removed instrumentation from hot-path functions:**
 

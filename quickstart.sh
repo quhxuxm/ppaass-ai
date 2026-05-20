@@ -54,7 +54,7 @@ cat << "EOF"
 4️⃣  Update config/agent.toml with your settings
 
 5️⃣  Start the Agent:
-   ./target/release/agent --config config/agent.toml
+   ./target/release/desktop-agent --config config/agent.toml
 
 6️⃣  Test the connection:
    curl --socks5 127.0.0.1:1080 http://example.com
@@ -72,7 +72,7 @@ cat << "EOF"
 ╚══════════════════════════════════════════════════════════════╝
 
 Start Proxy:  ./target/release/proxy --config config/proxy.toml
-Start Agent:  ./target/release/agent --config config/agent.toml
+Start Agent:  ./target/release/desktop-agent --config config/agent.toml
 
 EOF
 

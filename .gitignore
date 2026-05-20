@@ -10,9 +10,9 @@ Cargo.lock
 *.swo
 .DS_Store
 /agent-ui/node_modules
-/android/.gradle
-/android/build
-/android/app/build
-/android/app/src/main/jniLibs
-/android/local.properties
+/android-agent/.gradle
+/android-agent/build
+/android-agent/app/build
+/android-agent/app/src/main/jniLibs
+/android-agent/local.properties
 *~

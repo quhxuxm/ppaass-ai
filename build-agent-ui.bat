@@ -1,5 +1,5 @@
 @echo off
-REM PPAASS Agent UI Build Script for Windows
+REM PPAASS Desktop Agent UI Build Script for Windows
 
 cd /d "%~dp0agent-ui"
 
@@ -17,7 +17,7 @@ if not exist "node_modules" (
 )
 
 REM Build Tauri application
-echo Building PPAASS Agent UI...
+echo Building PPAASS Desktop Agent UI...
 call npm run tauri build
 
 echo.

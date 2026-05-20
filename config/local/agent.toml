@@ -1,4 +1,4 @@
-# PPAASS Agent 配置
+# PPAASS Desktop Agent 配置
 # 该配置用于演示，包含真实 RSA 密钥
 
 listen_addr = "127.0.0.1:7070"
@@ -24,7 +24,7 @@ async_runtime_stack_size_mb = 4
 # log_dir = "logs"
 
 # 日志文件名（仅在设置 log_dir 时使用）
-# log_file = "agent.log"
+# log_file = "desktop-agent.log"
 
 # Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 # runtime_threads = 4
@@ -54,7 +54,7 @@ ipv4 = "10.10.10.1/24"
 mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理。
 proxy_dns = true
-# Windows TUN 模式需要 wintun.dll。默认会检查 agent.exe 同目录、当前目录和 PATH；
+# Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"
 wintun_file = "wintun.dll"
 

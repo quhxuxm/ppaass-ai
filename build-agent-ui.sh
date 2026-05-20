@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PPAASS Agent UI Build Script
+# PPAASS Desktop Agent UI Build Script
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/agent-ui"
@@ -18,7 +18,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Build Tauri application
-echo "Building PPAASS Agent UI..."
+echo "Building PPAASS Desktop Agent UI..."
 npm run tauri build
 
 echo ""

@@ -9,10 +9,10 @@
                 "args": [
                     "build",
                     "--package",
-                    "agent"
+                    "desktop-agent"
                 ],
                 "filter": {
-                    "name": "agent",
+                    "name": "desktop-agent",
                     "kind": "bin"
                 }
             },
@@ -116,10 +116,10 @@
                 "args": [
                     "build",
                     "--package",
-                    "agent",
+                    "desktop-agent",
                 ],
                 "filter": {
-                    "name": "agent",
+                    "name": "desktop-agent",
                     "kind": "bin"
                 }
             },

@@ -48,7 +48,7 @@ Write-Host @"
 4️⃣  Update config\agent.toml with your settings
 
 5️⃣  Start the Agent:
-   .\target\release\agent.exe --config config\agent.toml
+   .\target\release\desktop-agent.exe --config config\agent.toml
 
 6️⃣  Test the connection:
    curl --socks5 127.0.0.1:1080 http://example.com
@@ -66,7 +66,7 @@ Write-Host @"
 ╚══════════════════════════════════════════════════════════════╝
 
 Start Proxy:  .\target\release\proxy.exe --config config\proxy.toml
-Start Agent:  .\target\release\agent.exe --config config\agent.toml
+Start Agent:  .\target\release\desktop-agent.exe --config config\agent.toml
 
 "@ -ForegroundColor White
 

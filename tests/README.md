@@ -34,7 +34,7 @@ cd /path/to/ppaass-ai
 cargo run --release -p proxy -- --config config/proxy.toml
 
 # Start agent
-cargo run --release -p agent -- --config config/agent.toml
+cargo run --release -p desktop-agent -- --config config/agent.toml
 ```
 
 ### 3. Run Integration Tests

@@ -89,7 +89,7 @@ pub struct TunConfig {
     pub block_quic: bool,
 
     /// Windows TUN 模式所需的 wintun.dll 路径。
-    /// 不设置时会依次检查 agent.exe 同目录、当前目录和 PATH。
+    /// 不设置时会依次检查 desktop-agent.exe 同目录、当前目录和 PATH。
     #[serde(default)]
     pub wintun_file: Option<String>,
 }
@@ -155,7 +155,7 @@ fn default_log_level() -> String {
 }
 
 fn default_log_file() -> String {
-    "agent.log".to_string()
+    "desktop-agent.log".to_string()
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {

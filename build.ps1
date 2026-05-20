@@ -17,11 +17,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Build agent
-Write-Host "`nBuilding agent..." -ForegroundColor Cyan
-cargo build --release -p agent
+# Build desktop agent
+Write-Host "`nBuilding desktop-agent..." -ForegroundColor Cyan
+cargo build --release -p desktop-agent
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to build agent" -ForegroundColor Red
+    Write-Host "Failed to build desktop-agent" -ForegroundColor Red
     exit 1
 }
 
@@ -35,5 +35,5 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`nBuild completed successfully!" -ForegroundColor Green
 Write-Host "`nExecutables location:" -ForegroundColor Yellow
-Write-Host "  Agent: target\release\agent.exe" -ForegroundColor White
+Write-Host "  Desktop Agent: target\release\desktop-agent.exe" -ForegroundColor White
 Write-Host "  Proxy: target\release\proxy.exe" -ForegroundColor White

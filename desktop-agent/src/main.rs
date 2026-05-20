@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     let runtime = runtime_builder.build()?;
 
     runtime.block_on(async move {
-        info!("PPAASS Agent 启动中");
+        info!("PPAASS Desktop Agent 启动中");
         info!("监听地址：    {}", config.listen_addr);
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);

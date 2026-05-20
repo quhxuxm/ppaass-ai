@@ -1,5 +1,5 @@
 @echo off
-REM PPAASS Agent UI Startup Script for Windows
+REM PPAASS Desktop Agent UI Startup Script for Windows
 
 cd /d "%~dp0agent-ui"
 
@@ -17,5 +17,5 @@ if not exist "node_modules" (
 )
 
 REM Run Tauri in development mode
-echo Starting PPAASS Agent UI...
+echo Starting PPAASS Desktop Agent UI...
 call npm run tauri dev
