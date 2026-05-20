@@ -92,6 +92,11 @@ pub struct TunConfig {
     /// 不设置时会依次检查 desktop-agent.exe 同目录、当前目录和 PATH。
     #[serde(default)]
     pub wintun_file: Option<String>,
+
+    /// TUN 路由状态文件名或路径。
+    /// 相对路径会放在当前运行目录下；不设置时使用 tun-routes.json。
+    #[serde(default)]
+    pub route_state_file: Option<String>,
 }
 
 impl Default for TunConfig {
@@ -105,6 +110,7 @@ impl Default for TunConfig {
             proxy_dns: false,
             block_quic: default_tun_block_quic(),
             wintun_file: None,
+            route_state_file: None,
         }
     }
 }

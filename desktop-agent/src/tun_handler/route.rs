@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
@@ -18,7 +20,7 @@ pub(super) struct ProxyRoute {
     pub(super) bind_interface: Option<BindInterface>,
 }
 
-pub(super) fn cleanup_stale_routes() {
+pub(super) fn cleanup_stale_routes(route_state_file: Option<&str>) {
     let mut mgr = match RouteManager::new() {
         Ok(mgr) => mgr,
         Err(e) => {
@@ -26,7 +28,7 @@ pub(super) fn cleanup_stale_routes() {
             return;
         }
     };
-    RouteLease::new().cleanup_stale_routes(&mut mgr);
+    RouteLease::new(route_state_file).cleanup_stale_routes(&mut mgr);
 }
 
 /// 检测 OS 当前使用哪个本地出口来到达代理服务器。
@@ -133,11 +135,12 @@ impl RouteGuard {
         tun_if_index: u32,
         tun_ipv4: Ipv4Addr,
         tun_ipv6_cidr: Option<&str>,
+        route_state_file: Option<&str>,
         proxy_ips: &[IpAddr],
     ) -> Result<Self> {
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
-        let mut lease = RouteLease::new();
+        let mut lease = RouteLease::new(route_state_file);
 
         lease.cleanup_stale_routes(&mut mgr);
 
@@ -217,18 +220,15 @@ impl Drop for RouteGuard {
     fn drop(&mut self) {
         info!(
             "正在恢复路由表：删除 {} 条已安装的路由",
-            self.installed.len()
+            self.lease.state.routes.len()
         );
         let mut cleanup_ok = true;
-        while let Some(route) = self.installed.pop() {
-            match self.mgr.delete(&route) {
-                Ok(()) => debug!("已删除路由：{}", route),
-                Err(e) => {
-                    cleanup_ok = false;
-                    warn!("删除路由 {} 失败：{e}", route);
-                }
+        for record in self.lease.state.routes.iter().rev() {
+            if !delete_recorded_route(&mut self.mgr, record) {
+                cleanup_ok = false;
             }
         }
+        self.installed.clear();
         if cleanup_ok {
             self.lease.clear();
         } else {
@@ -271,9 +271,9 @@ struct RouteLease {
 }
 
 impl RouteLease {
-    fn new() -> Self {
+    fn new(route_state_file: Option<&str>) -> Self {
         Self {
-            path: route_state_file_path(),
+            path: route_state_file_path(route_state_file),
             state: RouteState {
                 version: ROUTE_STATE_VERSION,
                 pid: std::process::id(),
@@ -405,8 +405,11 @@ fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
     let route = record.to_route();
     match mgr.delete(&route) {
         Ok(()) => {
-            debug!("已清理遗留 TUN 路由：{}", route);
-            return true;
+            if !recorded_route_exists(mgr, record) {
+                debug!("已清理 TUN 路由：{}", route);
+                return true;
+            }
+            debug!("删除 TUN 路由 {} 返回成功，但路由表中仍存在匹配条目", route);
         }
         Err(e) => {
             debug!(
@@ -416,82 +419,143 @@ fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
         }
     }
 
-    let routes = match mgr.list() {
-        Ok(routes) => routes,
+    if delete_matching_routes(mgr, record) && !recorded_route_exists(mgr, record) {
+        return true;
+    }
+
+    if delete_route_with_platform_tool(record) && !recorded_route_exists(mgr, record) {
+        return true;
+    }
+
+    warn!("删除 TUN 路由失败，路由表中仍存在匹配条目：{}", route);
+    false
+}
+
+fn recorded_route_exists(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    match matching_routes(mgr, record) {
+        Some(routes) => !routes.is_empty(),
+        None => true,
+    }
+}
+
+fn matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> Option<Vec<Route>> {
+    match mgr.list() {
+        Ok(routes) => Some(
+            routes
+                .into_iter()
+                .filter(|candidate| record.matches_route(candidate))
+                .collect(),
+        ),
         Err(e) => {
-            warn!("删除遗留 TUN 路由 {} 失败，且无法列出当前路由：{e}", route);
-            return false;
+            warn!("无法列出当前路由以确认 TUN 路由是否已删除：{e}");
+            None
         }
+    }
+}
+
+fn delete_matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    let route = record.to_route();
+    let matches = match matching_routes(mgr, record) {
+        Some(matches) => matches,
+        None => return false,
     };
 
-    let matches: Vec<Route> = routes
-        .into_iter()
-        .filter(|candidate| record.matches_route(candidate))
-        .collect();
     if matches.is_empty() {
-        debug!("遗留 TUN 路由已不存在：{}", route);
+        debug!("TUN 路由已不存在：{}", route);
         return true;
     }
 
     let mut deleted_all = true;
     for candidate in matches {
         match mgr.delete(&candidate) {
-            Ok(()) => debug!("已清理遗留 TUN 路由：{}", candidate),
+            Ok(()) => debug!("已按当前路由表条目清理 TUN 路由：{}", candidate),
             Err(e) => {
                 deleted_all = false;
-                warn!("删除遗留 TUN 路由 {} 失败：{e}", candidate);
+                warn!("删除当前路由表中的 TUN 路由 {} 失败：{e}", candidate);
             }
         }
     }
     deleted_all
 }
 
-fn route_state_file_path() -> PathBuf {
+#[cfg(target_os = "macos")]
+fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
+    let mut command = Command::new("route");
+    command.arg("-n").arg("delete");
+
+    match record.destination {
+        IpAddr::V4(ip) if record.prefix == 32 => {
+            command.arg("-host").arg(ip.to_string());
+        }
+        IpAddr::V4(ip) => {
+            command.arg("-net").arg(format!("{ip}/{}", record.prefix));
+        }
+        IpAddr::V6(ip) if record.prefix == 128 => {
+            command.arg("-inet6").arg("-host").arg(ip.to_string());
+        }
+        IpAddr::V6(ip) => {
+            command
+                .arg("-inet6")
+                .arg("-net")
+                .arg(format!("{ip}/{}", record.prefix));
+        }
+    }
+
+    run_route_cleanup_command(command)
+}
+
+#[cfg(target_os = "linux")]
+fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
+    let mut command = Command::new("ip");
+    if record.destination.is_ipv6() {
+        command.arg("-6");
+    }
+    command
+        .arg("route")
+        .arg("del")
+        .arg(format!("{}/{}", record.destination, record.prefix));
+
+    run_route_cleanup_command(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn delete_route_with_platform_tool(_record: &RouteRecord) -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn run_route_cleanup_command(mut command: Command) -> bool {
+    debug!("运行路由清理命令：{:?}", command);
+    match command.status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            debug!("路由清理命令退出状态：{status}");
+            false
+        }
+        Err(e) => {
+            debug!("运行路由清理命令失败：{e}");
+            false
+        }
+    }
+}
+
+fn route_state_file_path(configured_file: Option<&str>) -> PathBuf {
     if let Some(path) = std::env::var_os("PPAASS_TUN_ROUTE_STATE") {
         return PathBuf::from(path);
     }
 
-    platform_state_dir().join(ROUTE_STATE_FILE_NAME)
-}
+    let configured_file = configured_file
+        .map(str::trim)
+        .filter(|file| !file.is_empty())
+        .unwrap_or(ROUTE_STATE_FILE_NAME);
+    let path = PathBuf::from(configured_file);
+    if path.is_absolute() {
+        return path;
+    }
 
-#[cfg(target_os = "windows")]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("PROGRAMDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PPAASS")
-        .join("desktop-agent")
-}
-
-#[cfg(target_os = "macos")]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| {
-            home.join("Library")
-                .join("Application Support")
-                .join("ppaass-ai")
-        })
-        .unwrap_or_else(|| std::env::temp_dir().join("ppaass-ai"))
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join(".local").join("state"))
-        })
-        .unwrap_or_else(std::env::temp_dir)
-        .join("ppaass-ai")
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn platform_state_dir() -> PathBuf {
-    std::env::temp_dir().join("ppaass-ai")
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
 }
 
 fn now_unix_secs() -> u64 {

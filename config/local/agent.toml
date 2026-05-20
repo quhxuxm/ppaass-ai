@@ -59,6 +59,8 @@ proxy_dns = true
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"
 wintun_file = "wintun.dll"
+# TUN 路由状态文件名或路径。相对路径会放在当前运行目录下。
+route_state_file = "tun-routes.json"
 
 # 直连访问配置
 #
