@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
@@ -18,7 +20,7 @@ pub(super) struct ProxyRoute {
     pub(super) bind_interface: Option<BindInterface>,
 }
 
-pub(super) fn cleanup_stale_routes() {
+pub(super) fn cleanup_stale_routes(route_state_file: Option<&str>) {
     let mut mgr = match RouteManager::new() {
         Ok(mgr) => mgr,
         Err(e) => {
@@ -26,7 +28,7 @@ pub(super) fn cleanup_stale_routes() {
             return;
         }
     };
-    RouteLease::new().cleanup_stale_routes(&mut mgr);
+    RouteLease::new(route_state_file).cleanup_stale_routes(&mut mgr);
 }
 
 /// 检测 OS 当前使用哪个本地出口来到达代理服务器。
@@ -133,13 +135,15 @@ impl RouteGuard {
         tun_if_index: u32,
         tun_ipv4: Ipv4Addr,
         tun_ipv6_cidr: Option<&str>,
+        route_state_file: Option<&str>,
         proxy_ips: &[IpAddr],
     ) -> Result<Self> {
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
-        let mut lease = RouteLease::new();
+        let mut lease = RouteLease::new(route_state_file);
 
         lease.cleanup_stale_routes(&mut mgr);
+        cleanup_existing_tun_split_routes(&mut mgr, tun_if_index);
 
         let routes = match mgr.list() {
             Ok(routes) => routes,
@@ -217,18 +221,15 @@ impl Drop for RouteGuard {
     fn drop(&mut self) {
         info!(
             "正在恢复路由表：删除 {} 条已安装的路由",
-            self.installed.len()
+            self.lease.state.routes.len()
         );
         let mut cleanup_ok = true;
-        while let Some(route) = self.installed.pop() {
-            match self.mgr.delete(&route) {
-                Ok(()) => debug!("已删除路由：{}", route),
-                Err(e) => {
-                    cleanup_ok = false;
-                    warn!("删除路由 {} 失败：{e}", route);
-                }
+        for record in self.lease.state.routes.iter().rev() {
+            if !delete_recorded_route(&mut self.mgr, record) {
+                cleanup_ok = false;
             }
         }
+        self.installed.clear();
         if cleanup_ok {
             self.lease.clear();
         } else {
@@ -253,6 +254,8 @@ struct RouteRecord {
     destination: IpAddr,
     prefix: u8,
     gateway: Option<IpAddr>,
+    #[serde(default)]
+    if_name: Option<String>,
     if_index: Option<u32>,
 }
 
@@ -271,9 +274,9 @@ struct RouteLease {
 }
 
 impl RouteLease {
-    fn new() -> Self {
+    fn new(route_state_file: Option<&str>) -> Self {
         Self {
-            path: route_state_file_path(),
+            path: route_state_file_path(route_state_file),
             state: RouteState {
                 version: ROUTE_STATE_VERSION,
                 pid: std::process::id(),
@@ -371,11 +374,16 @@ impl RouteLease {
 
 impl RouteRecord {
     fn from_route(kind: RouteKind, route: &Route) -> Self {
+        let if_name = route.if_name().cloned();
+        #[cfg(target_os = "macos")]
+        let if_name = if_name.or_else(|| interface_name_for_index(route.if_index()));
+
         Self {
             kind,
             destination: route.destination(),
             prefix: route.prefix(),
             gateway: route.gateway(),
+            if_name,
             if_index: route.if_index(),
         }
     }
@@ -384,6 +392,10 @@ impl RouteRecord {
         let mut route = Route::new(self.destination, self.prefix);
         if let Some(gateway) = self.gateway {
             route = route.with_gateway(gateway);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(if_name) = &self.if_name {
+            route = route.with_if_name(if_name.clone());
         }
         if let Some(if_index) = self.if_index {
             route = route.with_if_index(if_index);
@@ -394,19 +406,68 @@ impl RouteRecord {
     fn matches_route(&self, route: &Route) -> bool {
         route.destination() == self.destination
             && route.prefix() == self.prefix
-            && route.gateway() == self.gateway
-            && self
-                .if_index
-                .is_none_or(|if_index| route.if_index() == Some(if_index))
+            && gateways_match(self.gateway, route.gateway(), self.destination)
+            && interfaces_match(self, route)
+    }
+}
+
+fn gateways_match(recorded: Option<IpAddr>, actual: Option<IpAddr>, destination: IpAddr) -> bool {
+    match (recorded, actual) {
+        (Some(recorded), Some(actual)) => recorded == actual,
+        (None, None) => true,
+        (None, Some(actual)) => is_unspecified_gateway(actual, destination),
+        (Some(recorded), None) => is_unspecified_gateway(recorded, destination),
+    }
+}
+
+fn is_unspecified_gateway(gateway: IpAddr, destination: IpAddr) -> bool {
+    gateway.is_ipv4() == destination.is_ipv4()
+        && match gateway {
+            IpAddr::V4(ip) => ip.is_unspecified(),
+            IpAddr::V6(ip) => ip.is_unspecified(),
+        }
+}
+
+fn interfaces_match(record: &RouteRecord, route: &Route) -> bool {
+    let index_matches = record
+        .if_index
+        .zip(route.if_index())
+        .is_some_and(|(expected, actual)| expected == actual);
+    let name_matches = record
+        .if_name
+        .as_deref()
+        .zip(route.if_name().map(String::as_str))
+        .is_some_and(|(expected, actual)| expected == actual);
+
+    match (record.if_index.is_some(), record.if_name.is_some()) {
+        (false, false) => true,
+        (true, false) => index_matches,
+        (false, true) => name_matches,
+        (true, true) => index_matches || name_matches,
     }
 }
 
 fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
     let route = record.to_route();
+    if let Some(matches) = matching_routes(mgr, record)
+        && matches.is_empty()
+    {
+        debug!("TUN 路由已不存在：{}", route);
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    if delete_route_with_platform_tool(record) && !recorded_route_exists(mgr, record) {
+        return true;
+    }
+
     match mgr.delete(&route) {
         Ok(()) => {
-            debug!("已清理遗留 TUN 路由：{}", route);
-            return true;
+            if !recorded_route_exists(mgr, record) {
+                debug!("已清理 TUN 路由：{}", route);
+                return true;
+            }
+            debug!("删除 TUN 路由 {} 返回成功，但路由表中仍存在匹配条目", route);
         }
         Err(e) => {
             debug!(
@@ -416,82 +477,291 @@ fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
         }
     }
 
-    let routes = match mgr.list() {
-        Ok(routes) => routes,
+    if delete_matching_routes(mgr, record) && !recorded_route_exists(mgr, record) {
+        return true;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if delete_route_with_platform_tool(record) && !recorded_route_exists(mgr, record) {
+        return true;
+    }
+
+    warn!("删除 TUN 路由失败，路由表中仍存在匹配条目：{}", route);
+    false
+}
+
+fn recorded_route_exists(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    match matching_routes(mgr, record) {
+        Some(routes) => !routes.is_empty(),
+        None => true,
+    }
+}
+
+fn matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> Option<Vec<Route>> {
+    match mgr.list() {
+        Ok(routes) => Some(
+            routes
+                .into_iter()
+                .filter(|candidate| record.matches_route(candidate))
+                .collect(),
+        ),
         Err(e) => {
-            warn!("删除遗留 TUN 路由 {} 失败，且无法列出当前路由：{e}", route);
-            return false;
+            warn!("无法列出当前路由以确认 TUN 路由是否已删除：{e}");
+            None
         }
+    }
+}
+
+fn delete_matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    let route = record.to_route();
+    let matches = match matching_routes(mgr, record) {
+        Some(matches) => matches,
+        None => return false,
     };
 
-    let matches: Vec<Route> = routes
-        .into_iter()
-        .filter(|candidate| record.matches_route(candidate))
-        .collect();
     if matches.is_empty() {
-        debug!("遗留 TUN 路由已不存在：{}", route);
+        debug!("TUN 路由已不存在：{}", route);
         return true;
     }
 
     let mut deleted_all = true;
     for candidate in matches {
         match mgr.delete(&candidate) {
-            Ok(()) => debug!("已清理遗留 TUN 路由：{}", candidate),
+            Ok(()) => debug!("已按当前路由表条目清理 TUN 路由：{}", candidate),
             Err(e) => {
                 deleted_all = false;
-                warn!("删除遗留 TUN 路由 {} 失败：{e}", candidate);
+                warn!("删除当前路由表中的 TUN 路由 {} 失败：{e}", candidate);
             }
         }
     }
     deleted_all
 }
 
-fn route_state_file_path() -> PathBuf {
+fn cleanup_existing_tun_split_routes(mgr: &mut RouteManager, tun_if_index: u32) {
+    let routes = [
+        split_route_record(
+            RouteKind::Ipv4SplitDefault,
+            IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+            1,
+            tun_if_index,
+        ),
+        split_route_record(
+            RouteKind::Ipv4SplitDefault,
+            IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)),
+            1,
+            tun_if_index,
+        ),
+        split_route_record(
+            RouteKind::Ipv6SplitDefault,
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            1,
+            tun_if_index,
+        ),
+        split_route_record(
+            RouteKind::Ipv6SplitDefault,
+            IpAddr::V6(Ipv6Addr::new(0x8000, 0, 0, 0, 0, 0, 0, 0)),
+            1,
+            tun_if_index,
+        ),
+    ];
+
+    for record in routes {
+        let _ = delete_recorded_route(mgr, &record);
+    }
+}
+
+fn split_route_record(
+    kind: RouteKind,
+    destination: IpAddr,
+    prefix: u8,
+    tun_if_index: u32,
+) -> RouteRecord {
+    let if_name = None;
+    #[cfg(target_os = "macos")]
+    let if_name = if_name.or_else(|| interface_name_for_index(Some(tun_if_index)));
+
+    RouteRecord {
+        kind,
+        destination,
+        prefix,
+        gateway: None,
+        if_name,
+        if_index: Some(tun_if_index),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
+    let if_name = record
+        .if_name
+        .clone()
+        .or_else(|| interface_name_for_index(record.if_index));
+
+    if let Some(if_name) = if_name.as_deref()
+        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), false))
+    {
+        return true;
+    }
+
+    if record.gateway.is_some()
+        && let Some(if_name) = if_name.as_deref()
+        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), true))
+    {
+        return true;
+    }
+
+    if record.gateway.is_some()
+        && run_route_cleanup_command(macos_route_delete_command(record, None, true))
+    {
+        return true;
+    }
+
+    run_route_cleanup_command(macos_route_delete_command(record, None, false))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_route_delete_command(
+    record: &RouteRecord,
+    if_scope: Option<&str>,
+    include_gateway: bool,
+) -> Command {
+    let mut command = Command::new("route");
+    command.arg("-n").arg("delete");
+    if record.destination.is_ipv6() {
+        command.arg("-inet6");
+    }
+    command.arg(if route_record_is_host(record) {
+        "-host"
+    } else {
+        "-net"
+    });
+    if let Some(if_scope) = if_scope {
+        command.arg("-ifscope").arg(if_scope);
+    }
+    command.arg(route_destination_arg(record));
+    if include_gateway
+        && let Some(gateway) = record.gateway
+        && !is_unspecified_gateway(gateway, record.destination)
+    {
+        command.arg(gateway.to_string());
+    }
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
+    let mut command = Command::new("ip");
+    if record.destination.is_ipv6() {
+        command.arg("-6");
+    }
+    command
+        .arg("route")
+        .arg("del")
+        .arg(format!("{}/{}", record.destination, record.prefix));
+
+    run_route_cleanup_command(command)
+}
+
+#[cfg(target_os = "macos")]
+fn route_record_is_host(record: &RouteRecord) -> bool {
+    (record.destination.is_ipv4() && record.prefix == 32)
+        || (record.destination.is_ipv6() && record.prefix == 128)
+}
+
+#[cfg(target_os = "macos")]
+fn route_destination_arg(record: &RouteRecord) -> String {
+    if route_record_is_host(record) {
+        record.destination.to_string()
+    } else {
+        format!("{}/{}", record.destination, record.prefix)
+    }
+}
+
+#[cfg(windows)]
+fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
+    let mut command = Command::new("powershell.exe");
+    let destination_prefix = format!("{}/{}", record.destination, record.prefix);
+    let interface_index = record
+        .if_index
+        .map(|if_index| if_index.to_string())
+        .unwrap_or_default();
+    let next_hop = record
+        .gateway
+        .filter(|gateway| !is_unspecified_gateway(*gateway, record.destination))
+        .map(|gateway| gateway.to_string())
+        .unwrap_or_default();
+    let script = r#"
+$DestinationPrefix = $args[0]
+$InterfaceIndex = $args[1]
+$NextHop = $args[2]
+$filter = @{
+    DestinationPrefix = $DestinationPrefix
+    ErrorAction = 'SilentlyContinue'
+}
+if (-not [string]::IsNullOrWhiteSpace($InterfaceIndex)) {
+    $filter.InterfaceIndex = [uint32]$InterfaceIndex
+}
+if (-not [string]::IsNullOrWhiteSpace($NextHop)) {
+    $filter.NextHop = $NextHop
+}
+$routes = @(Get-NetRoute @filter)
+foreach ($route in $routes) {
+    $route | Remove-NetRoute -Confirm:$false -ErrorAction Stop
+}
+"#;
+    let command_script = format!("& {{\n{script}\n}}");
+    command
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(command_script)
+        .arg(destination_prefix)
+        .arg(interface_index)
+        .arg(next_hop);
+
+    run_route_cleanup_command(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn delete_route_with_platform_tool(_record: &RouteRecord) -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn run_route_cleanup_command(mut command: Command) -> bool {
+    debug!("运行路由清理命令：{:?}", command);
+    match command.status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            debug!("路由清理命令退出状态：{status}");
+            false
+        }
+        Err(e) => {
+            debug!("运行路由清理命令失败：{e}");
+            false
+        }
+    }
+}
+
+fn route_state_file_path(configured_file: Option<&str>) -> PathBuf {
     if let Some(path) = std::env::var_os("PPAASS_TUN_ROUTE_STATE") {
         return PathBuf::from(path);
     }
 
-    platform_state_dir().join(ROUTE_STATE_FILE_NAME)
-}
+    let configured_file = configured_file
+        .map(str::trim)
+        .filter(|file| !file.is_empty())
+        .unwrap_or(ROUTE_STATE_FILE_NAME);
+    let path = PathBuf::from(configured_file);
+    if path.is_absolute() {
+        return path;
+    }
 
-#[cfg(target_os = "windows")]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("PROGRAMDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("PPAASS")
-        .join("desktop-agent")
-}
-
-#[cfg(target_os = "macos")]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| {
-            home.join("Library")
-                .join("Application Support")
-                .join("ppaass-ai")
-        })
-        .unwrap_or_else(|| std::env::temp_dir().join("ppaass-ai"))
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn platform_state_dir() -> PathBuf {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join(".local").join("state"))
-        })
-        .unwrap_or_else(std::env::temp_dir)
-        .join("ppaass-ai")
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn platform_state_dir() -> PathBuf {
-    std::env::temp_dir().join("ppaass-ai")
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
 }
 
 fn now_unix_secs() -> u64 {
@@ -649,4 +919,80 @@ fn interface_for_local_ip(local_ip: IpAddr) -> Option<BindInterface> {
     }
 
     fallback
+}
+
+#[cfg(target_os = "macos")]
+fn interface_name_for_index(if_index: Option<u32>) -> Option<String> {
+    let if_index = if_index?;
+    if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .find(|interface| interface.index == Some(if_index))
+        .map(|interface| interface.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(
+        destination: IpAddr,
+        prefix: u8,
+        gateway: Option<IpAddr>,
+        if_index: Option<u32>,
+    ) -> RouteRecord {
+        RouteRecord {
+            kind: RouteKind::Ipv4SplitDefault,
+            destination,
+            prefix,
+            gateway,
+            if_name: None,
+            if_index,
+        }
+    }
+
+    #[test]
+    fn matches_windows_unspecified_ipv4_gateway_for_on_link_route() {
+        let record = record(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, None, Some(42));
+        let route = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1)
+            .with_if_index(42)
+            .with_gateway(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
+        assert!(record.matches_route(&route));
+    }
+
+    #[test]
+    fn matches_windows_unspecified_ipv6_gateway_for_on_link_route() {
+        let record = record(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1, None, Some(42));
+        let route = Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1)
+            .with_if_index(42)
+            .with_gateway(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+
+        assert!(record.matches_route(&route));
+    }
+
+    #[test]
+    fn rejects_different_real_gateway() {
+        let record = record(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+            32,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))),
+            Some(7),
+        );
+        let route = Route::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 32)
+            .with_if_index(7)
+            .with_gateway(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 254)));
+
+        assert!(!record.matches_route(&route));
+    }
+
+    #[test]
+    fn matches_route_by_interface_name_when_index_changes() {
+        let mut record = record(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1, None, Some(42));
+        record.if_name = Some("utun9".to_string());
+        let mut route = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1).with_if_index(77);
+        route = route.with_if_name("utun9".to_string());
+
+        assert!(record.matches_route(&route));
+    }
 }

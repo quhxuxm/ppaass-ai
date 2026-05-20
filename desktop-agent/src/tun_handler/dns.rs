@@ -1,8 +1,16 @@
 use common::BindInterface;
+#[cfg(any(target_os = "macos", windows))]
+use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", windows))]
+use std::fs;
 use std::net::Ipv4Addr;
+#[cfg(any(target_os = "macos", windows))]
+use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "macos", windows))]
 use std::process::Command;
+#[cfg(any(target_os = "macos", windows))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(any(target_os = "macos", windows))]
 use tracing::{debug, info, warn};
@@ -10,30 +18,67 @@ use tracing::{debug, info, warn};
 #[cfg(not(any(target_os = "macos", windows)))]
 use tracing::debug;
 
+#[cfg(any(target_os = "macos", windows))]
+const DNS_STATE_VERSION: u8 = 1;
+#[cfg(any(target_os = "macos", windows))]
+const DNS_STATE_FILE_NAME: &str = "tun-dns.json";
+
 #[cfg(target_os = "macos")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum PreviousDns {
     Empty,
     Servers(Vec<String>),
 }
 
 #[cfg(target_os = "macos")]
-pub(super) struct DnsGuard {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DnsRecord {
     service: String,
     previous: PreviousDns,
 }
 
+#[cfg(target_os = "macos")]
+pub(super) struct DnsGuard {
+    service: String,
+    previous: PreviousDns,
+    lease: DnsLease,
+}
+
 #[cfg(windows)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum PreviousWindowsDns {
     Dhcp,
     Servers(Vec<String>),
 }
 
 #[cfg(windows)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DnsRecord {
+    interface_index: u32,
+    previous: PreviousWindowsDns,
+}
+
+#[cfg(windows)]
 pub(super) struct DnsGuard {
     interface_index: u32,
     previous: PreviousWindowsDns,
+    lease: DnsLease,
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[derive(Debug, Serialize, Deserialize)]
+struct DnsState {
+    version: u8,
+    pid: u32,
+    created_unix_secs: u64,
+    records: Vec<DnsRecord>,
+}
+
+#[cfg(any(target_os = "macos", windows))]
+struct DnsLease {
+    path: PathBuf,
+    state: DnsState,
+    persist_failed: bool,
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -46,7 +91,11 @@ impl DnsGuard {
         bind_interface: Option<&BindInterface>,
         _tun_interface_index: u32,
         tun_dns: Ipv4Addr,
+        dns_state_file: Option<&str>,
     ) -> Option<Self> {
+        let mut lease = DnsLease::new(dns_state_file);
+        lease.cleanup_stale_records();
+
         if !proxy_dns {
             return None;
         }
@@ -76,15 +125,29 @@ impl DnsGuard {
                 return None;
             }
         };
+        let previous = normalize_previous_dns(previous, tun_dns);
+
+        let record = DnsRecord {
+            service: service.clone(),
+            previous: previous.clone(),
+        };
+        lease.record_active(record.clone());
 
         if let Err(e) = set_dns_servers(&service, &[tun_dns.to_string()]) {
             warn!("设置网络服务 {service} 的 DNS 到 {tun_dns} 失败：{e}");
+            if restore_dns_record(&record) {
+                lease.remove_record(&record);
+            }
             return None;
         }
         flush_dns_cache();
 
         info!("TUN proxy_dns 已接管系统 DNS：服务={service} DNS={tun_dns}");
-        Some(Self { service, previous })
+        Some(Self {
+            service,
+            previous,
+            lease,
+        })
     }
 
     #[cfg(windows)]
@@ -93,7 +156,11 @@ impl DnsGuard {
         _bind_interface: Option<&BindInterface>,
         tun_interface_index: u32,
         tun_dns: Ipv4Addr,
+        dns_state_file: Option<&str>,
     ) -> Option<Self> {
+        let mut lease = DnsLease::new(dns_state_file);
+        lease.cleanup_stale_records();
+
         if !proxy_dns {
             return None;
         }
@@ -111,9 +178,19 @@ impl DnsGuard {
                 return None;
             }
         };
+        let previous = normalize_previous_dns(previous, tun_dns);
+
+        let record = DnsRecord {
+            interface_index,
+            previous: previous.clone(),
+        };
+        lease.record_active(record.clone());
 
         if let Err(e) = windows_set_dns_servers(interface_index, &[tun_dns.to_string()]) {
             warn!("设置 Windows 接口 {interface_index} DNS 到 {tun_dns} 失败：{e}");
+            if restore_dns_record(&record) {
+                lease.remove_record(&record);
+            }
             return None;
         }
         windows_flush_dns_cache();
@@ -122,6 +199,7 @@ impl DnsGuard {
         Some(Self {
             interface_index,
             previous,
+            lease,
         })
     }
 
@@ -131,6 +209,7 @@ impl DnsGuard {
         _bind_interface: Option<&BindInterface>,
         _tun_interface_index: u32,
         _tun_dns: Ipv4Addr,
+        _dns_state_file: Option<&str>,
     ) -> Option<Self> {
         if proxy_dns {
             debug!("当前平台未实现系统 DNS 临时切换；DNS 请求需由系统路由进入 TUN");
@@ -142,19 +221,17 @@ impl DnsGuard {
 #[cfg(target_os = "macos")]
 impl Drop for DnsGuard {
     fn drop(&mut self) {
-        let result = match &self.previous {
-            PreviousDns::Empty => clear_dns_servers(&self.service),
-            PreviousDns::Servers(servers) => set_dns_servers(&self.service, servers),
+        let record = DnsRecord {
+            service: self.service.clone(),
+            previous: self.previous.clone(),
         };
-
-        match result {
-            Ok(()) => {
-                flush_dns_cache();
-                info!("已恢复网络服务 {} 的 DNS 配置", self.service);
-            }
-            Err(e) => {
-                warn!("恢复网络服务 {} 的 DNS 配置失败：{e}", self.service);
-            }
+        if restore_dns_record(&record) {
+            self.lease.remove_record(&record);
+        } else {
+            warn!(
+                "保留 TUN DNS 状态文件以便下次启动重试：{}",
+                self.lease.path.display()
+            );
         }
     }
 }
@@ -162,23 +239,247 @@ impl Drop for DnsGuard {
 #[cfg(windows)]
 impl Drop for DnsGuard {
     fn drop(&mut self) {
-        let result = match &self.previous {
-            PreviousWindowsDns::Dhcp => windows_reset_dns_servers(self.interface_index),
-            PreviousWindowsDns::Servers(servers) => {
-                windows_set_dns_servers(self.interface_index, servers)
+        let record = DnsRecord {
+            interface_index: self.interface_index,
+            previous: self.previous.clone(),
+        };
+        if restore_dns_record(&record) {
+            self.lease.remove_record(&record);
+        } else {
+            warn!(
+                "保留 TUN DNS 状态文件以便下次启动重试：{}",
+                self.lease.path.display()
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+impl DnsLease {
+    fn new(dns_state_file: Option<&str>) -> Self {
+        Self {
+            path: dns_state_file_path(dns_state_file),
+            state: DnsState {
+                version: DNS_STATE_VERSION,
+                pid: std::process::id(),
+                created_unix_secs: now_unix_secs(),
+                records: Vec::new(),
+            },
+            persist_failed: false,
+        }
+    }
+
+    fn cleanup_stale_records(&mut self) {
+        let state = match fs::read_to_string(&self.path) {
+            Ok(content) => match serde_json::from_str::<DnsState>(&content) {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!(
+                        "TUN DNS 状态文件 {} 解析失败，将移除该文件：{e}",
+                        self.path.display()
+                    );
+                    remove_file_if_exists(&self.path);
+                    return;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!("读取 TUN DNS 状态文件 {} 失败：{e}", self.path.display());
+                return;
             }
         };
 
-        match result {
-            Ok(()) => {
-                windows_flush_dns_cache();
-                info!("已恢复 Windows 接口 {} 的 DNS 配置", self.interface_index);
-            }
-            Err(e) => warn!(
-                "恢复 Windows 接口 {} 的 DNS 配置失败：{e}",
-                self.interface_index
-            ),
+        if state.records.is_empty() {
+            remove_file_if_exists(&self.path);
+            return;
         }
+
+        info!(
+            "发现上次 TUN 模式遗留的 DNS 状态文件：{}，准备恢复 {} 条 DNS 配置",
+            self.path.display(),
+            state.records.len()
+        );
+
+        self.state.records.clear();
+        for record in state.records {
+            if !restore_dns_record(&record) {
+                self.state.records.push(record);
+            }
+        }
+
+        if self.state.records.is_empty() {
+            remove_file_if_exists(&self.path);
+            info!("上次遗留的 TUN DNS 配置已恢复完成");
+        } else if let Err(e) = self.persist() {
+            warn!("写回 TUN DNS 状态文件 {} 失败：{e}", self.path.display());
+        }
+    }
+
+    fn record_active(&mut self, record: DnsRecord) {
+        self.state
+            .records
+            .retain(|existing| !same_dns_target(existing, &record));
+        self.state.records.push(record);
+        if let Err(e) = self.persist() {
+            self.persist_failed = true;
+            warn!("写入 TUN DNS 状态文件 {} 失败：{e}", self.path.display());
+        }
+    }
+
+    fn remove_record(&mut self, record: &DnsRecord) {
+        self.state
+            .records
+            .retain(|existing| !same_dns_target(existing, record));
+        if self.state.records.is_empty() {
+            self.clear();
+        } else if let Err(e) = self.persist() {
+            warn!("更新 TUN DNS 状态文件 {} 失败：{e}", self.path.display());
+        }
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let data = serde_json::to_vec_pretty(&self.state).map_err(std::io::Error::other)?;
+        let tmp_path = self
+            .path
+            .with_extension(format!("json.tmp.{}", std::process::id()));
+        fs::write(&tmp_path, data)?;
+        #[cfg(windows)]
+        if self.path.exists() {
+            fs::remove_file(&self.path)?;
+        }
+        fs::rename(tmp_path, &self.path)
+    }
+
+    fn clear(&mut self) {
+        if self.persist_failed {
+            debug!(
+                "TUN DNS 状态文件此前写入失败，无需清理：{}",
+                self.path.display()
+            );
+        }
+        remove_file_if_exists(&self.path);
+        self.state.records.clear();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn same_dns_target(left: &DnsRecord, right: &DnsRecord) -> bool {
+    left.service == right.service
+}
+
+#[cfg(windows)]
+fn same_dns_target(left: &DnsRecord, right: &DnsRecord) -> bool {
+    left.interface_index == right.interface_index
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_previous_dns(previous: PreviousDns, tun_dns: Ipv4Addr) -> PreviousDns {
+    let tun_dns = tun_dns.to_string();
+    match previous {
+        PreviousDns::Servers(servers) if servers.len() == 1 && servers[0] == tun_dns => {
+            warn!("检测到当前 macOS DNS 已经是 TUN DNS {tun_dns}，将按遗留状态处理并在退出时清空");
+            PreviousDns::Empty
+        }
+        previous => previous,
+    }
+}
+
+#[cfg(windows)]
+fn normalize_previous_dns(previous: PreviousWindowsDns, tun_dns: Ipv4Addr) -> PreviousWindowsDns {
+    let tun_dns = tun_dns.to_string();
+    match previous {
+        PreviousWindowsDns::Servers(servers) if servers.len() == 1 && servers[0] == tun_dns => {
+            warn!(
+                "检测到当前 Windows DNS 已经是 TUN DNS {tun_dns}，将按遗留状态处理并在退出时重置为 DHCP"
+            );
+            PreviousWindowsDns::Dhcp
+        }
+        previous => previous,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn restore_dns_record(record: &DnsRecord) -> bool {
+    let result = match &record.previous {
+        PreviousDns::Empty => clear_dns_servers(&record.service),
+        PreviousDns::Servers(servers) => set_dns_servers(&record.service, servers),
+    };
+
+    match result {
+        Ok(()) => {
+            flush_dns_cache();
+            info!("已恢复网络服务 {} 的 DNS 配置", record.service);
+            true
+        }
+        Err(e) => {
+            warn!("恢复网络服务 {} 的 DNS 配置失败：{e}", record.service);
+            false
+        }
+    }
+}
+
+#[cfg(windows)]
+fn restore_dns_record(record: &DnsRecord) -> bool {
+    let result = match &record.previous {
+        PreviousWindowsDns::Dhcp => windows_reset_dns_servers(record.interface_index),
+        PreviousWindowsDns::Servers(servers) => {
+            windows_set_dns_servers(record.interface_index, servers)
+        }
+    };
+
+    match result {
+        Ok(()) => {
+            windows_flush_dns_cache();
+            info!("已恢复 Windows 接口 {} 的 DNS 配置", record.interface_index);
+            true
+        }
+        Err(e) => {
+            warn!(
+                "恢复 Windows 接口 {} 的 DNS 配置失败：{e}",
+                record.interface_index
+            );
+            false
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn dns_state_file_path(configured_file: Option<&str>) -> PathBuf {
+    if let Some(path) = std::env::var_os("PPAASS_TUN_DNS_STATE") {
+        return PathBuf::from(path);
+    }
+
+    let configured_file = configured_file
+        .map(str::trim)
+        .filter(|file| !file.is_empty())
+        .unwrap_or(DNS_STATE_FILE_NAME);
+    let path = PathBuf::from(configured_file);
+    if path.is_absolute() {
+        return path;
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn remove_file_if_exists(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => debug!("已删除 TUN DNS 状态文件：{}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("删除 TUN DNS 状态文件 {} 失败：{e}", path.display()),
     }
 }
 

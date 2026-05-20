@@ -26,7 +26,9 @@ use route::{RouteGuard, cleanup_stale_routes, detect_proxy_route, resolve_proxy_
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 use tun_rs::DeviceBuilder;
@@ -66,7 +68,7 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
-    cleanup_stale_routes();
+    cleanup_stale_routes(config.route_state_file.as_deref());
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
     let tun_name = device
@@ -120,20 +122,42 @@ pub async fn run_tun_mode(
         proxy_bind_interface.as_ref(),
         tun_if_index,
         dns_server,
+        config.dns_state_file.as_deref(),
     );
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
-    let _ = tokio::join!(tun_to_stack, stack_to_tun, tcp_task, udp_task);
 
-    // 清掉连接池绑定 IP，并通过 RouteGuard::drop 恢复系统路由。
+    // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
     pool.set_proxy_bind_ip(None);
     pool.set_proxy_bind_interface(None);
     drop(dns_guard);
     drop(route_guard);
 
+    let _ = tokio::join!(
+        wait_tun_task("tun_to_stack", tun_to_stack),
+        wait_tun_task("stack_to_tun", stack_to_tun),
+        wait_tun_task("tcp_task", tcp_task),
+        wait_tun_task("udp_task", udp_task),
+    );
+
     info!("TUN 模式转发器已停止");
     Ok(())
+}
+
+async fn wait_tun_task(name: &'static str, mut handle: JoinHandle<()>) {
+    tokio::select! {
+        result = &mut handle => {
+            if let Err(e) = result {
+                warn!("TUN 任务 {name} 异常结束：{e}");
+            }
+        }
+        _ = tokio::time::sleep(Duration::from_secs(3)) => {
+            warn!("TUN 任务 {name} 未及时退出，正在中止任务");
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -408,7 +432,13 @@ fn install_route_guard(
 ) -> Option<RouteGuard> {
     // 解析 proxy IP 后安装旁路和 split-default 路由；失败时继续运行但不接管全局路由。
     let proxy_ips = resolve_proxy_ips(proxy_addrs);
-    match RouteGuard::install(tun_if_index, tun_ipv4, config.ipv6.as_deref(), &proxy_ips) {
+    match RouteGuard::install(
+        tun_if_index,
+        tun_ipv4,
+        config.ipv6.as_deref(),
+        config.route_state_file.as_deref(),
+        &proxy_ips,
+    ) {
         Ok(guard) => Some(guard),
         Err(e) => {
             warn!(
