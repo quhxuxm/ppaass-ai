@@ -508,6 +508,7 @@ async fn process_udp_traffic(
 }
 
 const SOCKS_UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+const SOCKS_UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 struct SocksUdpRelay {
     tx: tokio::sync::mpsc::Sender<SocksUdpRelayRequest>,
@@ -644,6 +645,8 @@ async fn run_socks_udp_relay(
 
         info!("SOCKS5 UDP 已建立共享 proxy 连接");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
+        let idle = tokio::time::sleep(SOCKS_UDP_RELAY_CONNECTION_IDLE);
+        tokio::pin!(idle);
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
 
@@ -654,17 +657,31 @@ async fn run_socks_udp_relay(
                     retry_request = Some(request);
                     break;
                 }
+                idle.as_mut()
+                    .reset(tokio::time::Instant::now() + SOCKS_UDP_RELAY_CONNECTION_IDLE);
                 continue;
             }
 
             tokio::select! {
                 maybe_request = rx.recv() => {
-                    let Some(request) = maybe_request else { return };
+                    let Some(request) = maybe_request else {
+                        let _ = writer.shutdown().await;
+                        return;
+                    };
                     if let Err(e) = send_socks_udp_request(&mut writer, &mut state, &request).await {
                         debug!("SOCKS5 UDP 共享连接写入失败：{e}");
                         retry_request = Some(request);
                         break;
                     }
+                    idle.as_mut().reset(tokio::time::Instant::now() + SOCKS_UDP_RELAY_CONNECTION_IDLE);
+                }
+                _ = &mut idle => {
+                    debug!(
+                        "SOCKS5 UDP 共享连接空闲超过 {} 秒，主动关闭 proxy 连接",
+                        SOCKS_UDP_RELAY_CONNECTION_IDLE.as_secs()
+                    );
+                    let _ = writer.shutdown().await;
+                    break;
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {
@@ -680,6 +697,7 @@ async fn run_socks_udp_relay(
                             ).await {
                                 debug!("SOCKS5 UDP 回复写回失败：{e}");
                             }
+                            idle.as_mut().reset(tokio::time::Instant::now() + SOCKS_UDP_RELAY_CONNECTION_IDLE);
                         }
                         Err(e) => {
                             debug!("SOCKS5 UDP 共享连接读取失败：{e}");

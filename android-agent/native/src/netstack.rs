@@ -19,7 +19,9 @@ use crate::error::{AndroidAgentError, Result};
 use crate::fd_device::{AndroidTunDevice, RawFd};
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
+const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
+const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
 const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 
@@ -346,6 +348,8 @@ async fn run_dns_proxy(
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(5));
         cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let idle_sleep = tokio::time::sleep(DNS_PROXY_CONNECTION_IDLE);
+        tokio::pin!(idle_sleep);
         pending.clear();
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
@@ -359,14 +363,28 @@ async fn run_dns_proxy(
                     retry_request = Some(request);
                     break;
                 }
+                idle_sleep
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
                 continue;
             }
 
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                _ = shutdown.cancelled() => {
+                    let _ = writer.shutdown().await;
+                    return;
+                }
+                _ = &mut idle_sleep => {
+                    debug!("Android TUN DNS proxy idle; closing connection");
+                    let _ = writer.shutdown().await;
+                    break;
+                }
                 _ = cleanup.tick() => cleanup_pending_dns(&mut pending),
                 maybe_request = rx.recv() => {
-                    let Some(request) = maybe_request else { return };
+                    let Some(request) = maybe_request else {
+                        let _ = writer.shutdown().await;
+                        return;
+                    };
                     if let Err(e) = send_dns_request(
                         &mut writer,
                         &mut pending,
@@ -377,6 +395,9 @@ async fn run_dns_proxy(
                         retry_request = Some(request);
                         break;
                     }
+                    idle_sleep.as_mut().reset(
+                        tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE,
+                    );
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {
@@ -393,6 +414,9 @@ async fn run_dns_proxy(
                             ).await {
                                 debug!("Android TUN DNS proxy response failed: {e}");
                             }
+                            idle_sleep.as_mut().reset(
+                                tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE,
+                            );
                         }
                         Err(e) => {
                             debug!("Android TUN DNS proxy read failed: {e}");
@@ -672,6 +696,8 @@ async fn run_udp_relay(
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(60));
         cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let idle_sleep = tokio::time::sleep(UDP_RELAY_CONNECTION_IDLE);
+        tokio::pin!(idle_sleep);
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
 
@@ -682,19 +708,36 @@ async fn run_udp_relay(
                     retry_request = Some(request);
                     break;
                 }
+                idle_sleep
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + UDP_RELAY_CONNECTION_IDLE);
                 continue;
             }
 
             tokio::select! {
-                _ = shutdown.cancelled() => return,
+                _ = shutdown.cancelled() => {
+                    let _ = writer.shutdown().await;
+                    return;
+                }
+                _ = &mut idle_sleep => {
+                    debug!("Android TUN UDP relay idle; closing connection");
+                    let _ = writer.shutdown().await;
+                    break;
+                }
                 _ = cleanup.tick() => state.cleanup_expired(),
                 maybe_request = rx.recv() => {
-                    let Some(request) = maybe_request else { return };
+                    let Some(request) = maybe_request else {
+                        let _ = writer.shutdown().await;
+                        return;
+                    };
                     if let Err(e) = send_udp_relay_request(&mut writer, &mut state, &request).await {
                         debug!("Android TUN UDP relay write failed: {e}");
                         retry_request = Some(request);
                         break;
                     }
+                    idle_sleep.as_mut().reset(
+                        tokio::time::Instant::now() + UDP_RELAY_CONNECTION_IDLE,
+                    );
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {
@@ -710,6 +753,9 @@ async fn run_udp_relay(
                             ).await {
                                 debug!("Android TUN UDP relay response failed: {e}");
                             }
+                            idle_sleep.as_mut().reset(
+                                tokio::time::Instant::now() + UDP_RELAY_CONNECTION_IDLE,
+                            );
                         }
                         Err(e) => {
                             debug!("Android TUN UDP relay read failed: {e}");
