@@ -18,11 +18,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Build agent
-echo -e "\nBuilding agent..."
-cargo build --release -p agent
+# Build desktop agent
+echo -e "\nBuilding desktop-agent..."
+cargo build --release -p desktop-agent
 if [ $? -ne 0 ]; then
-    echo "Failed to build agent"
+    echo "Failed to build desktop-agent"
     exit 1
 fi
 
@@ -36,5 +36,5 @@ fi
 
 echo -e "\nBuild completed successfully!"
 echo -e "\nExecutables location:"
-echo "  Agent: target/release/agent"
+echo "  Desktop Agent: target/release/desktop-agent"
 echo "  Proxy: target/release/proxy"

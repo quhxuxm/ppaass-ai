@@ -1,5 +1,5 @@
 [package]
-name = "agent"
+name = "desktop-agent"
 version.workspace = true
 edition.workspace = true
 

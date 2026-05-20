@@ -63,14 +63,14 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p agent -- --config config/agent.toml
+cargo run --release -p desktop-agent -- --config config/agent.toml
 ```
 
 **Expected Output:**
 ```
-[2024-01-31T02:00:00Z INFO  agent] Starting agent server
-[2024-01-31T02:00:00Z INFO  agent::server] Agent server listening on 127.0.0.1:7070
-[2024-01-31T02:00:00Z INFO  agent::connection_pool] Connection pool initialized with 10 connections
+[2024-01-31T02:00:00Z INFO  desktop_agent] Starting agent server
+[2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7070
+[2024-01-31T02:00:00Z INFO  desktop_agent::connection_pool] Connection pool initialized with 10 connections
 ```
 
 ### Terminal 4: Run Integration Tests
@@ -301,7 +301,7 @@ jobs:
         run: cargo run --release -p proxy -- --config config/proxy.toml &
         
       - name: Start agent
-        run: cargo run --release -p agent -- --config config/agent.toml &
+        run: cargo run --release -p desktop-agent -- --config config/agent.toml &
         
       - name: Run integration tests
         run: ./run-tests.sh integration

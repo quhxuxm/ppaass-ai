@@ -1,4 +1,4 @@
-# PPAASS Agent 配置
+# PPAASS Desktop Agent 配置
 # 该配置用于演示，包含真实 RSA 密钥
 
 listen_addr = "127.0.0.1:7070"
@@ -24,7 +24,7 @@ async_runtime_stack_size_mb = 4
 # log_dir = "logs"
 
 # 日志文件名（仅在设置 log_dir 时使用）
-# log_file = "agent.log"
+# log_file = "desktop-agent.log"
 
 # Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 # runtime_threads = 4
@@ -41,7 +41,9 @@ async_runtime_stack_size_mb = 4
 #     旁路路由，确保代理流量不会回环进入 TUN。
 #   * 添加两条指向 TUN 的 split-default 路由（0.0.0.0/1 和 128.0.0.0/1），
 #     它们优先级高于现有默认路由。原默认路由不会被修改。
-# 关闭时会自动删除所有已安装的路由（转发器退出或 panic 时会释放 guard）。
+# 路由安装会写入一个小型状态文件，正常关闭时删除；如果进程被强杀、
+# 终端异常断开或系统中止导致 guard 没有执行，下次启动 TUN 模式时会先
+# 尝试按状态文件清理上次遗留的路由，再安装新的路由。
 #
 # 注意：创建 TUN 设备并修改路由表需要提升权限
 #（macOS/Linux 上为 root，Windows 上为管理员）。
@@ -54,7 +56,7 @@ ipv4 = "10.10.10.1/24"
 mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理。
 proxy_dns = true
-# Windows TUN 模式需要 wintun.dll。默认会检查 agent.exe 同目录、当前目录和 PATH；
+# Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"
 wintun_file = "wintun.dll"
 
@@ -76,14 +78,48 @@ mode = "rules"
 rules = [
    "localhost",
    "*.local",
+   "*.isoftbet.com",
+   "*.lab.wagerworks.com",
+   "*.corp.wagerworks.com",
+   "*.igt.com",
+   "10.76.0.0/16",
    "127.0.0.0/8",
-   "169.254.0.0/16",
    "10.0.0.0/8",
    "172.16.0.0/12",
    "192.168.0.0/16",
-   "100.64.0.0/10",
-   "224.0.0.0/4",
    "::1",
-   "fc00::/7",
-   "fe80::/10",
+   "63.183.31.0/8",
+   "*.baidu.com",
+   "*.bilibili.com",
+   "*.qq.com",
+   "*.taobao.com",
+   "*.jd.com",
+   "*.sina.com.cn",
+   "*.weibo.com",
+   "*.zhihu.com",
+   "*.douban.com",
+   "*.360.cn",
+   "*.sohu.com",
+   "*.youku.com",
+   "*.iqiyi.com",
+   "*.tencent.com",
+   "*.alibaba.com",
+   "*.hdslb.com",
+   "*.bilivideo.com",
+   "*.bilivideo.cn",
+   "*.microsoft.com",
+   "*.docs.rs",
+   "*.rust-lang.org",
+   "*.youdao.com",
+   "*.mi.com",
+   "*.vultr.com",
+   "*.gov.cn",
+   "*.aliyun.com",
+   "*.crates.io",
+   "*.qwen.ai",
+   "*.bytedance.com",
+   "*.qwenlm.ai",
+   "*.deepseek.com",
+   "*.cn",
+   "*.bing.com",
 ]

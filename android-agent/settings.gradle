@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'PpaassAndroidAgent'
+rootProject.name = 'android-agent'
 include ':app'

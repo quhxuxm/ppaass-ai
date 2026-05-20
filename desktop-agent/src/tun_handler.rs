@@ -22,7 +22,7 @@ use crate::error::{AgentError, Result};
 use dns::DnsGuard;
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
-use route::{RouteGuard, detect_proxy_route, resolve_proxy_ips};
+use route::{RouteGuard, cleanup_stale_routes, detect_proxy_route, resolve_proxy_ips};
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,6 +66,7 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
+    cleanup_stale_routes();
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
     let tun_name = device
@@ -239,7 +240,7 @@ fn resolve_wintun_file(config: &TunConfig) -> Result<PathBuf> {
         return Err(missing_wintun_error(&[path], true));
     }
 
-    // 未配置时按 agent.exe 目录、当前目录、PATH 顺序搜索。
+    // 未配置时按 desktop-agent.exe 目录、当前目录、PATH 顺序搜索。
     let candidates = default_wintun_candidates();
     if let Some(path) = candidates.iter().find(|path| path.is_file()) {
         return Ok(path.clone());
@@ -264,7 +265,7 @@ fn absolute_wintun_path(path: &Path) -> PathBuf {
 fn default_wintun_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    // agent.exe 同目录优先，最符合随二进制打包的部署方式。
+    // desktop-agent.exe 同目录优先，最符合随二进制打包的部署方式。
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -304,8 +305,8 @@ fn missing_wintun_error(candidates: &[PathBuf], explicit: bool) -> AgentError {
     };
 
     AgentError::Connection(format!(
-        "创建 TUN 设备失败：{reason}。TUN 模式需要与 agent.exe 同架构的 wintun.dll（当前进程架构：{}）。\
-         请从 https://www.wintun.net/ 下载对应架构的 DLL，放到 agent.exe 同目录，或在 [tun] 中设置 wintun_file。\
+        "创建 TUN 设备失败：{reason}。TUN 模式需要与 desktop-agent.exe 同架构的 wintun.dll（当前进程架构：{}）。\
+         请从 https://www.wintun.net/ 下载对应架构的 DLL，放到 desktop-agent.exe 同目录，或在 [tun] 中设置 wintun_file。\
          已检查：{}",
         windows_arch_label(),
         checked
@@ -318,7 +319,7 @@ fn windows_tun_create_error(error: std::io::Error, wintun_file: &Path) -> AgentE
     let hint = if error.raw_os_error() == Some(5) {
         "Windows 返回拒绝访问。请确认当前进程是 elevated 管理员令牌；如果已经提权，检查是否有同名 Wintun 适配器被其他进程占用，或安全策略拦截驱动安装/打开。"
     } else {
-        "如果 DLL 存在但仍加载失败，请确认它与 agent.exe 架构一致，并以管理员身份运行。"
+        "如果 DLL 存在但仍加载失败，请确认它与 desktop-agent.exe 架构一致，并以管理员身份运行。"
     };
 
     AgentError::Connection(format!(

@@ -1,5 +1,5 @@
 [package]
-name = "ppaass_android_agent"
+name = "android-agent"
 version.workspace = true
 edition.workspace = true
 

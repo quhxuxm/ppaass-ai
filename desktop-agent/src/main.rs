@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     let runtime = runtime_builder.build()?;
 
     runtime.block_on(async move {
-        info!("PPAASS Agent 启动中");
+        info!("PPAASS Desktop Agent 启动中");
         info!("监听地址：    {}", config.listen_addr);
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);
@@ -111,16 +111,8 @@ fn main() -> Result<()> {
         }
 
         let shutdown = CancellationToken::new();
-        let shutdown_for_signal = shutdown.clone();
-        // Ctrl-C 只触发取消信号，真正的资源清理由各任务在收到 token 后完成。
-        tokio::spawn(async move {
-            if let Err(err) = tokio::signal::ctrl_c().await {
-                error!("安装 Ctrl-C 信号处理器失败：{err}");
-                return;
-            }
-            info!("收到 Ctrl-C，正在请求关闭");
-            shutdown_for_signal.cancel();
-        });
+        // 关闭信号只触发取消，真正的资源清理由各任务在收到 token 后完成。
+        setup_shutdown_signals(&shutdown);
 
         match AgentServer::new(config).await {
             Ok(server) => {
@@ -138,4 +130,52 @@ fn main() -> Result<()> {
             }
         }
     })
+}
+
+fn setup_shutdown_signals(shutdown: &CancellationToken) {
+    let shutdown_for_ctrl_c = shutdown.clone();
+    tokio::spawn(async move {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            error!("安装 Ctrl-C 信号处理器失败：{err}");
+            return;
+        }
+        info!("收到 Ctrl-C，正在请求关闭");
+        shutdown_for_ctrl_c.cancel();
+    });
+
+    #[cfg(unix)]
+    {
+        setup_unix_shutdown_signal(
+            shutdown,
+            tokio::signal::unix::SignalKind::terminate(),
+            "SIGTERM",
+        );
+        setup_unix_shutdown_signal(
+            shutdown,
+            tokio::signal::unix::SignalKind::hangup(),
+            "SIGHUP",
+        );
+        setup_unix_shutdown_signal(shutdown, tokio::signal::unix::SignalKind::quit(), "SIGQUIT");
+    }
+}
+
+#[cfg(unix)]
+fn setup_unix_shutdown_signal(
+    shutdown: &CancellationToken,
+    kind: tokio::signal::unix::SignalKind,
+    name: &'static str,
+) {
+    let mut signal = match tokio::signal::unix::signal(kind) {
+        Ok(signal) => signal,
+        Err(err) => {
+            error!("安装 {name} 信号处理器失败：{err}");
+            return;
+        }
+    };
+    let shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        signal.recv().await;
+        info!("收到 {name}，正在请求关闭");
+        shutdown.cancel();
+    });
 }

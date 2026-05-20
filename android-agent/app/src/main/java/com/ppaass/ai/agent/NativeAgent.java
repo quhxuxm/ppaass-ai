@@ -2,7 +2,7 @@ package com.ppaass.ai.agent;
 
 final class NativeAgent {
     static {
-        System.loadLibrary("ppaass_android_agent");
+        System.loadLibrary("android_agent");
     }
 
     private NativeAgent() {

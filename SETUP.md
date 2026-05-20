@@ -111,10 +111,10 @@ connection_timeout_secs = 30
 
 ```bash
 # On Windows
-.\target\release\agent.exe --config config\agent.toml
+.\target\release\desktop-agent.exe --config config\agent.toml
 
 # On Linux/macOS
-./target/release/agent --config config/agent.toml
+./target/release/desktop-agent --config config/agent.toml
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
@@ -173,7 +173,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 3. **Check logs:**
     - Agent and proxy output detailed logs
-    - Set log level: `RUST_LOG=debug ./target/release/agent`
+    - Set log level: `RUST_LOG=debug ./target/release/desktop-agent`
 
 ### Authentication Issues
 
@@ -225,7 +225,7 @@ For issues and questions:
 **Start Agent:**
 
 ```bash
-./target/release/agent --config config/agent.toml
+./target/release/desktop-agent --config config/agent.toml
 ```
 
 **Test Connection:**
