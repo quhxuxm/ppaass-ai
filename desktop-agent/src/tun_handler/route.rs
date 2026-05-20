@@ -2,13 +2,31 @@ use super::network::parse_cidr_v6;
 use crate::error::{AgentError, Result};
 use common::BindInterface;
 use route_manager::{Route, RouteManager};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
+
+const ROUTE_STATE_VERSION: u8 = 1;
+const ROUTE_STATE_FILE_NAME: &str = "tun-routes.json";
 
 #[derive(Debug, Clone)]
 pub(super) struct ProxyRoute {
     pub(super) local_ip: IpAddr,
     pub(super) bind_interface: Option<BindInterface>,
+}
+
+pub(super) fn cleanup_stale_routes() {
+    let mut mgr = match RouteManager::new() {
+        Ok(mgr) => mgr,
+        Err(e) => {
+            warn!("RouteManager 初始化失败，无法预清理遗留 TUN 路由：{e}");
+            return;
+        }
+    };
+    RouteLease::new().cleanup_stale_routes(&mut mgr);
 }
 
 /// 检测 OS 当前使用哪个本地出口来到达代理服务器。
@@ -105,6 +123,7 @@ pub(super) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
 pub(super) struct RouteGuard {
     mgr: RouteManager,
     installed: Vec<Route>,
+    lease: RouteLease,
 }
 
 impl RouteGuard {
@@ -118,6 +137,9 @@ impl RouteGuard {
     ) -> Result<Self> {
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
+        let mut lease = RouteLease::new();
+
+        lease.cleanup_stale_routes(&mut mgr);
 
         let routes = match mgr.list() {
             Ok(routes) => routes,
@@ -166,6 +188,7 @@ impl RouteGuard {
             match mgr.add(&route) {
                 Ok(()) => {
                     info!("已安装代理旁路路由：{}", route);
+                    lease.record_installed(RouteKind::ProxyBypass, &route);
                     installed.push(route);
                 }
                 Err(e) => warn!("为 {ip} 安装旁路路由失败：{e}"),
@@ -173,10 +196,20 @@ impl RouteGuard {
         }
 
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
-        install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed);
-        install_ipv6_split_routes(&mut mgr, tun_if_index, tun_ipv6_cidr, &mut installed);
+        install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed, &mut lease);
+        install_ipv6_split_routes(
+            &mut mgr,
+            tun_if_index,
+            tun_ipv6_cidr,
+            &mut installed,
+            &mut lease,
+        );
 
-        Ok(Self { mgr, installed })
+        Ok(Self {
+            mgr,
+            installed,
+            lease,
+        })
     }
 }
 
@@ -186,12 +219,293 @@ impl Drop for RouteGuard {
             "正在恢复路由表：删除 {} 条已安装的路由",
             self.installed.len()
         );
+        let mut cleanup_ok = true;
         while let Some(route) = self.installed.pop() {
             match self.mgr.delete(&route) {
                 Ok(()) => debug!("已删除路由：{}", route),
-                Err(e) => warn!("删除路由 {} 失败：{e}", route),
+                Err(e) => {
+                    cleanup_ok = false;
+                    warn!("删除路由 {} 失败：{e}", route);
+                }
             }
         }
+        if cleanup_ok {
+            self.lease.clear();
+        } else {
+            warn!(
+                "部分 TUN 路由未能删除，保留路由状态文件以便下次启动重试：{}",
+                self.lease.path.display()
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum RouteKind {
+    ProxyBypass,
+    Ipv4SplitDefault,
+    Ipv6SplitDefault,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RouteRecord {
+    kind: RouteKind,
+    destination: IpAddr,
+    prefix: u8,
+    gateway: Option<IpAddr>,
+    if_index: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RouteState {
+    version: u8,
+    pid: u32,
+    created_unix_secs: u64,
+    routes: Vec<RouteRecord>,
+}
+
+struct RouteLease {
+    path: PathBuf,
+    state: RouteState,
+    persist_failed: bool,
+}
+
+impl RouteLease {
+    fn new() -> Self {
+        Self {
+            path: route_state_file_path(),
+            state: RouteState {
+                version: ROUTE_STATE_VERSION,
+                pid: std::process::id(),
+                created_unix_secs: now_unix_secs(),
+                routes: Vec::new(),
+            },
+            persist_failed: false,
+        }
+    }
+
+    fn cleanup_stale_routes(&self, mgr: &mut RouteManager) {
+        let state = match fs::read_to_string(&self.path) {
+            Ok(content) => match serde_json::from_str::<RouteState>(&content) {
+                Ok(state) => state,
+                Err(e) => {
+                    warn!(
+                        "TUN 路由状态文件 {} 解析失败，将移除该文件：{e}",
+                        self.path.display()
+                    );
+                    remove_file_if_exists(&self.path);
+                    return;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!("读取 TUN 路由状态文件 {} 失败：{e}", self.path.display());
+                return;
+            }
+        };
+
+        if state.routes.is_empty() {
+            remove_file_if_exists(&self.path);
+            return;
+        }
+
+        info!(
+            "发现上次 TUN 模式遗留的路由状态文件：{}，准备清理 {} 条路由",
+            self.path.display(),
+            state.routes.len()
+        );
+
+        let mut cleanup_ok = true;
+        for record in state.routes.iter().rev() {
+            if !delete_recorded_route(mgr, record) {
+                cleanup_ok = false;
+            }
+        }
+
+        if cleanup_ok {
+            remove_file_if_exists(&self.path);
+            info!("上次遗留的 TUN 路由已清理完成");
+        } else {
+            warn!(
+                "上次遗留的部分 TUN 路由未能清理，保留状态文件以便下次重试：{}",
+                self.path.display()
+            );
+        }
+    }
+
+    fn record_installed(&mut self, kind: RouteKind, route: &Route) {
+        self.state.routes.push(RouteRecord::from_route(kind, route));
+        if let Err(e) = self.persist() {
+            self.persist_failed = true;
+            warn!("写入 TUN 路由状态文件 {} 失败：{e}", self.path.display());
+        }
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let data = serde_json::to_vec_pretty(&self.state).map_err(std::io::Error::other)?;
+        let tmp_path = self
+            .path
+            .with_extension(format!("json.tmp.{}", std::process::id()));
+        fs::write(&tmp_path, data)?;
+        #[cfg(windows)]
+        if self.path.exists() {
+            fs::remove_file(&self.path)?;
+        }
+        fs::rename(tmp_path, &self.path)
+    }
+
+    fn clear(&mut self) {
+        if self.persist_failed {
+            debug!(
+                "TUN 路由状态文件此前写入失败，无需清理：{}",
+                self.path.display()
+            );
+        }
+        remove_file_if_exists(&self.path);
+        self.state.routes.clear();
+    }
+}
+
+impl RouteRecord {
+    fn from_route(kind: RouteKind, route: &Route) -> Self {
+        Self {
+            kind,
+            destination: route.destination(),
+            prefix: route.prefix(),
+            gateway: route.gateway(),
+            if_index: route.if_index(),
+        }
+    }
+
+    fn to_route(&self) -> Route {
+        let mut route = Route::new(self.destination, self.prefix);
+        if let Some(gateway) = self.gateway {
+            route = route.with_gateway(gateway);
+        }
+        if let Some(if_index) = self.if_index {
+            route = route.with_if_index(if_index);
+        }
+        route
+    }
+
+    fn matches_route(&self, route: &Route) -> bool {
+        route.destination() == self.destination
+            && route.prefix() == self.prefix
+            && route.gateway() == self.gateway
+            && self
+                .if_index
+                .is_none_or(|if_index| route.if_index() == Some(if_index))
+    }
+}
+
+fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    let route = record.to_route();
+    match mgr.delete(&route) {
+        Ok(()) => {
+            debug!("已清理遗留 TUN 路由：{}", route);
+            return true;
+        }
+        Err(e) => {
+            debug!(
+                "按状态文件直接删除路由 {} 失败，将检查当前路由表：{e}",
+                route
+            );
+        }
+    }
+
+    let routes = match mgr.list() {
+        Ok(routes) => routes,
+        Err(e) => {
+            warn!("删除遗留 TUN 路由 {} 失败，且无法列出当前路由：{e}", route);
+            return false;
+        }
+    };
+
+    let matches: Vec<Route> = routes
+        .into_iter()
+        .filter(|candidate| record.matches_route(candidate))
+        .collect();
+    if matches.is_empty() {
+        debug!("遗留 TUN 路由已不存在：{}", route);
+        return true;
+    }
+
+    let mut deleted_all = true;
+    for candidate in matches {
+        match mgr.delete(&candidate) {
+            Ok(()) => debug!("已清理遗留 TUN 路由：{}", candidate),
+            Err(e) => {
+                deleted_all = false;
+                warn!("删除遗留 TUN 路由 {} 失败：{e}", candidate);
+            }
+        }
+    }
+    deleted_all
+}
+
+fn route_state_file_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("PPAASS_TUN_ROUTE_STATE") {
+        return PathBuf::from(path);
+    }
+
+    platform_state_dir().join(ROUTE_STATE_FILE_NAME)
+}
+
+#[cfg(target_os = "windows")]
+fn platform_state_dir() -> PathBuf {
+    std::env::var_os("PROGRAMDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("PPAASS")
+        .join("desktop-agent")
+}
+
+#[cfg(target_os = "macos")]
+fn platform_state_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| {
+            home.join("Library")
+                .join("Application Support")
+                .join("ppaass-ai")
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("ppaass-ai"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn platform_state_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".local").join("state"))
+        })
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ppaass-ai")
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn platform_state_dir() -> PathBuf {
+    std::env::temp_dir().join("ppaass-ai")
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn remove_file_if_exists(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => debug!("已删除 TUN 路由状态文件：{}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("删除 TUN 路由状态文件 {} 失败：{e}", path.display()),
     }
 }
 
@@ -200,6 +514,7 @@ fn install_ipv4_split_routes(
     tun_if_index: u32,
     _tun_ipv4: Ipv4Addr,
     installed: &mut Vec<Route>,
+    lease: &mut RouteLease,
 ) {
     // 0.0.0.0/1 + 128.0.0.0/1 等价于默认路由，但优先级通常高于原 /0。
     // TUN/utun 是三层接口，这里使用接口路由；把 TUN 自己的 IP 当 gateway
@@ -212,6 +527,7 @@ fn install_ipv4_split_routes(
         match mgr.add(&route) {
             Ok(()) => {
                 info!("已安装 split-default 路由：{}", route);
+                lease.record_installed(RouteKind::Ipv4SplitDefault, &route);
                 installed.push(route);
             }
             Err(e) => warn!("安装 split-default 路由 {} 失败：{e}", route),
@@ -224,6 +540,7 @@ fn install_ipv6_split_routes(
     tun_if_index: u32,
     tun_ipv6_cidr: Option<&str>,
     installed: &mut Vec<Route>,
+    lease: &mut RouteLease,
 ) {
     let Some(v6_cidr) = tun_ipv6_cidr else {
         return;
@@ -243,6 +560,7 @@ fn install_ipv6_split_routes(
         match mgr.add(&route) {
             Ok(()) => {
                 info!("已安装 IPv6 split-default 路由：{}", route);
+                lease.record_installed(RouteKind::Ipv6SplitDefault, &route);
                 installed.push(route);
             }
             Err(e) => warn!("安装 IPv6 split-default 路由 {} 失败：{e}", route),

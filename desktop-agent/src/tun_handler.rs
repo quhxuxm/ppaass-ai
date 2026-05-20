@@ -22,7 +22,7 @@ use crate::error::{AgentError, Result};
 use dns::DnsGuard;
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
-use route::{RouteGuard, detect_proxy_route, resolve_proxy_ips};
+use route::{RouteGuard, cleanup_stale_routes, detect_proxy_route, resolve_proxy_ips};
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,6 +66,7 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
+    cleanup_stale_routes();
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
     let tun_name = device
