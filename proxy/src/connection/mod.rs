@@ -942,13 +942,99 @@ impl ServerConnection {
         let reader = StreamReader::new(stream);
 
         // AgentIo 让 packet-based 的 agent 连接呈现为 AsyncRead/AsyncWrite。
-        let mut agent_io = AgentIo { reader, writer };
+        let agent_io = AgentIo { reader, writer };
 
-        // Tokio 负责双向复制，任意一端关闭都会结束中继。
-        match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
-            Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
-            Err(e) => debug!("中继错误：{}", e),
+        let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
+        if tcp_relay_idle_timeout_secs == 0 {
+            // 兼容旧行为：不配置超时时按任一端关闭来结束中继。
+            let mut agent_io = agent_io;
+            match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
+                Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
+                Err(e) => debug!("中继错误：{}", e),
+            }
+            return Ok(());
         }
+
+        let idle_timeout = Duration::from_secs(tcp_relay_idle_timeout_secs);
+        let idle = tokio::time::sleep(idle_timeout);
+        tokio::pin!(idle);
+
+        let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
+        let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
+        let mut up_bytes: u64 = 0;
+        let mut down_bytes: u64 = 0;
+        let mut agent_buf = [0u8; 8192];
+        let mut target_buf = [0u8; 8192];
+
+        loop {
+            tokio::select! {
+                _ = &mut idle => {
+                    debug!(
+                        "TCP 中继空闲超过 {} 秒，关闭连接",
+                        idle_timeout.as_secs()
+                    );
+                    break;
+                }
+                read = agent_reader.read(&mut agent_buf) => {
+                    match read {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            up_bytes += n as u64;
+                            match tokio::time::timeout(idle_timeout, async {
+                                target_writer.write_all(&agent_buf[..n]).await?;
+                                target_writer.flush().await
+                            }).await {
+                                Ok(Ok(())) => {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                                }
+                                Ok(Err(e)) => {
+                                    debug!("TCP relay 写入目标失败：{}", e);
+                                    break;
+                                }
+                                Err(_) => {
+                                    debug!("TCP relay 写入目标超过 {} 秒，关闭连接", idle_timeout.as_secs());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!("TCP relay 读取 agent 数据失败：{}", e);
+                            break;
+                        }
+                    }
+                }
+                read = target_reader.read(&mut target_buf) => {
+                    match read {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            down_bytes += n as u64;
+                            match tokio::time::timeout(idle_timeout, async {
+                                agent_writer.write_all(&target_buf[..n]).await?;
+                                agent_writer.flush().await
+                            }).await {
+                                Ok(Ok(())) => {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                                }
+                                Ok(Err(e)) => {
+                                    debug!("TCP relay 写回 agent 失败：{}", e);
+                                    break;
+                                }
+                                Err(_) => {
+                                    debug!("TCP relay 写回 agent 超过 {} 秒，关闭连接", idle_timeout.as_secs());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!("TCP relay 读取目标数据失败：{}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        debug!("中继已结束：上行 {}，下行 {}", up_bytes, down_bytes);
 
         Ok(())
     }
