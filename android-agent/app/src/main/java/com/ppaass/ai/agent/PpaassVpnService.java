@@ -135,6 +135,7 @@ public class PpaassVpnService extends VpnService {
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
                 .put("connect_timeout_secs", 30)
+                .put("tcp_pool_size", DefaultConfig.TCP_POOL_SIZE)
                 .put("udp_pool_size", DefaultConfig.UDP_POOL_SIZE)
                 .put("tun", tunJson);
     }

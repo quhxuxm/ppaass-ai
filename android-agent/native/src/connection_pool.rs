@@ -11,25 +11,31 @@ use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
 const MAX_CONCURRENT_POOL_CONNECTS: usize = 5;
-const UDP_POOL_MAX_CONNECTION_AGE: Duration = Duration::from_secs(90);
+const POOL_MAX_CONNECTION_AGE: Duration = Duration::from_secs(90);
 
-struct PooledUdpConnection {
+struct PooledConnection {
     connection: AuthenticatedConnection,
     created_at: Instant,
 }
 
-pub struct UdpConnectionPool {
+pub struct AndroidConnectionPool {
     config: Arc<AndroidAgentConfig>,
     pool_size: usize,
-    connections: Mutex<VecDeque<PooledUdpConnection>>,
+    pool_name: &'static str,
+    connections: Mutex<VecDeque<PooledConnection>>,
     refill_notify: Notify,
 }
 
-impl UdpConnectionPool {
-    pub fn new(config: Arc<AndroidAgentConfig>) -> Arc<Self> {
+impl AndroidConnectionPool {
+    pub fn new(
+        config: Arc<AndroidAgentConfig>,
+        pool_size: usize,
+        pool_name: &'static str,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            pool_size: config.udp_pool_size,
             config,
+            pool_size,
+            pool_name,
             connections: Mutex::new(VecDeque::new()),
             refill_notify: Notify::new(),
         })
@@ -37,11 +43,14 @@ impl UdpConnectionPool {
 
     pub async fn prewarm(self: &Arc<Self>) {
         info!(
-            "prewarming Android udp_pool with {} connections",
-            self.pool_size
+            "prewarming Android {} with {} connections",
+            self.pool_name, self.pool_size
         );
         let success_count = self.fill_to_target().await;
-        info!("Android udp_pool prewarmed {} connections", success_count);
+        info!(
+            "Android {} prewarmed {} connections",
+            self.pool_name, success_count
+        );
 
         let pool = self.clone();
         tokio::spawn(async move {
@@ -63,7 +72,7 @@ impl UdpConnectionPool {
 
             match pooled {
                 Some(pooled) if !pooled.is_expired() => {
-                    debug!("using prewarmed Android udp_pool connection");
+                    debug!("using prewarmed Android {} connection", self.pool_name);
                     match pooled
                         .connection
                         .connect_to_target(address.clone(), transport)
@@ -75,16 +84,22 @@ impl UdpConnectionPool {
                             if message.starts_with("连接失败:") {
                                 return Err(AndroidAgentError::Connection(message));
                             }
-                            warn!("Android udp_pool connection was unusable; retrying: {message}");
+                            warn!(
+                                "Android {} connection was unusable; retrying: {message}",
+                                self.pool_name
+                            );
                         }
                     }
                 }
                 Some(_) => {
-                    debug!("discarding expired Android udp_pool connection");
+                    debug!("discarding expired Android {} connection", self.pool_name);
                     continue;
                 }
                 None => {
-                    debug!("Android udp_pool empty; creating connection on demand");
+                    debug!(
+                        "Android {} empty; creating connection on demand",
+                        self.pool_name
+                    );
                     let connection = self.create_connection().await?;
                     let (stream, _stream_id) = connection
                         .connect_to_target(address, transport)
@@ -118,8 +133,8 @@ impl UdpConnectionPool {
 
         let to_create = self.pool_size - current_size;
         debug!(
-            "refilling Android udp_pool: creating {} connections (current={})",
-            to_create, current_size
+            "refilling Android {}: creating {} connections (current={})",
+            self.pool_name, to_create, current_size
         );
 
         let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
@@ -144,9 +159,14 @@ impl UdpConnectionPool {
                         break;
                     }
                 }
-                Ok(Err(err)) => warn!("failed to create Android udp_pool connection: {err}"),
+                Ok(Err(err)) => {
+                    warn!(
+                        "failed to create Android {} connection: {err}",
+                        self.pool_name
+                    )
+                }
                 Err(err) if err.is_cancelled() => {}
-                Err(err) => warn!("Android udp_pool refill task join error: {err}"),
+                Err(err) => warn!("Android {} refill task join error: {err}", self.pool_name),
             }
         }
         success_count
@@ -156,7 +176,7 @@ impl UdpConnectionPool {
         self.connections.lock().await.len()
     }
 
-    async fn try_add_connection(&self, connection: PooledUdpConnection) -> bool {
+    async fn try_add_connection(&self, connection: PooledConnection) -> bool {
         let mut connections = self.connections.lock().await;
         if connections.len() >= self.pool_size {
             return false;
@@ -172,17 +192,17 @@ impl UdpConnectionPool {
     }
 }
 
-impl PooledUdpConnection {
+impl PooledConnection {
     fn is_expired(&self) -> bool {
-        self.created_at.elapsed() >= UDP_POOL_MAX_CONNECTION_AGE
+        self.created_at.elapsed() >= POOL_MAX_CONNECTION_AGE
     }
 }
 
 async fn create_pooled_connection(
     config: Arc<AndroidAgentConfig>,
-) -> std::io::Result<PooledUdpConnection> {
+) -> std::io::Result<PooledConnection> {
     let connection = AuthenticatedConnection::authenticate_only(config.as_ref()).await?;
-    Ok(PooledUdpConnection {
+    Ok(PooledConnection {
         connection,
         created_at: Instant::now(),
     })

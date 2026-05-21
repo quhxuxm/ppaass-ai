@@ -14,6 +14,9 @@ pub struct AndroidAgentConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
+    #[serde(default = "default_tcp_pool_size")]
+    pub tcp_pool_size: usize,
+
     #[serde(default = "default_udp_pool_size")]
     pub udp_pool_size: usize,
 
@@ -92,6 +95,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_tcp_pool_size() -> usize {
+    5
 }
 
 fn default_udp_pool_size() -> usize {
