@@ -44,6 +44,8 @@ public class MainActivity extends Activity {
     private EditText proxyAddrs;
     private EditText username;
     private EditText privateKey;
+    private EditText tcpPoolSize;
+    private EditText udpPoolSize;
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
@@ -72,9 +74,14 @@ public class MainActivity extends Activity {
 
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
+        scroll.setClipToPadding(false);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(32), dp(20), dp(28));
+        int horizontalPadding = dp(20);
+        int topPadding = dp(32);
+        int bottomPadding = dp(28);
+        root.setPadding(horizontalPadding, topPadding, horizontalPadding, bottomPadding);
+        applySystemBarPadding(root, horizontalPadding, topPadding, horizontalPadding, bottomPadding);
         scroll.addView(root);
 
         TextView title = new TextView(this);
@@ -96,6 +103,19 @@ public class MainActivity extends Activity {
         blockQuic.setChecked(prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         root.addView(blockQuic, matchWrap());
 
+        tcpPoolSize = field(
+                root,
+                "TCP pool size",
+                prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        udpPoolSize = field(
+                root,
+                "UDP pool size",
+                prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+
         selectAppsButton = new Button(this);
         selectAppsButton.setText("Select VPN apps");
         selectAppsButton.setOnClickListener(view -> showAppSelector());
@@ -112,6 +132,23 @@ public class MainActivity extends Activity {
         root.addView(vpnToggle, matchWrap());
 
         setContentView(scroll);
+        root.requestApplyInsets();
+    }
+
+    private void applySystemBarPadding(
+            View view,
+            int baseLeft,
+            int baseTop,
+            int baseRight,
+            int baseBottom) {
+        view.setOnApplyWindowInsetsListener((target, insets) -> {
+            target.setPadding(
+                    baseLeft + insets.getSystemWindowInsetLeft(),
+                    baseTop + insets.getSystemWindowInsetTop(),
+                    baseRight + insets.getSystemWindowInsetRight(),
+                    baseBottom + insets.getSystemWindowInsetBottom());
+            return insets;
+        });
     }
 
     private void toggleVpn() {
@@ -173,6 +210,8 @@ public class MainActivity extends Activity {
         updateEditTextEditable(proxyAddrs, editable);
         updateEditTextEditable(username, editable);
         updateEditTextEditable(privateKey, editable);
+        updateEditTextEditable(tcpPoolSize, editable);
+        updateEditTextEditable(udpPoolSize, editable);
         if (blockQuic != null) {
             blockQuic.setEnabled(editable);
         }
@@ -200,6 +239,8 @@ public class MainActivity extends Activity {
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", "1500")
                 .putBoolean("block_quic", blockQuic.isChecked())
+                .putString("tcp_pool_size", tcpPoolSize.getText().toString())
+                .putString("udp_pool_size", udpPoolSize.getText().toString())
                 .apply();
     }
 

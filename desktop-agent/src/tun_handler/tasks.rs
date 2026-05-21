@@ -130,8 +130,8 @@ pub(super) fn spawn_udp_sessions(
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
         let dns_proxy = context
             .proxy_dns
-            .then(|| DnsProxy::spawn(context.pool.clone(), udp_tx.clone(), shutdown.clone()));
-        let udp_relay = UdpRelay::spawn(context.pool.clone(), udp_tx.clone(), shutdown.clone());
+            .then(|| DnsProxy::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone()));
+        let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
 
         loop {
             tokio::select! {
@@ -188,7 +188,7 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: context.proxy_dns,
                         block_quic,
                         netstack_tx: udp_tx.clone(),
-                        pool: context.pool.clone(),
+                        udp_pool: context.udp_pool.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_bind_interface: context.direct_bind_interface.clone(),
                     };

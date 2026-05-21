@@ -5,13 +5,6 @@ REM Assumes desktop-agent.exe and agent.toml are in the same directory as this s
 
 cd /d "%~dp0"
 
-fltmc >nul 2>&1
-if errorlevel 1 (
-  echo Requesting Administrator privileges...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
-  exit /b
-)
-
 if not exist "desktop-agent.exe" (
   echo Error: desktop-agent.exe not found in script directory.
   exit /b 1

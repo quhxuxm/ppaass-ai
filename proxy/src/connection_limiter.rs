@@ -189,6 +189,7 @@ mod tests {
             max_idle_connections_per_user,
             max_udp_relay_flows_per_connection: 2048,
             max_udp_relay_flows: 4096,
+            udp_relay_idle_timeout_secs: 60,
         }
     }
 

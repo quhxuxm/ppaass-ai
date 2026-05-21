@@ -20,6 +20,8 @@ pub struct ConnectionPool {
     /// 预热连接的非托管池
     pool: Pool<ProxyConnection>,
     config: Arc<AgentConfig>,
+    pool_name: &'static str,
+    pool_size: usize,
     /// 请求补充连接的通知机制
     refill_notify: Arc<Notify>,
     /// 追踪池中可用连接数
@@ -36,15 +38,25 @@ pub struct ConnectionPool {
 
 impl ConnectionPool {
     pub fn new(config: Arc<AgentConfig>) -> Self {
-        let pool_size = config.pool_size;
+        let pool_size = config.tcp_pool_size;
+        Self::new_with_size(config, pool_size, "tcp_pool")
+    }
+
+    pub fn new_with_size(
+        config: Arc<AgentConfig>,
+        pool_size: usize,
+        pool_name: &'static str,
+    ) -> Self {
         // unmanaged pool 容量略大于目标值，给并发补充和消费留出余量。
-        let pool = Pool::new((pool_size as f32 * 1.5) as usize);
+        let pool = Pool::new(pool_capacity(pool_size));
         let refill_notify = Arc::new(Notify::new());
         let available = Arc::new(AtomicUsize::new(0));
         let max_connection_age = Duration::from_secs(config.pool_max_connection_age_secs);
         Self {
             pool,
             config,
+            pool_name,
+            pool_size,
             refill_notify,
             available,
             max_connection_age,
@@ -91,6 +103,7 @@ impl ConnectionPool {
         pool,
         config,
         available,
+        pool_name,
         proxy_bind_ip,
         proxy_bind_interface
     ))]
@@ -99,6 +112,7 @@ impl ConnectionPool {
         pool: Pool<ProxyConnection>,
         config: Arc<AgentConfig>,
         available: Arc<AtomicUsize>,
+        pool_name: &'static str,
         target_size: usize,
         proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
         proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
@@ -115,8 +129,8 @@ impl ConnectionPool {
                 // available 只记录可消费连接数；过期或取出的连接会触发补充。
                 let to_create = target_size - current_size;
                 debug!(
-                    "正在补充连接池：创建 {} 条连接（当前：{}）",
-                    to_create, current_size
+                    "正在补充 {} 连接池：创建 {} 条连接（当前：{}）",
+                    pool_name, to_create, current_size
                 );
 
                 // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
@@ -163,12 +177,15 @@ impl ConnectionPool {
     /// 用初始连接预热连接池，然后启动后台补充任务。
     #[instrument(skip(self))]
     pub async fn prewarm(&self) {
-        info!("正在预热连接池，目标 {} 条连接", self.config.pool_size);
+        info!(
+            "正在预热 {} 连接池，目标 {} 条连接",
+            self.pool_name, self.pool_size
+        );
 
         // 初始预热并发执行，但限制认证连接并发，避免启动瞬间打满 proxy。
         let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
         let mut set = tokio::task::JoinSet::new();
-        for i in 0..self.config.pool_size {
+        for i in 0..self.pool_size {
             let config = self.config.clone();
             let pool = self.pool.clone();
             let available = self.available.clone();
@@ -205,7 +222,7 @@ impl ConnectionPool {
                 Err(e) => warn!("预热任务 join 错误：{}", e),
             }
         }
-        info!("连接池已预热 {} 条连接", success_count);
+        info!("{} 连接池已预热 {} 条连接", self.pool_name, success_count);
 
         // 预热完成后启动后台补充任务。
         // 若在预热之前启动，两者会并发创建连接导致溢出。
@@ -213,7 +230,8 @@ impl ConnectionPool {
         let config_clone = self.config.clone();
         let available_clone = self.available.clone();
         let refill_notify_clone = self.refill_notify.clone();
-        let pool_size = self.config.pool_size;
+        let pool_name = self.pool_name;
+        let pool_size = self.pool_size;
         let proxy_bind_ip_clone = self.proxy_bind_ip.clone();
         let proxy_bind_interface_clone = self.proxy_bind_interface.clone();
         tokio::spawn(async move {
@@ -222,6 +240,7 @@ impl ConnectionPool {
                 pool_clone,
                 config_clone,
                 available_clone,
+                pool_name,
                 pool_size,
                 proxy_bind_ip_clone,
                 proxy_bind_interface_clone,
@@ -279,6 +298,10 @@ impl ConnectionPool {
             }
         }
     }
+}
+
+fn pool_capacity(pool_size: usize) -> usize {
+    ((pool_size as f32 * 1.5) as usize).max(1)
 }
 
 fn should_retry_pooled_connect_error(err: &crate::error::AgentError) -> bool {

@@ -5,7 +5,8 @@ listen_addr = "127.0.0.1:7080"
 proxy_addrs = ["127.0.0.1:9090", "127.0.0.1:9090"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-pool_size = 50
+tcp_pool_size = 50
+udp_pool_size = 5
 connect_timeout_secs = 20
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。

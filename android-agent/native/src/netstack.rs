@@ -4,7 +4,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::ClientConnection;
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::StackBuilder;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
@@ -15,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::config::AndroidAgentConfig;
+use crate::connection_pool::AndroidConnectionPool;
 use crate::error::{AndroidAgentError, Result};
 use crate::fd_device::{AndroidTunDevice, RawFd};
 
@@ -27,7 +27,8 @@ const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 struct ForwardContext {
-    config: Arc<AndroidAgentConfig>,
+    tcp_pool: Arc<AndroidConnectionPool>,
+    udp_pool: Arc<AndroidConnectionPool>,
     tun_networks: TunNetworks,
     proxy_dns: bool,
 }
@@ -56,8 +57,14 @@ pub async fn run_android_agent(
     let block_quic = config.tun.block_quic;
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, block_quic={}",
-        config.tun.ipv4, config.tun.ipv6, mtu, proxy_dns, block_quic
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, block_quic={}, tcp_pool_size={}, udp_pool_size={}",
+        config.tun.ipv4,
+        config.tun.ipv6,
+        mtu,
+        proxy_dns,
+        block_quic,
+        config.tcp_pool_size,
+        config.udp_pool_size
     );
 
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
@@ -80,8 +87,13 @@ pub async fn run_android_agent(
 
     let (tun_to_stack, stack_to_tun) = spawn_packet_bridge(device, stack, mtu, shutdown.clone());
     let config = Arc::new(config);
+    let tcp_pool = AndroidConnectionPool::new(config.clone(), config.tcp_pool_size, "tcp_pool");
+    let udp_pool = AndroidConnectionPool::new(config.clone(), config.udp_pool_size, "udp_pool");
+    tcp_pool.prewarm().await;
+    udp_pool.prewarm().await;
     let context = ForwardContext {
-        config,
+        tcp_pool,
+        udp_pool,
         tun_networks,
         proxy_dns,
     };
@@ -192,10 +204,11 @@ async fn handle_tcp(
     }
 
     debug!("Android TUN TCP proxy -> {}", target);
-    let proxy = ClientConnection::connect(context.config.as_ref(), address, TransportProtocol::Tcp)
+    let mut proxy_io = context
+        .tcp_pool
+        .get_connected_stream(address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    let mut proxy_io = proxy.into_stream();
     if let Err(e) = tokio::io::copy_bidirectional(&mut client, &mut proxy_io).await {
         debug!("Android TUN TCP proxy relay ended: {e}");
     }
@@ -434,14 +447,10 @@ async fn run_dns_proxy(
 async fn connect_dns_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let proxy = ClientConnection::connect(
-        context.config.as_ref(),
-        Address::ProxyDns { port: 53 },
-        TransportProtocol::Udp,
-    )
-    .await
-    .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    Ok(proxy.into_stream())
+    context
+        .udp_pool
+        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+        .await
 }
 
 async fn send_dns_request<W>(
@@ -773,14 +782,10 @@ async fn run_udp_relay(
 async fn connect_udp_relay_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let proxy = ClientConnection::connect(
-        context.config.as_ref(),
-        Address::UdpRelay,
-        TransportProtocol::Udp,
-    )
-    .await
-    .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    Ok(proxy.into_stream())
+    context
+        .udp_pool
+        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+        .await
 }
 
 async fn send_udp_relay_request<W>(

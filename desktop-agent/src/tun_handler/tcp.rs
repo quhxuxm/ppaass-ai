@@ -18,7 +18,8 @@ pub(super) async fn handle_tun_tcp(
     context: TunForwardContext,
 ) -> Result<()> {
     let TunForwardContext {
-        pool,
+        tcp_pool,
+        udp_pool: _,
         direct_checker,
         tun_networks,
         proxy_dns,
@@ -60,7 +61,7 @@ pub(super) async fn handle_tun_tcp(
     } else {
         debug!("TUN TCP -> 代理 -> {}", target_label);
     }
-    let connected = pool
+    let connected = tcp_pool
         .as_ref()
         .get_connected_stream(address, TransportProtocol::Tcp)
         .await?;

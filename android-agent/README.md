@@ -1,54 +1,66 @@
 # Android Agent
 
-This directory contains an Android VPN agent for PPAASS.
+这个目录包含 PPAASS 的 Android VPN Agent。
 
-The Android app owns the platform VPN layer:
+Android App 负责平台 VPN 层：
 
-- `PpaassVpnService` requests and establishes Android `VpnService`.
-- The service excludes the app package from the VPN so agent-to-proxy control sockets do not loop into the TUN.
-- The raw VPN file descriptor is detached and passed to the Rust JNI library.
+- `PpaassVpnService` 请求并建立 Android `VpnService`。
+- Service 会把 App 自身从 VPN 中排除，避免 agent 到 proxy 的控制连接被重新绕回 TUN。
+- 原始 VPN 文件描述符会被 detach 后传给 Rust JNI 库。
 
-The Rust library owns the packet and protocol layer:
+Rust 库负责数据包和协议层：
 
-- `android-agent/native` wraps the VPN fd with `AsyncFd`.
-- `netstack-smoltcp` turns IP packets into TCP streams and UDP payload sessions.
-- TCP and UDP flows are forwarded to the existing PPAASS proxy protocol through the `common` and `protocol` crates.
-- Android's app allow-list decides which applications enter the VPN.
-- DNS is always routed through the VPN; Rust maps TCP/UDP port 53 packets to the proxy-side DNS path, matching the desktop agent TUN mode.
-- QUIC blocking mirrors the desktop agent TUN mode behavior.
+- `android-agent/native` 使用 `AsyncFd` 包装 VPN fd。
+- `netstack-smoltcp` 将 IP 包转换为 TCP stream 和 UDP payload session。
+- TCP 和 UDP 流量会通过 `common` 和 `protocol` crate 转发到现有的 PPAASS proxy 协议。
+- Android 的应用 allow-list 决定哪些应用进入 VPN。
+- DNS 始终通过 VPN 路径转发；Rust 会把 TCP/UDP 53 端口包映射到 proxy 侧 DNS 路径，行为与 desktop agent 的 TUN 模式一致。
+- QUIC 阻断逻辑与 desktop agent 的 TUN 模式保持一致。
 
-## Build
+## 构建
 
-Install Android Studio or an Android SDK, then install the Rust Android targets and `cargo-ndk`:
+先安装 Android Studio 或 Android SDK，然后安装 Rust Android targets 和 `cargo-ndk`：
 
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install cargo-ndk
 ```
 
-Build from this directory with a local Gradle install, or open this directory in Android Studio:
+在本目录下使用本地 Gradle 构建 debug APK，也可以直接用 Android Studio 打开本目录：
 
 ```bash
 gradle assembleDebug
 ```
 
-The Gradle build runs:
+构建 release APK 时使用对应平台脚本：
+
+```bash
+# Windows
+.\build-release-apk-windows.bat
+
+# macOS
+bash ./build-release-apk-macos.command
+```
+
+Gradle 构建过程中会执行：
 
 ```bash
 cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o app/src/main/jniLibs build --manifest-path native/Cargo.toml --release
 ```
 
-Use `-PskipRustBuild=true` only when prebuilt `.so` files already exist under `app/src/main/jniLibs`.
+只有在 `app/src/main/jniLibs` 下已经存在预构建 `.so` 文件时，才使用 `-PskipRustBuild=true`。
 
-The Android app layer is plain Java. Rust remains in `android-agent/native` for the packet stack and proxy protocol bridge.
+Android App 层使用纯 Java。数据包栈和 proxy 协议桥接仍然在 `android-agent/native` 的 Rust 代码中。
 
-## Runtime Config
+Android native 内部会分别维护 `tcp_pool` 和 `udp_pool`；两者的 pool size 可在 Android 界面配置，默认值来自 `DefaultConfig`。
 
-Open the app, fill in:
+## 运行配置
 
-- proxy endpoints, comma or newline separated; the default is `140.82.30.214:80`
-- username, defaulting to `user1`
-- RSA private key PEM, defaulting to the private key paired with `config/local/users.toml` `users.user1.public_key_pem`
-- applications that should use the VPN. The selector lists installed packages that request network access, including system packages. Leaving the selection empty means all system traffic enters the VPN, with PPAASS Android Agent excluded to avoid looping its proxy connection. Selecting one or more apps switches to allow-list mode, so only selected apps enter the VPN.
+打开 App 后填写：
 
-The TUN address and MTU are fixed internal settings in the Android app (`10.10.10.2/24`, IPv6 disabled, MTU 1500), so they are not shown in the UI. Android is pointed at a routed DNS address inside the VPN network path; Rust maps UDP port 53 packets to `ProxyDns`, so the proxy machine selects the upstream DNS from its system configuration. QUIC is blocked by default to match the desktop TUN mode and make Google Play / YouTube fall back to TCP/TLS on proxy paths that do not handle UDP/443 reliably.
+- proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
+- username，默认是 `user1`
+- RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
+- 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，同时 PPAASS Android Agent 自身会被排除以避免 proxy 连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
+
+TUN 地址和 MTU 是 Android App 内部固定配置，分别为 `10.10.10.2/24`、禁用 IPv6、MTU 1500，因此 UI 中不会展示这些选项。Android 会指向 VPN 网络路径内的一个 routed DNS 地址；Rust 会把 UDP 53 端口包映射为 `ProxyDns`，因此最终由 proxy 机器按其系统配置选择上游 DNS。默认阻断 QUIC，以匹配 desktop TUN 模式，并让 Google Play / YouTube 在 proxy 路径无法可靠处理 UDP/443 时回退到 TCP/TLS。

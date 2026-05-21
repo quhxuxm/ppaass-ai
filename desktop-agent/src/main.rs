@@ -4,6 +4,7 @@ mod connection_pool;
 mod direct_access;
 mod error;
 mod http_handler;
+mod privilege;
 mod server;
 mod socks5_handler;
 mod telemetry;

@@ -1,4 +1,5 @@
 mod config;
+mod connection_pool;
 mod error;
 mod fd_device;
 mod jni_api;
