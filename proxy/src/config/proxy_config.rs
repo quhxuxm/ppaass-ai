@@ -91,6 +91,10 @@ pub struct ProxyConfig {
     /// proxy 全局同时存在的 UDP relay flow 数；每个 flow 持有一个 UDP socket，0 表示不限制。
     #[serde(default = "default_max_udp_relay_flows")]
     pub max_udp_relay_flows: usize,
+
+    /// UDP relay 空闲超时时间（秒）；会话和 flow 在该时间内无数据活动将被关闭。
+    #[serde(default = "default_udp_relay_idle_timeout_secs")]
+    pub udp_relay_idle_timeout_secs: u64,
 }
 
 fn default_log_level() -> String {
@@ -143,6 +147,10 @@ fn default_max_udp_relay_flows_per_connection() -> usize {
 
 fn default_max_udp_relay_flows() -> usize {
     4096
+}
+
+fn default_udp_relay_idle_timeout_secs() -> u64 {
+    60
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {

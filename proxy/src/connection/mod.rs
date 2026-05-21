@@ -57,7 +57,6 @@ use windows_sys::Win32::Networking::WinSock::{
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
-const UDP_RELAY_FLOW_IDLE: Duration = Duration::from_secs(60);
 
 struct UdpRelayFlow {
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -471,7 +470,8 @@ impl ServerConnection {
         let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
         let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
         let stream_id = connect_request.request_id;
-        let relay_idle = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
+        let relay_idle_timeout = Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs);
+        let relay_idle = tokio::time::sleep(relay_idle_timeout);
         tokio::pin!(relay_idle);
 
         loop {
@@ -479,7 +479,7 @@ impl ServerConnection {
                 _ = &mut relay_idle => {
                     debug!(
                         "UDP 共享中继空闲超过 {} 秒，关闭该连接",
-                        UDP_RELAY_FLOW_IDLE.as_secs()
+                        relay_idle_timeout.as_secs()
                     );
                     break;
                 }
@@ -503,7 +503,7 @@ impl ServerConnection {
                         continue;
                     }
 
-                    relay_idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                    relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
 
                     if let Some(user) = &username {
                         self.bandwidth_monitor.record_received(user, packet.data.len() as u64);
@@ -540,6 +540,7 @@ impl ServerConnection {
                             response_tx.clone(),
                             flow_done_tx.clone(),
                             flow_permit,
+                            relay_idle_timeout,
                         ).await {
                             Ok(flow) => {
                                 flows.insert(relay_packet.flow_id, flow);
@@ -584,7 +585,7 @@ impl ServerConnection {
                         .send(ProxyResponse::Data(packet))
                         .await
                         .map_err(|e| ProxyError::Connection(format!("Failed to send UDP relay response: {e}")))?;
-                    relay_idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                    relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
                 }
                 done = flow_done_rx.recv() => {
                     let Some(flow_id) = done else { break };
@@ -604,6 +605,7 @@ impl ServerConnection {
         response_tx: tokio::sync::mpsc::Sender<UdpRelayPacket>,
         flow_done_tx: tokio::sync::mpsc::Sender<u64>,
         flow_permit: UdpRelayFlowPermit,
+        flow_idle_timeout: Duration,
     ) -> Result<UdpRelayFlow> {
         let target_addr = relay_target_addr(&address)?;
         let socket = self
@@ -619,7 +621,7 @@ impl ServerConnection {
         tokio::spawn(async move {
             let _flow_permit = flow_permit;
             let mut buf = vec![0u8; 65535];
-            let idle = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
+            let idle = tokio::time::sleep(flow_idle_timeout);
             tokio::pin!(idle);
 
             loop {
@@ -627,9 +629,9 @@ impl ServerConnection {
                     _ = &mut idle => break,
                     maybe_data = rx.recv() => {
                         let Some(data) = maybe_data else { break };
-                        match tokio::time::timeout(UDP_RELAY_FLOW_IDLE, socket.send(&data)).await {
+                        match tokio::time::timeout(flow_idle_timeout, socket.send(&data)).await {
                             Ok(Ok(_)) => {
-                                idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
                             }
                             Ok(Err(e)) => {
                                 debug!("UDP relay flow {flow_id} 发送失败：{e}");
@@ -638,7 +640,7 @@ impl ServerConnection {
                             Err(_) => {
                                 debug!(
                                     "UDP relay flow {flow_id} 发送超过 {} 秒，关闭该 flow",
-                                    UDP_RELAY_FLOW_IDLE.as_secs()
+                                    flow_idle_timeout.as_secs()
                                 );
                                 break;
                             }
@@ -654,7 +656,7 @@ impl ServerConnection {
                                 };
                                 match response_tx.try_send(response) {
                                     Ok(()) => {
-                                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                        idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
                                     }
                                     Err(TrySendError::Full(_)) => {
                                         debug!("UDP relay flow {flow_id} 响应队列已满，关闭该 flow 以释放 socket");
@@ -787,7 +789,8 @@ impl ServerConnection {
 
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
 
-        let idle_timeout = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
+        let udp_relay_idle_timeout = Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs);
+        let idle_timeout = tokio::time::sleep(udp_relay_idle_timeout);
         tokio::pin!(idle_timeout);
         let mut agent_buf = [0u8; 65535];
         let mut udp_buf = [0u8; 65535];
@@ -797,7 +800,7 @@ impl ServerConnection {
                 _ = &mut idle_timeout => {
                     debug!(
                         "UDP 中继空闲超过 {} 秒，关闭 socket",
-                        UDP_RELAY_FLOW_IDLE.as_secs()
+                        udp_relay_idle_timeout.as_secs()
                     );
                     break;
                 }
@@ -811,16 +814,16 @@ impl ServerConnection {
                                 udp_socket.peer_addr(),
                                 pretty_hex::pretty_hex(&data)
                             );
-                            match tokio::time::timeout(UDP_RELAY_FLOW_IDLE, udp_send.send(data)).await {
+                            match tokio::time::timeout(udp_relay_idle_timeout, udp_send.send(data)).await {
                                 Ok(Ok(_)) => {
-                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + udp_relay_idle_timeout);
                                 }
                                 Ok(Err(e)) => {
                                     debug!("UDP 发送错误：{}", e);
                                     break;
                                 }
                                 Err(_) => {
-                                    debug!("UDP 发送超过 {} 秒，关闭 socket", UDP_RELAY_FLOW_IDLE.as_secs());
+                                    debug!("UDP 发送超过 {} 秒，关闭 socket", udp_relay_idle_timeout.as_secs());
                                     break;
                                 }
                             }
@@ -840,20 +843,20 @@ impl ServerConnection {
                                 udp_socket.peer_addr(),
                                 pretty_hex::pretty_hex(&data)
                             );
-                            let write_result = tokio::time::timeout(UDP_RELAY_FLOW_IDLE, async {
+                            let write_result = tokio::time::timeout(udp_relay_idle_timeout, async {
                                 agent_writer.write_all(data).await?;
                                 agent_writer.flush().await
                             }).await;
                             match write_result {
                                 Ok(Ok(())) => {
-                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
+                                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + udp_relay_idle_timeout);
                                 }
                                 Ok(Err(e)) => {
                                     debug!("写入 agent 数据错误：{}", e);
                                     break;
                                 }
                                 Err(_) => {
-                                    debug!("写入 agent 超过 {} 秒，关闭 UDP 中继", UDP_RELAY_FLOW_IDLE.as_secs());
+                                    debug!("写入 agent 超过 {} 秒，关闭 UDP 中继", udp_relay_idle_timeout.as_secs());
                                     break;
                                 }
                             }
