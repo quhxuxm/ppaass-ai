@@ -71,6 +71,10 @@ auth_timeout_secs = 30
 # 发送连接请求，将被关闭（默认：120）
 idle_connection_timeout_secs = 120
 
+# TCP relay 空闲超时时间，单位秒；建立 CONNECT 后若双向都无数据活动会关闭。
+# 0 表示不限制（默认：300）
+tcp_relay_idle_timeout_secs = 300
+
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
 udp_relay_idle_timeout_secs = 60
