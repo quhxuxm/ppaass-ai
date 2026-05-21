@@ -19,6 +19,7 @@ use crate::config::TunConfig;
 use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
+use crate::privilege::ensure_tun_privileges_or_relaunch;
 use dns::DnsGuard;
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
@@ -207,6 +208,8 @@ fn create_tun_device(
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
 ) -> Result<tun_rs::AsyncDevice> {
+    ensure_tun_privileges_or_relaunch()?;
+
     // DeviceBuilder 负责设置地址、MTU 和平台相关参数。
     let mut builder = DeviceBuilder::new()
         .name(&config.name)
@@ -221,9 +224,8 @@ fn create_tun_device(
 
 #[cfg(windows)]
 fn build_tun_device(builder: DeviceBuilder, config: &TunConfig) -> Result<tun_rs::AsyncDevice> {
-    // Windows 必须显式找到 wintun.dll，并要求管理员权限。
+    // Windows 必须显式找到 wintun.dll。
     let wintun_file = resolve_wintun_file(config)?;
-    ensure_windows_tun_privileges()?;
     info!("使用 Windows TUN 运行库：{}", wintun_file.display());
     builder
         .wintun_file(wintun_file.to_string_lossy().into_owned())
@@ -237,21 +239,6 @@ fn build_tun_device(builder: DeviceBuilder, _config: &TunConfig) -> Result<tun_r
     builder
         .build_async()
         .map_err(|e| AgentError::Connection(format!("创建 TUN 设备失败：{e}")))
-}
-
-#[cfg(windows)]
-fn ensure_windows_tun_privileges() -> Result<()> {
-    // Wintun 适配器创建和路由修改都需要 elevated 管理员令牌。
-    if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
-        return Ok(());
-    }
-
-    Err(AgentError::Connection(
-        "创建 TUN 设备失败：当前进程没有管理员权限。Windows TUN 模式需要以管理员身份运行，\
-         才能创建/打开 Wintun 适配器并修改系统路由。请右键以管理员身份打开 PowerShell/终端后启动 agent，\
-         或使用 start-agent.bat 触发 UAC 提权。"
-            .to_string(),
-    ))
 }
 
 #[cfg(windows)]

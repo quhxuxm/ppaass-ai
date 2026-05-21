@@ -19,8 +19,8 @@ fi
 echo "Starting Agent..."
 mkdir -p logs
 if [ -n "$CONFIG_PATH" ]; then
-    sudo ./desktop-agent --config "$CONFIG_PATH"
+    ./desktop-agent --config "$CONFIG_PATH"
 else
-    sudo ./desktop-agent
+    ./desktop-agent
 fi
 echo "Agent started."
