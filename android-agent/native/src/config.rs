@@ -11,6 +11,12 @@ pub struct AndroidAgentConfig {
     pub username: String,
     pub private_key_pem: String,
 
+    #[serde(default = "default_async_runtime_stack_size_mb")]
+    pub async_runtime_stack_size_mb: usize,
+
+    #[serde(default = "default_runtime_threads")]
+    pub runtime_threads: usize,
+
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
@@ -101,6 +107,14 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_async_runtime_stack_size_mb() -> usize {
+    4
+}
+
+fn default_runtime_threads() -> usize {
+    4
 }
 
 fn default_tcp_pool_size() -> usize {

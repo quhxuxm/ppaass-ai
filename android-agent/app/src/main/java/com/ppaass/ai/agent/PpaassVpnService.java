@@ -134,6 +134,11 @@ public class PpaassVpnService extends VpnService {
                 .put("sessions", parsePositiveInt(
                         prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
                         DefaultConfig.YAMUX_SESSIONS))
+                .put("max_streams_per_session", parsePositiveInt(
+                        prefs.getString(
+                                "yamux_max_streams_per_session",
+                                String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
+                        DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION))
                 .put("stream_window_size_kb", parseMinInt(
                         prefs.getString(
                                 "yamux_stream_window_size_kb",
@@ -146,6 +151,8 @@ public class PpaassVpnService extends VpnService {
                 .put("username", prefs.getString("username", DefaultConfig.USERNAME))
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
+                .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
+                .put("runtime_threads", DefaultConfig.RUNTIME_THREADS)
                 .put("connect_timeout_secs", 30)
                 .put("tcp_pool_size", parseNonNegativeInt(
                         prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),

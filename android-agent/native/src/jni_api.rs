@@ -35,16 +35,20 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start(
         }
     };
 
+    let async_runtime_stack_size = config.async_runtime_stack_size_mb.max(1) * 1024 * 1024;
+    let runtime_threads = config.runtime_threads.max(1);
     let shutdown = CancellationToken::new();
     let task_shutdown = shutdown.clone();
     let raw_fd = tun_fd as RawFd;
     let thread = match std::thread::Builder::new()
         .name("ppaass-android-agent".to_string())
+        .stack_size(async_runtime_stack_size)
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_name("ppaass-android-agent-worker")
-                .worker_threads(4)
+                .thread_stack_size(async_runtime_stack_size)
+                .worker_threads(runtime_threads)
                 .build()
             {
                 Ok(runtime) => runtime,

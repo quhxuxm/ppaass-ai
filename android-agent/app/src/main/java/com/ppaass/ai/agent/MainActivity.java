@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private EditText udpPoolSize;
     private Spinner tcpMode;
     private EditText yamuxSessions;
+    private EditText yamuxMaxStreamsPerSession;
     private EditText yamuxStreamWindowSizeKb;
     private Switch blockQuic;
     private TextView selectedAppsSummary;
@@ -129,6 +130,14 @@ public class MainActivity extends Activity {
                 root,
                 "Yamux sessions",
                 prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxMaxStreamsPerSession = field(
+                root,
+                "Yamux max streams/session",
+                prefs.getString(
+                        "yamux_max_streams_per_session",
+                        String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
         yamuxStreamWindowSizeKb = field(
@@ -237,6 +246,7 @@ public class MainActivity extends Activity {
         updateEditTextEditable(tcpPoolSize, editable);
         updateEditTextEditable(udpPoolSize, editable);
         updateEditTextEditable(yamuxSessions, editable);
+        updateEditTextEditable(yamuxMaxStreamsPerSession, editable);
         updateEditTextEditable(yamuxStreamWindowSizeKb, editable);
         if (tcpMode != null) {
             tcpMode.setEnabled(editable);
@@ -272,6 +282,9 @@ public class MainActivity extends Activity {
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
                 .putString("tcp_mode", selectedTcpMode())
                 .putString("yamux_sessions", yamuxSessions.getText().toString())
+                .putString(
+                        "yamux_max_streams_per_session",
+                        yamuxMaxStreamsPerSession.getText().toString())
                 .putString(
                         "yamux_stream_window_size_kb",
                         yamuxStreamWindowSizeKb.getText().toString())
