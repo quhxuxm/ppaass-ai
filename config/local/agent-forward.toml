@@ -10,7 +10,7 @@ udp_pool_size = 5
 connect_timeout_secs = 20
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
-# 该值应小于代理端的 `idle_connection_timeout_secs`（默认 120 秒），
+# 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
 # 使 agent 在代理关闭连接前主动替换连接。
 # pool_max_connection_age_secs = 90
 

@@ -107,6 +107,32 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
     }
 
     #[test]
+    fn parse_proxy_config_pre_connect_idle_timeout() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+pre_connect_idle_timeout_secs = 7
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.pre_connect_idle_timeout_secs, 7);
+    }
+
+    #[test]
+    fn parse_proxy_config_legacy_idle_timeout_alias() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+idle_connection_timeout_secs = 9
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.pre_connect_idle_timeout_secs, 9);
+    }
+
+    #[test]
     fn parse_users_config_missing_required_field_returns_error() {
         let content = r#"
 [users.user1]

@@ -184,7 +184,7 @@ mod tests {
             outbound_interface: None,
             dns_upstream_addr: None,
             connect_timeout_secs: 30,
-            idle_connection_timeout_secs: 120,
+            pre_connect_idle_timeout_secs: 120,
             tcp_relay_idle_timeout_secs: 300,
             auth_timeout_secs: 30,
             max_connections,
