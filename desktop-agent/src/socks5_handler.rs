@@ -20,10 +20,11 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument, trace, warn};
 
-#[instrument(skip(stream, pool, direct_checker))]
+#[instrument(skip(stream, tcp_pool, udp_pool, direct_checker))]
 pub async fn handle_socks5_connection(
     stream: TcpStream,
-    pool: Arc<ConnectionPool>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("处理 SOCKS5 连接");
@@ -53,18 +54,18 @@ pub async fn handle_socks5_connection(
     match command {
         // CONNECT 是最常见路径：客户端要求 agent 主动连接目标。
         Socks5Command::TCPConnect => {
-            handle_tcp_connect(protocol, target_addr, pool, direct_checker).await
+            handle_tcp_connect(protocol, target_addr, tcp_pool, direct_checker).await
         }
         // BIND 让 agent 监听一个端口等待远端主动连入。
         Socks5Command::TCPBind => {
-            handle_tcp_bind(protocol, target_addr, pool, direct_checker).await
+            handle_tcp_bind(protocol, target_addr, tcp_pool, direct_checker).await
         }
         // UDP ASSOCIATE 通过 TCP 控制连接维持 UDP 会话生命周期。
         Socks5Command::UDPAssociate => {
             handle_udp_associate(
                 protocol,
                 target_addr,
-                pool,
+                udp_pool,
                 control_local_ip,
                 direct_checker,
             )
@@ -281,7 +282,7 @@ async fn handle_tcp_bind(
 async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     _target_addr: TargetAddr,
-    pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     control_local_ip: Option<IpAddr>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
@@ -307,7 +308,7 @@ async fn handle_udp_associate(
         .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
     let udp_socket = Arc::new(udp_socket);
-    let pool = pool.clone();
+    let udp_pool = udp_pool.clone();
 
     // 客户端向 `bind_addr` 发送 UDP 数据包
 
@@ -319,7 +320,7 @@ async fn handle_udp_associate(
         debug!("UDP 关联 TCP 控制通道已关闭");
     };
 
-    let udp_handler = process_udp_traffic(udp_socket, pool, direct_checker);
+    let udp_handler = process_udp_traffic(udp_socket, udp_pool, direct_checker);
 
     tokio::select! {
         _ = keep_alive => {
@@ -369,13 +370,13 @@ fn resolve_udp_associate_reply_addr(
 
 async fn process_udp_traffic(
     udp_socket: Arc<UdpSocket>,
-    pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<String, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
-    let udp_relay = SocksUdpRelay::spawn(pool.clone(), udp_socket.clone());
+    let udp_relay = SocksUdpRelay::spawn(udp_pool.clone(), udp_socket.clone());
 
     loop {
         // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。

@@ -12,7 +12,8 @@ use tracing::{debug, error, info, instrument};
 
 pub struct AgentServer {
     config: Arc<AgentConfig>,
-    pool: Arc<ConnectionPool>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_access_checker: Arc<DirectAccessChecker>,
 }
 
@@ -22,12 +23,18 @@ impl AgentServer {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
-        // 连接池负责维护到 proxy 的已认证预热连接。
-        let pool = Arc::new(ConnectionPool::new(config.clone()));
+        // TCP/UDP 分别维护到 proxy 的已认证预热连接，避免两类流量互相挤占。
+        let tcp_pool = Arc::new(ConnectionPool::new(config.clone()));
+        let udp_pool = Arc::new(ConnectionPool::new_with_size(
+            config.clone(),
+            config.udp_pool_size,
+            "udp_pool",
+        ));
 
         Ok(Self {
             config,
-            pool,
+            tcp_pool,
+            udp_pool,
             direct_access_checker,
         })
     }
@@ -43,10 +50,18 @@ impl AgentServer {
             );
             let tun_cfg = self.config.tun.clone();
             let proxy_addrs = self.config.proxy_addrs.clone();
-            let pool = self.pool.clone();
+            let tcp_pool = self.tcp_pool.clone();
+            let udp_pool = self.udp_pool.clone();
             let direct_access_checker = self.direct_access_checker.clone();
-            if let Err(e) =
-                run_tun_mode(tun_cfg, proxy_addrs, pool, direct_access_checker, shutdown).await
+            if let Err(e) = run_tun_mode(
+                tun_cfg,
+                proxy_addrs,
+                tcp_pool,
+                udp_pool,
+                direct_access_checker,
+                shutdown,
+            )
+            .await
             {
                 error!("TUN 模式转发器异常停止：{}", e);
                 return Err(e);
@@ -55,7 +70,8 @@ impl AgentServer {
         }
 
         // 非 TUN 模式可以直接预热连接池。
-        self.pool.prewarm().await;
+        self.tcp_pool.prewarm().await;
+        self.udp_pool.prewarm().await;
 
         // 普通模式在同一端口上同时接受 SOCKS5 和 HTTP/CONNECT。
         let listener = TcpListener::bind(&self.config.listen_addr).await?;
@@ -71,11 +87,14 @@ impl AgentServer {
                     match accept_result {
                         Ok((stream, addr)) => {
                             debug!("接受来自 {} 的连接", addr);
-                            // 每个客户端连接独立处理，复用共享连接池和直连规则。
-                            let pool = self.pool.clone();
+                            // 每个客户端连接独立处理，复用对应协议的连接池和直连规则。
+                            let tcp_pool = self.tcp_pool.clone();
+                            let udp_pool = self.udp_pool.clone();
                             let direct_checker = self.direct_access_checker.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, pool, direct_checker).await {
+                                if let Err(e) =
+                                    handle_connection(stream, tcp_pool, udp_pool, direct_checker).await
+                                {
                                     error!("处理连接时出错：{}", e);
                                 }
                             });
@@ -92,10 +111,11 @@ impl AgentServer {
     }
 }
 
-#[instrument(skip(stream, pool, direct_checker))]
+#[instrument(skip(stream, tcp_pool, udp_pool, direct_checker))]
 async fn handle_connection(
     stream: TcpStream,
-    pool: Arc<ConnectionPool>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     // 通过窥探第一个字节来检测协议类型
@@ -105,10 +125,10 @@ async fn handle_connection(
     // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。
     match buffer[0] {
         // SOCKS5 版本号为 0x05
-        0x05 => handle_socks5_connection(stream, pool, direct_checker).await,
+        0x05 => handle_socks5_connection(stream, tcp_pool, udp_pool, direct_checker).await,
         // HTTP 方法首字母（G、P、C 等）
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
-            handle_http_connection(stream, pool, direct_checker).await
+            handle_http_connection(stream, tcp_pool, direct_checker).await
         }
         _ => {
             error!("未知协议，首字节：0x{:02x}", buffer[0]);

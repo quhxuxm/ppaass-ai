@@ -6,7 +6,8 @@ proxy_addrs = ["140.82.30.214:80"]
 # proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-pool_size = 5
+tcp_pool_size = 5
+udp_pool_size = 5
 connect_timeout_secs = 20
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。

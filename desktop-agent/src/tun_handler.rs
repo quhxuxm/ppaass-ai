@@ -2,7 +2,7 @@
 //!
 //! 当 TUN 模式启用时，agent 会打开一个 TUN 设备，并使用
 //! [`netstack-smoltcp`](https://crates.io/crates/netstack-smoltcp) 在其上构建
-//! 用户空间 TCP/IP 协议栈。协议栈接受的每个 TCP/UDP 流都会通过现有的
+//! 用户空间 TCP/IP 协议栈。协议栈接受的 TCP/UDP 流会通过各自的
 //! [`ConnectionPool`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
@@ -35,7 +35,8 @@ use tun_rs::DeviceBuilder;
 
 #[derive(Clone)]
 struct TunForwardContext {
-    pool: Arc<ConnectionPool>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
     tun_networks: TunNetworks,
     proxy_dns: bool,
@@ -43,11 +44,12 @@ struct TunForwardContext {
 }
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(pool, direct_access_checker, shutdown))]
+#[instrument(skip(tcp_pool, udp_pool, direct_access_checker, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
     proxy_addrs: Vec<String>,
-    pool: Arc<ConnectionPool>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
     direct_access_checker: Arc<DirectAccessChecker>,
     shutdown: CancellationToken,
 ) -> Result<()> {
@@ -84,7 +86,8 @@ pub async fn run_tun_mode(
     );
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
-    let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &pool).await;
+    let proxy_bind_interface =
+        configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool).await;
 
     // netstack-smoltcp 在用户空间接收 TUN 包并暴露 TCP/UDP 流接口。
     let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
@@ -107,7 +110,8 @@ pub async fn run_tun_mode(
     let (tun_to_stack, stack_to_tun) =
         spawn_packet_bridge(device.clone(), stack, config.mtu as usize, shutdown.clone());
     let forward_context = TunForwardContext {
-        pool: pool.clone(),
+        tcp_pool: tcp_pool.clone(),
+        udp_pool: udp_pool.clone(),
         direct_checker: direct_access_checker.clone(),
         tun_networks,
         proxy_dns,
@@ -129,8 +133,10 @@ pub async fn run_tun_mode(
     info!("收到 TUN 模式关闭请求");
 
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
-    pool.set_proxy_bind_ip(None);
-    pool.set_proxy_bind_interface(None);
+    tcp_pool.set_proxy_bind_ip(None);
+    tcp_pool.set_proxy_bind_interface(None);
+    udp_pool.set_proxy_bind_ip(None);
+    udp_pool.set_proxy_bind_interface(None);
     drop(dns_guard);
     drop(route_guard);
 
@@ -391,7 +397,8 @@ fn windows_arch_label() -> &'static str {
 async fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
-    pool: &ConnectionPool,
+    tcp_pool: &ConnectionPool,
+    udp_pool: &ConnectionPool,
 ) -> Option<common::BindInterface> {
     // 通过 OS 路由决策探测物理出口 IP，用于后续 proxy 连接 bind。
     let proxy_route = detect_proxy_route(proxy_addrs);
@@ -402,19 +409,24 @@ async fn configure_proxy_routing(
             "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口",
             route.local_ip, route.bind_interface
         );
-        pool.set_proxy_bind_ip(Some(route.local_ip));
-        pool.set_proxy_bind_interface(route.bind_interface);
+        tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
+        tcp_pool.set_proxy_bind_interface(route.bind_interface.clone());
+        udp_pool.set_proxy_bind_ip(Some(route.local_ip));
+        udp_pool.set_proxy_bind_interface(route.bind_interface);
     } else {
         warn!(
             "无法检测物理出口 IP — 代理连接可能会回环进入 TUN。\
              请确保启动 TUN 模式前代理服务器可达。"
         );
-        pool.set_proxy_bind_ip(None);
-        pool.set_proxy_bind_interface(None);
+        tcp_pool.set_proxy_bind_ip(None);
+        tcp_pool.set_proxy_bind_interface(None);
+        udp_pool.set_proxy_bind_ip(None);
+        udp_pool.set_proxy_bind_interface(None);
     }
 
     // 必须在设置绑定 IP 后、劫持默认路由前预热连接池。
-    pool.prewarm().await;
+    tcp_pool.prewarm().await;
+    udp_pool.prewarm().await;
 
     debug!(
         "TUN 路由预配置完成：设备={} ipv4={} mtu={}",

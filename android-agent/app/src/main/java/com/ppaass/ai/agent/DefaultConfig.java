@@ -6,6 +6,7 @@ final class DefaultConfig {
     static final String TUN_IPV4 = "10.10.10.2/24";
     static final String TUN_IPV6 = "";
     static final boolean BLOCK_QUIC = true;
+    static final int UDP_POOL_SIZE = 5;
     static final String PRIVATE_KEY_PEM =
             "-----BEGIN PRIVATE KEY-----\n"
                     + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC2bpTBcj9mZStY\n"

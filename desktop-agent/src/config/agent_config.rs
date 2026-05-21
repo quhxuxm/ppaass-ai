@@ -12,8 +12,11 @@ pub struct AgentConfig {
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
-    #[serde(default = "default_pool_size")]
-    pub pool_size: usize,
+    #[serde(default = "default_tcp_pool_size", alias = "pool_size")]
+    pub tcp_pool_size: usize,
+
+    #[serde(default = "default_udp_pool_size")]
+    pub udp_pool_size: usize,
 
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
@@ -55,7 +58,7 @@ pub struct AgentConfig {
 ///
 /// 当 `enabled = true` 时，agent 创建 TUN 设备，在其上构建小型
 /// 用户空间 TCP/IP 协议栈（通过 netstack-smoltcp），并将接受的
-/// 每个 TCP/UDP 流通过与 SOCKS5/HTTP 模式相同的连接池转发到代理。
+/// TCP 流通过主连接池转发到代理；UDP 流通过单独的 UDP 连接池转发。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
     /// 启用 TUN 模式
@@ -148,8 +151,12 @@ fn default_tun_block_quic() -> bool {
     true
 }
 
-fn default_pool_size() -> usize {
+fn default_tcp_pool_size() -> usize {
     10
+}
+
+fn default_udp_pool_size() -> usize {
+    5
 }
 
 fn default_connect_timeout_secs() -> u64 {

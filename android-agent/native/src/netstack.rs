@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 use crate::fd_device::{AndroidTunDevice, RawFd};
+use crate::udp_pool::UdpConnectionPool;
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
@@ -28,6 +29,7 @@ const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 struct ForwardContext {
     config: Arc<AndroidAgentConfig>,
+    udp_pool: Arc<UdpConnectionPool>,
     tun_networks: TunNetworks,
     proxy_dns: bool,
 }
@@ -80,8 +82,11 @@ pub async fn run_android_agent(
 
     let (tun_to_stack, stack_to_tun) = spawn_packet_bridge(device, stack, mtu, shutdown.clone());
     let config = Arc::new(config);
+    let udp_pool = UdpConnectionPool::new(config.clone());
+    udp_pool.prewarm().await;
     let context = ForwardContext {
         config,
+        udp_pool,
         tun_networks,
         proxy_dns,
     };
@@ -434,14 +439,10 @@ async fn run_dns_proxy(
 async fn connect_dns_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let proxy = ClientConnection::connect(
-        context.config.as_ref(),
-        Address::ProxyDns { port: 53 },
-        TransportProtocol::Udp,
-    )
-    .await
-    .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    Ok(proxy.into_stream())
+    context
+        .udp_pool
+        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+        .await
 }
 
 async fn send_dns_request<W>(
@@ -773,14 +774,10 @@ async fn run_udp_relay(
 async fn connect_udp_relay_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let proxy = ClientConnection::connect(
-        context.config.as_ref(),
-        Address::UdpRelay,
-        TransportProtocol::Udp,
-    )
-    .await
-    .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    Ok(proxy.into_stream())
+    context
+        .udp_pool
+        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+        .await
 }
 
 async fn send_udp_relay_request<W>(

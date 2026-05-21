@@ -22,7 +22,7 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) block_quic: bool,
     pub(super) netstack_tx: UdpWriter,
-    pub(super) pool: Arc<ConnectionPool>,
+    pub(super) udp_pool: Arc<ConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_bind_interface: Option<BindInterface>,
 }
@@ -39,7 +39,7 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         block_quic,
         netstack_tx,
-        pool,
+        udp_pool,
         direct_checker,
         direct_bind_interface,
     } = context;
@@ -92,7 +92,7 @@ pub(super) async fn handle_tun_udp(
     } else {
         debug!("TUN UDP -> 代理 -> {}", target_label);
     }
-    let connected = pool
+    let connected = udp_pool
         .as_ref()
         .get_connected_stream(address, TransportProtocol::Udp)
         .await?;
