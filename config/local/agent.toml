@@ -11,7 +11,7 @@ udp_pool_size = 5
 connect_timeout_secs = 20
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
-# 该值应小于代理端的 `idle_connection_timeout_secs`（默认 120 秒），
+# 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
 # 使 agent 在代理关闭连接前主动替换连接。
 pool_max_connection_age_secs = 90
 
@@ -29,6 +29,24 @@ async_runtime_stack_size_mb = 4
 
 # Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
 # runtime_threads = 4
+
+[transport]
+# TCP 传输模式：auto 优先 Yamux，失败时回退旧协议；可选 yamux、legacy。
+tcp_mode = "auto"
+
+[yamux]
+# 保持的 Yamux 外层 TCP 连接数。
+sessions = 5
+# 每条 Yamux 外层连接允许的并发 TCP 子流数。
+max_streams_per_session = 256
+# 打开 Yamux 子流并完成目标连接握手的超时时间。
+open_stream_timeout_secs = 10
+# Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
+keepalive_interval_secs = 30
+# Yamux 底层连接写超时。
+connection_write_timeout_secs = 10
+# 每个 Yamux 子流的流控窗口大小。
+stream_window_size_kb = 512
 
 
 # TUN 模式配置

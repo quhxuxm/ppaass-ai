@@ -203,10 +203,11 @@ async fn handle_connection(
         return Ok(());
     };
 
-    // 仅将空闲超时用于“已认证但尚未发送连接请求”的预热连接。
-    // 连接请求到达后，后续中继不应再受该超时限制。
-    let idle_timeout = Duration::from_secs(proxy_config.idle_connection_timeout_secs);
+    // 仅将空闲超时用于“已认证但尚未发送第一个 Connect”的预热连接。
+    // Connect 到达后会释放 idle permit；legacy relay、UDP relay 和 Yamux 外层 session
+    // 的生命周期分别由业务中继、UDP flow idle 或 Yamux keepalive 管理。
+    let pre_connect_idle_timeout = Duration::from_secs(proxy_config.pre_connect_idle_timeout_secs);
     connection
-        .handle_request(idle_timeout, &username, Some(idle_permit))
+        .handle_pre_connect_request(pre_connect_idle_timeout, &username, Some(idle_permit))
         .await
 }

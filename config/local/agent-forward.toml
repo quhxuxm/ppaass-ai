@@ -10,7 +10,7 @@ udp_pool_size = 5
 connect_timeout_secs = 20
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
-# 该值应小于代理端的 `idle_connection_timeout_secs`（默认 120 秒），
+# 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
 # 使 agent 在代理关闭连接前主动替换连接。
 # pool_max_connection_age_secs = 90
 
@@ -32,3 +32,14 @@ async_runtime_stack_size_mb = 4
 # tokio-console 默认在 6669 端口启用
 # 如有需要，可设置自定义端口
 # console_port = 6679
+
+[transport]
+tcp_mode = "auto"
+
+[yamux]
+sessions = 5
+max_streams_per_session = 256
+open_stream_timeout_secs = 10
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 10
+stream_window_size_kb = 512

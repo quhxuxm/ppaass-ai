@@ -18,6 +18,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -26,6 +27,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -46,6 +48,10 @@ public class MainActivity extends Activity {
     private EditText privateKey;
     private EditText tcpPoolSize;
     private EditText udpPoolSize;
+    private Spinner tcpMode;
+    private EditText yamuxSessions;
+    private EditText yamuxMaxStreamsPerSession;
+    private EditText yamuxStreamWindowSizeKb;
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
@@ -113,6 +119,33 @@ public class MainActivity extends Activity {
                 root,
                 "UDP pool size",
                 prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        tcpMode = spinner(
+                root,
+                "TCP mode",
+                new String[]{"auto", "yamux", "legacy"},
+                prefs.getString("tcp_mode", DefaultConfig.TCP_MODE));
+        yamuxSessions = field(
+                root,
+                "Yamux sessions",
+                prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxMaxStreamsPerSession = field(
+                root,
+                "Yamux max streams/session",
+                prefs.getString(
+                        "yamux_max_streams_per_session",
+                        String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxStreamWindowSizeKb = field(
+                root,
+                "Yamux stream window KB",
+                prefs.getString(
+                        "yamux_stream_window_size_kb",
+                        String.valueOf(DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
 
@@ -212,6 +245,12 @@ public class MainActivity extends Activity {
         updateEditTextEditable(privateKey, editable);
         updateEditTextEditable(tcpPoolSize, editable);
         updateEditTextEditable(udpPoolSize, editable);
+        updateEditTextEditable(yamuxSessions, editable);
+        updateEditTextEditable(yamuxMaxStreamsPerSession, editable);
+        updateEditTextEditable(yamuxStreamWindowSizeKb, editable);
+        if (tcpMode != null) {
+            tcpMode.setEnabled(editable);
+        }
         if (blockQuic != null) {
             blockQuic.setEnabled(editable);
         }
@@ -241,7 +280,47 @@ public class MainActivity extends Activity {
                 .putBoolean("block_quic", blockQuic.isChecked())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
+                .putString("tcp_mode", selectedTcpMode())
+                .putString("yamux_sessions", yamuxSessions.getText().toString())
+                .putString(
+                        "yamux_max_streams_per_session",
+                        yamuxMaxStreamsPerSession.getText().toString())
+                .putString(
+                        "yamux_stream_window_size_kb",
+                        yamuxStreamWindowSizeKb.getText().toString())
                 .apply();
+    }
+
+    private Spinner spinner(LinearLayout root, String title, String[] values, String selected) {
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                values);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        int selectedIndex = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equalsIgnoreCase(selected)) {
+                selectedIndex = i;
+                break;
+            }
+        }
+        spinner.setSelection(selectedIndex);
+        root.addView(label(title), matchWrap());
+        root.addView(spinner, matchWrap());
+        return spinner;
+    }
+
+    private String selectedTcpMode() {
+        if (tcpMode == null || tcpMode.getSelectedItem() == null) {
+            return DefaultConfig.TCP_MODE;
+        }
+        String value = tcpMode.getSelectedItem().toString().trim().toLowerCase();
+        if ("yamux".equals(value) || "legacy".equals(value) || "auto".equals(value)) {
+            return value;
+        }
+        return DefaultConfig.TCP_MODE;
     }
 
     private EditText field(LinearLayout root, String title, String value) {

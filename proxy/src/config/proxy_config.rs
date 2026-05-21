@@ -1,3 +1,4 @@
+use common::{TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -35,6 +36,14 @@ pub struct ProxyConfig {
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
 
+    /// TCP 传输模式：auto/yamux 接受 Yamux 和 legacy，legacy 拒绝 Yamux 外层连接。
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    /// Yamux 多路复用参数。仅作用于 TCP Yamux 外层连接，UDP 不受影响。
+    #[serde(default)]
+    pub yamux: YamuxConfig,
+
     #[serde(default)]
     pub forward_mode: bool,
 
@@ -61,10 +70,13 @@ pub struct ProxyConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// 空闲连接超时时间（秒）- agent 连接若在该时间内未发送
-    /// 连接请求，将被关闭（防止连接泄漏）
-    #[serde(default = "default_idle_connection_timeout_secs")]
-    pub idle_connection_timeout_secs: u64,
+    /// 已认证但尚未发送第一个 Connect 请求的预热连接空闲超时时间（秒）。
+    /// 连接进入 legacy TCP relay、UDP relay 或 Yamux 外层 session 后不再使用该超时。
+    #[serde(
+        default = "default_pre_connect_idle_timeout_secs",
+        alias = "idle_connection_timeout_secs"
+    )]
+    pub pre_connect_idle_timeout_secs: u64,
 
     /// TCP relay 空闲超时时间（秒）；建立 CONNECT 后若双向都无数据活动将被关闭。
     /// 0 表示不限制。
@@ -126,7 +138,7 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
-fn default_idle_connection_timeout_secs() -> u64 {
+fn default_pre_connect_idle_timeout_secs() -> u64 {
     120
 }
 

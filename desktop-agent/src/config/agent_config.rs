@@ -1,4 +1,5 @@
 use crate::direct_access::DirectAccessConfig;
+use common::{TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -24,10 +25,18 @@ pub struct AgentConfig {
     /// 连接池中连接的最大存活时间（秒）。
     /// 超过此时间的连接会被丢弃并替换为新连接，避免因代理端的空闲超时
     /// 关闭连接导致请求失败。
-    /// 应设为小于代理端 `idle_connection_timeout_secs` 的值
+    /// 应设为小于代理端 `pre_connect_idle_timeout_secs` 的值
     /// （默认 90 秒，代理端默认 120 秒）。
     #[serde(default = "default_pool_max_connection_age_secs")]
     pub pool_max_connection_age_secs: u64,
+
+    /// TCP 传输模式：auto、yamux、legacy。
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    /// Yamux 多路复用配置，仅影响 TCP；UDP 保持原协议路径。
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 
     /// 日志级别：trace、debug、info、warn、error
     #[serde(default = "default_log_level")]
@@ -164,7 +173,7 @@ fn default_connect_timeout_secs() -> u64 {
 }
 
 fn default_pool_max_connection_age_secs() -> u64 {
-    // 默认 90 秒 — 低于代理端默认的 idle_connection_timeout_secs (120 秒)。
+    // 默认 90 秒 — 低于代理端默认的 pre_connect_idle_timeout_secs (120 秒)。
     // 确保池中连接在代理端关闭之前被淘汰，避免使用过期连接导致请求失败。
     90
 }

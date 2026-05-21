@@ -1,11 +1,13 @@
 pub mod client_connection;
 pub mod error;
+pub mod yamux_settings;
 
 pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
-    bind_socket_to_interface,
+    YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
 pub use error::{CommonError, Result};
+pub use yamux_settings::{TcpTransportMode, TransportConfig, YamuxConfig, YamuxSettings};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;

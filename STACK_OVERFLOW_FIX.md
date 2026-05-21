@@ -30,7 +30,7 @@ observability.
 
 - `read_request()` - Called in a tight loop for every incoming message
 - `send_response()` - Called frequently for every outgoing message
-- `handle_request()` - Main connection handler loop
+- `handle_pre_connect_request()` - Main pre-connect request handler loop
 - `handle_connect()` - Called for each new connection request
 - `relay_udp()` - Long-lived bidirectional relay function
 

@@ -67,9 +67,10 @@ async_runtime_stack_size_mb = 4
 # 用于防止半开 TCP 连接、端口扫描器等造成僵尸连接（默认：30）。
 auth_timeout_secs = 30
 
-# 空闲连接超时时间，单位秒；已认证连接若未在该时间内
-# 发送连接请求，将被关闭（默认：120）
-idle_connection_timeout_secs = 120
+# Pre-connect idle 超时时间，单位秒；已认证连接若未在该时间内
+# 发送第一个 Connect 请求，将被关闭（默认：120）。
+# legacy relay、UDP relay 和 Yamux 外层 session 建立后不受该超时影响。
+pre_connect_idle_timeout_secs = 120
 
 # TCP relay 空闲超时时间，单位秒；建立 CONNECT 后若双向都无数据活动会关闭。
 # 0 表示不限制（默认：300）
@@ -90,3 +91,14 @@ udp_relay_idle_timeout_secs = 60
 # max_idle_connections_per_user = 128
 # max_udp_relay_flows_per_connection = 2048
 # max_udp_relay_flows = 4096
+
+[transport]
+tcp_mode = "auto"
+
+[yamux]
+sessions = 5
+max_streams_per_session = 256
+open_stream_timeout_secs = 10
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 10
+stream_window_size_kb = 512

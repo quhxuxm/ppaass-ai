@@ -8,6 +8,13 @@ final class DefaultConfig {
     static final boolean BLOCK_QUIC = true;
     static final int TCP_POOL_SIZE = 32;
     static final int UDP_POOL_SIZE = 32;
+    static final String TCP_MODE = "auto";
+    static final int YAMUX_SESSIONS = 5;
+    static final int YAMUX_MAX_STREAMS_PER_SESSION = 32;
+    static final int YAMUX_STREAM_WINDOW_SIZE_KB = 512;
+    static final int MIN_YAMUX_STREAM_WINDOW_SIZE_KB = 256;
+    static final int ASYNC_RUNTIME_STACK_SIZE_MB = 4;
+    static final int RUNTIME_THREADS = 4;
     static final String PRIVATE_KEY_PEM =
             "-----BEGIN PRIVATE KEY-----\n"
                     + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC2bpTBcj9mZStY\n"

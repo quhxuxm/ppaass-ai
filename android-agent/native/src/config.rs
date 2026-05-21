@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::ClientConnectionConfig;
+use common::{ClientConnectionConfig, TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AndroidAgentError, Result};
@@ -11,6 +11,12 @@ pub struct AndroidAgentConfig {
     pub username: String,
     pub private_key_pem: String,
 
+    #[serde(default = "default_async_runtime_stack_size_mb")]
+    pub async_runtime_stack_size_mb: usize,
+
+    #[serde(default = "default_runtime_threads")]
+    pub runtime_threads: usize,
+
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
@@ -19,6 +25,12 @@ pub struct AndroidAgentConfig {
 
     #[serde(default = "default_udp_pool_size")]
     pub udp_pool_size: usize,
+
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 
     #[serde(default)]
     pub tun: AndroidTunConfig,
@@ -95,6 +107,14 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_async_runtime_stack_size_mb() -> usize {
+    4
+}
+
+fn default_runtime_threads() -> usize {
+    4
 }
 
 fn default_tcp_pool_size() -> usize {

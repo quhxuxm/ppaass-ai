@@ -128,12 +128,31 @@ public class PpaassVpnService extends VpnService {
                 .put("mtu", parseInt(prefs.getString("mtu", "1500"), 1500))
                 .put("proxy_dns", true)
                 .put("block_quic", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
+        JSONObject transportJson = new JSONObject()
+                .put("tcp_mode", normalizeTcpMode(prefs.getString("tcp_mode", DefaultConfig.TCP_MODE)));
+        JSONObject yamuxJson = new JSONObject()
+                .put("sessions", parsePositiveInt(
+                        prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
+                        DefaultConfig.YAMUX_SESSIONS))
+                .put("max_streams_per_session", parsePositiveInt(
+                        prefs.getString(
+                                "yamux_max_streams_per_session",
+                                String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
+                        DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION))
+                .put("stream_window_size_kb", parseMinInt(
+                        prefs.getString(
+                                "yamux_stream_window_size_kb",
+                                String.valueOf(DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB)),
+                        DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB,
+                        DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB));
 
         return new JSONObject()
                 .put("proxy_addrs", new JSONArray(tokens(prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR))))
                 .put("username", prefs.getString("username", DefaultConfig.USERNAME))
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
+                .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
+                .put("runtime_threads", DefaultConfig.RUNTIME_THREADS)
                 .put("connect_timeout_secs", 30)
                 .put("tcp_pool_size", parseNonNegativeInt(
                         prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
@@ -141,6 +160,8 @@ public class PpaassVpnService extends VpnService {
                 .put("udp_pool_size", parseNonNegativeInt(
                         prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
                         DefaultConfig.UDP_POOL_SIZE))
+                .put("transport", transportJson)
+                .put("yamux", yamuxJson)
                 .put("tun", tunJson);
     }
 
@@ -213,6 +234,25 @@ public class PpaassVpnService extends VpnService {
 
     private int parseNonNegativeInt(String value, int fallback) {
         return Math.max(0, parseInt(value, fallback));
+    }
+
+    private int parsePositiveInt(String value, int fallback) {
+        return Math.max(1, parseInt(value, fallback));
+    }
+
+    private int parseMinInt(String value, int fallback, int min) {
+        return Math.max(min, parseInt(value, fallback));
+    }
+
+    private String normalizeTcpMode(String value) {
+        if (value == null) {
+            return DefaultConfig.TCP_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("auto".equals(normalized) || "yamux".equals(normalized) || "legacy".equals(normalized)) {
+            return normalized;
+        }
+        return DefaultConfig.TCP_MODE;
     }
 
     private List<String> tokens(String value) {

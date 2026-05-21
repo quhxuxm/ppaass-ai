@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["io-util"] }
+tokio-yamux.workspace = true
 tokio-util.workspace = true
 serde.workspace = true
 config.workspace = true

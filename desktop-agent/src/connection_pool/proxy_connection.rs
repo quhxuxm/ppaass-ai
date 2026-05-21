@@ -8,7 +8,9 @@ use std::{
 use super::connected_stream::ConnectedStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{AuthenticatedConnection, BindInterface, ClientConnectionConfig};
+use common::{
+    AuthenticatedConnection, BindInterface, ClientConnectionConfig, YamuxClientConnection,
+};
 use protocol::Address;
 use tracing::{debug, info, instrument};
 
@@ -115,6 +117,18 @@ impl ProxyConnection {
             auth_conn,
             created_at: Instant::now(),
         })
+    }
+
+    #[instrument(skip(config))]
+    pub async fn new_yamux_connection(
+        config: &AgentConfig,
+        bind_ip: Option<IpAddr>,
+        bind_interface: Option<BindInterface>,
+    ) -> Result<YamuxClientConnection> {
+        let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
+        YamuxClientConnection::connect_with_settings(&config_adapter, config.yamux.settings())
+            .await
+            .map_err(|e| AgentError::Connection(e.to_string()))
     }
 
     /// 如果连接在池中停留时间超过 `max_age`，返回 true。
