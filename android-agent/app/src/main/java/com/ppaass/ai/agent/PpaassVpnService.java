@@ -135,8 +135,12 @@ public class PpaassVpnService extends VpnService {
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
                 .put("connect_timeout_secs", 30)
-                .put("tcp_pool_size", DefaultConfig.TCP_POOL_SIZE)
-                .put("udp_pool_size", DefaultConfig.UDP_POOL_SIZE)
+                .put("tcp_pool_size", parseNonNegativeInt(
+                        prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
+                        DefaultConfig.TCP_POOL_SIZE))
+                .put("udp_pool_size", parseNonNegativeInt(
+                        prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
+                        DefaultConfig.UDP_POOL_SIZE))
                 .put("tun", tunJson);
     }
 
@@ -205,6 +209,10 @@ public class PpaassVpnService extends VpnService {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
+    }
+
+    private int parseNonNegativeInt(String value, int fallback) {
+        return Math.max(0, parseInt(value, fallback));
     }
 
     private List<String> tokens(String value) {
