@@ -22,4 +22,4 @@ pub use message_type::MessageType;
 pub use proxy_request::ProxyRequest;
 pub use proxy_response::ProxyResponse;
 pub use udp_relay_packet::UdpRelayPacket;
-pub use values::{MAX_MESSAGE_SIZE, PROTOCOL_VERSION};
+pub use values::{MAX_MESSAGE_SIZE, MAX_YAMUX_CONTROL_FRAME_SIZE, PROTOCOL_VERSION};

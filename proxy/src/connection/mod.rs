@@ -14,6 +14,7 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::connection_limiter::{ConnectionLimiter, IdleConnectionPermit, UdpRelayFlowPermit};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
+use common::TcpTransportMode;
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -22,6 +23,7 @@ use protocol::{
     Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
     ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol, UdpRelayPacket,
     crypto::{AesGcmCipher, RsaKeyPair},
+    read_yamux_connect_request, write_yamux_connect_response,
 };
 use std::collections::HashMap;
 #[cfg(not(windows))]
@@ -39,6 +41,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
+use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, instrument, trace, warn};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
@@ -312,6 +315,30 @@ impl ServerConnection {
                 .await;
         }
 
+        if matches!(connect_request.address, Address::TcpYamux) {
+            if self.proxy_config.transport.tcp_mode == TcpTransportMode::Legacy {
+                return self
+                    .send_connect_error(
+                        connect_request.request_id,
+                        "TCP Yamux is disabled by proxy config".to_string(),
+                    )
+                    .await;
+            }
+            if connect_request.transport != TransportProtocol::Tcp {
+                return self
+                    .send_connect_error(
+                        connect_request.request_id,
+                        "TCP Yamux only supports TCP transport".to_string(),
+                    )
+                    .await;
+            }
+            self.send_connect_success(connect_request.request_id.clone(), "TCP Yamux connected")
+                .await?;
+            return self
+                .handle_tcp_yamux_connect(connect_request.request_id)
+                .await;
+        }
+
         if matches!(connect_request.address, Address::UdpRelay) {
             if connect_request.transport != TransportProtocol::Udp {
                 return self
@@ -341,31 +368,7 @@ impl ServerConnection {
 
     fn target_addr_for_request(&self, address: &Address) -> Result<String> {
         // ProxyDns 是特殊地址类型，需要在 proxy 端决定真正的 DNS 上游。
-        match address {
-            Address::ProxyDns { port } => self.proxy_dns_target_addr(*port),
-            _ => Ok(format_target_addr(address)),
-        }
-    }
-
-    fn proxy_dns_target_addr(&self, port: u16) -> Result<String> {
-        // 显式配置优先，适合 Windows 或容器环境中系统 DNS 不可靠的情况。
-        if let Some(addr) = self
-            .proxy_config
-            .dns_upstream_addr
-            .as_deref()
-            .map(str::trim)
-            .filter(|addr| !addr.is_empty())
-        {
-            let target = endpoint_with_port(addr, port);
-            debug!("DNS 请求使用 proxy 配置的上游 DNS：{target}");
-            return Ok(target);
-        }
-
-        // 未配置时按当前系统 DNS 解析，保持默认行为贴近操作系统。
-        let nameserver = system_dns_nameserver()?;
-        let target = endpoint_with_port(&nameserver, port);
-        debug!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
-        Ok(target)
+        target_addr_for_address(&self.proxy_config, address)
     }
 
     async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
@@ -451,6 +454,101 @@ impl ServerConnection {
                     ),
                 )
                 .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_tcp_yamux_connect(&mut self, stream_id: String) -> Result<()> {
+        debug!("正在建立 TCP Yamux 会话：stream_id={stream_id}");
+
+        let username = self.user_config.as_ref().map(|c| c.username.clone());
+        let monitor_stream = self.bandwidth_monitor.clone();
+        let username_stream = username.clone();
+        let stream_id_filter = stream_id.clone();
+
+        let sink = BytesToProxyResponseSink {
+            inner: &mut self.writer,
+            stream_id: stream_id.clone(),
+            username: username.clone(),
+            bandwidth_monitor: self.bandwidth_monitor.clone(),
+            end_sent: false,
+        };
+
+        let stream_id_stop = stream_id.clone();
+        let stream = (&mut self.reader)
+            .take_while(move |res| {
+                let continue_stream = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        !(packet.stream_id == stream_id_stop
+                            && packet.is_end
+                            && packet.data.is_empty())
+                    }
+                    Ok(_) => true,
+                    Err(_) => false,
+                };
+                futures::future::ready(continue_stream)
+            })
+            .filter_map(move |res| {
+                let user = username_stream.as_ref();
+                let monitor = &monitor_stream;
+
+                let result = match res {
+                    Ok(ProxyRequest::Data(packet)) => {
+                        if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
+                            if let Some(u) = user {
+                                monitor.record_received(u, packet.data.len() as u64);
+                            }
+                            Some(Ok(Bytes::from(packet.data)))
+                        } else {
+                            None
+                        }
+                    }
+                    Ok(_) => None,
+                    Err(e) => Some(Err(io::Error::other(e))),
+                };
+
+                futures::future::ready(result)
+            });
+
+        let writer = SinkWriter::new(sink);
+        let reader = StreamReader::new(stream);
+        let agent_io = AgentIo { reader, writer };
+        let mut session = Session::new_server(
+            agent_io,
+            self.proxy_config.yamux.settings().to_tokio_config(),
+        );
+        let proxy_config = self.proxy_config.clone();
+        let egress_state = self.egress_state.clone();
+        let bandwidth_monitor = self.bandwidth_monitor.clone();
+        let username = self.user_config.as_ref().map(|c| c.username.clone());
+
+        while let Some(result) = session.next().await {
+            match result {
+                Ok(stream) => {
+                    let proxy_config = proxy_config.clone();
+                    let egress_state = egress_state.clone();
+                    let bandwidth_monitor = bandwidth_monitor.clone();
+                    let username = username.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = handle_yamux_tcp_stream(
+                            stream,
+                            proxy_config,
+                            egress_state,
+                            bandwidth_monitor,
+                            username,
+                        )
+                        .await
+                        {
+                            debug!("Yamux TCP 子流已结束：{err}");
+                        }
+                    });
+                }
+                Err(err) => {
+                    debug!("TCP Yamux 会话结束 stream_id={stream_id}: {err}");
+                    break;
+                }
             }
         }
 
@@ -1064,6 +1162,328 @@ impl ServerConnection {
     }
 }
 
+async fn handle_yamux_tcp_stream(
+    mut stream: StreamHandle,
+    proxy_config: Arc<ProxyConfig>,
+    egress_state: Arc<EgressState>,
+    bandwidth_monitor: Arc<BandwidthMonitor>,
+    username: Option<String>,
+) -> Result<()> {
+    let connect_request = read_yamux_connect_request(&mut stream).await?;
+    debug!(
+        "[Yamux 连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
+        connect_request.request_id, connect_request.address, connect_request.transport
+    );
+
+    if connect_request.transport != TransportProtocol::Tcp {
+        send_yamux_connect_error(
+            &mut stream,
+            connect_request.request_id,
+            "Yamux substream only supports TCP transport".to_string(),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if matches!(
+        connect_request.address,
+        Address::TcpYamux | Address::UdpRelay
+    ) {
+        send_yamux_connect_error(
+            &mut stream,
+            connect_request.request_id,
+            "Yamux substream target must be a TCP address".to_string(),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if let Some(username) = &username
+        && !bandwidth_monitor.check_limit(username).await
+    {
+        send_yamux_connect_error(
+            &mut stream,
+            connect_request.request_id,
+            "Bandwidth limit exceeded".to_string(),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if proxy_config.forward_mode {
+        return handle_yamux_upstream_connect(stream, connect_request, proxy_config).await;
+    }
+
+    let target_addr = match target_addr_for_address(&proxy_config, &connect_request.address) {
+        Ok(target_addr) => target_addr,
+        Err(err) => {
+            send_yamux_connect_error(
+                &mut stream,
+                connect_request.request_id,
+                format!("Failed to resolve target: {err}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let connect_timeout = Duration::from_secs(proxy_config.connect_timeout_secs);
+    match tokio::time::timeout(connect_timeout, egress_state.connect_tcp(&target_addr)).await {
+        Ok(Ok(target_stream)) => {
+            debug!(
+                "已通过 Yamux 子流连接目标（TCP）：{}，出站设备={}",
+                target_addr,
+                proxy_config
+                    .outbound_interface
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or("默认路由")
+            );
+            send_yamux_connect_success(&mut stream, connect_request.request_id, "Connected")
+                .await?;
+            relay_yamux_tcp_stream(
+                stream,
+                target_stream,
+                proxy_config.tcp_relay_idle_timeout_secs,
+            )
+            .await?;
+        }
+        Ok(Err(e)) => {
+            warn!("Yamux 子流连接目标失败（TCP）：{}，目标={}", e, target_addr);
+            send_yamux_connect_error(
+                &mut stream,
+                connect_request.request_id,
+                format!("Failed to connect: {}", e),
+            )
+            .await?;
+        }
+        Err(_) => {
+            warn!(
+                "Yamux 子流连接目标超时（TCP）：目标={}，超时={} 秒",
+                target_addr, proxy_config.connect_timeout_secs
+            );
+            send_yamux_connect_error(
+                &mut stream,
+                connect_request.request_id,
+                format!(
+                    "Connect timeout after {} seconds",
+                    proxy_config.connect_timeout_secs
+                ),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_yamux_upstream_connect(
+    mut stream: StreamHandle,
+    connect_request: ConnectRequest,
+    proxy_config: Arc<ProxyConfig>,
+) -> Result<()> {
+    debug!("正在将 Yamux 子流请求转发到上游代理");
+    match UpstreamConnection::connect(
+        &proxy_config,
+        connect_request.address.clone(),
+        connect_request.transport,
+    )
+    .await
+    {
+        Ok(upstream_conn) => {
+            send_yamux_connect_success(
+                &mut stream,
+                connect_request.request_id,
+                "Connected through upstream",
+            )
+            .await?;
+            relay_yamux_tcp_stream(
+                stream,
+                upstream_conn.into_stream(),
+                proxy_config.tcp_relay_idle_timeout_secs,
+            )
+            .await?;
+        }
+        Err(e) => {
+            error!("Yamux 子流连接上游代理失败：{}", e);
+            send_yamux_connect_error(
+                &mut stream,
+                connect_request.request_id,
+                format!("Upstream error: {}", e),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn relay_yamux_tcp_stream<S>(
+    mut agent_stream: StreamHandle,
+    mut target_stream: S,
+    idle_timeout_secs: u64,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    if idle_timeout_secs == 0 {
+        match tokio::io::copy_bidirectional(&mut agent_stream, &mut target_stream).await {
+            Ok((up, down)) => debug!("Yamux 子流中继已结束：上行 {}，下行 {}", up, down),
+            Err(e) => debug!("Yamux 子流中继错误：{}", e),
+        }
+        return Ok(());
+    }
+
+    let idle_timeout = Duration::from_secs(idle_timeout_secs);
+    let idle = tokio::time::sleep(idle_timeout);
+    tokio::pin!(idle);
+
+    let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_stream);
+    let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
+    let mut up_bytes: u64 = 0;
+    let mut down_bytes: u64 = 0;
+    let mut agent_buf = [0u8; 8192];
+    let mut target_buf = [0u8; 8192];
+
+    loop {
+        tokio::select! {
+            _ = &mut idle => {
+                debug!(
+                    "Yamux TCP 子流空闲超过 {} 秒，关闭连接",
+                    idle_timeout.as_secs()
+                );
+                break;
+            }
+            read = agent_reader.read(&mut agent_buf) => {
+                match read {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        up_bytes += n as u64;
+                        match tokio::time::timeout(idle_timeout, async {
+                            target_writer.write_all(&agent_buf[..n]).await?;
+                            target_writer.flush().await
+                        }).await {
+                            Ok(Ok(())) => {
+                                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                            }
+                            Ok(Err(e)) => {
+                                debug!("Yamux TCP relay 写入目标失败：{}", e);
+                                break;
+                            }
+                            Err(_) => {
+                                debug!("Yamux TCP relay 写入目标超过 {} 秒，关闭连接", idle_timeout.as_secs());
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Yamux TCP relay 读取 agent 数据失败：{}", e);
+                        break;
+                    }
+                }
+            }
+            read = target_reader.read(&mut target_buf) => {
+                match read {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        down_bytes += n as u64;
+                        match tokio::time::timeout(idle_timeout, async {
+                            agent_writer.write_all(&target_buf[..n]).await?;
+                            agent_writer.flush().await
+                        }).await {
+                            Ok(Ok(())) => {
+                                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                            }
+                            Ok(Err(e)) => {
+                                debug!("Yamux TCP relay 写回 agent 失败：{}", e);
+                                break;
+                            }
+                            Err(_) => {
+                                debug!("Yamux TCP relay 写回 agent 超过 {} 秒，关闭连接", idle_timeout.as_secs());
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Yamux TCP relay 读取目标数据失败：{}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    debug!(
+        "Yamux 子流中继已结束：上行 {}，下行 {}",
+        up_bytes, down_bytes
+    );
+    Ok(())
+}
+
+async fn send_yamux_connect_success<W>(
+    writer: &mut W,
+    request_id: String,
+    message: &str,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let response = ConnectResponse {
+        request_id,
+        success: true,
+        message: message.to_string(),
+    };
+    write_yamux_connect_response(writer, &response).await?;
+    Ok(())
+}
+
+async fn send_yamux_connect_error<W>(
+    writer: &mut W,
+    request_id: String,
+    message: String,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let response = ConnectResponse {
+        request_id,
+        success: false,
+        message,
+    };
+    write_yamux_connect_response(writer, &response).await?;
+    Ok(())
+}
+
+fn target_addr_for_address(proxy_config: &ProxyConfig, address: &Address) -> Result<String> {
+    match address {
+        Address::ProxyDns { port } => proxy_dns_target_addr(proxy_config, *port),
+        Address::TcpYamux | Address::UdpRelay => Err(ProxyError::Connection(
+            "virtual target address cannot be used as a TCP target".to_string(),
+        )),
+        _ => Ok(format_target_addr(address)),
+    }
+}
+
+fn proxy_dns_target_addr(proxy_config: &ProxyConfig, port: u16) -> Result<String> {
+    // 显式配置优先，适合 Windows 或容器环境中系统 DNS 不可靠的情况。
+    if let Some(addr) = proxy_config
+        .dns_upstream_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+    {
+        let target = endpoint_with_port(addr, port);
+        debug!("DNS 请求使用 proxy 配置的上游 DNS：{target}");
+        return Ok(target);
+    }
+
+    // 未配置时按当前系统 DNS 解析，保持默认行为贴近操作系统。
+    let nameserver = system_dns_nameserver()?;
+    let target = endpoint_with_port(&nameserver, port);
+    debug!("DNS 请求使用 proxy 端默认上游 DNS：{target}");
+    Ok(target)
+}
+
 fn format_target_addr(address: &Address) -> String {
     // 协议地址统一转成 host:port，供 Tokio lookup_host/connect 使用。
     match address {
@@ -1086,6 +1506,7 @@ fn format_target_addr(address: &Address) -> String {
             )
         }
         Address::ProxyDns { port } => format!("proxy-dns:{port}"),
+        Address::TcpYamux => "tcp-yamux".to_string(),
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }
@@ -1095,9 +1516,9 @@ fn relay_target_addr(address: &Address) -> Result<String> {
         Address::Domain { .. } | Address::Ipv4 { .. } | Address::Ipv6 { .. } => {
             Ok(format_target_addr(address))
         }
-        Address::ProxyDns { .. } | Address::UdpRelay => Err(ProxyError::Connection(
-            "UDP relay packet contains virtual target address".to_string(),
-        )),
+        Address::ProxyDns { .. } | Address::TcpYamux | Address::UdpRelay => Err(
+            ProxyError::Connection("UDP relay packet contains virtual target address".to_string()),
+        ),
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::direct_access::DirectAccessConfig;
+use common::{TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -28,6 +29,14 @@ pub struct AgentConfig {
     /// （默认 90 秒，代理端默认 120 秒）。
     #[serde(default = "default_pool_max_connection_age_secs")]
     pub pool_max_connection_age_secs: u64,
+
+    /// TCP 传输模式：auto、yamux、legacy。
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    /// Yamux 多路复用配置，仅影响 TCP；UDP 保持原协议路径。
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 
     /// 日志级别：trace、debug、info、warn、error
     #[serde(default = "default_log_level")]

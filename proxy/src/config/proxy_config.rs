@@ -1,3 +1,4 @@
+use common::{TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -34,6 +35,14 @@ pub struct ProxyConfig {
 
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
+
+    /// TCP 传输模式：auto/yamux 接受 Yamux 和 legacy，legacy 拒绝 Yamux 外层连接。
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    /// Yamux 多路复用参数。仅作用于 TCP Yamux 外层连接，UDP 不受影响。
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 
     #[serde(default)]
     pub forward_mode: bool,

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::ClientConnectionConfig;
+use common::{ClientConnectionConfig, TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AndroidAgentError, Result};
@@ -19,6 +19,12 @@ pub struct AndroidAgentConfig {
 
     #[serde(default = "default_udp_pool_size")]
     pub udp_pool_size: usize,
+
+    #[serde(default)]
+    pub transport: TransportConfig,
+
+    #[serde(default)]
+    pub yamux: YamuxConfig,
 
     #[serde(default)]
     pub tun: AndroidTunConfig,

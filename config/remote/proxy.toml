@@ -90,3 +90,14 @@ udp_relay_idle_timeout_secs = 60
 # max_idle_connections_per_user = 128
 # max_udp_relay_flows_per_connection = 2048
 # max_udp_relay_flows = 4096
+
+[transport]
+tcp_mode = "auto"
+
+[yamux]
+sessions = 5
+max_streams_per_session = 256
+open_stream_timeout_secs = 10
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 10
+stream_window_size_kb = 256
