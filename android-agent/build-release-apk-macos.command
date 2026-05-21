@@ -32,6 +32,22 @@ if ! cargo ndk --version >/dev/null 2>&1; then
   exit 1
 fi
 
+find_android_build_tool() {
+  local tool_name="$1"
+  local tool_path
+
+  tool_path="$(find "$ANDROID_HOME/build-tools" -type f -name "$tool_name" 2>/dev/null | sort | tail -n 1 || true)"
+  if [ -z "$tool_path" ]; then
+    echo "Error: Android build tool '$tool_name' was not found under $ANDROID_HOME/build-tools."
+    exit 1
+  fi
+
+  echo "$tool_path"
+}
+
+ZIPALIGN="$(find_android_build_tool zipalign)"
+APKSIGNER="$(find_android_build_tool apksigner)"
+
 GRADLE_CMD=()
 if [ -f "./gradlew" ]; then
   chmod +x ./gradlew || true
@@ -60,6 +76,55 @@ echo "Building Android release APK..."
 
 "${GRADLE_CMD[@]}" assembleRelease
 
+UNSIGNED_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+ALIGNED_APK="app/build/outputs/apk/release/app-release-aligned.apk"
+SIGNED_APK="app/build/outputs/apk/release/app-release-signed.apk"
+
+if [ ! -f "$UNSIGNED_APK" ]; then
+  echo "Error: unsigned release APK was not found at $UNSIGNED_APK"
+  exit 1
+fi
+
+KEYSTORE="${PPAASS_RELEASE_KEYSTORE:-$SCRIPT_DIR/local-release.keystore}"
+KEY_ALIAS="${PPAASS_RELEASE_KEY_ALIAS:-ppaass-local-release}"
+STORE_PASSWORD="${PPAASS_RELEASE_STORE_PASSWORD:-ppaass-local-release}"
+KEY_PASSWORD="${PPAASS_RELEASE_KEY_PASSWORD:-$STORE_PASSWORD}"
+
+if [ ! -f "$KEYSTORE" ]; then
+  if ! command -v keytool >/dev/null 2>&1; then
+    echo "Error: keytool was not found in PATH."
+    exit 1
+  fi
+
+  echo "Creating local signing keystore: $KEYSTORE"
+  keytool -genkeypair \
+    -keystore "$KEYSTORE" \
+    -storepass "$STORE_PASSWORD" \
+    -keypass "$KEY_PASSWORD" \
+    -alias "$KEY_ALIAS" \
+    -keyalg RSA \
+    -keysize 2048 \
+    -validity 10000 \
+    -dname "CN=PPAASS Local Release, OU=Development, O=PPAASS, L=Local, ST=Local, C=CN" \
+    >/dev/null
+fi
+
+echo "Signing release APK..."
+rm -f "$ALIGNED_APK" "$SIGNED_APK"
+"$ZIPALIGN" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+"$APKSIGNER" sign \
+  --ks "$KEYSTORE" \
+  --ks-key-alias "$KEY_ALIAS" \
+  --ks-pass "pass:$STORE_PASSWORD" \
+  --key-pass "pass:$KEY_PASSWORD" \
+  --out "$SIGNED_APK" \
+  "$ALIGNED_APK"
+"$APKSIGNER" verify --verbose "$SIGNED_APK"
+rm -f "$ALIGNED_APK"
+
 echo
-echo "Release APK output:"
+echo "Installable release APK:"
+echo "$SIGNED_APK"
+echo
+echo "All release APK output:"
 find app/build/outputs/apk/release -name "*.apk" -print
