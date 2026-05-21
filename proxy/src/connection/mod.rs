@@ -789,7 +789,8 @@ impl ServerConnection {
 
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
 
-        let udp_relay_idle_timeout = Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs);
+        let udp_relay_idle_timeout =
+            Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs);
         let idle_timeout = tokio::time::sleep(udp_relay_idle_timeout);
         tokio::pin!(idle_timeout);
         let mut agent_buf = [0u8; 65535];
