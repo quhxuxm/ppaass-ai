@@ -46,7 +46,7 @@ keepalive_interval_secs = 30
 # Yamux 底层连接写超时。
 connection_write_timeout_secs = 10
 # 每个 Yamux 子流的流控窗口大小。
-stream_window_size_kb = 256
+stream_window_size_kb = 512
 
 
 # TUN 模式配置

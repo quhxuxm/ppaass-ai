@@ -57,8 +57,8 @@ impl Decoder for MessageCodec {
             None => return Ok(None),
         };
 
-        let mut message: Message = bitcode::deserialize(&frame)
-            .map_err(|e| Self::io_error("消息反序列化失败", e))?;
+        let mut message: Message =
+            bitcode::deserialize(&frame).map_err(|e| Self::io_error("消息反序列化失败", e))?;
 
         if let Some(cipher) = self.state.cipher.get()
             && Self::needs_crypto(message.message_type)
@@ -106,8 +106,7 @@ impl Encoder<Message> for MessageCodec {
             item.payload = encrypted;
         }
 
-        let data = bitcode::serialize(&item)
-            .map_err(|e| Self::io_error("消息序列化失败", e))?;
+        let data = bitcode::serialize(&item).map_err(|e| Self::io_error("消息序列化失败", e))?;
         self.inner.encode(Bytes::from(data), dst)
     }
 }

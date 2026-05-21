@@ -6,7 +6,8 @@ pub const DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION: usize = 256;
 pub const DEFAULT_YAMUX_OPEN_STREAM_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_YAMUX_KEEPALIVE_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS: u64 = 10;
-pub const DEFAULT_YAMUX_STREAM_WINDOW_SIZE_KB: usize = 256;
+pub const MIN_YAMUX_STREAM_WINDOW_SIZE_KB: usize = 256;
+pub const DEFAULT_YAMUX_STREAM_WINDOW_SIZE_KB: usize = 512;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -84,7 +85,7 @@ impl YamuxConfig {
             ),
             stream_window_size_kb: self
                 .stream_window_size_kb
-                .max(DEFAULT_YAMUX_STREAM_WINDOW_SIZE_KB),
+                .max(MIN_YAMUX_STREAM_WINDOW_SIZE_KB),
         }
     }
 }
@@ -109,7 +110,7 @@ impl YamuxSettings {
         let max_streams = self.max_streams_per_session.max(1);
         let stream_window_size = self
             .stream_window_size_kb
-            .max(DEFAULT_YAMUX_STREAM_WINDOW_SIZE_KB)
+            .max(MIN_YAMUX_STREAM_WINDOW_SIZE_KB)
             .saturating_mul(1024)
             .min(u32::MAX as usize) as u32;
 

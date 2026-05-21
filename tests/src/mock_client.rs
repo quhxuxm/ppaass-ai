@@ -57,10 +57,7 @@ impl MockHttpClient {
 
         let duration = start.elapsed();
 
-        debug!(
-            "HTTP GET {} - 状态：{} - 耗时：{:?}",
-            url, status, duration
-        );
+        debug!("HTTP GET {} - 状态：{} - 耗时：{:?}", url, status, duration);
 
         Ok((duration, body))
     }

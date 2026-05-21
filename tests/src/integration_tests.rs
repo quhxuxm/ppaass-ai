@@ -68,10 +68,7 @@ impl IntegrationTestResults {
             error!(
                 "✗ {} - 失败：{}",
                 result.name,
-                result
-                    .error
-                    .as_ref()
-                    .unwrap_or(&"未知错误".to_string())
+                result.error.as_ref().unwrap_or(&"未知错误".to_string())
             );
         }
         self.test_details.push(result);

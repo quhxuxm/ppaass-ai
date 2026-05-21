@@ -101,4 +101,4 @@ max_streams_per_session = 256
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 256
+stream_window_size_kb = 512
