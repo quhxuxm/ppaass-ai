@@ -471,9 +471,18 @@ impl ServerConnection {
         let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
         let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
         let stream_id = connect_request.request_id;
+        let relay_idle = tokio::time::sleep(UDP_RELAY_FLOW_IDLE);
+        tokio::pin!(relay_idle);
 
         loop {
             tokio::select! {
+                _ = &mut relay_idle => {
+                    debug!(
+                        "UDP 共享中继空闲超过 {} 秒，关闭该连接",
+                        UDP_RELAY_FLOW_IDLE.as_secs()
+                    );
+                    break;
+                }
                 request = self.reader.next() => {
                     let request = match request {
                         Some(Ok(request)) => request,
@@ -493,6 +502,8 @@ impl ServerConnection {
                     if packet.data.is_empty() {
                         continue;
                     }
+
+                    relay_idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
 
                     if let Some(user) = &username {
                         self.bandwidth_monitor.record_received(user, packet.data.len() as u64);
@@ -573,6 +584,7 @@ impl ServerConnection {
                         .send(ProxyResponse::Data(packet))
                         .await
                         .map_err(|e| ProxyError::Connection(format!("Failed to send UDP relay response: {e}")))?;
+                    relay_idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_FLOW_IDLE);
                 }
                 done = flow_done_rx.recv() => {
                     let Some(flow_id) = done else { break };
@@ -660,7 +672,7 @@ impl ServerConnection {
                 }
             }
             drop(socket);
-            let _ = flow_done_tx.try_send(flow_id);
+            let _ = flow_done_tx.send(flow_id).await;
             debug!("UDP relay flow {flow_id} 已结束");
         });
 
