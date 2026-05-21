@@ -39,7 +39,7 @@ tasks.register('cargoBuildAndroid') {
         def manifest = layout.projectDirectory.file('../native/Cargo.toml').asFile.absolutePath
 
         rustTargets.keySet().each { abi ->
-            exec {
+            providers.exec {
                 commandLine 'cargo',
                         'ndk',
                         '-t',
@@ -50,7 +50,7 @@ tasks.register('cargoBuildAndroid') {
                         '--manifest-path',
                         manifest,
                         '--release'
-            }
+            }.result.get().assertNormalExitValue()
         }
     }
 }
