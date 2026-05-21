@@ -26,10 +26,20 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 cargo install cargo-ndk
 ```
 
-Build from this directory with a local Gradle install, or open this directory in Android Studio:
+Build a debug APK from this directory with a local Gradle install, or open this directory in Android Studio:
 
 ```bash
 gradle assembleDebug
+```
+
+Build a release APK with the platform script:
+
+```bash
+# Windows
+.\build-release-apk-windows.bat
+
+# macOS
+bash ./build-release-apk-macos.command
 ```
 
 The Gradle build runs:
