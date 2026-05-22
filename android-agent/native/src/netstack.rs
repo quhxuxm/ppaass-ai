@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::StackBuilder;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
@@ -209,7 +210,14 @@ async fn handle_tcp(
         .get_connected_stream(address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AndroidAgentError::Connection(e.to_string()))?;
-    if let Err(e) = tokio::io::copy_bidirectional(&mut client, &mut proxy_io).await {
+    if let Err(e) = tokio::io::copy_bidirectional_with_sizes(
+        &mut client,
+        &mut proxy_io,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
         debug!("Android TUN TCP proxy relay ended: {e}");
     }
     let _ = client.shutdown().await;

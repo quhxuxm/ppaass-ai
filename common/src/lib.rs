@@ -1,13 +1,21 @@
 pub mod client_connection;
+pub mod datagram_stream;
 pub mod error;
 pub mod yamux_settings;
 
+pub const DEFAULT_STREAM_RELAY_BUFFER_SIZE: usize = 64 * 1024;
+
 pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
     YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
+pub use datagram_stream::DatagramStreamIo;
 pub use error::{CommonError, Result};
-pub use yamux_settings::{TcpTransportMode, TransportConfig, YamuxConfig, YamuxSettings};
+pub use yamux_settings::{
+    TcpTransportMode, TransportConfig, YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig,
+    YamuxSettings, YamuxTransportConfig,
+};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;

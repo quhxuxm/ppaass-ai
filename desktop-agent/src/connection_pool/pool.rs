@@ -2,7 +2,10 @@ use super::connected_stream::ConnectedStream;
 use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{BindInterface, TcpTransportMode, YamuxClientConnection};
+use common::{
+    BindInterface, TcpTransportMode, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection,
+};
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
@@ -18,6 +21,17 @@ const MAX_CONCURRENT_POOL_CONNECTS: usize = 10;
 struct YamuxSessionHandle {
     id: usize,
     connection: YamuxClientConnection,
+}
+
+struct RefillTaskContext {
+    refill_notify: Arc<Notify>,
+    pool: Pool<ProxyConnection>,
+    config: Arc<AgentConfig>,
+    available: Arc<AtomicUsize>,
+    pool_name: &'static str,
+    target_size: usize,
+    proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+    proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
 }
 
 /// 使用 deadpool::unmanaged 的连接池，用于预热代理连接。
@@ -41,6 +55,9 @@ pub struct ConnectionPool {
     /// TUN 模式激活时保存物理出口接口。
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     use_yamux: bool,
+    yamux_mode: Option<TcpTransportMode>,
+    yamux_transport: Option<TransportProtocol>,
+    yamux_outer_address: Option<Address>,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
     yamux_refill_lock: Arc<Mutex<()>>,
     yamux_next_index: AtomicUsize,
@@ -63,8 +80,22 @@ impl ConnectionPool {
         let refill_notify = Arc::new(Notify::new());
         let available = Arc::new(AtomicUsize::new(0));
         let max_connection_age = Duration::from_secs(config.pool_max_connection_age_secs);
-        let use_yamux =
-            pool_name == "tcp_pool" && config.transport.tcp_mode != TcpTransportMode::Legacy;
+        let (yamux_mode, yamux_transport, yamux_outer_address) = match pool_name {
+            "tcp_pool" => (
+                Some(config.transport.tcp_mode),
+                Some(TransportProtocol::Tcp),
+                Some(Address::TcpYamux),
+            ),
+            "udp_pool" => (
+                Some(config.transport.udp_mode),
+                Some(TransportProtocol::Udp),
+                Some(Address::UdpYamux),
+            ),
+            _ => (None, None, None),
+        };
+        let use_yamux = yamux_mode
+            .map(|mode| mode != TcpTransportMode::Legacy)
+            .unwrap_or(false);
         Self {
             pool,
             config,
@@ -76,6 +107,9 @@ impl ConnectionPool {
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             use_yamux,
+            yamux_mode,
+            yamux_transport,
+            yamux_outer_address,
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
             yamux_refill_lock: Arc::new(Mutex::new(())),
             yamux_next_index: AtomicUsize::new(0),
@@ -116,39 +150,22 @@ impl ConnectionPool {
 
     // ── 内部辅助 ─────────────────────────────────────────────────────────────
 
-    #[instrument(skip(
-        refill_notify,
-        pool,
-        config,
-        available,
-        pool_name,
-        proxy_bind_ip,
-        proxy_bind_interface
-    ))]
-    async fn refill_task(
-        refill_notify: Arc<Notify>,
-        pool: Pool<ProxyConnection>,
-        config: Arc<AgentConfig>,
-        available: Arc<AtomicUsize>,
-        pool_name: &'static str,
-        target_size: usize,
-        proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
-        proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
-    ) {
+    #[instrument(skip(context), fields(pool_name = context.pool_name, target_size = context.target_size))]
+    async fn refill_task(context: RefillTaskContext) {
         loop {
             // 补充任务既响应显式通知，也周期性自检，避免通知丢失后池子长期为空。
             tokio::select! {
-                _ = refill_notify.notified() => {}
+                _ = context.refill_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             }
 
-            let current_size = available.load(Ordering::Acquire);
-            if current_size < target_size {
+            let current_size = context.available.load(Ordering::Acquire);
+            if current_size < context.target_size {
                 // available 只记录可消费连接数；过期或取出的连接会触发补充。
-                let to_create = target_size - current_size;
+                let to_create = context.target_size - current_size;
                 debug!(
                     "正在补充 {} 连接池：创建 {} 条连接（当前：{}）",
-                    pool_name, to_create, current_size
+                    context.pool_name, to_create, current_size
                 );
 
                 // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
@@ -156,10 +173,14 @@ impl ConnectionPool {
                 let mut set = tokio::task::JoinSet::new();
 
                 for _ in 0..to_create {
-                    let config = config.clone();
+                    let config = context.config.clone();
                     let semaphore = semaphore.clone();
-                    let bind_ip = proxy_bind_ip.read().ok().and_then(|g| *g);
-                    let bind_interface = proxy_bind_interface.read().ok().and_then(|g| g.clone());
+                    let bind_ip = context.proxy_bind_ip.read().ok().and_then(|g| *g);
+                    let bind_interface = context
+                        .proxy_bind_interface
+                        .read()
+                        .ok()
+                        .and_then(|g| g.clone());
                     set.spawn(async move {
                         // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();
@@ -171,8 +192,8 @@ impl ConnectionPool {
                     match res {
                         Ok(Ok(conn)) => {
                             // try_add 失败说明 pool 容量已满，剩余创建任务没有意义。
-                            if pool.try_add(conn).is_ok() {
-                                available.fetch_add(1, Ordering::Release);
+                            if context.pool.try_add(conn).is_ok() {
+                                context.available.fetch_add(1, Ordering::Release);
                                 debug!("已向池中添加预热连接");
                             } else {
                                 debug!("补充时池已满，中止剩余任务");
@@ -209,9 +230,9 @@ impl ConnectionPool {
                     );
                     return;
                 }
-                Err(err) if self.config.transport.tcp_mode == TcpTransportMode::Auto => {
+                Err(err) if self.yamux_mode == Some(TcpTransportMode::Auto) => {
                     warn!(
-                        "{} Yamux 连接池预热失败，将回退到 legacy TCP：{}",
+                        "{} Yamux 连接池预热失败，将回退到 legacy：{}",
                         self.pool_name, err
                     );
                 }
@@ -266,26 +287,18 @@ impl ConnectionPool {
 
         // 预热完成后启动后台补充任务。
         // 若在预热之前启动，两者会并发创建连接导致溢出。
-        let pool_clone = self.pool.clone();
-        let config_clone = self.config.clone();
-        let available_clone = self.available.clone();
-        let refill_notify_clone = self.refill_notify.clone();
-        let pool_name = self.pool_name;
-        let pool_size = self.pool_size;
-        let proxy_bind_ip_clone = self.proxy_bind_ip.clone();
-        let proxy_bind_interface_clone = self.proxy_bind_interface.clone();
+        let refill_context = RefillTaskContext {
+            refill_notify: self.refill_notify.clone(),
+            pool: self.pool.clone(),
+            config: self.config.clone(),
+            available: self.available.clone(),
+            pool_name: self.pool_name,
+            target_size: self.pool_size,
+            proxy_bind_ip: self.proxy_bind_ip.clone(),
+            proxy_bind_interface: self.proxy_bind_interface.clone(),
+        };
         tokio::spawn(async move {
-            Self::refill_task(
-                refill_notify_clone,
-                pool_clone,
-                config_clone,
-                available_clone,
-                pool_name,
-                pool_size,
-                proxy_bind_ip_clone,
-                proxy_bind_interface_clone,
-            )
-            .await;
+            Self::refill_task(refill_context).await;
         });
     }
 
@@ -297,14 +310,17 @@ impl ConnectionPool {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
-        if self.use_yamux && transport == TransportProtocol::Tcp {
-            match self.get_yamux_connected_stream(address.clone()).await {
+        if self.use_yamux && self.yamux_transport == Some(transport) {
+            match self
+                .get_yamux_connected_stream(address.clone(), transport)
+                .await
+            {
                 Ok(stream) => return Ok(stream),
                 Err(err)
-                    if self.config.transport.tcp_mode == TcpTransportMode::Auto
+                    if self.yamux_mode == Some(TcpTransportMode::Auto)
                         && should_fallback_yamux_error(&err) =>
                 {
-                    warn!("Yamux TCP 不可用，回退到 legacy TCP：{}", err);
+                    warn!("{} Yamux 不可用，回退到 legacy：{}", self.pool_name, err);
                 }
                 Err(err) => return Err(err),
             }
@@ -352,7 +368,11 @@ impl ConnectionPool {
         }
     }
 
-    async fn get_yamux_connected_stream(&self, address: Address) -> Result<ConnectedStream> {
+    async fn get_yamux_connected_stream(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<ConnectedStream> {
         let target_size = self.yamux_target_size();
         let mut attempts = 0usize;
 
@@ -365,16 +385,20 @@ impl ConnectionPool {
 
             match session
                 .connection
-                .connect_to_target(address.clone(), TransportProtocol::Tcp)
+                .connect_to_target(address.clone(), transport)
                 .await
             {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
-                    return Ok(ConnectedStream::new_yamux(stream, request_id));
+                    return if transport == TransportProtocol::Udp {
+                        Ok(ConnectedStream::new_yamux_datagram(stream, request_id))
+                    } else {
+                        Ok(ConnectedStream::new_yamux(stream, request_id))
+                    };
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    if message.starts_with("连接失败:") {
+                    if is_yamux_target_connect_error(&message) {
                         return Err(AgentError::Connection(message));
                     }
 
@@ -420,19 +444,33 @@ impl ConnectionPool {
             let semaphore = semaphore.clone();
             let bind_ip = self.get_proxy_bind_ip();
             let bind_interface = self.get_proxy_bind_interface();
+            let outer_address = self
+                .yamux_outer_address
+                .clone()
+                .ok_or_else(|| AgentError::Connection("Yamux outer address missing".to_string()))?;
+            let transport = self
+                .yamux_transport
+                .ok_or_else(|| AgentError::Connection("Yamux transport missing".to_string()))?;
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
-                ProxyConnection::new_yamux_connection(&config, bind_ip, bind_interface)
-                    .await
-                    .map(|connection| YamuxSessionHandle {
-                        id: session_id,
-                        connection,
-                    })
+                ProxyConnection::new_yamux_connection(
+                    &config,
+                    bind_ip,
+                    bind_interface,
+                    outer_address,
+                    transport,
+                )
+                .await
+                .map(|connection| YamuxSessionHandle {
+                    id: session_id,
+                    connection,
+                })
             });
         }
 
         let mut success_count = 0usize;
+        let mut failure_count = 0usize;
         let mut last_error = None;
         while let Some(res) = set.join_next().await {
             match res {
@@ -446,7 +484,8 @@ impl ConnectionPool {
                     success_count += 1;
                 }
                 Ok(Err(e)) => {
-                    warn!("创建 Yamux 代理连接失败：{}", e);
+                    debug!("{} Yamux 代理连接创建失败：{}", self.pool_name, e);
+                    failure_count += 1;
                     last_error = Some(e);
                 }
                 Err(e) if e.is_cancelled() => {}
@@ -455,8 +494,17 @@ impl ConnectionPool {
         }
 
         if success_count == 0 && self.yamux_sessions.lock().await.is_empty() {
-            return Err(last_error
-                .unwrap_or_else(|| AgentError::Connection("创建 Yamux 代理连接失败".to_string())));
+            let err = last_error
+                .unwrap_or_else(|| AgentError::Connection("创建 Yamux 代理连接失败".to_string()));
+            warn!("{} Yamux 连接池补充失败：{}", self.pool_name, err);
+            return Err(err);
+        }
+
+        if failure_count > 0 {
+            debug!(
+                "{} Yamux 连接池补充部分失败：成功 {} 条，失败 {} 条",
+                self.pool_name, success_count, failure_count
+            );
         }
 
         Ok(success_count)
@@ -478,7 +526,10 @@ impl ConnectionPool {
     }
 
     fn yamux_target_size(&self) -> usize {
-        self.config.yamux.session_count()
+        match self.yamux_transport {
+            Some(TransportProtocol::Udp) => self.config.yamux.udp_session_count(),
+            _ => self.config.yamux.tcp_session_count(),
+        }
     }
 }
 
@@ -498,8 +549,12 @@ fn should_retry_pooled_connect_error(err: &crate::error::AgentError) -> bool {
 
 fn should_fallback_yamux_error(err: &crate::error::AgentError) -> bool {
     match err {
-        crate::error::AgentError::Connection(message) => !message.starts_with("连接失败:"),
+        crate::error::AgentError::Connection(message) => !is_yamux_target_connect_error(message),
         crate::error::AgentError::Io(_) | crate::error::AgentError::Protocol(_) => true,
         _ => false,
     }
+}
+
+fn is_yamux_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
 }

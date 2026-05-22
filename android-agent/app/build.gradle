@@ -3,20 +3,31 @@ plugins {
 }
 
 android {
-    namespace 'com.ppaass.ai.agent'
-    compileSdk 35
+    namespace = 'com.ppaass.ai.agent'
+    compileSdk = 35
 
     defaultConfig {
-        applicationId 'com.ppaass.ai.agent'
-        minSdk 26
-        targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        applicationId = 'com.ppaass.ai.agent'
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = '0.1.0'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     sourceSets {
         main {
-            jniLibs.srcDir 'src/main/jniLibs'
+            jniLibs.srcDir('src/main/jniLibs')
+        }
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ['**/libandroid_agent.so']
         }
     }
 }
@@ -56,5 +67,9 @@ tasks.register('cargoBuildAndroid') {
 }
 
 tasks.named('preBuild') {
-    dependsOn 'cargoBuildAndroid'
+    dependsOn(tasks.named('cargoBuildAndroid'))
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs.add('-Xlint:deprecation')
 }

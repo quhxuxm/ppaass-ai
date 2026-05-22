@@ -64,13 +64,21 @@ upstream_proxy_addrs = ["127.0.0.1:8080"]
 # 上游代理连接超时时间，单位秒（默认：30 秒）
 connect_timeout_secs = 30
 
+# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
+yamux_tcp_relay_idle_timeout_secs = 0
+
 [transport]
 tcp_mode = "auto"
+udp_mode = "auto"
 
-[yamux]
-sessions = 5
-max_streams_per_session = 256
-open_stream_timeout_secs = 10
+[yamux.tcp]
+max_streams_per_session = 1024
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+connection_write_timeout_secs = 30
+stream_window_size_kb = 2048
+
+[yamux.udp]
+max_streams_per_session = 1024
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 30
+stream_window_size_kb = 2048

@@ -3,7 +3,7 @@ use super::network::{address_for_tun_target, reject_tun_target};
 use crate::direct_access::address_to_string;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
-use common::{BindInterface, bind_socket_to_interface};
+use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
@@ -45,7 +45,14 @@ pub(super) async fn handle_tun_tcp(
         let mut target = connect_direct_tcp(target, direct_bind_interface.as_ref())
             .await
             .map_err(|e| AgentError::Connection(format!("直连 {target_str} 失败：{e}")))?;
-        match tokio::io::copy_bidirectional(&mut client, &mut target).await {
+        match tokio::io::copy_bidirectional_with_sizes(
+            &mut client,
+            &mut target,
+            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        )
+        .await
+        {
             Ok((c2t, t2c)) => {
                 telemetry::emit_traffic("TUN TCP (直连)", target_label, c2t, t2c);
             }
@@ -67,7 +74,14 @@ pub(super) async fn handle_tun_tcp(
         .await?;
     let mut proxy_io = connected.into_async_io();
     // TUN TCP 流和 proxy stream 都实现 AsyncRead/AsyncWrite，可直接双向中继。
-    match tokio::io::copy_bidirectional(&mut client, &mut proxy_io).await {
+    match tokio::io::copy_bidirectional_with_sizes(
+        &mut client,
+        &mut proxy_io,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
         Ok((c2p, p2c)) => {
             telemetry::emit_traffic("TUN TCP", target_label, c2p, p2c);
         }

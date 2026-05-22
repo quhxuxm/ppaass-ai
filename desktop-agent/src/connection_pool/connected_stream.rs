@@ -1,5 +1,5 @@
 use super::proxy_stream_io::ProxyStreamIo;
-use common::YamuxClientStream;
+use common::{DatagramStreamIo, YamuxClientStream};
 use futures::stream::{SplitSink, SplitStream};
 use protocol::{AgentCodec, ProxyRequest};
 use std::io;
@@ -24,6 +24,10 @@ pub enum ConnectedStream {
         stream: YamuxClientStream,
         stream_id: String,
     },
+    YamuxDatagram {
+        stream: DatagramStreamIo<YamuxClientStream>,
+        stream_id: String,
+    },
 }
 
 impl ConnectedStream {
@@ -40,9 +44,18 @@ impl ConnectedStream {
         Self::Yamux { stream, stream_id }
     }
 
+    pub fn new_yamux_datagram(stream: YamuxClientStream, stream_id: String) -> Self {
+        Self::YamuxDatagram {
+            stream: DatagramStreamIo::new(stream),
+            stream_id,
+        }
+    }
+
     pub fn stream_id(&self) -> &str {
         match self {
-            Self::Framed { stream_id, .. } | Self::Yamux { stream_id, .. } => stream_id,
+            Self::Framed { stream_id, .. }
+            | Self::Yamux { stream_id, .. }
+            | Self::YamuxDatagram { stream_id, .. } => stream_id,
         }
     }
 
@@ -56,6 +69,7 @@ impl ConnectedStream {
                 stream_id,
             } => ConnectedStreamIo::Framed(ProxyStreamIo::new(writer, reader, stream_id)),
             Self::Yamux { stream, .. } => ConnectedStreamIo::Yamux(stream),
+            Self::YamuxDatagram { stream, .. } => ConnectedStreamIo::YamuxDatagram(stream),
         }
     }
 }
@@ -63,6 +77,7 @@ impl ConnectedStream {
 pub enum ConnectedStreamIo {
     Framed(ProxyStreamIo),
     Yamux(YamuxClientStream),
+    YamuxDatagram(DatagramStreamIo<YamuxClientStream>),
 }
 
 impl AsyncRead for ConnectedStreamIo {
@@ -74,6 +89,7 @@ impl AsyncRead for ConnectedStreamIo {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -87,6 +103,7 @@ impl AsyncWrite for ConnectedStreamIo {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -94,6 +111,7 @@ impl AsyncWrite for ConnectedStreamIo {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -101,6 +119,7 @@ impl AsyncWrite for ConnectedStreamIo {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }

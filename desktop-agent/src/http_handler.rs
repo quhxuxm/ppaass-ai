@@ -3,6 +3,7 @@ use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use bytes::Bytes;
+use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -209,7 +210,14 @@ async fn tunnel(
     // 1. 尽可能使用零拷贝
     // 2. 优化的缓冲区
     // 3. 正确处理背压
-    match tokio::io::copy_bidirectional(&mut client_io, &mut proxy_io).await {
+    match tokio::io::copy_bidirectional_with_sizes(
+        &mut client_io,
+        &mut proxy_io,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
         Ok((client_to_proxy, proxy_to_client)) => {
             debug!(
                 "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端",
@@ -232,7 +240,14 @@ async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
 
-    match tokio::io::copy_bidirectional(&mut client_io, &mut target_stream).await {
+    match tokio::io::copy_bidirectional_with_sizes(
+        &mut client_io,
+        &mut target_stream,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
         Ok((client_to_target, target_to_client)) => {
             debug!(
                 "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端",

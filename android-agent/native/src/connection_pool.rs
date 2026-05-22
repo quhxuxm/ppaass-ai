@@ -7,8 +7,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use common::{
-    AuthenticatedConnection, ClientStream, TcpTransportMode, YamuxClientConnection,
-    YamuxClientStream,
+    AuthenticatedConnection, ClientStream, DatagramStreamIo, TcpTransportMode,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -39,6 +39,9 @@ pub struct AndroidConnectionPool {
     connections: Mutex<VecDeque<PooledConnection>>,
     refill_notify: Notify,
     use_yamux: bool,
+    yamux_mode: Option<TcpTransportMode>,
+    yamux_transport: Option<TransportProtocol>,
+    yamux_outer_address: Option<Address>,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
     yamux_refill_lock: Mutex<()>,
     yamux_next_index: AtomicUsize,
@@ -51,8 +54,22 @@ impl AndroidConnectionPool {
         pool_size: usize,
         pool_name: &'static str,
     ) -> Arc<Self> {
-        let use_yamux =
-            pool_name == "tcp_pool" && config.transport.tcp_mode != TcpTransportMode::Legacy;
+        let (yamux_mode, yamux_transport, yamux_outer_address) = match pool_name {
+            "tcp_pool" => (
+                Some(config.transport.tcp_mode),
+                Some(TransportProtocol::Tcp),
+                Some(Address::TcpYamux),
+            ),
+            "udp_pool" => (
+                Some(config.transport.udp_mode),
+                Some(TransportProtocol::Udp),
+                Some(Address::UdpYamux),
+            ),
+            _ => (None, None, None),
+        };
+        let use_yamux = yamux_mode
+            .map(|mode| mode != TcpTransportMode::Legacy)
+            .unwrap_or(false);
         Arc::new(Self {
             config,
             pool_size,
@@ -60,6 +77,9 @@ impl AndroidConnectionPool {
             connections: Mutex::new(VecDeque::new()),
             refill_notify: Notify::new(),
             use_yamux,
+            yamux_mode,
+            yamux_transport,
+            yamux_outer_address,
             yamux_sessions: Mutex::new(Vec::new()),
             yamux_refill_lock: Mutex::new(()),
             yamux_next_index: AtomicUsize::new(0),
@@ -81,8 +101,8 @@ impl AndroidConnectionPool {
                     );
                     return;
                 }
-                Err(err) if self.config.transport.tcp_mode == TcpTransportMode::Auto => warn!(
-                    "failed to prewarm Android {} Yamux, falling back to legacy TCP: {err}",
+                Err(err) if self.yamux_mode == Some(TcpTransportMode::Auto) => warn!(
+                    "failed to prewarm Android {} Yamux, falling back to legacy: {err}",
                     self.pool_name
                 ),
                 Err(err) => {
@@ -109,14 +129,20 @@ impl AndroidConnectionPool {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<AndroidProxyStream> {
-        if self.use_yamux && transport == TransportProtocol::Tcp {
-            match self.get_yamux_connected_stream(address.clone()).await {
+        if self.use_yamux && self.yamux_transport == Some(transport) {
+            match self
+                .get_yamux_connected_stream(address.clone(), transport)
+                .await
+            {
                 Ok(stream) => return Ok(stream),
                 Err(err)
-                    if self.config.transport.tcp_mode == TcpTransportMode::Auto
+                    if self.yamux_mode == Some(TcpTransportMode::Auto)
                         && should_fallback_yamux_error(&err) =>
                 {
-                    warn!("Android Yamux TCP unavailable, falling back to legacy TCP: {err}");
+                    warn!(
+                        "Android {} Yamux unavailable, falling back to legacy: {err}",
+                        self.pool_name
+                    );
                 }
                 Err(err) => return Err(err),
             }
@@ -250,7 +276,11 @@ impl AndroidConnectionPool {
             .map_err(|err| AndroidAgentError::Connection(err.to_string()))
     }
 
-    async fn get_yamux_connected_stream(&self, address: Address) -> Result<AndroidProxyStream> {
+    async fn get_yamux_connected_stream(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<AndroidProxyStream> {
         let target_size = self.yamux_target_size();
         let mut attempts = 0usize;
 
@@ -262,13 +292,21 @@ impl AndroidConnectionPool {
 
             match session
                 .connection
-                .connect_to_target(address.clone(), TransportProtocol::Tcp)
+                .connect_to_target(address.clone(), transport)
                 .await
             {
-                Ok((stream, _stream_id)) => return Ok(AndroidProxyStream::Yamux(stream)),
+                Ok((stream, _stream_id)) => {
+                    return if transport == TransportProtocol::Udp {
+                        Ok(AndroidProxyStream::YamuxDatagram(DatagramStreamIo::new(
+                            stream,
+                        )))
+                    } else {
+                        Ok(AndroidProxyStream::Yamux(stream))
+                    };
+                }
                 Err(err) => {
                     let message = err.to_string();
-                    if message.starts_with("连接失败:") {
+                    if is_yamux_target_connect_error(&message) {
                         return Err(AndroidAgentError::Connection(message));
                     }
                     warn!(
@@ -311,12 +349,24 @@ impl AndroidConnectionPool {
         for _ in 0..to_create {
             let config = self.config.clone();
             let semaphore = semaphore.clone();
+            let outer_address = self.yamux_outer_address.clone().ok_or_else(|| {
+                AndroidAgentError::Connection("Android Yamux outer address missing".to_string())
+            })?;
+            let transport = self.yamux_transport.ok_or_else(|| {
+                AndroidAgentError::Connection("Android Yamux transport missing".to_string())
+            })?;
+            let yamux_settings = match transport {
+                TransportProtocol::Udp => config.yamux.udp_settings(),
+                TransportProtocol::Tcp => config.yamux.tcp_settings(),
+            };
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
-                YamuxClientConnection::connect_with_settings(
+                YamuxClientConnection::connect_for(
                     config.as_ref(),
-                    config.yamux.settings(),
+                    outer_address,
+                    transport,
+                    yamux_settings,
                 )
                 .await
                 .map(|connection| AndroidYamuxSession {
@@ -328,6 +378,7 @@ impl AndroidConnectionPool {
         }
 
         let mut success_count = 0usize;
+        let mut failure_count = 0usize;
         let mut last_error = None;
         while let Some(result) = set.join_next().await {
             match result {
@@ -341,10 +392,11 @@ impl AndroidConnectionPool {
                     success_count += 1;
                 }
                 Ok(Err(err)) => {
-                    warn!(
+                    debug!(
                         "failed to create Android {} Yamux session: {err}",
                         self.pool_name
                     );
+                    failure_count += 1;
                     last_error = Some(err);
                 }
                 Err(err) if err.is_cancelled() => {}
@@ -353,9 +405,18 @@ impl AndroidConnectionPool {
         }
 
         if success_count == 0 && self.yamux_sessions.lock().await.is_empty() {
-            return Err(last_error.unwrap_or_else(|| {
+            let err = last_error.unwrap_or_else(|| {
                 AndroidAgentError::Connection("failed to create Android Yamux session".into())
-            }));
+            });
+            warn!("failed to refill Android {} Yamux: {err}", self.pool_name);
+            return Err(err);
+        }
+
+        if failure_count > 0 {
+            debug!(
+                "partially refilled Android {} Yamux: {} succeeded, {} failed",
+                self.pool_name, success_count, failure_count
+            );
         }
 
         Ok(success_count)
@@ -376,7 +437,10 @@ impl AndroidConnectionPool {
     }
 
     fn yamux_target_size(&self) -> usize {
-        self.config.yamux.session_count()
+        match self.yamux_transport {
+            Some(TransportProtocol::Udp) => self.config.yamux.udp_session_count(),
+            _ => self.config.yamux.tcp_session_count(),
+        }
     }
 }
 
@@ -399,6 +463,7 @@ async fn create_pooled_connection(
 pub enum AndroidProxyStream {
     Framed(ClientStream),
     Yamux(YamuxClientStream),
+    YamuxDatagram(DatagramStreamIo<YamuxClientStream>),
 }
 
 impl AsyncRead for AndroidProxyStream {
@@ -410,6 +475,7 @@ impl AsyncRead for AndroidProxyStream {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -423,6 +489,7 @@ impl AsyncWrite for AndroidProxyStream {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -430,6 +497,7 @@ impl AsyncWrite for AndroidProxyStream {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -437,6 +505,7 @@ impl AsyncWrite for AndroidProxyStream {
         match &mut *self {
             Self::Framed(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::YamuxDatagram(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
@@ -445,8 +514,12 @@ impl Unpin for AndroidProxyStream {}
 
 fn should_fallback_yamux_error(err: &AndroidAgentError) -> bool {
     match err {
-        AndroidAgentError::Connection(message) => !message.starts_with("连接失败:"),
+        AndroidAgentError::Connection(message) => !is_yamux_target_connect_error(message),
         AndroidAgentError::Io(_) => true,
         _ => false,
     }
+}
+
+fn is_yamux_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
 }

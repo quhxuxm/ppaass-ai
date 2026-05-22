@@ -57,6 +57,9 @@ impl AuthenticatedConnection {
                 }
             }
         };
+        if let Err(err) = stream.set_nodelay(true) {
+            warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+        }
 
         // 2. 设置编解码器
         let cipher_state = Arc::new(CipherState::new());

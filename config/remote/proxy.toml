@@ -76,6 +76,10 @@ pre_connect_idle_timeout_secs = 120
 # 0 表示不限制（默认：300）
 tcp_relay_idle_timeout_secs = 300
 
+# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
+# 默认不限制，避免 WebSocket、SSH 等 TCP 长连接被子流 idle 切断。
+yamux_tcp_relay_idle_timeout_secs = 0
+
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
 udp_relay_idle_timeout_secs = 60
@@ -94,11 +98,16 @@ udp_relay_idle_timeout_secs = 60
 
 [transport]
 tcp_mode = "auto"
+udp_mode = "auto"
 
-[yamux]
-sessions = 5
-max_streams_per_session = 256
-open_stream_timeout_secs = 10
+[yamux.tcp]
+max_streams_per_session = 1024
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+connection_write_timeout_secs = 30
+stream_window_size_kb = 2048
+
+[yamux.udp]
+max_streams_per_session = 1024
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 30
+stream_window_size_kb = 2048

@@ -8,6 +8,7 @@ pub enum Address {
     ProxyDns { port: u16 },
     UdpRelay,
     TcpYamux,
+    UdpYamux,
 }
 
 impl Address {
@@ -19,6 +20,7 @@ impl Address {
             Address::ProxyDns { port } => *port,
             Address::UdpRelay => 0,
             Address::TcpYamux => 0,
+            Address::UdpYamux => 0,
         }
     }
 }

@@ -11,7 +11,7 @@ use crate::error::{AgentError, Result};
 use common::{
     AuthenticatedConnection, BindInterface, ClientConnectionConfig, YamuxClientConnection,
 };
-use protocol::Address;
+use protocol::{Address, TransportProtocol};
 use tracing::{debug, info, instrument};
 
 /// ClientConnection 特征的配置适配器
@@ -124,11 +124,22 @@ impl ProxyConnection {
         config: &AgentConfig,
         bind_ip: Option<IpAddr>,
         bind_interface: Option<BindInterface>,
+        outer_address: Address,
+        transport: TransportProtocol,
     ) -> Result<YamuxClientConnection> {
         let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
-        YamuxClientConnection::connect_with_settings(&config_adapter, config.yamux.settings())
-            .await
-            .map_err(|e| AgentError::Connection(e.to_string()))
+        let yamux_settings = match transport {
+            TransportProtocol::Udp => config.yamux.udp_settings(),
+            TransportProtocol::Tcp => config.yamux.tcp_settings(),
+        };
+        YamuxClientConnection::connect_for(
+            &config_adapter,
+            outer_address,
+            transport,
+            yamux_settings,
+        )
+        .await
+        .map_err(|e| AgentError::Connection(e.to_string()))
     }
 
     /// 如果连接在池中停留时间超过 `max_age`，返回 true。
