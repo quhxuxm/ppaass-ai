@@ -10,6 +10,8 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, instrument, warn};
 
+const OVER_IDLE_LIMIT_IMMEDIATE_CONNECT_GRACE: Duration = Duration::from_secs(1);
+
 pub struct ProxyServer {
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
@@ -199,19 +201,26 @@ async fn handle_connection(
         return Ok(());
     };
 
-    let Some(idle_permit) = connection_limiter.try_acquire_idle(&username) else {
-        warn!(
-            "用户 '{}' 预热 idle 连接数已达上限（{}），正在关闭多余预热连接",
-            username, proxy_config.max_idle_connections_per_user
-        );
-        return Ok(());
+    let idle_permit = match connection_limiter.try_acquire_idle(&username) {
+        Some(permit) => Some(permit),
+        None => {
+            warn!(
+                "用户 '{}' 预热 idle 连接数已达上限（{}），仅等待即时 Connect 请求",
+                username, proxy_config.max_idle_connections_per_user
+            );
+            None
+        }
     };
 
     // 仅将空闲超时用于“已认证但尚未发送第一个 Connect”的预热连接。
     // Connect 到达后会释放 idle permit；legacy relay、UDP relay 和 Yamux 外层 session
     // 的生命周期分别由业务中继、UDP flow idle 或 Yamux keepalive 管理。
-    let pre_connect_idle_timeout = Duration::from_secs(proxy_config.pre_connect_idle_timeout_secs);
+    let pre_connect_idle_timeout = if idle_permit.is_some() {
+        Duration::from_secs(proxy_config.pre_connect_idle_timeout_secs)
+    } else {
+        OVER_IDLE_LIMIT_IMMEDIATE_CONNECT_GRACE
+    };
     connection
-        .handle_pre_connect_request(pre_connect_idle_timeout, &username, Some(idle_permit))
+        .handle_pre_connect_request(pre_connect_idle_timeout, &username, idle_permit)
         .await
 }

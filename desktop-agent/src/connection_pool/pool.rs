@@ -470,6 +470,7 @@ impl ConnectionPool {
         }
 
         let mut success_count = 0usize;
+        let mut failure_count = 0usize;
         let mut last_error = None;
         while let Some(res) = set.join_next().await {
             match res {
@@ -483,7 +484,8 @@ impl ConnectionPool {
                     success_count += 1;
                 }
                 Ok(Err(e)) => {
-                    warn!("创建 Yamux 代理连接失败：{}", e);
+                    debug!("{} Yamux 代理连接创建失败：{}", self.pool_name, e);
+                    failure_count += 1;
                     last_error = Some(e);
                 }
                 Err(e) if e.is_cancelled() => {}
@@ -492,8 +494,17 @@ impl ConnectionPool {
         }
 
         if success_count == 0 && self.yamux_sessions.lock().await.is_empty() {
-            return Err(last_error
-                .unwrap_or_else(|| AgentError::Connection("创建 Yamux 代理连接失败".to_string())));
+            let err = last_error
+                .unwrap_or_else(|| AgentError::Connection("创建 Yamux 代理连接失败".to_string()));
+            warn!("{} Yamux 连接池补充失败：{}", self.pool_name, err);
+            return Err(err);
+        }
+
+        if failure_count > 0 {
+            debug!(
+                "{} Yamux 连接池补充部分失败：成功 {} 条，失败 {} 条",
+                self.pool_name, success_count, failure_count
+            );
         }
 
         Ok(success_count)

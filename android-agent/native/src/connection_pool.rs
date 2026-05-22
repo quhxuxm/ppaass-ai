@@ -378,6 +378,7 @@ impl AndroidConnectionPool {
         }
 
         let mut success_count = 0usize;
+        let mut failure_count = 0usize;
         let mut last_error = None;
         while let Some(result) = set.join_next().await {
             match result {
@@ -391,10 +392,11 @@ impl AndroidConnectionPool {
                     success_count += 1;
                 }
                 Ok(Err(err)) => {
-                    warn!(
+                    debug!(
                         "failed to create Android {} Yamux session: {err}",
                         self.pool_name
                     );
+                    failure_count += 1;
                     last_error = Some(err);
                 }
                 Err(err) if err.is_cancelled() => {}
@@ -403,9 +405,18 @@ impl AndroidConnectionPool {
         }
 
         if success_count == 0 && self.yamux_sessions.lock().await.is_empty() {
-            return Err(last_error.unwrap_or_else(|| {
+            let err = last_error.unwrap_or_else(|| {
                 AndroidAgentError::Connection("failed to create Android Yamux session".into())
-            }));
+            });
+            warn!("failed to refill Android {} Yamux: {err}", self.pool_name);
+            return Err(err);
+        }
+
+        if failure_count > 0 {
+            debug!(
+                "partially refilled Android {} Yamux: {} succeeded, {} failed",
+                self.pool_name, success_count, failure_count
+            );
         }
 
         Ok(success_count)
