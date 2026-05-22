@@ -5,6 +5,7 @@ pub mod yamux_settings;
 
 pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
     YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
 pub use datagram_stream::DatagramStreamIo;

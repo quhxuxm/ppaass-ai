@@ -41,7 +41,7 @@ udp_mode = "yamux"
 sessions = 5
 # 每条 TCP Yamux 外层连接允许的并发子流数。
 max_streams_per_session = 256
-# 打开 TCP Yamux 子流并完成目标连接握手的超时时间。
+# 打开 TCP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
 open_stream_timeout_secs = 10
 # TCP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
 keepalive_interval_secs = 30
@@ -55,7 +55,7 @@ stream_window_size_kb = 512
 sessions = 5
 # 每条 UDP Yamux 外层连接允许的并发子流数。
 max_streams_per_session = 256
-# 打开 UDP Yamux 子流并完成目标连接握手的超时时间。
+# 打开 UDP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
 open_stream_timeout_secs = 10
 # UDP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
 keepalive_interval_secs = 30

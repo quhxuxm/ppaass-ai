@@ -7,6 +7,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -18,10 +19,17 @@ use crate::YamuxSettings;
 use super::authenticated::AuthenticatedConnection;
 use super::config::ClientConnectionConfig;
 
+pub const YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE: &str = "Yamux open stream timeout";
+pub const YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE: &str =
+    "Yamux target connect response timeout";
+const MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION: usize = 16;
+
 #[derive(Clone)]
 pub struct YamuxClientConnection {
     control: tokio_yamux::Control,
     settings: YamuxSettings,
+    connect_response_timeout: Duration,
+    open_stream_permits: Arc<Semaphore>,
     stream_permits: Arc<Semaphore>,
     transport: TransportProtocol,
 }
@@ -68,12 +76,18 @@ impl YamuxClientConnection {
             ));
         }
 
+        let connect_response_timeout = config.timeout_duration().max(settings.open_stream_timeout);
         let auth_conn = AuthenticatedConnection::authenticate_only(config).await?;
         let (outer_stream, outer_stream_id) = auth_conn
             .connect_to_target(outer_address.clone(), transport)
             .await?;
         let mut session = Session::new_client(outer_stream, settings.to_tokio_config());
         let control = session.control();
+        let open_stream_permits = Arc::new(Semaphore::new(
+            settings
+                .max_streams_per_session
+                .clamp(1, MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION),
+        ));
         let stream_permits = Arc::new(Semaphore::new(settings.max_streams_per_session));
 
         tokio::spawn(async move {
@@ -95,6 +109,8 @@ impl YamuxClientConnection {
         Ok(Self {
             control,
             settings,
+            connect_response_timeout,
+            open_stream_permits,
             stream_permits,
             transport,
         })
@@ -133,31 +149,46 @@ impl YamuxClientConnection {
             .acquire_owned()
             .await
             .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
+        let open_permit = self
+            .open_stream_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
         let mut control = self.control.clone();
-        let stream = tokio::time::timeout(self.settings.open_stream_timeout, async {
-            let mut stream = control
-                .open_stream()
+        let mut stream =
+            tokio::time::timeout(self.settings.open_stream_timeout, control.open_stream())
                 .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
+                    )
+                })?
                 .map_err(|err| std::io::Error::other(err.to_string()))?;
+        drop(open_permit);
 
+        let response = tokio::time::timeout(self.connect_response_timeout, async {
             debug!("通过 Yamux 子流发送连接请求：{request:?}");
             write_yamux_connect_request(&mut stream, &request).await?;
             let response = read_yamux_connect_response(&mut stream).await?;
             debug!("Yamux 子流收到连接响应：{response:?}");
-
-            if !response.success {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    format!("连接失败: {}", response.message),
-                ));
-            }
-
-            Ok(stream)
+            Ok::<_, std::io::Error>(response)
         })
         .await
         .map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::TimedOut, "Yamux open stream timeout")
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+            )
         })??;
+
+        if !response.success {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("连接失败: {}", response.message),
+            ));
+        }
 
         Ok((YamuxClientStream::new(stream, permit), request_id))
     }

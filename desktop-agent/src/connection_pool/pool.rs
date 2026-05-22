@@ -2,7 +2,10 @@ use super::connected_stream::ConnectedStream;
 use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{BindInterface, TcpTransportMode, YamuxClientConnection};
+use common::{
+    BindInterface, TcpTransportMode, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection,
+};
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
@@ -395,7 +398,7 @@ impl ConnectionPool {
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    if message.starts_with("连接失败:") {
+                    if is_yamux_target_connect_error(&message) {
                         return Err(AgentError::Connection(message));
                     }
 
@@ -535,8 +538,12 @@ fn should_retry_pooled_connect_error(err: &crate::error::AgentError) -> bool {
 
 fn should_fallback_yamux_error(err: &crate::error::AgentError) -> bool {
     match err {
-        crate::error::AgentError::Connection(message) => !message.starts_with("连接失败:"),
+        crate::error::AgentError::Connection(message) => !is_yamux_target_connect_error(message),
         crate::error::AgentError::Io(_) | crate::error::AgentError::Protocol(_) => true,
         _ => false,
     }
+}
+
+fn is_yamux_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
 }

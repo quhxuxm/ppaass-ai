@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use common::{
     AuthenticatedConnection, ClientStream, DatagramStreamIo, TcpTransportMode,
-    YamuxClientConnection, YamuxClientStream,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -306,7 +306,7 @@ impl AndroidConnectionPool {
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    if message.starts_with("连接失败:") {
+                    if is_yamux_target_connect_error(&message) {
                         return Err(AndroidAgentError::Connection(message));
                     }
                     warn!(
@@ -503,8 +503,12 @@ impl Unpin for AndroidProxyStream {}
 
 fn should_fallback_yamux_error(err: &AndroidAgentError) -> bool {
     match err {
-        AndroidAgentError::Connection(message) => !message.starts_with("连接失败:"),
+        AndroidAgentError::Connection(message) => !is_yamux_target_connect_error(message),
         AndroidAgentError::Io(_) => true,
         _ => false,
     }
+}
+
+fn is_yamux_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
 }
