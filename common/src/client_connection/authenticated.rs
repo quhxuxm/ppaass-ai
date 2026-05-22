@@ -57,6 +57,7 @@ impl AuthenticatedConnection {
                 }
             }
         };
+        stream.set_nodelay(true)?;
 
         // 2. 设置编解码器
         let cipher_state = Arc::new(CipherState::new());

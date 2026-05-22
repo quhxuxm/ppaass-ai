@@ -41,9 +41,9 @@ impl EgressState {
     pub async fn connect_tcp(&self, target_addr: &str) -> io::Result<EgressTcpStream> {
         // 未指定出站设备时走系统默认路由，不做额外绑定。
         if self.interface.is_none() {
-            return TcpStream::connect(target_addr)
-                .await
-                .map(|stream| EgressTcpStream::new(stream, None));
+            let stream = TcpStream::connect(target_addr).await?;
+            stream.set_nodelay(true)?;
+            return Ok(EgressTcpStream::new(stream, None));
         }
 
         // 指定设备或 auto 模式需要按目标地址族选择可用源地址后再连接。
@@ -77,9 +77,9 @@ async fn connect_tcp_with_interface(
     egress_state: &EgressState,
 ) -> io::Result<EgressTcpStream> {
     if egress_state.interface.is_none() {
-        return TcpStream::connect(target_addr)
-            .await
-            .map(|stream| EgressTcpStream::new(stream, None));
+        let stream = TcpStream::connect(target_addr).await?;
+        stream.set_nodelay(true)?;
+        return Ok(EgressTcpStream::new(stream, None));
     }
 
     let mut last_error = None;
@@ -189,10 +189,11 @@ async fn connect_tcp_addr(
     socket.bind(&SockAddr::from(source.addr))?;
     socket.set_nonblocking(true)?;
 
-    TcpSocket::from_std_stream(socket.into())
+    let stream = TcpSocket::from_std_stream(socket.into())
         .connect(dst)
-        .await
-        .map(|stream| EgressTcpStream::new(stream, route_guard))
+        .await?;
+    stream.set_nodelay(true)?;
+    Ok(EgressTcpStream::new(stream, route_guard))
 }
 
 async fn connect_udp_addr(

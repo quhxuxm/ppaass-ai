@@ -118,6 +118,8 @@ async fn handle_connection(
     stream: TcpStream,
     _connection_permit: GlobalConnectionPermit,
 ) -> Result<()> {
+    stream.set_nodelay(true)?;
+
     let ConnectionContext {
         proxy_config,
         user_manager,
