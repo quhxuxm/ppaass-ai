@@ -186,6 +186,7 @@ mod tests {
             connect_timeout_secs: 30,
             pre_connect_idle_timeout_secs: 120,
             tcp_relay_idle_timeout_secs: 300,
+            yamux_tcp_relay_idle_timeout_secs: 0,
             auth_timeout_secs: 30,
             max_connections,
             max_connections_per_user,

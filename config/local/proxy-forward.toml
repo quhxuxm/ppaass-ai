@@ -64,6 +64,9 @@ upstream_proxy_addrs = ["127.0.0.1:8080"]
 # 上游代理连接超时时间，单位秒（默认：30 秒）
 connect_timeout_secs = 30
 
+# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
+yamux_tcp_relay_idle_timeout_secs = 0
+
 [transport]
 tcp_mode = "auto"
 udp_mode = "auto"

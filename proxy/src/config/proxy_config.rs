@@ -84,6 +84,11 @@ pub struct ProxyConfig {
     #[serde(default = "default_tcp_relay_idle_timeout_secs")]
     pub tcp_relay_idle_timeout_secs: u64,
 
+    /// Yamux TCP 子流空闲超时时间（秒）。
+    /// 0 表示不限制；默认不限制，避免 WebSocket、SSH 等长连接被子流 idle 误杀。
+    #[serde(default = "default_yamux_tcp_relay_idle_timeout_secs")]
+    pub yamux_tcp_relay_idle_timeout_secs: u64,
+
     /// 认证超时时间（秒）- 未在该时间内完成认证握手的连接将被关闭。
     /// 这可以防止 agent 通过 TCP 建连后从未发送认证请求造成僵尸连接
     /// （例如半开连接、端口扫描器、异常客户端）。
@@ -147,6 +152,10 @@ fn default_tcp_relay_idle_timeout_secs() -> u64 {
     300
 }
 
+fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
+    0
+}
+
 fn default_auth_timeout_secs() -> u64 {
     30
 }
@@ -191,5 +200,24 @@ impl ProxyConfig {
     pub fn get_compression_mode(&self) -> protocol::CompressionMode {
         // 未知压缩值回退到协议默认值，避免错误配置直接导致启动失败。
         self.compression_mode.parse().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yamux_tcp_relay_idle_timeout_defaults_to_unlimited() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+tcp_relay_idle_timeout_secs = 300
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
+        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 0);
     }
 }

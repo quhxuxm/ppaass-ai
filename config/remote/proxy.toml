@@ -76,6 +76,10 @@ pre_connect_idle_timeout_secs = 120
 # 0 表示不限制（默认：300）
 tcp_relay_idle_timeout_secs = 300
 
+# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
+# 默认不限制，避免 WebSocket、SSH 等 TCP 长连接被子流 idle 切断。
+yamux_tcp_relay_idle_timeout_secs = 0
+
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
 udp_relay_idle_timeout_secs = 60

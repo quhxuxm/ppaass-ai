@@ -277,7 +277,7 @@ impl ServerConnection {
                 Some(ProxyRequest::Connect(connect_request)) => {
                     // 从这里开始，这条 agent 连接不再算作“已认证但未 Connect”的 idle 连接。
                     // 如果它是 Yamux 外层 session，不应再被 pre-connect idle timeout 杀掉；
-                    // 每条 Yamux 子流会在 relay 层应用 tcp_relay_idle_timeout_secs。
+                    // 每条 Yamux 子流会在 relay 层应用 yamux_tcp_relay_idle_timeout_secs。
                     drop(idle_permit.take());
                     debug!(
                         "[连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
@@ -338,7 +338,7 @@ impl ServerConnection {
             self.send_connect_success(connect_request.request_id.clone(), "TCP Yamux connected")
                 .await?;
             // Yamux 外层 session 是一条长期复用的控制/数据通道；不要套 pre-connect idle。
-            // 死连接由 Yamux keepalive 发现，业务空闲由每条子流的 relay idle 清理。
+            // 死连接由 Yamux keepalive 发现；TCP 子流空闲策略由 yamux_tcp_relay_idle_timeout_secs 控制。
             return self
                 .handle_tcp_yamux_connect(connect_request.request_id)
                 .await;
@@ -1378,7 +1378,7 @@ async fn handle_yamux_tcp_stream(
             relay_yamux_tcp_stream(
                 stream,
                 target_stream,
-                proxy_config.tcp_relay_idle_timeout_secs,
+                proxy_config.yamux_tcp_relay_idle_timeout_secs,
             )
             .await?;
         }
@@ -1596,7 +1596,7 @@ async fn handle_yamux_upstream_connect(
             relay_yamux_tcp_stream(
                 stream,
                 upstream_conn.into_stream(),
-                proxy_config.tcp_relay_idle_timeout_secs,
+                proxy_config.yamux_tcp_relay_idle_timeout_secs,
             )
             .await?;
         }
