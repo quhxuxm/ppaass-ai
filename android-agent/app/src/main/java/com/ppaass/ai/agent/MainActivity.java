@@ -9,6 +9,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.os.Build;
@@ -18,6 +19,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -264,13 +266,33 @@ public class MainActivity extends Activity {
             int baseRight,
             int baseBottom) {
         view.setOnApplyWindowInsetsListener((target, insets) -> {
-            target.setPadding(
-                    baseLeft + insets.getSystemWindowInsetLeft(),
-                    baseTop + insets.getSystemWindowInsetTop(),
-                    baseRight + insets.getSystemWindowInsetRight(),
-                    baseBottom + insets.getSystemWindowInsetBottom());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets systemBars = insets.getInsets(WindowInsets.Type.systemBars());
+                target.setPadding(
+                        baseLeft + systemBars.left,
+                        baseTop + systemBars.top,
+                        baseRight + systemBars.right,
+                        baseBottom + systemBars.bottom);
+            } else {
+                applyLegacySystemBarPadding(target, insets, baseLeft, baseTop, baseRight, baseBottom);
+            }
             return insets;
         });
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applyLegacySystemBarPadding(
+            View target,
+            WindowInsets insets,
+            int baseLeft,
+            int baseTop,
+            int baseRight,
+            int baseBottom) {
+        target.setPadding(
+                baseLeft + insets.getSystemWindowInsetLeft(),
+                baseTop + insets.getSystemWindowInsetTop(),
+                baseRight + insets.getSystemWindowInsetRight(),
+                baseBottom + insets.getSystemWindowInsetBottom());
     }
 
     private void toggleVpn() {

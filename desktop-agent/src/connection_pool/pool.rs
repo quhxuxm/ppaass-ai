@@ -20,6 +20,17 @@ struct YamuxSessionHandle {
     connection: YamuxClientConnection,
 }
 
+struct RefillTaskContext {
+    refill_notify: Arc<Notify>,
+    pool: Pool<ProxyConnection>,
+    config: Arc<AgentConfig>,
+    available: Arc<AtomicUsize>,
+    pool_name: &'static str,
+    target_size: usize,
+    proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
+    proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
+}
+
 /// 使用 deadpool::unmanaged 的连接池，用于预热代理连接。
 /// 连接不会被复用 — 每条连接取出后即消费。
 pub struct ConnectionPool {
@@ -136,39 +147,22 @@ impl ConnectionPool {
 
     // ── 内部辅助 ─────────────────────────────────────────────────────────────
 
-    #[instrument(skip(
-        refill_notify,
-        pool,
-        config,
-        available,
-        pool_name,
-        proxy_bind_ip,
-        proxy_bind_interface
-    ))]
-    async fn refill_task(
-        refill_notify: Arc<Notify>,
-        pool: Pool<ProxyConnection>,
-        config: Arc<AgentConfig>,
-        available: Arc<AtomicUsize>,
-        pool_name: &'static str,
-        target_size: usize,
-        proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
-        proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
-    ) {
+    #[instrument(skip(context), fields(pool_name = context.pool_name, target_size = context.target_size))]
+    async fn refill_task(context: RefillTaskContext) {
         loop {
             // 补充任务既响应显式通知，也周期性自检，避免通知丢失后池子长期为空。
             tokio::select! {
-                _ = refill_notify.notified() => {}
+                _ = context.refill_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             }
 
-            let current_size = available.load(Ordering::Acquire);
-            if current_size < target_size {
+            let current_size = context.available.load(Ordering::Acquire);
+            if current_size < context.target_size {
                 // available 只记录可消费连接数；过期或取出的连接会触发补充。
-                let to_create = target_size - current_size;
+                let to_create = context.target_size - current_size;
                 debug!(
                     "正在补充 {} 连接池：创建 {} 条连接（当前：{}）",
-                    pool_name, to_create, current_size
+                    context.pool_name, to_create, current_size
                 );
 
                 // 限制并发认证连接数，防止 proxy 短时间内被补充任务打满。
@@ -176,10 +170,14 @@ impl ConnectionPool {
                 let mut set = tokio::task::JoinSet::new();
 
                 for _ in 0..to_create {
-                    let config = config.clone();
+                    let config = context.config.clone();
                     let semaphore = semaphore.clone();
-                    let bind_ip = proxy_bind_ip.read().ok().and_then(|g| *g);
-                    let bind_interface = proxy_bind_interface.read().ok().and_then(|g| g.clone());
+                    let bind_ip = context.proxy_bind_ip.read().ok().and_then(|g| *g);
+                    let bind_interface = context
+                        .proxy_bind_interface
+                        .read()
+                        .ok()
+                        .and_then(|g| g.clone());
                     set.spawn(async move {
                         // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();
@@ -191,8 +189,8 @@ impl ConnectionPool {
                     match res {
                         Ok(Ok(conn)) => {
                             // try_add 失败说明 pool 容量已满，剩余创建任务没有意义。
-                            if pool.try_add(conn).is_ok() {
-                                available.fetch_add(1, Ordering::Release);
+                            if context.pool.try_add(conn).is_ok() {
+                                context.available.fetch_add(1, Ordering::Release);
                                 debug!("已向池中添加预热连接");
                             } else {
                                 debug!("补充时池已满，中止剩余任务");
@@ -286,26 +284,18 @@ impl ConnectionPool {
 
         // 预热完成后启动后台补充任务。
         // 若在预热之前启动，两者会并发创建连接导致溢出。
-        let pool_clone = self.pool.clone();
-        let config_clone = self.config.clone();
-        let available_clone = self.available.clone();
-        let refill_notify_clone = self.refill_notify.clone();
-        let pool_name = self.pool_name;
-        let pool_size = self.pool_size;
-        let proxy_bind_ip_clone = self.proxy_bind_ip.clone();
-        let proxy_bind_interface_clone = self.proxy_bind_interface.clone();
+        let refill_context = RefillTaskContext {
+            refill_notify: self.refill_notify.clone(),
+            pool: self.pool.clone(),
+            config: self.config.clone(),
+            available: self.available.clone(),
+            pool_name: self.pool_name,
+            target_size: self.pool_size,
+            proxy_bind_ip: self.proxy_bind_ip.clone(),
+            proxy_bind_interface: self.proxy_bind_interface.clone(),
+        };
         tokio::spawn(async move {
-            Self::refill_task(
-                refill_notify_clone,
-                pool_clone,
-                config_clone,
-                available_clone,
-                pool_name,
-                pool_size,
-                proxy_bind_ip_clone,
-                proxy_bind_interface_clone,
-            )
-            .await;
+            Self::refill_task(refill_context).await;
         });
     }
 

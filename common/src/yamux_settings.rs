@@ -39,7 +39,7 @@ impl Default for TransportConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct YamuxConfig {
     #[serde(default)]
@@ -47,15 +47,6 @@ pub struct YamuxConfig {
 
     #[serde(default)]
     pub udp: YamuxTransportConfig,
-}
-
-impl Default for YamuxConfig {
-    fn default() -> Self {
-        Self {
-            tcp: YamuxTransportConfig::default(),
-            udp: YamuxTransportConfig::default(),
-        }
-    }
 }
 
 impl YamuxConfig {
@@ -76,7 +67,7 @@ impl YamuxConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct YamuxServerConfig {
     #[serde(default)]
@@ -84,15 +75,6 @@ pub struct YamuxServerConfig {
 
     #[serde(default)]
     pub udp: YamuxServerTransportConfig,
-}
-
-impl Default for YamuxServerConfig {
-    fn default() -> Self {
-        Self {
-            tcp: YamuxServerTransportConfig::default(),
-            udp: YamuxServerTransportConfig::default(),
-        }
-    }
 }
 
 impl YamuxServerConfig {

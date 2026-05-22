@@ -238,6 +238,7 @@ public class PpaassVpnService extends VpnService {
         }
     }
 
+    @SuppressWarnings("deprecation")
     private Notification notification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
