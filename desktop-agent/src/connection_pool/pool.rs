@@ -41,6 +41,9 @@ pub struct ConnectionPool {
     /// TUN 模式激活时保存物理出口接口。
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     use_yamux: bool,
+    yamux_mode: Option<TcpTransportMode>,
+    yamux_transport: Option<TransportProtocol>,
+    yamux_outer_address: Option<Address>,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
     yamux_refill_lock: Arc<Mutex<()>>,
     yamux_next_index: AtomicUsize,
@@ -63,8 +66,22 @@ impl ConnectionPool {
         let refill_notify = Arc::new(Notify::new());
         let available = Arc::new(AtomicUsize::new(0));
         let max_connection_age = Duration::from_secs(config.pool_max_connection_age_secs);
-        let use_yamux =
-            pool_name == "tcp_pool" && config.transport.tcp_mode != TcpTransportMode::Legacy;
+        let (yamux_mode, yamux_transport, yamux_outer_address) = match pool_name {
+            "tcp_pool" => (
+                Some(config.transport.tcp_mode),
+                Some(TransportProtocol::Tcp),
+                Some(Address::TcpYamux),
+            ),
+            "udp_pool" => (
+                Some(config.transport.udp_mode),
+                Some(TransportProtocol::Udp),
+                Some(Address::UdpYamux),
+            ),
+            _ => (None, None, None),
+        };
+        let use_yamux = yamux_mode
+            .map(|mode| mode != TcpTransportMode::Legacy)
+            .unwrap_or(false);
         Self {
             pool,
             config,
@@ -76,6 +93,9 @@ impl ConnectionPool {
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             use_yamux,
+            yamux_mode,
+            yamux_transport,
+            yamux_outer_address,
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
             yamux_refill_lock: Arc::new(Mutex::new(())),
             yamux_next_index: AtomicUsize::new(0),
@@ -209,9 +229,9 @@ impl ConnectionPool {
                     );
                     return;
                 }
-                Err(err) if self.config.transport.tcp_mode == TcpTransportMode::Auto => {
+                Err(err) if self.yamux_mode == Some(TcpTransportMode::Auto) => {
                     warn!(
-                        "{} Yamux 连接池预热失败，将回退到 legacy TCP：{}",
+                        "{} Yamux 连接池预热失败，将回退到 legacy：{}",
                         self.pool_name, err
                     );
                 }
@@ -297,14 +317,17 @@ impl ConnectionPool {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
-        if self.use_yamux && transport == TransportProtocol::Tcp {
-            match self.get_yamux_connected_stream(address.clone()).await {
+        if self.use_yamux && self.yamux_transport == Some(transport) {
+            match self
+                .get_yamux_connected_stream(address.clone(), transport)
+                .await
+            {
                 Ok(stream) => return Ok(stream),
                 Err(err)
-                    if self.config.transport.tcp_mode == TcpTransportMode::Auto
+                    if self.yamux_mode == Some(TcpTransportMode::Auto)
                         && should_fallback_yamux_error(&err) =>
                 {
-                    warn!("Yamux TCP 不可用，回退到 legacy TCP：{}", err);
+                    warn!("{} Yamux 不可用，回退到 legacy：{}", self.pool_name, err);
                 }
                 Err(err) => return Err(err),
             }
@@ -352,7 +375,11 @@ impl ConnectionPool {
         }
     }
 
-    async fn get_yamux_connected_stream(&self, address: Address) -> Result<ConnectedStream> {
+    async fn get_yamux_connected_stream(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<ConnectedStream> {
         let target_size = self.yamux_target_size();
         let mut attempts = 0usize;
 
@@ -365,12 +392,16 @@ impl ConnectionPool {
 
             match session
                 .connection
-                .connect_to_target(address.clone(), TransportProtocol::Tcp)
+                .connect_to_target(address.clone(), transport)
                 .await
             {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
-                    return Ok(ConnectedStream::new_yamux(stream, request_id));
+                    return if transport == TransportProtocol::Udp {
+                        Ok(ConnectedStream::new_yamux_datagram(stream, request_id))
+                    } else {
+                        Ok(ConnectedStream::new_yamux(stream, request_id))
+                    };
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -420,15 +451,28 @@ impl ConnectionPool {
             let semaphore = semaphore.clone();
             let bind_ip = self.get_proxy_bind_ip();
             let bind_interface = self.get_proxy_bind_interface();
+            let outer_address = self
+                .yamux_outer_address
+                .clone()
+                .ok_or_else(|| AgentError::Connection("Yamux outer address missing".to_string()))?;
+            let transport = self
+                .yamux_transport
+                .ok_or_else(|| AgentError::Connection("Yamux transport missing".to_string()))?;
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
-                ProxyConnection::new_yamux_connection(&config, bind_ip, bind_interface)
-                    .await
-                    .map(|connection| YamuxSessionHandle {
-                        id: session_id,
-                        connection,
-                    })
+                ProxyConnection::new_yamux_connection(
+                    &config,
+                    bind_ip,
+                    bind_interface,
+                    outer_address,
+                    transport,
+                )
+                .await
+                .map(|connection| YamuxSessionHandle {
+                    id: session_id,
+                    connection,
+                })
             });
         }
 
@@ -478,7 +522,10 @@ impl ConnectionPool {
     }
 
     fn yamux_target_size(&self) -> usize {
-        self.config.yamux.session_count()
+        match self.yamux_transport {
+            Some(TransportProtocol::Udp) => self.config.yamux.udp_session_count(),
+            _ => self.config.yamux.tcp_session_count(),
+        }
     }
 }
 

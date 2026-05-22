@@ -93,13 +93,20 @@ udp_relay_idle_timeout_secs = 60
 # max_udp_relay_flows = 4096
 
 [transport]
-# proxy 端 legacy 表示拒绝 Yamux 外层连接；auto/yamux 均接受 Yamux 和旧 TCP。
+# proxy 端 legacy 表示拒绝对应 Yamux 外层连接；auto/yamux 均接受 Yamux 和旧协议。
 tcp_mode = "auto"
+udp_mode = "auto"
 
-[yamux]
-sessions = 5
-max_streams_per_session = 256
-open_stream_timeout_secs = 10
+[yamux.tcp]
+# proxy 端是 Yamux acceptor，上限应不小于所有 agent 的对应配置。
+max_streams_per_session = 1024
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+connection_write_timeout_secs = 30
+stream_window_size_kb = 1024
+
+[yamux.udp]
+# proxy 端是 Yamux acceptor，上限应不小于所有 agent 的对应配置。
+max_streams_per_session = 1024
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 30
+stream_window_size_kb = 1024

@@ -194,7 +194,10 @@ impl DirectAccessChecker {
                 let ip = IpAddr::V6(Ipv6Addr::from(*addr));
                 self.rules.iter().any(|rule| Self::match_ip(rule, &ip))
             }
-            Address::ProxyDns { .. } | Address::TcpYamux | Address::UdpRelay => false,
+            Address::ProxyDns { .. }
+            | Address::TcpYamux
+            | Address::UdpYamux
+            | Address::UdpRelay => false,
         }
     }
 
@@ -243,6 +246,7 @@ pub fn address_to_string(address: &Address) -> String {
         }
         Address::ProxyDns { port } => format!("proxy-dns:{port}"),
         Address::TcpYamux => "tcp-yamux".to_string(),
+        Address::UdpYamux => "udp-yamux".to_string(),
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }

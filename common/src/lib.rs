@@ -1,4 +1,5 @@
 pub mod client_connection;
+pub mod datagram_stream;
 pub mod error;
 pub mod yamux_settings;
 
@@ -6,8 +7,12 @@ pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
     YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
+pub use datagram_stream::DatagramStreamIo;
 pub use error::{CommonError, Result};
-pub use yamux_settings::{TcpTransportMode, TransportConfig, YamuxConfig, YamuxSettings};
+pub use yamux_settings::{
+    TcpTransportMode, TransportConfig, YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig,
+    YamuxSettings, YamuxTransportConfig,
+};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;

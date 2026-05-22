@@ -902,6 +902,11 @@ fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> {
                 "SOCKS5 UDP 不支持 TCP Yamux 虚拟地址".to_string(),
             ));
         }
+        Address::UdpYamux => {
+            return Err(AgentError::Socks5(
+                "SOCKS5 UDP 不支持 UDP Yamux 虚拟地址".to_string(),
+            ));
+        }
         Address::UdpRelay => {
             return Err(AgentError::Socks5(
                 "SOCKS5 UDP 不支持 UDP relay 虚拟地址".to_string(),

@@ -49,9 +49,19 @@ public class MainActivity extends Activity {
     private EditText tcpPoolSize;
     private EditText udpPoolSize;
     private Spinner tcpMode;
-    private EditText yamuxSessions;
-    private EditText yamuxMaxStreamsPerSession;
-    private EditText yamuxStreamWindowSizeKb;
+    private Spinner udpMode;
+    private EditText yamuxTcpSessions;
+    private EditText yamuxTcpMaxStreamsPerSession;
+    private EditText yamuxTcpOpenStreamTimeoutSecs;
+    private EditText yamuxTcpKeepaliveIntervalSecs;
+    private EditText yamuxTcpConnectionWriteTimeoutSecs;
+    private EditText yamuxTcpStreamWindowSizeKb;
+    private EditText yamuxUdpSessions;
+    private EditText yamuxUdpMaxStreamsPerSession;
+    private EditText yamuxUdpOpenStreamTimeoutSecs;
+    private EditText yamuxUdpKeepaliveIntervalSecs;
+    private EditText yamuxUdpConnectionWriteTimeoutSecs;
+    private EditText yamuxUdpStreamWindowSizeKb;
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
@@ -126,26 +136,105 @@ public class MainActivity extends Activity {
                 "TCP mode",
                 new String[]{"auto", "yamux", "legacy"},
                 prefs.getString("tcp_mode", DefaultConfig.TCP_MODE));
-        yamuxSessions = field(
+        udpMode = spinner(
                 root,
-                "Yamux sessions",
-                prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
+                "UDP mode",
+                new String[]{"auto", "yamux", "legacy"},
+                prefs.getString("udp_mode", DefaultConfig.UDP_MODE));
+        yamuxTcpSessions = field(
+                root,
+                "TCP Yamux sessions",
+                prefs.getString(
+                        "yamux_tcp_sessions",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
-        yamuxMaxStreamsPerSession = field(
+        yamuxTcpMaxStreamsPerSession = field(
                 root,
-                "Yamux max streams/session",
+                "TCP Yamux max streams/session",
                 prefs.getString(
-                        "yamux_max_streams_per_session",
-                        String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
+                        "yamux_tcp_max_streams_per_session",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
-        yamuxStreamWindowSizeKb = field(
+        yamuxTcpOpenStreamTimeoutSecs = field(
                 root,
-                "Yamux stream window KB",
+                "TCP Yamux open stream timeout",
                 prefs.getString(
-                        "yamux_stream_window_size_kb",
-                        String.valueOf(DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB)),
+                        "yamux_tcp_open_stream_timeout_secs",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxTcpKeepaliveIntervalSecs = field(
+                root,
+                "TCP Yamux keepalive interval",
+                prefs.getString(
+                        "yamux_tcp_keepalive_interval_secs",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxTcpConnectionWriteTimeoutSecs = field(
+                root,
+                "TCP Yamux write timeout",
+                prefs.getString(
+                        "yamux_tcp_connection_write_timeout_secs",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxTcpStreamWindowSizeKb = field(
+                root,
+                "TCP Yamux stream window KB",
+                prefs.getString(
+                        "yamux_tcp_stream_window_size_kb",
+                        String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpSessions = field(
+                root,
+                "UDP Yamux sessions",
+                prefs.getString(
+                        "yamux_udp_sessions",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpMaxStreamsPerSession = field(
+                root,
+                "UDP Yamux max streams/session",
+                prefs.getString(
+                        "yamux_udp_max_streams_per_session",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpOpenStreamTimeoutSecs = field(
+                root,
+                "UDP Yamux open stream timeout",
+                prefs.getString(
+                        "yamux_udp_open_stream_timeout_secs",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpKeepaliveIntervalSecs = field(
+                root,
+                "UDP Yamux keepalive interval",
+                prefs.getString(
+                        "yamux_udp_keepalive_interval_secs",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpConnectionWriteTimeoutSecs = field(
+                root,
+                "UDP Yamux write timeout",
+                prefs.getString(
+                        "yamux_udp_connection_write_timeout_secs",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
+                1,
+                InputType.TYPE_CLASS_NUMBER);
+        yamuxUdpStreamWindowSizeKb = field(
+                root,
+                "UDP Yamux stream window KB",
+                prefs.getString(
+                        "yamux_udp_stream_window_size_kb",
+                        String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
 
@@ -245,11 +334,23 @@ public class MainActivity extends Activity {
         updateEditTextEditable(privateKey, editable);
         updateEditTextEditable(tcpPoolSize, editable);
         updateEditTextEditable(udpPoolSize, editable);
-        updateEditTextEditable(yamuxSessions, editable);
-        updateEditTextEditable(yamuxMaxStreamsPerSession, editable);
-        updateEditTextEditable(yamuxStreamWindowSizeKb, editable);
+        updateEditTextEditable(yamuxTcpSessions, editable);
+        updateEditTextEditable(yamuxTcpMaxStreamsPerSession, editable);
+        updateEditTextEditable(yamuxTcpOpenStreamTimeoutSecs, editable);
+        updateEditTextEditable(yamuxTcpKeepaliveIntervalSecs, editable);
+        updateEditTextEditable(yamuxTcpConnectionWriteTimeoutSecs, editable);
+        updateEditTextEditable(yamuxTcpStreamWindowSizeKb, editable);
+        updateEditTextEditable(yamuxUdpSessions, editable);
+        updateEditTextEditable(yamuxUdpMaxStreamsPerSession, editable);
+        updateEditTextEditable(yamuxUdpOpenStreamTimeoutSecs, editable);
+        updateEditTextEditable(yamuxUdpKeepaliveIntervalSecs, editable);
+        updateEditTextEditable(yamuxUdpConnectionWriteTimeoutSecs, editable);
+        updateEditTextEditable(yamuxUdpStreamWindowSizeKb, editable);
         if (tcpMode != null) {
             tcpMode.setEnabled(editable);
+        }
+        if (udpMode != null) {
+            udpMode.setEnabled(editable);
         }
         if (blockQuic != null) {
             blockQuic.setEnabled(editable);
@@ -281,13 +382,39 @@ public class MainActivity extends Activity {
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
                 .putString("tcp_mode", selectedTcpMode())
-                .putString("yamux_sessions", yamuxSessions.getText().toString())
+                .putString("udp_mode", selectedUdpMode())
+                .putString("yamux_tcp_sessions", yamuxTcpSessions.getText().toString())
                 .putString(
-                        "yamux_max_streams_per_session",
-                        yamuxMaxStreamsPerSession.getText().toString())
+                        "yamux_tcp_max_streams_per_session",
+                        yamuxTcpMaxStreamsPerSession.getText().toString())
                 .putString(
-                        "yamux_stream_window_size_kb",
-                        yamuxStreamWindowSizeKb.getText().toString())
+                        "yamux_tcp_open_stream_timeout_secs",
+                        yamuxTcpOpenStreamTimeoutSecs.getText().toString())
+                .putString(
+                        "yamux_tcp_keepalive_interval_secs",
+                        yamuxTcpKeepaliveIntervalSecs.getText().toString())
+                .putString(
+                        "yamux_tcp_connection_write_timeout_secs",
+                        yamuxTcpConnectionWriteTimeoutSecs.getText().toString())
+                .putString(
+                        "yamux_tcp_stream_window_size_kb",
+                        yamuxTcpStreamWindowSizeKb.getText().toString())
+                .putString("yamux_udp_sessions", yamuxUdpSessions.getText().toString())
+                .putString(
+                        "yamux_udp_max_streams_per_session",
+                        yamuxUdpMaxStreamsPerSession.getText().toString())
+                .putString(
+                        "yamux_udp_open_stream_timeout_secs",
+                        yamuxUdpOpenStreamTimeoutSecs.getText().toString())
+                .putString(
+                        "yamux_udp_keepalive_interval_secs",
+                        yamuxUdpKeepaliveIntervalSecs.getText().toString())
+                .putString(
+                        "yamux_udp_connection_write_timeout_secs",
+                        yamuxUdpConnectionWriteTimeoutSecs.getText().toString())
+                .putString(
+                        "yamux_udp_stream_window_size_kb",
+                        yamuxUdpStreamWindowSizeKb.getText().toString())
                 .apply();
     }
 
@@ -313,14 +440,22 @@ public class MainActivity extends Activity {
     }
 
     private String selectedTcpMode() {
-        if (tcpMode == null || tcpMode.getSelectedItem() == null) {
-            return DefaultConfig.TCP_MODE;
+        return selectedTransportMode(tcpMode, DefaultConfig.TCP_MODE);
+    }
+
+    private String selectedUdpMode() {
+        return selectedTransportMode(udpMode, DefaultConfig.UDP_MODE);
+    }
+
+    private String selectedTransportMode(Spinner spinner, String fallback) {
+        if (spinner == null || spinner.getSelectedItem() == null) {
+            return fallback;
         }
-        String value = tcpMode.getSelectedItem().toString().trim().toLowerCase();
+        String value = spinner.getSelectedItem().toString().trim().toLowerCase();
         if ("yamux".equals(value) || "legacy".equals(value) || "auto".equals(value)) {
             return value;
         }
-        return DefaultConfig.TCP_MODE;
+        return fallback;
     }
 
     private EditText field(LinearLayout root, String title, String value) {

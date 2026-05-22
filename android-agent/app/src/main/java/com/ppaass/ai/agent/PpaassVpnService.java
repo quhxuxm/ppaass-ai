@@ -129,22 +129,15 @@ public class PpaassVpnService extends VpnService {
                 .put("proxy_dns", true)
                 .put("block_quic", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         JSONObject transportJson = new JSONObject()
-                .put("tcp_mode", normalizeTcpMode(prefs.getString("tcp_mode", DefaultConfig.TCP_MODE)));
+                .put("tcp_mode", normalizeTransportMode(
+                        prefs.getString("tcp_mode", DefaultConfig.TCP_MODE),
+                        DefaultConfig.TCP_MODE))
+                .put("udp_mode", normalizeTransportMode(
+                        prefs.getString("udp_mode", DefaultConfig.UDP_MODE),
+                        DefaultConfig.UDP_MODE));
         JSONObject yamuxJson = new JSONObject()
-                .put("sessions", parsePositiveInt(
-                        prefs.getString("yamux_sessions", String.valueOf(DefaultConfig.YAMUX_SESSIONS)),
-                        DefaultConfig.YAMUX_SESSIONS))
-                .put("max_streams_per_session", parsePositiveInt(
-                        prefs.getString(
-                                "yamux_max_streams_per_session",
-                                String.valueOf(DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION)),
-                        DefaultConfig.YAMUX_MAX_STREAMS_PER_SESSION))
-                .put("stream_window_size_kb", parseMinInt(
-                        prefs.getString(
-                                "yamux_stream_window_size_kb",
-                                String.valueOf(DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB)),
-                        DefaultConfig.YAMUX_STREAM_WINDOW_SIZE_KB,
-                        DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB));
+                .put("tcp", buildYamuxTransportJson(prefs, true))
+                .put("udp", buildYamuxTransportJson(prefs, false));
 
         return new JSONObject()
                 .put("proxy_addrs", new JSONArray(tokens(prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR))))
@@ -163,6 +156,59 @@ public class PpaassVpnService extends VpnService {
                 .put("transport", transportJson)
                 .put("yamux", yamuxJson)
                 .put("tun", tunJson);
+    }
+
+    private JSONObject buildYamuxTransportJson(SharedPreferences prefs, boolean tcp) throws JSONException {
+        String prefix = tcp ? "yamux_tcp_" : "yamux_udp_";
+        int defaultSessions = tcp
+                ? DefaultConfig.TCP_YAMUX_SESSIONS
+                : DefaultConfig.UDP_YAMUX_SESSIONS;
+        int defaultMaxStreams = tcp
+                ? DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION
+                : DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION;
+        int defaultOpenTimeout = tcp
+                ? DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS
+                : DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS;
+        int defaultKeepalive = tcp
+                ? DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS
+                : DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS;
+        int defaultWriteTimeout = tcp
+                ? DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS
+                : DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS;
+        int defaultWindowSize = tcp
+                ? DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB
+                : DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB;
+
+        return new JSONObject()
+                .put("sessions", parsePositiveInt(
+                        prefs.getString(prefix + "sessions", String.valueOf(defaultSessions)),
+                        defaultSessions))
+                .put("max_streams_per_session", parsePositiveInt(
+                        prefs.getString(
+                                prefix + "max_streams_per_session",
+                                String.valueOf(defaultMaxStreams)),
+                        defaultMaxStreams))
+                .put("open_stream_timeout_secs", parsePositiveInt(
+                        prefs.getString(
+                                prefix + "open_stream_timeout_secs",
+                                String.valueOf(defaultOpenTimeout)),
+                        defaultOpenTimeout))
+                .put("keepalive_interval_secs", parseNonNegativeInt(
+                        prefs.getString(
+                                prefix + "keepalive_interval_secs",
+                                String.valueOf(defaultKeepalive)),
+                        defaultKeepalive))
+                .put("connection_write_timeout_secs", parsePositiveInt(
+                        prefs.getString(
+                                prefix + "connection_write_timeout_secs",
+                                String.valueOf(defaultWriteTimeout)),
+                        defaultWriteTimeout))
+                .put("stream_window_size_kb", parseMinInt(
+                        prefs.getString(
+                                prefix + "stream_window_size_kb",
+                                String.valueOf(defaultWindowSize)),
+                        defaultWindowSize,
+                        DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB));
     }
 
     private void applyAppSelection(Builder builder) {
@@ -244,15 +290,15 @@ public class PpaassVpnService extends VpnService {
         return Math.max(min, parseInt(value, fallback));
     }
 
-    private String normalizeTcpMode(String value) {
+    private String normalizeTransportMode(String value, String fallback) {
         if (value == null) {
-            return DefaultConfig.TCP_MODE;
+            return fallback;
         }
         String normalized = value.trim().toLowerCase();
         if ("auto".equals(normalized) || "yamux".equals(normalized) || "legacy".equals(normalized)) {
             return normalized;
         }
-        return DefaultConfig.TCP_MODE;
+        return fallback;
     }
 
     private List<String> tokens(String value) {

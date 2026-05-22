@@ -30,11 +30,11 @@ pub struct AgentConfig {
     #[serde(default = "default_pool_max_connection_age_secs")]
     pub pool_max_connection_age_secs: u64,
 
-    /// TCP 传输模式：auto、yamux、legacy。
+    /// TCP/UDP 传输模式：auto、yamux、legacy。
     #[serde(default)]
     pub transport: TransportConfig,
 
-    /// Yamux 多路复用配置，仅影响 TCP；UDP 保持原协议路径。
+    /// Yamux 多路复用配置。TCP 与 UDP 使用各自独立的 Yamux 外层连接池。
     #[serde(default)]
     pub yamux: YamuxConfig,
 

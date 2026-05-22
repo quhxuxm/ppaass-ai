@@ -176,7 +176,7 @@ mod tests {
             compression_mode: "none".to_string(),
             replay_attack_tolerance: 300,
             transport: common::TransportConfig::default(),
-            yamux: common::YamuxConfig::default(),
+            yamux: common::YamuxServerConfig::default(),
             forward_mode: false,
             upstream_proxy_addrs: None,
             upstream_username: None,

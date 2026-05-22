@@ -23,6 +23,7 @@ pub struct YamuxClientConnection {
     control: tokio_yamux::Control,
     settings: YamuxSettings,
     stream_permits: Arc<Semaphore>,
+    transport: TransportProtocol,
 }
 
 impl YamuxClientConnection {
@@ -40,9 +41,36 @@ impl YamuxClientConnection {
     where
         C: ClientConnectionConfig,
     {
+        Self::connect_for(config, Address::TcpYamux, TransportProtocol::Tcp, settings).await
+    }
+
+    pub async fn connect_for<C>(
+        config: &C,
+        outer_address: Address,
+        transport: TransportProtocol,
+        settings: YamuxSettings,
+    ) -> std::io::Result<Self>
+    where
+        C: ClientConnectionConfig,
+    {
+        if !matches!(outer_address, Address::TcpYamux | Address::UdpYamux) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Yamux outer target must be a Yamux virtual address",
+            ));
+        }
+        if matches!(outer_address, Address::TcpYamux) && transport != TransportProtocol::Tcp
+            || matches!(outer_address, Address::UdpYamux) && transport != TransportProtocol::Udp
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Yamux outer target does not match transport",
+            ));
+        }
+
         let auth_conn = AuthenticatedConnection::authenticate_only(config).await?;
         let (outer_stream, outer_stream_id) = auth_conn
-            .connect_to_target(Address::TcpYamux, TransportProtocol::Tcp)
+            .connect_to_target(outer_address.clone(), transport)
             .await?;
         let mut session = Session::new_client(outer_stream, settings.to_tokio_config());
         let control = session.control();
@@ -63,11 +91,12 @@ impl YamuxClientConnection {
             }
         });
 
-        info!("已建立 TCP Yamux 外层连接");
+        info!("已建立 {:?} Yamux 外层连接：{:?}", transport, outer_address);
         Ok(Self {
             control,
             settings,
             stream_permits,
+            transport,
         })
     }
 
@@ -76,16 +105,18 @@ impl YamuxClientConnection {
         address: Address,
         transport: TransportProtocol,
     ) -> std::io::Result<(YamuxClientStream, String)> {
-        if transport != TransportProtocol::Tcp {
+        if transport != self.transport {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Yamux client connection only supports TCP transport",
+                "Yamux client connection transport mismatch",
             ));
         }
-        if matches!(address, Address::TcpYamux | Address::UdpRelay) {
+        if matches!(address, Address::TcpYamux | Address::UdpYamux)
+            || (self.transport == TransportProtocol::Tcp && matches!(address, Address::UdpRelay))
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Yamux substream target must be a real TCP target",
+                "Yamux substream target is not valid for this session",
             ));
         }
 
