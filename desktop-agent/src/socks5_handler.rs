@@ -2,6 +2,7 @@ use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
+use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
 use dashmap::DashMap;
 use fast_socks5::server::{
     NoAuthentication, Socks5ServerProtocol, SocksServerError,
@@ -101,7 +102,14 @@ async fn handle_tcp_connect(
 
                 info!("SOCKS5 直连隧道已建立，开始数据中继");
 
-                match tokio::io::copy_bidirectional(&mut client_stream, &mut target_stream).await {
+                match tokio::io::copy_bidirectional_with_sizes(
+                    &mut client_stream,
+                    &mut target_stream,
+                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                )
+                .await
+                {
                     Ok((client_to_target, target_to_client)) => {
                         info!(
                             "直连 SOCKS5 中继完成: {} 字节发出, {} 字节接收",
@@ -211,9 +219,11 @@ async fn handle_tcp_bind(
                 match TcpStream::connect(&target_str).await {
                     Ok(mut target_stream) => {
                         info!("SOCKS5 BIND 直连隧道已建立，开始数据中继");
-                        match tokio::io::copy_bidirectional(
+                        match tokio::io::copy_bidirectional_with_sizes(
                             &mut incoming_stream,
                             &mut target_stream,
+                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
                         )
                         .await
                         {
@@ -801,7 +811,14 @@ async fn relay_data(
     // 1. 尽可能使用零拷贝
     // 2. 优化的缓冲区
     // 3. 正确处理背压
-    match tokio::io::copy_bidirectional(client_stream, &mut proxy_io).await {
+    match tokio::io::copy_bidirectional_with_sizes(
+        client_stream,
+        &mut proxy_io,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
         Ok((client_to_proxy, proxy_to_client)) => {
             info!(
                 "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端",

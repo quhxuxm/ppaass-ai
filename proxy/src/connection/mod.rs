@@ -14,7 +14,7 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::connection_limiter::{ConnectionLimiter, IdleConnectionPermit, UdpRelayFlowPermit};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
-use common::{DatagramStreamIo, TcpTransportMode};
+use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode};
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -1173,7 +1173,14 @@ impl ServerConnection {
         if tcp_relay_idle_timeout_secs == 0 {
             // 兼容旧行为：不配置超时时按任一端关闭来结束中继。
             let mut agent_io = agent_io;
-            match tokio::io::copy_bidirectional(target_stream, &mut agent_io).await {
+            match tokio::io::copy_bidirectional_with_sizes(
+                target_stream,
+                &mut agent_io,
+                DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            )
+            .await
+            {
                 Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
                 Err(e) => debug!("中继错误：{}", e),
             }
@@ -1188,8 +1195,8 @@ impl ServerConnection {
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
         let mut up_bytes: u64 = 0;
         let mut down_bytes: u64 = 0;
-        let mut agent_buf = [0u8; 8192];
-        let mut target_buf = [0u8; 8192];
+        let mut agent_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
+        let mut target_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
 
         loop {
             tokio::select! {
@@ -1616,7 +1623,14 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     if idle_timeout_secs == 0 {
-        match tokio::io::copy_bidirectional(&mut agent_stream, &mut target_stream).await {
+        match tokio::io::copy_bidirectional_with_sizes(
+            &mut agent_stream,
+            &mut target_stream,
+            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        )
+        .await
+        {
             Ok((up, down)) => debug!("Yamux 子流中继已结束：上行 {}，下行 {}", up, down),
             Err(e) => debug!("Yamux 子流中继错误：{}", e),
         }
@@ -1631,8 +1645,8 @@ where
     let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
     let mut up_bytes: u64 = 0;
     let mut down_bytes: u64 = 0;
-    let mut agent_buf = [0u8; 8192];
-    let mut target_buf = [0u8; 8192];
+    let mut agent_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
+    let mut target_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
 
     loop {
         tokio::select! {
