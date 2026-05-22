@@ -42,7 +42,7 @@ impl EgressState {
         // 未指定出站设备时走系统默认路由，不做额外绑定。
         if self.interface.is_none() {
             let stream = TcpStream::connect(target_addr).await?;
-            stream.set_nodelay(true)?;
+            enable_nodelay_best_effort(&stream, "默认出站 TCP 连接");
             return Ok(EgressTcpStream::new(stream, None));
         }
 
@@ -78,7 +78,7 @@ async fn connect_tcp_with_interface(
 ) -> io::Result<EgressTcpStream> {
     if egress_state.interface.is_none() {
         let stream = TcpStream::connect(target_addr).await?;
-        stream.set_nodelay(true)?;
+        enable_nodelay_best_effort(&stream, "默认出站 TCP 连接");
         return Ok(EgressTcpStream::new(stream, None));
     }
 
@@ -192,8 +192,14 @@ async fn connect_tcp_addr(
     let stream = TcpSocket::from_std_stream(socket.into())
         .connect(dst)
         .await?;
-    stream.set_nodelay(true)?;
+    enable_nodelay_best_effort(&stream, "绑定出站 TCP 连接");
     Ok(EgressTcpStream::new(stream, route_guard))
+}
+
+fn enable_nodelay_best_effort(stream: &TcpStream, context: &str) {
+    if let Err(err) = stream.set_nodelay(true) {
+        tracing::warn!("设置 {context} TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+    }
 }
 
 async fn connect_udp_addr(
