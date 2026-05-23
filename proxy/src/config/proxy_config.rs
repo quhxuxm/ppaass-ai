@@ -118,6 +118,14 @@ pub struct ProxyConfig {
     /// UDP relay 空闲超时时间（秒）；会话和 flow 在该时间内无数据活动将被关闭。
     #[serde(default = "default_udp_relay_idle_timeout_secs")]
     pub udp_relay_idle_timeout_secs: u64,
+
+    /// UDP relay 每个内部队列最多缓存的包数量。
+    #[serde(default = "default_udp_relay_channel_size")]
+    pub udp_relay_channel_size: usize,
+
+    /// proxy 全局 UDP relay 队列中允许积压的 payload 字节数；0 表示不限制。
+    #[serde(default = "default_max_udp_relay_buffered_bytes")]
+    pub max_udp_relay_buffered_bytes: usize,
 }
 
 fn default_log_level() -> String {
@@ -173,15 +181,23 @@ fn default_max_idle_connections_per_user() -> usize {
 }
 
 fn default_max_udp_relay_flows_per_connection() -> usize {
-    2048
+    512
 }
 
 fn default_max_udp_relay_flows() -> usize {
-    4096
+    1024
 }
 
 fn default_udp_relay_idle_timeout_secs() -> u64 {
     60
+}
+
+fn default_udp_relay_channel_size() -> usize {
+    256
+}
+
+fn default_max_udp_relay_buffered_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {
@@ -219,5 +235,20 @@ tcp_relay_idle_timeout_secs = 300
 
         assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
         assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 0);
+    }
+
+    #[test]
+    fn udp_relay_memory_defaults_are_bounded() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.max_udp_relay_flows_per_connection, 512);
+        assert_eq!(config.max_udp_relay_flows, 1024);
+        assert_eq!(config.udp_relay_channel_size, 256);
+        assert_eq!(config.max_udp_relay_buffered_bytes, 64 * 1024 * 1024);
     }
 }

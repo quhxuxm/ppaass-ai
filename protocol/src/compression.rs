@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::str::FromStr;
 
+use crate::message::MAX_MESSAGE_SIZE;
+
 /// agent 与 proxy 之间数据传输的压缩模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -82,18 +84,17 @@ pub fn compress(data: &[u8], mode: CompressionMode) -> io::Result<Vec<u8>> {
 
 /// 使用指定压缩模式解压数据
 pub fn decompress(data: &[u8], mode: CompressionMode) -> io::Result<Vec<u8>> {
-    match mode {
-        CompressionMode::None => Ok(data.to_vec()),
-        CompressionMode::Zstd => decompress_zstd(data),
-        CompressionMode::Lz4 => lz4_flex::decompress_size_prepended(data)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
-        CompressionMode::Gzip => {
-            let mut decoder = GzDecoder::new(data);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
+    let decompressed = match mode {
+        CompressionMode::None => {
+            ensure_decompressed_size(data.len())?;
+            data.to_vec()
         }
-    }
+        CompressionMode::Zstd => decompress_zstd(data, MAX_MESSAGE_SIZE)?,
+        CompressionMode::Lz4 => decompress_lz4(data, MAX_MESSAGE_SIZE)?,
+        CompressionMode::Gzip => decompress_gzip(data, MAX_MESSAGE_SIZE)?,
+    };
+    ensure_decompressed_size(decompressed.len())?;
+    Ok(decompressed)
 }
 
 #[cfg(feature = "zstd-compression")]
@@ -107,12 +108,13 @@ fn compress_zstd(_data: &[u8]) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(feature = "zstd-compression")]
-fn decompress_zstd(data: &[u8]) -> io::Result<Vec<u8>> {
-    zstd::decode_all(data)
+fn decompress_zstd(data: &[u8], max_size: usize) -> io::Result<Vec<u8>> {
+    let decoder = zstd::stream::read::Decoder::new(data)?;
+    read_limited(decoder, max_size)
 }
 
 #[cfg(not(feature = "zstd-compression"))]
-fn decompress_zstd(_data: &[u8]) -> io::Result<Vec<u8>> {
+fn decompress_zstd(_data: &[u8], _max_size: usize) -> io::Result<Vec<u8>> {
     Err(zstd_feature_disabled_error())
 }
 
@@ -121,6 +123,52 @@ fn zstd_feature_disabled_error() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
         "zstd compression is disabled; rebuild with the zstd-compression feature",
+    )
+}
+
+fn decompress_lz4(data: &[u8], max_size: usize) -> io::Result<Vec<u8>> {
+    let Some(size_bytes) = data.get(..4) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "lz4 payload is too short",
+        ));
+    };
+    let expected_size =
+        u32::from_le_bytes([size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3]]) as usize;
+    if expected_size > max_size {
+        return Err(decompressed_size_error(expected_size, max_size));
+    }
+    lz4_flex::decompress_size_prepended(data)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn decompress_gzip(data: &[u8], max_size: usize) -> io::Result<Vec<u8>> {
+    read_limited(GzDecoder::new(data), max_size)
+}
+
+fn read_limited<R>(reader: R, max_size: usize) -> io::Result<Vec<u8>>
+where
+    R: Read,
+{
+    let mut limited = reader.take((max_size as u64) + 1);
+    let mut decompressed = Vec::new();
+    limited.read_to_end(&mut decompressed)?;
+    ensure_decompressed_size(decompressed.len())?;
+    Ok(decompressed)
+}
+
+fn ensure_decompressed_size(size: usize) -> io::Result<()> {
+    if size > MAX_MESSAGE_SIZE {
+        Err(decompressed_size_error(size, MAX_MESSAGE_SIZE))
+    } else {
+        Ok(())
+    }
+}
+
+fn decompressed_size_error(size: usize, max_size: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("decompressed message too large: {size} bytes > {max_size} bytes"),
     )
 }
 
@@ -202,6 +250,24 @@ mod tests {
             "invalid".parse::<CompressionMode>().unwrap(),
             CompressionMode::None
         );
+    }
+
+    #[test]
+    fn lz4_decompression_rejects_declared_size_over_limit() {
+        let mut payload = ((MAX_MESSAGE_SIZE + 1) as u32).to_le_bytes().to_vec();
+        payload.extend_from_slice(&[0; 8]);
+
+        let err = decompress(&payload, CompressionMode::Lz4).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn gzip_decompression_is_limited() {
+        let oversized = vec![b'a'; MAX_MESSAGE_SIZE + 1];
+        let compressed = compress(&oversized, CompressionMode::Gzip).unwrap();
+
+        let err = decompress(&compressed, CompressionMode::Gzip).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[cfg(not(feature = "zstd-compression"))]
