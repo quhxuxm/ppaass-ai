@@ -4,6 +4,7 @@ use crate::connection::{EgressState, ServerConnection};
 use crate::connection_limiter::{ConnectionLimiter, GlobalConnectionPermit};
 use crate::error::Result;
 use crate::user_manager::UserManager;
+use common::spawn_guarded;
 use protocol::CompressionMode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,7 +91,7 @@ impl ProxyServer {
                                 compression_mode: self.config.get_compression_mode(),
                                 connection_limiter: self.connection_limiter.clone(),
                             };
-                            tokio::spawn(async move {
+                            spawn_guarded("proxy inbound connection", async move {
                                 if let Err(e) =
                                     handle_connection(context, stream, connection_permit).await
                                 {

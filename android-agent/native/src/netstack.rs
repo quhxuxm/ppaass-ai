@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
-use futures::{SinkExt, StreamExt};
+use common::{
+    DEFAULT_STREAM_RELAY_BUFFER_SIZE, install_known_smoltcp_panic_hook, panic_payload_message,
+    spawn_guarded,
+};
+use futures::{FutureExt, SinkExt, StreamExt};
 use netstack_smoltcp::StackBuilder;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -69,24 +73,6 @@ pub async fn run_android_agent(
     );
 
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
-    let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
-        .enable_tcp(true)
-        .enable_udp(true)
-        .enable_icmp(true)
-        .mtu(mtu)
-        .build()
-        .map_err(|e| AndroidAgentError::Connection(format!("build netstack failed: {e}")))?;
-
-    if let Some(runner) = runner {
-        tokio::spawn(runner);
-    }
-
-    let tcp_listener = tcp_listener
-        .ok_or_else(|| AndroidAgentError::Connection("netstack TCP listener unavailable".into()))?;
-    let udp_socket = udp_socket
-        .ok_or_else(|| AndroidAgentError::Connection("netstack UDP socket unavailable".into()))?;
-
-    let (tun_to_stack, stack_to_tun) = spawn_packet_bridge(device, stack, mtu, shutdown.clone());
     let config = Arc::new(config);
     let tcp_pool = AndroidConnectionPool::new(config.clone(), config.tcp_pool_size, "tcp_pool");
     let udp_pool = AndroidConnectionPool::new(config.clone(), config.udp_pool_size, "udp_pool");
@@ -98,15 +84,250 @@ pub async fn run_android_agent(
         tun_networks,
         proxy_dns,
     };
-
-    let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), shutdown.clone());
-    let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, shutdown.clone());
+    let netstack_task =
+        spawn_netstack_supervisor(device, mtu, context, block_quic, shutdown.clone())?;
 
     shutdown.cancelled().await;
     info!("Android TUN agent shutdown requested");
-    let _ = tokio::join!(tun_to_stack, stack_to_tun, tcp_task, udp_task);
+    let _ = netstack_task.await;
     info!("Android TUN agent stopped");
     Ok(())
+}
+
+struct NetstackGeneration {
+    id: u64,
+    shutdown: CancellationToken,
+    runner: JoinHandle<NetstackRunnerExit>,
+    tun_to_stack: JoinHandle<()>,
+    stack_to_tun: JoinHandle<()>,
+    tcp_task: JoinHandle<()>,
+    udp_task: JoinHandle<()>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum NetstackTaskKind {
+    Runner,
+    TunToStack,
+    StackToTun,
+    TcpListener,
+    UdpSessions,
+}
+
+enum NetstackRunnerExit {
+    Finished,
+    Error(String),
+    Panic(String),
+}
+
+fn spawn_netstack_supervisor(
+    device: Arc<AndroidTunDevice>,
+    mtu: usize,
+    context: ForwardContext,
+    block_quic: bool,
+    shutdown: CancellationToken,
+) -> Result<JoinHandle<()>> {
+    install_known_smoltcp_panic_hook();
+    let initial = start_netstack_generation(
+        0,
+        device.clone(),
+        mtu,
+        context.clone(),
+        block_quic,
+        &shutdown,
+    )?;
+
+    Ok(spawn_guarded("android netstack supervisor", async move {
+        run_netstack_supervisor(device, mtu, context, block_quic, shutdown, initial).await;
+    }))
+}
+
+fn start_netstack_generation(
+    id: u64,
+    device: Arc<AndroidTunDevice>,
+    mtu: usize,
+    context: ForwardContext,
+    block_quic: bool,
+    parent_shutdown: &CancellationToken,
+) -> Result<NetstackGeneration> {
+    let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
+        .enable_tcp(true)
+        .enable_udp(true)
+        .enable_icmp(true)
+        .mtu(mtu)
+        .build()
+        .map_err(|e| AndroidAgentError::Connection(format!("build netstack failed: {e}")))?;
+    let runner = runner
+        .ok_or_else(|| AndroidAgentError::Connection("netstack runner unavailable".into()))?;
+    let tcp_listener = tcp_listener
+        .ok_or_else(|| AndroidAgentError::Connection("netstack TCP listener unavailable".into()))?;
+    let udp_socket = udp_socket
+        .ok_or_else(|| AndroidAgentError::Connection("netstack UDP socket unavailable".into()))?;
+
+    let generation_shutdown = parent_shutdown.child_token();
+    let (tun_to_stack, stack_to_tun) =
+        spawn_packet_bridge(device, stack, mtu, generation_shutdown.clone());
+    let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
+    let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, generation_shutdown.clone());
+
+    Ok(NetstackGeneration {
+        id,
+        shutdown: generation_shutdown,
+        runner: spawn_netstack_runner(runner),
+        tun_to_stack,
+        stack_to_tun,
+        tcp_task,
+        udp_task,
+    })
+}
+
+async fn run_netstack_supervisor(
+    device: Arc<AndroidTunDevice>,
+    mtu: usize,
+    context: ForwardContext,
+    block_quic: bool,
+    shutdown: CancellationToken,
+    mut generation: NetstackGeneration,
+) {
+    let mut next_generation_id = generation.id + 1;
+    let mut restart_delay = Duration::from_millis(200);
+
+    loop {
+        let stopped_task = tokio::select! {
+            _ = shutdown.cancelled() => None,
+            result = &mut generation.runner => {
+                match result {
+                    Ok(NetstackRunnerExit::Finished) => warn!("Android netstack runner generation={} exited; rebuilding netstack", generation.id),
+                    Ok(NetstackRunnerExit::Error(err)) => warn!("Android netstack runner generation={} failed: {err}; rebuilding netstack", generation.id),
+                    Ok(NetstackRunnerExit::Panic(message)) => warn!("Android netstack runner generation={} panicked: {message}; rebuilding netstack", generation.id),
+                    Err(err) => warn!("Android netstack runner generation={} join error: {err}; rebuilding netstack", generation.id),
+                }
+                Some(NetstackTaskKind::Runner)
+            }
+            result = &mut generation.tun_to_stack => {
+                log_netstack_task_exit("tun_to_stack", generation.id, result);
+                Some(NetstackTaskKind::TunToStack)
+            }
+            result = &mut generation.stack_to_tun => {
+                log_netstack_task_exit("stack_to_tun", generation.id, result);
+                Some(NetstackTaskKind::StackToTun)
+            }
+            result = &mut generation.tcp_task => {
+                log_netstack_task_exit("tcp_task", generation.id, result);
+                Some(NetstackTaskKind::TcpListener)
+            }
+            result = &mut generation.udp_task => {
+                log_netstack_task_exit("udp_task", generation.id, result);
+                Some(NetstackTaskKind::UdpSessions)
+            }
+        };
+
+        let Some(stopped_task) = stopped_task else {
+            stop_netstack_generation(generation, None).await;
+            break;
+        };
+
+        stop_netstack_generation(generation, Some(stopped_task)).await;
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(restart_delay) => {}
+        }
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        loop {
+            match start_netstack_generation(
+                next_generation_id,
+                device.clone(),
+                mtu,
+                context.clone(),
+                block_quic,
+                &shutdown,
+            ) {
+                Ok(next) => {
+                    info!("Android netstack rebuilt: generation={next_generation_id}");
+                    generation = next;
+                    next_generation_id += 1;
+                    restart_delay = Duration::from_millis(200);
+                    break;
+                }
+                Err(err) => {
+                    warn!("failed to rebuild Android netstack: {err}");
+                    restart_delay = (restart_delay * 2).min(Duration::from_secs(5));
+                    tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        _ = tokio::time::sleep(restart_delay) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("Android netstack supervisor exited");
+}
+
+fn spawn_netstack_runner(runner: netstack_smoltcp::Runner) -> JoinHandle<NetstackRunnerExit> {
+    tokio::spawn(async move {
+        match AssertUnwindSafe(runner).catch_unwind().await {
+            Ok(Ok(())) => NetstackRunnerExit::Finished,
+            Ok(Err(e)) => NetstackRunnerExit::Error(e.to_string()),
+            Err(payload) => NetstackRunnerExit::Panic(panic_payload_message(payload.as_ref())),
+        }
+    })
+}
+
+fn log_netstack_task_exit(
+    task_name: &'static str,
+    generation: u64,
+    result: std::result::Result<(), tokio::task::JoinError>,
+) {
+    match result {
+        Ok(()) => warn!(
+            "Android netstack {task_name} generation={generation} exited; rebuilding netstack"
+        ),
+        Err(err) => warn!(
+            "Android netstack {task_name} generation={generation} join error: {err}; rebuilding netstack"
+        ),
+    }
+}
+
+async fn stop_netstack_generation(
+    generation: NetstackGeneration,
+    completed: Option<NetstackTaskKind>,
+) {
+    generation.shutdown.cancel();
+
+    if completed != Some(NetstackTaskKind::Runner) {
+        abort_generation_task("netstack_runner", generation.runner).await;
+    }
+    if completed != Some(NetstackTaskKind::TunToStack) {
+        abort_generation_task("tun_to_stack", generation.tun_to_stack).await;
+    }
+    if completed != Some(NetstackTaskKind::StackToTun) {
+        abort_generation_task("stack_to_tun", generation.stack_to_tun).await;
+    }
+    if completed != Some(NetstackTaskKind::TcpListener) {
+        abort_generation_task("tcp_task", generation.tcp_task).await;
+    }
+    if completed != Some(NetstackTaskKind::UdpSessions) {
+        abort_generation_task("udp_task", generation.udp_task).await;
+    }
+}
+
+async fn abort_generation_task<T>(name: &'static str, handle: JoinHandle<T>)
+where
+    T: Send + 'static,
+{
+    handle.abort();
+    match handle.await {
+        Ok(_) => {}
+        Err(err) if err.is_cancelled() => {}
+        Err(err) => warn!("error while aborting Android netstack generation task {name}: {err}"),
+    }
 }
 
 fn spawn_packet_bridge(
@@ -119,7 +340,7 @@ fn spawn_packet_bridge(
 
     let input_device = device.clone();
     let input_shutdown = shutdown.clone();
-    let tun_to_stack = tokio::spawn(async move {
+    let tun_to_stack = spawn_guarded("android tun_to_stack", async move {
         let mut buf = vec![0u8; mtu.max(1500) + 64];
         loop {
             tokio::select! {
@@ -145,7 +366,7 @@ fn spawn_packet_bridge(
     });
 
     let output_shutdown = shutdown;
-    let stack_to_tun = tokio::spawn(async move {
+    let stack_to_tun = spawn_guarded("android stack_to_tun", async move {
         loop {
             tokio::select! {
                 _ = output_shutdown.cancelled() => break,
@@ -174,14 +395,14 @@ fn spawn_tcp_listener(
     context: ForwardContext,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    spawn_guarded("android tcp listener", async move {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 accepted = tcp_listener.next() => {
                     let Some((stream, source, target)) = accepted else { break };
                     let context = context.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("android tun tcp flow", async move {
                         if let Err(err) = handle_tcp(stream, source, target, context).await {
                             debug!("TUN TCP flow ended: {err}");
                         }
@@ -230,7 +451,7 @@ fn spawn_udp_sessions(
     block_quic: bool,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    spawn_guarded("android udp sessions", async move {
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
         let dns_proxy = context
@@ -296,7 +517,10 @@ impl DnsProxy {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
-        tokio::spawn(run_dns_proxy(context, netstack_tx, rx, shutdown));
+        spawn_guarded(
+            "android tun dns proxy",
+            run_dns_proxy(context, netstack_tx, rx, shutdown),
+        );
         Arc::new(Self { tx })
     }
 
@@ -646,7 +870,10 @@ impl UdpRelay {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
-        tokio::spawn(run_udp_relay(context, netstack_tx, rx, shutdown));
+        spawn_guarded(
+            "android tun udp relay",
+            run_udp_relay(context, netstack_tx, rx, shutdown),
+        );
         Arc::new(Self { tx })
     }
 

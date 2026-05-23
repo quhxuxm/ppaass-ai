@@ -5,6 +5,7 @@ use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use crate::tun_handler::run_tun_mode;
+use common::spawn_guarded;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -91,7 +92,7 @@ impl AgentServer {
                             let tcp_pool = self.tcp_pool.clone();
                             let udp_pool = self.udp_pool.clone();
                             let direct_checker = self.direct_access_checker.clone();
-                            tokio::spawn(async move {
+                            spawn_guarded("desktop inbound connection", async move {
                                 if let Err(e) =
                                     handle_connection(stream, tcp_pool, udp_pool, direct_checker).await
                                 {

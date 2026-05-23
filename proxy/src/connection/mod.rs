@@ -14,7 +14,7 @@ use crate::connection::upstream::UpstreamConnection;
 use crate::connection_limiter::{ConnectionLimiter, IdleConnectionPermit, UdpRelayFlowPermit};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
-use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode};
+use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode, spawn_guarded};
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -560,7 +560,7 @@ impl ServerConnection {
                     let egress_state = egress_state.clone();
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("proxy yamux tcp stream", async move {
                         if let Err(err) = handle_yamux_tcp_stream(
                             stream,
                             proxy_config,
@@ -657,7 +657,7 @@ impl ServerConnection {
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
                     let connection_limiter = connection_limiter.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("proxy yamux udp stream", async move {
                         if let Err(err) = handle_yamux_udp_stream(
                             stream,
                             proxy_config,
@@ -843,7 +843,7 @@ impl ServerConnection {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(UDP_RELAY_CHANNEL_SIZE);
         let response_address = address.clone();
 
-        tokio::spawn(async move {
+        spawn_guarded("proxy udp relay flow", async move {
             let _flow_permit = flow_permit;
             let mut buf = vec![0u8; 65535];
             let idle = tokio::time::sleep(flow_idle_timeout);
@@ -2065,7 +2065,7 @@ async fn spawn_yamux_udp_relay_flow(
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(UDP_RELAY_CHANNEL_SIZE);
     let response_address = address.clone();
 
-    tokio::spawn(async move {
+    spawn_guarded("proxy yamux udp relay flow", async move {
         let _flow_permit = flow_permit;
         let mut buf = vec![0u8; 65535];
         let idle = tokio::time::sleep(flow_idle_timeout);

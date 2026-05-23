@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use common::{
     AuthenticatedConnection, ClientStream, DatagramStreamIo, TcpTransportMode,
     YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
+    spawn_guarded,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -119,7 +120,7 @@ impl AndroidConnectionPool {
         );
 
         let pool = self.clone();
-        tokio::spawn(async move {
+        spawn_guarded("android connection pool refill", async move {
             pool.refill_task().await;
         });
     }

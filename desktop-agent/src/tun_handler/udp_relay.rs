@@ -1,6 +1,7 @@
 use super::network::socket_addr_to_address;
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
+use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
 use std::collections::HashMap;
@@ -118,7 +119,10 @@ impl UdpRelay {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
-        tokio::spawn(run_udp_relay(pool, netstack_tx, rx, shutdown));
+        spawn_guarded(
+            "desktop tun udp relay",
+            run_udp_relay(pool, netstack_tx, rx, shutdown),
+        );
         Arc::new(Self { tx })
     }
 

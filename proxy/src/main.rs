@@ -10,11 +10,14 @@ use crate::config::ProxyConfig;
 use crate::server::ProxyServer;
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use common::init_tracing;
+use common::{init_tracing, panic_payload_message};
+use futures::FutureExt;
 #[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
 use std::collections::BTreeSet;
-use tracing::info;
+use std::panic::AssertUnwindSafe;
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 #[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
@@ -127,9 +130,21 @@ fn main() -> Result<()> {
         );
         info!("用户配置文件：{}", config.users_path);
 
-        // 启动代理服务器
-        let server = ProxyServer::new(config).await?;
-        server.run().await?;
+        loop {
+            let server = ProxyServer::new(config.clone()).await?;
+            match AssertUnwindSafe(server.run()).catch_unwind().await {
+                Ok(Ok(())) => break,
+                Ok(Err(err)) => return Err(err.into()),
+                Err(payload) => {
+                    error!(
+                        "proxy 主服务 panic，准备重启监听循环：{}",
+                        panic_payload_message(payload.as_ref())
+                    );
+                    warn!("500ms 后重启 proxy 主服务");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
         Ok(())
     })
 }

@@ -1,5 +1,6 @@
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
+use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
 use std::collections::HashMap;
@@ -42,7 +43,10 @@ impl DnsProxy {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
-        tokio::spawn(run_dns_proxy(pool, netstack_tx, rx, shutdown));
+        spawn_guarded(
+            "desktop tun dns proxy",
+            run_dns_proxy(pool, netstack_tx, rx, shutdown),
+        );
         Arc::new(Self { tx })
     }
 

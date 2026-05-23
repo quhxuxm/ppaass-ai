@@ -15,6 +15,7 @@ use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, info};
 
 use crate::YamuxSettings;
+use crate::spawn_guarded;
 
 use super::authenticated::AuthenticatedConnection;
 use super::config::ClientConnectionConfig;
@@ -90,7 +91,7 @@ impl YamuxClientConnection {
         ));
         let stream_permits = Arc::new(Semaphore::new(settings.max_streams_per_session));
 
-        tokio::spawn(async move {
+        spawn_guarded("yamux client session", async move {
             while let Some(result) = session.next().await {
                 match result {
                     Ok(mut inbound_stream) => {

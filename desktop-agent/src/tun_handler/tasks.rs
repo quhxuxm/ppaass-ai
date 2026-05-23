@@ -4,6 +4,7 @@ use super::network::{address_for_tun_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
+use common::spawn_guarded;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ pub(super) fn spawn_packet_bridge(
 
     let device_in = device.clone();
     let shutdown_in = shutdown.clone();
-    let tun_to_stack = tokio::spawn(async move {
+    let tun_to_stack = spawn_guarded("desktop tun_to_stack", async move {
         // TUN -> netstack：读取系统注入的 IP 包并交给用户态协议栈处理。
         let mut buf = vec![0u8; mtu.max(1500) + 64];
         loop {
@@ -57,7 +58,7 @@ pub(super) fn spawn_packet_bridge(
 
     let device_out = device;
     let shutdown_out = shutdown;
-    let stack_to_tun = tokio::spawn(async move {
+    let stack_to_tun = spawn_guarded("desktop stack_to_tun", async move {
         // netstack -> TUN：协议栈生成的响应包写回虚拟网卡。
         loop {
             tokio::select! {
@@ -89,7 +90,7 @@ pub(super) fn spawn_tcp_listener(
     context: TunForwardContext,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    spawn_guarded("desktop tcp listener", async move {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
@@ -98,7 +99,7 @@ pub(super) fn spawn_tcp_listener(
                     let Some((stream, source_addr, target_addr)) = accepted else { break };
                     debug!("TUN TCP {} -> {}", source_addr, target_addr);
                     let context = context.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("desktop tun tcp flow", async move {
                         if let Err(e) =
                             handle_tun_tcp(
                                 stream,
@@ -123,7 +124,7 @@ pub(super) fn spawn_udp_sessions(
     block_quic: bool,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    spawn_guarded("desktop udp sessions", async move {
         // UDP 以五元组近似会话化，同一 source/target 复用一个处理任务。
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
@@ -192,7 +193,7 @@ pub(super) fn spawn_udp_sessions(
                         direct_checker: context.direct_checker.clone(),
                         direct_bind_interface: context.direct_bind_interface.clone(),
                     };
-                    tokio::spawn(async move {
+                    spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
                         if let Err(e) =
                             handle_tun_udp(
