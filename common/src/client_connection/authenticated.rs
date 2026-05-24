@@ -44,18 +44,9 @@ impl AuthenticatedConnection {
         // 1. TCP 连接 — 可选绑定到指定本地地址，
         //    以绕过可能存在的 TUN 默认路由。
         let stream = if let Some(bind) = config.bind_addr() {
-            connect_bound(&remote_addr, bind, config.bind_interface(), timeout).await?
+            connect_bound(config, &remote_addr, bind, config.bind_interface(), timeout).await?
         } else {
-            match tokio::time::timeout(timeout, TcpStream::connect(&remote_addr)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "连接超时",
-                    ));
-                }
-            }
+            connect_unbound(config, &remote_addr, timeout).await?
         };
         if let Err(err) = stream.set_nodelay(true) {
             warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
@@ -217,12 +208,16 @@ impl AuthenticatedConnection {
 ///
 /// 如果所有绑定连接尝试都失败，则直接返回错误。
 /// TUN 模式依赖这个绑定来防止代理连接回环进入 TUN，不能静默回退到普通连接。
-async fn connect_bound(
+async fn connect_bound<C>(
+    config: &C,
     remote_addr: &str,
     bind: SocketAddr,
     bind_interface: Option<BindInterface>,
     timeout: std::time::Duration,
-) -> std::io::Result<TcpStream> {
+) -> std::io::Result<TcpStream>
+where
+    C: ClientConnectionConfig,
+{
     // 异步解析远端主机名
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host(remote_addr)
         .await
@@ -249,6 +244,11 @@ async fn connect_bound(
                 continue;
             }
         };
+        if let Err(e) = config.protect_socket(&socket, *dst) {
+            warn!("保护代理连接 socket 失败 (dst={}): {e}", dst);
+            last_error = Some(e);
+            continue;
+        }
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
             warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -294,5 +294,62 @@ async fn connect_bound(
 
     Err(last_error.unwrap_or_else(|| {
         std::io::Error::other(format!("所有到 {remote_addr} 的绑定连接尝试均失败"))
+    }))
+}
+
+async fn connect_unbound<C>(
+    config: &C,
+    remote_addr: &str,
+    timeout: std::time::Duration,
+) -> std::io::Result<TcpStream>
+where
+    C: ClientConnectionConfig,
+{
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(remote_addr).await?.collect();
+    let mut last_error = None;
+
+    for dst in addrs {
+        let socket = match Socket::new(Domain::for_address(dst), Type::STREAM, Some(Protocol::TCP))
+        {
+            Ok(socket) => socket,
+            Err(e) => {
+                warn!("创建 TcpSocket 失败 (dst={}): {e}", dst);
+                last_error = Some(e);
+                continue;
+            }
+        };
+        if let Err(e) = config.protect_socket(&socket, dst) {
+            warn!("保护代理连接 socket 失败 (dst={}): {e}", dst);
+            last_error = Some(e);
+            continue;
+        }
+        if let Err(e) = socket.set_nonblocking(true) {
+            warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
+            last_error = Some(e);
+            continue;
+        }
+
+        let socket = TcpSocket::from_std_stream(socket.into());
+        match tokio::time::timeout(timeout, socket.connect(dst)).await {
+            Ok(Ok(stream)) => {
+                debug!("已连接到远端代理 {dst}");
+                return Ok(stream);
+            }
+            Ok(Err(e)) => {
+                warn!("连接到远端代理 {dst} 失败: {e}");
+                last_error = Some(e);
+            }
+            Err(_) => {
+                warn!("连接到远端代理 {dst} 超时");
+                last_error = Some(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("连接到远端代理 {dst} 超时"),
+                ));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))
     }))
 }

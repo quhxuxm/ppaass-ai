@@ -1,4 +1,5 @@
-use std::{fmt::Debug, net::SocketAddr, time::Duration};
+use socket2::Socket;
+use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
 
 /// Optional interface constraint for outbound client connections.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,5 +36,11 @@ pub trait ClientConnectionConfig: Debug {
     /// physical interface even after split-default routes point at the TUN.
     fn bind_interface(&self) -> Option<BindInterface> {
         None
+    }
+
+    /// Give platform VPN implementations a chance to keep the control socket
+    /// outside of the VPN before it connects.
+    fn protect_socket(&self, _socket: &Socket, _dst: SocketAddr) -> io::Result<()> {
+        Ok(())
     }
 }

@@ -2,8 +2,10 @@ use std::time::Duration;
 
 use common::{ClientConnectionConfig, TransportConfig, YamuxConfig};
 use serde::{Deserialize, Serialize};
+use socket2::Socket;
 
 use crate::error::{AndroidAgentError, Result};
+use crate::socket_protector;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AndroidAgentConfig {
@@ -102,6 +104,18 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(self.connect_timeout_secs)
+    }
+
+    #[cfg(unix)]
+    fn protect_socket(&self, socket: &Socket, _dst: std::net::SocketAddr) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        socket_protector::protect_fd(socket.as_raw_fd())
+    }
+
+    #[cfg(not(unix))]
+    fn protect_socket(&self, _socket: &Socket, _dst: std::net::SocketAddr) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

@@ -20,10 +20,13 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
 use crate::privilege::ensure_tun_privileges_or_relaunch;
+use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use dns::DnsGuard;
+use futures::FutureExt;
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
 use route::{RouteGuard, cleanup_stale_routes, detect_proxy_route, resolve_proxy_ips};
+use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -87,29 +90,8 @@ pub async fn run_tun_mode(
     );
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
-    let proxy_bind_interface =
-        configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool).await;
+    let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool);
 
-    // netstack-smoltcp 在用户空间接收 TUN 包并暴露 TCP/UDP 流接口。
-    let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
-        .enable_tcp(true)
-        .enable_udp(true)
-        .enable_icmp(true)
-        .mtu(config.mtu as usize)
-        .build()
-        .map_err(|e| AgentError::Connection(format!("构建 netstack 失败：{e}")))?;
-    if let Some(runner) = runner {
-        // runner 驱动协议栈定时器和内部状态机，必须持续运行。
-        tokio::spawn(runner);
-    }
-    let tcp_listener =
-        tcp_listener.ok_or_else(|| AgentError::Connection("netstack TCP 监听器不可用".into()))?;
-    let udp_socket =
-        udp_socket.ok_or_else(|| AgentError::Connection("netstack UDP 套接字不可用".into()))?;
-
-    // 三组任务分别桥接原始包、处理 TCP 流、维护 UDP 会话。
-    let (tun_to_stack, stack_to_tun) =
-        spawn_packet_bridge(device.clone(), stack, config.mtu as usize, shutdown.clone());
     let forward_context = TunForwardContext {
         tcp_pool: tcp_pool.clone(),
         udp_pool: udp_pool.clone(),
@@ -118,9 +100,20 @@ pub async fn run_tun_mode(
         proxy_dns,
         direct_bind_interface: proxy_bind_interface.clone(),
     };
-    let tcp_task = spawn_tcp_listener(tcp_listener, forward_context.clone(), shutdown.clone());
-    let udp_task = spawn_udp_sessions(udp_socket, forward_context, block_quic, shutdown.clone());
+    let netstack_task = spawn_netstack_supervisor(
+        device.clone(),
+        config.mtu as usize,
+        forward_context,
+        block_quic,
+        shutdown.clone(),
+    )?;
     let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
+
+    // 路由已就绪后再预热代理连接池。否则 VMware、旧 TUN 路由或 split-default
+    // 已存在时，绑定到物理接口的 Yamux 连接可能在启动早期得到 No route to host。
+    tcp_pool.prewarm().await;
+    udp_pool.prewarm().await;
+
     let dns_server = tun_dns_server(ipv4, ipv4_prefix);
     let dns_guard = DnsGuard::install(
         proxy_dns,
@@ -141,15 +134,245 @@ pub async fn run_tun_mode(
     drop(dns_guard);
     drop(route_guard);
 
-    let _ = tokio::join!(
-        wait_tun_task("tun_to_stack", tun_to_stack),
-        wait_tun_task("stack_to_tun", stack_to_tun),
-        wait_tun_task("tcp_task", tcp_task),
-        wait_tun_task("udp_task", udp_task),
-    );
+    let _ = tokio::join!(wait_tun_task("netstack_supervisor", netstack_task),);
 
     info!("TUN 模式转发器已停止");
     Ok(())
+}
+
+struct NetstackGeneration {
+    id: u64,
+    shutdown: CancellationToken,
+    runner: JoinHandle<NetstackRunnerExit>,
+    tun_to_stack: JoinHandle<()>,
+    stack_to_tun: JoinHandle<()>,
+    tcp_task: JoinHandle<()>,
+    udp_task: JoinHandle<()>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum NetstackTaskKind {
+    Runner,
+    TunToStack,
+    StackToTun,
+    TcpListener,
+    UdpSessions,
+}
+
+enum NetstackRunnerExit {
+    Finished,
+    Error(String),
+    Panic(String),
+}
+
+fn spawn_netstack_supervisor(
+    device: Arc<tun_rs::AsyncDevice>,
+    mtu: usize,
+    context: TunForwardContext,
+    block_quic: bool,
+    shutdown: CancellationToken,
+) -> Result<JoinHandle<()>> {
+    install_known_smoltcp_panic_hook();
+    let initial = start_netstack_generation(
+        0,
+        device.clone(),
+        mtu,
+        context.clone(),
+        block_quic,
+        &shutdown,
+    )?;
+
+    Ok(spawn_guarded("desktop netstack supervisor", async move {
+        run_netstack_supervisor(device, mtu, context, block_quic, shutdown, initial).await;
+    }))
+}
+
+fn start_netstack_generation(
+    id: u64,
+    device: Arc<tun_rs::AsyncDevice>,
+    mtu: usize,
+    context: TunForwardContext,
+    block_quic: bool,
+    parent_shutdown: &CancellationToken,
+) -> Result<NetstackGeneration> {
+    let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
+        .enable_tcp(true)
+        .enable_udp(true)
+        .enable_icmp(true)
+        .mtu(mtu)
+        .build()
+        .map_err(|e| AgentError::Connection(format!("构建 netstack 失败：{e}")))?;
+    let runner = runner.ok_or_else(|| AgentError::Connection("netstack runner 不可用".into()))?;
+    let tcp_listener =
+        tcp_listener.ok_or_else(|| AgentError::Connection("netstack TCP 监听器不可用".into()))?;
+    let udp_socket =
+        udp_socket.ok_or_else(|| AgentError::Connection("netstack UDP 套接字不可用".into()))?;
+
+    let generation_shutdown = parent_shutdown.child_token();
+    let (tun_to_stack, stack_to_tun) =
+        spawn_packet_bridge(device, stack, mtu, generation_shutdown.clone());
+    let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
+    let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, generation_shutdown.clone());
+
+    Ok(NetstackGeneration {
+        id,
+        shutdown: generation_shutdown,
+        runner: spawn_netstack_runner(runner),
+        tun_to_stack,
+        stack_to_tun,
+        tcp_task,
+        udp_task,
+    })
+}
+
+async fn run_netstack_supervisor(
+    device: Arc<tun_rs::AsyncDevice>,
+    mtu: usize,
+    context: TunForwardContext,
+    block_quic: bool,
+    shutdown: CancellationToken,
+    mut generation: NetstackGeneration,
+) {
+    let mut next_generation_id = generation.id + 1;
+    let mut restart_delay = Duration::from_millis(200);
+
+    loop {
+        let stopped_task = tokio::select! {
+            _ = shutdown.cancelled() => {
+                None
+            }
+            result = &mut generation.runner => {
+                match result {
+                    Ok(NetstackRunnerExit::Finished) => warn!("netstack runner generation={} 已退出，准备重建 netstack", generation.id),
+                    Ok(NetstackRunnerExit::Error(err)) => warn!("netstack runner generation={} 错误退出：{err}，准备重建 netstack", generation.id),
+                    Ok(NetstackRunnerExit::Panic(message)) => warn!("netstack runner generation={} panic：{message}，准备重建 netstack", generation.id),
+                    Err(err) => warn!("netstack runner generation={} join 错误：{err}，准备重建 netstack", generation.id),
+                }
+                Some(NetstackTaskKind::Runner)
+            }
+            result = &mut generation.tun_to_stack => {
+                log_netstack_task_exit("tun_to_stack", generation.id, result);
+                Some(NetstackTaskKind::TunToStack)
+            }
+            result = &mut generation.stack_to_tun => {
+                log_netstack_task_exit("stack_to_tun", generation.id, result);
+                Some(NetstackTaskKind::StackToTun)
+            }
+            result = &mut generation.tcp_task => {
+                log_netstack_task_exit("tcp_task", generation.id, result);
+                Some(NetstackTaskKind::TcpListener)
+            }
+            result = &mut generation.udp_task => {
+                log_netstack_task_exit("udp_task", generation.id, result);
+                Some(NetstackTaskKind::UdpSessions)
+            }
+        };
+
+        let Some(stopped_task) = stopped_task else {
+            stop_netstack_generation(generation, None).await;
+            break;
+        };
+
+        stop_netstack_generation(generation, Some(stopped_task)).await;
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(restart_delay) => {}
+        }
+        if shutdown.is_cancelled() {
+            break;
+        }
+
+        loop {
+            match start_netstack_generation(
+                next_generation_id,
+                device.clone(),
+                mtu,
+                context.clone(),
+                block_quic,
+                &shutdown,
+            ) {
+                Ok(next) => {
+                    info!("netstack 已重建：generation={}", next_generation_id);
+                    generation = next;
+                    next_generation_id += 1;
+                    restart_delay = Duration::from_millis(200);
+                    break;
+                }
+                Err(err) => {
+                    warn!("重建 netstack 失败：{err}");
+                    restart_delay = (restart_delay * 2).min(Duration::from_secs(5));
+                    tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        _ = tokio::time::sleep(restart_delay) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("netstack supervisor 退出");
+}
+
+fn spawn_netstack_runner(runner: netstack_smoltcp::Runner) -> JoinHandle<NetstackRunnerExit> {
+    tokio::spawn(async move {
+        match AssertUnwindSafe(runner).catch_unwind().await {
+            Ok(Ok(())) => NetstackRunnerExit::Finished,
+            Ok(Err(e)) => NetstackRunnerExit::Error(e.to_string()),
+            Err(payload) => NetstackRunnerExit::Panic(panic_payload_message(payload.as_ref())),
+        }
+    })
+}
+
+fn log_netstack_task_exit(
+    task_name: &'static str,
+    generation: u64,
+    result: std::result::Result<(), tokio::task::JoinError>,
+) {
+    match result {
+        Ok(()) => warn!("netstack {task_name} generation={generation} 已退出，准备重建 netstack"),
+        Err(err) => warn!(
+            "netstack {task_name} generation={generation} join 错误：{err}，准备重建 netstack"
+        ),
+    }
+}
+
+async fn stop_netstack_generation(
+    generation: NetstackGeneration,
+    completed: Option<NetstackTaskKind>,
+) {
+    generation.shutdown.cancel();
+
+    if completed != Some(NetstackTaskKind::Runner) {
+        abort_generation_task("netstack_runner", generation.runner).await;
+    }
+    if completed != Some(NetstackTaskKind::TunToStack) {
+        abort_generation_task("tun_to_stack", generation.tun_to_stack).await;
+    }
+    if completed != Some(NetstackTaskKind::StackToTun) {
+        abort_generation_task("stack_to_tun", generation.stack_to_tun).await;
+    }
+    if completed != Some(NetstackTaskKind::TcpListener) {
+        abort_generation_task("tcp_task", generation.tcp_task).await;
+    }
+    if completed != Some(NetstackTaskKind::UdpSessions) {
+        abort_generation_task("udp_task", generation.udp_task).await;
+    }
+}
+
+async fn abort_generation_task<T>(name: &'static str, handle: JoinHandle<T>)
+where
+    T: Send + 'static,
+{
+    handle.abort();
+    match handle.await {
+        Ok(_) => {}
+        Err(err) if err.is_cancelled() => {}
+        Err(err) => warn!("中止 netstack generation 任务 {name} 时出现 join 错误：{err}"),
+    }
 }
 
 async fn wait_tun_task(name: &'static str, mut handle: JoinHandle<()>) {
@@ -381,7 +604,7 @@ fn windows_arch_label() -> &'static str {
     }
 }
 
-async fn configure_proxy_routing(
+fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
     tcp_pool: &ConnectionPool,
@@ -410,10 +633,6 @@ async fn configure_proxy_routing(
         udp_pool.set_proxy_bind_ip(None);
         udp_pool.set_proxy_bind_interface(None);
     }
-
-    // 必须在设置绑定 IP 后、劫持默认路由前预热连接池。
-    tcp_pool.prewarm().await;
-    udp_pool.prewarm().await;
 
     debug!(
         "TUN 路由预配置完成：设备={} ipv4={} mtu={}",

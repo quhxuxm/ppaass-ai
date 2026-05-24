@@ -1,6 +1,7 @@
 pub mod client_connection;
 pub mod datagram_stream;
 pub mod error;
+pub mod task_guard;
 pub mod yamux_settings;
 
 pub const DEFAULT_STREAM_RELAY_BUFFER_SIZE: usize = 64 * 1024;
@@ -12,6 +13,7 @@ pub use client_connection::{
 };
 pub use datagram_stream::DatagramStreamIo;
 pub use error::{CommonError, Result};
+pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 pub use yamux_settings::{
     TcpTransportMode, TransportConfig, YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig,
     YamuxSettings, YamuxTransportConfig,

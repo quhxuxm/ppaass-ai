@@ -1,11 +1,12 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString};
-use jni::sys::{jint, jlong};
+use jni::objects::{JClass, JObject, JString};
+use jni::sys::{jboolean, jint, jlong};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::AndroidAgentConfig;
 use crate::fd_device::RawFd;
 use crate::netstack::run_android_agent;
+use crate::socket_protector;
 
 struct AgentHandle {
     shutdown: CancellationToken,
@@ -18,6 +19,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start(
     _class: JClass,
     tun_fd: jint,
     config_json: JString,
+    vpn_service: JObject,
 ) -> jlong {
     let json: String = match env.get_string(&config_json) {
         Ok(value) => value.into(),
@@ -34,6 +36,14 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start(
             return 0;
         }
     };
+
+    if let Err(err) = socket_protector::install(&mut env, vpn_service) {
+        throw(
+            &mut env,
+            format!("failed to install Android socket protector: {err}"),
+        );
+        return 0;
+    }
 
     let async_runtime_stack_size = config.async_runtime_stack_size_mb.max(1) * 1024 * 1024;
     let runtime_threads = config.runtime_threads.max(1);
@@ -64,6 +74,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start(
         }) {
         Ok(thread) => thread,
         Err(err) => {
+            socket_protector::clear();
             throw(
                 &mut env,
                 format!("failed to spawn native agent thread: {err}"),
@@ -76,6 +87,23 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start(
         shutdown,
         thread: Some(thread),
     })) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_isRunning(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    if handle == 0 {
+        return 0;
+    }
+
+    let handle = unsafe { &*(handle as *const AgentHandle) };
+    match handle.thread.as_ref() {
+        Some(thread) if !thread.is_finished() => 1,
+        _ => 0,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -93,6 +121,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_stop(
     if let Some(thread) = handle.thread.take() {
         let _ = thread.join();
     }
+    socket_protector::clear();
 }
 
 fn throw(env: &mut JNIEnv, message: String) {

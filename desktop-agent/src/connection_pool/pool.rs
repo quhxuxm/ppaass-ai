@@ -4,7 +4,7 @@ use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use common::{
     BindInterface, TcpTransportMode, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
-    YamuxClientConnection,
+    YamuxClientConnection, spawn_guarded,
 };
 use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
@@ -297,7 +297,7 @@ impl ConnectionPool {
             proxy_bind_ip: self.proxy_bind_ip.clone(),
             proxy_bind_interface: self.proxy_bind_interface.clone(),
         };
-        tokio::spawn(async move {
+        spawn_guarded("desktop connection pool refill", async move {
             Self::refill_task(refill_context).await;
         });
     }

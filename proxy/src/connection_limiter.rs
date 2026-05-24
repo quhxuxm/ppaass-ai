@@ -19,6 +19,8 @@ struct ConnectionLimiterInner {
     max_idle_connections_per_user: usize,
     udp_relay_flows: AtomicUsize,
     max_udp_relay_flows: usize,
+    udp_relay_buffered_bytes: AtomicUsize,
+    max_udp_relay_buffered_bytes: usize,
 }
 
 struct UserConnectionCounters {
@@ -43,6 +45,11 @@ pub struct UdpRelayFlowPermit {
     limiter: Arc<ConnectionLimiterInner>,
 }
 
+pub struct UdpRelayBufferedBytesPermit {
+    limiter: Arc<ConnectionLimiterInner>,
+    bytes: usize,
+}
+
 impl ConnectionLimiter {
     pub fn new(config: &ProxyConfig) -> Self {
         let global = if config.max_connections == 0 {
@@ -60,6 +67,8 @@ impl ConnectionLimiter {
                 max_idle_connections_per_user: config.max_idle_connections_per_user,
                 udp_relay_flows: AtomicUsize::new(0),
                 max_udp_relay_flows: config.max_udp_relay_flows,
+                udp_relay_buffered_bytes: AtomicUsize::new(0),
+                max_udp_relay_buffered_bytes: config.max_udp_relay_buffered_bytes,
             }),
         }
     }
@@ -103,6 +112,31 @@ impl ConnectionLimiter {
         self.inner.udp_relay_flows.load(Ordering::Acquire)
     }
 
+    pub fn try_acquire_udp_relay_buffered_bytes(
+        &self,
+        bytes: usize,
+    ) -> Option<UdpRelayBufferedBytesPermit> {
+        if bytes == 0 || self.inner.max_udp_relay_buffered_bytes == 0 {
+            return Some(UdpRelayBufferedBytesPermit {
+                limiter: self.inner.clone(),
+                bytes: 0,
+            });
+        }
+        increment_limited_by(
+            &self.inner.udp_relay_buffered_bytes,
+            self.inner.max_udp_relay_buffered_bytes,
+            bytes,
+        )?;
+        Some(UdpRelayBufferedBytesPermit {
+            limiter: self.inner.clone(),
+            bytes,
+        })
+    }
+
+    pub fn active_udp_relay_buffered_bytes(&self) -> usize {
+        self.inner.udp_relay_buffered_bytes.load(Ordering::Acquire)
+    }
+
     fn user_counters(&self, username: &str) -> Arc<UserConnectionCounters> {
         self.inner
             .users
@@ -141,14 +175,32 @@ impl Drop for UdpRelayFlowPermit {
     }
 }
 
+impl Drop for UdpRelayBufferedBytesPermit {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            self.limiter
+                .udp_relay_buffered_bytes
+                .fetch_sub(self.bytes, Ordering::AcqRel);
+        }
+    }
+}
+
 fn increment_limited(counter: &AtomicUsize, limit: usize) -> Option<()> {
+    increment_limited_by(counter, limit, 1)
+}
+
+fn increment_limited_by(counter: &AtomicUsize, limit: usize, amount: usize) -> Option<()> {
+    if amount == 0 {
+        return Some(());
+    }
     loop {
         let current = counter.load(Ordering::Acquire);
-        if limit != 0 && current >= limit {
+        let next = current.checked_add(amount)?;
+        if limit != 0 && next > limit {
             return None;
         }
         if counter
-            .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             return Some(());
@@ -194,6 +246,8 @@ mod tests {
             max_udp_relay_flows_per_connection: 2048,
             max_udp_relay_flows: 4096,
             udp_relay_idle_timeout_secs: 60,
+            udp_relay_channel_size: 256,
+            max_udp_relay_buffered_bytes: 64 * 1024 * 1024,
         }
     }
 
@@ -258,5 +312,20 @@ mod tests {
         drop(flow);
         assert_eq!(limiter.active_udp_relay_flows(), 0);
         assert!(limiter.try_acquire_udp_relay_flow().is_some());
+    }
+
+    #[test]
+    fn udp_relay_buffered_bytes_limit_releases_on_drop() {
+        let mut config = config(0, 0, 0);
+        config.max_udp_relay_buffered_bytes = 10;
+        let limiter = ConnectionLimiter::new(&config);
+
+        let first = limiter.try_acquire_udp_relay_buffered_bytes(6).unwrap();
+        assert!(limiter.try_acquire_udp_relay_buffered_bytes(5).is_none());
+        assert_eq!(limiter.active_udp_relay_buffered_bytes(), 6);
+
+        drop(first);
+        assert_eq!(limiter.active_udp_relay_buffered_bytes(), 0);
+        assert!(limiter.try_acquire_udp_relay_buffered_bytes(10).is_some());
     }
 }

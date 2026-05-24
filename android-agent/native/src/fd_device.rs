@@ -22,6 +22,7 @@ mod imp {
             loop {
                 let mut guard = self.fd.readable().await?;
                 match guard.try_io(|inner| read_fd(inner.get_ref().as_raw_fd(), buf)) {
+                    Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Ok(result) => return result,
                     Err(_would_block) => continue,
                 }
@@ -42,6 +43,7 @@ mod imp {
                         ));
                     }
                     Ok(Ok(n)) => written += n,
+                    Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Ok(Err(e)) => return Err(e),
                     Err(_would_block) => continue,
                 }

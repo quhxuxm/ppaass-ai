@@ -11,10 +11,12 @@ pub use response_sink::BytesToProxyResponseSink;
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::connection::upstream::UpstreamConnection;
-use crate::connection_limiter::{ConnectionLimiter, IdleConnectionPermit, UdpRelayFlowPermit};
+use crate::connection_limiter::{
+    ConnectionLimiter, IdleConnectionPermit, UdpRelayBufferedBytesPermit, UdpRelayFlowPermit,
+};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
-use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode};
+use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode, spawn_guarded};
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -59,10 +61,46 @@ use windows_sys::Win32::Networking::WinSock::{
 
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
-const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
 
 struct UdpRelayFlow {
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    tx: tokio::sync::mpsc::Sender<QueuedUdpRelayData>,
+}
+
+struct QueuedUdpRelayData {
+    data: Vec<u8>,
+    _buffer_permit: UdpRelayBufferedBytesPermit,
+}
+
+struct QueuedUdpRelayResponse {
+    packet: UdpRelayPacket,
+    _buffer_permit: UdpRelayBufferedBytesPermit,
+}
+
+fn udp_relay_channel_size(config: &ProxyConfig) -> usize {
+    config.udp_relay_channel_size.max(1)
+}
+
+fn try_acquire_udp_relay_buffer(
+    limiter: &ConnectionLimiter,
+    max_buffered_bytes: usize,
+    flow_id: u64,
+    bytes: usize,
+    direction: &str,
+) -> Option<UdpRelayBufferedBytesPermit> {
+    match limiter.try_acquire_udp_relay_buffered_bytes(bytes) {
+        Some(permit) => Some(permit),
+        None => {
+            warn!(
+                "proxy UDP relay 缓冲字节数已达上限（当前={}，上限={}），丢弃 flow {} 的{}数据包（{} bytes）",
+                limiter.active_udp_relay_buffered_bytes(),
+                max_buffered_bytes,
+                flow_id,
+                direction,
+                bytes
+            );
+            None
+        }
+    }
 }
 
 pub struct ServerConnection {
@@ -560,7 +598,7 @@ impl ServerConnection {
                     let egress_state = egress_state.clone();
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("proxy yamux tcp stream", async move {
                         if let Err(err) = handle_yamux_tcp_stream(
                             stream,
                             proxy_config,
@@ -657,7 +695,7 @@ impl ServerConnection {
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
                     let connection_limiter = connection_limiter.clone();
-                    tokio::spawn(async move {
+                    spawn_guarded("proxy yamux udp stream", async move {
                         if let Err(err) = handle_yamux_udp_stream(
                             stream,
                             proxy_config,
@@ -688,10 +726,10 @@ impl ServerConnection {
             .await?;
 
         let username = self.user_config.as_ref().map(|c| c.username.clone());
+        let channel_size = udp_relay_channel_size(&self.proxy_config);
         let (response_tx, mut response_rx) =
-            tokio::sync::mpsc::channel::<UdpRelayPacket>(UDP_RELAY_CHANNEL_SIZE);
-        let (flow_done_tx, mut flow_done_rx) =
-            tokio::sync::mpsc::channel::<u64>(UDP_RELAY_CHANNEL_SIZE);
+            tokio::sync::mpsc::channel::<QueuedUdpRelayResponse>(channel_size);
+        let (flow_done_tx, mut flow_done_rx) = tokio::sync::mpsc::channel::<u64>(channel_size);
         let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
         let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
         let stream_id = connect_request.request_id;
@@ -766,6 +804,7 @@ impl ServerConnection {
                             flow_done_tx.clone(),
                             flow_permit,
                             relay_idle_timeout,
+                            channel_size,
                         ).await {
                             Ok(flow) => {
                                 flows.insert(relay_packet.flow_id, flow);
@@ -782,7 +821,20 @@ impl ServerConnection {
 
                     let flow_id = relay_packet.flow_id;
                     if let Some(flow) = flows.get(&flow_id) {
-                        match flow.tx.try_send(relay_packet.data) {
+                        let Some(buffer_permit) = try_acquire_udp_relay_buffer(
+                            &self.connection_limiter,
+                            self.proxy_config.max_udp_relay_buffered_bytes,
+                            flow_id,
+                            relay_packet.data.len(),
+                            "上行",
+                        ) else {
+                            continue;
+                        };
+                        let queued = QueuedUdpRelayData {
+                            data: relay_packet.data,
+                            _buffer_permit: buffer_permit,
+                        };
+                        match flow.tx.try_send(queued) {
                             Ok(()) => {}
                             Err(TrySendError::Full(_)) => {
                                 debug!("UDP relay flow {flow_id} 发送队列已满，丢弃一个 UDP 数据包");
@@ -796,6 +848,7 @@ impl ServerConnection {
                 response = response_rx.recv() => {
                     let Some(response) = response else { break };
                     let encoded = response
+                        .packet
                         .encode()
                         .map_err(ProxyError::Protocol)?;
                     if let Some(user) = &username {
@@ -827,10 +880,11 @@ impl ServerConnection {
         &self,
         flow_id: u64,
         address: Address,
-        response_tx: tokio::sync::mpsc::Sender<UdpRelayPacket>,
+        response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
         flow_done_tx: tokio::sync::mpsc::Sender<u64>,
         flow_permit: UdpRelayFlowPermit,
         flow_idle_timeout: Duration,
+        channel_size: usize,
     ) -> Result<UdpRelayFlow> {
         let target_addr = relay_target_addr(&address)?;
         let socket = self
@@ -840,10 +894,12 @@ impl ServerConnection {
             .map_err(|e| {
                 ProxyError::Connection(format!("Failed to connect UDP relay target: {e}"))
             })?;
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(UDP_RELAY_CHANNEL_SIZE);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<QueuedUdpRelayData>(channel_size);
         let response_address = address.clone();
+        let connection_limiter = self.connection_limiter.clone();
+        let max_buffered_bytes = self.proxy_config.max_udp_relay_buffered_bytes;
 
-        tokio::spawn(async move {
+        spawn_guarded("proxy udp relay flow", async move {
             let _flow_permit = flow_permit;
             let mut buf = vec![0u8; 65535];
             let idle = tokio::time::sleep(flow_idle_timeout);
@@ -853,7 +909,8 @@ impl ServerConnection {
                 tokio::select! {
                     _ = &mut idle => break,
                     maybe_data = rx.recv() => {
-                        let Some(data) = maybe_data else { break };
+                        let Some(queued) = maybe_data else { break };
+                        let data = queued.data;
                         match tokio::time::timeout(flow_idle_timeout, socket.send(&data)).await {
                             Ok(Ok(_)) => {
                                 idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
@@ -874,10 +931,23 @@ impl ServerConnection {
                     read = socket.recv(&mut buf) => {
                         match read {
                             Ok(n) => {
-                                let response = UdpRelayPacket {
+                                let Some(buffer_permit) = try_acquire_udp_relay_buffer(
+                                    &connection_limiter,
+                                    max_buffered_bytes,
                                     flow_id,
-                                    address: response_address.clone(),
-                                    data: buf[..n].to_vec(),
+                                    n,
+                                    "下行",
+                                ) else {
+                                    debug!("UDP relay flow {flow_id} 响应缓冲预算不足，关闭该 flow 以释放 socket");
+                                    break;
+                                };
+                                let response = QueuedUdpRelayResponse {
+                                    packet: UdpRelayPacket {
+                                        flow_id,
+                                        address: response_address.clone(),
+                                        data: buf[..n].to_vec(),
+                                    },
+                                    _buffer_permit: buffer_permit,
                                 };
                                 match response_tx.try_send(response) {
                                     Ok(()) => {
@@ -1918,10 +1988,10 @@ async fn relay_yamux_udp_relay_stream(
 ) -> Result<()> {
     let agent_io = DatagramStreamIo::new(agent_stream);
     let (mut reader, mut writer) = tokio::io::split(agent_io);
+    let channel_size = udp_relay_channel_size(&proxy_config);
     let (response_tx, mut response_rx) =
-        tokio::sync::mpsc::channel::<UdpRelayPacket>(UDP_RELAY_CHANNEL_SIZE);
-    let (flow_done_tx, mut flow_done_rx) =
-        tokio::sync::mpsc::channel::<u64>(UDP_RELAY_CHANNEL_SIZE);
+        tokio::sync::mpsc::channel::<QueuedUdpRelayResponse>(channel_size);
+    let (flow_done_tx, mut flow_done_rx) = tokio::sync::mpsc::channel::<u64>(channel_size);
     let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
     let max_flows = proxy_config.max_udp_relay_flows_per_connection;
     let relay_idle_timeout = Duration::from_secs(proxy_config.udp_relay_idle_timeout_secs);
@@ -1986,6 +2056,9 @@ async fn relay_yamux_udp_relay_stream(
                         flow_done_tx.clone(),
                         flow_permit,
                         relay_idle_timeout,
+                        channel_size,
+                        connection_limiter.clone(),
+                        proxy_config.max_udp_relay_buffered_bytes,
                     ).await {
                         Ok(flow) => {
                             flows.insert(relay_packet.flow_id, flow);
@@ -2002,7 +2075,20 @@ async fn relay_yamux_udp_relay_stream(
 
                 let flow_id = relay_packet.flow_id;
                 if let Some(flow) = flows.get(&flow_id) {
-                    match flow.tx.try_send(relay_packet.data) {
+                    let Some(buffer_permit) = try_acquire_udp_relay_buffer(
+                        &connection_limiter,
+                        proxy_config.max_udp_relay_buffered_bytes,
+                        flow_id,
+                        relay_packet.data.len(),
+                        "上行",
+                    ) else {
+                        continue;
+                    };
+                    let queued = QueuedUdpRelayData {
+                        data: relay_packet.data,
+                        _buffer_permit: buffer_permit,
+                    };
+                    match flow.tx.try_send(queued) {
                         Ok(()) => {}
                         Err(TrySendError::Full(_)) => {
                             debug!("Yamux UDP relay flow {flow_id} 发送队列已满，丢弃一个 UDP 数据包");
@@ -2016,6 +2102,7 @@ async fn relay_yamux_udp_relay_stream(
             response = response_rx.recv() => {
                 let Some(response) = response else { break };
                 let encoded = response
+                    .packet
                     .encode()
                     .map_err(ProxyError::Protocol)?;
                 if let Some(user) = &username {
@@ -2053,19 +2140,22 @@ async fn spawn_yamux_udp_relay_flow(
     egress_state: Arc<EgressState>,
     flow_id: u64,
     address: Address,
-    response_tx: tokio::sync::mpsc::Sender<UdpRelayPacket>,
+    response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
     flow_done_tx: tokio::sync::mpsc::Sender<u64>,
     flow_permit: UdpRelayFlowPermit,
     flow_idle_timeout: Duration,
+    channel_size: usize,
+    connection_limiter: ConnectionLimiter,
+    max_buffered_bytes: usize,
 ) -> Result<UdpRelayFlow> {
     let target_addr = relay_target_addr(&address)?;
     let socket = egress_state.connect_udp(&target_addr).await.map_err(|e| {
         ProxyError::Connection(format!("Failed to connect Yamux UDP relay target: {e}"))
     })?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(UDP_RELAY_CHANNEL_SIZE);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<QueuedUdpRelayData>(channel_size);
     let response_address = address.clone();
 
-    tokio::spawn(async move {
+    spawn_guarded("proxy yamux udp relay flow", async move {
         let _flow_permit = flow_permit;
         let mut buf = vec![0u8; 65535];
         let idle = tokio::time::sleep(flow_idle_timeout);
@@ -2075,7 +2165,8 @@ async fn spawn_yamux_udp_relay_flow(
             tokio::select! {
                 _ = &mut idle => break,
                 maybe_data = rx.recv() => {
-                    let Some(data) = maybe_data else { break };
+                    let Some(queued) = maybe_data else { break };
+                    let data = queued.data;
                     match tokio::time::timeout(flow_idle_timeout, socket.send(&data)).await {
                         Ok(Ok(_)) => {
                             idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
@@ -2096,10 +2187,23 @@ async fn spawn_yamux_udp_relay_flow(
                 read = socket.recv(&mut buf) => {
                     match read {
                         Ok(n) => {
-                            let response = UdpRelayPacket {
+                            let Some(buffer_permit) = try_acquire_udp_relay_buffer(
+                                &connection_limiter,
+                                max_buffered_bytes,
                                 flow_id,
-                                address: response_address.clone(),
-                                data: buf[..n].to_vec(),
+                                n,
+                                "下行",
+                            ) else {
+                                debug!("Yamux UDP relay flow {flow_id} 响应缓冲预算不足，关闭该 flow 以释放 socket");
+                                break;
+                            };
+                            let response = QueuedUdpRelayResponse {
+                                packet: UdpRelayPacket {
+                                    flow_id,
+                                    address: response_address.clone(),
+                                    data: buf[..n].to_vec(),
+                                },
+                                _buffer_permit: buffer_permit,
                             };
                             match response_tx.try_send(response) {
                                 Ok(()) => {

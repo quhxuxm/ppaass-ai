@@ -68,11 +68,19 @@ public class MainActivity extends Activity {
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
     private Button vpnToggle;
+    private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
+            (sharedPreferences, key) -> {
+                if (PpaassVpnService.PREF_RUNNING.equals(key)
+                        || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)) {
+                    runOnUiThread(this::updateVpnToggle);
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
     }
 
@@ -80,6 +88,14 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateVpnToggle();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (prefs != null) {
+            prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -313,12 +329,12 @@ public class MainActivity extends Activity {
     private void startVpnService() {
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_START);
+        intent.putExtra(PpaassVpnService.EXTRA_STARTED_BY_APP, true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {
             startService(intent);
         }
-        setVpnRunning(true);
         updateVpnToggle();
     }
 
@@ -326,16 +342,19 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_STOP);
         startService(intent);
-        setVpnRunning(false);
         updateVpnToggle();
     }
 
     private boolean isVpnRunning() {
-        return prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false);
-    }
-
-    private void setVpnRunning(boolean running) {
-        prefs.edit().putBoolean(PpaassVpnService.PREF_RUNNING, running).apply();
+        boolean running = prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false);
+        if (running && !PpaassVpnService.isRunningInProcess()) {
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_RUNNING, false)
+                    .putBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false)
+                    .apply();
+            return false;
+        }
+        return running;
     }
 
     private void updateVpnToggle() {
@@ -344,9 +363,11 @@ public class MainActivity extends Activity {
         }
 
         boolean running = isVpnRunning();
-        vpnToggle.setText(running ? "Stop" : "Start");
+        boolean systemManaged = prefs.getBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false);
+        vpnToggle.setText(systemManaged ? "Always-on VPN" : running ? "Stop" : "Start");
         vpnToggle.setTextColor(Color.WHITE);
         vpnToggle.setBackgroundColor(running ? COLOR_RUNNING : COLOR_STOPPED);
+        vpnToggle.setEnabled(!systemManaged);
         updateConfigEditability(!running);
     }
 

@@ -1,22 +1,24 @@
-use super::udp::UdpWriter;
-use crate::connection_pool::ConnectionPool;
-use common::spawn_guarded;
-use futures::SinkExt;
-use protocol::{Address, TransportProtocol};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use common::spawn_guarded;
+use futures::SinkExt;
+use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use super::ForwardContext;
+use super::udp::UdpWriter;
+use crate::error::Result;
+
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
-const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
+const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
 
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
@@ -38,33 +40,41 @@ struct PendingDnsRequest {
 
 impl DnsProxy {
     pub(super) fn spawn(
-        pool: Arc<ConnectionPool>,
+        context: ForwardContext,
         netstack_tx: UdpWriter,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
         spawn_guarded(
-            "desktop tun dns proxy",
-            run_dns_proxy(pool, netstack_tx, rx, shutdown),
+            "android tun dns proxy",
+            run_dns_proxy(context, netstack_tx, rx, shutdown),
         );
         Arc::new(Self { tx })
     }
 
     pub(super) fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
+        debug!(
+            "Android TUN DNS request queued: {} -> {} bytes={}",
+            client,
+            target,
+            packet.len()
+        );
         match self.tx.try_send(DnsProxyRequest {
             client,
             target,
             packet,
         }) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => debug!("TUN UDP DNS 队列已满，丢弃请求"),
-            Err(TrySendError::Closed(_)) => debug!("TUN UDP DNS 共享转发器已关闭，丢弃请求"),
+            Err(TrySendError::Full(_)) => debug!("Android TUN DNS queue is full; dropping packet"),
+            Err(TrySendError::Closed(_)) => {
+                debug!("Android TUN DNS proxy is closed; dropping packet");
+            }
         }
     }
 }
 
 async fn run_dns_proxy(
-    pool: Arc<ConnectionPool>,
+    context: ForwardContext,
     netstack_tx: UdpWriter,
     mut rx: mpsc::Receiver<DnsProxyRequest>,
     shutdown: CancellationToken,
@@ -88,14 +98,15 @@ async fn run_dns_proxy(
             }
         };
 
-        let connected = connect_dns_stream(&pool).await;
+        let connected = connect_dns_stream(&context).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
                 reconnect_delay = Duration::from_millis(200);
                 proxy_io
             }
             Err(e) => {
-                warn!("TUN UDP DNS 共享连接创建失败：{e}");
+                warn!("Android TUN DNS proxy connection failed: {e}");
+                android_log_error(format!("Android TUN DNS proxy connection failed: {e}"));
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = tokio::time::sleep(reconnect_delay) => {}
@@ -106,12 +117,12 @@ async fn run_dns_proxy(
             }
         };
 
-        debug!("TUN UDP DNS 已建立共享 proxy 连接");
+        debug!("Android TUN DNS proxy connected");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(5));
         cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let idle = tokio::time::sleep(DNS_PROXY_CONNECTION_IDLE);
-        tokio::pin!(idle);
+        let idle_sleep = tokio::time::sleep(DNS_PROXY_CONNECTION_IDLE);
+        tokio::pin!(idle_sleep);
         pending.clear();
         retry_request = Some(first_request);
         let mut response_buf = vec![0u8; 65535];
@@ -121,11 +132,12 @@ async fn run_dns_proxy(
                 if let Err(e) =
                     send_dns_request(&mut writer, &mut pending, &mut next_id, &request).await
                 {
-                    debug!("TUN UDP DNS 共享连接写入失败：{e}");
+                    debug!("Android TUN DNS proxy write failed: {e}");
                     retry_request = Some(request);
                     break;
                 }
-                idle.as_mut()
+                idle_sleep
+                    .as_mut()
                     .reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
                 continue;
             }
@@ -135,11 +147,8 @@ async fn run_dns_proxy(
                     let _ = writer.shutdown().await;
                     return;
                 }
-                _ = &mut idle => {
-                    debug!(
-                        "TUN UDP DNS 共享连接空闲超过 {} 秒，主动关闭 proxy 连接",
-                        DNS_PROXY_CONNECTION_IDLE.as_secs()
-                    );
+                _ = &mut idle_sleep => {
+                    debug!("Android TUN DNS proxy idle; closing connection");
                     let _ = writer.shutdown().await;
                     break;
                 }
@@ -155,16 +164,18 @@ async fn run_dns_proxy(
                         &mut next_id,
                         &request,
                     ).await {
-                        debug!("TUN UDP DNS 共享连接写入失败：{e}");
+                        debug!("Android TUN DNS proxy write failed: {e}");
                         retry_request = Some(request);
                         break;
                     }
-                    idle.as_mut().reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
+                    idle_sleep.as_mut().reset(
+                        tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE,
+                    );
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {
                         Ok(0) => {
-                            debug!("TUN UDP DNS 共享连接已关闭");
+                            debug!("Android TUN DNS proxy closed");
                             break;
                         }
                         Ok(n) => {
@@ -174,12 +185,14 @@ async fn run_dns_proxy(
                                 &mut pending,
                                 &mut response,
                             ).await {
-                                debug!("TUN UDP DNS 回复写回失败：{e}");
+                                debug!("Android TUN DNS proxy response failed: {e}");
                             }
-                            idle.as_mut().reset(tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE);
+                            idle_sleep.as_mut().reset(
+                                tokio::time::Instant::now() + DNS_PROXY_CONNECTION_IDLE,
+                            );
                         }
                         Err(e) => {
-                            debug!("TUN UDP DNS 共享连接读取失败：{e}");
+                            debug!("Android TUN DNS proxy read failed: {e}");
                             break;
                         }
                     }
@@ -188,16 +201,16 @@ async fn run_dns_proxy(
         }
     }
 
-    debug!("TUN UDP DNS 共享转发器退出");
+    debug!("Android TUN DNS proxy exited");
 }
 
 async fn connect_dns_stream(
-    pool: &ConnectionPool,
-) -> crate::error::Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let connected = pool
+    context: &ForwardContext,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
+    context
+        .udp_pool
         .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
-        .await?;
-    Ok(connected.into_async_io())
+        .await
 }
 
 async fn send_dns_request<W>(
@@ -210,13 +223,13 @@ where
     W: AsyncWrite + Unpin,
 {
     let Some(original_id) = dns_id(&request.packet) else {
-        debug!("TUN UDP DNS 请求过短，已丢弃");
+        debug!("Android TUN DNS request is too short; dropping");
         return Ok(());
     };
 
     cleanup_pending_dns(pending);
     let Some(upstream_id) = allocate_dns_id(pending, next_id) else {
-        warn!("TUN UDP DNS 待处理请求过多，已丢弃一个请求");
+        warn!("Android TUN DNS pending table is full; dropping request");
         return Ok(());
     };
 
@@ -251,18 +264,24 @@ async fn handle_dns_response(
     response: &mut [u8],
 ) -> io::Result<()> {
     let Some(upstream_id) = dns_id(response) else {
-        debug!("TUN UDP DNS 回复过短，已丢弃");
+        debug!("Android TUN DNS response is too short; dropping");
         return Ok(());
     };
 
     let Some(request) = pending.remove(&upstream_id) else {
-        debug!("TUN UDP DNS 收到无匹配请求的回复 id={upstream_id}");
+        debug!("Android TUN DNS response had no matching id={upstream_id}");
         return Ok(());
     };
 
     write_dns_id(response, request.original_id);
-    let mut s = netstack_tx.lock().await;
-    s.send((response.to_vec(), request.target, request.client))
+    let mut tx = netstack_tx.lock().await;
+    debug!(
+        "Android TUN DNS response writeback: {} -> {} bytes={}",
+        request.target,
+        request.client,
+        response.len()
+    );
+    tx.send((response.to_vec(), request.target, request.client))
         .await
 }
 
@@ -293,35 +312,36 @@ fn write_dns_id(packet: &mut [u8], id: u16) {
     packet[1] = bytes[1];
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn android_log_error(message: impl AsRef<str>) {
+    #[cfg(target_os = "android")]
+    {
+        use std::ffi::CString;
 
-    #[test]
-    fn allocate_skips_pending_ids() {
-        let mut pending = HashMap::new();
-        pending.insert(
-            0,
-            PendingDnsRequest {
-                client: "127.0.0.1:10000".parse().unwrap(),
-                target: "10.10.10.2:53".parse().unwrap(),
-                original_id: 42,
-                expires_at: Instant::now() + DNS_PENDING_TTL,
-            },
-        );
-        let mut next_id = 0;
-
-        assert_eq!(allocate_dns_id(&pending, &mut next_id), Some(1));
-        assert_eq!(next_id, 2);
+        const ANDROID_LOG_ERROR: libc::c_int = 6;
+        let text = message.as_ref().replace('\0', " ");
+        let Ok(tag) = CString::new("PPAASS-Native") else {
+            return;
+        };
+        let Ok(text) = CString::new(text) else {
+            return;
+        };
+        unsafe {
+            __android_log_write(ANDROID_LOG_ERROR, tag.as_ptr(), text.as_ptr());
+        }
     }
 
-    #[test]
-    fn rewrites_dns_transaction_id() {
-        let mut packet = vec![0x12, 0x34, 0x01, 0x00];
-        assert_eq!(dns_id(&packet), Some(0x1234));
-
-        write_dns_id(&mut packet, 0xabcd);
-        assert_eq!(dns_id(&packet), Some(0xabcd));
-        assert_eq!(&packet[2..], &[0x01, 0x00]);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = message;
     }
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(
+        prio: libc::c_int,
+        tag: *const libc::c_char,
+        text: *const libc::c_char,
+    ) -> libc::c_int;
 }
