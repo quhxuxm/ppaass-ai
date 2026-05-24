@@ -5,7 +5,7 @@
 Android App 负责平台 VPN 层：
 
 - `PpaassVpnService` 请求并建立 Android `VpnService`。
-- Service 会把 App 自身从 VPN 中排除，避免 agent 到 proxy 的控制连接被重新绕回 TUN。
+- Service 会对 agent 到 proxy 的控制连接调用 `VpnService.protect()`，避免控制连接被重新绕回 TUN；这样也兼容 Android 的始终开启 VPN / 阻止无 VPN 连接模式。
 - 原始 VPN 文件描述符会被 detach 后传给 Rust JNI 库。
 
 Rust 库负责数据包和协议层：
@@ -61,6 +61,12 @@ Android native 内部会分别维护 `tcp_pool` 和 `udp_pool`；两者的 pool 
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
 - username，默认是 `user1`
 - RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
-- 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，同时 PPAASS Android Agent 自身会被排除以避免 proxy 连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
+- 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
+
+## 始终开启 VPN
+
+PPAASS Android Agent 声明支持 Android 系统设置里的“始终开启 VPN”。用户需要在系统设置中把 PPAASS 选为始终开启的 VPN；普通应用不能自行替用户打开该系统开关。
+
+当系统以始终开启模式拉起 Service 时，界面会显示 `Always-on VPN`，并禁用 App 内的停止按钮，断开操作交给 Android 系统设置处理。代理控制连接会在 native 建连前通过 `VpnService.protect(fd)` 排除出 VPN 路径，因此在“阻止无 VPN 连接”模式下也不会依赖把 App 自身加入 disallow-list。
 
 TUN 地址和 MTU 是 Android App 内部固定配置，分别为 `10.10.10.2/24`、禁用 IPv6、MTU 1500，因此 UI 中不会展示这些选项。Android 会指向 VPN 网络路径内的一个 routed DNS 地址；Rust 会把 UDP 53 端口包映射为 `ProxyDns`，因此最终由 proxy 机器按其系统配置选择上游 DNS。默认阻断 QUIC，以匹配 desktop TUN 模式，并让 Google Play / YouTube 在 proxy 路径无法可靠处理 UDP/443 时回退到 TCP/TLS。

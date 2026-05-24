@@ -13,11 +13,13 @@ pub(super) fn spawn_packet_bridge(
     stack: netstack_smoltcp::Stack,
     mtu: usize,
     shutdown: CancellationToken,
+    fatal_shutdown: CancellationToken,
 ) -> (JoinHandle<()>, JoinHandle<()>) {
     let (mut stack_sink, mut stack_stream) = stack.split();
 
     let input_device = device.clone();
     let input_shutdown = shutdown.clone();
+    let input_fatal_shutdown = fatal_shutdown.clone();
     let tun_to_stack = spawn_guarded("android tun_to_stack", async move {
         let mut buf = vec![0u8; mtu.max(1500) + 64];
         loop {
@@ -31,9 +33,14 @@ pub(super) fn spawn_packet_bridge(
                                 break;
                             }
                         }
-                        Ok(_) => continue,
+                        Ok(_) => {
+                            warn!("Android VPN fd returned EOF; stopping agent");
+                            input_fatal_shutdown.cancel();
+                            break;
+                        }
                         Err(e) => {
-                            warn!("failed to read Android VPN fd: {e}");
+                            warn!("failed to read Android VPN fd: {e}; stopping agent");
+                            input_fatal_shutdown.cancel();
                             break;
                         }
                     }
@@ -44,6 +51,7 @@ pub(super) fn spawn_packet_bridge(
     });
 
     let output_shutdown = shutdown;
+    let output_fatal_shutdown = fatal_shutdown;
     let stack_to_tun = spawn_guarded("android stack_to_tun", async move {
         loop {
             tokio::select! {
@@ -52,7 +60,8 @@ pub(super) fn spawn_packet_bridge(
                     match packet {
                         Some(Ok(packet)) => {
                             if let Err(e) = device.send(&packet).await {
-                                warn!("failed to write packet to Android VPN fd: {e}");
+                                warn!("failed to write packet to Android VPN fd: {e}; stopping agent");
+                                output_fatal_shutdown.cancel();
                                 break;
                             }
                         }

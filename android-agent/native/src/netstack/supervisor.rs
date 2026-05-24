@@ -86,8 +86,13 @@ fn start_netstack_generation(
         .ok_or_else(|| AndroidAgentError::Connection("netstack UDP socket unavailable".into()))?;
 
     let generation_shutdown = parent_shutdown.child_token();
-    let (tun_to_stack, stack_to_tun) =
-        spawn_packet_bridge(device, stack, mtu, generation_shutdown.clone());
+    let (tun_to_stack, stack_to_tun) = spawn_packet_bridge(
+        device,
+        stack,
+        mtu,
+        generation_shutdown.clone(),
+        parent_shutdown.clone(),
+    );
     let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
     let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, generation_shutdown.clone());
 

@@ -8,7 +8,10 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -24,22 +27,50 @@ import java.util.Set;
 public class PpaassVpnService extends VpnService {
     public static final String ACTION_START = "com.ppaass.ai.agent.START";
     public static final String ACTION_STOP = "com.ppaass.ai.agent.STOP";
+    public static final String EXTRA_STARTED_BY_APP = "com.ppaass.ai.agent.STARTED_BY_APP";
     public static final String PREF_RUNNING = "vpn_running";
+    public static final String PREF_SYSTEM_MANAGED = "vpn_system_managed";
 
+    private static final String TAG = "PpaassVpnService";
     private static final String CHANNEL_ID = "ppaass_vpn";
     private static final int NOTIFICATION_ID = 7001;
+    private static final long HEALTH_CHECK_INTERVAL_MS = 2_000L;
+
+    private static volatile boolean runningInProcess;
 
     private long nativeHandle;
     private ParcelFileDescriptor tun;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable nativeHealthCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (nativeHandle == 0) {
+                return;
+            }
+            if (!NativeAgent.isRunning(nativeHandle)) {
+                Log.w(TAG, "Native VPN agent exited; stopping service");
+                stopAgent();
+                return;
+            }
+            mainHandler.postDelayed(this, HEALTH_CHECK_INTERVAL_MS);
+        }
+    };
+
+    static boolean isRunningInProcess() {
+        return runningInProcess;
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopAgent();
+            return START_NOT_STICKY;
         } else {
-            startAgent();
+            boolean startedByApp = intent != null
+                    && intent.getBooleanExtra(EXTRA_STARTED_BY_APP, false);
+            startAgent(!startedByApp || isAlwaysOnVpn());
+            return START_STICKY;
         }
-        return START_STICKY;
     }
 
     @Override
@@ -48,14 +79,29 @@ public class PpaassVpnService extends VpnService {
         super.onDestroy();
     }
 
-    private void startAgent() {
+    @Override
+    public void onRevoke() {
+        Log.w(TAG, "VPN permission revoked by the system");
+        stopAgent();
+        super.onRevoke();
+    }
+
+    public boolean protectSocket(int socketFd) {
+        return protect(socketFd);
+    }
+
+    private void startAgent(boolean systemManaged) {
         if (nativeHandle != 0) {
+            runningInProcess = true;
+            startNativeHealthChecks();
             setRunning(true);
+            setSystemManaged(systemManaged);
             return;
         }
 
         startForeground(NOTIFICATION_ID, notification());
 
+        int rawFd = -1;
         try {
             JSONObject config = buildConfigJson();
             JSONObject tunConfig = config.getJSONObject("tun");
@@ -85,17 +131,27 @@ public class PpaassVpnService extends VpnService {
                 throw new IllegalStateException("VpnService establish returned null");
             }
 
-            int rawFd = tun.detachFd();
+            rawFd = tun.detachFd();
             tun = null;
-            nativeHandle = NativeAgent.start(rawFd, config.toString());
+            long handle = NativeAgent.start(rawFd, config.toString(), this);
+            rawFd = -1;
+            if (handle == 0) {
+                throw new IllegalStateException("Native agent returned an empty handle");
+            }
+            nativeHandle = handle;
+            runningInProcess = true;
+            startNativeHealthChecks();
             setRunning(true);
+            setSystemManaged(systemManaged);
         } catch (RuntimeException | JSONException error) {
+            closeDetachedFd(rawFd);
             stopAgent();
             throw new IllegalStateException("Failed to start PPAASS VPN", error);
         }
     }
 
     private void stopAgent() {
+        stopNativeHealthChecks();
         if (nativeHandle != 0) {
             NativeAgent.stop(nativeHandle);
             nativeHandle = 0;
@@ -108,8 +164,19 @@ public class PpaassVpnService extends VpnService {
             tun = null;
         }
         stopForeground(STOP_FOREGROUND_REMOVE);
+        runningInProcess = false;
         setRunning(false);
+        setSystemManaged(false);
         stopSelf();
+    }
+
+    private void startNativeHealthChecks() {
+        mainHandler.removeCallbacks(nativeHealthCheck);
+        mainHandler.postDelayed(nativeHealthCheck, HEALTH_CHECK_INTERVAL_MS);
+    }
+
+    private void stopNativeHealthChecks() {
+        mainHandler.removeCallbacks(nativeHealthCheck);
     }
 
     private void setRunning(boolean running) {
@@ -117,6 +184,27 @@ public class PpaassVpnService extends VpnService {
                 .edit()
                 .putBoolean(PREF_RUNNING, running)
                 .apply();
+    }
+
+    private void setSystemManaged(boolean managed) {
+        getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_SYSTEM_MANAGED, managed)
+                .apply();
+    }
+
+    private boolean isAlwaysOnVpn() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isAlwaysOn();
+    }
+
+    private void closeDetachedFd(int rawFd) {
+        if (rawFd < 0) {
+            return;
+        }
+        try {
+            ParcelFileDescriptor.adoptFd(rawFd).close();
+        } catch (IOException ignored) {
+        }
     }
 
     private JSONObject buildConfigJson() throws JSONException {
@@ -217,10 +305,6 @@ public class PpaassVpnService extends VpnService {
         selected.remove(getPackageName());
 
         if (selected.isEmpty()) {
-            try {
-                builder.addDisallowedApplication(getPackageName());
-            } catch (PackageManager.NameNotFoundException ignored) {
-            }
             return;
         }
 
