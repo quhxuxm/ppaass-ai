@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private EditText privateKey;
     private EditText tcpPoolSize;
     private EditText udpPoolSize;
+    private Spinner compressionMode;
     private Spinner tcpMode;
     private Spinner udpMode;
     private EditText yamuxTcpSessions;
@@ -149,6 +150,11 @@ public class MainActivity extends Activity {
                 prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
                 1,
                 InputType.TYPE_CLASS_NUMBER);
+        compressionMode = spinner(
+                root,
+                "Compression mode",
+                new String[]{"none", "lz4", "gzip", "zstd"},
+                prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE));
         tcpMode = spinner(
                 root,
                 "TCP mode",
@@ -392,6 +398,9 @@ public class MainActivity extends Activity {
         if (tcpMode != null) {
             tcpMode.setEnabled(editable);
         }
+        if (compressionMode != null) {
+            compressionMode.setEnabled(editable);
+        }
         if (udpMode != null) {
             udpMode.setEnabled(editable);
         }
@@ -424,6 +433,7 @@ public class MainActivity extends Activity {
                 .putBoolean("block_quic", blockQuic.isChecked())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
+                .putString("compression_mode", selectedCompressionMode())
                 .putString("tcp_mode", selectedTcpMode())
                 .putString("udp_mode", selectedUdpMode())
                 .putString("yamux_tcp_sessions", yamuxTcpSessions.getText().toString())
@@ -488,6 +498,17 @@ public class MainActivity extends Activity {
 
     private String selectedUdpMode() {
         return selectedTransportMode(udpMode, DefaultConfig.UDP_MODE);
+    }
+
+    private String selectedCompressionMode() {
+        if (compressionMode == null || compressionMode.getSelectedItem() == null) {
+            return DefaultConfig.COMPRESSION_MODE;
+        }
+        String value = compressionMode.getSelectedItem().toString().trim().toLowerCase();
+        if ("none".equals(value) || "lz4".equals(value) || "gzip".equals(value) || "zstd".equals(value)) {
+            return value;
+        }
+        return DefaultConfig.COMPRESSION_MODE;
     }
 
     private String selectedTransportMode(Spinner spinner, String fallback) {

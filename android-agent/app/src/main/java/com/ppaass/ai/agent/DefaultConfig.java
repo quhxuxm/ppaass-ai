@@ -8,6 +8,7 @@ final class DefaultConfig {
     static final boolean BLOCK_QUIC = true;
     static final int TCP_POOL_SIZE = 32;
     static final int UDP_POOL_SIZE = 32;
+    static final String COMPRESSION_MODE = "none";
     static final String TCP_MODE = "auto";
     static final String UDP_MODE = "auto";
     static final int TCP_YAMUX_SESSIONS = 5;
