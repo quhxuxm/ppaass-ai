@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
+    private AlertDialog appSelectorDialog;
     private Button vpnToggle;
     private TextView vpnStatus;
     private final List<View> editableControls = new ArrayList<>();
@@ -113,6 +114,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (appSelectorDialog != null) {
+            appSelectorDialog.dismiss();
+            appSelectorDialog = null;
+        }
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
         }
@@ -949,6 +954,10 @@ public class MainActivity extends Activity {
     }
 
     private void showAppSelector() {
+        if (appSelectorDialog != null && appSelectorDialog.isShowing()) {
+            return;
+        }
+
         List<AppEntry> apps = loadVpnCapableApps();
         Set<String> selected = selectedPackages();
         boolean[] checked = new boolean[apps.size()];
@@ -966,7 +975,7 @@ public class MainActivity extends Activity {
             adapter.notifyDataSetChanged();
         });
 
-        new AlertDialog.Builder(this)
+        appSelectorDialog = new AlertDialog.Builder(this)
                 .setTitle("VPN apps")
                 .setView(list)
                 .setPositiveButton("OK", (dialog, which) -> {
@@ -980,7 +989,9 @@ public class MainActivity extends Activity {
                     updateSelectedAppsSummary();
                 })
                 .setNegativeButton("Cancel", null)
-                .show();
+                .create();
+        appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
+        appSelectorDialog.show();
     }
 
     private List<AppEntry> loadVpnCapableApps() {
