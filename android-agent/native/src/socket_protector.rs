@@ -1,22 +1,42 @@
-use std::io;
 use std::sync::Mutex;
 
-use jni::objects::{GlobalRef, JObject, JValue};
-use jni::sys::jint;
-use jni::{JNIEnv, JavaVM};
+#[cfg(unix)]
+use std::io;
 
+use jni::JNIEnv;
+#[cfg(unix)]
+use jni::JavaVM;
+use jni::objects::JObject;
+#[cfg(unix)]
+use jni::objects::{GlobalRef, JValue};
+#[cfg(unix)]
+use jni::sys::jint;
+
+#[cfg(unix)]
 struct SocketProtector {
     vm: JavaVM,
     service: GlobalRef,
 }
 
+#[cfg(not(unix))]
+struct SocketProtector;
+
 static SOCKET_PROTECTOR: Mutex<Option<SocketProtector>> = Mutex::new(None);
 
 pub fn install(env: &mut JNIEnv<'_>, service: JObject<'_>) -> jni::errors::Result<()> {
+    #[cfg(unix)]
     let protector = SocketProtector {
         vm: env.get_java_vm()?,
         service: env.new_global_ref(service)?,
     };
+
+    #[cfg(not(unix))]
+    let protector = {
+        let _ = env;
+        let _ = service;
+        SocketProtector
+    };
+
     *SOCKET_PROTECTOR
         .lock()
         .expect("socket protector mutex poisoned") = Some(protector);
@@ -62,12 +82,4 @@ pub fn protect_fd(fd: std::os::fd::RawFd) -> io::Result<()> {
             "VpnService.protect returned false",
         ))
     }
-}
-
-#[cfg(not(unix))]
-pub fn protect_fd(_fd: i32) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Android socket protection is only supported on Unix-like targets",
-    ))
 }

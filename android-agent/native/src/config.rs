@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use socket2::Socket;
 
 use crate::error::{AndroidAgentError, Result};
-use crate::socket_protector;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AndroidAgentConfig {
@@ -110,7 +109,7 @@ impl ClientConnectionConfig for AndroidAgentConfig {
     fn protect_socket(&self, socket: &Socket, _dst: std::net::SocketAddr) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
 
-        socket_protector::protect_fd(socket.as_raw_fd())
+        crate::socket_protector::protect_fd(socket.as_raw_fd())
     }
 
     #[cfg(not(unix))]
