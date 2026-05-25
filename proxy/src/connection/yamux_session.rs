@@ -64,15 +64,17 @@ impl ServerConnection {
         let egress_state = self.egress_state.clone();
         let bandwidth_monitor = self.bandwidth_monitor.clone();
         let username = self.user_config.as_ref().map(|c| c.username.clone());
+        let mut stream_tasks = Vec::new();
 
         while let Some(result) = session.next().await {
             match result {
                 Ok(stream) => {
+                    prune_finished_yamux_stream_tasks(&mut stream_tasks);
                     let proxy_config = proxy_config.clone();
                     let egress_state = egress_state.clone();
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
-                    spawn_guarded("proxy yamux tcp stream", async move {
+                    let task = spawn_guarded("proxy yamux tcp stream", async move {
                         if let Err(err) = handle_yamux_tcp_stream(
                             stream,
                             proxy_config,
@@ -85,6 +87,7 @@ impl ServerConnection {
                             debug!("Yamux TCP 子流已结束：{err}");
                         }
                     });
+                    stream_tasks.push(task);
                 }
                 Err(err) => {
                     debug!("TCP Yamux 会话结束 stream_id={stream_id}: {err}");
@@ -93,6 +96,7 @@ impl ServerConnection {
             }
         }
 
+        abort_yamux_stream_tasks("TCP", &stream_id, stream_tasks).await;
         Ok(())
     }
 
@@ -160,16 +164,18 @@ impl ServerConnection {
         let bandwidth_monitor = self.bandwidth_monitor.clone();
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let connection_limiter = self.connection_limiter.clone();
+        let mut stream_tasks = Vec::new();
 
         while let Some(result) = session.next().await {
             match result {
                 Ok(stream) => {
+                    prune_finished_yamux_stream_tasks(&mut stream_tasks);
                     let proxy_config = proxy_config.clone();
                     let egress_state = egress_state.clone();
                     let bandwidth_monitor = bandwidth_monitor.clone();
                     let username = username.clone();
                     let connection_limiter = connection_limiter.clone();
-                    spawn_guarded("proxy yamux udp stream", async move {
+                    let task = spawn_guarded("proxy yamux udp stream", async move {
                         if let Err(err) = handle_yamux_udp_stream(
                             stream,
                             proxy_config,
@@ -183,6 +189,7 @@ impl ServerConnection {
                             debug!("Yamux UDP 子流已结束：{err}");
                         }
                     });
+                    stream_tasks.push(task);
                 }
                 Err(err) => {
                     debug!("UDP Yamux 会话结束 stream_id={stream_id}: {err}");
@@ -191,6 +198,40 @@ impl ServerConnection {
             }
         }
 
+        abort_yamux_stream_tasks("UDP", &stream_id, stream_tasks).await;
         Ok(())
+    }
+}
+
+fn prune_finished_yamux_stream_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
+    tasks.retain(|task| !task.is_finished());
+}
+
+async fn abort_yamux_stream_tasks(
+    transport: &str,
+    stream_id: &str,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+) {
+    if tasks.is_empty() {
+        return;
+    }
+
+    let task_count = tasks.len();
+    debug!(
+        "{transport} Yamux 会话结束 stream_id={stream_id}，正在关闭 {task_count} 个未完成子流任务"
+    );
+
+    for task in &tasks {
+        task.abort();
+    }
+
+    for task in tasks {
+        match task.await {
+            Ok(()) => {}
+            Err(err) if err.is_cancelled() => {}
+            Err(err) => {
+                debug!("{transport} Yamux 子流任务回收时返回错误 stream_id={stream_id}: {err}")
+            }
+        }
     }
 }

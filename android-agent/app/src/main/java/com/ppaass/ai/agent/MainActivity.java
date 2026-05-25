@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
+    private AlertDialog appSelectorDialog;
     private Button vpnToggle;
     private TextView vpnStatus;
     private final List<View> editableControls = new ArrayList<>();
@@ -113,6 +114,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (appSelectorDialog != null) {
+            appSelectorDialog.dismiss();
+            appSelectorDialog = null;
+        }
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
         }
@@ -949,6 +954,10 @@ public class MainActivity extends Activity {
     }
 
     private void showAppSelector() {
+        if (appSelectorDialog != null && appSelectorDialog.isShowing()) {
+            return;
+        }
+
         List<AppEntry> apps = loadVpnCapableApps();
         Set<String> selected = selectedPackages();
         boolean[] checked = new boolean[apps.size()];
@@ -961,14 +970,49 @@ public class MainActivity extends Activity {
         ListView list = new ListView(this);
         list.setAdapter(adapter);
         list.setFastScrollEnabled(true);
+        list.setDivider(null);
+        list.setDividerHeight(0);
+        list.setCacheColorHint(Color.TRANSPARENT);
+        list.setSelector(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+
+        TextView selectionSummary = chip(appSelectionSummary(checked), COLOR_STATUS_STOPPED);
         list.setOnItemClickListener((parent, view, position, id) -> {
             checked[position] = !checked[position];
+            selectionSummary.setText(appSelectionSummary(checked));
             adapter.notifyDataSetChanged();
         });
 
-        new AlertDialog.Builder(this)
-                .setTitle("VPN apps")
-                .setView(list)
+        LinearLayout dialogContent = new LinearLayout(this);
+        dialogContent.setOrientation(LinearLayout.VERTICAL);
+        dialogContent.setPadding(dp(18), dp(16), dp(18), 0);
+
+        LinearLayout titleRow = horizontalRow();
+        TextView dialogTitle = titleText("VPN apps", 20f);
+        titleRow.addView(dialogTitle, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        titleRow.addView(selectionSummary, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        dialogContent.addView(titleRow, matchWrap());
+
+        TextView dialogSubtitle = mutedText("Only selected apps use the VPN path", 13f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(4), 0, dp(12));
+        dialogContent.addView(dialogSubtitle, subtitleParams);
+
+        LinearLayout listShell = new LinearLayout(this);
+        listShell.setOrientation(LinearLayout.VERTICAL);
+        listShell.setPadding(dp(4), dp(4), dp(4), dp(4));
+        listShell.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        listShell.addView(list, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(460)));
+        dialogContent.addView(listShell, matchWrap());
+
+        appSelectorDialog = new AlertDialog.Builder(this)
+                .setView(dialogContent)
                 .setPositiveButton("OK", (dialog, which) -> {
                     Set<String> next = new HashSet<>();
                     for (int i = 0; i < apps.size(); i++) {
@@ -980,7 +1024,33 @@ public class MainActivity extends Activity {
                     updateSelectedAppsSummary();
                 })
                 .setNegativeButton("Cancel", null)
-                .show();
+                .setNeutralButton("Clear all", null)
+                .create();
+        appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
+        appSelectorDialog.setOnShowListener(dialog -> {
+            appSelectorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT_DARK);
+            appSelectorDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_MUTED);
+            Button clearButton = appSelectorDialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            clearButton.setTextColor(COLOR_ACTION_STOP);
+            clearButton.setOnClickListener(view -> {
+                for (int i = 0; i < checked.length; i++) {
+                    checked[i] = false;
+                }
+                selectionSummary.setText(appSelectionSummary(checked));
+                adapter.notifyDataSetChanged();
+            });
+        });
+        appSelectorDialog.show();
+    }
+
+    private String appSelectionSummary(boolean[] checked) {
+        int count = 0;
+        for (boolean item : checked) {
+            if (item) {
+                count++;
+            }
+        }
+        return count == 0 ? "All apps" : count + " selected";
     }
 
     private List<AppEntry> loadVpnCapableApps() {
@@ -1083,29 +1153,56 @@ public class MainActivity extends Activity {
         public View getView(int position, View convertView, ViewGroup parent) {
             AppRow row;
             if (convertView == null) {
+                LinearLayout outer = new LinearLayout(MainActivity.this);
+                outer.setOrientation(LinearLayout.VERTICAL);
+                outer.setPadding(0, 0, 0, dp(4));
+
                 LinearLayout container = new LinearLayout(MainActivity.this);
                 container.setOrientation(LinearLayout.HORIZONTAL);
                 container.setGravity(Gravity.CENTER_VERTICAL);
-                container.setPadding(dp(12), dp(8), dp(12), dp(8));
+                container.setMinimumHeight(dp(68));
+                container.setPadding(dp(12), dp(10), dp(12), dp(10));
 
                 ImageView icon = new ImageView(MainActivity.this);
-                LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+                icon.setPadding(dp(4), dp(4), dp(4), dp(4));
+                icon.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+                LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(44), dp(44));
                 iconParams.setMargins(0, 0, dp(12), 0);
                 container.addView(icon, iconParams);
 
                 LinearLayout textColumn = new LinearLayout(MainActivity.this);
                 textColumn.setOrientation(LinearLayout.VERTICAL);
 
+                LinearLayout labelRow = horizontalRow();
                 TextView label = new TextView(MainActivity.this);
                 label.setSingleLine(true);
                 label.setEllipsize(TextUtils.TruncateAt.END);
                 label.setTextSize(15f);
-                textColumn.addView(label, matchWrap());
+                label.setTypeface(Typeface.DEFAULT_BOLD);
+                labelRow.addView(label, new LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f));
+
+                TextView systemBadge = new TextView(MainActivity.this);
+                systemBadge.setText("System");
+                systemBadge.setTextSize(11f);
+                systemBadge.setTextColor(COLOR_MUTED);
+                systemBadge.setTypeface(Typeface.DEFAULT_BOLD);
+                systemBadge.setPadding(dp(8), dp(2), dp(8), dp(2));
+                systemBadge.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+                LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                badgeParams.setMargins(dp(8), 0, 0, 0);
+                labelRow.addView(systemBadge, badgeParams);
+                textColumn.addView(labelRow, matchWrap());
 
                 TextView packageName = new TextView(MainActivity.this);
                 packageName.setSingleLine(true);
                 packageName.setEllipsize(TextUtils.TruncateAt.END);
                 packageName.setTextSize(12f);
+                packageName.setTextColor(COLOR_MUTED);
                 textColumn.addView(packageName, matchWrap());
 
                 LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
@@ -1121,32 +1218,50 @@ public class MainActivity extends Activity {
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
-                row = new AppRow(icon, label, packageName, checkBox);
-                container.setTag(row);
-                convertView = container;
+                outer.addView(container, matchWrap());
+
+                row = new AppRow(container, icon, label, packageName, systemBadge, checkBox);
+                outer.setTag(row);
+                convertView = outer;
             } else {
                 row = (AppRow) convertView.getTag();
             }
 
             AppEntry app = getItem(position);
+            boolean selected = checked[position];
             row.icon.setImageDrawable(app.icon);
-            row.label.setText(app.label + (app.systemApp ? " (system)" : ""));
+            row.item.setBackground(rounded(
+                    selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
+                    selected ? COLOR_ACCENT_SOFT : COLOR_BORDER));
+            row.label.setText(app.label);
+            row.label.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_TEXT);
             row.packageName.setText(app.packageName);
-            row.checkBox.setChecked(checked[position]);
+            row.systemBadge.setVisibility(app.systemApp ? View.VISIBLE : View.GONE);
+            row.checkBox.setChecked(selected);
             return convertView;
         }
     }
 
     private static final class AppRow {
+        final View item;
         final ImageView icon;
         final TextView label;
         final TextView packageName;
+        final TextView systemBadge;
         final CheckBox checkBox;
 
-        AppRow(ImageView icon, TextView label, TextView packageName, CheckBox checkBox) {
+        AppRow(
+                View item,
+                ImageView icon,
+                TextView label,
+                TextView packageName,
+                TextView systemBadge,
+                CheckBox checkBox) {
+            this.item = item;
             this.icon = icon;
             this.label = label;
             this.packageName = packageName;
+            this.systemBadge = systemBadge;
             this.checkBox = checkBox;
         }
     }
