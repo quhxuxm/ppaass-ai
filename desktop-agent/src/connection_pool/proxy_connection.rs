@@ -11,7 +11,7 @@ use crate::error::{AgentError, Result};
 use common::{
     AuthenticatedConnection, BindInterface, ClientConnectionConfig, YamuxClientConnection,
 };
-use protocol::{Address, TransportProtocol};
+use protocol::{Address, CompressionMode, TransportProtocol};
 use tracing::{debug, info, instrument};
 
 /// ClientConnection 特征的配置适配器
@@ -63,6 +63,10 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     fn timeout_duration(&self) -> Duration {
         // 认证 TCP 连接和握手共用配置的连接超时。
         Duration::from_secs(self.config.connect_timeout_secs)
+    }
+
+    fn compression_mode(&self) -> CompressionMode {
+        self.config.get_compression_mode()
     }
 
     fn bind_addr(&self) -> Option<SocketAddr> {
@@ -171,5 +175,27 @@ impl ProxyConnection {
             stream.reader,
             request_id,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::ClientConnectionConfig;
+
+    const MINIMAL_AGENT_CONFIG: &str = r#"
+listen_addr = "127.0.0.1:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+compression_mode = "gzip"
+"#;
+
+    #[test]
+    fn connection_config_adapter_forwards_compression_mode() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        let adapter = AgentClientConfig::new(&config, None, None);
+
+        assert_eq!(adapter.compression_mode(), CompressionMode::Gzip);
     }
 }

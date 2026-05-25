@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 common = { path = "../../common" }
-protocol = { path = "../../protocol" }
+protocol = { path = "../../protocol", features = ["zstd-compression"] }
 
 bytes.workspace = true
 dashmap.workspace = true

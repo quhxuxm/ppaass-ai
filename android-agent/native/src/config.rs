@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use common::{ClientConnectionConfig, TransportConfig, YamuxConfig};
+use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
 
@@ -20,6 +21,9 @@ pub struct AndroidAgentConfig {
 
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
+
+    #[serde(default = "default_compression_mode")]
+    pub compression_mode: String,
 
     #[serde(default = "default_tcp_pool_size")]
     pub tcp_pool_size: usize,
@@ -105,6 +109,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
         Duration::from_secs(self.connect_timeout_secs)
     }
 
+    fn compression_mode(&self) -> CompressionMode {
+        self.compression_mode.parse().unwrap_or_default()
+    }
+
     #[cfg(unix)]
     fn protect_socket(&self, socket: &Socket, _dst: std::net::SocketAddr) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
@@ -120,6 +128,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_compression_mode() -> String {
+    "none".to_string()
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {

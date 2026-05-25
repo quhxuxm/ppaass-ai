@@ -53,7 +53,7 @@ impl AuthenticatedConnection {
         }
 
         // 2. 设置编解码器
-        let cipher_state = Arc::new(CipherState::new());
+        let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
         let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
         let (mut writer, mut reader) = framed.split();
 

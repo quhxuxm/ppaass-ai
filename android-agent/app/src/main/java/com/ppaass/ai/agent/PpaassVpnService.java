@@ -235,6 +235,8 @@ public class PpaassVpnService extends VpnService {
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", DefaultConfig.RUNTIME_THREADS)
                 .put("connect_timeout_secs", 30)
+                .put("compression_mode", normalizeCompressionMode(
+                        prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE)))
                 .put("tcp_pool_size", parseNonNegativeInt(
                         prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
                         DefaultConfig.TCP_POOL_SIZE))
@@ -384,6 +386,20 @@ public class PpaassVpnService extends VpnService {
             return normalized;
         }
         return fallback;
+    }
+
+    private String normalizeCompressionMode(String value) {
+        if (value == null) {
+            return DefaultConfig.COMPRESSION_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("none".equals(normalized)
+                || "lz4".equals(normalized)
+                || "gzip".equals(normalized)
+                || "zstd".equals(normalized)) {
+            return normalized;
+        }
+        return DefaultConfig.COMPRESSION_MODE;
     }
 
     private List<String> tokens(String value) {

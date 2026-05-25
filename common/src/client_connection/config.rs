@@ -1,3 +1,4 @@
+use protocol::CompressionMode;
 use socket2::Socket;
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
 
@@ -21,6 +22,11 @@ pub trait ClientConnectionConfig: Debug {
 
     /// 连接操作的超时时长
     fn timeout_duration(&self) -> Duration;
+
+    /// Agent -> proxy 消息的压缩模式。
+    fn compression_mode(&self) -> CompressionMode {
+        CompressionMode::None
+    }
 
     /// 可选的本地套接字绑定地址。
     /// 当返回 `Some` 时，使用 [`tokio::net::TcpSocket`] 在连接前绑定到该地址，
