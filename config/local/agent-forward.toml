@@ -8,6 +8,9 @@ private_key_path = "keys/user1.pem"
 tcp_pool_size = 50
 udp_pool_size = 5
 connect_timeout_secs = 20
+# Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
+# 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+compression_mode = "lz4"
 
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
 # 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），

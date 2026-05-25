@@ -1,5 +1,6 @@
 use crate::direct_access::DirectAccessConfig;
 use common::{TransportConfig, YamuxConfig};
+use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -21,6 +22,11 @@ pub struct AgentConfig {
 
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
+
+    /// Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
+    /// 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+    #[serde(default = "default_compression_mode")]
+    pub compression_mode: String,
 
     /// 连接池中连接的最大存活时间（秒）。
     /// 超过此时间的连接会被丢弃并替换为新连接，避免因代理端的空闲超时
@@ -172,6 +178,10 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
+fn default_compression_mode() -> String {
+    "none".to_string()
+}
+
 fn default_pool_max_connection_age_secs() -> u64 {
     // 默认 90 秒 — 低于代理端默认的 pre_connect_idle_timeout_secs (120 秒)。
     // 确保池中连接在代理端关闭之前被淘汰，避免使用过期连接导致请求失败。
@@ -204,5 +214,37 @@ impl AgentConfig {
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
         Ok(())
+    }
+
+    pub fn get_compression_mode(&self) -> CompressionMode {
+        self.compression_mode.parse().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL_AGENT_CONFIG: &str = r#"
+listen_addr = "127.0.0.1:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#;
+
+    #[test]
+    fn compression_mode_defaults_to_none() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert_eq!(config.get_compression_mode(), CompressionMode::None);
+    }
+
+    #[test]
+    fn parses_compression_mode() {
+        let config: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + r#"compression_mode = "lz4""#))
+                .unwrap();
+
+        assert_eq!(config.get_compression_mode(), CompressionMode::Lz4);
     }
 }

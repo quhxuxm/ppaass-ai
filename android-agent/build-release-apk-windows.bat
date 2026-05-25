@@ -32,7 +32,13 @@ if errorlevel 1 (
 )
 
 set "ZIPALIGN="
-for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\zipalign.exe" 2^>nul') do set "ZIPALIGN=%%T"
+for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\zipalign.exe" 2^>nul') do set "ZIPALIGN=%%T"
+if not defined ZIPALIGN (
+  for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\zipalign.exe" 2^>nul') do set "ZIPALIGN=%%T"
+)
+if not defined ZIPALIGN (
+  for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\zipalign" 2^>nul') do set "ZIPALIGN=%%T"
+)
 if not defined ZIPALIGN (
   for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\zipalign" 2^>nul') do set "ZIPALIGN=%%T"
 )
@@ -43,9 +49,18 @@ if not defined ZIPALIGN (
 )
 
 set "APKSIGNER="
-for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\apksigner.bat" 2^>nul') do set "APKSIGNER=%%T"
+for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\apksigner.bat" 2^>nul') do set "APKSIGNER=%%T"
+if not defined APKSIGNER (
+  for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\apksigner.bat" 2^>nul') do set "APKSIGNER=%%T"
+)
+if not defined APKSIGNER (
+  for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\apksigner.exe" 2^>nul') do set "APKSIGNER=%%T"
+)
 if not defined APKSIGNER (
   for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\apksigner.exe" 2^>nul') do set "APKSIGNER=%%T"
+)
+if not defined APKSIGNER (
+  for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\apksigner" 2^>nul') do set "APKSIGNER=%%T"
 )
 if not defined APKSIGNER (
   for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\*\apksigner" 2^>nul') do set "APKSIGNER=%%T"
@@ -66,7 +81,13 @@ if exist "gradlew.bat" (
 )
 
 if not defined GRADLE_CMD (
-  for /f "delims=" %%G in ('dir /b /s "%USERPROFILE%\.gradle\wrapper\dists\*\*\*\bin\gradle.bat" 2^>nul') do (
+  for /f "delims=" %%G in ('dir /b /s "%USERPROFILE%\.gradle\codex-dists\gradle.bat" 2^>nul') do (
+    if not defined GRADLE_CMD set "GRADLE_CMD=%%G"
+  )
+)
+
+if not defined GRADLE_CMD (
+  for /f "delims=" %%G in ('dir /b /s "%USERPROFILE%\.gradle\wrapper\dists\gradle.bat" 2^>nul') do (
     if not defined GRADLE_CMD set "GRADLE_CMD=%%G"
   )
 )

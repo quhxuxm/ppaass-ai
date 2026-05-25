@@ -10,7 +10,9 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
@@ -41,8 +43,20 @@ import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
-    private static final int COLOR_STOPPED = Color.rgb(46, 125, 50);
-    private static final int COLOR_RUNNING = Color.rgb(211, 47, 47);
+    private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
+    private static final int COLOR_BACKGROUND = Color.rgb(246, 248, 251);
+    private static final int COLOR_SURFACE = Color.WHITE;
+    private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
+    private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
+    private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
+    private static final int COLOR_BORDER = Color.rgb(226, 232, 240);
+    private static final int COLOR_ACCENT = Color.rgb(37, 99, 235);
+    private static final int COLOR_ACCENT_DARK = Color.rgb(29, 78, 216);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(219, 234, 254);
+    private static final int COLOR_ACTION_START = Color.rgb(15, 118, 110);
+    private static final int COLOR_ACTION_STOP = Color.rgb(220, 38, 38);
+    private static final int COLOR_STATUS_RUNNING = Color.rgb(22, 163, 74);
+    private static final int COLOR_STATUS_STOPPED = Color.rgb(100, 116, 139);
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
@@ -69,6 +83,10 @@ public class MainActivity extends Activity {
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
     private Button vpnToggle;
+    private TextView vpnStatus;
+    private final List<View> editableControls = new ArrayList<>();
+    private final List<Button> configTabButtons = new ArrayList<>();
+    private final List<View> configTabPages = new ArrayList<>();
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
@@ -80,7 +98,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        configureWindow();
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        migrateModeDefaults();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
     }
@@ -107,175 +127,286 @@ public class MainActivity extends Activity {
         }
     }
 
+    @SuppressWarnings("deprecation")
+    private void configureWindow() {
+        getWindow().setStatusBarColor(COLOR_BACKGROUND);
+        getWindow().setNavigationBarColor(COLOR_SURFACE);
+
+        int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+    }
+
+    private void migrateModeDefaults() {
+        if (prefs.getBoolean(PREF_MODE_DEFAULTS_MIGRATED, false)) {
+            return;
+        }
+
+        String compression = prefs.getString("compression_mode", "none");
+        String tcp = prefs.getString("tcp_mode", "auto");
+        String udp = prefs.getString("udp_mode", "auto");
+        SharedPreferences.Editor editor = prefs.edit()
+                .putBoolean(PREF_MODE_DEFAULTS_MIGRATED, true);
+
+        if ("none".equalsIgnoreCase(compression)
+                && "auto".equalsIgnoreCase(tcp)
+                && "auto".equalsIgnoreCase(udp)) {
+            editor.putString("compression_mode", DefaultConfig.COMPRESSION_MODE)
+                    .putString("tcp_mode", DefaultConfig.TCP_MODE)
+                    .putString("udp_mode", DefaultConfig.UDP_MODE);
+        }
+
+        editor.apply();
+    }
+
     private void buildUi() {
+        editableControls.clear();
+        configTabButtons.clear();
+        configTabPages.clear();
+
         ScrollView scroll = new ScrollView(this);
         scroll.setClipToPadding(false);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(COLOR_BACKGROUND);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int horizontalPadding = dp(20);
-        int topPadding = dp(32);
-        int bottomPadding = dp(28);
+        int horizontalPadding = dp(16);
+        int topPadding = dp(20);
+        int bottomPadding = dp(24);
         root.setPadding(horizontalPadding, topPadding, horizontalPadding, bottomPadding);
         applySystemBarPadding(root, horizontalPadding, topPadding, horizontalPadding, bottomPadding);
         scroll.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText(getString(R.string.app_name));
-        title.setTextSize(24f);
-        root.addView(title, matchWrap());
+        LinearLayout header = panel(root);
+        header.setPadding(dp(18), dp(18), dp(18), dp(18));
+        LinearLayout headerRow = horizontalRow();
 
-        proxyAddrs = field(root, "Proxy addrs", prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR));
-        username = field(root, "Username", prefs.getString("username", DefaultConfig.USERNAME));
-        privateKey = field(
-                root,
-                "Private key PEM",
-                DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
-                8,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        ImageView appIcon = new ImageView(this);
+        appIcon.setImageResource(R.drawable.ic_vpn);
+        appIcon.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        appIcon.setPadding(dp(10), dp(10), dp(10), dp(10));
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        iconParams.setMargins(0, 0, dp(12), 0);
+        headerRow.addView(appIcon, iconParams);
 
-        blockQuic = new Switch(this);
-        blockQuic.setText("Block QUIC");
-        blockQuic.setChecked(prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
-        root.addView(blockQuic, matchWrap());
+        LinearLayout titleColumn = new LinearLayout(this);
+        titleColumn.setOrientation(LinearLayout.VERTICAL);
+        TextView title = titleText(getString(R.string.app_name), 24f);
+        titleColumn.addView(title, matchWrap());
 
-        tcpPoolSize = field(
-                root,
-                "TCP pool size",
-                prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
-        udpPoolSize = field(
-                root,
-                "UDP pool size",
-                prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
+        TextView subtitle = mutedText("Tunnel dashboard", 13f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(2), 0, 0);
+        titleColumn.addView(subtitle, subtitleParams);
+
+        vpnStatus = chip("Stopped", COLOR_STATUS_STOPPED);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusParams.setMargins(0, dp(10), 0, 0);
+        titleColumn.addView(vpnStatus, statusParams);
+        headerRow.addView(titleColumn, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        vpnToggle = actionButton("Start", COLOR_ACTION_START);
+        vpnToggle.setOnClickListener(view -> toggleVpn());
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(112), dp(48));
+        headerRow.addView(vpnToggle, toggleParams);
+        header.addView(headerRow, matchWrap());
+
+        LinearLayout apps = panel(root);
+        sectionTitle(apps, "VPN apps");
+
+        selectAppsButton = new Button(this);
+        selectAppsButton.setText("Choose");
+        selectAppsButton.setAllCaps(false);
+        selectAppsButton.setTextSize(14f);
+        selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
+        selectAppsButton.setTextColor(COLOR_ACCENT_DARK);
+        selectAppsButton.setSingleLine(true);
+        selectAppsButton.setMinHeight(0);
+        selectAppsButton.setMinWidth(0);
+        selectAppsButton.setPadding(dp(14), 0, dp(14), 0);
+        selectAppsButton.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        selectAppsButton.setOnClickListener(view -> showAppSelector());
+        trackEditable(selectAppsButton);
+        selectedAppsSummary = new TextView(this);
+        selectedAppsSummary.setTextSize(16f);
+        selectedAppsSummary.setTypeface(Typeface.DEFAULT_BOLD);
+        selectedAppsSummary.setTextColor(COLOR_MUTED);
+        updateSelectedAppsSummary();
+
+        LinearLayout appsRow = horizontalRow();
+        appsRow.addView(selectedAppsSummary, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        LinearLayout.LayoutParams selectAppsParams = new LinearLayout.LayoutParams(dp(104), dp(42));
+        appsRow.addView(selectAppsButton, selectAppsParams);
+        LinearLayout.LayoutParams appsRowParams = matchWrap();
+        appsRowParams.setMargins(0, dp(4), 0, 0);
+        apps.addView(appsRow, appsRowParams);
+
+        LinearLayout configPanel = panel(root);
+        sectionTitle(configPanel, "Configuration");
+        LinearLayout tabBar = tabBar();
+        configPanel.addView(tabBar, matchWrap());
+
+        LinearLayout runtime = tabPage(configPanel);
+        LinearLayout tcpYamux = tabPage(configPanel);
+        LinearLayout udpYamux = tabPage(configPanel);
+        LinearLayout connection = tabPage(configPanel);
+
+        addConfigTab(tabBar, "Runtime", runtime);
+        addConfigTab(tabBar, "TCP Yamux", tcpYamux);
+        addConfigTab(tabBar, "UDP Yamux", udpYamux);
+        addConfigTab(tabBar, "Connection", connection);
+
+        blockQuic = switchControl(runtime, "Block QUIC", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         compressionMode = spinner(
-                root,
+                runtime,
                 "Compression mode",
                 new String[]{"none", "lz4", "gzip", "zstd"},
                 prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE));
         tcpMode = spinner(
-                root,
+                runtime,
                 "TCP mode",
                 new String[]{"auto", "yamux", "legacy"},
                 prefs.getString("tcp_mode", DefaultConfig.TCP_MODE));
         udpMode = spinner(
-                root,
+                runtime,
                 "UDP mode",
                 new String[]{"auto", "yamux", "legacy"},
                 prefs.getString("udp_mode", DefaultConfig.UDP_MODE));
-        yamuxTcpSessions = field(
-                root,
+        tcpPoolSize = numberControl(
+                runtime,
+                "TCP pool size",
+                prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
+                1,
+                0);
+        udpPoolSize = numberControl(
+                runtime,
+                "UDP pool size",
+                prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
+                1,
+                0);
+
+        yamuxTcpSessions = numberControl(
+                tcpYamux,
                 "TCP Yamux sessions",
                 prefs.getString(
                         "yamux_tcp_sessions",
                         String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxTcpMaxStreamsPerSession = field(
-                root,
+                1);
+        yamuxTcpMaxStreamsPerSession = numberControl(
+                tcpYamux,
                 "TCP Yamux max streams/session",
                 prefs.getString(
                         "yamux_tcp_max_streams_per_session",
                         String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxTcpOpenStreamTimeoutSecs = field(
-                root,
+                1);
+        yamuxTcpOpenStreamTimeoutSecs = numberControl(
+                tcpYamux,
                 "TCP Yamux open stream timeout",
                 prefs.getString(
                         "yamux_tcp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxTcpKeepaliveIntervalSecs = field(
-                root,
+                1);
+        yamuxTcpKeepaliveIntervalSecs = numberControl(
+                tcpYamux,
                 "TCP Yamux keepalive interval",
                 prefs.getString(
                         "yamux_tcp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxTcpConnectionWriteTimeoutSecs = field(
-                root,
+                5,
+                0);
+        yamuxTcpConnectionWriteTimeoutSecs = numberControl(
+                tcpYamux,
                 "TCP Yamux write timeout",
                 prefs.getString(
                         "yamux_tcp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxTcpStreamWindowSizeKb = field(
-                root,
+                1);
+        yamuxTcpStreamWindowSizeKb = numberControl(
+                tcpYamux,
                 "TCP Yamux stream window KB",
                 prefs.getString(
                         "yamux_tcp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpSessions = field(
-                root,
+                256,
+                DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
+
+        yamuxUdpSessions = numberControl(
+                udpYamux,
                 "UDP Yamux sessions",
                 prefs.getString(
                         "yamux_udp_sessions",
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpMaxStreamsPerSession = field(
-                root,
+                1);
+        yamuxUdpMaxStreamsPerSession = numberControl(
+                udpYamux,
                 "UDP Yamux max streams/session",
                 prefs.getString(
                         "yamux_udp_max_streams_per_session",
                         String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpOpenStreamTimeoutSecs = field(
-                root,
+                1);
+        yamuxUdpOpenStreamTimeoutSecs = numberControl(
+                udpYamux,
                 "UDP Yamux open stream timeout",
                 prefs.getString(
                         "yamux_udp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpKeepaliveIntervalSecs = field(
-                root,
+                1);
+        yamuxUdpKeepaliveIntervalSecs = numberControl(
+                udpYamux,
                 "UDP Yamux keepalive interval",
                 prefs.getString(
                         "yamux_udp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpConnectionWriteTimeoutSecs = field(
-                root,
+                5,
+                0);
+        yamuxUdpConnectionWriteTimeoutSecs = numberControl(
+                udpYamux,
                 "UDP Yamux write timeout",
                 prefs.getString(
                         "yamux_udp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
-                InputType.TYPE_CLASS_NUMBER);
-        yamuxUdpStreamWindowSizeKb = field(
-                root,
+                1);
+        yamuxUdpStreamWindowSizeKb = numberControl(
+                udpYamux,
                 "UDP Yamux stream window KB",
                 prefs.getString(
                         "yamux_udp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
-                1,
-                InputType.TYPE_CLASS_NUMBER);
+                256,
+                DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
 
-        selectAppsButton = new Button(this);
-        selectAppsButton.setText("Select VPN apps");
-        selectAppsButton.setOnClickListener(view -> showAppSelector());
-        selectedAppsSummary = new TextView(this);
-        selectedAppsSummary.setTextSize(13f);
-        selectedAppsSummary.setPadding(0, dp(4), 0, dp(10));
-        updateSelectedAppsSummary();
-        root.addView(selectAppsButton, matchWrap());
-        root.addView(selectedAppsSummary, matchWrap());
+        proxyAddrs = field(connection, "Proxy addrs", prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        username = field(connection, "Username", prefs.getString("username", DefaultConfig.USERNAME));
+        privateKey = field(
+                connection,
+                "Private key PEM",
+                DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
+                5,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
-        vpnToggle = new Button(this);
-        vpnToggle.setOnClickListener(view -> toggleVpn());
+        selectConfigTab(0);
+
         updateVpnToggle();
-        root.addView(vpnToggle, matchWrap());
 
         setContentView(scroll);
         root.requestApplyInsets();
@@ -372,43 +503,24 @@ public class MainActivity extends Activity {
         boolean systemManaged = prefs.getBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false);
         vpnToggle.setText(systemManaged ? "Always-on VPN" : running ? "Stop" : "Start");
         vpnToggle.setTextColor(Color.WHITE);
-        vpnToggle.setBackgroundColor(running ? COLOR_RUNNING : COLOR_STOPPED);
+        int actionColor = running ? COLOR_ACTION_STOP : COLOR_ACTION_START;
+        vpnToggle.setBackground(rounded(actionColor, actionColor));
         vpnToggle.setEnabled(!systemManaged);
+        if (vpnStatus != null) {
+            vpnStatus.setText(systemManaged ? "Always-on" : running ? "Running" : "Stopped");
+            int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
+            vpnStatus.setBackground(rounded(statusColor, statusColor));
+        }
         updateConfigEditability(!running);
     }
 
     private void updateConfigEditability(boolean editable) {
-        updateEditTextEditable(proxyAddrs, editable);
-        updateEditTextEditable(username, editable);
-        updateEditTextEditable(privateKey, editable);
-        updateEditTextEditable(tcpPoolSize, editable);
-        updateEditTextEditable(udpPoolSize, editable);
-        updateEditTextEditable(yamuxTcpSessions, editable);
-        updateEditTextEditable(yamuxTcpMaxStreamsPerSession, editable);
-        updateEditTextEditable(yamuxTcpOpenStreamTimeoutSecs, editable);
-        updateEditTextEditable(yamuxTcpKeepaliveIntervalSecs, editable);
-        updateEditTextEditable(yamuxTcpConnectionWriteTimeoutSecs, editable);
-        updateEditTextEditable(yamuxTcpStreamWindowSizeKb, editable);
-        updateEditTextEditable(yamuxUdpSessions, editable);
-        updateEditTextEditable(yamuxUdpMaxStreamsPerSession, editable);
-        updateEditTextEditable(yamuxUdpOpenStreamTimeoutSecs, editable);
-        updateEditTextEditable(yamuxUdpKeepaliveIntervalSecs, editable);
-        updateEditTextEditable(yamuxUdpConnectionWriteTimeoutSecs, editable);
-        updateEditTextEditable(yamuxUdpStreamWindowSizeKb, editable);
-        if (tcpMode != null) {
-            tcpMode.setEnabled(editable);
-        }
-        if (compressionMode != null) {
-            compressionMode.setEnabled(editable);
-        }
-        if (udpMode != null) {
-            udpMode.setEnabled(editable);
-        }
-        if (blockQuic != null) {
-            blockQuic.setEnabled(editable);
-        }
-        if (selectAppsButton != null) {
-            selectAppsButton.setEnabled(editable);
+        for (View control : editableControls) {
+            if (control instanceof EditText) {
+                updateEditTextEditable((EditText) control, editable);
+            } else {
+                control.setEnabled(editable);
+            }
         }
     }
 
@@ -472,6 +584,13 @@ public class MainActivity extends Activity {
     }
 
     private Spinner spinner(LinearLayout root, String title, String[] values, String selected) {
+        LinearLayout row = controlRow();
+        TextView label = controlLabel(title);
+        row.addView(label, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
         Spinner spinner = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(
                 this,
@@ -487,8 +606,11 @@ public class MainActivity extends Activity {
             }
         }
         spinner.setSelection(selectedIndex);
-        root.addView(label(title), matchWrap());
-        root.addView(spinner, matchWrap());
+        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setPadding(dp(8), 0, dp(8), 0);
+        row.addView(spinner, new LinearLayout.LayoutParams(dp(148), dp(44)));
+        root.addView(row, matchWrap());
+        trackEditable(spinner);
         return spinner;
     }
 
@@ -527,22 +649,293 @@ public class MainActivity extends Activity {
     }
 
     private EditText field(LinearLayout root, String title, String value, int lines, int inputType) {
+        root.addView(controlLabel(title), labelParams());
         EditText edit = new EditText(this);
         edit.setText(value == null ? "" : value);
         edit.setMinLines(lines);
         edit.setMaxLines(lines == 1 ? 1 : lines + 4);
         edit.setInputType(inputType);
-        root.addView(label(title), matchWrap());
+        edit.setTextColor(COLOR_TEXT);
+        edit.setTextSize(lines == 1 ? 16f : 13f);
+        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        edit.setMinHeight(dp(48));
+        edit.setPadding(dp(12), 0, dp(12), 0);
+        if (lines > 1) {
+            edit.setGravity(Gravity.TOP | Gravity.START);
+            edit.setPadding(dp(12), dp(10), dp(12), dp(10));
+        }
         root.addView(edit, matchWrap());
+        trackEditable(edit);
         return edit;
     }
 
-    private TextView label(String text) {
+    private EditText numberControl(LinearLayout root, String title, String value, int step, int min) {
+        LinearLayout row = controlRow();
+        TextView label = controlLabel(title);
+        row.addView(label, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        Button minus = stepButton("-");
+        EditText edit = new EditText(this);
+        edit.setText(value == null ? "" : value);
+        edit.setInputType(InputType.TYPE_CLASS_NUMBER);
+        edit.setGravity(Gravity.CENTER);
+        edit.setSingleLine(true);
+        edit.setTextColor(COLOR_TEXT);
+        edit.setTextSize(16f);
+        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        edit.setPadding(0, 0, 0, 0);
+        Button plus = stepButton("+");
+
+        minus.setOnClickListener(view -> adjustNumber(edit, -step, min));
+        plus.setOnClickListener(view -> adjustNumber(edit, step, min));
+
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        row.addView(minus, buttonParams);
+        LinearLayout.LayoutParams valueParams = new LinearLayout.LayoutParams(dp(76), dp(40));
+        valueParams.setMargins(dp(8), 0, dp(8), 0);
+        row.addView(edit, valueParams);
+        row.addView(plus, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        root.addView(row, matchWrap());
+
+        trackEditable(minus);
+        trackEditable(edit);
+        trackEditable(plus);
+        return edit;
+    }
+
+    private Switch switchControl(LinearLayout root, String title, boolean checked) {
+        LinearLayout row = controlRow();
+        TextView label = controlLabel(title);
+        row.addView(label, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        Switch switchView = new Switch(this);
+        switchView.setChecked(checked);
+        row.addView(switchView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(row, matchWrap());
+        trackEditable(switchView);
+        return switchView;
+    }
+
+    private void adjustNumber(EditText edit, int delta, int min) {
+        int current;
+        try {
+            current = Integer.parseInt(edit.getText().toString().trim());
+        } catch (NumberFormatException ignored) {
+            current = min;
+        }
+        edit.setText(String.valueOf(Math.max(min, current + delta)));
+        edit.setSelection(edit.getText().length());
+    }
+
+    private Button stepButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(18f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setTextColor(COLOR_ACCENT_DARK);
+        button.setAllCaps(false);
+        button.setIncludeFontPadding(false);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(0, 0, 0, 0);
+        button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        return button;
+    }
+
+    private Button actionButton(String text, int color) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(15f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setSingleLine(true);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setIncludeFontPadding(false);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setBackground(rounded(color, color));
+        return button;
+    }
+
+    private LinearLayout panel(LinearLayout root) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(18), dp(16), dp(18), dp(18));
+        panel.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        panel.setElevation(dp(2));
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, root.getChildCount() == 0 ? 0 : dp(14), 0, 0);
+        root.addView(panel, params);
+        return panel;
+    }
+
+    private LinearLayout tabBar() {
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(dp(4), dp(4), dp(4), dp(4));
+        grid.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        return grid;
+    }
+
+    private LinearLayout tabPage(LinearLayout root) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(0, dp(12), 0, 0);
+        page.setVisibility(View.GONE);
+        configTabPages.add(page);
+        root.addView(page, matchWrap());
+        return page;
+    }
+
+    private void addConfigTab(LinearLayout tabBar, String title, View page) {
+        Button button = new Button(this);
+        button.setText(title);
+        button.setTextSize(13f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setSingleLine(false);
+        button.setMaxLines(2);
+        button.setGravity(Gravity.CENTER);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        int index = configTabButtons.size();
+        button.setOnClickListener(view -> selectConfigTab(index));
+        configTabButtons.add(button);
+
+        LinearLayout row;
+        if (index % 2 == 0) {
+            row = horizontalRow();
+            LinearLayout.LayoutParams rowParams = matchWrap();
+            if (index > 0) {
+                rowParams.setMargins(0, dp(4), 0, 0);
+            }
+            tabBar.addView(row, rowParams);
+        } else {
+            row = (LinearLayout) tabBar.getChildAt(tabBar.getChildCount() - 1);
+        }
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        if (index % 2 == 1) {
+            params.setMargins(dp(4), 0, 0, 0);
+        }
+        row.addView(button, params);
+
+        if (!configTabPages.contains(page)) {
+            configTabPages.add(page);
+        }
+    }
+
+    private void selectConfigTab(int selectedIndex) {
+        for (int i = 0; i < configTabPages.size(); i++) {
+            configTabPages.get(i).setVisibility(i == selectedIndex ? View.VISIBLE : View.GONE);
+        }
+        for (int i = 0; i < configTabButtons.size(); i++) {
+            Button button = configTabButtons.get(i);
+            boolean selected = i == selectedIndex;
+            button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
+            button.setBackground(rounded(
+                    selected ? COLOR_SURFACE : COLOR_CONTROL,
+                    selected ? COLOR_SURFACE : COLOR_CONTROL));
+            button.setElevation(selected ? dp(1) : 0);
+        }
+    }
+
+    private LinearLayout horizontalRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        return row;
+    }
+
+    private LinearLayout controlRow() {
+        LinearLayout row = horizontalRow();
+        row.setPadding(0, dp(8), 0, dp(4));
+        return row;
+    }
+
+    private void sectionTitle(LinearLayout root, String text) {
+        LinearLayout row = horizontalRow();
+        row.setPadding(0, 0, 0, dp(6));
+
+        View accent = new View(this);
+        accent.setBackground(rounded(COLOR_ACCENT, COLOR_ACCENT));
+        LinearLayout.LayoutParams accentParams = new LinearLayout.LayoutParams(dp(4), dp(18));
+        accentParams.setMargins(0, 0, dp(8), 0);
+        row.addView(accent, accentParams);
+
+        TextView view = titleText(text, 15f);
+        row.addView(view, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        root.addView(row, matchWrap());
+    }
+
+    private TextView titleText(String text, float size) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(COLOR_TEXT);
+        view.setTextSize(size);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        return view;
+    }
+
+    private TextView mutedText(String text, float size) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(COLOR_MUTED);
+        view.setTextSize(size);
+        return view;
+    }
+
+    private TextView controlLabel(String text) {
         TextView view = new TextView(this);
         view.setText(text);
         view.setTextSize(13f);
-        view.setPadding(0, dp(14), 0, 0);
+        view.setTextColor(COLOR_MUTED);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        view.setMaxLines(2);
+        view.setEllipsize(TextUtils.TruncateAt.END);
         return view;
+    }
+
+    private LinearLayout.LayoutParams labelParams() {
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, dp(10), 0, dp(6));
+        return params;
+    }
+
+    private TextView chip(String text, int color) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(12f);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setTextColor(Color.WHITE);
+        view.setPadding(dp(10), dp(5), dp(10), dp(5));
+        view.setBackground(rounded(color, color));
+        return view;
+    }
+
+    private GradientDrawable rounded(int fill, int stroke) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(8));
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+    private void trackEditable(View view) {
+        editableControls.add(view);
     }
 
     private LinearLayout.LayoutParams matchWrap() {
@@ -655,11 +1048,11 @@ public class MainActivity extends Activity {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("No apps selected: all system traffic uses VPN. PPAASS Android Agent is excluded.");
+            selectedAppsSummary.setText("All apps");
             return;
         }
 
-        selectedAppsSummary.setText(selected.size() + " app(s) selected: only selected apps use VPN.");
+        selectedAppsSummary.setText(selected.size() + " selected");
     }
 
     private final class AppListAdapter extends BaseAdapter {

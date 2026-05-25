@@ -48,6 +48,9 @@ fn main() -> Result<()> {
     if let Some(log_file) = args.log_file {
         config.log_file = log_file;
     }
+    if let Some(compression_mode) = args.compression_mode {
+        config.compression_mode = compression_mode;
+    }
     if let Some(runtime_threads) = args.runtime_threads {
         config.runtime_threads = Some(runtime_threads);
     }
@@ -99,6 +102,7 @@ fn main() -> Result<()> {
         info!("监听地址：    {}", config.listen_addr);
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);
+        info!("压缩模式：    {}", config.get_compression_mode());
         info!("日志级别：    {}", config.log_level);
         info!(
             "日志目录：    {}",

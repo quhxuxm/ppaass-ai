@@ -8,9 +8,9 @@ final class DefaultConfig {
     static final boolean BLOCK_QUIC = true;
     static final int TCP_POOL_SIZE = 32;
     static final int UDP_POOL_SIZE = 32;
-    static final String COMPRESSION_MODE = "none";
-    static final String TCP_MODE = "auto";
-    static final String UDP_MODE = "auto";
+    static final String COMPRESSION_MODE = "lz4";
+    static final String TCP_MODE = "yamux";
+    static final String UDP_MODE = "yamux";
     static final int TCP_YAMUX_SESSIONS = 5;
     static final int UDP_YAMUX_SESSIONS = 5;
     static final int TCP_YAMUX_MAX_STREAMS_PER_SESSION = 32;
