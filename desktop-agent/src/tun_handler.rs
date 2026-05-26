@@ -8,6 +8,8 @@
 
 mod dns;
 mod dns_proxy;
+#[cfg(target_os = "macos")]
+pub(crate) mod helper_service;
 mod network;
 mod route;
 mod tasks;
@@ -20,6 +22,8 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
 use crate::privilege::ensure_tun_privileges_or_relaunch;
+#[cfg(target_os = "macos")]
+use crate::tun_helper_client::{HelperTunLease, start_tun as start_tun_via_helper};
 use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use dns::DnsGuard;
 use futures::FutureExt;
@@ -74,23 +78,30 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
-    cleanup_stale_routes(config.route_state_file.as_deref());
-    // TUN 设备创建完成后才能拿到真实设备名和 if_index。
-    let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
-    let tun_name = device
-        .name()
-        .map_err(|e| AgentError::Connection(format!("读取 TUN 设备名失败：{e}")))?;
-    let tun_if_index = device
-        .if_index()
-        .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
-    let device = Arc::new(device);
-    info!(
-        "TUN 设备已创建：名称={} if_index={}",
-        tun_name, tun_if_index
-    );
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
     let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool);
+
+    // TUN 设备创建完成后才能拿到真实设备名和 if_index。
+    let CreatedTunDevice {
+        device,
+        name: tun_name,
+        if_index: tun_if_index,
+        system_guard,
+    } = create_tun_device(
+        &config,
+        ipv4,
+        ipv4_prefix,
+        ipv6_config,
+        &proxy_addrs,
+        proxy_bind_interface.as_ref(),
+    )?;
+    let helper_managed_network = system_guard.is_some();
+    let device = Arc::new(device);
+    info!(
+        "TUN 设备已创建：名称={} if_index={} helper_managed={}",
+        tun_name, tun_if_index, helper_managed_network
+    );
 
     let forward_context = TunForwardContext {
         tcp_pool: tcp_pool.clone(),
@@ -107,7 +118,11 @@ pub async fn run_tun_mode(
         block_quic,
         shutdown.clone(),
     )?;
-    let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
+    let route_guard = if helper_managed_network {
+        None
+    } else {
+        install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs)
+    };
 
     // 路由已就绪后再预热代理连接池。否则 VMware、旧 TUN 路由或 split-default
     // 已存在时，绑定到物理接口的 Yamux 连接可能在启动早期得到 No route to host。
@@ -115,13 +130,17 @@ pub async fn run_tun_mode(
     udp_pool.prewarm().await;
 
     let dns_server = tun_dns_server(ipv4, ipv4_prefix);
-    let dns_guard = DnsGuard::install(
-        proxy_dns,
-        proxy_bind_interface.as_ref(),
-        tun_if_index,
-        dns_server,
-        config.dns_state_file.as_deref(),
-    );
+    let dns_guard = if helper_managed_network {
+        None
+    } else {
+        DnsGuard::install(
+            proxy_dns,
+            proxy_bind_interface.as_ref(),
+            tun_if_index,
+            dns_server,
+            config.dns_state_file.as_deref(),
+        )
+    };
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
@@ -133,6 +152,7 @@ pub async fn run_tun_mode(
     udp_pool.set_proxy_bind_interface(None);
     drop(dns_guard);
     drop(route_guard);
+    drop(system_guard);
 
     let _ = tokio::join!(wait_tun_task("netstack_supervisor", netstack_task),);
 
@@ -425,12 +445,59 @@ fn tun_dns_server(ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> std::net::Ipv4A
     ipv4
 }
 
+struct CreatedTunDevice {
+    device: tun_rs::AsyncDevice,
+    name: String,
+    if_index: u32,
+    system_guard: Option<TunSystemGuard>,
+}
+
+enum TunSystemGuard {
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    Helper(HelperTunLease),
+}
+
 fn create_tun_device(
     config: &TunConfig,
     ipv4: std::net::Ipv4Addr,
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
-) -> Result<tun_rs::AsyncDevice> {
+    proxy_addrs: &[String],
+    proxy_bind_interface: Option<&common::BindInterface>,
+) -> Result<CreatedTunDevice> {
+    #[cfg(target_os = "macos")]
+    if config.macos_helper_enabled {
+        match start_tun_via_helper(config, proxy_addrs, proxy_bind_interface) {
+            Ok(helper_device) => {
+                info!(
+                    "已通过 TUN helper 创建设备：name={} if_index={}",
+                    helper_device.name, helper_device.if_index
+                );
+                return Ok(CreatedTunDevice {
+                    device: helper_device.device,
+                    name: helper_device.name,
+                    if_index: helper_device.if_index,
+                    system_guard: Some(TunSystemGuard::Helper(helper_device.lease)),
+                });
+            }
+            Err(err) if config.macos_helper_fallback_to_privilege => {
+                warn!("TUN helper 不可用，将回退到旧的整进程提权路径：{}", err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    create_tun_device_legacy(config, ipv4, ipv4_prefix, ipv6_config)
+}
+
+fn create_tun_device_legacy(
+    config: &TunConfig,
+    ipv4: std::net::Ipv4Addr,
+    ipv4_prefix: u8,
+    ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
+) -> Result<CreatedTunDevice> {
+    cleanup_stale_routes(config.route_state_file.as_deref());
     ensure_tun_privileges_or_relaunch()?;
 
     // DeviceBuilder 负责设置地址、MTU 和平台相关参数。
@@ -442,7 +509,20 @@ fn create_tun_device(
         builder = builder.ipv6(ipv6, ipv6_prefix);
     }
 
-    build_tun_device(builder, config)
+    let device = build_tun_device(builder, config)?;
+    let name = device
+        .name()
+        .map_err(|e| AgentError::Connection(format!("读取 TUN 设备名失败：{e}")))?;
+    let if_index = device
+        .if_index()
+        .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
+
+    Ok(CreatedTunDevice {
+        device,
+        name,
+        if_index,
+        system_guard: None,
+    })
 }
 
 #[cfg(windows)]

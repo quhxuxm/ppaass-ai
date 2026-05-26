@@ -68,6 +68,10 @@ cargo run --release -p desktop-agent -- --config config/agent.toml
 
 6. Configure your applications to use the proxy at `127.0.0.1:1080`
 
+### Desktop TUN Helper Mode
+
+macOS TUN mode can run the existing `desktop-agent` binary in a privileged helper mode so the normal agent does not need to ask for sudo on every start. `start-agent.sh` and `start-agent.command` install the already-built `desktop-agent` automatically when `[tun] enabled = true` and `macos_helper_enabled = true`, then expose `/var/run/ppaass-ai/tun-helper.sock` to the current UID. No separate helper binary is built. On Windows, `start-agent.bat` creates a highest-privilege scheduled task the first time TUN mode is started, then uses that task for later starts.
+
 ## Configuration
 
 ### Agent Configuration (`config/agent.toml`)

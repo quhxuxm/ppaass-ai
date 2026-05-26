@@ -1,9 +1,10 @@
 use protocol::CompressionMode;
+use serde::{Deserialize, Serialize};
 use socket2::Socket;
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
 
 /// Optional interface constraint for outbound client connections.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindInterface {
     pub name: Option<String>,
     pub index: Option<u32>,

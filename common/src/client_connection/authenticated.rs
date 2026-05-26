@@ -349,7 +349,6 @@ where
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))
-    }))
+    Err(last_error
+        .unwrap_or_else(|| std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))))
 }

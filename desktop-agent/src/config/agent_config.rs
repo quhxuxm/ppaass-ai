@@ -1,5 +1,5 @@
 use crate::direct_access::DirectAccessConfig;
-use common::{TransportConfig, YamuxConfig};
+use common::{TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -120,6 +120,21 @@ pub struct TunConfig {
     /// 相对路径会放在当前运行目录下；不设置时使用 tun-dns.json。
     #[serde(default)]
     pub dns_state_file: Option<String>,
+
+    /// macOS 是否优先使用已安装的本地特权 helper 创建 TUN 和改写系统网络状态。
+    #[serde(default = "default_macos_tun_helper_enabled", alias = "helper_enabled")]
+    pub macos_helper_enabled: bool,
+
+    /// macOS 本地特权 helper 的 Unix socket 路径。
+    #[serde(default = "default_macos_tun_helper_socket", alias = "helper_socket")]
+    pub macos_helper_socket: String,
+
+    /// macOS helper 不可用时是否回退到旧的整进程提权路径。
+    #[serde(
+        default = "default_macos_tun_helper_fallback_to_privilege",
+        alias = "helper_fallback_to_privilege"
+    )]
+    pub macos_helper_fallback_to_privilege: bool,
 }
 
 impl Default for TunConfig {
@@ -135,6 +150,9 @@ impl Default for TunConfig {
             wintun_file: None,
             route_state_file: None,
             dns_state_file: None,
+            macos_helper_enabled: default_macos_tun_helper_enabled(),
+            macos_helper_socket: default_macos_tun_helper_socket(),
+            macos_helper_fallback_to_privilege: default_macos_tun_helper_fallback_to_privilege(),
         }
     }
 }
@@ -163,6 +181,18 @@ fn default_tun_mtu() -> u16 {
 }
 
 fn default_tun_block_quic() -> bool {
+    true
+}
+
+fn default_macos_tun_helper_enabled() -> bool {
+    cfg!(target_os = "macos")
+}
+
+fn default_macos_tun_helper_socket() -> String {
+    DEFAULT_TUN_HELPER_SOCKET_PATH.to_string()
+}
+
+fn default_macos_tun_helper_fallback_to_privilege() -> bool {
     true
 }
 
