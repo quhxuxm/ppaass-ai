@@ -13,4 +13,8 @@ final class NativeAgent {
     static native boolean isRunning(long handle);
 
     static native void stop(long handle);
+
+    static native long vpnDownloadBytes();
+
+    static native long vpnUploadBytes();
 }

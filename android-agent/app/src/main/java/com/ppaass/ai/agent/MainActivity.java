@@ -8,14 +8,20 @@ import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -35,15 +41,24 @@ import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
     private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
+    private static final String PREF_TRAFFIC_DAY = "traffic_day";
+    private static final String PREF_TRAFFIC_RX_BASE = "traffic_rx_base";
+    private static final String PREF_TRAFFIC_TX_BASE = "traffic_tx_base";
+    private static final String PREF_TRAFFIC_HOURLY = "traffic_hourly";
+    private static final String PREF_TRAFFIC_TX_HOURLY = "traffic_tx_hourly";
     private static final int COLOR_BACKGROUND = Color.rgb(246, 248, 251);
     private static final int COLOR_SURFACE = Color.WHITE;
     private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
@@ -85,14 +100,39 @@ public class MainActivity extends Activity {
     private AlertDialog appSelectorDialog;
     private Button vpnToggle;
     private TextView vpnStatus;
+    private TextView downloadSpeed;
+    private TextView uploadSpeed;
+    private TextView trafficDownload;
+    private TextView trafficUpload;
+    private SpeedGaugeView speedGauge;
+    private TrafficBarView trafficChart;
+    private final long[] hourlyDownloadBytes = new long[24];
+    private final long[] hourlyUploadBytes = new long[24];
+    private String lastVpnToggleLabel;
+    private long lastRxBytes = -1;
+    private long lastTxBytes = -1;
+    private long lastTrafficSampleMs;
     private final List<View> editableControls = new ArrayList<>();
+    private final List<Button> screenTabButtons = new ArrayList<>();
+    private final List<View> screenPages = new ArrayList<>();
     private final List<Button> configTabButtons = new ArrayList<>();
     private final List<View> configTabPages = new ArrayList<>();
+    private final Handler statusHandler = new Handler(Looper.getMainLooper());
+    private final Runnable statusRefresh = new Runnable() {
+        @Override
+        public void run() {
+            updateStatusMetrics();
+            statusHandler.postDelayed(this, 1000);
+        }
+    };
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
                         || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)) {
-                    runOnUiThread(this::updateVpnToggle);
+                    runOnUiThread(() -> {
+                        updateVpnToggle();
+                        updateStatusMetrics();
+                    });
                 }
             };
 
@@ -110,10 +150,18 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateVpnToggle();
+        startStatusRefresh();
+    }
+
+    @Override
+    protected void onPause() {
+        statusHandler.removeCallbacks(statusRefresh);
+        super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        statusHandler.removeCallbacks(statusRefresh);
         if (appSelectorDialog != null) {
             appSelectorDialog.dismiss();
             appSelectorDialog = null;
@@ -168,8 +216,15 @@ public class MainActivity extends Activity {
 
     private void buildUi() {
         editableControls.clear();
+        screenTabButtons.clear();
+        screenPages.clear();
         configTabButtons.clear();
         configTabPages.clear();
+        lastVpnToggleLabel = null;
+        lastRxBytes = -1;
+        lastTxBytes = -1;
+        lastTrafficSampleMs = 0;
+        loadHourlyTrafficState();
 
         ScrollView scroll = new ScrollView(this);
         scroll.setClipToPadding(false);
@@ -185,6 +240,26 @@ public class MainActivity extends Activity {
         applySystemBarPadding(root, horizontalPadding, topPadding, horizontalPadding, bottomPadding);
         scroll.addView(root);
 
+        LinearLayout screenTabs = screenTabBar();
+        root.addView(screenTabs, matchWrap());
+
+        LinearLayout statusScreen = screenPage(root);
+        LinearLayout configScreen = screenPage(root);
+        addScreenTab(screenTabs, "Status", statusScreen);
+        addScreenTab(screenTabs, "Config", configScreen);
+
+        buildStatusScreen(statusScreen);
+        buildConfigScreen(configScreen);
+
+        selectScreen(0);
+        updateVpnToggle();
+        updateStatusMetrics();
+
+        setContentView(scroll);
+        root.requestApplyInsets();
+    }
+
+    private void buildStatusScreen(LinearLayout root) {
         LinearLayout header = panel(root);
         header.setPadding(dp(18), dp(18), dp(18), dp(18));
         LinearLayout headerRow = horizontalRow();
@@ -202,7 +277,7 @@ public class MainActivity extends Activity {
         TextView title = titleText(getString(R.string.app_name), 24f);
         titleColumn.addView(title, matchWrap());
 
-        TextView subtitle = mutedText("Tunnel dashboard", 13f);
+        TextView subtitle = mutedText("System status", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, 0);
         titleColumn.addView(subtitle, subtitleParams);
@@ -257,21 +332,45 @@ public class MainActivity extends Activity {
         appsRowParams.setMargins(0, dp(4), 0, 0);
         apps.addView(appsRow, appsRowParams);
 
-        LinearLayout configPanel = panel(root);
-        sectionTitle(configPanel, "Configuration");
-        LinearLayout tabBar = tabBar();
-        configPanel.addView(tabBar, matchWrap());
+        LinearLayout dashboard = panel(root);
+        sectionTitle(dashboard, "Live dashboard");
+        speedGauge = new SpeedGaugeView();
+        LinearLayout.LayoutParams gaugeParams = matchWrap();
+        gaugeParams.height = dp(210);
+        gaugeParams.setMargins(0, dp(6), 0, dp(12));
+        dashboard.addView(speedGauge, gaugeParams);
 
-        LinearLayout runtime = tabPage(configPanel);
-        LinearLayout tcpYamux = tabPage(configPanel);
-        LinearLayout udpYamux = tabPage(configPanel);
-        LinearLayout connection = tabPage(configPanel);
+        LinearLayout speedRow = horizontalRow();
+        downloadSpeed = statusTile(speedRow, "Download", "0 B/s");
+        uploadSpeed = statusTile(speedRow, "Upload", "0 B/s");
+        dashboard.addView(speedRow, matchWrap());
 
-        addConfigTab(tabBar, "Runtime", runtime);
-        addConfigTab(tabBar, "TCP Yamux", tcpYamux);
-        addConfigTab(tabBar, "UDP Yamux", udpYamux);
-        addConfigTab(tabBar, "Connection", connection);
+        LinearLayout dailyPanel = panel(root);
+        sectionTitle(dailyPanel, "Data usage");
+        trafficChart = new TrafficBarView();
+        LinearLayout.LayoutParams chartParams = matchWrap();
+        chartParams.height = dp(150);
+        chartParams.setMargins(0, dp(8), 0, dp(10));
+        dailyPanel.addView(trafficChart, chartParams);
+        LinearLayout trafficRow = horizontalRow();
+        trafficDownload = statusTile(trafficRow, "Download", "0 B");
+        trafficUpload = statusTile(trafficRow, "Upload", "0 B");
+        dailyPanel.addView(trafficRow, matchWrap());
+    }
 
+    private void buildConfigScreen(LinearLayout root) {
+        LinearLayout connection = configSection(root, "Connection");
+        proxyAddrs = field(connection, "Proxy addrs", prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        username = field(connection, "Username", prefs.getString("username", DefaultConfig.USERNAME));
+        privateKey = field(
+                connection,
+                "Private key PEM",
+                DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
+                5,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+
+        LinearLayout runtime = configSection(root, "Runtime");
         blockQuic = switchControl(runtime, "Block QUIC", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         compressionMode = spinner(
                 runtime,
@@ -301,6 +400,7 @@ public class MainActivity extends Activity {
                 1,
                 0);
 
+        LinearLayout tcpYamux = configSection(root, "TCP Yamux");
         yamuxTcpSessions = numberControl(
                 tcpYamux,
                 "TCP Yamux sessions",
@@ -350,6 +450,7 @@ public class MainActivity extends Activity {
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
 
+        LinearLayout udpYamux = configSection(root, "UDP Yamux");
         yamuxUdpSessions = numberControl(
                 udpYamux,
                 "UDP Yamux sessions",
@@ -395,26 +496,9 @@ public class MainActivity extends Activity {
                 "UDP Yamux stream window KB",
                 prefs.getString(
                         "yamux_udp_stream_window_size_kb",
-                        String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
+                String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
-
-        proxyAddrs = field(connection, "Proxy addrs", prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        username = field(connection, "Username", prefs.getString("username", DefaultConfig.USERNAME));
-        privateKey = field(
-                connection,
-                "Private key PEM",
-                DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
-                5,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-
-        selectConfigTab(0);
-
-        updateVpnToggle();
-
-        setContentView(scroll);
-        root.requestApplyInsets();
     }
 
     private void applySystemBarPadding(
@@ -499,6 +583,12 @@ public class MainActivity extends Activity {
         return running;
     }
 
+    private void startStatusRefresh() {
+        statusHandler.removeCallbacks(statusRefresh);
+        updateStatusMetrics();
+        statusHandler.postDelayed(statusRefresh, 1000);
+    }
+
     private void updateVpnToggle() {
         if (vpnToggle == null) {
             return;
@@ -506,17 +596,194 @@ public class MainActivity extends Activity {
 
         boolean running = isVpnRunning();
         boolean systemManaged = prefs.getBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false);
-        vpnToggle.setText(systemManaged ? "Always-on VPN" : running ? "Stop" : "Start");
-        vpnToggle.setTextColor(Color.WHITE);
+        String label = systemManaged ? "Always-on" : running ? "Stop" : "Start";
         int actionColor = running ? COLOR_ACTION_STOP : COLOR_ACTION_START;
-        vpnToggle.setBackground(rounded(actionColor, actionColor));
-        vpnToggle.setEnabled(!systemManaged);
+        updateFlipButton(label, actionColor, !systemManaged);
         if (vpnStatus != null) {
-            vpnStatus.setText(systemManaged ? "Always-on" : running ? "Running" : "Stopped");
+            vpnStatus.setText(systemManaged ? "Always-on VPN" : running ? "Connected" : "Stopped");
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
             vpnStatus.setBackground(rounded(statusColor, statusColor));
         }
         updateConfigEditability(!running);
+    }
+
+    private void updateFlipButton(String label, int color, boolean enabled) {
+        boolean shouldFlip = lastVpnToggleLabel != null && !label.equals(lastVpnToggleLabel);
+        lastVpnToggleLabel = label;
+        if (!shouldFlip) {
+            vpnToggle.animate().cancel();
+            vpnToggle.setRotationY(0f);
+            applyToggleButtonState(label, color, enabled);
+            return;
+        }
+
+        vpnToggle.animate()
+                .rotationY(90f)
+                .setDuration(110)
+                .withEndAction(() -> {
+                    applyToggleButtonState(label, color, enabled);
+                    vpnToggle.setRotationY(-90f);
+                    vpnToggle.animate().rotationY(0f).setDuration(110).start();
+                })
+                .start();
+    }
+
+    private void applyToggleButtonState(String label, int color, boolean enabled) {
+        vpnToggle.setText(label);
+        vpnToggle.setTextColor(Color.WHITE);
+        vpnToggle.setBackground(rounded(color, color));
+        vpnToggle.setEnabled(enabled);
+    }
+
+    private void updateStatusMetrics() {
+        long rxBytes = currentVpnDownloadBytes();
+        long txBytes = currentVpnUploadBytes();
+        long nowMs = SystemClock.elapsedRealtime();
+        boolean resetDay = ensureTrafficDay(rxBytes, txBytes);
+
+        long rxRate = 0;
+        long txRate = 0;
+        long deltaRx = 0;
+        long deltaTx = 0;
+        if (lastTrafficSampleMs > 0 && !resetDay) {
+            long elapsedMs = Math.max(1, nowMs - lastTrafficSampleMs);
+            deltaRx = Math.max(0, rxBytes - lastRxBytes);
+            deltaTx = Math.max(0, txBytes - lastTxBytes);
+            rxRate = deltaRx * 1000 / elapsedMs;
+            txRate = deltaTx * 1000 / elapsedMs;
+        }
+
+        lastRxBytes = rxBytes;
+        lastTxBytes = txBytes;
+        lastTrafficSampleMs = nowMs;
+
+        if (deltaRx > 0 || deltaTx > 0) {
+            recordHourlyTraffic(deltaRx, deltaTx);
+        }
+
+        long downloadBytes = Math.max(0, rxBytes - prefs.getLong(PREF_TRAFFIC_RX_BASE, rxBytes));
+        long uploadBytes = Math.max(0, txBytes - prefs.getLong(PREF_TRAFFIC_TX_BASE, txBytes));
+        boolean running = isVpnRunning();
+        if (!running) {
+            rxRate = 0;
+            txRate = 0;
+        }
+
+        if (downloadSpeed != null) {
+            downloadSpeed.setText(formatSpeed(rxRate));
+        }
+        if (uploadSpeed != null) {
+            uploadSpeed.setText(formatSpeed(txRate));
+        }
+        if (trafficDownload != null) {
+            trafficDownload.setText(formatBytes(downloadBytes));
+        }
+        if (trafficUpload != null) {
+            trafficUpload.setText(formatBytes(uploadBytes));
+        }
+        if (speedGauge != null) {
+            speedGauge.setSpeeds(rxRate, txRate, running);
+        }
+        if (trafficChart != null) {
+            trafficChart.setHourlyData(
+                    hourlyDownloadBytes,
+                    hourlyUploadBytes,
+                    Calendar.getInstance().get(Calendar.HOUR_OF_DAY));
+        }
+    }
+
+    private long currentVpnDownloadBytes() {
+        return Math.max(0, NativeAgent.vpnDownloadBytes());
+    }
+
+    private long currentVpnUploadBytes() {
+        return Math.max(0, NativeAgent.vpnUploadBytes());
+    }
+
+    private boolean ensureTrafficDay(long rxBytes, long txBytes) {
+        String today = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+        String storedDay = prefs.getString(PREF_TRAFFIC_DAY, "");
+        long storedBase = prefs.getLong(PREF_TRAFFIC_RX_BASE, rxBytes);
+        long storedTxBase = prefs.getLong(PREF_TRAFFIC_TX_BASE, txBytes);
+        if (today.equals(storedDay) && storedBase <= rxBytes && storedTxBase <= txBytes) {
+            return false;
+        }
+
+        for (int i = 0; i < hourlyDownloadBytes.length; i++) {
+            hourlyDownloadBytes[i] = 0;
+            hourlyUploadBytes[i] = 0;
+        }
+        prefs.edit()
+                .putString(PREF_TRAFFIC_DAY, today)
+                .putLong(PREF_TRAFFIC_RX_BASE, rxBytes)
+                .putLong(PREF_TRAFFIC_TX_BASE, txBytes)
+                .putString(PREF_TRAFFIC_HOURLY, serializeHourlyTraffic(hourlyDownloadBytes))
+                .putString(PREF_TRAFFIC_TX_HOURLY, serializeHourlyTraffic(hourlyUploadBytes))
+                .apply();
+        return true;
+    }
+
+    private void recordHourlyTraffic(long deltaRx, long deltaTx) {
+        int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        hourlyDownloadBytes[hour] = Math.max(0, hourlyDownloadBytes[hour] + deltaRx);
+        hourlyUploadBytes[hour] = Math.max(0, hourlyUploadBytes[hour] + deltaTx);
+        prefs.edit()
+                .putString(PREF_TRAFFIC_HOURLY, serializeHourlyTraffic(hourlyDownloadBytes))
+                .putString(PREF_TRAFFIC_TX_HOURLY, serializeHourlyTraffic(hourlyUploadBytes))
+                .apply();
+    }
+
+    private void loadHourlyTrafficState() {
+        for (int i = 0; i < hourlyDownloadBytes.length; i++) {
+            hourlyDownloadBytes[i] = 0;
+            hourlyUploadBytes[i] = 0;
+        }
+        loadHourlyTraffic(PREF_TRAFFIC_HOURLY, hourlyDownloadBytes);
+        loadHourlyTraffic(PREF_TRAFFIC_TX_HOURLY, hourlyUploadBytes);
+    }
+
+    private void loadHourlyTraffic(String key, long[] target) {
+        String serialized = prefs == null ? "" : prefs.getString(key, "");
+        if (serialized == null || serialized.isEmpty()) {
+            return;
+        }
+        String[] parts = serialized.split(",");
+        for (int i = 0; i < parts.length && i < target.length; i++) {
+            try {
+                target[i] = Math.max(0, Long.parseLong(parts[i]));
+            } catch (NumberFormatException ignored) {
+                target[i] = 0;
+            }
+        }
+    }
+
+    private String serializeHourlyTraffic(long[] values) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            builder.append(values[i]);
+        }
+        return builder.toString();
+    }
+
+    private String formatSpeed(long bytesPerSecond) {
+        return formatBytes(bytesPerSecond) + "/s";
+    }
+
+    private String formatBytes(long bytes) {
+        double value = Math.max(0, bytes);
+        String[] units = {"B", "KB", "MB", "GB", "TB"};
+        int unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        if (unit == 0) {
+            return String.format(Locale.US, "%.0f %s", value, units[unit]);
+        }
+        return String.format(Locale.US, "%.1f %s", value, units[unit]);
     }
 
     private void updateConfigEditability(boolean editable) {
@@ -589,13 +856,7 @@ public class MainActivity extends Activity {
     }
 
     private Spinner spinner(LinearLayout root, String title, String[] values, String selected) {
-        LinearLayout row = controlRow();
-        TextView label = controlLabel(title);
-        row.addView(label, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f));
-
+        root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(
                 this,
@@ -612,9 +873,10 @@ public class MainActivity extends Activity {
         }
         spinner.setSelection(selectedIndex);
         spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-        spinner.setPadding(dp(8), 0, dp(8), 0);
-        row.addView(spinner, new LinearLayout.LayoutParams(dp(148), dp(44)));
-        root.addView(row, matchWrap());
+        spinner.setPadding(dp(12), 0, dp(12), 0);
+        root.addView(spinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
         trackEditable(spinner);
         return spinner;
     }
@@ -675,12 +937,8 @@ public class MainActivity extends Activity {
     }
 
     private EditText numberControl(LinearLayout root, String title, String value, int step, int min) {
-        LinearLayout row = controlRow();
-        TextView label = controlLabel(title);
-        row.addView(label, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f));
+        root.addView(controlLabel(title), labelParams());
+        LinearLayout row = horizontalRow();
 
         Button minus = stepButton("-");
         EditText edit = new EditText(this);
@@ -697,12 +955,12 @@ public class MainActivity extends Activity {
         minus.setOnClickListener(view -> adjustNumber(edit, -step, min));
         plus.setOnClickListener(view -> adjustNumber(edit, step, min));
 
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         row.addView(minus, buttonParams);
-        LinearLayout.LayoutParams valueParams = new LinearLayout.LayoutParams(dp(76), dp(40));
-        valueParams.setMargins(dp(8), 0, dp(8), 0);
+        LinearLayout.LayoutParams valueParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        valueParams.setMargins(dp(10), 0, dp(10), 0);
         row.addView(edit, valueParams);
-        row.addView(plus, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        row.addView(plus, new LinearLayout.LayoutParams(dp(46), dp(46)));
         root.addView(row, matchWrap());
 
         trackEditable(minus);
@@ -780,6 +1038,108 @@ public class MainActivity extends Activity {
         params.setMargins(0, root.getChildCount() == 0 ? 0 : dp(14), 0, 0);
         root.addView(panel, params);
         return panel;
+    }
+
+    private LinearLayout configSection(LinearLayout root, String title) {
+        LinearLayout section = panel(root);
+        section.setPadding(dp(18), dp(18), dp(18), dp(20));
+        sectionTitle(section, title);
+        return section;
+    }
+
+    private LinearLayout screenTabBar() {
+        LinearLayout row = horizontalRow();
+        row.setPadding(dp(4), dp(4), dp(4), dp(4));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        return row;
+    }
+
+    private LinearLayout screenPage(LinearLayout root) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setVisibility(View.GONE);
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, dp(14), 0, 0);
+        root.addView(page, params);
+        screenPages.add(page);
+        return page;
+    }
+
+    private void addScreenTab(LinearLayout tabBar, String title, View page) {
+        Button button = new Button(this);
+        button.setText(title);
+        button.setTextSize(14f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        int index = screenTabButtons.size();
+        button.setOnClickListener(view -> selectScreen(index));
+        screenTabButtons.add(button);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        if (index > 0) {
+            params.setMargins(dp(4), 0, 0, 0);
+        }
+        tabBar.addView(button, params);
+
+        if (!screenPages.contains(page)) {
+            screenPages.add(page);
+        }
+    }
+
+    private void selectScreen(int selectedIndex) {
+        for (int i = 0; i < screenPages.size(); i++) {
+            screenPages.get(i).setVisibility(i == selectedIndex ? View.VISIBLE : View.GONE);
+        }
+        for (int i = 0; i < screenTabButtons.size(); i++) {
+            Button button = screenTabButtons.get(i);
+            boolean selected = i == selectedIndex;
+            button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
+            button.setBackground(rounded(
+                    selected ? COLOR_SURFACE : COLOR_CONTROL,
+                    selected ? COLOR_SURFACE : COLOR_CONTROL));
+            button.setElevation(selected ? dp(1) : 0);
+        }
+    }
+
+    private TextView statusMetric(LinearLayout root, String label, String value, float valueSize) {
+        TextView labelView = mutedText(label, 12f);
+        LinearLayout.LayoutParams labelParams = matchWrap();
+        labelParams.setMargins(0, dp(8), 0, dp(2));
+        root.addView(labelView, labelParams);
+
+        TextView valueView = titleText(value, valueSize);
+        valueView.setSingleLine(true);
+        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        root.addView(valueView, matchWrap());
+        return valueView;
+    }
+
+    private TextView statusTile(LinearLayout row, String label, String value) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tile.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        TextView labelView = mutedText(label, 12f);
+        tile.addView(labelView, matchWrap());
+
+        TextView valueView = titleText(value, 18f);
+        valueView.setSingleLine(true);
+        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams valueParams = matchWrap();
+        valueParams.setMargins(0, dp(2), 0, 0);
+        tile.addView(valueView, valueParams);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(78), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(10), 0, 0, 0);
+        }
+        row.addView(tile, params);
+        return valueView;
     }
 
     private LinearLayout tabBar() {
@@ -1123,6 +1483,174 @@ public class MainActivity extends Activity {
         }
 
         selectedAppsSummary.setText(selected.size() + " selected");
+    }
+
+    private final class SpeedGaugeView extends View {
+        private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF arcBounds = new RectF();
+        private long rxBytesPerSecond;
+        private long txBytesPerSecond;
+        private boolean active;
+
+        SpeedGaugeView() {
+            super(MainActivity.this);
+            trackPaint.setStyle(Paint.Style.STROKE);
+            trackPaint.setStrokeCap(Paint.Cap.ROUND);
+            trackPaint.setColor(COLOR_CONTROL);
+            progressPaint.setStyle(Paint.Style.STROKE);
+            progressPaint.setStrokeCap(Paint.Cap.ROUND);
+            progressPaint.setColor(COLOR_ACCENT);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+        }
+
+        void setSpeeds(long rxBytesPerSecond, long txBytesPerSecond, boolean active) {
+            this.rxBytesPerSecond = Math.max(0, rxBytesPerSecond);
+            this.txBytesPerSecond = Math.max(0, txBytesPerSecond);
+            this.active = active;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int width = getWidth();
+            int height = getHeight();
+            float stroke = dp(16);
+            float radius = Math.min(width * 0.38f, height * 0.50f);
+            float centerX = width / 2f;
+            float centerY = dp(28) + radius;
+            arcBounds.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+
+            trackPaint.setStrokeWidth(stroke);
+            progressPaint.setStrokeWidth(stroke);
+            canvas.drawArc(arcBounds, 150f, 240f, false, trackPaint);
+
+            long totalSpeed = rxBytesPerSecond + txBytesPerSecond;
+            long scale = gaugeScale(totalSpeed);
+            float sweep = active ? Math.min(240f, totalSpeed * 240f / scale) : 0f;
+            canvas.drawArc(arcBounds, 150f, sweep, false, progressPaint);
+
+            textPaint.setTypeface(Typeface.DEFAULT_BOLD);
+            textPaint.setColor(COLOR_TEXT);
+            textPaint.setTextSize(dp(28));
+            canvas.drawText(formatSpeed(totalSpeed), centerX, centerY + dp(4), textPaint);
+
+            textPaint.setTypeface(Typeface.DEFAULT);
+            textPaint.setColor(COLOR_MUTED);
+            textPaint.setTextSize(dp(12));
+            canvas.drawText(active ? "Realtime speed" : "VPN idle", centerX, centerY + dp(30), textPaint);
+            canvas.drawText("Scale " + formatSpeed(scale), centerX, Math.min(height - dp(10), centerY + dp(54)), textPaint);
+        }
+
+        private long gaugeScale(long speed) {
+            long scale = 64L * 1024L;
+            while (speed > scale && scale < 1024L * 1024L * 1024L) {
+                scale *= 2L;
+            }
+            return scale;
+        }
+    }
+
+    private final class TrafficBarView extends View {
+        private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF barBounds = new RectF();
+        private final long[] downloadValues = new long[24];
+        private final long[] uploadValues = new long[24];
+        private int currentHour;
+
+        TrafficBarView() {
+            super(MainActivity.this);
+            gridPaint.setColor(COLOR_BORDER);
+            gridPaint.setStrokeWidth(dp(1));
+            textPaint.setColor(COLOR_MUTED);
+            textPaint.setTextSize(dp(10));
+            textPaint.setTextAlign(Paint.Align.CENTER);
+        }
+
+        void setHourlyData(long[] hourlyDownloadValues, long[] hourlyUploadValues, int currentHour) {
+            for (int i = 0; i < downloadValues.length; i++) {
+                downloadValues[i] = i < hourlyDownloadValues.length ? Math.max(0, hourlyDownloadValues[i]) : 0;
+                uploadValues[i] = i < hourlyUploadValues.length ? Math.max(0, hourlyUploadValues[i]) : 0;
+            }
+            this.currentHour = currentHour;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int width = getWidth();
+            int height = getHeight();
+            float left = dp(6);
+            float right = width - dp(6);
+            float top = dp(28);
+            float bottom = height - dp(24);
+            float chartHeight = Math.max(dp(48), bottom - top);
+
+            drawLegend(canvas, right - dp(146), dp(10), COLOR_ACCENT, "Down");
+            drawLegend(canvas, right - dp(76), dp(10), COLOR_ACTION_START, "Up");
+
+            for (int i = 0; i < 3; i++) {
+                float y = top + chartHeight * i / 2f;
+                canvas.drawLine(left, y, right, y, gridPaint);
+            }
+
+            long max = 0;
+            for (int i = 0; i < downloadValues.length; i++) {
+                max = Math.max(max, downloadValues[i]);
+                max = Math.max(max, uploadValues[i]);
+            }
+
+            float gap = dp(3);
+            float groupWidth = Math.max(dp(5), (right - left - gap * 23) / 24f);
+            float barGap = dp(1);
+            float barWidth = Math.max(dp(2), (groupWidth - barGap) / 2f);
+            for (int i = 0; i < downloadValues.length; i++) {
+                boolean highlighted = i == currentHour;
+                float x = left + i * (groupWidth + gap);
+                drawTrafficBar(canvas, downloadValues[i], max, x, bottom, chartHeight,
+                        barWidth,
+                        highlighted ? COLOR_ACCENT : Color.rgb(147, 197, 253));
+                drawTrafficBar(canvas, uploadValues[i], max, x + barWidth + barGap, bottom, chartHeight,
+                        barWidth,
+                        highlighted ? COLOR_ACTION_START : Color.rgb(94, 234, 212));
+            }
+
+            canvas.drawText("00", left + barWidth / 2f, height - dp(6), textPaint);
+            canvas.drawText("12", left + 12 * (groupWidth + gap) + groupWidth / 2f, height - dp(6), textPaint);
+            canvas.drawText("23", right - groupWidth / 2f, height - dp(6), textPaint);
+        }
+
+        private void drawTrafficBar(
+                Canvas canvas,
+                long value,
+                long max,
+                float x,
+                float bottom,
+                float chartHeight,
+                float barWidth,
+                int color) {
+            boolean hasValue = value > 0;
+            float ratio = max == 0 ? 0f : value / (float) max;
+            float barHeight = hasValue ? Math.max(dp(4), chartHeight * ratio) : dp(3);
+            float y = bottom - barHeight;
+            barPaint.setColor(hasValue ? color : COLOR_CONTROL);
+            barBounds.set(x, y, x + barWidth, bottom);
+            canvas.drawRoundRect(barBounds, dp(3), dp(3), barPaint);
+        }
+
+        private void drawLegend(Canvas canvas, float x, float y, int color, String label) {
+            barPaint.setColor(color);
+            barBounds.set(x, y, x + dp(10), y + dp(10));
+            canvas.drawRoundRect(barBounds, dp(3), dp(3), barPaint);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText(label, x + dp(14), y + dp(10), textPaint);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+        }
     }
 
     private final class AppListAdapter extends BaseAdapter {

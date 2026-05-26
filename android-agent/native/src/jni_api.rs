@@ -7,6 +7,7 @@ use crate::config::AndroidAgentConfig;
 use crate::fd_device::RawFd;
 use crate::netstack::run_android_agent;
 use crate::socket_protector;
+use crate::traffic_stats;
 
 struct AgentHandle {
     shutdown: CancellationToken,
@@ -122,6 +123,22 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_stop(
         let _ = thread.join();
     }
     socket_protector::clear();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_vpnDownloadBytes(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    traffic_stats::download_bytes().min(jlong::MAX as u64) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_vpnUploadBytes(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    traffic_stats::upload_bytes().min(jlong::MAX as u64) as jlong
 }
 
 fn throw(env: &mut JNIEnv, message: String) {

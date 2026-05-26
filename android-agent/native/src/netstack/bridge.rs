@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::fd_device::AndroidTunDevice;
+use crate::traffic_stats;
 
 pub(super) fn spawn_packet_bridge(
     device: Arc<AndroidTunDevice>,
@@ -28,6 +29,7 @@ pub(super) fn spawn_packet_bridge(
                 read = input_device.recv(&mut buf) => {
                     match read {
                         Ok(n) if n > 0 => {
+                            traffic_stats::record_upload(n);
                             if let Err(e) = stack_sink.send(buf[..n].to_vec()).await {
                                 warn!("failed to push packet into netstack: {e}");
                                 break;
@@ -64,6 +66,7 @@ pub(super) fn spawn_packet_bridge(
                                 output_fatal_shutdown.cancel();
                                 break;
                             }
+                            traffic_stats::record_download(packet.len());
                         }
                         Some(Err(e)) => warn!("netstack stream error: {e}"),
                         None => break,
