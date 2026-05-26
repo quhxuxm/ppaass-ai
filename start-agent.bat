@@ -54,16 +54,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$inTun=$false;$enabled=$
 if errorlevel 1 exit /b 0
 
 set "USE_TUN_TASK=1"
-schtasks /Query /TN "%TASK_NAME%" >nul 2>&1
-if not errorlevel 1 exit /b 0
-
-echo TUN mode is enabled; installing elevated Windows startup task...
 set "PPAASS_TASK_NAME=%TASK_NAME%"
 set "PPAASS_AGENT_PATH=%~dp0desktop-agent.exe"
 set "PPAASS_CONFIG_PATH=%~dp0%CONFIG_PATH%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$script='$q=[char]34; $taskName=$env:PPAASS_TASK_NAME; $agent=$env:PPAASS_AGENT_PATH; $config=$env:PPAASS_CONFIG_PATH; $tr=$q+$agent+$q+'' --config ''+$q+$config+$q; & schtasks.exe /Create /TN $taskName /SC ONDEMAND /RL HIGHEST /TR $tr /F; exit $LASTEXITCODE'; $p=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$script); exit $p.ExitCode"
+set "PPAASS_WORK_DIR=%~dp0"
+set "PPAASS_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%PPAASS_POWERSHELL%" set "PPAASS_POWERSHELL=powershell.exe"
+
+"%PPAASS_POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $taskName=$env:PPAASS_TASK_NAME; $agent=(Resolve-Path -LiteralPath $env:PPAASS_AGENT_PATH).Path; $config=(Resolve-Path -LiteralPath $env:PPAASS_CONFIG_PATH).Path; $workDir=($env:PPAASS_WORK_DIR).TrimEnd('\'); $task=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue; if($null -eq $task){ exit 1 }; $action=@($task.Actions)[0]; if($null -eq $action){ exit 1 }; $execute=[Environment]::ExpandEnvironmentVariables([string]$action.Execute); try { $execute=(Resolve-Path -LiteralPath $execute -ErrorAction Stop).Path } catch {}; $arguments=[string]$action.Arguments; $taskWorkDir=([string]$action.WorkingDirectory).TrimEnd('\'); if(($execute -ieq $agent) -and ($arguments -like ('*'+$config+'*')) -and ($taskWorkDir -ieq $workDir)){ exit 0 }; exit 1"
+if not errorlevel 1 exit /b 0
+
+echo TUN mode is enabled; installing or updating elevated Windows startup task...
+"%PPAASS_POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$script='$ErrorActionPreference=''Stop''; $taskName=$env:PPAASS_TASK_NAME; $agent=(Resolve-Path -LiteralPath $env:PPAASS_AGENT_PATH).Path; $config=(Resolve-Path -LiteralPath $env:PPAASS_CONFIG_PATH).Path; $workDir=$env:PPAASS_WORK_DIR; $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name; $action=New-ScheduledTaskAction -Execute $agent -Argument (''--config "''+$config+''"'') -WorkingDirectory $workDir; $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest; $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DisallowStartIfOnBatteries:$false; Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null'; $p=Start-Process -FilePath $env:PPAASS_POWERSHELL -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$script); exit $p.ExitCode"
 if errorlevel 1 (
-  echo Error: failed to install elevated Windows startup task.
+  echo Error: failed to install or update elevated Windows startup task.
   exit /b 2
 )
 exit /b 0

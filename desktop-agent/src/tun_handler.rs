@@ -152,7 +152,10 @@ pub async fn run_tun_mode(
     udp_pool.set_proxy_bind_interface(None);
     drop(dns_guard);
     drop(route_guard);
+    #[cfg(target_os = "macos")]
     drop(system_guard);
+    #[cfg(not(target_os = "macos"))]
+    let _ = system_guard;
 
     let _ = tokio::join!(wait_tun_task("netstack_supervisor", netstack_task),);
 
@@ -463,12 +466,12 @@ fn create_tun_device(
     ipv4: std::net::Ipv4Addr,
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
-    proxy_addrs: &[String],
-    proxy_bind_interface: Option<&common::BindInterface>,
+    _proxy_addrs: &[String],
+    _proxy_bind_interface: Option<&common::BindInterface>,
 ) -> Result<CreatedTunDevice> {
     #[cfg(target_os = "macos")]
     if config.macos_helper_enabled {
-        match start_tun_via_helper(config, proxy_addrs, proxy_bind_interface) {
+        match start_tun_via_helper(config, _proxy_addrs, _proxy_bind_interface) {
             Ok(helper_device) => {
                 info!(
                     "已通过 TUN helper 创建设备：name={} if_index={}",
