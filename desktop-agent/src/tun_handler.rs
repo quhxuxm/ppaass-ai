@@ -8,6 +8,8 @@
 
 mod dns;
 mod dns_proxy;
+#[cfg(target_os = "macos")]
+pub(crate) mod helper_service;
 mod network;
 mod route;
 mod tasks;
@@ -20,6 +22,8 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
 use crate::privilege::ensure_tun_privileges_or_relaunch;
+#[cfg(target_os = "macos")]
+use crate::tun_helper_client::{HelperTunLease, start_tun as start_tun_via_helper};
 use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use dns::DnsGuard;
 use futures::FutureExt;
@@ -30,12 +34,15 @@ use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 use tun_rs::DeviceBuilder;
+
+const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
+const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TunForwardContext {
@@ -74,23 +81,31 @@ pub async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
-    cleanup_stale_routes(config.route_state_file.as_deref());
-    // TUN 设备创建完成后才能拿到真实设备名和 if_index。
-    let device = create_tun_device(&config, ipv4, ipv4_prefix, ipv6_config)?;
-    let tun_name = device
-        .name()
-        .map_err(|e| AgentError::Connection(format!("读取 TUN 设备名失败：{e}")))?;
-    let tun_if_index = device
-        .if_index()
-        .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
-    let device = Arc::new(device);
-    info!(
-        "TUN 设备已创建：名称={} if_index={}",
-        tun_name, tun_if_index
-    );
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
-    let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool);
+    let proxy_bind_interface =
+        configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool, &shutdown).await;
+
+    // TUN 设备创建完成后才能拿到真实设备名和 if_index。
+    let CreatedTunDevice {
+        device,
+        name: tun_name,
+        if_index: tun_if_index,
+        system_guard,
+    } = create_tun_device(
+        &config,
+        ipv4,
+        ipv4_prefix,
+        ipv6_config,
+        &proxy_addrs,
+        proxy_bind_interface.as_ref(),
+    )?;
+    let helper_managed_network = system_guard.is_some();
+    let device = Arc::new(device);
+    info!(
+        "TUN 设备已创建：名称={} if_index={} helper_managed={}",
+        tun_name, tun_if_index, helper_managed_network
+    );
 
     let forward_context = TunForwardContext {
         tcp_pool: tcp_pool.clone(),
@@ -107,7 +122,11 @@ pub async fn run_tun_mode(
         block_quic,
         shutdown.clone(),
     )?;
-    let route_guard = install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs);
+    let route_guard = if helper_managed_network {
+        None
+    } else {
+        install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs)
+    };
 
     // 路由已就绪后再预热代理连接池。否则 VMware、旧 TUN 路由或 split-default
     // 已存在时，绑定到物理接口的 Yamux 连接可能在启动早期得到 No route to host。
@@ -115,13 +134,17 @@ pub async fn run_tun_mode(
     udp_pool.prewarm().await;
 
     let dns_server = tun_dns_server(ipv4, ipv4_prefix);
-    let dns_guard = DnsGuard::install(
-        proxy_dns,
-        proxy_bind_interface.as_ref(),
-        tun_if_index,
-        dns_server,
-        config.dns_state_file.as_deref(),
-    );
+    let dns_guard = if helper_managed_network {
+        None
+    } else {
+        DnsGuard::install(
+            proxy_dns,
+            proxy_bind_interface.as_ref(),
+            tun_if_index,
+            dns_server,
+            config.dns_state_file.as_deref(),
+        )
+    };
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
@@ -133,6 +156,10 @@ pub async fn run_tun_mode(
     udp_pool.set_proxy_bind_interface(None);
     drop(dns_guard);
     drop(route_guard);
+    #[cfg(target_os = "macos")]
+    drop(system_guard);
+    #[cfg(not(target_os = "macos"))]
+    let _ = system_guard;
 
     let _ = tokio::join!(wait_tun_task("netstack_supervisor", netstack_task),);
 
@@ -425,12 +452,59 @@ fn tun_dns_server(ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> std::net::Ipv4A
     ipv4
 }
 
+struct CreatedTunDevice {
+    device: tun_rs::AsyncDevice,
+    name: String,
+    if_index: u32,
+    system_guard: Option<TunSystemGuard>,
+}
+
+enum TunSystemGuard {
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    Helper(HelperTunLease),
+}
+
 fn create_tun_device(
     config: &TunConfig,
     ipv4: std::net::Ipv4Addr,
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
-) -> Result<tun_rs::AsyncDevice> {
+    _proxy_addrs: &[String],
+    _proxy_bind_interface: Option<&common::BindInterface>,
+) -> Result<CreatedTunDevice> {
+    #[cfg(target_os = "macos")]
+    if config.macos_helper_enabled {
+        match start_tun_via_helper(config, _proxy_addrs, _proxy_bind_interface) {
+            Ok(helper_device) => {
+                info!(
+                    "已通过 TUN helper 创建设备：name={} if_index={}",
+                    helper_device.name, helper_device.if_index
+                );
+                return Ok(CreatedTunDevice {
+                    device: helper_device.device,
+                    name: helper_device.name,
+                    if_index: helper_device.if_index,
+                    system_guard: Some(TunSystemGuard::Helper(helper_device.lease)),
+                });
+            }
+            Err(err) if config.macos_helper_fallback_to_privilege => {
+                warn!("TUN helper 不可用，将回退到旧的整进程提权路径：{}", err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    create_tun_device_legacy(config, ipv4, ipv4_prefix, ipv6_config)
+}
+
+fn create_tun_device_legacy(
+    config: &TunConfig,
+    ipv4: std::net::Ipv4Addr,
+    ipv4_prefix: u8,
+    ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
+) -> Result<CreatedTunDevice> {
+    cleanup_stale_routes(config.route_state_file.as_deref());
     ensure_tun_privileges_or_relaunch()?;
 
     // DeviceBuilder 负责设置地址、MTU 和平台相关参数。
@@ -442,7 +516,20 @@ fn create_tun_device(
         builder = builder.ipv6(ipv6, ipv6_prefix);
     }
 
-    build_tun_device(builder, config)
+    let device = build_tun_device(builder, config)?;
+    let name = device
+        .name()
+        .map_err(|e| AgentError::Connection(format!("读取 TUN 设备名失败：{e}")))?;
+    let if_index = device
+        .if_index()
+        .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
+
+    Ok(CreatedTunDevice {
+        device,
+        name,
+        if_index,
+        system_guard: None,
+    })
 }
 
 #[cfg(windows)]
@@ -604,20 +691,63 @@ fn windows_arch_label() -> &'static str {
     }
 }
 
-fn configure_proxy_routing(
+async fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
     tcp_pool: &ConnectionPool,
     udp_pool: &ConnectionPool,
+    shutdown: &CancellationToken,
 ) -> Option<common::BindInterface> {
-    // 通过 OS 路由决策探测物理出口 IP，用于后续 proxy 连接 bind。
-    let proxy_route = detect_proxy_route(proxy_addrs);
+    // 通过 OS 路由决策探测物理出口 IP/接口，用于后续 proxy 连接 bind。
+    // macOS 登录项开机自启时，默认路由和网络服务常常晚于进程启动才可用。
+    let started = Instant::now();
+    let mut attempts = 0usize;
+    let mut last_partial_route = None;
+    let proxy_route = loop {
+        attempts += 1;
+        match detect_proxy_route(proxy_addrs) {
+            Some(route) if proxy_route_has_interface(&route) => break Some(route),
+            Some(route) => {
+                debug!(
+                    "已检测到物理出口 IP={}，但出口接口尚不可用；等待系统网络就绪",
+                    route.local_ip
+                );
+                last_partial_route = Some(route);
+            }
+            None => {
+                debug!("尚未检测到物理出口；等待系统网络就绪");
+            }
+        }
+
+        let elapsed = started.elapsed();
+        if elapsed >= PROXY_ROUTE_DETECT_MAX_WAIT {
+            if let Some(route) = last_partial_route {
+                warn!(
+                    "等待物理出口接口超时（尝试 {} 次，用时 {:?}）；退化为仅绑定出口 IP={}，\
+                     代理连接仍可能受当前系统路由影响",
+                    attempts, elapsed, route.local_ip
+                );
+                break Some(route);
+            }
+            break None;
+        }
+
+        let delay = PROXY_ROUTE_DETECT_RETRY_DELAY.min(PROXY_ROUTE_DETECT_MAX_WAIT - elapsed);
+        tokio::select! {
+            _ = shutdown.cancelled() => break None,
+            _ = tokio::time::sleep(delay) => {}
+        }
+    };
+
     let mut bind_interface = None;
     if let Some(route) = proxy_route {
         bind_interface = route.bind_interface.clone();
         info!(
-            "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口",
-            route.local_ip, route.bind_interface
+            "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口（尝试 {} 次，用时 {:?}）",
+            route.local_ip,
+            route.bind_interface,
+            attempts,
+            started.elapsed()
         );
         tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
         tcp_pool.set_proxy_bind_interface(route.bind_interface.clone());
@@ -640,6 +770,45 @@ fn configure_proxy_routing(
     );
 
     bind_interface
+}
+
+fn proxy_route_has_interface(route: &route::ProxyRoute) -> bool {
+    route
+        .bind_interface
+        .as_ref()
+        .is_some_and(bind_interface_is_usable)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.name.is_some()
+}
+
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+    windows,
+))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.index.is_some()
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "fuchsia",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+    windows,
+)))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.name.is_some() || interface.index.is_some()
 }
 
 fn install_route_guard(

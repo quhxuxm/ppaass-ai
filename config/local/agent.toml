@@ -84,7 +84,9 @@ stream_window_size_kb = 2048
 # 尝试按状态文件清理上次遗留的路由，再安装新的路由。
 #
 # 注意：创建 TUN 设备并修改路由表需要提升权限。
-# agent 只会在进入 TUN 建立流程时请求提权；普通 SOCKS5/HTTP 模式不会提权。
+# macOS 默认优先连接本地特权 helper；start-agent.sh/start-agent.command
+# 会在 TUN 启动前自动安装 helper，后续启停 TUN 不再需要每次输密码。
+# macOS helper 不可用时默认回退到旧的 sudo 整进程提权路径；普通 SOCKS5/HTTP 模式不会提权。
 
 [tun]
 enabled = true
@@ -101,6 +103,10 @@ wintun_file = "wintun.dll"
 route_state_file = "tun-routes.json"
 # TUN DNS 状态文件名或路径。相对路径会放在当前运行目录下。
 dns_state_file = "tun-dns.json"
+# macOS 使用 desktop-agent 自身的特权 helper 模式；Windows 由 start-agent.bat 创建最高权限计划任务避免重复 UAC。
+macos_helper_enabled = true
+macos_helper_socket = "/var/run/ppaass-ai/tun-helper.sock"
+macos_helper_fallback_to_privilege = true
 
 # 直连访问配置
 #
@@ -120,6 +126,7 @@ mode = "rules"
 rules = [
    "localhost",
    "*.local",
+   "140.82.30.214/32",
    "*.isoftbet.com",
    "*.lab.wagerworks.com",
    "*.corp.wagerworks.com",

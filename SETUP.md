@@ -117,6 +117,17 @@ connection_timeout_secs = 30
 ./target/release/desktop-agent --config config/agent.toml
 ```
 
+#### TUN helper startup behavior
+
+Desktop TUN mode needs permission to create the TUN device and change routes/DNS.
+On macOS, `start-agent.sh` and `start-agent.command` install the existing `desktop-agent` binary as a privileged helper-mode service when `[tun] enabled = true` and `macos_helper_enabled = true`. Later TUN starts use the helper socket instead of prompting for sudo every time. No separate helper binary is built or installed. To remove the installed service:
+
+```bash
+./scripts/uninstall-tun-helper-unix.sh
+```
+
+On Windows, `start-agent.bat` creates a highest-privilege scheduled task the first time TUN mode is started. That first install may show UAC once; later starts use the task instead of relaunching the agent through UAC every time.
+
 #### Alternative: Use startup scripts (same-folder deployment)
 
 If you deploy the binaries and configs alongside the scripts, use:

@@ -40,7 +40,7 @@ impl ProxyServer {
 
         // 初始化带宽监控器
         let bandwidth_monitor = Arc::new(BandwidthMonitor::new());
-        // 出站状态在启动时构建；auto 模式会在这里缓存路由表，避免每个连接重复读取。
+        // 出站状态在启动时构建；auto 模式会缓存初始路由表，并在默认路由不可用时刷新。
         let egress_state = Arc::new(EgressState::new(config.outbound_interface.as_deref())?);
         let connection_limiter = ConnectionLimiter::new(&config);
 

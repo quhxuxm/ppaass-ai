@@ -34,10 +34,10 @@ pretty-hex.workspace = true
 
 # 用于统计与报告
 hdrhistogram = "7.5"
-sysinfo = "0.33"
+sysinfo = "0.39.2"
 
 # SOCKS5 客户端
-async-socks5 = "0.5"
+async-socks5 = "0.6.0"
 
 [dev-dependencies]
-tempfile = "3.19"
+tempfile.workspace = true

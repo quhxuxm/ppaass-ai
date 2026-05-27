@@ -63,4 +63,24 @@ pub struct CliArgs {
     /// 覆盖 Windows TUN 运行库 wintun.dll 路径
     #[arg(long)]
     pub tun_wintun_file: Option<String>,
+
+    /// 禁用 macOS 本地特权 TUN helper，回到旧的整进程提权路径
+    #[arg(long)]
+    pub tun_no_helper: bool,
+
+    /// 覆盖 macOS 本地特权 TUN helper 的 socket 路径
+    #[arg(long)]
+    pub tun_helper_socket: Option<String>,
+
+    /// helper 不可用时不回退到 sudo/UAC 整进程提权
+    #[arg(long)]
+    pub tun_helper_no_fallback: bool,
+
+    /// 以 macOS TUN helper 服务模式运行当前 desktop-agent 二进制
+    #[arg(long, hide = true)]
+    pub tun_helper_service: bool,
+
+    /// 限制允许连接 macOS TUN helper socket 的用户 UID
+    #[arg(long, hide = true)]
+    pub tun_helper_allowed_uid: Option<u32>,
 }

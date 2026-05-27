@@ -9,6 +9,7 @@ mod server;
 mod socks5_handler;
 mod telemetry;
 mod tun_handler;
+mod tun_helper_client;
 
 use crate::cli::CliArgs;
 use crate::config::AgentConfig;
@@ -26,6 +27,21 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
     let args = CliArgs::parse();
+
+    #[cfg(target_os = "macos")]
+    if args.tun_helper_service {
+        return tun_handler::helper_service::run(
+            args.tun_helper_socket.as_deref(),
+            args.tun_helper_allowed_uid,
+            args.log_level.as_deref(),
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if args.tun_helper_service {
+        anyhow::bail!("TUN helper service mode is only supported on macOS");
+    }
+
     // 加载配置文件
     let mut config = AgentConfig::load(&args.config)?;
 
@@ -73,6 +89,15 @@ fn main() -> Result<()> {
     }
     if let Some(tun_wintun_file) = args.tun_wintun_file {
         config.tun.wintun_file = Some(tun_wintun_file);
+    }
+    if args.tun_no_helper {
+        config.tun.macos_helper_enabled = false;
+    }
+    if let Some(tun_helper_socket) = args.tun_helper_socket {
+        config.tun.macos_helper_socket = tun_helper_socket;
+    }
+    if args.tun_helper_no_fallback {
+        config.tun.macos_helper_fallback_to_privilege = false;
     }
 
     // 如有需要，创建日志目录
