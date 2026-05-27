@@ -126,6 +126,7 @@ mode = "rules"
 rules = [
    "localhost",
    "*.local",
+   "140.82.30.214/32",
    "*.isoftbet.com",
    "*.lab.wagerworks.com",
    "*.corp.wagerworks.com",
