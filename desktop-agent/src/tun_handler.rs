@@ -34,12 +34,15 @@ use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 use tun_rs::DeviceBuilder;
+
+const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
+const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TunForwardContext {
@@ -80,7 +83,8 @@ pub async fn run_tun_mode(
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
-    let proxy_bind_interface = configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool);
+    let proxy_bind_interface =
+        configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool, &shutdown).await;
 
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let CreatedTunDevice {
@@ -687,20 +691,63 @@ fn windows_arch_label() -> &'static str {
     }
 }
 
-fn configure_proxy_routing(
+async fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
     tcp_pool: &ConnectionPool,
     udp_pool: &ConnectionPool,
+    shutdown: &CancellationToken,
 ) -> Option<common::BindInterface> {
-    // 通过 OS 路由决策探测物理出口 IP，用于后续 proxy 连接 bind。
-    let proxy_route = detect_proxy_route(proxy_addrs);
+    // 通过 OS 路由决策探测物理出口 IP/接口，用于后续 proxy 连接 bind。
+    // macOS 登录项开机自启时，默认路由和网络服务常常晚于进程启动才可用。
+    let started = Instant::now();
+    let mut attempts = 0usize;
+    let mut last_partial_route = None;
+    let proxy_route = loop {
+        attempts += 1;
+        match detect_proxy_route(proxy_addrs) {
+            Some(route) if proxy_route_has_interface(&route) => break Some(route),
+            Some(route) => {
+                debug!(
+                    "已检测到物理出口 IP={}，但出口接口尚不可用；等待系统网络就绪",
+                    route.local_ip
+                );
+                last_partial_route = Some(route);
+            }
+            None => {
+                debug!("尚未检测到物理出口；等待系统网络就绪");
+            }
+        }
+
+        let elapsed = started.elapsed();
+        if elapsed >= PROXY_ROUTE_DETECT_MAX_WAIT {
+            if let Some(route) = last_partial_route {
+                warn!(
+                    "等待物理出口接口超时（尝试 {} 次，用时 {:?}）；退化为仅绑定出口 IP={}，\
+                     代理连接仍可能受当前系统路由影响",
+                    attempts, elapsed, route.local_ip
+                );
+                break Some(route);
+            }
+            break None;
+        }
+
+        let delay = PROXY_ROUTE_DETECT_RETRY_DELAY.min(PROXY_ROUTE_DETECT_MAX_WAIT - elapsed);
+        tokio::select! {
+            _ = shutdown.cancelled() => break None,
+            _ = tokio::time::sleep(delay) => {}
+        }
+    };
+
     let mut bind_interface = None;
     if let Some(route) = proxy_route {
         bind_interface = route.bind_interface.clone();
         info!(
-            "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口",
-            route.local_ip, route.bind_interface
+            "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口（尝试 {} 次，用时 {:?}）",
+            route.local_ip,
+            route.bind_interface,
+            attempts,
+            started.elapsed()
         );
         tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
         tcp_pool.set_proxy_bind_interface(route.bind_interface.clone());
@@ -723,6 +770,45 @@ fn configure_proxy_routing(
     );
 
     bind_interface
+}
+
+fn proxy_route_has_interface(route: &route::ProxyRoute) -> bool {
+    route
+        .bind_interface
+        .as_ref()
+        .is_some_and(bind_interface_is_usable)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.name.is_some()
+}
+
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+    windows,
+))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.index.is_some()
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "fuchsia",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+    windows,
+)))]
+fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.name.is_some() || interface.index.is_some()
 }
 
 fn install_route_guard(

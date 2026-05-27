@@ -26,7 +26,7 @@ enum InterfaceSelection {
 
 impl EgressState {
     pub fn new(interface: Option<&str>) -> io::Result<Self> {
-        // 启动阶段解析出站设备配置；auto 模式会在这里读取并缓存路由表。
+        // 启动阶段解析出站设备配置；auto 模式会读取初始路由表并在失效时刷新。
         let interface = match normalize_interface(interface) {
             Some(interface) if auto::is_auto_interface(interface) => {
                 Some(InterfaceSelection::Auto(AutoInterfaceSelector::new()?))
@@ -61,7 +61,7 @@ impl EgressState {
     }
 
     fn interface_for_dst(&self, dst: SocketAddr) -> io::Result<Cow<'_, str>> {
-        // Named 直接使用配置值；auto 则从启动时缓存的路由表中选择出口设备。
+        // Named 直接使用配置值；auto 则从可刷新的路由表快照中选择出口设备。
         match &self.interface {
             Some(InterfaceSelection::Named(interface)) => Ok(Cow::Borrowed(interface.as_str())),
             Some(InterfaceSelection::Auto(selector)) => {
