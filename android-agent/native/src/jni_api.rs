@@ -111,10 +111,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_isRunning<'local>(
     }
 
     let handle = unsafe { &*(handle as *const AgentHandle) };
-    match handle.thread.as_ref() {
-        Some(thread) if !thread.is_finished() => true,
-        _ => false,
-    }
+    matches!(handle.thread.as_ref(), Some(thread) if !thread.is_finished())
 }
 
 #[unsafe(no_mangle)]
