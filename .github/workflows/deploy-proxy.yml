@@ -68,6 +68,11 @@ jobs:
           username: ${{ env.REMOTE_USER }}
           password: ${{ env.REMOTE_PASSWORD }}
           script: |
+            if [ -f "${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh" ] && grep -q -- "--supervisor" "${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh"; then
+              chmod +x ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
+              ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh stop || true
+            fi
+
             process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
             if [ -n "$process_id" ]; then
               echo "Stopping existing proxy process with PID: $process_id"
