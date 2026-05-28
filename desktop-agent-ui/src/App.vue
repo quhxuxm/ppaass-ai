@@ -14,7 +14,7 @@ import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
 import ToggleSwitch from "primevue/toggleswitch";
 
-type TabKey = "overview" | "network" | "tun" | "diagnostics" | "logs" | "toml";
+type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
 
 type AgentConfigSummary = {
   listen_addr: string;
@@ -111,6 +111,33 @@ type TrafficHourlyStore = {
 
 type ToastKind = "info" | "success" | "error";
 
+type DirectRuleGroup = {
+  key: string;
+  label: string;
+  icon: string;
+  items: Array<{ rule: string; index: number }>;
+};
+
+type OverviewCardKey = "status" | "proxy" | "egress" | "speed" | "traffic" | "tun" | "policy";
+
+type OverviewCardDefinition = {
+  key: OverviewCardKey;
+  baseSpan: number;
+};
+
+type OverviewCardView = OverviewCardDefinition & {
+  span: number;
+};
+
+type OverviewDragGhost = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+};
+
 const fallbackRawConfig = `listen_addr = "127.0.0.1:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
@@ -156,8 +183,9 @@ rules = ["localhost", "*.local", "127.0.0.0/8"]
 
 const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
   { key: "overview", label: "总览", icon: "pi pi-th-large" },
-  { key: "network", label: "连接", icon: "pi pi-sitemap" },
-  { key: "tun", label: "TUN", icon: "pi pi-compass" },
+  { key: "forwarding", label: "转发", icon: "pi pi-sitemap" },
+  { key: "egress", label: "出口", icon: "pi pi-share-alt" },
+  { key: "routing", label: "系统", icon: "pi pi-cog" },
   { key: "diagnostics", label: "诊断", icon: "pi pi-wifi" },
   { key: "logs", label: "日志", icon: "pi pi-list" },
   { key: "toml", label: "TOML", icon: "pi pi-code" }
@@ -173,7 +201,28 @@ const directRulePresets = [
 const compressionOptions = ["none", "lz4", "gzip", "zstd"];
 const logLevelOptions = ["trace", "debug", "info", "warn", "error"];
 const transportModeOptions = ["auto", "yamux", "legacy"];
-const directModeOptions = ["proxy_all", "direct_all", "rules"];
+const directModeLabels: Record<string, string> = {
+  proxy_all: "全走代理",
+  direct_all: "全量直连",
+  rules: "按规则"
+};
+const directModeOptions = [
+  { label: "代理", value: "proxy_all" },
+  { label: "直连", value: "direct_all" },
+  { label: "规则", value: "rules" }
+];
+const overviewLayoutKey = "ppaass-agent-ui:overview-card-order:v1";
+const overviewCardDefinitions: OverviewCardDefinition[] = [
+  { key: "status", baseSpan: 7 },
+  { key: "proxy", baseSpan: 5 },
+  { key: "egress", baseSpan: 6 },
+  { key: "speed", baseSpan: 6 },
+  { key: "traffic", baseSpan: 6 },
+  { key: "tun", baseSpan: 6 },
+  { key: "policy", baseSpan: 6 }
+];
+const defaultOverviewCardOrder = overviewCardDefinitions.map((card) => card.key);
+const overviewCardByKey = new Map(overviewCardDefinitions.map((card) => [card.key, card]));
 const trafficBaselineKey = "ppaass-agent-ui:traffic-baseline:v1";
 const trafficHourlyKey = "ppaass-agent-ui:traffic-hourly:v1";
 
@@ -184,6 +233,10 @@ const state = reactive({
   diagnosticsRunning: false,
   dirty: false,
   ruleDraft: "",
+  overviewCardOrder: readOverviewCardOrder(),
+  draggingOverviewCard: null as OverviewCardKey | null,
+  dragOverOverviewCard: null as OverviewCardKey | null,
+  overviewDragGhost: null as OverviewDragGhost | null,
   statusText: "初始化",
   toast: null as null | { kind: ToastKind; message: string },
   config: null as LoadedAgentConfig | null,
@@ -228,6 +281,26 @@ const hourlyTrafficMax = computed(() =>
     ...state.traffic.hourly_buckets.map((bucket) => bucket.download_bytes + bucket.upload_bytes)
   )
 );
+const directModeLabel = computed(() => directModeLabels[summary.value.direct_mode] ?? summary.value.direct_mode);
+const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "未启用"));
+const proxyEntryStateLabel = computed(() => (summary.value.tun_enabled ? "TUN 启用时暂停" : "随 Agent 启动"));
+const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN 模式" : "HTTP / SOCKS5 代理"));
+const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
+const directRuleGroups = computed(() => {
+  const groups: DirectRuleGroup[] = [
+    { key: "wildcard", label: "通配符", icon: "pi pi-asterisk", items: [] },
+    { key: "network", label: "IP / CIDR", icon: "pi pi-hashtag", items: [] },
+    { key: "domain", label: "域名", icon: "pi pi-globe", items: [] },
+    { key: "other", label: "其他", icon: "pi pi-ellipsis-h", items: [] }
+  ];
+  const byKey = new Map(groups.map((group) => [group.key, group]));
+
+  summary.value.direct_rules.forEach((rule, index) => {
+    byKey.get(ruleGroupKey(rule))?.items.push({ rule, index });
+  });
+
+  return groups.filter((group) => group.items.length > 0);
+});
 
 let trafficTimer: number | undefined;
 
@@ -610,6 +683,222 @@ function normalizeRules(rules: string[]) {
       seen.add(key);
       return true;
     });
+}
+
+function readOverviewCardOrder() {
+  try {
+    const raw = localStorage.getItem(overviewLayoutKey);
+    return normalizeOverviewCardOrder(raw ? JSON.parse(raw) : []);
+  } catch {
+    return [...defaultOverviewCardOrder];
+  }
+}
+
+function normalizeOverviewCardOrder(value: unknown): OverviewCardKey[] {
+  const order: OverviewCardKey[] = [];
+  const known = new Set(defaultOverviewCardOrder);
+  const rawItems = Array.isArray(value) ? value : [];
+
+  for (const item of rawItems) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const key = item as OverviewCardKey;
+    if (known.has(key) && !order.includes(key)) {
+      order.push(key);
+    }
+  }
+
+  for (const key of defaultOverviewCardOrder) {
+    if (!order.includes(key)) {
+      order.push(key);
+    }
+  }
+
+  return order;
+}
+
+function buildOverviewCards(order: OverviewCardKey[]): OverviewCardView[] {
+  const cards = normalizeOverviewCardOrder(order).map((key) => ({
+    ...(overviewCardByKey.get(key) ?? overviewCardDefinitions[0]),
+    span: overviewCardByKey.get(key)?.baseSpan ?? 12
+  }));
+  const result: OverviewCardView[] = [];
+  let row: OverviewCardView[] = [];
+  let rowSpan = 0;
+
+  const flushRow = () => {
+    if (!row.length) {
+      return;
+    }
+    row[row.length - 1].span += 12 - rowSpan;
+    result.push(...row);
+    row = [];
+    rowSpan = 0;
+  };
+
+  for (const card of cards) {
+    if (rowSpan > 0 && rowSpan + card.baseSpan > 12) {
+      flushRow();
+    }
+    row.push(card);
+    rowSpan += card.baseSpan;
+    if (rowSpan === 12) {
+      flushRow();
+    }
+  }
+
+  flushRow();
+  return result;
+}
+
+function overviewCardTitle(key: OverviewCardKey) {
+  const titles: Record<OverviewCardKey, string> = {
+    status: "运行状态",
+    proxy: "HTTP / SOCKS5",
+    egress: "公共远端出口",
+    speed: "实时网速",
+    traffic: "今日流量",
+    tun: "TUN",
+    policy: "共享策略"
+  };
+  return titles[key];
+}
+
+function overviewCardSubtitle(key: OverviewCardKey) {
+  if (key === "status") {
+    return state.agent.binary_path ? shortPath(state.agent.binary_path) : "desktop-agent";
+  }
+  return "";
+}
+
+function onOverviewMouseDown(event: MouseEvent, key: OverviewCardKey) {
+  if (event.button !== 0) {
+    return;
+  }
+  if (event.target instanceof Element && event.target.closest("input, textarea, select, a, button:not(.overview-drag-handle)")) {
+    return;
+  }
+  event.preventDefault();
+  document.body.classList.add("overview-dragging");
+  state.draggingOverviewCard = key;
+  state.dragOverOverviewCard = null;
+  const cardElement =
+    event.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : document.querySelector<HTMLElement>(`[data-overview-card="${key}"]`);
+  const cardBox = cardElement?.getBoundingClientRect();
+  if (cardBox) {
+    state.overviewDragGhost = {
+      x: cardBox.left,
+      y: cardBox.top,
+      width: cardBox.width,
+      height: cardBox.height,
+      offsetX: event.clientX - cardBox.left,
+      offsetY: event.clientY - cardBox.top
+    };
+  }
+
+  window.addEventListener("mousemove", onOverviewMouseMove);
+  window.addEventListener("mouseup", onOverviewMouseUp, { once: true });
+}
+
+function onOverviewMouseMove(event: MouseEvent) {
+  if (!state.draggingOverviewCard) {
+    return;
+  }
+
+  if (state.overviewDragGhost) {
+    state.overviewDragGhost.x = event.clientX - state.overviewDragGhost.offsetX;
+    state.overviewDragGhost.y = event.clientY - state.overviewDragGhost.offsetY;
+  }
+
+  const targetKey = overviewCardKeyFromPoint(event.clientX, event.clientY);
+  if (!targetKey || targetKey === state.draggingOverviewCard) {
+    state.dragOverOverviewCard = null;
+    return;
+  }
+
+  state.dragOverOverviewCard = targetKey;
+  moveOverviewCard(
+    state.draggingOverviewCard,
+    targetKey,
+    overviewDropPlacement(event.clientX, event.clientY, targetKey)
+  );
+}
+
+function onOverviewMouseUp(event: MouseEvent) {
+  const source = state.draggingOverviewCard;
+  const target = overviewCardKeyFromPoint(event.clientX, event.clientY);
+  if (source && target && source !== target) {
+    moveOverviewCard(source, target, overviewDropPlacement(event.clientX, event.clientY, target));
+  }
+  resetOverviewMouseDrag();
+}
+
+function overviewCardKeyFromPoint(x: number, y: number) {
+  const element = document.elementFromPoint(x, y);
+  const card = element instanceof Element ? element.closest<HTMLElement>("[data-overview-card]") : null;
+  const key = card?.dataset.overviewCard as OverviewCardKey | undefined;
+  return key && overviewCardByKey.has(key) ? key : null;
+}
+
+function overviewDropPlacement(x: number, y: number, targetKey: OverviewCardKey): "before" | "after" {
+  const target = document.querySelector<HTMLElement>(`[data-overview-card="${targetKey}"]`);
+  let placement: "before" | "after" = "before";
+  if (target) {
+    const box = target.getBoundingClientRect();
+    const pastVerticalMidpoint = y > box.top + box.height / 2;
+    const pastHorizontalMidpoint = x > box.left + box.width / 2;
+    placement = pastVerticalMidpoint || pastHorizontalMidpoint ? "after" : "before";
+  }
+  return placement;
+}
+
+function resetOverviewMouseDrag() {
+  window.removeEventListener("mousemove", onOverviewMouseMove);
+  window.removeEventListener("mouseup", onOverviewMouseUp);
+  document.body.classList.remove("overview-dragging");
+  state.draggingOverviewCard = null;
+  state.dragOverOverviewCard = null;
+  state.overviewDragGhost = null;
+}
+
+function moveOverviewCard(source: OverviewCardKey, target: OverviewCardKey, placement: "before" | "after") {
+  const next = [...state.overviewCardOrder];
+  const sourceIndex = next.indexOf(source);
+  if (sourceIndex === -1) {
+    return;
+  }
+  next.splice(sourceIndex, 1);
+  const targetIndex = next.indexOf(target);
+  if (targetIndex === -1) {
+    return;
+  }
+  next.splice(placement === "after" ? targetIndex + 1 : targetIndex, 0, source);
+  state.overviewCardOrder = normalizeOverviewCardOrder(next);
+  localStorage.setItem(overviewLayoutKey, JSON.stringify(state.overviewCardOrder));
+}
+
+function ruleGroupKey(rule: string) {
+  const normalized = rule.trim().toLowerCase();
+  if (normalized.includes("*")) {
+    return "wildcard";
+  }
+  if (isNetworkRule(normalized)) {
+    return "network";
+  }
+  if (/^[a-z0-9._-]+(\.[a-z0-9._-]+)*$/i.test(normalized)) {
+    return "domain";
+  }
+  return "other";
+}
+
+function isNetworkRule(rule: string) {
+  return (
+    /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(rule) ||
+    /^([0-9a-f]{0,4}:){1,7}[0-9a-f]{0,4}(\/\d{1,3})?$/i.test(rule)
+  );
 }
 
 function coerceField(field: keyof AgentConfigSummary, value: unknown): unknown {
@@ -1033,27 +1322,78 @@ function getErrorMessage(error: unknown) {
         <h2>未载入配置</h2>
       </section>
 
-      <div v-else-if="state.activeTab === 'overview'" class="content-grid">
-        <Card class="panel span-7">
+      <div v-else-if="state.activeTab === 'overview'" class="content-grid overview-grid">
+        <Card
+          v-for="card in overviewCards"
+          :key="card.key"
+          :class="[
+            'panel',
+            'overview-card',
+            {
+              dragging: state.draggingOverviewCard === card.key,
+              'drop-target': state.dragOverOverviewCard === card.key
+            }
+          ]"
+          :style="{ gridColumn: 'span ' + card.span }"
+          :data-overview-card="card.key"
+          @mousedown="onOverviewMouseDown($event, card.key)"
+        >
           <template #title>
-            <div class="panel-heading inline">
-              <div>
-                <h2>运行状态</h2>
-                <p>{{ state.agent.binary_path ? shortPath(state.agent.binary_path) : "desktop-agent" }}</p>
+            <div class="panel-heading inline overview-card-heading">
+              <div class="overview-card-title">
+                <h2>{{ overviewCardTitle(card.key) }}</h2>
+                <p v-if="overviewCardSubtitle(card.key)">{{ overviewCardSubtitle(card.key) }}</p>
               </div>
-              <Badge :value="state.agent.running ? 'Active' : 'Idle'" :severity="state.agent.running ? 'success' : 'secondary'" />
+              <div class="overview-card-actions">
+                <Badge
+                  v-if="card.key === 'status'"
+                  :value="state.agent.running ? 'Active' : 'Idle'"
+                  :severity="state.agent.running ? 'success' : 'secondary'"
+                />
+                <Tag
+                  v-else-if="card.key === 'proxy'"
+                  :value="proxyEntryStateLabel"
+                  :severity="summary.tun_enabled ? 'secondary' : 'success'"
+                />
+                <Tag
+                  v-else-if="card.key === 'egress'"
+                  :value="`${summary.tcp_mode.toUpperCase()} / ${summary.udp_mode.toUpperCase()}`"
+                  severity="info"
+                />
+                <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />
+                <span v-else-if="card.key === 'traffic'">{{ state.traffic.baseline?.date ?? localDateKey() }}</span>
+                <Tag
+                  v-else-if="card.key === 'tun'"
+                  :value="summary.tun_enabled ? 'Enabled' : 'Disabled'"
+                  :severity="summary.tun_enabled ? 'success' : 'secondary'"
+                />
+                <Tag v-else-if="card.key === 'policy'" :value="directModeLabel" severity="info" />
+                <button
+                  type="button"
+                  class="overview-drag-handle"
+                  aria-label="拖动调整顺序"
+                  title="拖动调整顺序"
+                >
+                  <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+                </button>
+              </div>
             </div>
           </template>
           <template #content>
-            <div class="status-board">
+            <div v-if="card.key === 'status'" class="status-board">
               <div class="metric-tile">
                 <i class="pi pi-broadcast-tower"></i>
-                <span>本地入口</span>
+                <span>当前转发</span>
+                <strong>{{ activeForwardingLabel }}</strong>
+              </div>
+              <div class="metric-tile">
+                <i class="pi pi-globe"></i>
+                <span>代理入口</span>
                 <strong>{{ summary.listen_addr }}</strong>
               </div>
               <div class="metric-tile">
                 <i class="pi pi-server"></i>
-                <span>代理节点</span>
+                <span>公共出口</span>
                 <strong>{{ summary.proxy_addrs.length }}</strong>
               </div>
               <div class="metric-tile">
@@ -1077,18 +1417,12 @@ function getErrorMessage(error: unknown) {
                 <strong>{{ summary.log_level }}</strong>
               </div>
             </div>
-          </template>
-        </Card>
-
-        <Card class="panel span-5">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>代理出口</h2>
-              <Tag :value="`${summary.tcp_mode.toUpperCase()} / ${summary.udp_mode.toUpperCase()}`" severity="info" />
+            <div v-else-if="card.key === 'proxy'" class="kv-list">
+              <div class="kv-row"><span>监听</span><strong>{{ summary.listen_addr }}</strong></div>
+              <div class="kv-row"><span>协议</span><strong>HTTP / SOCKS5</strong></div>
+              <div class="kv-row"><span>公共出口</span><strong>{{ summary.proxy_addrs.length }} 个节点</strong></div>
             </div>
-          </template>
-          <template #content>
-            <div class="endpoint-list">
+            <div v-else-if="card.key === 'egress'" class="endpoint-list">
               <div v-for="proxy in summary.proxy_addrs" :key="proxy" class="endpoint-row">
                 <i class="pi pi-server"></i>
                 <span>{{ proxy }}</span>
@@ -1098,18 +1432,7 @@ function getErrorMessage(error: unknown) {
                 <span>未配置</span>
               </div>
             </div>
-          </template>
-        </Card>
-
-        <Card class="panel span-6">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>实时网速</h2>
-              <Tag value="System" severity="info" />
-            </div>
-          </template>
-          <template #content>
-            <div class="speed-gauges">
+            <div v-else-if="card.key === 'speed'" class="speed-gauges">
               <div class="speed-gauge">
                 <Knob
                   :model-value="downloadGaugeValue"
@@ -1135,18 +1458,7 @@ function getErrorMessage(error: unknown) {
                 <strong>{{ formatRate(state.traffic.upload_bps) }}</strong>
               </div>
             </div>
-          </template>
-        </Card>
-
-        <Card class="panel span-6">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>今日流量</h2>
-              <span>{{ state.traffic.baseline?.date ?? localDateKey() }}</span>
-            </div>
-          </template>
-          <template #content>
-            <div class="hourly-chart">
+            <div v-else-if="card.key === 'traffic'" class="hourly-chart">
               <div class="hourly-totals">
                 <Tag :value="`下载 ${formatBytes(state.traffic.day_download_bytes)}`" severity="info" rounded />
                 <Tag :value="`上传 ${formatBytes(state.traffic.day_upload_bytes)}`" severity="success" rounded />
@@ -1167,63 +1479,145 @@ function getErrorMessage(error: unknown) {
                 <span><i class="legend-dot upload"></i>上传</span>
               </div>
             </div>
-          </template>
-        </Card>
-
-        <Card class="panel span-6">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>TUN</h2>
-              <Tag :value="summary.tun_enabled ? 'Enabled' : 'Disabled'" :severity="summary.tun_enabled ? 'success' : 'secondary'" />
-            </div>
-          </template>
-          <template #content>
-            <div class="kv-list">
+            <div v-else-if="card.key === 'tun'" class="kv-list">
               <div class="kv-row"><span>设备</span><strong>{{ summary.tun_name }}</strong></div>
               <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
               <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
               <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "Proxy" : "System" }}</strong></div>
             </div>
+            <div v-else-if="card.key === 'policy'" class="kv-list">
+              <div class="kv-row"><span>配置段</span><strong>direct_access</strong></div>
+              <div class="kv-row"><span>服务对象</span><strong>代理入口与 TUN 模式</strong></div>
+              <div class="kv-row"><span>规则</span><strong>{{ summary.direct_rules.length }} 条</strong></div>
+            </div>
           </template>
         </Card>
 
+        <div
+          v-if="state.draggingOverviewCard && state.overviewDragGhost"
+          class="overview-drag-ghost"
+          :style="{
+            left: `${state.overviewDragGhost.x}px`,
+            top: `${state.overviewDragGhost.y}px`,
+            width: `${state.overviewDragGhost.width}px`,
+            height: `${state.overviewDragGhost.height}px`
+          }"
+        >
+          <div class="overview-drag-ghost-heading">
+            <strong>{{ overviewCardTitle(state.draggingOverviewCard) }}</strong>
+            <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+          </div>
+          <div class="overview-drag-ghost-lines" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="state.activeTab === 'forwarding'" class="content-grid">
+        <section class="card-group span-12">
+          <div class="card-group-heading">
+            <div>
+              <h2>HTTP / SOCKS5 代理</h2>
+              <p>{{ summary.listen_addr }}</p>
+            </div>
+            <Tag :value="proxyEntryStateLabel" :severity="summary.tun_enabled ? 'secondary' : 'success'" />
+          </div>
+          <div class="card-group-grid">
+            <Card class="panel">
+              <template #title><h2>代理入口</h2></template>
+              <template #content>
+                <div class="method-summary">
+                  <div class="method-fact"><span>入站协议</span><strong>HTTP / SOCKS5</strong></div>
+                  <div class="method-fact"><span>监听状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
+                </div>
+                <label class="field">
+                  <span><i class="pi pi-broadcast-tower"></i>监听地址</span>
+                  <InputText :model-value="summary.listen_addr" @update:model-value="setField('listen_addr', $event)" />
+                </label>
+              </template>
+            </Card>
+
+            <Card class="panel">
+              <template #title>
+                <div class="panel-heading inline">
+                  <h2>代理状态</h2>
+                  <Tag :value="activeForwardingLabel" severity="info" />
+                </div>
+              </template>
+              <template #content>
+                <div class="kv-list">
+                  <div class="kv-row"><span>监听</span><strong>{{ summary.listen_addr }}</strong></div>
+                  <div class="kv-row"><span>协议</span><strong>HTTP / SOCKS5</strong></div>
+                  <div class="kv-row"><span>状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
+                  <div class="kv-row"><span>公共出口</span><strong>{{ summary.proxy_addrs.length }} 个节点</strong></div>
+                </div>
+              </template>
+            </Card>
+          </div>
+        </section>
+
+        <section class="card-group span-12">
+          <div class="card-group-heading">
+            <div>
+              <h2>TUN 模式</h2>
+              <p>{{ summary.tun_name }} · {{ summary.tun_ipv4 }}</p>
+            </div>
+            <ToggleSwitch :model-value="summary.tun_enabled" @update:model-value="setField('tun_enabled', $event)" />
+          </div>
+          <div class="card-group-grid">
+            <Card class="panel">
+              <template #title><h2>TUN 设备</h2></template>
+              <template #content>
+                <div class="method-summary">
+                  <div class="method-fact"><span>转发方式</span><strong>虚拟网卡</strong></div>
+                  <div class="method-fact"><span>当前状态</span><strong>{{ tunModeLabel }}</strong></div>
+                </div>
+                <label class="field">
+                  <span><i class="pi pi-desktop"></i>名称</span>
+                  <InputText :model-value="summary.tun_name" @update:model-value="setField('tun_name', $event)" />
+                </label>
+                <div class="field-pair">
+                  <label class="field">
+                    <span><i class="pi pi-hashtag"></i>IPv4</span>
+                    <InputText :model-value="summary.tun_ipv4" @update:model-value="setField('tun_ipv4', $event)" />
+                  </label>
+                  <label class="field">
+                    <span><i class="pi pi-gauge"></i>MTU</span>
+                    <InputNumber :model-value="summary.tun_mtu" :min="0" :use-grouping="false" @update:model-value="setField('tun_mtu', $event)" />
+                  </label>
+                </div>
+              </template>
+            </Card>
+
+            <Card class="panel">
+              <template #title><h2>TUN 专属策略</h2></template>
+              <template #content>
+                <div class="toggle-list">
+                  <div class="switch-row">
+                    <span>Proxy DNS</span>
+                    <ToggleSwitch :model-value="summary.tun_proxy_dns" @update:model-value="setField('tun_proxy_dns', $event)" />
+                  </div>
+                  <div class="switch-row">
+                    <span>阻断 QUIC</span>
+                    <ToggleSwitch :model-value="summary.tun_block_quic" @update:model-value="setField('tun_block_quic', $event)" />
+                  </div>
+                </div>
+              </template>
+            </Card>
+          </div>
+        </section>
+      </div>
+
+      <div v-else-if="state.activeTab === 'egress'" class="content-grid">
         <Card class="panel span-6">
           <template #title>
             <div class="panel-heading inline">
-              <h2>直连规则</h2>
-              <Tag :value="summary.direct_mode" severity="info" />
+              <h2>公共远端出口</h2>
+              <span>{{ summary.proxy_addrs.length }} 个节点</span>
             </div>
           </template>
-          <template #content>
-            <div class="rule-strip">
-              <Tag v-for="rule in summary.direct_rules.slice(0, 10)" :key="rule" :value="rule" severity="success" rounded />
-              <Tag v-if="summary.direct_rules.length > 10" :value="`+${summary.direct_rules.length - 10}`" severity="secondary" rounded />
-            </div>
-          </template>
-        </Card>
-      </div>
-
-      <div v-else-if="state.activeTab === 'network'" class="content-grid">
-        <Card class="panel span-6">
-          <template #title><h2>身份</h2></template>
-          <template #content>
-            <label class="field">
-              <span><i class="pi pi-user"></i>用户</span>
-              <InputText :model-value="summary.username" @update:model-value="setField('username', $event)" />
-            </label>
-            <label class="field">
-              <span><i class="pi pi-key"></i>私钥</span>
-              <InputText :model-value="summary.private_key_path" @update:model-value="setField('private_key_path', $event)" />
-            </label>
-            <label class="field">
-              <span><i class="pi pi-broadcast-tower"></i>本地入口</span>
-              <InputText :model-value="summary.listen_addr" @update:model-value="setField('listen_addr', $event)" />
-            </label>
-          </template>
-        </Card>
-
-        <Card class="panel span-6">
-          <template #title><h2>代理</h2></template>
           <template #content>
             <label class="field">
               <span><i class="pi pi-server"></i>节点</span>
@@ -1253,7 +1647,21 @@ function getErrorMessage(error: unknown) {
         </Card>
 
         <Card class="panel span-6">
-          <template #title><h2>连接池</h2></template>
+          <template #title><h2>身份凭据</h2></template>
+          <template #content>
+            <label class="field">
+              <span><i class="pi pi-user"></i>用户</span>
+              <InputText :model-value="summary.username" @update:model-value="setField('username', $event)" />
+            </label>
+            <label class="field">
+              <span><i class="pi pi-key"></i>私钥</span>
+              <InputText :model-value="summary.private_key_path" @update:model-value="setField('private_key_path', $event)" />
+            </label>
+          </template>
+        </Card>
+
+        <Card class="panel span-12">
+          <template #title><h2>出口通道</h2></template>
           <template #content>
             <div class="field-pair">
               <label class="field">
@@ -1263,6 +1671,16 @@ function getErrorMessage(error: unknown) {
               <label class="field">
                 <span><i class="pi pi-wave-pulse"></i>UDP</span>
                 <InputNumber :model-value="summary.udp_pool_size" :min="0" :use-grouping="false" @update:model-value="setField('udp_pool_size', $event)" />
+              </label>
+            </div>
+            <div class="field-pair">
+              <label class="field">
+                <span><i class="pi pi-toggle-on"></i>TCP 传输</span>
+                <SelectButton :model-value="summary.tcp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('tcp_mode', $event)" />
+              </label>
+              <label class="field">
+                <span><i class="pi pi-toggle-on"></i>UDP 传输</span>
+                <SelectButton :model-value="summary.udp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('udp_mode', $event)" />
               </label>
             </div>
             <div class="field-pair">
@@ -1277,110 +1695,161 @@ function getErrorMessage(error: unknown) {
             </div>
           </template>
         </Card>
-
-        <Card class="panel span-6">
-          <template #title><h2>传输</h2></template>
-          <template #content>
-            <label class="field">
-              <span><i class="pi pi-toggle-on"></i>TCP</span>
-              <SelectButton :model-value="summary.tcp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('tcp_mode', $event)" />
-            </label>
-            <label class="field">
-              <span><i class="pi pi-toggle-on"></i>UDP</span>
-              <SelectButton :model-value="summary.udp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('udp_mode', $event)" />
-            </label>
-            <div class="field-pair">
-              <label class="field">
-                <span><i class="pi pi-chart-line"></i>日志</span>
-                <Select :model-value="summary.log_level" :options="logLevelOptions" @update:model-value="setField('log_level', $event)" />
-              </label>
-              <label class="field">
-                <span><i class="pi pi-microchip"></i>线程</span>
-                <InputNumber :model-value="summary.runtime_threads ?? 0" :min="0" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
-              </label>
-            </div>
-          </template>
-        </Card>
       </div>
 
-      <div v-else-if="state.activeTab === 'tun'" class="content-grid">
-        <Card class="panel span-5">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>设备</h2>
-              <ToggleSwitch :model-value="summary.tun_enabled" @update:model-value="setField('tun_enabled', $event)" />
+      <div v-else-if="state.activeTab === 'routing'" class="content-grid">
+        <section class="card-group span-12">
+          <div class="card-group-heading">
+            <div>
+              <h2>系统运行参数</h2>
+              <p>{{ summary.log_level }} · {{ summary.runtime_threads ?? 0 }} 线程</p>
             </div>
-          </template>
-          <template #content>
-            <label class="field">
-              <span><i class="pi pi-desktop"></i>名称</span>
-              <InputText :model-value="summary.tun_name" @update:model-value="setField('tun_name', $event)" />
-            </label>
-            <label class="field">
-              <span><i class="pi pi-hashtag"></i>IPv4</span>
-              <InputText :model-value="summary.tun_ipv4" @update:model-value="setField('tun_ipv4', $event)" />
-            </label>
-            <label class="field">
-              <span><i class="pi pi-gauge"></i>MTU</span>
-              <InputNumber :model-value="summary.tun_mtu" :min="0" :use-grouping="false" @update:model-value="setField('tun_mtu', $event)" />
-            </label>
-          </template>
-        </Card>
-
-        <Card class="panel span-7">
-          <template #title><h2>流量策略</h2></template>
-          <template #content>
-            <div class="toggle-list">
-              <div class="switch-row">
-                <span>Proxy DNS</span>
-                <ToggleSwitch :model-value="summary.tun_proxy_dns" @update:model-value="setField('tun_proxy_dns', $event)" />
-              </div>
-              <div class="switch-row">
-                <span>阻断 QUIC</span>
-                <ToggleSwitch :model-value="summary.tun_block_quic" @update:model-value="setField('tun_block_quic', $event)" />
-              </div>
-            </div>
-
-            <label class="field direct-mode-field">
-              <span><i class="pi pi-directions"></i>直连</span>
-              <SelectButton :model-value="summary.direct_mode" :options="directModeOptions" :allow-empty="false" @update:model-value="setField('direct_mode', $event)" />
-            </label>
-
-            <div class="rules-editor">
-              <label class="field rule-input-field">
-                <span><i class="pi pi-list-plus"></i>规则</span>
-                <div class="rule-input-row">
-                  <InputText v-model="state.ruleDraft" placeholder="example.com  *.example.com  10.0.0.0/8" @keydown.enter.prevent="addDraftRules" />
-                  <Button icon="pi pi-plus" severity="primary" rounded aria-label="添加" @click="addDraftRules" />
+            <Tag value="全局" severity="secondary" />
+          </div>
+          <div class="content-grid">
+            <Card class="panel span-12">
+              <template #title><h2>运行参数</h2></template>
+              <template #content>
+                <div class="field-pair">
+                  <label class="field">
+                    <span><i class="pi pi-chart-line"></i>日志</span>
+                    <Select :model-value="summary.log_level" :options="logLevelOptions" @update:model-value="setField('log_level', $event)" />
+                  </label>
+                  <label class="field">
+                    <span><i class="pi pi-microchip"></i>线程</span>
+                    <InputNumber :model-value="summary.runtime_threads ?? 0" :min="0" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
+                  </label>
                 </div>
-              </label>
+              </template>
+            </Card>
+          </div>
+        </section>
 
-              <div class="preset-row">
-                <Button
-                  v-for="preset in directRulePresets"
-                  :key="preset.label"
-                  :icon="preset.icon"
-                  :label="preset.label"
-                  severity="secondary"
-                  outlined
-                  size="small"
-                  @click="addDirectRules(preset.rules)"
-                />
-              </div>
-
-              <div class="rule-toolbar">
-                <span>{{ summary.direct_rules.length }} 条</span>
-              </div>
-              <div class="rule-chip-list">
-                <div v-if="!summary.direct_rules.length" class="empty-rules">未配置</div>
-                <div v-for="(rule, index) in summary.direct_rules" v-else :key="`${rule}-${index}`" class="rule-chip">
-                  <span :title="rule">{{ rule }}</span>
-                  <Button icon="pi pi-times" text rounded severity="secondary" aria-label="删除" @click="removeDirectRule(index)" />
-                </div>
-              </div>
+        <section class="card-group span-12">
+          <div class="card-group-heading">
+            <div>
+              <h2>流量策略</h2>
+              <p>direct_access</p>
             </div>
-          </template>
-        </Card>
+            <Tag :value="directModeLabel" severity="info" />
+          </div>
+          <div class="content-grid">
+            <Card class="panel span-12">
+              <template #title>
+                <div class="panel-heading inline">
+                  <h2>共享直连策略</h2>
+                  <Tag :value="directModeLabel" severity="info" />
+                </div>
+              </template>
+              <template #content>
+                <div class="policy-grid">
+                  <label class="field direct-mode-field">
+                    <span><i class="pi pi-directions"></i>模式</span>
+                    <SelectButton
+                      :model-value="summary.direct_mode"
+                      :options="directModeOptions"
+                      option-label="label"
+                      option-value="value"
+                      :allow-empty="false"
+                      @update:model-value="setField('direct_mode', $event)"
+                    />
+                  </label>
+                  <div class="policy-facts">
+                    <div class="policy-fact"><span>当前转发</span><strong>{{ activeForwardingLabel }}</strong></div>
+                    <div class="policy-fact"><span>规则数量</span><strong>{{ summary.direct_rules.length }} 条</strong></div>
+                    <div class="policy-fact"><span>配置段</span><strong>direct_access</strong></div>
+                  </div>
+                </div>
+                <div class="forwarding-methods">
+                  <div class="forwarding-method">
+                    <i class="pi pi-server"></i>
+                    <div>
+                      <span>HTTP / SOCKS5 代理</span>
+                      <strong>{{ summary.listen_addr }}</strong>
+                    </div>
+                  </div>
+                  <div class="forwarding-method">
+                    <i class="pi pi-compass"></i>
+                    <div>
+                      <span>TUN 模式</span>
+                      <strong>{{ tunModeLabel }} · {{ summary.tun_name }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </Card>
+
+            <Card class="panel span-5">
+              <template #title><h2>快捷预设</h2></template>
+              <template #content>
+                <div class="preset-list">
+                  <Button
+                    v-for="preset in directRulePresets"
+                    :key="preset.label"
+                    :icon="preset.icon"
+                    :label="preset.label"
+                    severity="secondary"
+                    outlined
+                    @click="addDirectRules(preset.rules)"
+                  />
+                </div>
+              </template>
+            </Card>
+
+            <Card class="panel span-7">
+              <template #title>
+                <div class="panel-heading inline">
+                  <h2>规则管理</h2>
+                  <Tag :value="`${summary.direct_rules.length} 条`" severity="info" />
+                </div>
+              </template>
+              <template #content>
+                <div class="rule-manager">
+                  <section class="rule-create">
+                    <div class="section-heading">
+                      <span>添加规则</span>
+                      <strong>{{ directModeLabel }}</strong>
+                    </div>
+                    <div class="rule-compose">
+                      <label class="field rule-input-field">
+                        <span><i class="pi pi-list-plus"></i>规则值</span>
+                        <InputText v-model="state.ruleDraft" placeholder="域名 / 通配符 / CIDR" @keydown.enter.prevent="addDraftRules" />
+                      </label>
+                      <Button icon="pi pi-plus" label="添加" severity="primary" @click="addDraftRules" />
+                    </div>
+                  </section>
+
+                  <section class="rule-inventory">
+                    <div class="section-heading">
+                      <span>当前规则</span>
+                      <strong>{{ directRuleGroups.length }} 组</strong>
+                    </div>
+                    <div v-if="!summary.direct_rules.length" class="empty-rules">未配置</div>
+                    <div v-else class="rule-group-list">
+                      <section v-for="group in directRuleGroups" :key="group.key" class="rule-group">
+                        <div class="rule-group-heading">
+                          <div>
+                            <i :class="group.icon"></i>
+                            <span>{{ group.label }}</span>
+                          </div>
+                          <strong>{{ group.items.length }}</strong>
+                        </div>
+                        <div class="rule-chip-list grouped">
+                          <div v-for="item in group.items" :key="`${group.key}-${item.rule}-${item.index}`" class="rule-chip">
+                            <span :title="item.rule">{{ item.rule }}</span>
+                            <button type="button" class="rule-chip-remove" aria-label="删除" @click="removeDirectRule(item.index)">
+                              <span class="rule-chip-remove-mark" aria-hidden="true"></span>
+                            </button>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  </section>
+                </div>
+              </template>
+            </Card>
+          </div>
+        </section>
       </div>
 
       <div v-else-if="state.activeTab === 'diagnostics'" class="content-grid">
