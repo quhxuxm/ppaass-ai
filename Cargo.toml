@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "desktop-agent",
+    "desktop-agent-be",
     "proxy",
     "common",
     "protocol",

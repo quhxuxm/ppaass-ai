@@ -19,10 +19,10 @@ if [ $? -ne 0 ]; then
 fi
 
 # Build desktop agent
-echo -e "\nBuilding desktop-agent..."
-cargo build --release -p desktop-agent
+echo -e "\nBuilding desktop-agent-be..."
+cargo build --release -p desktop-agent-be
 if [ $? -ne 0 ]; then
-    echo "Failed to build desktop-agent"
+    echo "Failed to build desktop-agent-be"
     exit 1
 fi
 

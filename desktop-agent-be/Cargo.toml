@@ -1,7 +1,11 @@
 [package]
-name = "desktop-agent"
+name = "desktop-agent-be"
 version.workspace = true
 edition.workspace = true
+
+[[bin]]
+name = "desktop-agent"
+path = "src/main.rs"
 
 [features]
 default = []

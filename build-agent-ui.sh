@@ -3,7 +3,7 @@
 # PPAASS Desktop Agent UI Build Script
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR/agent-ui"
+cd "$SCRIPT_DIR/desktop-agent-ui"
 
 # Check if node is installed
 if ! command -v node &> /dev/null; then
@@ -23,4 +23,4 @@ npm run tauri build
 
 echo ""
 echo "Build complete! The application bundle is in:"
-echo "  agent-ui/src-tauri/target/release/bundle/"
+echo "  desktop-agent-ui/src-tauri/target/release/bundle/"

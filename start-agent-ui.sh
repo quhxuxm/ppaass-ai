@@ -3,7 +3,7 @@
 # PPAASS Desktop Agent UI Startup Script for macOS
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR/agent-ui"
+cd "$SCRIPT_DIR/desktop-agent-ui"
 
 # Check if node is installed
 if ! command -v node &> /dev/null; then

@@ -1,7 +1,7 @@
 @echo off
 REM PPAASS Desktop Agent UI Build Script for Windows
 
-cd /d "%~dp0agent-ui"
+cd /d "%~dp0desktop-agent-ui"
 
 REM Check if node is installed
 where node >nul 2>nul
@@ -22,4 +22,4 @@ call npm run tauri build
 
 echo.
 echo Build complete! The application bundle is in:
-echo   agent-ui\src-tauri\target\release\bundle\
+echo   desktop-agent-ui\src-tauri\target\release\bundle\
