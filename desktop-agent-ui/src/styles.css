@@ -1,12 +1,38 @@
 :root {
   color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  background: #edf2f7;
-  color: #172026;
+  --app-font:
+    "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue",
+    Arial, sans-serif;
+  --app-mono-font:
+    "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --app-bg: #edf2f7;
+  --app-surface: #ffffff;
+  --app-sidebar: #f8fafc;
+  --app-muted-surface: #f8fafc;
+  --app-border: #dbe3ed;
+  --app-border-soft: #e2e8f0;
+  --app-text: #172026;
+  --app-text-strong: #0f172a;
+  --app-text-muted: #64748b;
+  --app-primary: #2563eb;
+  --app-primary-strong: #1d4ed8;
+  --app-success: #14b8a6;
+  --window-titlebar-height: 38px;
+  --p-primary-color: var(--app-primary);
+  --p-primary-hover-color: var(--app-primary-strong);
+  --p-primary-active-color: var(--app-primary-strong);
+  --p-content-border-color: var(--app-border);
+  --p-content-background: var(--app-surface);
+  --p-content-color: var(--app-text);
+  --p-text-color: var(--app-text);
+  --p-text-muted-color: var(--app-text-muted);
+  font-family: var(--app-font);
+  background: var(--app-bg);
+  color: var(--app-text);
   font-size: 15px;
   line-height: 1.4;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -17,7 +43,8 @@ body {
   margin: 0;
   min-width: 920px;
   min-height: 640px;
-  background: #edf2f7;
+  overflow: hidden;
+  background: var(--app-bg);
 }
 
 button,
@@ -35,11 +62,84 @@ button {
   min-height: 100vh;
 }
 
+.app-frame {
+  display: grid;
+  grid-template-rows: var(--window-titlebar-height) minmax(0, 1fr);
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+
+.window-titlebar {
+  position: relative;
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr) 116px;
+  align-items: center;
+  height: var(--window-titlebar-height);
+  border-bottom: 1px solid #d9e2ec;
+  background: var(--app-sidebar);
+  color: var(--app-text-muted);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.window-traffic-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    filter 0.14s ease,
+    transform 0.14s ease;
+}
+
+.window-control:hover {
+  filter: brightness(0.94);
+}
+
+.window-control:active {
+  transform: scale(0.94);
+}
+
+.window-control.close {
+  background: #ff5f57;
+}
+
+.window-control.minimize {
+  background: #febc2e;
+}
+
+.window-control.maximize {
+  background: #28c840;
+}
+
+.window-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
-  min-height: 100vh;
-  background: #edf2f7;
+  height: calc(100vh - var(--window-titlebar-height));
+  min-height: calc(100vh - var(--window-titlebar-height));
+  overflow: hidden;
+  background: var(--app-bg);
 }
 
 .sidebar {
@@ -48,8 +148,9 @@ button {
   gap: 24px;
   padding: 24px 16px;
   border-right: 1px solid #d9e2ec;
-  background: #f8fafc;
-  color: #172026;
+  overflow: hidden;
+  background: var(--app-sidebar);
+  color: var(--app-text);
   box-shadow: 12px 0 28px rgba(15, 23, 42, 0.04);
 }
 
@@ -83,7 +184,7 @@ button {
 }
 
 .brand-subtitle {
-  color: #64748b;
+  color: var(--app-text-muted);
   font-size: 12px;
 }
 
@@ -121,13 +222,13 @@ button {
 
 .nav-button.p-button:hover {
   background: #eef5ff;
-  color: #1d4ed8;
+  color: var(--app-primary-strong);
 }
 
 .nav-button.p-button.active {
   border-color: #cfe0ff;
   background: #e8f1ff;
-  color: #1d4ed8;
+  color: var(--app-primary-strong);
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08);
 }
 
@@ -155,9 +256,9 @@ button {
   display: grid;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
@@ -207,6 +308,8 @@ button {
 
 .workspace {
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 26px;
 }
 
@@ -222,7 +325,7 @@ button {
   margin: 0;
   font-size: 28px;
   line-height: 1.15;
-  color: #0f172a;
+  color: var(--app-text-strong);
 }
 
 .topbar p {
@@ -243,9 +346,9 @@ button {
 .icon-button {
   width: 40px;
   height: 40px;
-  background: #ffffff;
+  background: var(--app-surface);
   color: #334155;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
 }
 
@@ -269,11 +372,11 @@ button {
 }
 
 .command.primary {
-  background: #2563eb;
+  background: var(--app-primary);
 }
 
 .command.primary:hover {
-  background: #1d4ed8;
+  background: var(--app-primary-strong);
 }
 
 .command.danger {
@@ -333,7 +436,7 @@ body.overview-dragging * {
 }
 
 .overview-card.drop-target {
-  border-color: #2563eb;
+  border-color: var(--app-primary);
   box-shadow:
     0 0 0 3px rgba(37, 99, 235, 0.14),
     0 12px 28px rgba(15, 23, 42, 0.06);
@@ -372,10 +475,10 @@ body.overview-dragging * {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--app-muted-surface);
+  color: var(--app-text-muted);
   cursor: inherit;
   touch-action: none;
 }
@@ -413,7 +516,7 @@ body.overview-dragging * {
 .overview-drag-ghost-heading strong {
   min-width: 0;
   overflow: hidden;
-  color: #0f172a;
+  color: var(--app-text-strong);
   font-size: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -427,7 +530,7 @@ body.overview-dragging * {
   border: 1px solid #bfdbfe;
   border-radius: 8px;
   background: #eff6ff;
-  color: #2563eb;
+  color: var(--app-primary);
   font-size: 13px;
 }
 
@@ -462,7 +565,7 @@ body.overview-dragging * {
 
 .card-group-heading h2 {
   margin: 0;
-  color: #0f172a;
+  color: var(--app-text-strong);
   font-size: 18px;
   line-height: 1.2;
 }
@@ -486,9 +589,9 @@ body.overview-dragging * {
 .panel {
   min-width: 0;
   padding: 18px;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
 }
 
@@ -528,7 +631,7 @@ body.overview-dragging * {
 }
 
 .full-height {
-  min-height: calc(100vh - 128px);
+  min-height: calc(100vh - var(--window-titlebar-height) - 128px);
 }
 
 .panel-heading {
@@ -593,17 +696,17 @@ body.overview-dragging * {
   gap: 5px 8px;
   min-height: 82px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .metric-tile svg {
-  color: #2563eb;
+  color: var(--app-primary);
 }
 
 .metric-tile i {
-  color: #2563eb;
+  color: var(--app-primary);
   font-size: 17px;
 }
 
@@ -633,9 +736,9 @@ body.overview-dragging * {
   gap: 5px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .speed-gauge span {
@@ -647,7 +750,7 @@ body.overview-dragging * {
 .speed-gauge strong {
   max-width: 100%;
   overflow: hidden;
-  color: #0f172a;
+  color: var(--app-text-strong);
   font-size: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -672,9 +775,9 @@ body.overview-dragging * {
   align-items: end;
   min-height: 182px;
   padding: 12px 10px 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .hourly-column {
@@ -704,11 +807,11 @@ body.overview-dragging * {
 }
 
 .hourly-segment.download {
-  background: #2563eb;
+  background: var(--app-primary);
 }
 
 .hourly-segment.upload {
-  background: #14b8a6;
+  background: var(--app-success);
 }
 
 .hourly-column > span {
@@ -738,11 +841,11 @@ body.overview-dragging * {
 }
 
 .legend-dot.download {
-  background: #2563eb;
+  background: var(--app-primary);
 }
 
 .legend-dot.upload {
-  background: #14b8a6;
+  background: var(--app-success);
 }
 
 .endpoint-list,
@@ -761,9 +864,9 @@ body.overview-dragging * {
   gap: 10px;
   min-height: 38px;
   padding: 0 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .endpoint-row {
@@ -817,9 +920,9 @@ body.overview-dragging * {
   gap: 7px;
   min-height: 68px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .method-fact span {
@@ -831,7 +934,7 @@ body.overview-dragging * {
 .method-fact strong {
   min-width: 0;
   overflow: hidden;
-  color: #0f172a;
+  color: var(--app-text-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -854,9 +957,9 @@ body.overview-dragging * {
   gap: 7px;
   min-height: 78px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .policy-fact span,
@@ -870,7 +973,7 @@ body.overview-dragging * {
 .section-heading strong {
   min-width: 0;
   overflow: hidden;
-  color: #0f172a;
+  color: var(--app-text-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -889,9 +992,9 @@ body.overview-dragging * {
   gap: 10px;
   min-height: 66px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .forwarding-method i {
@@ -901,7 +1004,7 @@ body.overview-dragging * {
   height: 38px;
   border-radius: 8px;
   background: #eff6ff;
-  color: #2563eb;
+  color: var(--app-primary);
 }
 
 .forwarding-method div {
@@ -919,7 +1022,7 @@ body.overview-dragging * {
 .forwarding-method strong {
   min-width: 0;
   overflow: hidden;
-  color: #0f172a;
+  color: var(--app-text-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -938,9 +1041,9 @@ body.overview-dragging * {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .section-heading {
@@ -975,10 +1078,10 @@ body.overview-dragging * {
 .toml-editor {
   width: 100%;
   min-width: 0;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
-  color: #172026;
+  background: var(--app-surface);
+  color: var(--app-text);
   outline: none;
 }
 
@@ -1014,7 +1117,7 @@ body.overview-dragging * {
 .field .p-inputtext:enabled:focus,
 .field .p-select:not(.p-disabled).p-focus,
 .toml-editor:focus {
-  border-color: #2563eb;
+  border-color: var(--app-primary);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 
@@ -1058,7 +1161,7 @@ body.overview-dragging * {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   background: #f1f5f9;
 }
@@ -1071,8 +1174,8 @@ body.overview-dragging * {
 }
 
 .p-selectbutton .p-togglebutton.p-togglebutton-checked {
-  background: #ffffff;
-  color: #1d4ed8;
+  background: var(--app-surface);
+  color: var(--app-primary-strong);
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
 }
 
@@ -1098,7 +1201,7 @@ body.overview-dragging * {
 }
 
 .toggle.checked {
-  background: #14b8a6;
+  background: var(--app-success);
 }
 
 .toggle.checked span {
@@ -1115,13 +1218,13 @@ body.overview-dragging * {
   display: grid;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--app-muted-surface);
 }
 
 .rule-create {
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .rule-compose {
@@ -1194,9 +1297,9 @@ body.overview-dragging * {
 
 .rule-group {
   overflow: hidden;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .rule-group-heading {
@@ -1206,8 +1309,8 @@ body.overview-dragging * {
   gap: 10px;
   min-height: 40px;
   padding: 0 10px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: var(--app-muted-surface);
 }
 
 .rule-group-heading div {
@@ -1218,7 +1321,7 @@ body.overview-dragging * {
 }
 
 .rule-group-heading i {
-  color: #2563eb;
+  color: var(--app-primary);
 }
 
 .rule-group-heading span,
@@ -1258,7 +1361,7 @@ body.overview-dragging * {
   border: 1px solid #bae6fd;
   border-radius: 8px;
   background: #eff6ff;
-  color: #1d4ed8;
+  color: var(--app-primary-strong);
   font-size: 13px;
   line-height: 1;
 }
@@ -1295,7 +1398,7 @@ body.overview-dragging * {
   border-color: #bfdbfe;
   border-radius: 0 8px 8px 0;
   background: transparent;
-  color: #1d4ed8;
+  color: var(--app-primary-strong);
   cursor: pointer;
   font: inherit;
   line-height: 0;
@@ -1312,7 +1415,7 @@ body.overview-dragging * {
 }
 
 .rule-chip-remove:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--app-primary);
   outline-offset: -2px;
 }
 
@@ -1347,9 +1450,9 @@ body.overview-dragging * {
   gap: 8px 12px;
   min-height: 64px;
   padding: 12px;
-  border: 1px solid #dbe3ed;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .diagnostic-row.ok {
@@ -1412,7 +1515,7 @@ body.overview-dragging * {
   border-radius: 8px;
   background: #101827;
   color: #dbeafe;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--app-mono-font);
   font-size: 12px;
 }
 
@@ -1431,7 +1534,7 @@ body.overview-dragging * {
 .toml-editor {
   resize: none;
   padding: 14px;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--app-mono-font);
   font-size: 13px;
   line-height: 1.55;
 }

@@ -13,8 +13,16 @@ edition = "2021"
 tauri-build = { version = "2.3.1", features = [] }
 
 [dependencies]
+desktop-agent-be = { path = "../../desktop-agent-be" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sysinfo = "0.39.2"
 tauri = { version = "2.6.2", features = [] }
+tokio = { version = "1.52", features = ["full", "tracing"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml = "0.8"
+tracing = { version = "0.1", features = ["attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+windows-service = "0.8"

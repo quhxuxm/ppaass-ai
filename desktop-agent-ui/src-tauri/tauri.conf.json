@@ -12,11 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "PPAASS Agent",
         "width": 1180,
         "height": 760,
         "minWidth": 960,
-        "minHeight": 640
+        "minHeight": 640,
+        "decorations": false,
+        "theme": "Light"
       }
     ],
     "security": {
@@ -26,6 +29,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../config/local/agent.toml": "config/local/agent.toml",
+      "../../keys/user1.pem": "keys/user1.pem",
+      "../../keys/user2.pem": "keys/user2.pem",
+      "../../wintun.dll": "wintun.dll"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

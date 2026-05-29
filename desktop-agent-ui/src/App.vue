@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import Badge from "primevue/badge";
 import Button from "primevue/button";
 import Card from "primevue/card";
@@ -71,9 +72,14 @@ type ConnectivityCheck = {
 
 type ConnectivityReport = {
   listen_addr: string;
+  tun_enabled: boolean;
+  tun_name: string;
+  tun_ready: boolean;
+  tun_status: string;
   agent_reachable: boolean;
   generated_at_ms: number;
   results: ConnectivityCheck[];
+  tun_results: ConnectivityCheck[];
 };
 
 type NetworkTrafficSnapshot = {
@@ -225,6 +231,7 @@ const defaultOverviewCardOrder = overviewCardDefinitions.map((card) => card.key)
 const overviewCardByKey = new Map(overviewCardDefinitions.map((card) => [card.key, card]));
 const trafficBaselineKey = "ppaass-agent-ui:traffic-baseline:v1";
 const trafficHourlyKey = "ppaass-agent-ui:traffic-hourly:v1";
+const appWindow = getCurrentWindow();
 
 const state = reactive({
   activeTab: "overview" as TabKey,
@@ -263,15 +270,37 @@ const state = reactive({
 
 const summary = computed(() => state.config?.summary ?? summarizeRaw(fallbackRawConfig));
 const running = computed(() => state.agent.running);
-const managed = computed(() => state.agent.managed !== false);
 const runningLabel = computed(() => {
   if (!running.value) {
     return "已停止";
   }
-  return managed.value ? "运行中" : "外部运行";
+  return "运行中";
 });
 const runningSeverity = computed(() => (running.value ? "success" : "secondary"));
-const diagnosticsPassed = computed(() => state.diagnostics?.results.filter((item) => item.success).length ?? 0);
+const proxyDiagnosticResults = computed(() => state.diagnostics?.results ?? []);
+const tunDiagnosticResults = computed(() => state.diagnostics?.tun_results ?? []);
+const diagnosticsTotal = computed(() => proxyDiagnosticResults.value.length + tunDiagnosticResults.value.length);
+const diagnosticsPassed = computed(
+  () =>
+    proxyDiagnosticResults.value.filter((item) => item.success).length +
+    tunDiagnosticResults.value.filter((item) => item.success).length
+);
+const tunDiagnosticsLabel = computed(() => {
+  if (!state.diagnostics) {
+    return "Pending";
+  }
+  if (!state.diagnostics.tun_enabled) {
+    return "Disabled";
+  }
+  if (!state.diagnostics.tun_ready) {
+    return "Not Ready";
+  }
+  if (!tunDiagnosticResults.value.length) {
+    return "No tests";
+  }
+  const passed = tunDiagnosticResults.value.filter((item) => item.success).length;
+  return `${passed}/${tunDiagnosticResults.value.length}`;
+});
 const speedGaugeMax = computed(() => Math.max(256 * 1024, state.traffic.download_bps, state.traffic.upload_bps) * 1.25);
 const downloadGaugeValue = computed(() => Math.round((state.traffic.download_bps / speedGaugeMax.value) * 100));
 const uploadGaugeValue = computed(() => Math.round((state.traffic.upload_bps / speedGaugeMax.value) * 100));
@@ -303,15 +332,20 @@ const directRuleGroups = computed(() => {
 });
 
 let trafficTimer: number | undefined;
+let agentTimer: number | undefined;
 
 onMounted(() => {
   void boot();
   startTrafficPolling();
+  startAgentPolling();
 });
 
 onBeforeUnmount(() => {
   if (trafficTimer) {
     window.clearInterval(trafficTimer);
+  }
+  if (agentTimer) {
+    window.clearInterval(agentTimer);
   }
 });
 
@@ -381,8 +415,14 @@ async function startAgent() {
       { configPath: state.config.path },
       () => ({ ...fallbackAgentState(), running: true, managed: true, pid: 4242, config_path: state.config?.path })
     );
-    showToast("success", "Agent 已启动");
+    await delay(1800);
+    await refreshAgentState();
+    showToast(
+      state.agent.running ? "success" : "error",
+      state.agent.running ? "Agent 已启动" : latestAgentLog() ?? "Agent 启动失败"
+    );
   } catch (error) {
+    await refreshAgentState();
     showToast("error", getErrorMessage(error));
   } finally {
     state.busy = false;
@@ -397,7 +437,7 @@ async function stopAgent() {
       {},
       () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
     );
-    showToast("success", "Agent 已停止");
+    showToast(state.agent.running ? "error" : "success", state.agent.running ? "Agent 仍在运行" : "Agent 已停止");
   } catch (error) {
     showToast("error", getErrorMessage(error));
   } finally {
@@ -417,9 +457,10 @@ async function runDiagnostics() {
       { path: state.config.path },
       () => fallbackConnectivityReport(state.config?.summary)
     );
-    const passed = state.diagnostics.results.filter((item) => item.success).length;
-    const kind = passed === state.diagnostics.results.length ? "success" : "error";
-    showToast(kind, `诊断完成：${passed}/${state.diagnostics.results.length}`);
+    const total = diagnosticsTotal.value;
+    const passed = diagnosticsPassed.value;
+    const kind = total > 0 && passed === total ? "success" : "error";
+    showToast(kind, `诊断完成：${passed}/${total}`);
   } catch (error) {
     showToast("error", getErrorMessage(error));
   } finally {
@@ -1141,25 +1182,62 @@ function fallbackAgentState(): AgentState {
 
 function fallbackConnectivityReport(currentSummary?: AgentConfigSummary): ConnectivityReport {
   const listenAddr = currentSummary?.listen_addr ?? "127.0.0.1:10080";
-  const results = ["Google", "YouTube"].flatMap((target) =>
-    ["HTTP", "SOCKS5"].map((protocol) => ({
+  const tunEnabled = currentSummary?.tun_enabled ?? false;
+  const tunName = currentSummary?.tun_name ?? "ppaass-tun";
+  const tunStatus = tunEnabled ? "TUN 状态需要 Tauri 运行时" : "TUN 未启用";
+  const targets = ["Google", "YouTube"];
+  const results = tunEnabled
+    ? []
+    : targets.flatMap((target) =>
+        ["HTTP", "SOCKS5"].map((protocol) => ({
+          target,
+          protocol,
+          url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
+          proxy_url: `${protocol === "HTTP" ? "http" : "socks5h"}://${listenAddr}`,
+          success: false,
+          http_code: null,
+          duration_ms: 0,
+          error: "需要 Tauri 运行时"
+        }))
+      );
+  const tunResults = tunEnabled
+    ? targets.map((target) => ({
       target,
-      protocol,
+      protocol: "TUN",
       url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
-      proxy_url: `${protocol === "HTTP" ? "http" : "socks5h"}://${listenAddr}`,
+      proxy_url: `tun://${tunName}`,
       success: false,
       http_code: null,
       duration_ms: 0,
-      error: "需要 Tauri 运行时"
+      error: tunStatus
     }))
-  );
+    : [];
 
   return {
     listen_addr: listenAddr,
+    tun_enabled: tunEnabled,
+    tun_name: tunName,
+    tun_ready: false,
+    tun_status: tunStatus,
     agent_reachable: false,
     generated_at_ms: Date.now(),
-    results
+    results,
+    tun_results: tunResults
   };
+}
+
+function startAgentPolling() {
+  agentTimer = window.setInterval(() => {
+    void refreshAgentState();
+  }, 1200);
+}
+
+async function refreshAgentState() {
+  try {
+    state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, () => state.agent);
+  } catch {
+    // Keep the last visible agent state if the runtime status read fails.
+  }
 }
 
 function fallbackTrafficSnapshot(): NetworkTrafficSnapshot {
@@ -1178,6 +1256,15 @@ function showToast(kind: ToastKind, message: string) {
   }, 2600);
 }
 
+function latestAgentLog() {
+  const logs = state.agent.logs ?? [];
+  return logs.length > 0 ? logs[logs.length - 1] : null;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function shortPath(path?: string | null) {
   if (!path) {
     return "—";
@@ -1191,7 +1278,7 @@ function shortPath(path?: string | null) {
 }
 
 function shortProxyUrl(value: string) {
-  return value.replace(/^https?:\/\//, "").replace(/^socks5h:\/\//, "socks5h ");
+  return value.replace(/^https?:\/\//, "").replace(/^socks5h:\/\//, "socks5h ").replace(/^tun:\/\//, "tun ");
 }
 
 function formatTimestamp(timestampMs: number) {
@@ -1244,6 +1331,26 @@ function localDateKey() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+async function minimizeWindow() {
+  await runWindowAction("minimize");
+}
+
+async function toggleMaximizeWindow() {
+  await runWindowAction("toggleMaximize");
+}
+
+async function closeWindow() {
+  await runWindowAction("close");
+}
+
+async function runWindowAction(action: "minimize" | "toggleMaximize" | "close") {
+  try {
+    await appWindow[action]();
+  } catch {
+    // Browser preview does not expose Tauri window controls.
+  }
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1254,8 +1361,18 @@ function getErrorMessage(error: unknown) {
 </script>
 
 <template>
-  <main class="shell">
-    <aside class="sidebar">
+  <main class="app-frame">
+    <div class="window-titlebar" data-tauri-drag-region>
+      <div class="window-traffic-lights">
+        <button class="window-control close" aria-label="关闭窗口" @click="closeWindow"></button>
+        <button class="window-control minimize" aria-label="最小化窗口" @click="minimizeWindow"></button>
+        <button class="window-control maximize" aria-label="最大化窗口" @click="toggleMaximizeWindow"></button>
+      </div>
+      <div class="window-title" data-tauri-drag-region>PPAASS Agent</div>
+    </div>
+
+    <div class="shell">
+      <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">P</div>
         <div>
@@ -1306,9 +1423,8 @@ function getErrorMessage(error: unknown) {
             :disabled="!state.dirty"
             @click="saveConfig"
           />
-          <Button v-if="running && managed" label="停止" icon="pi pi-stop" severity="danger" @click="stopAgent" />
-          <Button v-else-if="running" label="外部运行" icon="pi pi-bolt" severity="secondary" disabled />
-          <Button v-else label="启动" icon="pi pi-play" severity="primary" @click="startAgent" />
+          <Button v-if="running" label="停止" icon="pi pi-stop" severity="danger" :disabled="state.busy" @click="stopAgent" />
+          <Button v-else label="启动" icon="pi pi-play" severity="primary" :disabled="state.busy" @click="startAgent" />
         </div>
       </header>
 
@@ -1857,8 +1973,8 @@ function getErrorMessage(error: unknown) {
           <template #title>
             <div class="panel-heading inline">
               <div>
-                <h2>出口诊断</h2>
-                <p>{{ summary.listen_addr }}</p>
+                <h2>链路诊断</h2>
+                <p>{{ summary.tun_enabled ? `${summary.tun_name} · TUN` : summary.listen_addr }}</p>
               </div>
               <Button
                 :label="state.diagnosticsRunning ? '测试中' : '运行测试'"
@@ -1873,7 +1989,19 @@ function getErrorMessage(error: unknown) {
               <div class="metric-tile">
                 <i :class="state.diagnostics?.agent_reachable ? 'pi pi-check-circle' : 'pi pi-exclamation-circle'"></i>
                 <span>本地入口</span>
-                <strong>{{ state.diagnostics ? (state.diagnostics.agent_reachable ? "Reachable" : "Offline") : "Pending" }}</strong>
+                <strong>
+                  {{
+                    state.diagnostics
+                      ? state.diagnostics.tun_enabled
+                        ? state.diagnostics.agent_reachable
+                          ? "Proxy On"
+                          : "Paused"
+                        : state.diagnostics.agent_reachable
+                          ? "Reachable"
+                          : "Offline"
+                      : "Pending"
+                  }}
+                </strong>
               </div>
               <div class="metric-tile">
                 <i class="pi pi-globe"></i>
@@ -1881,9 +2009,14 @@ function getErrorMessage(error: unknown) {
                 <strong>Google / YouTube</strong>
               </div>
               <div class="metric-tile">
+                <i class="pi pi-compass"></i>
+                <span>TUN</span>
+                <strong>{{ tunDiagnosticsLabel }}</strong>
+              </div>
+              <div class="metric-tile">
                 <i class="pi pi-shield"></i>
                 <span>结果</span>
-                <strong>{{ state.diagnostics ? `${diagnosticsPassed}/${state.diagnostics.results.length}` : "—" }}</strong>
+                <strong>{{ state.diagnostics ? `${diagnosticsPassed}/${diagnosticsTotal}` : "—" }}</strong>
               </div>
             </div>
           </template>
@@ -1898,15 +2031,42 @@ function getErrorMessage(error: unknown) {
           </template>
           <template #content>
             <div class="diagnostic-list">
-              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics && !summary.tun_enabled" class="diagnostic-row muted">
                 <div><strong>Google</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
               </div>
-              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics && !summary.tun_enabled" class="diagnostic-row muted">
                 <div><strong>YouTube</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
               </div>
+              <div v-if="!state.diagnostics && summary.tun_enabled" class="diagnostic-row muted">
+                <div><strong>HTTP / SOCKS5</strong><span>TUN 启用时代理入口暂停</span></div>
+                <span>跳过</span>
+              </div>
+              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+                <div><strong>TUN</strong><span>{{ summary.tun_enabled ? summary.tun_name : "未启用" }}</span></div>
+                <span>{{ summary.tun_enabled ? "未测试" : "跳过" }}</span>
+              </div>
+              <div v-if="state.diagnostics?.tun_enabled && !proxyDiagnosticResults.length" class="diagnostic-row muted">
+                <div><strong>HTTP / SOCKS5</strong><span>TUN 启用时代理入口暂停</span></div>
+                <span>跳过</span>
+              </div>
+              <div v-if="state.diagnostics && !state.diagnostics.tun_enabled" class="diagnostic-row muted">
+                <div><strong>TUN</strong><span>未启用</span></div>
+                <span>跳过</span>
+              </div>
               <div v-for="item in state.diagnostics?.results ?? []" :key="`${item.target}-${item.protocol}`" :class="['diagnostic-row', item.success ? 'ok' : 'fail']">
+                <div>
+                  <strong>{{ item.target }} · {{ item.protocol }}</strong>
+                  <span :title="item.proxy_url">{{ shortProxyUrl(item.proxy_url) }}</span>
+                </div>
+                <div class="diagnostic-result">
+                  <strong>{{ item.http_code ?? "—" }}</strong>
+                  <span>{{ Math.max(1, Math.round(item.duration_ms)) }} ms</span>
+                </div>
+                <p v-if="item.error">{{ item.error }}</p>
+              </div>
+              <div v-for="item in state.diagnostics?.tun_results ?? []" :key="`${item.target}-${item.protocol}`" :class="['diagnostic-row', item.success ? 'ok' : 'fail']">
                 <div>
                   <strong>{{ item.target }} · {{ item.protocol }}</strong>
                   <span :title="item.proxy_url">{{ shortProxyUrl(item.proxy_url) }}</span>
@@ -1926,7 +2086,7 @@ function getErrorMessage(error: unknown) {
         <template #title>
           <div class="panel-heading inline">
             <h2>日志</h2>
-            <Button icon="pi pi-refresh" label="刷新" severity="secondary" outlined size="small" @click="reloadAll" />
+            <Button icon="pi pi-refresh" label="刷新" severity="secondary" outlined size="small" @click="refreshAgentState" />
           </div>
         </template>
         <template #content>
@@ -1948,7 +2108,8 @@ function getErrorMessage(error: unknown) {
           <Textarea class="toml-editor" :model-value="state.config?.raw ?? ''" @update:model-value="setRawConfig(String($event))" />
         </template>
       </Card>
-    </section>
+      </section>
+    </div>
 
     <Transition name="toast">
       <div v-if="state.toast" :class="['toast', state.toast.kind]">{{ state.toast.message }}</div>

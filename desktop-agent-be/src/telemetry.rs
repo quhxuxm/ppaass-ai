@@ -1,11 +1,22 @@
 //! 遥测模块：tracing 初始化（标准输出或文件）以及供协议处理器使用的
 //! 流量统计辅助函数 `emit_traffic`。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
+
+static TOTAL_OUTBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
+static TOTAL_INBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub struct TrafficSnapshot {
+    pub outbound_bytes: u64,
+    pub inbound_bytes: u64,
+}
 
 /// 初始化全局 tracing。
 /// 若 `log_dir` 不为空，日志只会按天滚动写入该目录下的文件。
@@ -50,11 +61,25 @@ pub fn emit_traffic<S1: Into<String>, S2: Into<String>>(
     outbound_bytes: u64,
     inbound_bytes: u64,
 ) {
+    let protocol = protocol.into();
+    let target = target.into();
+
+    TOTAL_OUTBOUND_BYTES.fetch_add(outbound_bytes, Ordering::Relaxed);
+    TOTAL_INBOUND_BYTES.fetch_add(inbound_bytes, Ordering::Relaxed);
+
     info!(
-        protocol = %protocol.into(),
-        target = %target.into(),
+        protocol = %protocol,
+        target = %target,
         outbound_bytes,
         inbound_bytes,
         "流量统计"
     );
+}
+
+#[allow(dead_code)]
+pub fn traffic_snapshot() -> TrafficSnapshot {
+    TrafficSnapshot {
+        outbound_bytes: TOTAL_OUTBOUND_BYTES.load(Ordering::Relaxed),
+        inbound_bytes: TOTAL_INBOUND_BYTES.load(Ordering::Relaxed),
+    }
 }
