@@ -18,7 +18,7 @@
         "height": 760,
         "minWidth": 960,
         "minHeight": 640,
-        "decorations": false,
+        "decorations": true,
         "theme": "Light"
       }
     ],

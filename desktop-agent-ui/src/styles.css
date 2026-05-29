@@ -17,7 +17,6 @@
   --app-primary: #2563eb;
   --app-primary-strong: #1d4ed8;
   --app-success: #14b8a6;
-  --window-titlebar-height: 38px;
   --p-primary-color: var(--app-primary);
   --p-primary-hover-color: var(--app-primary-strong);
   --p-primary-active-color: var(--app-primary-strong);
@@ -63,81 +62,17 @@ button {
 }
 
 .app-frame {
-  display: grid;
-  grid-template-rows: var(--window-titlebar-height) minmax(0, 1fr);
+  display: block;
   min-height: 100vh;
   overflow: hidden;
   background: var(--app-bg);
 }
 
-.window-titlebar {
-  position: relative;
-  display: grid;
-  grid-template-columns: 116px minmax(0, 1fr) 116px;
-  align-items: center;
-  height: var(--window-titlebar-height);
-  border-bottom: 1px solid #d9e2ec;
-  background: var(--app-sidebar);
-  color: var(--app-text-muted);
-  user-select: none;
-  -webkit-app-region: drag;
-}
-
-.window-traffic-lights {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 14px;
-  -webkit-app-region: no-drag;
-}
-
-.window-control {
-  width: 13px;
-  height: 13px;
-  padding: 0;
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    filter 0.14s ease,
-    transform 0.14s ease;
-}
-
-.window-control:hover {
-  filter: brightness(0.94);
-}
-
-.window-control:active {
-  transform: scale(0.94);
-}
-
-.window-control.close {
-  background: #ff5f57;
-}
-
-.window-control.minimize {
-  background: #febc2e;
-}
-
-.window-control.maximize {
-  background: #28c840;
-}
-
-.window-title {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .shell {
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
-  height: calc(100vh - var(--window-titlebar-height));
-  min-height: calc(100vh - var(--window-titlebar-height));
+  height: 100vh;
+  min-height: 100vh;
   overflow: hidden;
   background: var(--app-bg);
 }
@@ -631,7 +566,7 @@ body.overview-dragging * {
 }
 
 .full-height {
-  min-height: calc(100vh - var(--window-titlebar-height) - 128px);
+  min-height: calc(100vh - 128px);
 }
 
 .panel-heading {

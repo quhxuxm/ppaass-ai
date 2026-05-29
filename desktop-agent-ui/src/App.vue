@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import Badge from "primevue/badge";
 import Button from "primevue/button";
 import Card from "primevue/card";
@@ -231,8 +230,6 @@ const defaultOverviewCardOrder = overviewCardDefinitions.map((card) => card.key)
 const overviewCardByKey = new Map(overviewCardDefinitions.map((card) => [card.key, card]));
 const trafficBaselineKey = "ppaass-agent-ui:traffic-baseline:v1";
 const trafficHourlyKey = "ppaass-agent-ui:traffic-hourly:v1";
-const appWindow = getCurrentWindow();
-
 const state = reactive({
   activeTab: "overview" as TabKey,
   loading: true,
@@ -1331,26 +1328,6 @@ function localDateKey() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-async function minimizeWindow() {
-  await runWindowAction("minimize");
-}
-
-async function toggleMaximizeWindow() {
-  await runWindowAction("toggleMaximize");
-}
-
-async function closeWindow() {
-  await runWindowAction("close");
-}
-
-async function runWindowAction(action: "minimize" | "toggleMaximize" | "close") {
-  try {
-    await appWindow[action]();
-  } catch {
-    // Browser preview does not expose Tauri window controls.
-  }
-}
-
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1362,15 +1339,6 @@ function getErrorMessage(error: unknown) {
 
 <template>
   <main class="app-frame">
-    <div class="window-titlebar" data-tauri-drag-region>
-      <div class="window-traffic-lights">
-        <button class="window-control close" aria-label="关闭窗口" @click="closeWindow"></button>
-        <button class="window-control minimize" aria-label="最小化窗口" @click="minimizeWindow"></button>
-        <button class="window-control maximize" aria-label="最大化窗口" @click="toggleMaximizeWindow"></button>
-      </div>
-      <div class="window-title" data-tauri-drag-region>PPAASS Agent</div>
-    </div>
-
     <div class="shell">
       <aside class="sidebar">
       <div class="brand">
