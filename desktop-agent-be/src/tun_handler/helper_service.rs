@@ -173,7 +173,7 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
         request.proxy_dns,
         request.proxy_bind_interface.as_ref(),
         if_index,
-        tun_dns_server(ipv4, ipv4_prefix),
+        super::tun_dns_server(ipv4, ipv4_prefix),
         request.dns_state_file.as_deref(),
     );
 
@@ -343,8 +343,4 @@ fn init_tracing(log_level: &str) {
         .with_env_filter(filter)
         .with_target(true)
         .init();
-}
-
-fn tun_dns_server(ipv4: Ipv4Addr, _ipv4_prefix: u8) -> Ipv4Addr {
-    ipv4
 }

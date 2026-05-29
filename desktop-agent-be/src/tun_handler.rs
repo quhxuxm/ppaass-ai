@@ -418,11 +418,10 @@ async fn wait_tun_task(name: &'static str, mut handle: JoinHandle<()>) {
     }
 }
 
-#[cfg(windows)]
 fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Addr {
-    // Windows treats the TUN adapter address itself as local, so DNS queries sent to
-    // that IP can be consumed by the host instead of entering Wintun. Pick another
-    // usable address in the same TUN subnet so packets are delivered to netstack.
+    // Host stacks treat the TUN adapter address itself as local, so DNS queries sent
+    // to that IP can be consumed by the host instead of entering the TUN device.
+    // Pick another usable address in the same TUN subnet so packets reach netstack.
     if ipv4_prefix >= 31 {
         return ipv4;
     }
@@ -436,11 +435,15 @@ fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Ad
     let broadcast = network | !mask;
     let local = u32::from(ipv4);
 
-    let candidates = [network.saturating_add(1), network.saturating_add(2)];
+    let candidates = [
+        network.saturating_add(1),
+        network.saturating_add(2),
+        network.saturating_add(3),
+    ];
     for candidate in candidates {
         if candidate != network && candidate != broadcast && candidate != local {
             let dns = std::net::Ipv4Addr::from(candidate);
-            info!("Windows TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
+            info!("TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
             return dns;
         }
     }
@@ -448,9 +451,34 @@ fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Ad
     ipv4
 }
 
-#[cfg(not(windows))]
-fn tun_dns_server(ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> std::net::Ipv4Addr {
-    ipv4
+#[cfg(test)]
+mod tests {
+    use super::tun_dns_server;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn tun_dns_server_uses_sibling_address_for_default_subnet() {
+        assert_eq!(
+            tun_dns_server(Ipv4Addr::new(10, 10, 10, 1), 24),
+            Ipv4Addr::new(10, 10, 10, 2)
+        );
+    }
+
+    #[test]
+    fn tun_dns_server_can_use_first_host_when_adapter_uses_second_host() {
+        assert_eq!(
+            tun_dns_server(Ipv4Addr::new(10, 10, 10, 2), 24),
+            Ipv4Addr::new(10, 10, 10, 1)
+        );
+    }
+
+    #[test]
+    fn tun_dns_server_falls_back_for_point_to_point_subnet() {
+        assert_eq!(
+            tun_dns_server(Ipv4Addr::new(10, 10, 10, 1), 31),
+            Ipv4Addr::new(10, 10, 10, 1)
+        );
+    }
 }
 
 struct CreatedTunDevice {
