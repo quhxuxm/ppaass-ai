@@ -211,6 +211,7 @@ struct AgentConfigSummary {
     log_dir: Option<String>,
     log_file: String,
     runtime_threads: Option<usize>,
+    effective_runtime_threads: usize,
     tcp_mode: String,
     udp_mode: String,
     tcp_yamux_sessions: usize,
@@ -1630,6 +1631,9 @@ fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
     let value = raw
         .parse::<Value>()
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    let runtime_threads = int_at(&value, &["runtime_threads"])
+        .filter(|value| *value > 0)
+        .map(|value| value as usize);
 
     Ok(AgentConfigSummary {
         listen_addr: string_or(&value, &["listen_addr"], "127.0.0.1:10080"),
@@ -1643,7 +1647,8 @@ fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
         log_level: string_or(&value, &["log_level"], "info"),
         log_dir: string_at(&value, &["log_dir"]),
         log_file: string_or(&value, &["log_file"], "desktop-agent.log"),
-        runtime_threads: int_at(&value, &["runtime_threads"]).map(|value| value as usize),
+        runtime_threads,
+        effective_runtime_threads: runtime_threads.unwrap_or_else(default_runtime_threads),
         tcp_mode: string_or(&value, &["transport", "tcp_mode"], "auto"),
         udp_mode: string_or(&value, &["transport", "udp_mode"], "auto"),
         tcp_yamux_sessions: int_at(&value, &["yamux", "tcp", "sessions"]).unwrap_or(5) as usize,
@@ -1657,6 +1662,12 @@ fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
         direct_rules: string_array_at(&value, &["direct_access", "rules"]),
     })
+}
+
+fn default_runtime_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|threads| threads.get())
+        .unwrap_or(1)
 }
 
 fn str_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {

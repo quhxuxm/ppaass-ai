@@ -29,6 +29,7 @@ type AgentConfigSummary = {
   log_dir?: string | null;
   log_file: string;
   runtime_threads?: number | null;
+  effective_runtime_threads: number;
   tcp_mode: string;
   udp_mode: string;
   tcp_yamux_sessions: number;
@@ -654,6 +655,9 @@ function setField(field: keyof AgentConfigSummary, value: unknown) {
 
   const coerced = coerceField(field, value);
   (state.config.summary as Record<string, unknown>)[field] = coerced;
+  if (field === "runtime_threads") {
+    state.config.summary.effective_runtime_threads = Number(coerced);
+  }
   state.config.raw = applyFieldToToml(state.config.raw, field, coerced);
   state.diagnostics = null;
   state.dirty = true;
@@ -958,6 +962,9 @@ function coerceField(field: keyof AgentConfigSummary, value: unknown): unknown {
     ].includes(field)
   ) {
     const parsed = Number.parseInt(String(value), 10);
+    if (field === "runtime_threads") {
+      return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+    }
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
   }
   if (field === "proxy_addrs" || field === "direct_rules") {
@@ -1076,6 +1083,7 @@ function formatTomlValue(value: unknown, kind: "string" | "number" | "bool" | "a
 }
 
 function summarizeRaw(raw: string): AgentConfigSummary {
+  const runtimeThreads = normalizeRuntimeThreads(matchNumber(raw, null, "runtime_threads"));
   return {
     listen_addr: matchString(raw, null, "listen_addr") ?? "127.0.0.1:10080",
     proxy_addrs: matchStringArray(raw, "proxy_addrs"),
@@ -1088,7 +1096,8 @@ function summarizeRaw(raw: string): AgentConfigSummary {
     log_level: matchString(raw, null, "log_level") ?? "info",
     log_dir: matchString(raw, null, "log_dir"),
     log_file: matchString(raw, null, "log_file") ?? "desktop-agent.log",
-    runtime_threads: matchNumber(raw, null, "runtime_threads"),
+    runtime_threads: runtimeThreads,
+    effective_runtime_threads: runtimeThreads ?? defaultRuntimeThreads(),
     tcp_mode: matchString(raw, "transport", "tcp_mode") ?? "auto",
     udp_mode: matchString(raw, "transport", "udp_mode") ?? "auto",
     tcp_yamux_sessions: matchNumber(raw, "yamux.tcp", "sessions") ?? 5,
@@ -1102,6 +1111,14 @@ function summarizeRaw(raw: string): AgentConfigSummary {
     direct_mode: matchString(raw, "direct_access", "mode") ?? "proxy_all",
     direct_rules: matchStringArray(raw, "rules", "direct_access")
   };
+}
+
+function defaultRuntimeThreads() {
+  return Math.max(1, Math.floor(window.navigator.hardwareConcurrency || 1));
+}
+
+function normalizeRuntimeThreads(value: number | undefined) {
+  return value && value > 0 ? value : undefined;
 }
 
 function matchString(raw: string, section: string | null, key: string) {
@@ -1786,7 +1803,7 @@ function getErrorMessage(error: unknown) {
           <div class="card-group-heading">
             <div>
               <h2>系统运行参数</h2>
-              <p>{{ summary.log_level }} · {{ summary.runtime_threads ?? 0 }} 线程</p>
+              <p>{{ summary.log_level }} · {{ summary.effective_runtime_threads }} 线程</p>
             </div>
             <Tag value="全局" severity="secondary" />
           </div>
@@ -1801,7 +1818,7 @@ function getErrorMessage(error: unknown) {
                   </label>
                   <label class="field">
                     <span><i class="pi pi-microchip"></i>线程</span>
-                    <InputNumber :model-value="summary.runtime_threads ?? 0" :min="0" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
+                    <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
                   </label>
                 </div>
               </template>
