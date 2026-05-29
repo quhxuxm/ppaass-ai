@@ -18,6 +18,15 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+#[cfg(target_os = "macos")]
+pub fn run_tun_helper_service(
+    socket: Option<&str>,
+    allowed_uid: Option<u32>,
+    log_level: Option<&str>,
+) -> anyhow::Result<()> {
+    tun_handler::helper_service::run(socket, allowed_uid, log_level)
+}
+
 pub async fn run_agent(config: AgentConfig, shutdown: CancellationToken) -> Result<()> {
     info!("PPAASS Desktop Agent 启动中");
     info!("监听地址：    {}", config.listen_addr);

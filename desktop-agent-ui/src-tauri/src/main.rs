@@ -57,6 +57,28 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(windows)]
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
 
+#[cfg(target_os = "macos")]
+const TUN_HELPER_SERVICE_ARG: &str = "--tun-helper-service";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_SOCKET_ARG: &str = "--tun-helper-socket";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_ALLOWED_UID_ARG: &str = "--tun-helper-allowed-uid";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_LOG_LEVEL_ARG: &str = "--log-level";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_INSTALL_PATH: &str = "/usr/local/libexec/ppaass-desktop-agent";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_LEGACY_INSTALL_PATH: &str = "/usr/local/libexec/ppaass-tun-helper";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_SOCKET_PATH: &str = "/var/run/ppaass-ai/tun-helper.sock";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_PLIST_ID: &str = "com.ppaass.ai.desktop-agent.tun-helper";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_PLIST_PATH: &str =
+    "/Library/LaunchDaemons/com.ppaass.ai.desktop-agent.tun-helper.plist";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_LEGACY_PLIST_PATH: &str = "/Library/LaunchDaemons/com.ppaass.ai.tun-helper.plist";
+
 const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("config/local/agent.toml", "agent.toml"),
     ("config/local/agent.toml", "config/local/agent.toml"),
@@ -354,6 +376,10 @@ fn start_agent_inner(
     if allow_elevation {
         ensure_start_privileges(&config_path)?;
     }
+    #[cfg(target_os = "macos")]
+    if allow_elevation {
+        ensure_macos_tun_helper_for_config(&config_path, &runtime.logs)?;
+    }
     stop_external_agent(&config_path)?;
     if let Ok(mut last_error) = runtime.last_error.lock() {
         *last_error = None;
@@ -612,6 +638,354 @@ fn bundled_agent_resource_path(app: &tauri::App, resource_path: &str) -> Result<
         .map(|base| base.join(resource_path))
         .find(|path| path.is_file())
         .ok_or_else(|| format!("找不到内置 Agent 资源：{resource_path}"))
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum MacosTunHelperStatus {
+    Current,
+    Missing,
+    Outdated,
+    NeedsRestart,
+}
+
+#[cfg(target_os = "macos")]
+fn check_macos_tun_helper_on_startup(logs: &UiLogBuffer) {
+    let Some(config_path) = locate_config_path() else {
+        return;
+    };
+
+    let config = match desktop_agent_be::config::AgentConfig::load(&config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            logs.push(format!("跳过 TUN helper 自动检查：读取配置失败：{err}"));
+            return;
+        }
+    };
+    if !config_needs_macos_tun_helper(&config) {
+        return;
+    }
+
+    let (tun_ready, tun_status) = probe_tun_ready(&config.tun.name);
+    if tun_ready {
+        logs.push(format!(
+            "TUN 已在运行，暂不自动更新 helper：{tun_status}。停止后点击启动会再次检查。"
+        ));
+        return;
+    }
+
+    if let Err(err) = ensure_macos_tun_helper(&config, logs) {
+        logs.push(format!("TUN helper 自动检查失败：{err}"));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_tun_helper_for_config(config_path: &Path, logs: &UiLogBuffer) -> Result<(), String> {
+    let config = desktop_agent_be::config::AgentConfig::load(config_path)
+        .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
+    if !config_needs_macos_tun_helper(&config) {
+        return Ok(());
+    }
+
+    ensure_macos_tun_helper(&config, logs)
+}
+
+#[cfg(target_os = "macos")]
+fn config_needs_macos_tun_helper(config: &desktop_agent_be::config::AgentConfig) -> bool {
+    config.tun.enabled && config.tun.macos_helper_enabled
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_tun_helper(
+    config: &desktop_agent_be::config::AgentConfig,
+    logs: &UiLogBuffer,
+) -> Result<(), String> {
+    let source = std::env::current_exe().map_err(|err| format!("定位当前 App 程序失败：{err}"))?;
+    let socket_path = macos_tun_helper_socket(config);
+    let status = macos_tun_helper_status(&source, socket_path);
+    match status {
+        MacosTunHelperStatus::Current => {
+            logs.push("TUN helper 已是当前 App 版本");
+            return Ok(());
+        }
+        MacosTunHelperStatus::Missing => logs.push("TUN helper 未安装，正在请求管理员授权安装"),
+        MacosTunHelperStatus::Outdated => logs.push("TUN helper 不是当前 App 版本，正在请求管理员授权更新"),
+        MacosTunHelperStatus::NeedsRestart => {
+            logs.push("TUN helper 已安装但未就绪，正在请求管理员授权重启")
+        }
+    }
+
+    install_macos_tun_helper(&source, config, logs)?;
+    if wait_for_macos_tun_helper_socket(socket_path, Duration::from_secs(6)) {
+        logs.push("TUN helper 已就绪");
+        Ok(())
+    } else {
+        Err(format!("TUN helper socket 未就绪：{socket_path}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_socket(config: &desktop_agent_be::config::AgentConfig) -> &str {
+    let socket_path = config.tun.macos_helper_socket.trim();
+    if socket_path.is_empty() {
+        TUN_HELPER_SOCKET_PATH
+    } else {
+        socket_path
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_status(source: &Path, socket_path: &str) -> MacosTunHelperStatus {
+    let install_path = Path::new(TUN_HELPER_INSTALL_PATH);
+    let plist_path = Path::new(TUN_HELPER_PLIST_PATH);
+    if !install_path.is_file() || !plist_path.is_file() {
+        return MacosTunHelperStatus::Missing;
+    }
+
+    if !files_identical(source, install_path).unwrap_or(false) {
+        return MacosTunHelperStatus::Outdated;
+    }
+
+    if !Path::new(socket_path).exists() {
+        return MacosTunHelperStatus::NeedsRestart;
+    }
+
+    MacosTunHelperStatus::Current
+}
+
+#[cfg(target_os = "macos")]
+fn files_identical(left: &Path, right: &Path) -> io::Result<bool> {
+    let left_metadata = fs::metadata(left)?;
+    let right_metadata = fs::metadata(right)?;
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+
+    Ok(fs::read(left)? == fs::read(right)?)
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_tun_helper(
+    source: &Path,
+    config: &desktop_agent_be::config::AgentConfig,
+    logs: &UiLogBuffer,
+) -> Result<(), String> {
+    let allowed_uid = current_uid()?;
+    let socket_path = macos_tun_helper_socket(config);
+    let script = macos_tun_helper_install_script(source, socket_path, allowed_uid);
+    let script_path = std::env::temp_dir().join(format!(
+        "ppaass-install-tun-helper-{}-{}.sh",
+        std::process::id(),
+        current_time_millis()
+    ));
+    fs::write(&script_path, script).map_err(|err| {
+        format!(
+            "写入 TUN helper 安装脚本失败：{}：{err}",
+            script_path.display()
+        )
+    })?;
+
+    let result = run_macos_admin_shell_script(&script_path);
+    let _ = fs::remove_file(&script_path);
+    result?;
+
+    logs.push(format!(
+        "TUN helper 已安装到：{}，socket={}",
+        TUN_HELPER_INSTALL_PATH, socket_path
+    ));
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_install_script(source: &Path, socket_path: &str, allowed_uid: u32) -> String {
+    let plist = macos_tun_helper_plist(socket_path, allowed_uid);
+    format!(
+        r#"#!/bin/sh
+set -eu
+source_path={source_path}
+install_path={install_path}
+socket_path={socket_path}
+plist_id={plist_id}
+plist_path={plist_path}
+legacy_plist_path={legacy_plist_path}
+legacy_install_path={legacy_install_path}
+
+/bin/mkdir -p "$(dirname "$install_path")"
+/bin/mkdir -p "$(dirname "$socket_path")"
+/usr/bin/install -m 0755 "$source_path" "$install_path"
+/usr/sbin/chown root:wheel "$install_path"
+/bin/rm -f "$legacy_install_path"
+/bin/launchctl bootout system "$plist_path" >/dev/null 2>&1 || true
+/bin/launchctl bootout system "$legacy_plist_path" >/dev/null 2>&1 || true
+/bin/rm -f "$legacy_plist_path"
+/bin/cat > "$plist_path" <<'PPAASS_TUN_HELPER_PLIST'
+{plist}
+PPAASS_TUN_HELPER_PLIST
+/usr/sbin/chown root:wheel "$plist_path"
+/bin/chmod 0644 "$plist_path"
+/bin/launchctl bootstrap system "$plist_path"
+/bin/launchctl enable "system/$plist_id"
+/bin/launchctl kickstart -k "system/$plist_id"
+"#,
+        source_path = shell_quote(&source.to_string_lossy()),
+        install_path = shell_quote(TUN_HELPER_INSTALL_PATH),
+        socket_path = shell_quote(socket_path),
+        plist_id = shell_quote(TUN_HELPER_PLIST_ID),
+        plist_path = shell_quote(TUN_HELPER_PLIST_PATH),
+        legacy_plist_path = shell_quote(TUN_HELPER_LEGACY_PLIST_PATH),
+        legacy_install_path = shell_quote(TUN_HELPER_LEGACY_INSTALL_PATH),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_plist(socket_path: &str, allowed_uid: u32) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{plist_id}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{install_path}</string>
+    <string>{service_arg}</string>
+    <string>{socket_arg}</string>
+    <string>{socket_path}</string>
+    <string>{allowed_uid_arg}</string>
+    <string>{allowed_uid}</string>
+    <string>{log_level_arg}</string>
+    <string>info</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/var/log/ppaass-desktop-agent-tun-helper.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/ppaass-desktop-agent-tun-helper.err.log</string>
+</dict>
+</plist>"#,
+        plist_id = xml_escape(TUN_HELPER_PLIST_ID),
+        install_path = xml_escape(TUN_HELPER_INSTALL_PATH),
+        service_arg = xml_escape(TUN_HELPER_SERVICE_ARG),
+        socket_arg = xml_escape(TUN_HELPER_SOCKET_ARG),
+        socket_path = xml_escape(socket_path),
+        allowed_uid_arg = xml_escape(TUN_HELPER_ALLOWED_UID_ARG),
+        log_level_arg = xml_escape(TUN_HELPER_LOG_LEVEL_ARG),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_admin_shell_script(script_path: &Path) -> Result<(), String> {
+    let shell_command = format!("/bin/sh {}", shell_quote(&script_path.to_string_lossy()));
+    let apple_script = format!(
+        "do shell script {} with administrator privileges",
+        apple_script_string(&shell_command)
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &apple_script])
+        .output()
+        .map_err(|err| format!("请求管理员授权失败：{err}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(command_failure_message("TUN helper 安装失败", &output))
+}
+
+#[cfg(target_os = "macos")]
+fn command_failure_message(context: &str, output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = if stderr.is_empty() { stdout } else { stderr };
+    if detail.is_empty() {
+        format!("{context}：{}", output.status)
+    } else {
+        format!("{context}：{detail}")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_macos_tun_helper_socket(socket_path: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if Path::new(socket_path).exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn current_uid() -> Result<u32, String> {
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|err| format!("读取当前用户 UID 失败：{err}"))?;
+    if !output.status.success() {
+        return Err(command_failure_message("读取当前用户 UID 失败", &output));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .map_err(|err| format!("解析当前用户 UID 失败：{err}"))
+}
+
+#[cfg(target_os = "macos")]
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(target_os = "macos")]
+fn apple_script_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_tun_helper_service_from_args() -> Result<(), String> {
+    let args = std::env::args().collect::<Vec<_>>();
+    let socket = arg_value(&args, TUN_HELPER_SOCKET_ARG);
+    let allowed_uid = match arg_value(&args, TUN_HELPER_ALLOWED_UID_ARG) {
+        Some(value) => Some(
+            value
+                .parse::<u32>()
+                .map_err(|err| format!("解析 TUN helper allowed uid 失败：{err}"))?,
+        ),
+        None => None,
+    };
+    let log_level = arg_value(&args, TUN_HELPER_LOG_LEVEL_ARG);
+
+    desktop_agent_be::run_tun_helper_service(
+        socket.as_deref(),
+        allowed_uid,
+        log_level.as_deref(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2).find_map(|pair| {
+        if pair[0] == flag {
+            Some(pair[1].clone())
+        } else {
+            None
+        }
+    })
 }
 
 fn current_time_millis() -> u128 {
@@ -1881,6 +2255,17 @@ fn ancestor_dirs() -> Vec<PathBuf> {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        if std::env::args().any(|arg| arg == TUN_HELPER_SERVICE_ARG) {
+            if let Err(err) = run_macos_tun_helper_service_from_args() {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
     #[cfg(windows)]
     {
         if std::env::args().any(|arg| arg == INSTALL_SERVICE_ARG) {
@@ -1905,6 +2290,8 @@ fn main() {
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            #[cfg(target_os = "macos")]
+            check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())
         })
         .manage(runtime)
