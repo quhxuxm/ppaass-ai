@@ -71,8 +71,8 @@ stream_window_size_kb = 2048
 # TUN 模式配置
 # ============================
 # 启用后，agent 会打开 TUN 设备，并通过用户空间网络栈（netstack-smoltcp）
-# 将该接口捕获的所有 IP 流量转发到代理。TUN 模式下不会启动
-# `listen_addr` 上的 SOCKS5/HTTP 监听器，TUN 设备会完全替代它。
+# 将该接口捕获的所有 IP 流量转发到代理。`listen_addr` 上的
+# SOCKS5/HTTP 监听器会保持可用，便于 TUN 和手动浏览器代理并行测试。
 #
 # agent 启动时会自动改写系统路由表：
 #   * 每个 `proxy_addrs` 条目都会通过当前默认网关安装一条 /32（或 /128）

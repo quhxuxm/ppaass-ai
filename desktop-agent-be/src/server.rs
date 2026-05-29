@@ -8,6 +8,7 @@ use crate::tun_handler::run_tun_mode;
 use common::spawn_guarded;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument};
 
@@ -42,11 +43,16 @@ impl AgentServer {
 
     #[instrument(skip(self))]
     pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
-        // TUN 模式启用时完全替代 SOCKS5/HTTP 监听器：
-        // 所有流量通过 TUN 设备捕获并转发到代理。
+        // 本地 HTTP/SOCKS 入口始终启动。TUN 打开时作为额外入口并行运行，
+        // 这样手动配置浏览器代理和系统 TUN 两种模式不会互相挤掉。
+        let listener = TcpListener::bind(&self.config.listen_addr).await?;
+        info!("Agent 服务器正在监听 {}", self.config.listen_addr);
+
+        let mut tun_tasks = JoinSet::new();
+        let mut tun_task_running = false;
         if self.config.tun.enabled {
             info!(
-                "TUN 模式已启用 — {} 上的 SOCKS5/HTTP 监听器将不会启动",
+                "TUN 模式已启用 — {} 上的 SOCKS5/HTTP 监听器保持可用",
                 self.config.listen_addr
             );
             let tun_cfg = self.config.tun.clone();
@@ -54,35 +60,46 @@ impl AgentServer {
             let tcp_pool = self.tcp_pool.clone();
             let udp_pool = self.udp_pool.clone();
             let direct_access_checker = self.direct_access_checker.clone();
-            if let Err(e) = run_tun_mode(
-                tun_cfg,
-                proxy_addrs,
-                tcp_pool,
-                udp_pool,
-                direct_access_checker,
-                shutdown,
-            )
-            .await
-            {
-                error!("TUN 模式转发器异常停止：{}", e);
-                return Err(e);
-            }
-            return Ok(());
+            let tun_shutdown = shutdown.clone();
+            tun_tasks.spawn(async move {
+                run_tun_mode(
+                    tun_cfg,
+                    proxy_addrs,
+                    tcp_pool,
+                    udp_pool,
+                    direct_access_checker,
+                    tun_shutdown,
+                )
+                .await
+            });
+            tun_task_running = true;
+        } else {
+            // 纯代理模式可以直接预热连接池；TUN 模式会在路由就绪后预热。
+            self.tcp_pool.prewarm().await;
+            self.udp_pool.prewarm().await;
         }
-
-        // 非 TUN 模式可以直接预热连接池。
-        self.tcp_pool.prewarm().await;
-        self.udp_pool.prewarm().await;
-
-        // 普通模式在同一端口上同时接受 SOCKS5 和 HTTP/CONNECT。
-        let listener = TcpListener::bind(&self.config.listen_addr).await?;
-        info!("Agent 服务器正在监听 {}", self.config.listen_addr);
 
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
                     info!("收到关闭信号，停止监听");
                     break;
+                }
+                tun_result = tun_tasks.join_next(), if tun_task_running => {
+                    tun_task_running = false;
+                    match tun_result {
+                        Some(Ok(Ok(()))) if shutdown.is_cancelled() => break,
+                        Some(Ok(Ok(()))) => {
+                            error!("TUN 模式转发器提前退出，HTTP/SOCKS 监听器继续运行");
+                        }
+                        Some(Ok(Err(e))) => {
+                            error!("TUN 模式转发器异常停止，HTTP/SOCKS 监听器继续运行：{}", e);
+                        }
+                        Some(Err(e)) => {
+                            error!("TUN 模式任务异常，HTTP/SOCKS 监听器继续运行：{}", e);
+                        }
+                        None => {}
+                    }
                 }
                 accept_result = listener.accept() => {
                     match accept_result {
@@ -104,6 +121,16 @@ impl AgentServer {
                             error!("接受连接失败：{}", e);
                         }
                     }
+                }
+            }
+        }
+
+        if tun_task_running {
+            if let Some(result) = tun_tasks.join_next().await {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("TUN 模式转发器停止时返回错误：{}", e),
+                    Err(e) => error!("TUN 模式任务停止时异常：{}", e),
                 }
             }
         }

@@ -310,8 +310,8 @@ const hourlyTrafficMax = computed(() =>
 );
 const directModeLabel = computed(() => directModeLabels[summary.value.direct_mode] ?? summary.value.direct_mode);
 const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "未启用"));
-const proxyEntryStateLabel = computed(() => (summary.value.tun_enabled ? "TUN 启用时暂停" : "随 Agent 启动"));
-const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN 模式" : "HTTP / SOCKS5 代理"));
+const proxyEntryStateLabel = computed(() => "随 Agent 启动");
+const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
 const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
 const directRuleGroups = computed(() => {
   const groups: DirectRuleGroup[] = [
@@ -393,7 +393,7 @@ async function saveConfig() {
       () => state.config as LoadedAgentConfig
     );
     state.dirty = false;
-    showToast("success", "已保存");
+    showToast("success", `已保存到 ${shortPath(state.config.path)}`);
   } catch (error) {
     showToast("error", getErrorMessage(error));
   } finally {
@@ -1200,20 +1200,18 @@ function fallbackConnectivityReport(currentSummary?: AgentConfigSummary): Connec
   const tunName = currentSummary?.tun_name ?? "ppaass-tun";
   const tunStatus = tunEnabled ? "TUN 状态需要 Tauri 运行时" : "TUN 未启用";
   const targets = ["Google", "YouTube"];
-  const results = tunEnabled
-    ? []
-    : targets.flatMap((target) =>
-        ["HTTP", "SOCKS5"].map((protocol) => ({
-          target,
-          protocol,
-          url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
-          proxy_url: `${protocol === "HTTP" ? "http" : "socks5h"}://${listenAddr}`,
-          success: false,
-          http_code: null,
-          duration_ms: 0,
-          error: "需要 Tauri 运行时"
-        }))
-      );
+  const results = targets.flatMap((target) =>
+    ["HTTP", "SOCKS5"].map((protocol) => ({
+      target,
+      protocol,
+      url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
+      proxy_url: `${protocol === "HTTP" ? "http" : "socks5h"}://${listenAddr}`,
+      success: false,
+      http_code: null,
+      duration_ms: 0,
+      error: "需要 Tauri 运行时"
+    }))
+  );
   const tunResults = tunEnabled
     ? targets.map((target) => ({
       target,
@@ -1451,11 +1449,7 @@ function getErrorMessage(error: unknown) {
                   :value="state.agent.running ? 'Active' : 'Idle'"
                   :severity="state.agent.running ? 'success' : 'secondary'"
                 />
-                <Tag
-                  v-else-if="card.key === 'proxy'"
-                  :value="proxyEntryStateLabel"
-                  :severity="summary.tun_enabled ? 'secondary' : 'success'"
-                />
+                <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
                 <Tag
                   v-else-if="card.key === 'egress'"
                   :value="`${summary.tcp_mode.toUpperCase()} / ${summary.udp_mode.toUpperCase()}`"
@@ -1623,7 +1617,7 @@ function getErrorMessage(error: unknown) {
               <h2>HTTP / SOCKS5 代理</h2>
               <p>{{ summary.listen_addr }}</p>
             </div>
-            <Tag :value="proxyEntryStateLabel" :severity="summary.tun_enabled ? 'secondary' : 'success'" />
+            <Tag :value="proxyEntryStateLabel" severity="success" />
           </div>
           <div class="card-group-grid">
             <Card class="panel">
@@ -2016,25 +2010,17 @@ function getErrorMessage(error: unknown) {
           </template>
           <template #content>
             <div class="diagnostic-list">
-              <div v-if="!state.diagnostics && !summary.tun_enabled" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics" class="diagnostic-row muted">
                 <div><strong>Google</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
               </div>
-              <div v-if="!state.diagnostics && !summary.tun_enabled" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics" class="diagnostic-row muted">
                 <div><strong>YouTube</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
-              </div>
-              <div v-if="!state.diagnostics && summary.tun_enabled" class="diagnostic-row muted">
-                <div><strong>HTTP / SOCKS5</strong><span>TUN 启用时代理入口暂停</span></div>
-                <span>跳过</span>
               </div>
               <div v-if="!state.diagnostics" class="diagnostic-row muted">
                 <div><strong>TUN</strong><span>{{ summary.tun_enabled ? summary.tun_name : "未启用" }}</span></div>
                 <span>{{ summary.tun_enabled ? "未测试" : "跳过" }}</span>
-              </div>
-              <div v-if="state.diagnostics?.tun_enabled && !proxyDiagnosticResults.length" class="diagnostic-row muted">
-                <div><strong>HTTP / SOCKS5</strong><span>TUN 启用时代理入口暂停</span></div>
-                <span>跳过</span>
               </div>
               <div v-if="state.diagnostics && !state.diagnostics.tun_enabled" class="diagnostic-row muted">
                 <div><strong>TUN</strong><span>未启用</span></div>

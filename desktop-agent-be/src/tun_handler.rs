@@ -9,6 +9,7 @@
 mod dns;
 mod dns_proxy;
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub(crate) mod helper_service;
 mod network;
 mod route;

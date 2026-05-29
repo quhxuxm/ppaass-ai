@@ -3,17 +3,22 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::io::Read;
+use std::io::{self, Write};
 use std::net::{
-    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown as TcpShutdown, SocketAddr, TcpListener as StdTcpListener,
-    TcpStream as StdTcpStream, ToSocketAddrs,
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream as StdTcpStream, ToSocketAddrs,
 };
+#[cfg(windows)]
+use std::net::{Shutdown as TcpShutdown, TcpListener as StdTcpListener};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(any(windows, target_os = "linux"))]
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -49,6 +54,7 @@ const INSTALL_SERVICE_ARG: &str = "--ppaass-install-service";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[cfg(windows)]
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
 
 const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
@@ -268,6 +274,7 @@ struct NetworkInterfaceTraffic {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
+#[cfg(windows)]
 enum ServiceRequest {
     Start { config_path: String },
     Stop,
@@ -276,6 +283,7 @@ enum ServiceRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg(windows)]
 struct ServiceResponse {
     ok: bool,
     state: Option<AgentState>,
@@ -297,14 +305,19 @@ fn load_agent_config(path: Option<String>) -> Result<LoadedAgentConfig, String> 
 
 #[tauri::command]
 fn save_agent_config(path: String, raw: String) -> Result<LoadedAgentConfig, String> {
-    let config_path = PathBuf::from(path);
+    let config_path = make_absolute_path(Path::new(&path));
     if let Some(parent) = config_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
     }
-    fs::write(&config_path, raw).map_err(|err| format!("保存配置失败：{err}"))?;
+    let mut file =
+        fs::File::create(&config_path).map_err(|err| format!("保存配置失败：{err}"))?;
+    file.write_all(raw.as_bytes())
+        .map_err(|err| format!("写入配置失败：{err}"))?;
+    file.sync_all()
+        .map_err(|err| format!("同步配置到磁盘失败：{err}"))?;
     load_config_from_path(&config_path)
 }
 
@@ -418,17 +431,15 @@ fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, St
     ];
 
     let mut results = Vec::new();
-    if !tun_enabled {
-        for (target, url) in targets.iter().copied() {
-            for (protocol, proxy) in &protocols {
-                results.push(run_curl_check(
-                    target,
-                    protocol,
-                    url,
-                    Some(proxy.as_str()),
-                    proxy.as_str(),
-                ));
-            }
+    for (target, url) in targets.iter().copied() {
+        for (protocol, proxy) in &protocols {
+            results.push(run_curl_check(
+                target,
+                protocol,
+                url,
+                Some(proxy.as_str()),
+                proxy.as_str(),
+            ));
         }
     }
 
@@ -503,10 +514,14 @@ fn agent_traffic_snapshot() -> NetworkTrafficSnapshot {
 }
 
 fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
-    let raw = fs::read_to_string(path).map_err(|err| format!("读取配置失败：{err}"))?;
+    let config_path = make_absolute_path(path);
+    let raw = fs::read_to_string(&config_path).map_err(|err| format!("读取配置失败：{err}"))?;
     let summary = summarize_config(&raw)?;
+    let display_path = config_path
+        .canonicalize()
+        .unwrap_or_else(|_| config_path.clone());
     Ok(LoadedAgentConfig {
-        path: path.to_string_lossy().to_string(),
+        path: display_path.to_string_lossy().to_string(),
         raw,
         summary,
     })
@@ -570,12 +585,13 @@ fn current_time_millis() -> u128 {
 fn probe_tun_ready(tun_name: &str) -> (bool, String) {
     let interface_ready = tun_interface_ready(tun_name);
     let routes_ready = tun_routes_ready(tun_name);
+    let display_name = resolved_tun_name(tun_name).unwrap_or_else(|| tun_name.to_string());
 
     match (interface_ready, routes_ready) {
-        (true, true) => (true, format!("TUN 已就绪：{tun_name}")),
-        (false, true) => (false, format!("TUN 网卡未就绪：{tun_name}")),
-        (true, false) => (false, format!("TUN 路由未就绪：{tun_name}")),
-        (false, false) => (false, format!("TUN 网卡和路由未就绪：{tun_name}")),
+        (true, true) => (true, format!("TUN 已就绪：{display_name}")),
+        (false, true) => (false, format!("TUN 网卡未就绪：{display_name}")),
+        (true, false) => (false, format!("TUN 路由未就绪：{display_name}")),
+        (false, false) => (false, format!("TUN 网卡和路由未就绪：{display_name}")),
     }
 }
 
@@ -615,6 +631,36 @@ fn powershell_status(script: &str, tun_name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn tun_interface_ready(tun_name: &str) -> bool {
+    macos_ifconfig_up(tun_name)
+        || macos_active_tun_route_interface().is_some_and(|name| macos_ifconfig_up(&name))
+}
+
+#[cfg(target_os = "macos")]
+fn tun_routes_ready(tun_name: &str) -> bool {
+    (route_get_uses_tun("1.1.1.1", tun_name) && route_get_uses_tun("200.0.0.1", tun_name))
+        || macos_active_tun_route_interface().is_some()
+}
+
+#[cfg(target_os = "macos")]
+fn route_get_uses_tun(target: &str, tun_name: &str) -> bool {
+    route_get_interface(target).is_some_and(|name| name == tun_name)
+}
+
+#[cfg(target_os = "macos")]
+fn resolved_tun_name(tun_name: &str) -> Option<String> {
+    if macos_ifconfig_up(tun_name) {
+        return Some(tun_name.to_string());
+    }
+    macos_active_tun_route_interface()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolved_tun_name(tun_name: &str) -> Option<String> {
+    Some(tun_name.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ifconfig_up(tun_name: &str) -> bool {
     let output = Command::new("ifconfig").arg(tun_name).output().ok();
     output.is_some_and(|output| {
         output.status.success()
@@ -625,21 +671,35 @@ fn tun_interface_ready(tun_name: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn tun_routes_ready(tun_name: &str) -> bool {
-    route_get_uses_tun("1.1.1.1", tun_name) && route_get_uses_tun("200.0.0.1", tun_name)
+fn macos_active_tun_route_interface() -> Option<String> {
+    let first = route_get_interface("1.1.1.1")?;
+    let second = route_get_interface("200.0.0.1")?;
+    if first == second && first.starts_with("utun") {
+        Some(first)
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
-fn route_get_uses_tun(target: &str, tun_name: &str) -> bool {
+fn route_get_interface(target: &str) -> Option<String> {
     Command::new("route")
         .args(["-n", "get", target])
         .output()
         .ok()
-        .is_some_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .any(|line| line.trim() == format!("interface: {tun_name}"))
+        .and_then(|output| {
+            if !output.status.success() {
+                return None;
+            }
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix("interface:")
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(ToOwned::to_owned)
+                })
         })
 }
 
@@ -1733,9 +1793,9 @@ fn locate_config_path() -> Option<PathBuf> {
         "config/remote/agent.toml",
     ];
 
-    for base in deployed_agent_dirs()
+    for base in ancestor_dirs()
         .into_iter()
-        .chain(ancestor_dirs().into_iter())
+        .chain(deployed_agent_dirs().into_iter())
     {
         for file_name in file_names {
             let path = base.join(file_name);
