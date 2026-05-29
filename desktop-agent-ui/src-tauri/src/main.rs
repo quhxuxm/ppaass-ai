@@ -58,6 +58,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
 
 const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
+    ("config/local/agent.toml", "agent.toml"),
     ("config/local/agent.toml", "config/local/agent.toml"),
     ("keys/user1.pem", "keys/user1.pem"),
     ("keys/user2.pem", "keys/user2.pem"),
@@ -306,18 +307,13 @@ fn load_agent_config(path: Option<String>) -> Result<LoadedAgentConfig, String> 
 #[tauri::command]
 fn save_agent_config(path: String, raw: String) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(Path::new(&path));
-    if let Some(parent) = config_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
+    write_config_file(&config_path, &raw)?;
+
+    if let Some(primary_path) = primary_agent_config_path(&config_path) {
+        write_config_file(&primary_path, &raw)?;
+        return load_config_from_path(&primary_path);
     }
-    let mut file =
-        fs::File::create(&config_path).map_err(|err| format!("保存配置失败：{err}"))?;
-    file.write_all(raw.as_bytes())
-        .map_err(|err| format!("写入配置失败：{err}"))?;
-    file.sync_all()
-        .map_err(|err| format!("同步配置到磁盘失败：{err}"))?;
+
     load_config_from_path(&config_path)
 }
 
@@ -527,6 +523,33 @@ fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
     })
 }
 
+fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
+    }
+    let mut file = fs::File::create(path).map_err(|err| format!("保存配置失败：{err}"))?;
+    file.write_all(raw.as_bytes())
+        .map_err(|err| format!("写入配置失败：{err}"))?;
+    file.sync_all()
+        .map_err(|err| format!("同步配置到磁盘失败：{err}"))?;
+    Ok(())
+}
+
+fn primary_agent_config_path(path: &Path) -> Option<PathBuf> {
+    if path.file_name()?.to_str()? != "agent.toml" {
+        return None;
+    }
+    let local_dir = path.parent()?;
+    if local_dir.file_name()?.to_str()? != "local" {
+        return None;
+    }
+    let config_dir = local_dir.parent()?;
+    if config_dir.file_name()?.to_str()? != "config" {
+        return None;
+    }
+    config_dir.parent().map(|base| base.join("agent.toml"))
+}
+
 fn install_bundled_agent_assets(app: &tauri::App, logs: &UiLogBuffer) -> Result<(), String> {
     let app_data_dir = app
         .path()
@@ -537,12 +560,12 @@ fn install_bundled_agent_assets(app: &tauri::App, logs: &UiLogBuffer) -> Result<
     let _ = DEPLOYED_AGENT_DATA_DIR.set(app_data_dir.clone());
 
     for (resource_path, deploy_path) in BUNDLED_AGENT_FILES {
-        let source = bundled_agent_resource_path(app, resource_path)?;
         let destination = app_data_dir.join(deploy_path);
         if destination.exists() {
             logs.push(format!("保留已有 Agent 资源：{}", destination.display()));
             continue;
         }
+        let source = bundled_agent_source_path(app, resource_path, deploy_path, &app_data_dir)?;
 
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
@@ -559,6 +582,22 @@ fn install_bundled_agent_assets(app: &tauri::App, logs: &UiLogBuffer) -> Result<
     }
 
     Ok(())
+}
+
+fn bundled_agent_source_path(
+    app: &tauri::App,
+    resource_path: &str,
+    deploy_path: &str,
+    app_data_dir: &Path,
+) -> Result<PathBuf, String> {
+    if deploy_path == "agent.toml" {
+        let legacy_config = app_data_dir.join("config/local/agent.toml");
+        if legacy_config.is_file() {
+            return Ok(legacy_config);
+        }
+    }
+
+    bundled_agent_resource_path(app, resource_path)
 }
 
 fn bundled_agent_resource_path(app: &tauri::App, resource_path: &str) -> Result<PathBuf, String> {
