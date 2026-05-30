@@ -6,17 +6,15 @@ use std::fs;
 #[cfg(any(windows, target_os = "macos"))]
 use std::io::Read;
 use std::io::{self, Write};
-use std::net::{
-    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream as StdTcpStream, ToSocketAddrs,
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream as StdTcpStream, ToSocketAddrs};
 #[cfg(windows)]
 use std::net::{Shutdown as TcpShutdown, TcpListener as StdTcpListener};
+#[cfg(target_os = "macos")]
+use std::os::unix::net::UnixStream;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-#[cfg(target_os = "macos")]
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(any(windows, target_os = "linux"))]
@@ -82,6 +80,8 @@ const TUN_HELPER_PLIST_PATH: &str =
     "/Library/LaunchDaemons/com.ppaass.ai.desktop-agent.tun-helper.plist";
 #[cfg(target_os = "macos")]
 const TUN_HELPER_LEGACY_PLIST_PATH: &str = "/Library/LaunchDaemons/com.ppaass.ai.tun-helper.plist";
+#[cfg(target_os = "macos")]
+const TUN_HELPER_CURRENT_APP_MARKER: &str = "tun-helper-current-app.txt";
 
 const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("config/local/agent.toml", "agent.toml"),
@@ -209,8 +209,7 @@ fn normalize_log_level(log_level: &str) -> &'static str {
 }
 
 fn log_filter(log_level: &str) -> EnvFilter {
-    EnvFilter::try_new(normalize_log_level(log_level))
-        .unwrap_or_else(|_| EnvFilter::new("info"))
+    EnvFilter::try_new(normalize_log_level(log_level)).unwrap_or_else(|_| EnvFilter::new("info"))
 }
 
 #[derive(Clone)]
@@ -476,7 +475,10 @@ fn start_agent_inner(
     agent_state(runtime)
 }
 
-fn apply_log_level_from_config_path(runtime: &AgentRuntime, config_path: &Path) -> Result<(), String> {
+fn apply_log_level_from_config_path(
+    runtime: &AgentRuntime,
+    config_path: &Path,
+) -> Result<(), String> {
     let config = desktop_agent_be::config::AgentConfig::load(config_path)
         .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
     apply_ui_log_level(runtime, &config.log_level);
@@ -513,7 +515,13 @@ fn stop_agent(runtime: tauri::State<'_, AgentRuntime>) -> Result<AgentState, Str
 }
 
 #[tauri::command]
-fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, String> {
+async fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, String> {
+    tauri::async_runtime::spawn_blocking(move || run_connectivity_tests_blocking(path))
+        .await
+        .map_err(|err| format!("诊断任务执行失败：{err}"))?
+}
+
+fn run_connectivity_tests_blocking(path: Option<String>) -> Result<ConnectivityReport, String> {
     let config_path = match path.filter(|value| !value.trim().is_empty()) {
         Some(value) => PathBuf::from(value),
         None => locate_config_path().ok_or_else(|| {
@@ -538,18 +546,19 @@ fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, St
         ("SOCKS5", proxy_url("socks5h", &listen_addr)),
     ];
 
-    let mut results = Vec::new();
+    let mut result_jobs = Vec::new();
     for (target, url) in targets.iter().copied() {
         for (protocol, proxy) in &protocols {
-            results.push(run_curl_check(
-                target,
-                protocol,
-                url,
-                Some(proxy.as_str()),
-                proxy.as_str(),
-            ));
+            let target = target.to_string();
+            let protocol = (*protocol).to_string();
+            let url = url.to_string();
+            let proxy = proxy.clone();
+            result_jobs.push(thread::spawn(move || {
+                run_curl_check(&target, &protocol, &url, Some(proxy.as_str()), &proxy)
+            }));
         }
     }
+    let results = collect_connectivity_checks(result_jobs);
 
     let mut tun_results = Vec::new();
     let (tun_ready, tun_status) = if tun_enabled {
@@ -560,9 +569,16 @@ fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, St
     if tun_enabled {
         let tun_route = format!("tun://{tun_name}");
         if tun_ready {
+            let mut tun_jobs = Vec::new();
             for (target, url) in targets.iter().copied() {
-                tun_results.push(run_curl_check(target, "TUN", url, None, &tun_route));
+                let target = target.to_string();
+                let url = url.to_string();
+                let tun_route = tun_route.clone();
+                tun_jobs.push(thread::spawn(move || {
+                    run_curl_check(&target, "TUN", &url, None, &tun_route)
+                }));
             }
+            tun_results = collect_connectivity_checks(tun_jobs);
         } else {
             for (target, url) in targets.iter().copied() {
                 tun_results.push(failed_connectivity_check(
@@ -590,6 +606,10 @@ fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, St
         results,
         tun_results,
     })
+}
+
+fn collect_connectivity_checks(jobs: Vec<JoinHandle<ConnectivityCheck>>) -> Vec<ConnectivityCheck> {
+    jobs.into_iter().filter_map(|job| job.join().ok()).collect()
 }
 
 #[tauri::command]
@@ -636,7 +656,10 @@ fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
 }
 
 fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
     }
     let mut file = fs::File::create(path).map_err(|err| format!("保存配置失败：{err}"))?;
@@ -752,21 +775,40 @@ fn check_macos_tun_helper_on_startup(logs: &UiLogBuffer) {
         return;
     }
 
+    let source = match std::env::current_exe() {
+        Ok(source) => source,
+        Err(err) => {
+            logs.push(format!(
+                "跳过 TUN helper 自动检查：定位当前 App 程序失败：{err}"
+            ));
+            return;
+        }
+    };
+    let force_refresh = macos_tun_helper_current_app_update_pending(&source, logs);
     let (tun_ready, tun_status) = probe_tun_ready(&config.tun.name);
     if tun_ready {
-        logs.push(format!(
-            "TUN 已在运行，暂不自动更新 helper：{tun_status}。停止后点击启动会再次检查。"
-        ));
+        if force_refresh {
+            logs.push(format!(
+                "检测到当前 App 首次运行或已更新，但 TUN 已在运行，暂不热更新 helper：{tun_status}。停止后点击启动会强制更新。"
+            ));
+        } else {
+            logs.push(format!(
+                "TUN 已在运行，暂不自动更新 helper：{tun_status}。停止后点击启动会再次检查。"
+            ));
+        }
         return;
     }
 
-    if let Err(err) = ensure_macos_tun_helper(&config, logs) {
+    if let Err(err) = ensure_macos_tun_helper_from_source(&source, &config, logs, force_refresh) {
         logs.push(format!("TUN helper 自动检查失败：{err}"));
     }
 }
 
 #[cfg(target_os = "macos")]
-fn ensure_macos_tun_helper_for_config(config_path: &Path, logs: &UiLogBuffer) -> Result<(), String> {
+fn ensure_macos_tun_helper_for_config(
+    config_path: &Path,
+    logs: &UiLogBuffer,
+) -> Result<(), String> {
     let config = desktop_agent_be::config::AgentConfig::load(config_path)
         .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
     if !config_needs_macos_tun_helper(&config) {
@@ -787,27 +829,151 @@ fn ensure_macos_tun_helper(
     logs: &UiLogBuffer,
 ) -> Result<(), String> {
     let source = std::env::current_exe().map_err(|err| format!("定位当前 App 程序失败：{err}"))?;
+    let force_refresh = macos_tun_helper_current_app_update_pending(&source, logs);
+    ensure_macos_tun_helper_from_source(&source, config, logs, force_refresh)
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_tun_helper_from_source(
+    source: &Path,
+    config: &desktop_agent_be::config::AgentConfig,
+    logs: &UiLogBuffer,
+    force_refresh: bool,
+) -> Result<(), String> {
     let socket_path = macos_tun_helper_socket(config);
-    let status = macos_tun_helper_status(&source, config);
-    match status {
-        MacosTunHelperStatus::Current => {
+    let status = macos_tun_helper_status(source, config);
+    match (status, force_refresh) {
+        (MacosTunHelperStatus::Current, false) => {
             logs.push("TUN helper 已是当前 App 版本");
+            record_macos_tun_helper_current_app(source, logs);
             return Ok(());
         }
-        MacosTunHelperStatus::Missing => logs.push("TUN helper 未安装，正在请求管理员授权安装"),
-        MacosTunHelperStatus::Outdated => logs.push("TUN helper 不是当前 App 版本，正在请求管理员授权更新"),
-        MacosTunHelperStatus::NeedsRestart => {
+        (MacosTunHelperStatus::Current, true) => {
+            logs.push("当前 App 首次运行或已更新，正在强制刷新 TUN helper")
+        }
+        (MacosTunHelperStatus::Missing, _) => {
+            logs.push("TUN helper 未安装，正在请求管理员授权安装")
+        }
+        (MacosTunHelperStatus::Outdated, _) => {
+            logs.push("TUN helper 不是当前 App 版本，正在请求管理员授权更新")
+        }
+        (MacosTunHelperStatus::NeedsRestart, _) => {
             logs.push("TUN helper 已安装但未就绪，正在请求管理员授权重启")
         }
     }
 
-    install_macos_tun_helper(&source, config, logs)?;
+    install_macos_tun_helper(source, config, logs)?;
     if wait_for_macos_tun_helper_socket(socket_path, Duration::from_secs(6)) {
         logs.push("TUN helper 已就绪");
+        record_macos_tun_helper_current_app(source, logs);
         Ok(())
     } else {
         Err(format!("TUN helper socket 未就绪：{socket_path}"))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_current_app_update_pending(source: &Path, logs: &UiLogBuffer) -> bool {
+    let signature = match macos_current_app_signature(source) {
+        Ok(signature) => signature,
+        Err(err) => {
+            logs.push(format!("跳过 TUN helper 首次运行强制刷新：{err}"));
+            return false;
+        }
+    };
+    let marker_path = match macos_tun_helper_current_app_marker_path() {
+        Ok(path) => path,
+        Err(err) => {
+            logs.push(format!("跳过 TUN helper 首次运行强制刷新：{err}"));
+            return false;
+        }
+    };
+
+    match fs::read_to_string(&marker_path) {
+        Ok(saved) => saved.trim() != signature,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => true,
+        Err(err) => {
+            logs.push(format!(
+                "读取 TUN helper 当前 App 标记失败，将按普通状态检查：{}：{err}",
+                marker_path.display()
+            ));
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn record_macos_tun_helper_current_app(source: &Path, logs: &UiLogBuffer) {
+    let signature = match macos_current_app_signature(source) {
+        Ok(signature) => signature,
+        Err(err) => {
+            logs.push(format!("记录 TUN helper 当前 App 标记失败：{err}"));
+            return;
+        }
+    };
+    let marker_path = match macos_tun_helper_current_app_marker_path() {
+        Ok(path) => path,
+        Err(err) => {
+            logs.push(format!("记录 TUN helper 当前 App 标记失败：{err}"));
+            return;
+        }
+    };
+
+    if let Some(parent) = marker_path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            logs.push(format!(
+                "创建 TUN helper 当前 App 标记目录失败：{}：{err}",
+                parent.display()
+            ));
+            return;
+        }
+    }
+    if let Err(err) = fs::write(&marker_path, format!("{signature}\n")) {
+        logs.push(format!(
+            "写入 TUN helper 当前 App 标记失败：{}：{err}",
+            marker_path.display()
+        ));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_current_app_marker_path() -> Result<PathBuf, String> {
+    DEPLOYED_AGENT_DATA_DIR
+        .get()
+        .map(|dir| dir.join(TUN_HELPER_CURRENT_APP_MARKER))
+        .ok_or_else(|| "Agent 数据目录尚未初始化".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_current_app_signature(source: &Path) -> Result<String, String> {
+    let canonical = source
+        .canonicalize()
+        .unwrap_or_else(|_| source.to_path_buf());
+    let mut file = fs::File::open(source).map_err(|err| format!("打开当前 App 程序失败：{err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("读取当前 App 程序元数据失败：{err}"))?;
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|err| format!("读取当前 App 程序失败：{err}"))?;
+        if read == 0 {
+            break;
+        }
+        for byte in &buffer[..read] {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    Ok(format!(
+        "path={}\nlen={}\nhash={hash:016x}",
+        canonical.display(),
+        metadata.len()
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -961,7 +1127,8 @@ fn install_macos_tun_helper(
 ) -> Result<(), String> {
     let allowed_uid = current_uid()?;
     let socket_path = macos_tun_helper_socket(config);
-    let script = macos_tun_helper_install_script(source, socket_path, allowed_uid, &config.log_level);
+    let script =
+        macos_tun_helper_install_script(source, socket_path, allowed_uid, &config.log_level);
     let script_path = std::env::temp_dir().join(format!(
         "ppaass-install-tun-helper-{}-{}.sh",
         std::process::id(),
@@ -1165,12 +1332,8 @@ fn run_macos_tun_helper_service_from_args() -> Result<(), String> {
     };
     let log_level = arg_value(&args, TUN_HELPER_LOG_LEVEL_ARG);
 
-    desktop_agent_be::run_tun_helper_service(
-        socket.as_deref(),
-        allowed_uid,
-        log_level.as_deref(),
-    )
-    .map_err(|err| err.to_string())
+    desktop_agent_be::run_tun_helper_service(socket.as_deref(), allowed_uid, log_level.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(target_os = "macos")]

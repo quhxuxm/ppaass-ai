@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import Badge from "primevue/badge";
 import Button from "primevue/button";
@@ -170,6 +170,28 @@ type HighlightedLogLine = {
   tokens: LogToken[];
 };
 
+type TomlTokenKind =
+  | "plain"
+  | "section"
+  | "key"
+  | "equals"
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "comment"
+  | "punctuation";
+
+type TomlToken = {
+  value: string;
+  kind: TomlTokenKind;
+};
+
+type HighlightedTomlLine = {
+  raw: string;
+  tokens: TomlToken[];
+};
+
 const fallbackRawConfig = `listen_addr = "127.0.0.1:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
@@ -294,6 +316,7 @@ const state = reactive({
 
 const summary = computed(() => state.config?.summary ?? summarizeRaw(fallbackRawConfig));
 const running = computed(() => state.agent.running);
+const configLocked = computed(() => running.value);
 const runningLabel = computed(() => {
   if (!running.value) {
     return "已停止";
@@ -340,6 +363,8 @@ const proxyEntryStateLabel = computed(() => "随 Agent 启动");
 const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
 const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
 const highlightedLogs = computed(() => state.agent.logs.map(tokenizeLogLine));
+const highlightedToml = computed(() => tokenizeToml(state.config?.raw ?? ""));
+const tomlHighlightRef = ref<HTMLElement | null>(null);
 const directRuleGroups = computed(() => {
   const groups: DirectRuleGroup[] = [
     { key: "wildcard", label: "通配符", icon: "pi pi-asterisk", items: [] },
@@ -409,6 +434,9 @@ async function reloadAll() {
 
 async function saveConfig() {
   if (!state.config) {
+    return;
+  }
+  if (!ensureConfigEditable()) {
     return;
   }
 
@@ -488,6 +516,7 @@ async function runDiagnostics() {
 
   try {
     state.diagnosticsRunning = true;
+    state.diagnostics = null;
     state.diagnostics = await invokeOrFallback<ConnectivityReport>(
       "run_connectivity_tests",
       { path: state.config.path },
@@ -690,6 +719,9 @@ function setField(field: keyof AgentConfigSummary, value: unknown) {
   if (!state.config || value === null || value === undefined) {
     return;
   }
+  if (!ensureConfigEditable(false)) {
+    return;
+  }
 
   const coerced = coerceField(field, value);
   (state.config.summary as Record<string, unknown>)[field] = coerced;
@@ -705,6 +737,9 @@ function setRawConfig(raw: string) {
   if (!state.config) {
     return;
   }
+  if (!ensureConfigEditable(false)) {
+    return;
+  }
   state.config.raw = raw;
   try {
     state.config.summary = summarizeRaw(raw);
@@ -714,8 +749,83 @@ function setRawConfig(raw: string) {
   state.dirty = true;
 }
 
+function guardIntegerBeforeInput(event: InputEvent) {
+  const target = event.target;
+  if (!isIntegerInputTarget(target) || !event.data) {
+    return;
+  }
+
+  if (!/^\d+$/.test(event.data)) {
+    event.preventDefault();
+  }
+}
+
+function guardIntegerPaste(event: ClipboardEvent) {
+  const target = event.target;
+  if (!isIntegerInputTarget(target)) {
+    return;
+  }
+
+  const text = event.clipboardData?.getData("text") ?? "";
+  const digits = digitsOnly(text);
+  if (digits === text) {
+    return;
+  }
+
+  event.preventDefault();
+  if (!digits) {
+    return;
+  }
+
+  const start = target.selectionStart ?? target.value.length;
+  const end = target.selectionEnd ?? target.value.length;
+  target.setRangeText(digits, start, end, "end");
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function sanitizeIntegerInput(event: Event) {
+  const target = event.target;
+  if (!isIntegerInputTarget(target)) {
+    return;
+  }
+
+  const sanitized = digitsOnly(target.value);
+  if (sanitized === target.value) {
+    return;
+  }
+
+  const caret = target.selectionStart ?? sanitized.length;
+  const beforeCaret = target.value.slice(0, caret);
+  const removedBeforeCaret = beforeCaret.length - digitsOnly(beforeCaret).length;
+  const nextCaret = Math.max(0, caret - removedBeforeCaret);
+  target.value = sanitized;
+  target.setSelectionRange(nextCaret, nextCaret);
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function isIntegerInputTarget(target: EventTarget | null): target is HTMLInputElement {
+  return target instanceof HTMLInputElement && Boolean(target.closest(".p-inputnumber"));
+}
+
+function digitsOnly(value: string) {
+  return value.replace(/\D+/g, "");
+}
+
+function syncTomlHighlightScroll(event: Event) {
+  const target = event.currentTarget as HTMLTextAreaElement | null;
+  const highlighter = tomlHighlightRef.value;
+  if (!target || !highlighter) {
+    return;
+  }
+  highlighter.scrollTop = target.scrollTop;
+  highlighter.scrollLeft = target.scrollLeft;
+}
+
 function addDirectRules(rules: string[]) {
   if (!state.config) {
+    return;
+  }
+  if (!ensureConfigEditable()) {
     return;
   }
   const next = normalizeRules([...state.config.summary.direct_rules, ...rules]);
@@ -725,11 +835,17 @@ function addDirectRules(rules: string[]) {
 }
 
 function addDraftRules() {
+  if (!ensureConfigEditable()) {
+    return;
+  }
   addDirectRules(parseRuleInput(state.ruleDraft));
 }
 
 function removeDirectRule(index: number) {
   if (!state.config || !Number.isInteger(index)) {
+    return;
+  }
+  if (!ensureConfigEditable()) {
     return;
   }
   const next = normalizeRules(state.config.summary.direct_rules).filter((_, current) => current !== index);
@@ -740,10 +856,23 @@ function updateDirectRules(rules: string[]) {
   if (!state.config) {
     return;
   }
+  if (!ensureConfigEditable(false)) {
+    return;
+  }
   state.config.summary.direct_rules = normalizeRules(rules);
   state.config.raw = applyFieldToToml(state.config.raw, "direct_rules", state.config.summary.direct_rules);
   state.diagnostics = null;
   state.dirty = true;
+}
+
+function ensureConfigEditable(notify = true) {
+  if (!configLocked.value) {
+    return true;
+  }
+  if (notify) {
+    showToast("error", "Agent 运行中，停止后再修改配置");
+  }
+  return false;
 }
 
 function parseRuleInput(value: string) {
@@ -1363,6 +1492,153 @@ function logTokenKind(value: string): LogTokenKind {
   return "plain";
 }
 
+function tokenizeToml(raw: string): HighlightedTomlLine[] {
+  return raw.split("\n").map((line) => ({ raw: line, tokens: tokenizeTomlLine(line) }));
+}
+
+function tokenizeTomlLine(line: string): TomlToken[] {
+  if (!line) {
+    return [{ value: "", kind: "plain" }];
+  }
+
+  const commentIndex = findTomlDelimiter(line, "#");
+  const code = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+  const comment = commentIndex >= 0 ? line.slice(commentIndex) : "";
+  const tokens: TomlToken[] = [];
+  const sectionMatch = code.match(/^(\s*)(\[\[?)([^\]]+)(\]\]?)(\s*)$/);
+
+  if (sectionMatch) {
+    pushTomlToken(tokens, sectionMatch[1], "plain");
+    pushTomlToken(tokens, `${sectionMatch[2]}${sectionMatch[3]}${sectionMatch[4]}`, "section");
+    pushTomlToken(tokens, sectionMatch[5], "plain");
+    pushTomlToken(tokens, comment, "comment");
+    return tokens.length ? tokens : [{ value: line, kind: "plain" }];
+  }
+
+  const equalsIndex = findTomlDelimiter(code, "=");
+  if (equalsIndex >= 0) {
+    tokenizeTomlKey(code.slice(0, equalsIndex), tokens);
+    pushTomlToken(tokens, "=", "equals");
+    tokenizeTomlValue(code.slice(equalsIndex + 1), tokens);
+  } else {
+    tokenizeTomlValue(code, tokens);
+  }
+
+  pushTomlToken(tokens, comment, "comment");
+  return tokens.length ? tokens : [{ value: line, kind: "plain" }];
+}
+
+function tokenizeTomlKey(keyPart: string, tokens: TomlToken[]) {
+  const keyMatch = keyPart.match(/^(\s*)(.*?)(\s*)$/);
+  if (!keyMatch) {
+    pushTomlToken(tokens, keyPart, "plain");
+    return;
+  }
+  pushTomlToken(tokens, keyMatch[1], "plain");
+  pushTomlToken(tokens, keyMatch[2], "key");
+  pushTomlToken(tokens, keyMatch[3], "plain");
+}
+
+function tokenizeTomlValue(value: string, tokens: TomlToken[]) {
+  let cursor = 0;
+  while (cursor < value.length) {
+    const rest = value.slice(cursor);
+    const whitespace = rest.match(/^\s+/)?.[0];
+    if (whitespace) {
+      pushTomlToken(tokens, whitespace, "plain");
+      cursor += whitespace.length;
+      continue;
+    }
+
+    const char = value[cursor];
+    if (char === "\"" || char === "'") {
+      const stringEnd = findTomlStringEnd(value, cursor, char);
+      pushTomlToken(tokens, value.slice(cursor, stringEnd), "string");
+      cursor = stringEnd;
+      continue;
+    }
+
+    const word = rest.match(/^(true|false)\b/)?.[0];
+    if (word) {
+      pushTomlToken(tokens, word, "boolean");
+      cursor += word.length;
+      continue;
+    }
+
+    const date = rest.match(/^\d{4}-\d{2}-\d{2}(?:[Tt ][0-9:.+-Zz]+)?/)?.[0];
+    if (date) {
+      pushTomlToken(tokens, date, "date");
+      cursor += date.length;
+      continue;
+    }
+
+    const number = rest.match(/^[+-]?(?:0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?)/)?.[0];
+    if (number) {
+      pushTomlToken(tokens, number, "number");
+      cursor += number.length;
+      continue;
+    }
+
+    if ("[]{}.,=".includes(char)) {
+      pushTomlToken(tokens, char, "punctuation");
+      cursor += 1;
+      continue;
+    }
+
+    pushTomlToken(tokens, char, "plain");
+    cursor += 1;
+  }
+}
+
+function findTomlDelimiter(line: string, delimiter: string) {
+  let quote: string | null = null;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) {
+      if (quote === "\"" && char === "\\" && !escaped) {
+        escaped = true;
+        continue;
+      }
+      if (char === quote && !escaped) {
+        quote = null;
+      }
+      escaped = false;
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === delimiter) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findTomlStringEnd(value: string, start: number, quote: string) {
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote === "\"" && char === "\\" && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (char === quote && !escaped) {
+      return index + 1;
+    }
+    escaped = false;
+  }
+  return value.length;
+}
+
+function pushTomlToken(tokens: TomlToken[], value: string, kind: TomlTokenKind) {
+  if (value) {
+    tokens.push({ value, kind });
+  }
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -1443,7 +1719,12 @@ function getErrorMessage(error: unknown) {
 </script>
 
 <template>
-  <main class="app-frame">
+  <main
+    class="app-frame"
+    @beforeinput.capture="guardIntegerBeforeInput"
+    @paste.capture="guardIntegerPaste"
+    @input.capture="sanitizeIntegerInput"
+  >
     <div class="shell">
       <aside class="sidebar">
       <div class="brand">
@@ -1493,7 +1774,7 @@ function getErrorMessage(error: unknown) {
             outlined
             rounded
             aria-label="保存配置"
-            :disabled="!state.dirty"
+            :disabled="configLocked || !state.dirty || state.busy"
             @click="saveConfig"
           />
           <Button v-if="running" label="停止" icon="pi pi-stop" severity="danger" :disabled="state.busy" @click="stopAgent" />
@@ -1567,7 +1848,7 @@ function getErrorMessage(error: unknown) {
           <template #content>
             <div v-if="card.key === 'status'" class="status-board">
               <div class="metric-tile">
-                <i class="pi pi-broadcast-tower"></i>
+                <i class="pi pi-sitemap"></i>
                 <span>当前转发</span>
                 <strong>{{ activeForwardingLabel }}</strong>
               </div>
@@ -1718,8 +1999,8 @@ function getErrorMessage(error: unknown) {
                   <div class="method-fact"><span>监听状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
                 </div>
                 <label class="field">
-                  <span><i class="pi pi-broadcast-tower"></i>监听地址</span>
-                  <InputText :model-value="summary.listen_addr" @update:model-value="setField('listen_addr', $event)" />
+                  <span><i class="pi pi-wifi"></i>监听地址</span>
+                  <InputText :model-value="summary.listen_addr" :disabled="configLocked" @update:model-value="setField('listen_addr', $event)" />
                 </label>
               </template>
             </Card>
@@ -1749,7 +2030,7 @@ function getErrorMessage(error: unknown) {
               <h2>TUN 模式</h2>
               <p>{{ summary.tun_name }} · {{ summary.tun_ipv4 }}</p>
             </div>
-            <ToggleSwitch :model-value="summary.tun_enabled" @update:model-value="setField('tun_enabled', $event)" />
+            <ToggleSwitch :model-value="summary.tun_enabled" :disabled="configLocked" @update:model-value="setField('tun_enabled', $event)" />
           </div>
           <div class="card-group-grid">
             <Card class="panel">
@@ -1761,18 +2042,8 @@ function getErrorMessage(error: unknown) {
                 </div>
                 <label class="field">
                   <span><i class="pi pi-desktop"></i>名称</span>
-                  <InputText :model-value="summary.tun_name" @update:model-value="setField('tun_name', $event)" />
+                  <InputText :model-value="summary.tun_name" :disabled="configLocked" @update:model-value="setField('tun_name', $event)" />
                 </label>
-                <div class="field-pair">
-                  <label class="field">
-                    <span><i class="pi pi-hashtag"></i>IPv4</span>
-                    <InputText :model-value="summary.tun_ipv4" @update:model-value="setField('tun_ipv4', $event)" />
-                  </label>
-                  <label class="field">
-                    <span><i class="pi pi-gauge"></i>MTU</span>
-                    <InputNumber :model-value="summary.tun_mtu" :min="0" :use-grouping="false" @update:model-value="setField('tun_mtu', $event)" />
-                  </label>
-                </div>
               </template>
             </Card>
 
@@ -1782,11 +2053,11 @@ function getErrorMessage(error: unknown) {
                 <div class="toggle-list">
                   <div class="switch-row">
                     <span>Proxy DNS</span>
-                    <ToggleSwitch :model-value="summary.tun_proxy_dns" @update:model-value="setField('tun_proxy_dns', $event)" />
+                    <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="setField('tun_proxy_dns', $event)" />
                   </div>
                   <div class="switch-row">
                     <span>阻断 QUIC</span>
-                    <ToggleSwitch :model-value="summary.tun_block_quic" @update:model-value="setField('tun_block_quic', $event)" />
+                    <ToggleSwitch :model-value="summary.tun_block_quic" :disabled="configLocked" @update:model-value="setField('tun_block_quic', $event)" />
                   </div>
                 </div>
               </template>
@@ -1808,6 +2079,7 @@ function getErrorMessage(error: unknown) {
               <span><i class="pi pi-server"></i>节点</span>
               <Textarea
                 :model-value="summary.proxy_addrs.join('\n')"
+                :disabled="configLocked"
                 rows="5"
                 auto-resize
                 @update:model-value="setField('proxy_addrs', $event)"
@@ -1819,13 +2091,15 @@ function getErrorMessage(error: unknown) {
                 <InputNumber
                   :model-value="summary.connect_timeout_secs"
                   :min="0"
+                  :allow-empty="false"
+                  :disabled="configLocked"
                   :use-grouping="false"
                   @update:model-value="setField('connect_timeout_secs', $event)"
                 />
               </label>
               <label class="field">
                 <span><i class="pi pi-box"></i>压缩</span>
-                <Select :model-value="summary.compression_mode" :options="compressionOptions" @update:model-value="setField('compression_mode', $event)" />
+                <Select :model-value="summary.compression_mode" :options="compressionOptions" :disabled="configLocked" @update:model-value="setField('compression_mode', $event)" />
               </label>
             </div>
           </template>
@@ -1836,11 +2110,11 @@ function getErrorMessage(error: unknown) {
           <template #content>
             <label class="field">
               <span><i class="pi pi-user"></i>用户</span>
-              <InputText :model-value="summary.username" @update:model-value="setField('username', $event)" />
+              <InputText :model-value="summary.username" :disabled="configLocked" @update:model-value="setField('username', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-key"></i>私钥</span>
-              <InputText :model-value="summary.private_key_path" @update:model-value="setField('private_key_path', $event)" />
+              <InputText :model-value="summary.private_key_path" :disabled="configLocked" @update:model-value="setField('private_key_path', $event)" />
             </label>
           </template>
         </Card>
@@ -1851,31 +2125,31 @@ function getErrorMessage(error: unknown) {
             <div class="field-pair">
               <label class="field">
                 <span><i class="pi pi-clone"></i>TCP</span>
-                <InputNumber :model-value="summary.tcp_pool_size" :min="0" :use-grouping="false" @update:model-value="setField('tcp_pool_size', $event)" />
+                <InputNumber :model-value="summary.tcp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setField('tcp_pool_size', $event)" />
               </label>
               <label class="field">
                 <span><i class="pi pi-wave-pulse"></i>UDP</span>
-                <InputNumber :model-value="summary.udp_pool_size" :min="0" :use-grouping="false" @update:model-value="setField('udp_pool_size', $event)" />
+                <InputNumber :model-value="summary.udp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setField('udp_pool_size', $event)" />
               </label>
             </div>
             <div class="field-pair">
               <label class="field">
-                <span><i class="pi pi-toggle-on"></i>TCP 传输</span>
-                <SelectButton :model-value="summary.tcp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('tcp_mode', $event)" />
+                <span><i class="pi pi-sliders-h"></i>TCP 传输</span>
+                <SelectButton :model-value="summary.tcp_mode" :options="transportModeOptions" :allow-empty="false" :disabled="configLocked" @update:model-value="setField('tcp_mode', $event)" />
               </label>
               <label class="field">
-                <span><i class="pi pi-toggle-on"></i>UDP 传输</span>
-                <SelectButton :model-value="summary.udp_mode" :options="transportModeOptions" :allow-empty="false" @update:model-value="setField('udp_mode', $event)" />
+                <span><i class="pi pi-sliders-h"></i>UDP 传输</span>
+                <SelectButton :model-value="summary.udp_mode" :options="transportModeOptions" :allow-empty="false" :disabled="configLocked" @update:model-value="setField('udp_mode', $event)" />
               </label>
             </div>
             <div class="field-pair">
               <label class="field">
                 <span><i class="pi pi-share-alt"></i>TCP Yamux</span>
-                <InputNumber :model-value="summary.tcp_yamux_sessions" :min="0" :use-grouping="false" @update:model-value="setField('tcp_yamux_sessions', $event)" />
+                <InputNumber :model-value="summary.tcp_yamux_sessions" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setField('tcp_yamux_sessions', $event)" />
               </label>
               <label class="field">
                 <span><i class="pi pi-share-alt"></i>UDP Yamux</span>
-                <InputNumber :model-value="summary.udp_yamux_sessions" :min="0" :use-grouping="false" @update:model-value="setField('udp_yamux_sessions', $event)" />
+                <InputNumber :model-value="summary.udp_yamux_sessions" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setField('udp_yamux_sessions', $event)" />
               </label>
             </div>
           </template>
@@ -1898,11 +2172,11 @@ function getErrorMessage(error: unknown) {
                 <div class="field-pair">
                   <label class="field">
                     <span><i class="pi pi-chart-line"></i>日志</span>
-                    <Select :model-value="summary.log_level" :options="logLevelOptions" @update:model-value="setField('log_level', $event)" />
+                    <Select :model-value="summary.log_level" :options="logLevelOptions" :disabled="configLocked" @update:model-value="setField('log_level', $event)" />
                   </label>
                   <label class="field">
                     <span><i class="pi pi-microchip"></i>线程</span>
-                    <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
+                    <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setField('runtime_threads', $event)" />
                   </label>
                 </div>
               </template>
@@ -1936,6 +2210,7 @@ function getErrorMessage(error: unknown) {
                       option-label="label"
                       option-value="value"
                       :allow-empty="false"
+                      :disabled="configLocked"
                       @update:model-value="setField('direct_mode', $event)"
                     />
                   </label>
@@ -1975,6 +2250,7 @@ function getErrorMessage(error: unknown) {
                     :label="preset.label"
                     severity="secondary"
                     outlined
+                    :disabled="configLocked"
                     @click="addDirectRules(preset.rules)"
                   />
                 </div>
@@ -1997,10 +2273,10 @@ function getErrorMessage(error: unknown) {
                     </div>
                     <div class="rule-compose">
                       <label class="field rule-input-field">
-                        <span><i class="pi pi-list-plus"></i>规则值</span>
-                        <InputText v-model="state.ruleDraft" placeholder="域名 / 通配符 / CIDR" @keydown.enter.prevent="addDraftRules" />
+                        <span><i class="pi pi-plus-circle"></i>规则值</span>
+                        <InputText v-model="state.ruleDraft" placeholder="域名 / 通配符 / CIDR" :disabled="configLocked" @keydown.enter.prevent="addDraftRules" />
                       </label>
-                      <Button icon="pi pi-plus" label="添加" severity="primary" @click="addDraftRules" />
+                      <Button icon="pi pi-plus" label="添加" severity="primary" :disabled="configLocked" @click="addDraftRules" />
                     </div>
                   </section>
 
@@ -2022,7 +2298,7 @@ function getErrorMessage(error: unknown) {
                         <div class="rule-chip-list grouped">
                           <div v-for="item in group.items" :key="`${group.key}-${item.rule}-${item.index}`" class="rule-chip">
                             <span :title="item.rule">{{ item.rule }}</span>
-                            <button type="button" class="rule-chip-remove" aria-label="删除" @click="removeDirectRule(item.index)">
+                            <button type="button" class="rule-chip-remove" aria-label="删除" :disabled="configLocked" @click="removeDirectRule(item.index)">
                               <span class="rule-chip-remove-mark" aria-hidden="true"></span>
                             </button>
                           </div>
@@ -2100,15 +2376,19 @@ function getErrorMessage(error: unknown) {
           </template>
           <template #content>
             <div class="diagnostic-list">
-              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+              <div v-if="state.diagnosticsRunning" class="diagnostic-row muted">
+                <div><strong>后台测试中</strong><span>Google / YouTube · HTTP / SOCKS5 / TUN</span></div>
+                <span>等待结果</span>
+              </div>
+              <div v-if="!state.diagnostics && !state.diagnosticsRunning" class="diagnostic-row muted">
                 <div><strong>Google</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
               </div>
-              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics && !state.diagnosticsRunning" class="diagnostic-row muted">
                 <div><strong>YouTube</strong><span>HTTP / SOCKS5</span></div>
                 <span>未测试</span>
               </div>
-              <div v-if="!state.diagnostics" class="diagnostic-row muted">
+              <div v-if="!state.diagnostics && !state.diagnosticsRunning" class="diagnostic-row muted">
                 <div><strong>TUN</strong><span>{{ summary.tun_enabled ? summary.tun_name : "未启用" }}</span></div>
                 <span>{{ summary.tun_enabled ? "未测试" : "跳过" }}</span>
               </div>
@@ -2179,7 +2459,26 @@ function getErrorMessage(error: unknown) {
           </div>
         </template>
         <template #content>
-          <Textarea class="toml-editor" :model-value="state.config?.raw ?? ''" @update:model-value="setRawConfig(String($event))" />
+          <div class="toml-editor-shell">
+            <pre ref="tomlHighlightRef" class="toml-highlight" aria-hidden="true"><code><span
+              v-for="(line, lineIndex) in highlightedToml"
+              :key="lineIndex"
+              class="toml-line"
+            ><span
+              v-for="(token, tokenIndex) in line.tokens"
+              :key="tokenIndex"
+              :class="['toml-token', `toml-${token.kind}`]"
+            >{{ token.value }}</span>{{ lineIndex < highlightedToml.length - 1 ? "\n" : "" }}</span></code></pre>
+            <Textarea
+              class="toml-editor"
+              :model-value="state.config?.raw ?? ''"
+              :readonly="configLocked"
+              spellcheck="false"
+              wrap="off"
+              @scroll="syncTomlHighlightScroll"
+              @update:model-value="setRawConfig(String($event))"
+            />
+          </div>
         </template>
       </Card>
       </section>

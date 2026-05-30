@@ -186,6 +186,28 @@ button {
   letter-spacing: 0;
 }
 
+.p-button .p-button-label,
+.p-tag,
+.p-tag-label,
+.p-badge,
+.p-selectbutton .p-togglebutton,
+.p-selectbutton .p-togglebutton-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.p-tag {
+  min-height: 26px;
+  padding-block: 0;
+}
+
+.p-badge {
+  min-height: 22px;
+  padding-block: 0;
+}
+
 .sidebar-status {
   margin-top: auto;
   display: grid;
@@ -592,8 +614,9 @@ body.overview-dragging * {
   line-height: 1.2;
 }
 
-.panel-heading p,
-.panel-heading span {
+.panel-heading > p,
+.panel-heading > span:not(.p-tag):not(.p-badge),
+.panel-heading > div > p {
   margin: 4px 0 0;
   color: #64748b;
   font-size: 13px;
@@ -602,11 +625,13 @@ body.overview-dragging * {
 .metric-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 28px;
   padding: 0 10px;
   border-radius: 8px;
   font-size: 12px;
   font-weight: 800;
+  line-height: 1;
 }
 
 .metric-badge.good {
@@ -1051,7 +1076,7 @@ body.overview-dragging * {
 .field textarea:focus,
 .field .p-inputtext:enabled:focus,
 .field .p-select:not(.p-disabled).p-focus,
-.toml-editor:focus {
+.toml-editor-shell:focus-within {
   border-color: var(--app-primary);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
@@ -1102,6 +1127,11 @@ body.overview-dragging * {
 }
 
 .p-selectbutton .p-togglebutton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -1358,6 +1388,15 @@ body.overview-dragging * {
   background: #dbeafe;
 }
 
+.rule-chip-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.rule-chip-remove:disabled:hover {
+  background: transparent;
+}
+
 .empty-rules {
   display: grid;
   place-items: center;
@@ -1439,7 +1478,7 @@ body.overview-dragging * {
 }
 
 .log-view,
-.toml-editor {
+.toml-editor-shell {
   height: calc(100vh - 210px);
   min-height: 420px;
 }
@@ -1548,12 +1587,110 @@ body.overview-dragging * {
   color: #94a3b8;
 }
 
+.toml-editor-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: #0f172a;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.toml-highlight,
 .toml-editor {
-  resize: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
   padding: 14px;
+  border: 0;
+  border-radius: 0;
   font-family: var(--app-mono-font);
   font-size: 13px;
   line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.toml-highlight {
+  z-index: 1;
+  overflow: hidden;
+  background: #0f172a;
+  color: #dbeafe;
+  pointer-events: none;
+}
+
+.toml-highlight code {
+  display: block;
+  min-width: max-content;
+}
+
+.toml-editor {
+  z-index: 2;
+  resize: none;
+  overflow: auto;
+  background: transparent !important;
+  caret-color: #bfdbfe;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  outline: none;
+}
+
+.toml-editor[readonly] {
+  cursor: default;
+}
+
+.toml-editor-shell textarea.toml-editor.p-textarea {
+  background: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+.toml-editor::selection {
+  background: rgba(96, 165, 250, 0.28);
+}
+
+.toml-line {
+  display: block;
+  min-height: 20px;
+}
+
+.toml-section {
+  color: #93c5fd;
+  font-weight: 800;
+}
+
+.toml-key {
+  color: #5eead4;
+}
+
+.toml-equals,
+.toml-punctuation {
+  color: #94a3b8;
+}
+
+.toml-string {
+  color: #86efac;
+}
+
+.toml-number {
+  color: #fdba74;
+}
+
+.toml-boolean {
+  color: #f0abfc;
+  font-weight: 800;
+}
+
+.toml-date {
+  color: #c4b5fd;
+}
+
+.toml-comment {
+  color: #64748b;
+  font-style: italic;
 }
 
 .loading,
