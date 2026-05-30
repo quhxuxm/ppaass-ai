@@ -58,6 +58,12 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(windows)]
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
+#[cfg(windows)]
+const TRAY_ID: &str = "main";
+#[cfg(windows)]
+const TRAY_SHOW_ID: &str = "show";
+#[cfg(windows)]
+const TRAY_EXIT_ID: &str = "exit";
 
 #[cfg(target_os = "macos")]
 const TUN_HELPER_SERVICE_ARG: &str = "--tun-helper-service";
@@ -2607,6 +2613,64 @@ fn deployed_agent_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+#[cfg(windows)]
+fn setup_windows_tray(app: &tauri::App) -> Result<(), String> {
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| "找不到默认窗口图标，无法创建系统托盘".to_string())?;
+    let menu = tauri::menu::MenuBuilder::new(app)
+        .text(TRAY_SHOW_ID, "显示")
+        .separator()
+        .text(TRAY_EXIT_ID, "退出")
+        .build()
+        .map_err(|err| format!("创建系统托盘菜单失败：{err}"))?;
+
+    tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .tooltip("PPAASS Desktop Agent")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_ID => restore_main_window(app),
+            TRAY_EXIT_ID => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                restore_main_window(tray.app_handle());
+            }
+        })
+        .build(app)
+        .map_err(|err| format!("创建系统托盘失败：{err}"))?;
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn hide_window_to_tray_after_minimize(window: tauri::Window) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        if window.is_minimized().unwrap_or(false) {
+            let _ = window.hide();
+        }
+    });
+}
+
+#[cfg(windows)]
+fn restore_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn ancestor_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(current_dir) = std::env::current_dir() {
@@ -2660,9 +2724,19 @@ fn main() {
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            #[cfg(windows)]
+            setup_windows_tray(app).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
             #[cfg(target_os = "macos")]
             check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(not(windows))]
+            let _ = (window, event);
+            #[cfg(windows)]
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                hide_window_to_tray_after_minimize(window.clone());
+            }
         })
         .manage(runtime)
         .invoke_handler(tauri::generate_handler![
