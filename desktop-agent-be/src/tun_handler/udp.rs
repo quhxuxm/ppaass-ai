@@ -1,4 +1,6 @@
-use super::network::{TunNetworks, address_for_tun_target, reject_tun_target};
+use super::network::{
+    TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
+};
 use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::Result;
@@ -49,6 +51,11 @@ pub(super) async fn handle_tun_udp(
     if !proxy_dns_request {
         if tun_networks.is_ipv4_broadcast(target.ip()) {
             debug!("TUN UDP 广播已丢弃 -> {}", target);
+            drain_dropped_udp(rx).await;
+            return Ok(());
+        }
+        if is_tun_local_udp_target(client, target, tun_networks) {
+            debug!("TUN UDP 本地网段流量已丢弃：{} -> {}", client, target);
             drain_dropped_udp(rx).await;
             return Ok(());
         }

@@ -20,7 +20,7 @@ impl TunNetworks {
         }
     }
 
-    fn contains_ip(self, ip: IpAddr) -> bool {
+    pub(super) fn contains_ip(self, ip: IpAddr) -> bool {
         // IPv6 未配置时，只检测 IPv4 TUN 网段。
         match ip {
             IpAddr::V4(ip) => ipv4_in_cidr(ip, self.ipv4, self.ipv4_prefix),
@@ -43,6 +43,14 @@ impl TunNetworks {
         let broadcast = network | !mask;
         u32::from(ip) == broadcast
     }
+}
+
+pub(super) fn is_tun_local_udp_target(
+    source: SocketAddr,
+    target: SocketAddr,
+    tun_networks: TunNetworks,
+) -> bool {
+    tun_networks.contains_ip(source.ip()) && tun_networks.contains_ip(target.ip())
 }
 
 pub(super) fn reject_tun_target(
@@ -138,6 +146,30 @@ fn ipv6_in_cidr(ip: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
         u128::MAX << (128 - prefix)
     };
     (u128::from_be_bytes(ip.octets()) & mask) == (u128::from_be_bytes(network.octets()) & mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tun_local_udp_target_matches_source_and_target_inside_tun_network() {
+        let networks = TunNetworks::new(Ipv4Addr::new(10, 10, 10, 1), 24, None);
+        let source = "10.10.10.1:137".parse().unwrap();
+        let target = "10.10.10.1:137".parse().unwrap();
+
+        assert!(is_tun_local_udp_target(source, target, networks));
+    }
+
+    #[test]
+    fn reversed_external_to_tun_target_is_not_local_udp_noise() {
+        let networks = TunNetworks::new(Ipv4Addr::new(10, 10, 10, 1), 24, None);
+        let source = "8.8.8.8:443".parse().unwrap();
+        let target = "10.10.10.1:443".parse().unwrap();
+
+        assert!(!is_tun_local_udp_target(source, target, networks));
+        assert!(reject_tun_target("UDP", source, target, networks).is_err());
+    }
 }
 
 pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {

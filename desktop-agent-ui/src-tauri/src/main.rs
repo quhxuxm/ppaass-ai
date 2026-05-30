@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::io::Read;
 use std::io::{self, Write};
 use std::net::{
@@ -15,6 +15,8 @@ use std::net::{Shutdown as TcpShutdown, TcpListener as StdTcpListener};
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+#[cfg(target_os = "macos")]
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(any(windows, target_os = "linux"))]
@@ -28,6 +30,8 @@ use tokio_util::sync::CancellationToken;
 use toml::Value;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::Registry;
+use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
 #[cfg(windows)]
@@ -119,6 +123,7 @@ impl AgentRuntime {
 struct UiLogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
     capacity: usize,
+    filter: Arc<Mutex<Option<reload::Handle<EnvFilter, Registry>>>>,
 }
 
 impl UiLogBuffer {
@@ -126,6 +131,7 @@ impl UiLogBuffer {
         Self {
             lines: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
+            filter: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -147,6 +153,7 @@ impl UiLogBuffer {
     }
 
     fn install_tracing(&self) {
+        let (filter, handle) = reload::Layer::new(log_filter("info"));
         let layer = fmt::layer()
             .with_writer(UiLogMakeWriter {
                 buffer: self.clone(),
@@ -157,15 +164,53 @@ impl UiLogBuffer {
             .with_line_number(true);
 
         let result = tracing_subscriber::registry()
-            .with(EnvFilter::new("debug"))
+            .with(filter)
             .with(layer)
             .try_init();
 
         match result {
-            Ok(()) => self.push("UI 日志通道已初始化"),
+            Ok(()) => {
+                if let Ok(mut slot) = self.filter.lock() {
+                    *slot = Some(handle);
+                }
+                self.push("UI 日志通道已初始化");
+            }
             Err(err) => self.push(format!("UI 日志通道初始化失败：{err}")),
         }
     }
+
+    fn set_log_level(&self, log_level: &str) -> Result<(), String> {
+        let normalized = normalize_log_level(log_level);
+        let handle = self
+            .filter
+            .lock()
+            .map_err(|_| "日志级别状态锁已损坏".to_string())?
+            .clone();
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+
+        handle
+            .reload(log_filter(normalized))
+            .map_err(|err| format!("更新 UI 日志级别失败：{err}"))?;
+        self.push(format!("UI 日志级别已切换为：{normalized}"));
+        Ok(())
+    }
+}
+
+fn normalize_log_level(log_level: &str) -> &'static str {
+    match log_level.trim().to_ascii_lowercase().as_str() {
+        "trace" => "trace",
+        "debug" => "debug",
+        "warn" => "warn",
+        "error" => "error",
+        _ => "info",
+    }
+}
+
+fn log_filter(log_level: &str) -> EnvFilter {
+    EnvFilter::try_new(normalize_log_level(log_level))
+        .unwrap_or_else(|_| EnvFilter::new("info"))
 }
 
 #[derive(Clone)]
@@ -295,6 +340,14 @@ struct NetworkInterfaceTraffic {
     transmitted_bytes: u64,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MacosTunHelperProbeResponse {
+    Pong,
+    Error { message: String },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 #[cfg(windows)]
@@ -303,6 +356,7 @@ enum ServiceRequest {
     Stop,
     State,
     Traffic,
+    SetLogLevel { log_level: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -315,7 +369,10 @@ struct ServiceResponse {
 }
 
 #[tauri::command]
-fn load_agent_config(path: Option<String>) -> Result<LoadedAgentConfig, String> {
+fn load_agent_config(
+    runtime: tauri::State<'_, AgentRuntime>,
+    path: Option<String>,
+) -> Result<LoadedAgentConfig, String> {
     let config_path = match path.filter(|value| !value.trim().is_empty()) {
         Some(value) => PathBuf::from(value),
         None => locate_config_path().ok_or_else(|| {
@@ -323,20 +380,34 @@ fn load_agent_config(path: Option<String>) -> Result<LoadedAgentConfig, String> 
         })?,
     };
 
-    load_config_from_path(&config_path)
+    let loaded = load_config_from_path(&config_path)?;
+    apply_ui_log_level(&runtime, &loaded.summary.log_level);
+    Ok(loaded)
 }
 
 #[tauri::command]
-fn save_agent_config(path: String, raw: String) -> Result<LoadedAgentConfig, String> {
+fn save_agent_config(
+    runtime: tauri::State<'_, AgentRuntime>,
+    path: String,
+    raw: String,
+) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(Path::new(&path));
     write_config_file(&config_path, &raw)?;
 
-    if let Some(primary_path) = primary_agent_config_path(&config_path) {
+    let loaded = if let Some(primary_path) = primary_agent_config_path(&config_path) {
         write_config_file(&primary_path, &raw)?;
-        return load_config_from_path(&primary_path);
-    }
+        load_config_from_path(&primary_path)?
+    } else {
+        load_config_from_path(&config_path)?
+    };
 
-    load_config_from_path(&config_path)
+    apply_ui_log_level(&runtime, &loaded.summary.log_level);
+    #[cfg(windows)]
+    let _ = send_service_request(&ServiceRequest::SetLogLevel {
+        log_level: loaded.summary.log_level.clone(),
+    });
+
+    Ok(loaded)
 }
 
 #[tauri::command]
@@ -368,6 +439,8 @@ fn start_agent_inner(
     config_path: PathBuf,
     allow_elevation: bool,
 ) -> Result<AgentState, String> {
+    apply_log_level_from_config_path(runtime, &config_path)?;
+
     let (running, _) = process_status(runtime)?;
     if running {
         return agent_state(runtime);
@@ -401,6 +474,19 @@ fn start_agent_inner(
 
     wait_for_agent_start(runtime)?;
     agent_state(runtime)
+}
+
+fn apply_log_level_from_config_path(runtime: &AgentRuntime, config_path: &Path) -> Result<(), String> {
+    let config = desktop_agent_be::config::AgentConfig::load(config_path)
+        .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
+    apply_ui_log_level(runtime, &config.log_level);
+    Ok(())
+}
+
+fn apply_ui_log_level(runtime: &AgentRuntime, log_level: &str) {
+    if let Err(err) = runtime.logs.set_log_level(log_level) {
+        runtime.logs.push(err);
+    }
 }
 
 #[tauri::command]
@@ -702,7 +788,7 @@ fn ensure_macos_tun_helper(
 ) -> Result<(), String> {
     let source = std::env::current_exe().map_err(|err| format!("定位当前 App 程序失败：{err}"))?;
     let socket_path = macos_tun_helper_socket(config);
-    let status = macos_tun_helper_status(&source, socket_path);
+    let status = macos_tun_helper_status(&source, config);
     match status {
         MacosTunHelperStatus::Current => {
             logs.push("TUN helper 已是当前 App 版本");
@@ -735,7 +821,11 @@ fn macos_tun_helper_socket(config: &desktop_agent_be::config::AgentConfig) -> &s
 }
 
 #[cfg(target_os = "macos")]
-fn macos_tun_helper_status(source: &Path, socket_path: &str) -> MacosTunHelperStatus {
+fn macos_tun_helper_status(
+    source: &Path,
+    config: &desktop_agent_be::config::AgentConfig,
+) -> MacosTunHelperStatus {
+    let socket_path = macos_tun_helper_socket(config);
     let install_path = Path::new(TUN_HELPER_INSTALL_PATH);
     let plist_path = Path::new(TUN_HELPER_PLIST_PATH);
     if !install_path.is_file() || !plist_path.is_file() {
@@ -746,11 +836,110 @@ fn macos_tun_helper_status(source: &Path, socket_path: &str) -> MacosTunHelperSt
         return MacosTunHelperStatus::Outdated;
     }
 
-    if !Path::new(socket_path).exists() {
+    if !macos_tun_helper_plist_matches(config).unwrap_or(false) {
+        return MacosTunHelperStatus::Outdated;
+    }
+
+    if !macos_tun_helper_socket_ready(socket_path) {
         return MacosTunHelperStatus::NeedsRestart;
     }
 
     MacosTunHelperStatus::Current
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_socket_ready(socket_path: &str) -> bool {
+    macos_tun_helper_ping(socket_path).is_ok()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_ping(socket_path: &str) -> Result<(), String> {
+    if !Path::new(socket_path).exists() {
+        return Err(format!("helper socket 不存在：{socket_path}"));
+    }
+
+    let mut stream = UnixStream::connect(socket_path)
+        .map_err(|err| format!("连接 TUN helper 失败：socket={socket_path} error={err}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(700)))
+        .map_err(|err| format!("设置 helper probe 读超时失败：{err}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(700)))
+        .map_err(|err| format!("设置 helper probe 写超时失败：{err}"))?;
+
+    let payload = br#"{"type":"ping"}"#;
+    let len = (payload.len() as u32).to_be_bytes();
+    stream
+        .write_all(&len)
+        .and_then(|_| stream.write_all(payload))
+        .map_err(|err| format!("发送 TUN helper probe 失败：{err}"))?;
+
+    let mut marker = [0u8; 1];
+    stream
+        .read_exact(&mut marker)
+        .map_err(|err| format!("读取 TUN helper probe marker 失败：{err}"))?;
+
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact(&mut len_buf)
+        .map_err(|err| format!("读取 TUN helper probe 响应长度失败：{err}"))?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > 1024 * 1024 {
+        return Err(format!("TUN helper probe 响应过大：{len} bytes"));
+    }
+
+    let mut response = vec![0u8; len];
+    stream
+        .read_exact(&mut response)
+        .map_err(|err| format!("读取 TUN helper probe 响应失败：{err}"))?;
+
+    match serde_json::from_slice::<MacosTunHelperProbeResponse>(&response)
+        .map_err(|err| format!("解析 TUN helper probe 响应失败：{err}"))?
+    {
+        MacosTunHelperProbeResponse::Pong => Ok(()),
+        MacosTunHelperProbeResponse::Error { message } => {
+            Err(format!("TUN helper probe 返回错误：{message}"))
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_plist_matches(
+    config: &desktop_agent_be::config::AgentConfig,
+) -> Result<bool, String> {
+    let socket_path = macos_tun_helper_socket(config);
+    let allowed_uid = current_uid()?;
+    let actual = fs::read_to_string(TUN_HELPER_PLIST_PATH)
+        .map_err(|err| format!("读取 TUN helper plist 失败：{err}"))?;
+    Ok(macos_tun_helper_plist_has_core_config(
+        &actual,
+        socket_path,
+        allowed_uid,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_helper_plist_has_core_config(
+    plist: &str,
+    socket_path: &str,
+    allowed_uid: u32,
+) -> bool {
+    // Log level changes should not force a privileged helper reinstall on every
+    // start. The helper is considered current when the executable, socket, and
+    // access control are correct; binary updates still trigger reinstall via
+    // files_identical().
+    let allowed_uid = allowed_uid.to_string();
+    [
+        TUN_HELPER_PLIST_ID,
+        TUN_HELPER_INSTALL_PATH,
+        TUN_HELPER_SERVICE_ARG,
+        TUN_HELPER_SOCKET_ARG,
+        socket_path,
+        TUN_HELPER_ALLOWED_UID_ARG,
+        allowed_uid.as_str(),
+    ]
+    .iter()
+    .all(|value| plist.contains(&format!("<string>{}</string>", xml_escape(value))))
 }
 
 #[cfg(target_os = "macos")]
@@ -772,7 +961,7 @@ fn install_macos_tun_helper(
 ) -> Result<(), String> {
     let allowed_uid = current_uid()?;
     let socket_path = macos_tun_helper_socket(config);
-    let script = macos_tun_helper_install_script(source, socket_path, allowed_uid);
+    let script = macos_tun_helper_install_script(source, socket_path, allowed_uid, &config.log_level);
     let script_path = std::env::temp_dir().join(format!(
         "ppaass-install-tun-helper-{}-{}.sh",
         std::process::id(),
@@ -797,8 +986,13 @@ fn install_macos_tun_helper(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_tun_helper_install_script(source: &Path, socket_path: &str, allowed_uid: u32) -> String {
-    let plist = macos_tun_helper_plist(socket_path, allowed_uid);
+fn macos_tun_helper_install_script(
+    source: &Path,
+    socket_path: &str,
+    allowed_uid: u32,
+    log_level: &str,
+) -> String {
+    let plist = macos_tun_helper_plist(socket_path, allowed_uid, log_level);
     format!(
         r#"#!/bin/sh
 set -eu
@@ -838,7 +1032,8 @@ PPAASS_TUN_HELPER_PLIST
 }
 
 #[cfg(target_os = "macos")]
-fn macos_tun_helper_plist(socket_path: &str, allowed_uid: u32) -> String {
+fn macos_tun_helper_plist(socket_path: &str, allowed_uid: u32, log_level: &str) -> String {
+    let log_level = normalize_log_level(log_level);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -855,7 +1050,7 @@ fn macos_tun_helper_plist(socket_path: &str, allowed_uid: u32) -> String {
     <string>{allowed_uid_arg}</string>
     <string>{allowed_uid}</string>
     <string>{log_level_arg}</string>
-    <string>info</string>
+    <string>{log_level}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -874,6 +1069,7 @@ fn macos_tun_helper_plist(socket_path: &str, allowed_uid: u32) -> String {
         socket_path = xml_escape(socket_path),
         allowed_uid_arg = xml_escape(TUN_HELPER_ALLOWED_UID_ARG),
         log_level_arg = xml_escape(TUN_HELPER_LOG_LEVEL_ARG),
+        log_level = xml_escape(log_level),
     )
 }
 
@@ -912,7 +1108,7 @@ fn command_failure_message(context: &str, output: &std::process::Output) -> Stri
 fn wait_for_macos_tun_helper_socket(socket_path: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if Path::new(socket_path).exists() {
+        if macos_tun_helper_socket_ready(socket_path) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -1353,6 +1549,10 @@ fn spawn_embedded_agent(
         .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
     normalize_agent_config_paths(&mut config, &agent_base_dir);
     config.log_dir = None;
+    #[cfg(target_os = "macos")]
+    {
+        config.tun.macos_helper_fallback_to_privilege = false;
+    }
     let shutdown = CancellationToken::new();
     let shutdown_for_thread = shutdown.clone();
     let thread_logs = logs.clone();
@@ -2061,6 +2261,13 @@ fn handle_service_request(runtime: &AgentRuntime, stream: &mut StdTcpStream) -> 
             state: None,
             traffic: Some(agent_traffic_snapshot()),
             error: None,
+        },
+        ServiceRequest::SetLogLevel { log_level } => match runtime.logs.set_log_level(&log_level) {
+            Ok(()) => match agent_state(runtime) {
+                Ok(state) => service_state_ok(state),
+                Err(err) => service_error(err),
+            },
+            Err(err) => service_error(err),
         },
     }
 }

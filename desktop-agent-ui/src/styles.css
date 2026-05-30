@@ -1446,17 +1446,99 @@ body.overview-dragging * {
 
 .log-view {
   overflow: auto;
-  padding: 14px;
+  padding: 12px;
   border-radius: 8px;
-  background: #101827;
+  background: #111827;
   color: #dbeafe;
   font-family: var(--app-mono-font);
   font-size: 12px;
+  line-height: 1.55;
 }
 
-.log-view div {
-  min-height: 20px;
+.log-line {
+  min-height: 22px;
+  padding: 1px 8px 1px 10px;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-line:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.log-line-trace {
+  border-left-color: #94a3b8;
+}
+
+.log-line-debug {
+  border-left-color: #38bdf8;
+}
+
+.log-line-info {
+  border-left-color: #60a5fa;
+}
+
+.log-line-warn {
+  border-left-color: #f59e0b;
+}
+
+.log-line-error {
+  border-left-color: #f43f5e;
+}
+
+.log-timestamp {
+  color: #93c5fd;
+}
+
+.log-level-trace,
+.log-level-debug,
+.log-level-info,
+.log-level-warn,
+.log-level-error {
+  font-weight: 800;
+}
+
+.log-level-trace {
+  color: #cbd5e1;
+}
+
+.log-level-debug {
+  color: #67e8f9;
+}
+
+.log-level-info {
+  color: #bfdbfe;
+}
+
+.log-level-warn {
+  color: #fbbf24;
+}
+
+.log-level-error {
+  color: #fb7185;
+}
+
+.log-thread {
+  color: #c4b5fd;
+}
+
+.log-target {
+  color: #5eead4;
+}
+
+.log-field {
+  color: #f0abfc;
+}
+
+.log-string {
+  color: #86efac;
+}
+
+.log-number,
+.log-address {
+  color: #fdba74;
 }
 
 .log-empty {

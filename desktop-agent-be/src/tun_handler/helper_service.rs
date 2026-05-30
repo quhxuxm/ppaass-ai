@@ -24,7 +24,6 @@ use tun_rs::DeviceBuilder;
 #[allow(dead_code)]
 struct TunSystemLease {
     route_guard: Option<RouteGuard>,
-    dns_guard: Option<DnsGuard>,
 }
 
 struct PreparedTun {
@@ -47,7 +46,7 @@ pub(crate) fn run(
     let _runtime_guard = runtime.enter();
 
     if effective_uid() != 0 {
-        warn!("desktop-agent TUN helper 模式当前不是 root，TUN 创建和路由/DNS 修改通常会失败");
+        warn!("desktop-agent TUN helper 模式当前不是 root，TUN 创建和路由修改通常会失败");
     }
     if allowed_uid.is_none() {
         warn!("未设置 --tun-helper-allowed-uid；本机任意用户都可以连接 helper socket");
@@ -120,6 +119,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn cleanup_stale(route_state_file: Option<&str>, dns_state_file: Option<&str>) {
     cleanup_stale_routes(route_state_file);
+    debug!("TUN helper 不会修改系统 DNS；仅检查并恢复旧版本遗留的 DNS 状态");
     let _ = DnsGuard::install(false, None, 0, Ipv4Addr::UNSPECIFIED, dns_state_file);
 }
 
@@ -163,12 +163,15 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
         .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
 
     let proxy_ips = resolve_proxy_ips(&request.proxy_addrs);
+    let dns_capture_target = super::tun_ipv4_peer(ipv4, ipv4_prefix).unwrap_or(ipv4);
     let route_guard = match RouteGuard::install(
         if_index,
         ipv4,
+        dns_capture_target,
         request.ipv6.as_deref(),
         request.route_state_file.as_deref(),
         &proxy_ips,
+        request.proxy_dns,
     ) {
         Ok(guard) => Some(guard),
         Err(e) => {
@@ -177,22 +180,11 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
         }
     };
 
-    let dns_guard = DnsGuard::install(
-        request.proxy_dns,
-        request.proxy_bind_interface.as_ref(),
-        if_index,
-        super::tun_dns_server(ipv4, ipv4_prefix),
-        request.dns_state_file.as_deref(),
-    );
-
     Ok(PreparedTun {
         device,
         name,
         if_index,
-        lease: TunSystemLease {
-            route_guard,
-            dns_guard,
-        },
+        lease: TunSystemLease { route_guard },
     })
 }
 

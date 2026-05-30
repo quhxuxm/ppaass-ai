@@ -126,26 +126,16 @@ pub async fn run_tun_mode(
     let route_guard = if helper_managed_network {
         None
     } else {
-        install_route_guard(&config, ipv4, tun_if_index, &proxy_addrs)
+        install_route_guard(&config, ipv4, ipv4_prefix, tun_if_index, &proxy_addrs)
     };
+    if !helper_managed_network {
+        cleanup_stale_dns(config.dns_state_file.as_deref());
+    }
 
     // 路由已就绪后再预热代理连接池。否则 VMware、旧 TUN 路由或 split-default
     // 已存在时，绑定到物理接口的 Yamux 连接可能在启动早期得到 No route to host。
     tcp_pool.prewarm().await;
     udp_pool.prewarm().await;
-
-    let dns_server = tun_dns_server(ipv4, ipv4_prefix);
-    let dns_guard = if helper_managed_network {
-        None
-    } else {
-        DnsGuard::install(
-            proxy_dns,
-            proxy_bind_interface.as_ref(),
-            tun_if_index,
-            dns_server,
-            config.dns_state_file.as_deref(),
-        )
-    };
 
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
@@ -155,7 +145,6 @@ pub async fn run_tun_mode(
     tcp_pool.set_proxy_bind_interface(None);
     udp_pool.set_proxy_bind_ip(None);
     udp_pool.set_proxy_bind_interface(None);
-    drop(dns_guard);
     drop(route_guard);
     #[cfg(target_os = "macos")]
     drop(system_guard);
@@ -166,6 +155,19 @@ pub async fn run_tun_mode(
 
     info!("TUN 模式转发器已停止");
     Ok(())
+}
+
+fn cleanup_stale_dns(dns_state_file: Option<&str>) {
+    // Current TUN mode never changes system DNS. This only restores DNS records
+    // left behind by older builds that did temporarily rewrite system DNS.
+    debug!("TUN 模式不会修改系统 DNS；仅检查并恢复旧版本遗留的 DNS 状态");
+    let _ = DnsGuard::install(
+        false,
+        None,
+        0,
+        std::net::Ipv4Addr::UNSPECIFIED,
+        dns_state_file,
+    );
 }
 
 struct NetstackGeneration {
@@ -449,14 +451,6 @@ fn tun_ipv4_peer(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::
     None
 }
 
-fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Addr {
-    let Some(dns) = tun_ipv4_peer(ipv4, ipv4_prefix) else {
-        return ipv4;
-    };
-    info!("TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
-    dns
-}
-
 #[cfg(target_os = "macos")]
 fn tun_ipv4_destination(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
     tun_ipv4_peer(ipv4, ipv4_prefix)
@@ -482,36 +476,11 @@ fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::tun_dns_server;
     #[cfg(target_os = "macos")]
     use super::tun_ipv4_destination;
     #[cfg(target_os = "macos")]
     use super::tun_ipv4_interface_prefix;
     use std::net::Ipv4Addr;
-
-    #[test]
-    fn tun_dns_server_uses_sibling_address_for_default_subnet() {
-        assert_eq!(
-            tun_dns_server(Ipv4Addr::new(10, 10, 10, 1), 24),
-            Ipv4Addr::new(10, 10, 10, 2)
-        );
-    }
-
-    #[test]
-    fn tun_dns_server_can_use_first_host_when_adapter_uses_second_host() {
-        assert_eq!(
-            tun_dns_server(Ipv4Addr::new(10, 10, 10, 2), 24),
-            Ipv4Addr::new(10, 10, 10, 1)
-        );
-    }
-
-    #[test]
-    fn tun_dns_server_falls_back_for_point_to_point_subnet() {
-        assert_eq!(
-            tun_dns_server(Ipv4Addr::new(10, 10, 10, 1), 31),
-            Ipv4Addr::new(10, 10, 10, 1)
-        );
-    }
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -902,17 +871,21 @@ fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
 fn install_route_guard(
     config: &TunConfig,
     tun_ipv4: std::net::Ipv4Addr,
+    tun_ipv4_prefix: u8,
     tun_if_index: u32,
     proxy_addrs: &[String],
 ) -> Option<RouteGuard> {
     // 解析 proxy IP 后安装旁路和 split-default 路由；失败时继续运行但不接管全局路由。
     let proxy_ips = resolve_proxy_ips(proxy_addrs);
+    let dns_capture_target = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix).unwrap_or(tun_ipv4);
     match RouteGuard::install(
         tun_if_index,
         tun_ipv4,
+        dns_capture_target,
         config.ipv6.as_deref(),
         config.route_state_file.as_deref(),
         &proxy_ips,
+        config.proxy_dns,
     ) {
         Ok(guard) => Some(guard),
         Err(e) => {

@@ -1,6 +1,6 @@
 use super::TunForwardContext;
 use super::dns_proxy::DnsProxy;
-use super::network::{address_for_tun_target, reject_tun_target};
+use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
@@ -149,6 +149,13 @@ pub(super) fn spawn_udp_sessions(
                     let (address, _) = address_for_tun_target(target_addr, context.proxy_dns);
                     if context.tun_networks.is_ipv4_broadcast(target_addr.ip()) {
                         debug!("TUN UDP 广播已丢弃 -> {}", target_addr);
+                        continue;
+                    }
+                    if is_tun_local_udp_target(source_addr, target_addr, context.tun_networks) {
+                        debug!(
+                            "TUN UDP 本地网段流量已丢弃：{} -> {}",
+                            source_addr, target_addr
+                        );
                         continue;
                     }
                     if let Err(e) = reject_tun_target(

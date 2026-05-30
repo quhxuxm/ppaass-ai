@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+use super::dns::SystemDnsServer;
+use super::dns::{flush_system_dns_cache, system_dns_servers};
 use super::network::parse_cidr_v6;
 use crate::error::{AgentError, Result};
 use common::BindInterface;
@@ -13,6 +16,8 @@ use tracing::{debug, info, warn};
 
 const ROUTE_STATE_VERSION: u8 = 1;
 const ROUTE_STATE_FILE_NAME: &str = "tun-routes.json";
+#[cfg(target_os = "macos")]
+const PF_DNS_ANCHOR: &str = "com.apple/ppaass-ai-tun-dns";
 
 #[derive(Debug, Clone)]
 pub(super) struct ProxyRoute {
@@ -126,6 +131,8 @@ pub(super) struct RouteGuard {
     mgr: RouteManager,
     installed: Vec<Route>,
     lease: RouteLease,
+    #[cfg(target_os = "macos")]
+    pf_dns_guard: Option<MacosPfDnsGuard>,
 }
 
 impl RouteGuard {
@@ -134,9 +141,11 @@ impl RouteGuard {
     pub(super) fn install(
         tun_if_index: u32,
         tun_ipv4: Ipv4Addr,
+        _dns_capture_target: Ipv4Addr,
         tun_ipv6_cidr: Option<&str>,
         route_state_file: Option<&str>,
         proxy_ips: &[IpAddr],
+        capture_system_dns: bool,
     ) -> Result<Self> {
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
@@ -160,6 +169,8 @@ impl RouteGuard {
         );
 
         let mut installed: Vec<Route> = Vec::new();
+        #[cfg(target_os = "macos")]
+        let mut pf_dns_guard = None;
 
         for ip in proxy_ips {
             // 给每个 proxy IP 安装最具体的主机路由，使 agent 到 proxy 绕过 TUN。
@@ -199,6 +210,30 @@ impl RouteGuard {
             }
         }
 
+        if capture_system_dns {
+            let dns_servers = system_dns_servers();
+            let dns_capture_ips = dns_servers
+                .iter()
+                .map(|server| server.ip)
+                .collect::<Vec<_>>();
+            install_dns_capture_routes(
+                &mut mgr,
+                tun_if_index,
+                &dns_capture_ips,
+                proxy_ips,
+                default_v4_gw,
+                default_v6_gw,
+                &mut installed,
+                &mut lease,
+            );
+            #[cfg(target_os = "macos")]
+            {
+                pf_dns_guard =
+                    MacosPfDnsGuard::install(tun_if_index, _dns_capture_target, &dns_servers);
+            }
+            flush_system_dns_cache();
+        }
+
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
         install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed, &mut lease);
         install_ipv6_split_routes(
@@ -213,12 +248,17 @@ impl RouteGuard {
             mgr,
             installed,
             lease,
+            #[cfg(target_os = "macos")]
+            pf_dns_guard,
         })
     }
 }
 
 impl Drop for RouteGuard {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        drop(self.pf_dns_guard.take());
+
         info!(
             "正在恢复路由表：删除 {} 条已安装的路由",
             self.lease.state.routes.len()
@@ -244,6 +284,7 @@ impl Drop for RouteGuard {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum RouteKind {
     ProxyBypass,
+    DnsCapture,
     Ipv4SplitDefault,
     Ipv6SplitDefault,
 }
@@ -779,6 +820,210 @@ fn remove_file_if_exists(path: &Path) {
     }
 }
 
+fn install_dns_capture_routes(
+    mgr: &mut RouteManager,
+    tun_if_index: u32,
+    dns_ips: &[IpAddr],
+    proxy_ips: &[IpAddr],
+    default_v4_gateway: Option<IpAddr>,
+    default_v6_gateway: Option<IpAddr>,
+    installed: &mut Vec<Route>,
+    lease: &mut RouteLease,
+) {
+    if dns_ips.is_empty() {
+        debug!("TUN proxy_dns 未发现可捕获的系统 DNS 服务器地址");
+        return;
+    }
+
+    for ip in dns_ips {
+        if proxy_ips.contains(ip) {
+            debug!("系统 DNS {ip} 同时也是代理地址，跳过 DNS 捕获路由");
+            continue;
+        }
+        if dns_capture_route_targets_default_gateway(*ip, default_v4_gateway, default_v6_gateway) {
+            warn!("系统 DNS {ip} 同时也是默认网关，跳过普通 DNS 捕获路由以避免网络中断");
+            continue;
+        }
+
+        let route = match ip {
+            IpAddr::V4(ip) => Route::new(IpAddr::V4(*ip), 32).with_if_index(tun_if_index),
+            IpAddr::V6(ip) => Route::new(IpAddr::V6(*ip), 128).with_if_index(tun_if_index),
+        };
+        match mgr.add(&route) {
+            Ok(()) => {
+                info!("已安装系统 DNS 捕获路由（不修改系统 DNS）：{}", route);
+                lease.record_installed(RouteKind::DnsCapture, &route);
+                installed.push(route);
+            }
+            Err(e) => warn!("安装系统 DNS 捕获路由 {} 失败：{e}", route),
+        }
+    }
+}
+
+fn dns_capture_route_targets_default_gateway(
+    ip: IpAddr,
+    default_v4_gateway: Option<IpAddr>,
+    default_v6_gateway: Option<IpAddr>,
+) -> bool {
+    Some(ip) == default_v4_gateway || Some(ip) == default_v6_gateway
+}
+
+#[cfg(target_os = "macos")]
+struct MacosPfDnsGuard {
+    token: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosPfDnsGuard {
+    fn install(
+        tun_if_index: u32,
+        dns_capture_target: Ipv4Addr,
+        dns_servers: &[SystemDnsServer],
+    ) -> Option<Self> {
+        let tun_if_name = interface_name_for_index(Some(tun_if_index))?;
+        let rules = macos_pf_dns_rules(&tun_if_name, dns_capture_target, dns_servers);
+        if rules.trim().is_empty() {
+            debug!("macOS TUN proxy_dns 未发现需要 PF 捕获的 scoped DNS");
+            return None;
+        }
+
+        let token = match macos_pf_enable() {
+            Ok(token) => token,
+            Err(e) => {
+                warn!("启用 macOS PF 以捕获 scoped DNS 失败：{e}");
+                return None;
+            }
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "ppaass-tun-dns-pf-{}-{}.conf",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        if let Err(e) = fs::write(&path, &rules) {
+            warn!("写入 macOS PF DNS 规则失败：{}：{e}", path.display());
+            macos_pf_release_token(token.as_deref());
+            return None;
+        }
+
+        let load_result = Command::new("/sbin/pfctl")
+            .args(["-a", PF_DNS_ANCHOR, "-f"])
+            .arg(&path)
+            .output();
+        let _ = fs::remove_file(&path);
+
+        match load_result {
+            Ok(output) if output.status.success() => {
+                info!("已安装 macOS scoped DNS 捕获规则（不修改系统 DNS）");
+                Some(Self { token })
+            }
+            Ok(output) => {
+                warn!(
+                    "安装 macOS PF DNS 捕获规则失败：{}",
+                    command_output_message(&output)
+                );
+                macos_pf_flush_anchor();
+                macos_pf_release_token(token.as_deref());
+                None
+            }
+            Err(e) => {
+                warn!("运行 pfctl 安装 DNS 捕获规则失败：{e}");
+                macos_pf_release_token(token.as_deref());
+                None
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosPfDnsGuard {
+    fn drop(&mut self) {
+        macos_pf_flush_anchor();
+        macos_pf_release_token(self.token.as_deref());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_pf_dns_rules(
+    tun_if_name: &str,
+    dns_capture_target: Ipv4Addr,
+    dns_servers: &[SystemDnsServer],
+) -> String {
+    let mut rules = String::new();
+    for server in dns_servers {
+        let IpAddr::V4(dns_ip) = server.ip else {
+            continue;
+        };
+        let Some(interface_name) = server.interface_name.as_deref() else {
+            continue;
+        };
+        if interface_name == tun_if_name {
+            continue;
+        }
+        rules.push_str(&format!(
+            "pass out quick on {interface_name} route-to ({tun_if_name} {dns_capture_target}) inet proto {{ udp tcp }} from any to {dns_ip} port = 53 keep state\n"
+        ));
+    }
+    rules
+}
+
+#[cfg(target_os = "macos")]
+fn macos_pf_enable() -> std::io::Result<Option<String>> {
+    let output = Command::new("/sbin/pfctl").arg("-E").output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(command_output_message(&output)));
+    }
+    Ok(parse_pf_token(&output))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_pf_token(output: &std::process::Output) -> Option<String> {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined.lines().find_map(|line| {
+        let (_, token) = line.split_once("Token")?;
+        let token = token.trim_start_matches([' ', ':']).trim();
+        (!token.is_empty()).then(|| token.to_string())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_pf_flush_anchor() {
+    let _ = Command::new("/sbin/pfctl")
+        .args(["-a", PF_DNS_ANCHOR, "-F", "all"])
+        .output()
+        .map_err(|e| debug!("清理 macOS PF DNS anchor 失败：{e}"));
+}
+
+#[cfg(target_os = "macos")]
+fn macos_pf_release_token(token: Option<&str>) {
+    let Some(token) = token else {
+        return;
+    };
+    let _ = Command::new("/sbin/pfctl")
+        .args(["-X", token])
+        .output()
+        .map_err(|e| debug!("释放 macOS PF enable token 失败：{e}"));
+}
+
+#[cfg(target_os = "macos")]
+fn command_output_message(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        if stdout.is_empty() {
+            output.status.to_string()
+        } else {
+            stdout
+        }
+    } else {
+        stderr
+    }
+}
+
 fn install_ipv4_split_routes(
     mgr: &mut RouteManager,
     tun_if_index: u32,
@@ -868,9 +1113,52 @@ fn route_next_hop(
     fallback_gateway: Option<IpAddr>,
     fallback_if_index: Option<u32>,
 ) -> (Option<IpAddr>, Option<u32>) {
+    #[cfg(target_os = "macos")]
+    if let Some(next_hop) = macos_route_get_next_hop(dst) {
+        return next_hop;
+    }
+
     best_route(routes, dst)
         .map(|route| (route.gateway(), route.if_index()))
         .unwrap_or((fallback_gateway, fallback_if_index))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_route_get_next_hop(dst: IpAddr) -> Option<(Option<IpAddr>, Option<u32>)> {
+    let output = Command::new("/sbin/route")
+        .args(["-n", "get", &dst.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        debug!(
+            "route -n get {dst} 失败：{}",
+            command_output_message(&output)
+        );
+        return None;
+    }
+    parse_macos_route_get_next_hop(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_route_get_next_hop(output: &str) -> Option<(Option<IpAddr>, Option<u32>)> {
+    let mut gateway = None;
+    let mut if_index = None;
+
+    for line in output.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("gateway:") {
+            gateway = value.trim().parse::<IpAddr>().ok();
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("interface:") {
+            if_index = interface_index_for_name(value.trim());
+        }
+    }
+
+    if gateway.is_none() && if_index.is_none() {
+        None
+    } else {
+        Some((gateway, if_index))
+    }
 }
 
 fn best_route(routes: &[Route], dst: IpAddr) -> Option<&Route> {
@@ -929,6 +1217,15 @@ fn interface_name_for_index(if_index: Option<u32>) -> Option<String> {
         .into_iter()
         .find(|interface| interface.index == Some(if_index))
         .map(|interface| interface.name)
+}
+
+#[cfg(target_os = "macos")]
+fn interface_index_for_name(name: &str) -> Option<u32> {
+    if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .find(|interface| interface.name == name)
+        .and_then(|interface| interface.index)
 }
 
 #[cfg(test)]
@@ -994,5 +1291,44 @@ mod tests {
         route = route.with_if_name("utun9".to_string());
 
         assert!(record.matches_route(&route));
+    }
+
+    #[test]
+    fn skips_dns_capture_route_when_dns_is_default_gateway() {
+        let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+
+        assert!(dns_capture_route_targets_default_gateway(
+            gateway,
+            Some(gateway),
+            None
+        ));
+    }
+
+    #[test]
+    fn allows_dns_capture_route_when_dns_is_not_default_gateway() {
+        let dns = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+
+        assert!(!dns_capture_route_targets_default_gateway(
+            dns,
+            Some(gateway),
+            None
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parses_macos_route_get_gateway_even_when_interface_is_unknown() {
+        let output = r#"
+   route to: 140.82.30.214
+destination: 140.82.30.214
+    gateway: 192.168.31.1
+  interface: test999
+"#;
+
+        assert_eq!(
+            parse_macos_route_get_next_hop(output),
+            Some((Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))), None))
+        );
     }
 }

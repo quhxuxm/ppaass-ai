@@ -144,6 +144,32 @@ type OverviewDragGhost = {
   offsetY: number;
 };
 
+type LogTokenKind =
+  | "plain"
+  | "timestamp"
+  | "level-trace"
+  | "level-debug"
+  | "level-info"
+  | "level-warn"
+  | "level-error"
+  | "thread"
+  | "target"
+  | "field"
+  | "string"
+  | "number"
+  | "address";
+
+type LogToken = {
+  value: string;
+  kind: LogTokenKind;
+};
+
+type HighlightedLogLine = {
+  raw: string;
+  level: string | null;
+  tokens: LogToken[];
+};
+
 const fallbackRawConfig = `listen_addr = "127.0.0.1:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
@@ -313,6 +339,7 @@ const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "
 const proxyEntryStateLabel = computed(() => "随 Agent 启动");
 const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
 const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
+const highlightedLogs = computed(() => state.agent.logs.map(tokenizeLogLine));
 const directRuleGroups = computed(() => {
   const groups: DirectRuleGroup[] = [
     { key: "wildcard", label: "通配符", icon: "pi pi-asterisk", items: [] },
@@ -387,18 +414,26 @@ async function saveConfig() {
 
   try {
     state.busy = true;
-    state.config = await invokeOrFallback<LoadedAgentConfig>(
-      "save_agent_config",
-      { path: state.config.path, raw: state.config.raw },
-      () => state.config as LoadedAgentConfig
-    );
-    state.dirty = false;
+    await persistConfig();
     showToast("success", `已保存到 ${shortPath(state.config.path)}`);
   } catch (error) {
     showToast("error", getErrorMessage(error));
   } finally {
     state.busy = false;
   }
+}
+
+async function persistConfig() {
+  if (!state.config) {
+    return;
+  }
+
+  state.config = await invokeOrFallback<LoadedAgentConfig>(
+    "save_agent_config",
+    { path: state.config.path, raw: state.config.raw },
+    () => state.config as LoadedAgentConfig
+  );
+  state.dirty = false;
 }
 
 async function startAgent() {
@@ -408,6 +443,9 @@ async function startAgent() {
 
   try {
     state.busy = true;
+    if (state.dirty) {
+      await persistConfig();
+    }
     state.agent = await invokeOrFallback<AgentState>(
       "start_agent",
       { configPath: state.config.path },
@@ -1273,6 +1311,58 @@ function latestAgentLog() {
   return logs.length > 0 ? logs[logs.length - 1] : null;
 }
 
+function tokenizeLogLine(line: string): HighlightedLogLine {
+  const level = line.match(/\b(TRACE|DEBUG|INFO|WARN|ERROR)\b/)?.[1]?.toLowerCase() ?? null;
+  const pattern =
+    /(\d{4}-\d{2}-\d{2}T[^\s]+|\b(?:TRACE|DEBUG|INFO|WARN|ERROR)\b|ThreadId\([^)]+\)|\b[a-zA-Z_][\w:.-]*(?:\.rs)?:\d+:\d+:|\b[a-zA-Z_][\w.-]*=|"(?:[^"\\]|\\.)*"|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b|\b\d+(?:\.\d+)?\b)/g;
+  const tokens: LogToken[] = [];
+  let cursor = 0;
+
+  for (const match of line.matchAll(pattern)) {
+    const value = match[0];
+    const index = match.index ?? 0;
+    if (index > cursor) {
+      tokens.push({ value: line.slice(cursor, index), kind: "plain" });
+    }
+    tokens.push({ value, kind: logTokenKind(value) });
+    cursor = index + value.length;
+  }
+
+  if (cursor < line.length) {
+    tokens.push({ value: line.slice(cursor), kind: "plain" });
+  }
+
+  return { raw: line, level, tokens: tokens.length ? tokens : [{ value: line, kind: "plain" }] };
+}
+
+function logTokenKind(value: string): LogTokenKind {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return "timestamp";
+  }
+  if (/^(TRACE|DEBUG|INFO|WARN|ERROR)$/.test(value)) {
+    return `level-${value.toLowerCase()}` as LogTokenKind;
+  }
+  if (/^ThreadId\(/.test(value)) {
+    return "thread";
+  }
+  if (/\.rs:\d+:\d+:$/.test(value) || /^[a-zA-Z_][\w:.-]+:$/.test(value)) {
+    return "target";
+  }
+  if (/^[a-zA-Z_][\w.-]*=$/.test(value)) {
+    return "field";
+  }
+  if (/^"/.test(value)) {
+    return "string";
+  }
+  if (/^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$/.test(value)) {
+    return "address";
+  }
+  if (/^\d/.test(value)) {
+    return "number";
+  }
+  return "plain";
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -2063,7 +2153,20 @@ function getErrorMessage(error: unknown) {
         <template #content>
           <div class="log-view">
             <div v-if="!state.agent.logs.length" class="log-empty">暂无日志</div>
-            <div v-for="(line, index) in state.agent.logs" :key="index">{{ line }}</div>
+            <template v-else>
+              <div
+                v-for="(entry, index) in highlightedLogs"
+                :key="index"
+                :class="['log-line', entry.level ? `log-line-${entry.level}` : '']"
+                :title="entry.raw"
+              >
+                <span
+                  v-for="(token, tokenIndex) in entry.tokens"
+                  :key="tokenIndex"
+                  :class="['log-token', `log-${token.kind}`]"
+                >{{ token.value }}</span>
+              </div>
+            </template>
           </div>
         </template>
       </Card>

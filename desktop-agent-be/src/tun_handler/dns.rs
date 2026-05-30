@@ -1,9 +1,8 @@
 use common::BindInterface;
 #[cfg(any(target_os = "macos", windows))]
 use serde::{Deserialize, Serialize};
-#[cfg(any(target_os = "macos", windows))]
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 #[cfg(any(target_os = "macos", windows))]
 use std::path::{Path, PathBuf};
 
@@ -217,6 +216,50 @@ impl DnsGuard {
         None
     }
 }
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(super) struct SystemDnsServer {
+    pub(super) ip: IpAddr,
+    pub(super) interface_name: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn system_dns_servers() -> Vec<SystemDnsServer> {
+    macos_system_dns_servers()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn system_dns_servers() -> Vec<SystemDnsServer> {
+    let mut servers = platform_system_dns_server_ips()
+        .into_iter()
+        .map(|ip| SystemDnsServer {
+            ip,
+            interface_name: None,
+        })
+        .collect::<Vec<_>>();
+    normalize_dns_servers(&mut servers);
+    servers
+}
+
+fn normalize_dns_servers(servers: &mut Vec<SystemDnsServer>) {
+    servers.retain(|server| {
+        !server.ip.is_unspecified() && !server.ip.is_loopback() && !server.ip.is_multicast()
+    });
+    servers.sort_by(|left, right| {
+        left.ip
+            .cmp(&right.ip)
+            .then_with(|| left.interface_name.cmp(&right.interface_name))
+    });
+    servers.dedup();
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn flush_system_dns_cache() {
+    flush_dns_cache();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn flush_system_dns_cache() {}
 
 #[cfg(target_os = "macos")]
 impl Drop for DnsGuard {
@@ -483,6 +526,28 @@ fn remove_file_if_exists(path: &Path) {
     }
 }
 
+fn parse_dns_server_ips(output: &str) -> Vec<IpAddr> {
+    output
+        .lines()
+        .filter_map(|line| parse_dns_server_ip_line(line.trim()))
+        .collect()
+}
+
+fn parse_dns_server_ip_line(trimmed: &str) -> Option<IpAddr> {
+    let value = if trimmed.starts_with("nameserver[") {
+        trimmed
+            .split_once(':')
+            .map(|(_, value)| value.trim())
+            .unwrap_or("")
+    } else if let Some(value) = trimmed.strip_prefix("nameserver") {
+        value.split_whitespace().next().unwrap_or("")
+    } else {
+        trimmed
+    };
+    let value = value.trim_matches(|ch: char| ch == '[' || ch == ']');
+    value.parse::<IpAddr>().ok()
+}
+
 #[cfg(windows)]
 fn windows_previous_dns(interface_index: u32) -> std::io::Result<PreviousWindowsDns> {
     if windows_interface_has_static_dns(interface_index)? {
@@ -491,6 +556,22 @@ fn windows_previous_dns(interface_index: u32) -> std::io::Result<PreviousWindows
         )?))
     } else {
         Ok(PreviousWindowsDns::Dhcp)
+    }
+}
+
+#[cfg(windows)]
+fn platform_system_dns_server_ips() -> Vec<IpAddr> {
+    let script = r#"
+Get-DnsClientServerAddress |
+  ForEach-Object { $_.ServerAddresses } |
+  Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+"#;
+    match run_powershell(script, &[]) {
+        Ok(output) => parse_dns_server_ips(&output),
+        Err(e) => {
+            debug!("读取 Windows 系统 DNS 服务器失败：{e}");
+            Vec::new()
+        }
     }
 }
 
@@ -667,6 +748,88 @@ fn run_networksetup(args: &[&str]) -> std::io::Result<String> {
 }
 
 #[cfg(target_os = "macos")]
+pub(super) fn macos_system_dns_servers() -> Vec<SystemDnsServer> {
+    let mut servers = match Command::new("scutil").arg("--dns").output() {
+        Ok(output) if output.status.success() => {
+            parse_macos_dns_servers(&String::from_utf8_lossy(&output.stdout))
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if stderr.is_empty() {
+                debug!("读取 macOS 系统 DNS 服务器失败：{}", output.status);
+            } else {
+                debug!("读取 macOS 系统 DNS 服务器失败：{stderr}");
+            }
+            Vec::new()
+        }
+        Err(e) => {
+            debug!("运行 scutil --dns 失败：{e}");
+            Vec::new()
+        }
+    };
+    normalize_dns_servers(&mut servers);
+    servers
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_dns_servers(output: &str) -> Vec<SystemDnsServer> {
+    let mut servers = Vec::new();
+    let mut block_ips: Vec<IpAddr> = Vec::new();
+    let mut block_if_name: Option<String> = None;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("resolver #") || trimmed.starts_with("DNS configuration") {
+            flush_macos_dns_block(&mut servers, &mut block_ips, block_if_name.take());
+            continue;
+        }
+        if let Some(ip) = parse_dns_server_ip_line(trimmed) {
+            block_ips.push(ip);
+            continue;
+        }
+        if let Some(if_name) = parse_scutil_if_name(trimmed) {
+            block_if_name = Some(if_name);
+        }
+    }
+    flush_macos_dns_block(&mut servers, &mut block_ips, block_if_name);
+
+    if servers.is_empty() {
+        parse_dns_server_ips(output)
+            .into_iter()
+            .map(|ip| SystemDnsServer {
+                ip,
+                interface_name: None,
+            })
+            .collect()
+    } else {
+        servers
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn flush_macos_dns_block(
+    servers: &mut Vec<SystemDnsServer>,
+    block_ips: &mut Vec<IpAddr>,
+    interface_name: Option<String>,
+) {
+    for ip in block_ips.drain(..) {
+        servers.push(SystemDnsServer {
+            ip,
+            interface_name: interface_name.clone(),
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_scutil_if_name(line: &str) -> Option<String> {
+    let value = line.strip_prefix("if_index")?.split_once(':')?.1;
+    let start = value.find('(')? + 1;
+    let end = value[start..].find(')')? + start;
+    let name = value[start..end].trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn flush_dns_cache() {
     for (program, args) in [
         ("dscacheutil", &["-flushcache"][..]),
@@ -677,5 +840,63 @@ fn flush_dns_cache() {
             Ok(status) => debug!("{program} {:?} 退出状态 {}", args, status),
             Err(e) => debug!("运行 {program} {:?} 失败：{e}", args),
         }
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+fn platform_system_dns_server_ips() -> Vec<IpAddr> {
+    fs::read_to_string("/etc/resolv.conf")
+        .map(|content| {
+            content
+                .lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix("nameserver"))
+                .filter_map(|value| value.split_whitespace().next())
+                .filter_map(|value| value.parse::<IpAddr>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_scutil_and_resolv_dns_addresses() {
+        let output = r#"
+resolver #1
+  nameserver[0] : 192.168.1.1
+  nameserver[1] : 8.8.8.8
+  if_index : 11 (en0)
+resolver #2
+nameserver 1.1.1.1
+"#;
+
+        assert_eq!(
+            parse_dns_server_ips(output),
+            vec![
+                IpAddr::V4("192.168.1.1".parse().unwrap()),
+                IpAddr::V4("8.8.8.8".parse().unwrap()),
+                IpAddr::V4("1.1.1.1".parse().unwrap()),
+            ]
+        );
+        assert_eq!(
+            parse_macos_dns_servers(output),
+            vec![
+                SystemDnsServer {
+                    ip: IpAddr::V4("192.168.1.1".parse().unwrap()),
+                    interface_name: Some("en0".to_string()),
+                },
+                SystemDnsServer {
+                    ip: IpAddr::V4("8.8.8.8".parse().unwrap()),
+                    interface_name: Some("en0".to_string()),
+                },
+                SystemDnsServer {
+                    ip: IpAddr::V4("1.1.1.1".parse().unwrap()),
+                    interface_name: None,
+                },
+            ]
+        );
     }
 }
