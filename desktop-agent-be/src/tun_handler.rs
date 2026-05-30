@@ -418,12 +418,12 @@ async fn wait_tun_task(name: &'static str, mut handle: JoinHandle<()>) {
     }
 }
 
-fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Addr {
+fn tun_ipv4_peer(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
     // Host stacks treat the TUN adapter address itself as local, so DNS queries sent
     // to that IP can be consumed by the host instead of entering the TUN device.
     // Pick another usable address in the same TUN subnet so packets reach netstack.
     if ipv4_prefix >= 31 {
-        return ipv4;
+        return None;
     }
 
     let mask = if ipv4_prefix == 0 {
@@ -442,18 +442,51 @@ fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Ad
     ];
     for candidate in candidates {
         if candidate != network && candidate != broadcast && candidate != local {
-            let dns = std::net::Ipv4Addr::from(candidate);
-            info!("TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
-            return dns;
+            return Some(std::net::Ipv4Addr::from(candidate));
         }
     }
 
-    ipv4
+    None
+}
+
+fn tun_dns_server(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> std::net::Ipv4Addr {
+    let Some(dns) = tun_ipv4_peer(ipv4, ipv4_prefix) else {
+        return ipv4;
+    };
+    info!("TUN proxy_dns 使用虚拟 DNS 地址：{dns} (本机 TUN 地址={ipv4})");
+    dns
+}
+
+#[cfg(target_os = "macos")]
+fn tun_ipv4_destination(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
+    tun_ipv4_peer(ipv4, ipv4_prefix)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tun_ipv4_destination(_ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
+    // macOS utun is point-to-point. Keep the configured CIDR for routing policy
+    // and virtual peer selection, but install the interface address as a host
+    // route so packets are delivered through the utun control socket.
+    32
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
+    configured_prefix
 }
 
 #[cfg(test)]
 mod tests {
     use super::tun_dns_server;
+    #[cfg(target_os = "macos")]
+    use super::tun_ipv4_destination;
+    #[cfg(target_os = "macos")]
+    use super::tun_ipv4_interface_prefix;
     use std::net::Ipv4Addr;
 
     #[test]
@@ -478,6 +511,21 @@ mod tests {
             tun_dns_server(Ipv4Addr::new(10, 10, 10, 1), 31),
             Ipv4Addr::new(10, 10, 10, 1)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tun_destination_uses_virtual_peer() {
+        assert_eq!(
+            tun_ipv4_destination(Ipv4Addr::new(10, 10, 10, 1), 24),
+            Some(Ipv4Addr::new(10, 10, 10, 2))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tun_interface_uses_host_prefix() {
+        assert_eq!(tun_ipv4_interface_prefix(24), 32);
     }
 }
 
@@ -540,7 +588,18 @@ fn create_tun_device_legacy(
     let mut builder = DeviceBuilder::new()
         .name(&config.name)
         .mtu(config.mtu)
-        .ipv4(ipv4, ipv4_prefix, None);
+        .ipv4(
+            ipv4,
+            tun_ipv4_interface_prefix(ipv4_prefix),
+            tun_ipv4_destination(ipv4, ipv4_prefix),
+        );
+    #[cfg(target_os = "macos")]
+    {
+        // We manage split-default and proxy bypass routes ourselves. tun-rs' macOS
+        // associated route points the TUN subnet at the adapter address, which can
+        // steal packets for the virtual peer/DNS address before they reach utun.
+        builder = builder.associate_route(false);
+    }
     if let Some((ipv6, ipv6_prefix)) = ipv6_config {
         builder = builder.ipv6(ipv6, ipv6_prefix);
     }

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{IoSlice, Read, Write};
 use std::net::Ipv4Addr;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -28,7 +28,7 @@ struct TunSystemLease {
 }
 
 struct PreparedTun {
-    device: tun_rs::AsyncDevice,
+    device: tun_rs::SyncDevice,
     name: String,
     if_index: u32,
     lease: TunSystemLease,
@@ -139,13 +139,21 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
     let mut builder = DeviceBuilder::new()
         .name(&request.name)
         .mtu(request.mtu)
-        .ipv4(ipv4, ipv4_prefix, None);
+        .ipv4(
+            ipv4,
+            super::tun_ipv4_interface_prefix(ipv4_prefix),
+            super::tun_ipv4_destination(ipv4, ipv4_prefix),
+        );
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.associate_route(false);
+    }
     if let Some((ipv6, ipv6_prefix)) = ipv6_config {
         builder = builder.ipv6(ipv6, ipv6_prefix);
     }
 
     let device = builder
-        .build_async()
+        .build_sync()
         .map_err(|e| AgentError::Connection(format!("创建 TUN 设备失败：{e}")))?;
     let name = device
         .name()
@@ -214,10 +222,7 @@ fn handle_client(
         TunHelperRequest::StartTun(request) => {
             let prepared = prepare_tun(&request).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let lease_id = next_lease_id();
-            let fd = prepared
-                .device
-                .into_fd()
-                .map_err(|e| anyhow::anyhow!("导出 TUN fd 失败：{e}"))?;
+            let fd = prepared.device.into_raw_fd();
             let response = TunHelperResponse::TunStarted(TunStartedResponse {
                 lease_id: lease_id.clone(),
                 name: prepared.name,
