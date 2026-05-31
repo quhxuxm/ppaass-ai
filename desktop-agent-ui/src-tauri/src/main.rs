@@ -58,12 +58,14 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(windows)]
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const TRAY_ID: &str = "main";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const TRAY_SHOW_ID: &str = "show";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const TRAY_EXIT_ID: &str = "exit";
+#[cfg(any(windows, target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
 #[cfg(target_os = "macos")]
 const TUN_HELPER_SERVICE_ARG: &str = "--tun-helper-service";
@@ -2613,12 +2615,11 @@ fn deployed_agent_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-#[cfg(windows)]
-fn setup_windows_tray(app: &tauri::App) -> Result<(), String> {
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| "找不到默认窗口图标，无法创建系统托盘".to_string())?;
+#[cfg(any(windows, target_os = "macos"))]
+fn setup_system_tray(app: &tauri::App) -> Result<(), String> {
+    let icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES)
+        .map(|icon| icon.to_owned())
+        .map_err(|err| format!("加载应用托盘图标失败：{err}"))?;
     let menu = tauri::menu::MenuBuilder::new(app)
         .text(TRAY_SHOW_ID, "显示")
         .separator()
@@ -2626,7 +2627,7 @@ fn setup_windows_tray(app: &tauri::App) -> Result<(), String> {
         .build()
         .map_err(|err| format!("创建系统托盘菜单失败：{err}"))?;
 
-    tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
+    let tray_builder = tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("PPAASS Desktop Agent")
         .menu(&menu)
@@ -2645,31 +2646,48 @@ fn setup_windows_tray(app: &tauri::App) -> Result<(), String> {
             {
                 restore_main_window(tray.app_handle());
             }
-        })
+        });
+
+    tray_builder
         .build(app)
         .map_err(|err| format!("创建系统托盘失败：{err}"))?;
 
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn hide_window_to_tray_after_minimize(window: tauri::Window) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(80)).await;
         if window.is_minimized().unwrap_or(false) {
-            let _ = window.hide();
+            hide_window_to_tray(&window);
         }
     });
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
+fn hide_window_to_tray(window: &tauri::Window) {
+    set_macos_dock_visibility(window.app_handle(), false);
+    let _ = window.hide();
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 fn restore_main_window(app: &tauri::AppHandle) {
+    set_macos_dock_visibility(app, true);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
 }
+
+#[cfg(target_os = "macos")]
+fn set_macos_dock_visibility(app: &tauri::AppHandle, visible: bool) {
+    let _ = app.set_dock_visibility(visible);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_macos_dock_visibility(_app: &tauri::AppHandle, _visible: bool) {}
 
 fn ancestor_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -2724,18 +2742,30 @@ fn main() {
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-            #[cfg(windows)]
-            setup_windows_tray(app).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            #[cfg(any(windows, target_os = "macos"))]
+            setup_system_tray(app).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
             #[cfg(target_os = "macos")]
             check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())
         })
         .on_window_event(|window, event| {
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "macos")))]
             let _ = (window, event);
-            #[cfg(windows)]
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+            #[cfg(any(windows, target_os = "macos"))]
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(false)
+                )
+            {
                 hide_window_to_tray_after_minimize(window.clone());
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    hide_window_to_tray(window);
+                }
             }
         })
         .manage(runtime)
