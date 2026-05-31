@@ -125,13 +125,11 @@ impl AgentServer {
             }
         }
 
-        if tun_task_running {
-            if let Some(result) = tun_tasks.join_next().await {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => error!("TUN 模式转发器停止时返回错误：{}", e),
-                    Err(e) => error!("TUN 模式任务停止时异常：{}", e),
-                }
+        if tun_task_running && let Some(result) = tun_tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!("TUN 模式转发器停止时返回错误：{}", e),
+                Err(e) => error!("TUN 模式任务停止时异常：{}", e),
             }
         }
 

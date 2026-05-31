@@ -218,11 +218,13 @@ impl RouteGuard {
                 .collect::<Vec<_>>();
             install_dns_capture_routes(
                 &mut mgr,
-                tun_if_index,
-                &dns_capture_ips,
-                proxy_ips,
-                default_v4_gw,
-                default_v6_gw,
+                DnsCaptureRouteContext {
+                    tun_if_index,
+                    dns_ips: &dns_capture_ips,
+                    proxy_ips,
+                    default_v4_gateway: default_v4_gw,
+                    default_v6_gateway: default_v6_gw,
+                },
                 &mut installed,
                 &mut lease,
             );
@@ -820,16 +822,28 @@ fn remove_file_if_exists(path: &Path) {
     }
 }
 
-fn install_dns_capture_routes(
-    mgr: &mut RouteManager,
+struct DnsCaptureRouteContext<'a> {
     tun_if_index: u32,
-    dns_ips: &[IpAddr],
-    proxy_ips: &[IpAddr],
+    dns_ips: &'a [IpAddr],
+    proxy_ips: &'a [IpAddr],
     default_v4_gateway: Option<IpAddr>,
     default_v6_gateway: Option<IpAddr>,
+}
+
+fn install_dns_capture_routes(
+    mgr: &mut RouteManager,
+    context: DnsCaptureRouteContext<'_>,
     installed: &mut Vec<Route>,
     lease: &mut RouteLease,
 ) {
+    let DnsCaptureRouteContext {
+        tun_if_index,
+        dns_ips,
+        proxy_ips,
+        default_v4_gateway,
+        default_v6_gateway,
+    } = context;
+
     if dns_ips.is_empty() {
         debug!("TUN proxy_dns 未发现可捕获的系统 DNS 服务器地址");
         return;

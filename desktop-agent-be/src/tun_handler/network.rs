@@ -148,6 +148,20 @@ fn ipv6_in_cidr(ip: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
     (u128::from_be_bytes(ip.octets()) & mask) == (u128::from_be_bytes(network.octets()) & mask)
 }
 
+pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {
+    // 保留 IP 字面量，避免已经解析出的 TUN 目标再次走 DNS。
+    match addr.ip() {
+        IpAddr::V4(v4) => Address::Ipv4 {
+            addr: v4.octets(),
+            port: addr.port(),
+        },
+        IpAddr::V6(v6) => Address::Ipv6 {
+            addr: v6.octets(),
+            port: addr.port(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,19 +183,5 @@ mod tests {
 
         assert!(!is_tun_local_udp_target(source, target, networks));
         assert!(reject_tun_target("UDP", source, target, networks).is_err());
-    }
-}
-
-pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {
-    // 保留 IP 字面量，避免已经解析出的 TUN 目标再次走 DNS。
-    match addr.ip() {
-        IpAddr::V4(v4) => Address::Ipv4 {
-            addr: v4.octets(),
-            port: addr.port(),
-        },
-        IpAddr::V6(v6) => Address::Ipv6 {
-            addr: v6.octets(),
-            port: addr.port(),
-        },
     }
 }
