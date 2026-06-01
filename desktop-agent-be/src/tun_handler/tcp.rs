@@ -1,12 +1,11 @@
 use super::TunForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
+use super::system_dns::resolve_via_system;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io;
-use std::net::IpAddr;
 use std::net::SocketAddr;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
@@ -47,22 +46,18 @@ pub(super) async fn handle_tun_tcp(
         } else if let Some(domain) = direct_domain_cache.domain_for_ip(target.ip())
             && direct_checker.is_direct_domain(&domain)
         {
-            match resolve_direct_domain_target(&domain, target.port(), target.ip()).await {
+            match resolve_via_system("TCP", source, &domain, target.port(), target.ip()).await {
                 Ok(resolved) => {
                     debug!(
                         "TUN TCP 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
-                        target,
-                        domain,
-                        resolved
+                        target, domain, resolved
                     );
                     direct_target = Some(resolved);
                 }
                 Err(e) => {
                     debug!(
                         "TUN TCP 域名规则命中但 Agent DNS 解析失败，回退代理：{} -> {}，错误：{}",
-                        target,
-                        domain,
-                        e
+                        target, domain, e
                     );
                 }
             }
@@ -135,28 +130,4 @@ async fn connect_direct_tcp(
 
     let socket = TcpSocket::from_std_stream(socket.into());
     socket.connect(target).await
-}
-
-async fn resolve_direct_domain_target(
-    domain: &str,
-    port: u16,
-    prefer_ip_family: IpAddr,
-) -> io::Result<SocketAddr> {
-    let mut first = None;
-    let prefer_v4 = prefer_ip_family.is_ipv4();
-    for addr in tokio::net::lookup_host((domain, port)).await? {
-        if first.is_none() {
-            first = Some(addr);
-        }
-        if addr.is_ipv4() == prefer_v4 {
-            return Ok(addr);
-        }
-    }
-
-    first.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            format!("域名 {domain} 无可用解析结果"),
-        )
-    })
 }

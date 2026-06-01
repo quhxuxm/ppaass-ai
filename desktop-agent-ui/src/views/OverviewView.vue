@@ -10,6 +10,7 @@ import {
   formatBytes,
   formatRate,
   hourLabel,
+  isSystemDnsRecord,
   localDateKey,
   shortPath
 } from "../formatters";
@@ -376,6 +377,13 @@ function hourlyBarHeight(bytes: number) {
                 <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
               </div>
               <div class="dns-record-meta">
+                <Tag
+                  v-if="isSystemDnsRecord(record)"
+                  value="系统解析"
+                  severity="warn"
+                  rounded
+                  title="该请求绕过了 Agent 内部 DNS，由 Agent 机器本机系统解析"
+                />
                 <Tag :value="record.record_type" severity="secondary" rounded />
                 <span :class="['dns-status', record.status === 'NOERROR' ? 'ok' : 'warn']">{{ record.status }}</span>
                 <span>{{ Math.max(1, Math.round(record.duration_ms)) }} ms</span>

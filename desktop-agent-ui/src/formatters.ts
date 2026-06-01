@@ -49,6 +49,14 @@ export function isAgentDnsRecord(record: DnsResolutionRecord) {
   return record.resolver === "agent";
 }
 
+export function isSystemDnsRecord(record: DnsResolutionRecord) {
+  return record.resolver === "system";
+}
+
+export function isAgentOrSystemDnsRecord(record: DnsResolutionRecord) {
+  return isAgentDnsRecord(record) || isSystemDnsRecord(record);
+}
+
 export function dnsRecordTimestamp(record: DnsResolutionRecord) {
   const timestamp = Number(record.timestamp_ms);
   return Number.isFinite(timestamp) ? timestamp : 0;

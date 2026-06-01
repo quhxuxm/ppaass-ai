@@ -7,7 +7,7 @@ import {
   delay,
   dnsRecordTimestamp,
   getErrorMessage,
-  isAgentDnsRecord,
+  isAgentOrSystemDnsRecord,
   normalizeDnsRecords,
   shortPath
 } from "../formatters";
@@ -93,7 +93,7 @@ export function useDesktopAgent() {
   const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
   const recentDnsRecords = computed(() =>
     normalizeDnsRecords(state.dnsRecords)
-      .filter(isAgentDnsRecord)
+      .filter(isAgentOrSystemDnsRecord)
       .sort((left, right) => dnsRecordTimestamp(right) - dnsRecordTimestamp(left))
       .slice(0, 80)
   );

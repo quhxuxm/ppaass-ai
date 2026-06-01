@@ -13,6 +13,7 @@ mod dns_proxy;
 #[allow(dead_code)]
 pub(crate) mod helper_service;
 mod network;
+mod system_dns;
 mod route;
 mod tasks;
 mod tcp;
