@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
 use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::process::Stdio;
@@ -15,6 +16,7 @@ use crate::logging::UiLogBuffer;
 use crate::macos_helper::ensure_macos_tun_helper_for_config;
 use crate::models::AgentState;
 use crate::network::connect_addr;
+#[cfg(target_os = "windows")]
 use crate::process_util::hide_child_console;
 use crate::runtime::{AgentRuntime, EmbeddedAgent};
 #[cfg(windows)]
