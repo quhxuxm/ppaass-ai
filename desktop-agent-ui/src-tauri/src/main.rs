@@ -465,8 +465,12 @@ async fn get_agent_state(
 
 fn get_agent_state_inner(runtime: &AgentRuntime) -> Result<AgentState, String> {
     #[cfg(windows)]
-    if let Ok(state) = windows_service_state() {
-        return Ok(state);
+    if windows_service_matches_current_exe().unwrap_or(false) {
+        match windows_service_state() {
+            Ok(state) => return Ok(state),
+            Err(err) if windows_service_is_running().unwrap_or(false) => return Err(err),
+            Err(_) => return agent_state_from_status(runtime, false, None),
+        }
     }
 
     agent_state(runtime)
@@ -1753,6 +1757,14 @@ fn display_connect_addr(addr: SocketAddr) -> String {
 
 fn agent_state(runtime: &AgentRuntime) -> Result<AgentState, String> {
     let (running, pid) = process_status(runtime)?;
+    agent_state_from_status(runtime, running, pid)
+}
+
+fn agent_state_from_status(
+    runtime: &AgentRuntime,
+    running: bool,
+    pid: Option<u32>,
+) -> Result<AgentState, String> {
     let config_path = runtime
         .config_path
         .lock()
@@ -2031,6 +2043,15 @@ fn stop_agent_via_windows_service() -> Result<AgentState, String> {
 fn windows_service_state() -> Result<AgentState, String> {
     let response = send_service_request(&ServiceRequest::State)?;
     service_state_response(response)
+}
+
+#[cfg(windows)]
+fn windows_service_is_running() -> Result<bool, String> {
+    let output = run_sc_capture(["query", SERVICE_NAME])?;
+    Ok(output.lines().any(|line| {
+        let line = line.to_ascii_uppercase();
+        line.contains("STATE") && line.contains("RUNNING")
+    }))
 }
 
 #[cfg(windows)]
@@ -2762,7 +2783,6 @@ fn hide_window_to_tray(window: &tauri::Window) {
     let _ = window.hide();
 }
 
-#[cfg(any(windows, target_os = "macos"))]
 fn restore_main_window(app: &tauri::AppHandle) {
     set_macos_dock_visibility(app, true);
     if let Some(window) = app.get_webview_window("main") {
@@ -2830,6 +2850,9 @@ fn main() {
     let setup_logs = runtime.logs.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            restore_main_window(app);
+        }))
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;

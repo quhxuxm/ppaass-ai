@@ -443,7 +443,7 @@ onBeforeUnmount(() => {
 async function boot() {
   try {
     state.config = await invokeOrFallback<LoadedAgentConfig>("load_agent_config", {}, loadFallbackConfig);
-    state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, fallbackAgentState);
+    await refreshAgentState();
     state.statusText = "就绪";
   } catch (error) {
     state.statusText = "配置异常";
@@ -462,7 +462,7 @@ async function reloadAll() {
       path ? { path } : {},
       loadFallbackConfig
     );
-    state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, fallbackAgentState);
+    await refreshAgentState();
     state.diagnostics = null;
     state.dirty = false;
     showToast("success", "已重新载入");
