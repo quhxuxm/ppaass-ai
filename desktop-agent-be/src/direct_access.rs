@@ -169,6 +169,21 @@ impl DirectAccessChecker {
         result
     }
 
+    /// 仅使用域名规则判断是否应直连。
+    ///
+    /// 用于 TUN 场景中目标已经是 IP，但通过 DNS 映射可还原原始域名时的判定。
+    pub fn is_direct_domain(&self, host: &str) -> bool {
+        let host_lower = host.to_lowercase();
+        match self.mode {
+            DirectAccessMode::ProxyAll => false,
+            DirectAccessMode::DirectAll => true,
+            DirectAccessMode::Rules => self
+                .rules
+                .iter()
+                .any(|rule| Self::match_domain(rule, &host_lower)),
+        }
+    }
+
     /// 检查地址是否匹配任何已配置的规则
     fn matches_any_rule(&self, address: &Address) -> bool {
         match address {

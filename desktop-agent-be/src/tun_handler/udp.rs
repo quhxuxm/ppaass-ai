@@ -9,12 +9,15 @@ use common::{BindInterface, bind_socket_to_interface};
 use futures::SinkExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, trace};
+
+use super::direct_domain_cache::DirectDomainCache;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -26,6 +29,7 @@ pub(super) struct UdpSessionContext {
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_pool: Arc<ConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
+    pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) direct_bind_interface: Option<BindInterface>,
 }
 
@@ -43,6 +47,7 @@ pub(super) async fn handle_tun_udp(
         netstack_tx,
         udp_pool,
         direct_checker,
+        direct_domain_cache,
         direct_bind_interface,
     } = context;
 
@@ -77,14 +82,46 @@ pub(super) async fn handle_tun_udp(
         return Ok(());
     }
 
-    if !proxy_dns_request && direct_checker.is_direct(&address) {
+    let mut direct_target = None;
+    let mut direct_label = target_label.clone();
+    if !proxy_dns_request {
+        if direct_checker.is_direct(&address) {
+            direct_target = Some(target);
+        } else if let Some(domain) = direct_domain_cache.domain_for_ip(target.ip())
+            && direct_checker.is_direct_domain(&domain)
+        {
+            match resolve_direct_domain_target(&domain, target.port(), target.ip()).await {
+                Ok(resolved) => {
+                    debug!(
+                        "TUN UDP 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
+                        target,
+                        domain,
+                        resolved
+                    );
+                    direct_label = format!("{} ({} -> {})", target_label, domain, resolved);
+                    direct_target = Some(resolved);
+                }
+                Err(e) => {
+                    debug!(
+                        "TUN UDP 域名规则命中但 Agent DNS 解析失败，回退代理：{} -> {}，错误：{}",
+                        target,
+                        domain,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(connect_target) = direct_target {
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         let target_str = address_to_string(&address);
         debug!("TUN UDP 直连 -> {}", target_str);
         relay_direct_udp(
             client,
             target,
-            target_label,
+            connect_target,
+            direct_label,
             rx,
             netstack_tx,
             direct_bind_interface,
@@ -161,15 +198,16 @@ pub(super) async fn handle_tun_udp(
 
 async fn relay_direct_udp(
     client: SocketAddr,
-    target: SocketAddr,
+    original_target: SocketAddr,
+    connect_target: SocketAddr,
     target_label: String,
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
     direct_bind_interface: Option<BindInterface>,
 ) -> Result<()> {
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
-    let socket = bind_direct_udp(target, direct_bind_interface.as_ref())?;
-    socket.connect(target).await?;
+    let socket = bind_direct_udp(connect_target, direct_bind_interface.as_ref())?;
+    socket.connect(connect_target).await?;
     let socket = Arc::new(socket);
 
     let socket_w = socket.clone();
@@ -191,7 +229,7 @@ async fn relay_direct_udp(
                 Ok(n) => {
                     let pkt = buf[..n].to_vec();
                     let mut s = netstack_tx_r.lock().await;
-                    if let Err(e) = s.send((pkt, target, client)).await {
+                    if let Err(e) = s.send((pkt, original_target, client)).await {
                         debug!("UDP 直连回复错误：{e}");
                         break;
                     }
@@ -210,6 +248,30 @@ async fn relay_direct_udp(
     }
     telemetry::emit_traffic("TUN UDP (直连)", target_label, 0, 0);
     Ok(())
+}
+
+async fn resolve_direct_domain_target(
+    domain: &str,
+    port: u16,
+    prefer_ip_family: IpAddr,
+) -> io::Result<SocketAddr> {
+    let mut first = None;
+    let prefer_v4 = prefer_ip_family.is_ipv4();
+    for addr in tokio::net::lookup_host((domain, port)).await? {
+        if first.is_none() {
+            first = Some(addr);
+        }
+        if addr.is_ipv4() == prefer_v4 {
+            return Ok(addr);
+        }
+    }
+
+    first.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("域名 {domain} 无可用解析结果"),
+        )
+    })
 }
 
 fn bind_direct_udp(

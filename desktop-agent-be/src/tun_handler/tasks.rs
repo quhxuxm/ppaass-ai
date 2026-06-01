@@ -131,7 +131,14 @@ pub(super) fn spawn_udp_sessions(
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
         let dns_proxy = context
             .proxy_dns
-            .then(|| DnsProxy::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone()));
+            .then(|| {
+                DnsProxy::spawn(
+                    context.udp_pool.clone(),
+                    udp_tx.clone(),
+                    context.direct_domain_cache.clone(),
+                    shutdown.clone(),
+                )
+            });
         let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
 
         loop {
@@ -171,7 +178,16 @@ pub(super) fn spawn_udp_sessions(
                         debug!("TUN UDP/443 QUIC 已阻断 -> {}", target_addr);
                         continue;
                     }
-                    if !context.direct_checker.is_direct(&address) {
+
+                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    if !direct_match
+                        && let Some(domain) =
+                            context.direct_domain_cache.domain_for_ip(target_addr.ip())
+                    {
+                        direct_match = context.direct_checker.is_direct_domain(&domain);
+                    }
+
+                    if !direct_match {
                         udp_relay.send(source_addr, target_addr, data);
                         continue;
                     }
@@ -198,6 +214,7 @@ pub(super) fn spawn_udp_sessions(
                         netstack_tx: udp_tx.clone(),
                         udp_pool: context.udp_pool.clone(),
                         direct_checker: context.direct_checker.clone(),
+                        direct_domain_cache: context.direct_domain_cache.clone(),
                         direct_bind_interface: context.direct_bind_interface.clone(),
                     };
                     spawn_guarded("desktop tun udp flow", async move {

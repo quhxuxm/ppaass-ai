@@ -6,6 +6,7 @@
 //! [`ConnectionPool`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
+mod direct_domain_cache;
 mod dns;
 mod dns_proxy;
 #[cfg(target_os = "macos")]
@@ -26,6 +27,7 @@ use crate::privilege::ensure_tun_privileges_or_relaunch;
 #[cfg(target_os = "macos")]
 use crate::tun_helper_client::{HelperTunLease, start_tun as start_tun_via_helper};
 use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
+use direct_domain_cache::DirectDomainCache;
 use dns::DnsGuard;
 use futures::FutureExt;
 use netstack_smoltcp::StackBuilder;
@@ -50,6 +52,7 @@ struct TunForwardContext {
     tcp_pool: Arc<ConnectionPool>,
     udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
+    direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
     proxy_dns: bool,
     direct_bind_interface: Option<common::BindInterface>,
@@ -112,6 +115,7 @@ pub async fn run_tun_mode(
         tcp_pool: tcp_pool.clone(),
         udp_pool: udp_pool.clone(),
         direct_checker: direct_access_checker.clone(),
+        direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,
         proxy_dns,
         direct_bind_interface: proxy_bind_interface.clone(),

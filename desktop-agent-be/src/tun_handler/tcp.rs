@@ -1,11 +1,12 @@
 use super::TunForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
-use crate::direct_access::address_to_string;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::io;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
@@ -21,6 +22,7 @@ pub(super) async fn handle_tun_tcp(
         tcp_pool,
         udp_pool: _,
         direct_checker,
+        direct_domain_cache,
         tun_networks,
         proxy_dns,
         direct_bind_interface,
@@ -38,11 +40,39 @@ pub(super) async fn handle_tun_tcp(
         target.to_string()
     };
 
-    if !proxy_dns_request && direct_checker.is_direct(&address) {
+    let mut direct_target = None;
+    if !proxy_dns_request {
+        if direct_checker.is_direct(&address) {
+            direct_target = Some(target);
+        } else if let Some(domain) = direct_domain_cache.domain_for_ip(target.ip())
+            && direct_checker.is_direct_domain(&domain)
+        {
+            match resolve_direct_domain_target(&domain, target.port(), target.ip()).await {
+                Ok(resolved) => {
+                    debug!(
+                        "TUN TCP 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
+                        target,
+                        domain,
+                        resolved
+                    );
+                    direct_target = Some(resolved);
+                }
+                Err(e) => {
+                    debug!(
+                        "TUN TCP 域名规则命中但 Agent DNS 解析失败，回退代理：{} -> {}，错误：{}",
+                        target,
+                        domain,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(connect_target) = direct_target {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
-        let target_str = address_to_string(&address);
-        debug!("TUN TCP 直连 -> {}", target_str);
-        let mut target = connect_direct_tcp(target, direct_bind_interface.as_ref())
+        let target_str = format!("{} (原始目标 {})", connect_target, target);
+        let mut target = connect_direct_tcp(connect_target, direct_bind_interface.as_ref())
             .await
             .map_err(|e| AgentError::Connection(format!("直连 {target_str} 失败：{e}")))?;
         match tokio::io::copy_bidirectional_with_sizes(
@@ -105,4 +135,28 @@ async fn connect_direct_tcp(
 
     let socket = TcpSocket::from_std_stream(socket.into());
     socket.connect(target).await
+}
+
+async fn resolve_direct_domain_target(
+    domain: &str,
+    port: u16,
+    prefer_ip_family: IpAddr,
+) -> io::Result<SocketAddr> {
+    let mut first = None;
+    let prefer_v4 = prefer_ip_family.is_ipv4();
+    for addr in tokio::net::lookup_host((domain, port)).await? {
+        if first.is_none() {
+            first = Some(addr);
+        }
+        if addr.is_ipv4() == prefer_v4 {
+            return Ok(addr);
+        }
+    }
+
+    first.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("域名 {domain} 无可用解析结果"),
+        )
+    })
 }

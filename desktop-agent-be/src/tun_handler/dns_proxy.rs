@@ -1,3 +1,4 @@
+use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
 use crate::telemetry::{self, DnsResolutionRecord};
@@ -50,12 +51,13 @@ impl DnsProxy {
     pub(super) fn spawn(
         pool: Arc<ConnectionPool>,
         netstack_tx: UdpWriter,
+        direct_domain_cache: Arc<DirectDomainCache>,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
         spawn_guarded(
             "desktop tun dns proxy",
-            run_dns_proxy(pool, netstack_tx, rx, shutdown),
+            run_dns_proxy(pool, netstack_tx, direct_domain_cache, rx, shutdown),
         );
         Arc::new(Self { tx })
     }
@@ -76,6 +78,7 @@ impl DnsProxy {
 async fn run_dns_proxy(
     pool: Arc<ConnectionPool>,
     netstack_tx: UdpWriter,
+    direct_domain_cache: Arc<DirectDomainCache>,
     mut rx: mpsc::Receiver<DnsProxyRequest>,
     shutdown: CancellationToken,
 ) {
@@ -181,6 +184,7 @@ async fn run_dns_proxy(
                             let mut response = response_buf[..n].to_vec();
                             if let Err(e) = handle_dns_response(
                                 &netstack_tx,
+                                direct_domain_cache.as_ref(),
                                 &mut pending,
                                 &mut response,
                             ).await {
@@ -263,6 +267,7 @@ where
 
 async fn handle_dns_response(
     netstack_tx: &UdpWriter,
+    direct_domain_cache: &DirectDomainCache,
     pending: &mut HashMap<u16, PendingDnsRequest>,
     response: &mut [u8],
 ) -> io::Result<()> {
@@ -280,6 +285,7 @@ async fn handle_dns_response(
         status: "INVALID".to_string(),
         answers: Vec::new(),
     });
+    direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),
         resolver: "agent".to_string(),
