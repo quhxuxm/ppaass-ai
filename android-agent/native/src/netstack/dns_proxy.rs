@@ -570,39 +570,6 @@ fn dns_rcode_name(rcode: u16) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_dns_query_name_and_type() {
-        let packet = vec![
-            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
-            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
-            0x01,
-        ];
-
-        assert_eq!(
-            parse_dns_query(&packet),
-            Some(("example.com".to_string(), "A".to_string()))
-        );
-    }
-
-    #[test]
-    fn parses_dns_response_answers() {
-        let response = vec![
-            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
-            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
-            0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 0x5d,
-            0xb8, 0xd8, 0x22,
-        ];
-
-        let parsed = parse_dns_response(&response).unwrap();
-        assert_eq!(parsed.status, "NOERROR");
-        assert_eq!(parsed.answers, vec!["93.184.216.34"]);
-    }
-}
-
 fn android_log_error(message: impl AsRef<str>) {
     #[cfg(target_os = "android")]
     {
@@ -635,4 +602,37 @@ unsafe extern "C" {
         tag: *const libc::c_char,
         text: *const libc::c_char,
     ) -> libc::c_int;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_dns_query_name_and_type() {
+        let packet = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+
+        assert_eq!(
+            parse_dns_query(&packet),
+            Some(("example.com".to_string(), "A".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_dns_response_answers() {
+        let response = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 0x5d,
+            0xb8, 0xd8, 0x22,
+        ];
+
+        let parsed = parse_dns_response(&response).unwrap();
+        assert_eq!(parsed.status, "NOERROR");
+        assert_eq!(parsed.answers, vec!["93.184.216.34"]);
+    }
 }

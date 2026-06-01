@@ -175,11 +175,12 @@ mod tests {
 
         // Handshake header
         let hs_len = hello.len() as u32;
-        let mut handshake = Vec::new();
-        handshake.push(0x01); // ClientHello
-        handshake.push(((hs_len >> 16) & 0xff) as u8);
-        handshake.push(((hs_len >> 8) & 0xff) as u8);
-        handshake.push((hs_len & 0xff) as u8);
+        let mut handshake = vec![
+            0x01, // ClientHello
+            ((hs_len >> 16) & 0xff) as u8,
+            ((hs_len >> 8) & 0xff) as u8,
+            (hs_len & 0xff) as u8,
+        ];
         handshake.extend_from_slice(&hello);
 
         // TLS Record header
@@ -239,4 +240,3 @@ mod tests {
         assert!(extract_http_host(&buf).is_none());
     }
 }
-
