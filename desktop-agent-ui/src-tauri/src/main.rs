@@ -67,6 +67,14 @@ const TRAY_EXIT_ID: &str = "exit";
 #[cfg(any(windows, target_os = "macos"))]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
+#[cfg(windows)]
+fn hide_child_console(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_child_console(_command: &mut Command) {}
+
 #[cfg(target_os = "macos")]
 const TUN_HELPER_SERVICE_ARG: &str = "--tun-helper-service";
 #[cfg(target_os = "macos")]
@@ -699,11 +707,13 @@ fn get_network_traffic_snapshot_inner() -> Result<NetworkTrafficSnapshot, String
 }
 
 #[tauri::command]
-async fn get_dns_resolution_records() -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
+async fn get_dns_resolution_records(
+) -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
     run_blocking("读取 DNS 解析记录", get_dns_resolution_records_inner).await
 }
 
-fn get_dns_resolution_records_inner() -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
+fn get_dns_resolution_records_inner(
+) -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
     #[cfg(windows)]
     {
         let response = send_service_request(&ServiceRequest::DnsRecords)?;
@@ -1478,7 +1488,8 @@ fn tun_routes_ready(tun_name: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn powershell_status(script: &str, tun_name: &str) -> bool {
-    Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+    command
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -1489,9 +1500,9 @@ fn powershell_status(script: &str, tun_name: &str) -> bool {
         .env("PPAASS_TUN_NAME", tun_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stderr(Stdio::null());
+    hide_child_console(&mut command);
+    command.status().is_ok_and(|status| status.success())
 }
 
 #[cfg(target_os = "macos")]
@@ -1664,7 +1675,10 @@ fn run_curl_check(
         url.to_string(),
     ]);
 
-    let output = Command::new(curl_bin).args(&args).output();
+    let mut command = Command::new(curl_bin);
+    command.args(&args);
+    hide_child_console(&mut command);
+    let output = command.output();
 
     match output {
         Ok(output) => {
@@ -2211,7 +2225,8 @@ if ($stopped) { exit 0 }
 exit 2
 "#;
 
-    let output = Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+    command
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -2220,7 +2235,9 @@ exit 2
             script,
         ])
         .env("PPAASS_AGENT_PORT", port.to_string())
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    hide_child_console(&mut command);
+    let output = command
         .output()
         .map_err(|err| format!("停止外部 Agent 失败：{err}"))?;
 
