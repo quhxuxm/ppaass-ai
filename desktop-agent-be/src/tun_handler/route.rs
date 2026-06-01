@@ -236,6 +236,20 @@ impl RouteGuard {
             flush_system_dns_cache();
         }
 
+        // macOS：在劫持默认路由前安装 ifscope 默认路由。
+        // 没有这条路由时，`IP_BOUND_IF` 把直连套接字绑到物理接口后，
+        // 内核做 scoped 路由查找会因为找不到 ifscope 默认路由而返回
+        // "Network is unreachable" / "No route to host"，导致 *.bilibili.com 等
+        // 命中 direct_access 的目标全部连接失败（symptom：浏览器无法打开）。
+        #[cfg(target_os = "macos")]
+        install_macos_scoped_default_bypass(
+            default_v4_gw,
+            default_v4_if,
+            default_v6_gw,
+            default_v6_if,
+            &mut lease,
+        );
+
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
         install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed, &mut lease);
         install_ipv6_split_routes(
@@ -289,6 +303,9 @@ enum RouteKind {
     DnsCapture,
     Ipv4SplitDefault,
     Ipv6SplitDefault,
+    /// macOS 专属：通过原默认网关安装的 ifscope 默认路由，
+    /// 让绑定到物理接口的直连套接字能找到合法下一跳。
+    MacosScopedDefaultBypass,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,6 +398,17 @@ impl RouteLease {
 
     fn record_installed(&mut self, kind: RouteKind, route: &Route) {
         self.state.routes.push(RouteRecord::from_route(kind, route));
+        if let Err(e) = self.persist() {
+            self.persist_failed = true;
+            warn!("写入 TUN 路由状态文件 {} 失败：{e}", self.path.display());
+        }
+    }
+
+    /// 直接以 `RouteRecord` 形式记录一条已安装路由。
+    /// 用于 macOS scoped default 等无法用 `route_manager::Route` 表达的路由。
+    #[cfg(target_os = "macos")]
+    fn record_raw(&mut self, record: RouteRecord) {
+        self.state.routes.push(record);
         if let Err(e) = self.persist() {
             self.persist_failed = true;
             warn!("写入 TUN 路由状态文件 {} 失败：{e}", self.path.display());
@@ -1035,6 +1063,87 @@ fn command_output_message(output: &std::process::Output) -> String {
         }
     } else {
         stderr
+    }
+}
+
+/// 安装 macOS ifscope 默认路由，作为代理旁路 / 直连套接字的下一跳兜底。
+///
+/// 没有这条路由时，使用 `IP_BOUND_IF` 绑定到物理接口的直连套接字会因
+/// scoped 路由查找命中不到任何 ifscope 默认路由而失败，所有命中
+/// `direct_access` 域名规则的目标都会无法连接。
+#[cfg(target_os = "macos")]
+fn install_macos_scoped_default_bypass(
+    default_v4_gw: Option<IpAddr>,
+    default_v4_if: Option<u32>,
+    default_v6_gw: Option<IpAddr>,
+    default_v6_if: Option<u32>,
+    lease: &mut RouteLease,
+) {
+    if let (Some(gw), Some(if_idx)) = (default_v4_gw, default_v4_if)
+        && let Some(if_name) = interface_name_for_index(Some(if_idx))
+    {
+        install_one_macos_scoped_default(&if_name, gw, false, lease);
+    } else {
+        debug!("跳过 macOS IPv4 scoped default bypass：默认网关或接口缺失");
+    }
+
+    if let (Some(gw), Some(if_idx)) = (default_v6_gw, default_v6_if)
+        && let Some(if_name) = interface_name_for_index(Some(if_idx))
+    {
+        install_one_macos_scoped_default(&if_name, gw, true, lease);
+    } else {
+        debug!("跳过 macOS IPv6 scoped default bypass：默认网关或接口缺失");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_one_macos_scoped_default(
+    if_name: &str,
+    gateway: IpAddr,
+    is_ipv6: bool,
+    lease: &mut RouteLease,
+) {
+    // 形如：route -n add -ifscope en0 -net default 192.168.31.1
+    let mut cmd = Command::new("/sbin/route");
+    cmd.arg("-n").arg("add");
+    if is_ipv6 {
+        cmd.arg("-inet6");
+    }
+    cmd.args(["-ifscope", if_name, "-net", "default", &gateway.to_string()]);
+
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            info!("已安装 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
+            let destination = if is_ipv6 {
+                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+            } else {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            };
+            let if_index = interface_index_for_name(if_name);
+            let record = RouteRecord {
+                kind: RouteKind::MacosScopedDefaultBypass,
+                destination,
+                prefix: 0,
+                gateway: Some(gateway),
+                if_name: Some(if_name.to_string()),
+                if_index,
+            };
+            lease.record_raw(record);
+        }
+        Ok(out) => {
+            let msg = command_output_message(&out);
+            // 已存在同样的 ifscope 默认路由属于幂等成功；仅记录调试日志。
+            if msg.contains("File exists") || msg.contains("already in table") {
+                debug!(
+                    "macOS scoped default bypass 已存在：ifscope={if_name} gateway={gateway}"
+                );
+            } else {
+                warn!(
+                    "安装 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{msg}"
+                );
+            }
+        }
+        Err(e) => warn!("运行 route add -ifscope 安装 macOS scoped default bypass 失败：{e}"),
     }
 }
 
