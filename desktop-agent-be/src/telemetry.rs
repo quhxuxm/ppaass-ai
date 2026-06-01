@@ -1,7 +1,11 @@
 //! 遥测模块：tracing 初始化（标准输出或文件）以及供协议处理器使用的
 //! 流量统计辅助函数 `emit_traffic`。
 
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
@@ -10,12 +14,26 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static TOTAL_OUTBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
 static TOTAL_INBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
+static DNS_RECORDS: OnceLock<Mutex<VecDeque<DnsResolutionRecord>>> = OnceLock::new();
+const DNS_RECORD_CAPACITY: usize = 80;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub struct TrafficSnapshot {
     pub outbound_bytes: u64,
     pub inbound_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsResolutionRecord {
+    pub timestamp_ms: u128,
+    pub client: String,
+    pub upstream: String,
+    pub query: String,
+    pub record_type: String,
+    pub status: String,
+    pub answers: Vec<String>,
+    pub duration_ms: u128,
 }
 
 /// 初始化全局 tracing。
@@ -82,4 +100,33 @@ pub fn traffic_snapshot() -> TrafficSnapshot {
         outbound_bytes: TOTAL_OUTBOUND_BYTES.load(Ordering::Relaxed),
         inbound_bytes: TOTAL_INBOUND_BYTES.load(Ordering::Relaxed),
     }
+}
+
+pub fn emit_dns_resolution(record: DnsResolutionRecord) {
+    let records =
+        DNS_RECORDS.get_or_init(|| Mutex::new(VecDeque::with_capacity(DNS_RECORD_CAPACITY)));
+    let Ok(mut records) = records.lock() else {
+        return;
+    };
+
+    while records.len() >= DNS_RECORD_CAPACITY {
+        records.pop_front();
+    }
+    records.push_back(record);
+}
+
+#[allow(dead_code)]
+pub fn dns_resolution_records() -> Vec<DnsResolutionRecord> {
+    DNS_RECORDS
+        .get_or_init(|| Mutex::new(VecDeque::with_capacity(DNS_RECORD_CAPACITY)))
+        .lock()
+        .map(|records| records.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+pub fn current_time_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }

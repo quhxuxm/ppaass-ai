@@ -815,6 +815,90 @@ body.overview-dragging * {
   gap: 10px;
 }
 
+.dns-records {
+  min-width: 0;
+}
+
+.dns-record-list {
+  display: grid;
+  gap: 8px;
+  max-height: 300px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.dns-record-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 9px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-muted-surface);
+}
+
+.dns-record-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dns-record-row strong,
+.dns-record-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dns-record-row strong {
+  color: var(--app-text-strong);
+  font-size: 14px;
+}
+
+.dns-record-row span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dns-record-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.dns-status {
+  font-weight: 800;
+}
+
+.dns-status.ok {
+  color: #15803d;
+}
+
+.dns-status.warn {
+  color: #be123c;
+}
+
+.dns-empty {
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  min-height: 180px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: var(--app-muted-surface);
+  color: #64748b;
+  font-weight: 800;
+}
+
+.dns-empty i {
+  color: var(--app-primary);
+  font-size: 20px;
+}
+
 .endpoint-row,
 .kv-row,
 .switch-row {

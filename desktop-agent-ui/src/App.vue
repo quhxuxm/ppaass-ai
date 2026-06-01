@@ -95,6 +95,17 @@ type NetworkInterfaceTraffic = {
   transmitted_bytes: number;
 };
 
+type DnsResolutionRecord = {
+  timestamp_ms: number;
+  client: string;
+  upstream: string;
+  query: string;
+  record_type: string;
+  status: string;
+  answers: string[];
+  duration_ms: number;
+};
+
 type TrafficBaseline = {
   date: string;
   received: number;
@@ -124,7 +135,7 @@ type DirectRuleGroup = {
   items: Array<{ rule: string; index: number }>;
 };
 
-type OverviewCardKey = "status" | "proxy" | "egress" | "speed" | "traffic" | "tun" | "policy";
+type OverviewCardKey = "status" | "proxy" | "egress" | "speed" | "traffic" | "dns" | "tun" | "policy";
 
 type OverviewCardDefinition = {
   key: OverviewCardKey;
@@ -272,6 +283,7 @@ const overviewCardDefinitions: OverviewCardDefinition[] = [
   { key: "egress", baseSpan: 6 },
   { key: "speed", baseSpan: 6 },
   { key: "traffic", baseSpan: 6 },
+  { key: "dns", baseSpan: 6 },
   { key: "tun", baseSpan: 6 },
   { key: "policy", baseSpan: 6 }
 ];
@@ -311,7 +323,8 @@ const state = reactive({
     upload_bps: 0,
     day_download_bytes: 0,
     day_upload_bytes: 0
-  }
+  },
+  dnsRecords: [] as DnsResolutionRecord[]
 });
 
 const summary = computed(() => state.config?.summary ?? summarizeRaw(fallbackRawConfig));
@@ -362,6 +375,17 @@ const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "
 const proxyEntryStateLabel = computed(() => "随 Agent 启动");
 const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
 const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
+const recentDnsRecords = computed(() =>
+  normalizeDnsRecords(state.dnsRecords)
+    .sort((left, right) => dnsRecordTimestamp(right) - dnsRecordTimestamp(left))
+    .slice(0, 80)
+);
+const dnsCardLabel = computed(() => {
+  if (!summary.value.tun_proxy_dns) {
+    return "System";
+  }
+  return `${state.dnsRecords.length} 条`;
+});
 const highlightedLogs = computed(() => state.agent.logs.map(tokenizeLogLine));
 const highlightedToml = computed(() => tokenizeToml(state.config?.raw ?? ""));
 const tomlHighlightRef = ref<HTMLElement | null>(null);
@@ -383,9 +407,11 @@ const directRuleGroups = computed(() => {
 
 let trafficTimer: number | undefined;
 let agentTimer: number | undefined;
+let dnsTimer: number | undefined;
 let pollingActive = false;
 let trafficRefreshInFlight = false;
 let agentRefreshInFlight = false;
+let dnsRefreshInFlight = false;
 
 onMounted(() => {
   pollingActive = true;
@@ -395,6 +421,7 @@ onMounted(() => {
     }
     startTrafficPolling();
     startAgentPolling();
+    startDnsPolling();
   });
 });
 
@@ -405,6 +432,9 @@ onBeforeUnmount(() => {
   }
   if (agentTimer) {
     window.clearTimeout(agentTimer);
+  }
+  if (dnsTimer) {
+    window.clearTimeout(dnsTimer);
   }
 });
 
@@ -974,6 +1004,12 @@ function buildOverviewCards(order: OverviewCardKey[]): OverviewCardView[] {
 
   for (const card of cards) {
     if (rowSpan > 0 && rowSpan + card.baseSpan > 12) {
+      if (row.length === 1) {
+        result.push({ ...row[0], span: 6 }, { ...card, span: 6 });
+        row = [];
+        rowSpan = 0;
+        continue;
+      }
       flushRow();
     }
     row.push(card);
@@ -994,6 +1030,7 @@ function overviewCardTitle(key: OverviewCardKey) {
     egress: "公共远端出口",
     speed: "实时网速",
     traffic: "今日流量",
+    dns: "DNS 解析",
     tun: "TUN",
     policy: "共享策略"
   };
@@ -1463,6 +1500,45 @@ async function refreshAgentState() {
   }
 }
 
+function startDnsPolling() {
+  void pollDnsRecords();
+}
+
+async function pollDnsRecords() {
+  if (!pollingActive) {
+    return;
+  }
+  if (!state.busy) {
+    await refreshDnsRecords();
+  }
+  if (pollingActive) {
+    dnsTimer = window.setTimeout(() => {
+      void pollDnsRecords();
+    }, 2500);
+  }
+}
+
+async function refreshDnsRecords() {
+  if (dnsRefreshInFlight) {
+    return;
+  }
+  dnsRefreshInFlight = true;
+  try {
+    const records = await invokeOrFallback<DnsResolutionRecord[]>(
+      "get_dns_resolution_records",
+      {},
+      () => state.dnsRecords
+    );
+    if (Array.isArray(records)) {
+      state.dnsRecords = records;
+    }
+  } catch {
+    // Keep the last visible DNS records if the runtime status read fails.
+  } finally {
+    dnsRefreshInFlight = false;
+  }
+}
+
 function fallbackTrafficSnapshot(): NetworkTrafficSnapshot {
   return {
     sampled_at_ms: Date.now(),
@@ -1703,6 +1779,36 @@ function shortProxyUrl(value: string) {
   return value.replace(/^https?:\/\//, "").replace(/^socks5h:\/\//, "socks5h ").replace(/^tun:\/\//, "tun ");
 }
 
+function dnsAnswerLabel(record: DnsResolutionRecord) {
+  const answers = dnsAnswers(record);
+  if (answers.length) {
+    return answers.slice(0, 3).join(", ");
+  }
+  if (record.status === "NOERROR") {
+    return "无返回记录";
+  }
+  if (record.status === "TIMEOUT") {
+    return "解析超时";
+  }
+  return record.upstream;
+}
+
+function dnsAnswers(record: DnsResolutionRecord) {
+  return Array.isArray(record.answers) ? record.answers : [];
+}
+
+function normalizeDnsRecords(records: unknown): DnsResolutionRecord[] {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  return records.filter((record): record is DnsResolutionRecord => Boolean(record && typeof record === "object"));
+}
+
+function dnsRecordTimestamp(record: DnsResolutionRecord) {
+  const timestamp = Number(record.timestamp_ms);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function formatTimestamp(timestampMs: number) {
   if (!timestampMs) {
     return "—";
@@ -1872,6 +1978,7 @@ function getErrorMessage(error: unknown) {
                 />
                 <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />
                 <span v-else-if="card.key === 'traffic'">{{ state.traffic.baseline?.date ?? localDateKey() }}</span>
+                <Tag v-else-if="card.key === 'dns'" :value="dnsCardLabel" :severity="summary.tun_proxy_dns ? 'info' : 'secondary'" />
                 <Tag
                   v-else-if="card.key === 'tun'"
                   :value="summary.tun_enabled ? 'Enabled' : 'Disabled'"
@@ -1987,6 +2094,29 @@ function getErrorMessage(error: unknown) {
               <div class="hourly-legend">
                 <span><i class="legend-dot download"></i>下载</span>
                 <span><i class="legend-dot upload"></i>上传</span>
+              </div>
+            </div>
+            <div v-else-if="card.key === 'dns'" class="dns-records">
+              <div v-if="!summary.tun_proxy_dns" class="dns-empty">
+                <i class="pi pi-info-circle"></i>
+                <span>当前使用系统 DNS</span>
+              </div>
+              <div v-else-if="!recentDnsRecords.length" class="dns-empty">
+                <i class="pi pi-globe"></i>
+                <span>等待 DNS 请求</span>
+              </div>
+              <div v-else class="dns-record-list">
+                <div v-for="record in recentDnsRecords" :key="`${record.timestamp_ms}-${record.client}-${record.query}`" class="dns-record-row">
+                  <div>
+                    <strong :title="record.query">{{ record.query }}</strong>
+                    <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
+                  </div>
+                  <div class="dns-record-meta">
+                    <Tag :value="record.record_type" severity="secondary" rounded />
+                    <span :class="['dns-status', record.status === 'NOERROR' ? 'ok' : 'warn']">{{ record.status }}</span>
+                    <span>{{ Math.max(1, Math.round(record.duration_ms)) }} ms</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div v-else-if="card.key === 'tun'" class="kv-list">

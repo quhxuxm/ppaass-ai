@@ -363,6 +363,7 @@ enum ServiceRequest {
     Stop,
     State,
     Traffic,
+    DnsRecords,
     SetLogLevel { log_level: String },
 }
 
@@ -372,6 +373,7 @@ struct ServiceResponse {
     ok: bool,
     state: Option<AgentState>,
     traffic: Option<NetworkTrafficSnapshot>,
+    dns_records: Option<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>>,
     error: Option<String>,
 }
 
@@ -690,6 +692,27 @@ fn get_network_traffic_snapshot_inner() -> Result<NetworkTrafficSnapshot, String
     }
 
     Ok(agent_traffic_snapshot())
+}
+
+#[tauri::command]
+async fn get_dns_resolution_records() -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
+    run_blocking("读取 DNS 解析记录", get_dns_resolution_records_inner).await
+}
+
+fn get_dns_resolution_records_inner() -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
+    #[cfg(windows)]
+    {
+        let response = send_service_request(&ServiceRequest::DnsRecords)?;
+        if response.ok {
+            return Ok(response.dns_records.unwrap_or_default());
+        }
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Agent 服务 DNS 解析记录请求失败".to_string()));
+    }
+
+    #[cfg(not(windows))]
+    Ok(desktop_agent_be::telemetry::dns_resolution_records())
 }
 
 fn agent_traffic_snapshot() -> NetworkTrafficSnapshot {
@@ -2489,6 +2512,14 @@ fn handle_service_request(runtime: &AgentRuntime, stream: &mut StdTcpStream) -> 
             ok: true,
             state: None,
             traffic: Some(agent_traffic_snapshot()),
+            dns_records: None,
+            error: None,
+        },
+        ServiceRequest::DnsRecords => ServiceResponse {
+            ok: true,
+            state: None,
+            traffic: None,
+            dns_records: Some(desktop_agent_be::telemetry::dns_resolution_records()),
             error: None,
         },
         ServiceRequest::SetLogLevel { log_level } => match runtime.logs.set_log_level(&log_level) {
@@ -2522,6 +2553,7 @@ fn service_state_ok(state: AgentState) -> ServiceResponse {
         ok: true,
         state: Some(state),
         traffic: None,
+        dns_records: None,
         error: None,
     }
 }
@@ -2532,6 +2564,7 @@ fn service_error(error: String) -> ServiceResponse {
         ok: false,
         state: None,
         traffic: None,
+        dns_records: None,
         error: Some(error),
     }
 }
@@ -2834,7 +2867,8 @@ fn main() {
             start_agent,
             stop_agent,
             run_connectivity_tests,
-            get_network_traffic_snapshot
+            get_network_traffic_snapshot,
+            get_dns_resolution_records
         ])
         .run(tauri::generate_context!())
         .expect("error while running PPAASS Desktop Agent UI");

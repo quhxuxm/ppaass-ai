@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,7 @@ use tracing::{debug, warn};
 use super::ForwardContext;
 use super::udp::UdpWriter;
 use crate::error::Result;
+use crate::traffic_stats::{self, DnsResolutionRecord};
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
@@ -35,7 +37,15 @@ struct PendingDnsRequest {
     client: SocketAddr,
     target: SocketAddr,
     original_id: u16,
+    query: String,
+    record_type: String,
+    started_at: Instant,
     expires_at: Instant,
+}
+
+struct DnsResponseSummary {
+    status: String,
+    answers: Vec<String>,
 }
 
 impl DnsProxy {
@@ -226,6 +236,8 @@ where
         debug!("Android TUN DNS request is too short; dropping");
         return Ok(());
     };
+    let (query, record_type) = parse_dns_query(&request.packet)
+        .unwrap_or_else(|| ("<unknown>".to_string(), "UNKNOWN".to_string()));
 
     cleanup_pending_dns(pending);
     let Some(upstream_id) = allocate_dns_id(pending, next_id) else {
@@ -233,6 +245,7 @@ where
         return Ok(());
     };
 
+    let started_at = Instant::now();
     let mut packet = request.packet.clone();
     write_dns_id(&mut packet, upstream_id);
     pending.insert(
@@ -241,6 +254,9 @@ where
             client: request.client,
             target: request.target,
             original_id,
+            query,
+            record_type,
+            started_at,
             expires_at: Instant::now() + DNS_PENDING_TTL,
         },
     );
@@ -273,6 +289,21 @@ async fn handle_dns_response(
         return Ok(());
     };
 
+    let response_summary = parse_dns_response(response).unwrap_or_else(|| DnsResponseSummary {
+        status: "INVALID".to_string(),
+        answers: Vec::new(),
+    });
+    traffic_stats::record_dns_resolution(DnsResolutionRecord {
+        timestamp_ms: traffic_stats::current_time_millis(),
+        client: request.client.to_string(),
+        upstream: request.target.to_string(),
+        query: request.query,
+        record_type: request.record_type,
+        status: response_summary.status,
+        answers: response_summary.answers,
+        duration_ms: request.started_at.elapsed().as_millis(),
+    });
+
     write_dns_id(response, request.original_id);
     let mut tx = netstack_tx.lock().await;
     debug!(
@@ -287,7 +318,25 @@ async fn handle_dns_response(
 
 fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>) {
     let now = Instant::now();
-    pending.retain(|_, request| request.expires_at > now);
+    let expired_ids: Vec<u16> = pending
+        .iter()
+        .filter_map(|(id, request)| (request.expires_at <= now).then_some(*id))
+        .collect();
+
+    for id in expired_ids {
+        if let Some(request) = pending.remove(&id) {
+            traffic_stats::record_dns_resolution(DnsResolutionRecord {
+                timestamp_ms: traffic_stats::current_time_millis(),
+                client: request.client.to_string(),
+                upstream: request.target.to_string(),
+                query: request.query,
+                record_type: request.record_type,
+                status: "TIMEOUT".to_string(),
+                answers: Vec::new(),
+                duration_ms: request.started_at.elapsed().as_millis(),
+            });
+        }
+    }
 }
 
 fn allocate_dns_id(pending: &HashMap<u16, PendingDnsRequest>, next_id: &mut u16) -> Option<u16> {
@@ -310,6 +359,246 @@ fn write_dns_id(packet: &mut [u8], id: u16) {
     let bytes = id.to_be_bytes();
     packet[0] = bytes[0];
     packet[1] = bytes[1];
+}
+
+fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
+    if packet.len() < 12 || read_u16(packet, 4)? == 0 {
+        return None;
+    }
+
+    let mut offset = 12;
+    let query = parse_dns_name(packet, &mut offset)?;
+    let record_type = dns_type_name(read_u16(packet, offset)?).to_string();
+    Some((query, record_type))
+}
+
+fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
+    if packet.len() < 12 {
+        return None;
+    }
+
+    let flags = read_u16(packet, 2)?;
+    let qdcount = read_u16(packet, 4)?;
+    let ancount = read_u16(packet, 6)?;
+    let mut offset = 12;
+
+    for _ in 0..qdcount {
+        parse_dns_name(packet, &mut offset)?;
+        offset = offset.checked_add(4)?;
+        if offset > packet.len() {
+            return None;
+        }
+    }
+
+    let mut answers = Vec::new();
+    for _ in 0..ancount {
+        parse_dns_name(packet, &mut offset)?;
+        let record_type = read_u16(packet, offset)?;
+        offset = offset.checked_add(2)?;
+        let _class = read_u16(packet, offset)?;
+        offset = offset.checked_add(2)?;
+        let _ttl = read_u32(packet, offset)?;
+        offset = offset.checked_add(4)?;
+        let rdlength = read_u16(packet, offset)? as usize;
+        offset = offset.checked_add(2)?;
+        let rdata_offset = offset;
+        let rdata_end = offset.checked_add(rdlength)?;
+        if rdata_end > packet.len() {
+            return None;
+        }
+
+        if let Some(answer) = parse_dns_answer_rdata(packet, rdata_offset, rdlength, record_type) {
+            answers.push(answer);
+        }
+        offset = rdata_end;
+    }
+
+    Some(DnsResponseSummary {
+        status: dns_rcode_name(flags & 0x000f).to_string(),
+        answers,
+    })
+}
+
+fn parse_dns_answer_rdata(
+    packet: &[u8],
+    rdata_offset: usize,
+    rdlength: usize,
+    record_type: u16,
+) -> Option<String> {
+    let rdata = packet.get(rdata_offset..rdata_offset.checked_add(rdlength)?)?;
+    match record_type {
+        1 if rdata.len() == 4 => {
+            Some(Ipv4Addr::new(rdata[0], rdata[1], rdata[2], rdata[3]).to_string())
+        }
+        2 | 5 | 12 => {
+            let mut offset = rdata_offset;
+            parse_dns_name(packet, &mut offset)
+        }
+        15 if rdata.len() >= 3 => {
+            let preference = u16::from_be_bytes([rdata[0], rdata[1]]);
+            let mut offset = rdata_offset + 2;
+            parse_dns_name(packet, &mut offset).map(|exchange| format!("{preference} {exchange}"))
+        }
+        16 => Some(parse_txt_rdata(rdata)),
+        28 if rdata.len() == 16 => {
+            let bytes: [u8; 16] = rdata.try_into().ok()?;
+            Some(Ipv6Addr::from(bytes).to_string())
+        }
+        33 if rdata.len() >= 7 => {
+            let port = u16::from_be_bytes([rdata[4], rdata[5]]);
+            let mut offset = rdata_offset + 6;
+            parse_dns_name(packet, &mut offset).map(|target| format!("{target}:{port}"))
+        }
+        64 | 65 if rdata.len() >= 3 => {
+            let priority = u16::from_be_bytes([rdata[0], rdata[1]]);
+            let mut offset = rdata_offset + 2;
+            parse_dns_name(packet, &mut offset).map(|target| {
+                if target == "." {
+                    format!("priority {priority}")
+                } else {
+                    format!("priority {priority} {target}")
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_txt_rdata(rdata: &[u8]) -> String {
+    let mut cursor = 0;
+    let mut values = Vec::new();
+    while cursor < rdata.len() {
+        let Some(length) = rdata.get(cursor).copied().map(usize::from) else {
+            break;
+        };
+        cursor += 1;
+        let end = (cursor + length).min(rdata.len());
+        values.push(String::from_utf8_lossy(&rdata[cursor..end]).to_string());
+        cursor = end;
+    }
+    values.join(" ")
+}
+
+fn parse_dns_name(packet: &[u8], offset: &mut usize) -> Option<String> {
+    let mut labels = Vec::new();
+    let mut cursor = *offset;
+    let mut jumped = false;
+    let mut jumps = 0usize;
+
+    loop {
+        let length = *packet.get(cursor)?;
+        if length & 0xc0 == 0xc0 {
+            let next = *packet.get(cursor + 1)?;
+            let pointer = ((((length & 0x3f) as u16) << 8) | next as u16) as usize;
+            if !jumped {
+                *offset = cursor + 2;
+            }
+            cursor = pointer;
+            jumped = true;
+            jumps += 1;
+            if jumps > 16 {
+                return None;
+            }
+            continue;
+        }
+        if length & 0xc0 != 0 {
+            return None;
+        }
+        if length == 0 {
+            if !jumped {
+                *offset = cursor + 1;
+            }
+            break;
+        }
+
+        cursor += 1;
+        let end = cursor.checked_add(length as usize)?;
+        let label = packet.get(cursor..end)?;
+        labels.push(String::from_utf8_lossy(label).to_string());
+        cursor = end;
+        if !jumped {
+            *offset = cursor;
+        }
+    }
+
+    if labels.is_empty() {
+        Some(".".to_string())
+    } else {
+        Some(labels.join("."))
+    }
+}
+
+fn read_u16(packet: &[u8], offset: usize) -> Option<u16> {
+    let bytes = packet.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_u32(packet: &[u8], offset: usize) -> Option<u32> {
+    let bytes = packet.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn dns_type_name(record_type: u16) -> String {
+    match record_type {
+        1 => "A".to_string(),
+        2 => "NS".to_string(),
+        5 => "CNAME".to_string(),
+        6 => "SOA".to_string(),
+        12 => "PTR".to_string(),
+        15 => "MX".to_string(),
+        16 => "TXT".to_string(),
+        28 => "AAAA".to_string(),
+        33 => "SRV".to_string(),
+        64 => "SVCB".to_string(),
+        65 => "HTTPS".to_string(),
+        255 => "ANY".to_string(),
+        other => format!("TYPE{other}"),
+    }
+}
+
+fn dns_rcode_name(rcode: u16) -> &'static str {
+    match rcode {
+        0 => "NOERROR",
+        1 => "FORMERR",
+        2 => "SERVFAIL",
+        3 => "NXDOMAIN",
+        4 => "NOTIMP",
+        5 => "REFUSED",
+        _ => "ERROR",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_dns_query_name_and_type() {
+        let packet = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+
+        assert_eq!(
+            parse_dns_query(&packet),
+            Some(("example.com".to_string(), "A".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_dns_response_answers() {
+        let response = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 0x5d,
+            0xb8, 0xd8, 0x22,
+        ];
+
+        let parsed = parse_dns_response(&response).unwrap();
+        assert_eq!(parsed.status, "NOERROR");
+        assert_eq!(parsed.answers, vec!["93.184.216.34"]);
+    }
 }
 
 fn android_log_error(message: impl AsRef<str>) {

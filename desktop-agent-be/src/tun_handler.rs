@@ -880,6 +880,7 @@ mod tests {
     use super::tun_ipv4_destination;
     #[cfg(target_os = "macos")]
     use super::tun_ipv4_interface_prefix;
+    #[cfg(target_os = "macos")]
     use std::net::Ipv4Addr;
 
     #[cfg(target_os = "macos")]

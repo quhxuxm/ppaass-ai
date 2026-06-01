@@ -881,22 +881,25 @@ nameserver 1.1.1.1
                 IpAddr::V4("1.1.1.1".parse().unwrap()),
             ]
         );
-        assert_eq!(
-            parse_macos_dns_servers(output),
-            vec![
-                SystemDnsServer {
-                    ip: IpAddr::V4("192.168.1.1".parse().unwrap()),
-                    interface_name: Some("en0".to_string()),
-                },
-                SystemDnsServer {
-                    ip: IpAddr::V4("8.8.8.8".parse().unwrap()),
-                    interface_name: Some("en0".to_string()),
-                },
-                SystemDnsServer {
-                    ip: IpAddr::V4("1.1.1.1".parse().unwrap()),
-                    interface_name: None,
-                },
-            ]
-        );
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                parse_macos_dns_servers(output),
+                vec![
+                    SystemDnsServer {
+                        ip: IpAddr::V4("192.168.1.1".parse().unwrap()),
+                        interface_name: Some("en0".to_string()),
+                    },
+                    SystemDnsServer {
+                        ip: IpAddr::V4("8.8.8.8".parse().unwrap()),
+                        interface_name: Some("en0".to_string()),
+                    },
+                    SystemDnsServer {
+                        ip: IpAddr::V4("1.1.1.1".parse().unwrap()),
+                        interface_name: None,
+                    },
+                ]
+            );
+        }
     }
 }

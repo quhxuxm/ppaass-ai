@@ -17,4 +17,6 @@ final class NativeAgent {
     static native long vpnDownloadBytes();
 
     static native long vpnUploadBytes();
+
+    static native String dnsResolutionRecordsJson();
 }
