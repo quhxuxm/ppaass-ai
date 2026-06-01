@@ -375,9 +375,30 @@ struct ServiceResponse {
     error: Option<String>,
 }
 
+async fn run_blocking<T, F>(task_name: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|err| format!("{task_name}任务执行失败：{err}"))?
+}
+
 #[tauri::command]
-fn load_agent_config(
-    runtime: tauri::State<'_, AgentRuntime>,
+async fn load_agent_config(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+    path: Option<String>,
+) -> Result<LoadedAgentConfig, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("加载配置", move || {
+        load_agent_config_inner(&runtime, path)
+    })
+    .await
+}
+
+fn load_agent_config_inner(
+    runtime: &AgentRuntime,
     path: Option<String>,
 ) -> Result<LoadedAgentConfig, String> {
     let config_path = match path.filter(|value| !value.trim().is_empty()) {
@@ -393,8 +414,20 @@ fn load_agent_config(
 }
 
 #[tauri::command]
-fn save_agent_config(
-    runtime: tauri::State<'_, AgentRuntime>,
+async fn save_agent_config(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+    path: String,
+    raw: String,
+) -> Result<LoadedAgentConfig, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("保存配置", move || {
+        save_agent_config_inner(&runtime, path, raw)
+    })
+    .await
+}
+
+fn save_agent_config_inner(
+    runtime: &AgentRuntime,
     path: String,
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
@@ -418,20 +451,38 @@ fn save_agent_config(
 }
 
 #[tauri::command]
-fn get_agent_state(runtime: tauri::State<'_, AgentRuntime>) -> Result<AgentState, String> {
+async fn get_agent_state(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+) -> Result<AgentState, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("读取 Agent 状态", move || {
+        get_agent_state_inner(&runtime)
+    })
+    .await
+}
+
+fn get_agent_state_inner(runtime: &AgentRuntime) -> Result<AgentState, String> {
     #[cfg(windows)]
     if let Ok(state) = windows_service_state() {
         return Ok(state);
     }
 
-    agent_state(&runtime)
+    agent_state(runtime)
 }
 
 #[tauri::command]
-fn start_agent(
-    runtime: tauri::State<'_, AgentRuntime>,
+async fn start_agent(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
     config_path: String,
 ) -> Result<AgentState, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("启动 Agent", move || {
+        start_agent_command(&runtime, config_path)
+    })
+    .await
+}
+
+fn start_agent_command(runtime: &AgentRuntime, config_path: String) -> Result<AgentState, String> {
     #[cfg(windows)]
     {
         return start_agent_via_windows_service(config_path, &runtime.logs);
@@ -500,7 +551,12 @@ fn apply_ui_log_level(runtime: &AgentRuntime, log_level: &str) {
 }
 
 #[tauri::command]
-fn stop_agent(runtime: tauri::State<'_, AgentRuntime>) -> Result<AgentState, String> {
+async fn stop_agent(runtime: tauri::State<'_, Arc<AgentRuntime>>) -> Result<AgentState, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("停止 Agent", move || stop_agent_inner_command(&runtime)).await
+}
+
+fn stop_agent_inner_command(runtime: &AgentRuntime) -> Result<AgentState, String> {
     #[cfg(windows)]
     if let Ok(state) = stop_agent_via_windows_service() {
         return Ok(state);
@@ -519,14 +575,12 @@ fn stop_agent(runtime: tauri::State<'_, AgentRuntime>) -> Result<AgentState, Str
     }
 
     drop(guard);
-    agent_state(&runtime)
+    agent_state(runtime)
 }
 
 #[tauri::command]
 async fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, String> {
-    tauri::async_runtime::spawn_blocking(move || run_connectivity_tests_blocking(path))
-        .await
-        .map_err(|err| format!("诊断任务执行失败：{err}"))?
+    run_blocking("诊断", move || run_connectivity_tests_blocking(path)).await
 }
 
 fn run_connectivity_tests_blocking(path: Option<String>) -> Result<ConnectivityReport, String> {
@@ -621,7 +675,11 @@ fn collect_connectivity_checks(jobs: Vec<JoinHandle<ConnectivityCheck>>) -> Vec<
 }
 
 #[tauri::command]
-fn get_network_traffic_snapshot() -> Result<NetworkTrafficSnapshot, String> {
+async fn get_network_traffic_snapshot() -> Result<NetworkTrafficSnapshot, String> {
+    run_blocking("读取流量", get_network_traffic_snapshot_inner).await
+}
+
+fn get_network_traffic_snapshot_inner() -> Result<NetworkTrafficSnapshot, String> {
     #[cfg(windows)]
     if let Ok(response) = send_service_request(&ServiceRequest::Traffic) {
         if response.ok {
@@ -2734,7 +2792,7 @@ fn main() {
         }
     }
 
-    let runtime = AgentRuntime::new();
+    let runtime = Arc::new(AgentRuntime::new());
     runtime.logs.install_tracing();
     let setup_logs = runtime.logs.clone();
 

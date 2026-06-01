@@ -383,19 +383,28 @@ const directRuleGroups = computed(() => {
 
 let trafficTimer: number | undefined;
 let agentTimer: number | undefined;
+let pollingActive = false;
+let trafficRefreshInFlight = false;
+let agentRefreshInFlight = false;
 
 onMounted(() => {
-  void boot();
-  startTrafficPolling();
-  startAgentPolling();
+  pollingActive = true;
+  void boot().finally(() => {
+    if (!pollingActive) {
+      return;
+    }
+    startTrafficPolling();
+    startAgentPolling();
+  });
 });
 
 onBeforeUnmount(() => {
+  pollingActive = false;
   if (trafficTimer) {
-    window.clearInterval(trafficTimer);
+    window.clearTimeout(trafficTimer);
   }
   if (agentTimer) {
-    window.clearInterval(agentTimer);
+    window.clearTimeout(agentTimer);
   }
 });
 
@@ -534,13 +543,28 @@ async function runDiagnostics() {
 }
 
 function startTrafficPolling() {
-  void refreshTraffic();
-  trafficTimer = window.setInterval(() => {
-    void refreshTraffic();
-  }, 1000);
+  void pollTraffic();
+}
+
+async function pollTraffic() {
+  if (!pollingActive) {
+    return;
+  }
+  if (!state.busy) {
+    await refreshTraffic();
+  }
+  if (pollingActive) {
+    trafficTimer = window.setTimeout(() => {
+      void pollTraffic();
+    }, 1000);
+  }
 }
 
 async function refreshTraffic() {
+  if (trafficRefreshInFlight) {
+    return;
+  }
+  trafficRefreshInFlight = true;
   try {
     const snapshot = await invokeOrFallback<NetworkTrafficSnapshot>(
       "get_network_traffic_snapshot",
@@ -550,6 +574,8 @@ async function refreshTraffic() {
     updateTraffic(snapshot);
   } catch {
     // Keep the last visible telemetry sample if the OS counter read fails.
+  } finally {
+    trafficRefreshInFlight = false;
   }
 }
 
@@ -1406,16 +1432,34 @@ function fallbackConnectivityReport(currentSummary?: AgentConfigSummary): Connec
 }
 
 function startAgentPolling() {
-  agentTimer = window.setInterval(() => {
-    void refreshAgentState();
-  }, 1200);
+  void pollAgentState();
+}
+
+async function pollAgentState() {
+  if (!pollingActive) {
+    return;
+  }
+  if (!state.busy) {
+    await refreshAgentState();
+  }
+  if (pollingActive) {
+    agentTimer = window.setTimeout(() => {
+      void pollAgentState();
+    }, 1200);
+  }
 }
 
 async function refreshAgentState() {
+  if (agentRefreshInFlight) {
+    return;
+  }
+  agentRefreshInFlight = true;
   try {
     state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, () => state.agent);
   } catch {
     // Keep the last visible agent state if the runtime status read fails.
+  } finally {
+    agentRefreshInFlight = false;
   }
 }
 
