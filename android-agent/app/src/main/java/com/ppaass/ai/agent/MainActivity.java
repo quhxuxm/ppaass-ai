@@ -364,8 +364,8 @@ public class MainActivity extends Activity {
         dailyPanel.addView(trafficRow, matchWrap());
 
         LinearLayout dnsPanel = panel(root);
-        sectionTitle(dnsPanel, "DNS records");
-        TextView dnsSubtitle = mutedText("Last 80 proxied DNS resolutions", 13f);
+        sectionTitle(dnsPanel, "Agent DNS records");
+        TextView dnsSubtitle = mutedText("Last 80 DNS resolutions handled by Agent", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
@@ -753,16 +753,25 @@ public class MainActivity extends Activity {
 
         dnsRecordList.removeAllViews();
         if (records.length() == 0) {
-            addDnsEmptyRow(running ? "Waiting for DNS requests" : "VPN stopped");
+            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
             return;
         }
 
+        boolean hasAgentRecords = false;
         for (int index = records.length() - 1; index >= 0; index--) {
             JSONObject record = records.optJSONObject(index);
-            if (record != null) {
+            if (record != null && isAgentDnsRecord(record)) {
                 addDnsRecordRow(record);
+                hasAgentRecords = true;
             }
         }
+        if (!hasAgentRecords) {
+            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
+        }
+    }
+
+    private boolean isAgentDnsRecord(JSONObject record) {
+        return "agent".equals(record.optString("resolver", ""));
     }
 
     private void addDnsEmptyRow(String text) {
@@ -848,7 +857,7 @@ public class MainActivity extends Activity {
         if ("TIMEOUT".equals(status)) {
             return "Query timeout";
         }
-        return record.optString("upstream", "Proxy DNS");
+        return record.optString("upstream", "Agent DNS");
     }
 
     private boolean ensureTrafficDay(long rxBytes, long txBytes) {

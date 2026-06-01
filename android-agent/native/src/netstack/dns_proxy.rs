@@ -295,6 +295,7 @@ async fn handle_dns_response(
     });
     traffic_stats::record_dns_resolution(DnsResolutionRecord {
         timestamp_ms: traffic_stats::current_time_millis(),
+        resolver: "agent".to_string(),
         client: request.client.to_string(),
         upstream: request.target.to_string(),
         query: request.query,
@@ -327,6 +328,7 @@ fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>) {
         if let Some(request) = pending.remove(&id) {
             traffic_stats::record_dns_resolution(DnsResolutionRecord {
                 timestamp_ms: traffic_stats::current_time_millis(),
+                resolver: "agent".to_string(),
                 client: request.client.to_string(),
                 upstream: request.target.to_string(),
                 query: request.query,

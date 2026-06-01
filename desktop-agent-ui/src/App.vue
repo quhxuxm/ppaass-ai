@@ -97,6 +97,7 @@ type NetworkInterfaceTraffic = {
 
 type DnsResolutionRecord = {
   timestamp_ms: number;
+  resolver?: string;
   client: string;
   upstream: string;
   query: string;
@@ -377,6 +378,7 @@ const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN +
 const overviewCards = computed(() => buildOverviewCards(state.overviewCardOrder));
 const recentDnsRecords = computed(() =>
   normalizeDnsRecords(state.dnsRecords)
+    .filter(isAgentDnsRecord)
     .sort((left, right) => dnsRecordTimestamp(right) - dnsRecordTimestamp(left))
     .slice(0, 80)
 );
@@ -384,7 +386,7 @@ const dnsCardLabel = computed(() => {
   if (!summary.value.tun_proxy_dns) {
     return "System";
   }
-  return `${state.dnsRecords.length} 条`;
+  return `${recentDnsRecords.value.length} 条`;
 });
 const highlightedLogs = computed(() => state.agent.logs.map(tokenizeLogLine));
 const highlightedToml = computed(() => tokenizeToml(state.config?.raw ?? ""));
@@ -1030,7 +1032,7 @@ function overviewCardTitle(key: OverviewCardKey) {
     egress: "公共远端出口",
     speed: "实时网速",
     traffic: "今日流量",
-    dns: "DNS 解析",
+    dns: "Agent DNS",
     tun: "TUN",
     policy: "共享策略"
   };
@@ -1804,6 +1806,10 @@ function normalizeDnsRecords(records: unknown): DnsResolutionRecord[] {
   return records.filter((record): record is DnsResolutionRecord => Boolean(record && typeof record === "object"));
 }
 
+function isAgentDnsRecord(record: DnsResolutionRecord) {
+  return record.resolver === "agent";
+}
+
 function dnsRecordTimestamp(record: DnsResolutionRecord) {
   const timestamp = Number(record.timestamp_ms);
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -2099,11 +2105,11 @@ function getErrorMessage(error: unknown) {
             <div v-else-if="card.key === 'dns'" class="dns-records">
               <div v-if="!summary.tun_proxy_dns" class="dns-empty">
                 <i class="pi pi-info-circle"></i>
-                <span>当前使用系统 DNS</span>
+                <span>Agent DNS 代理未启用</span>
               </div>
               <div v-else-if="!recentDnsRecords.length" class="dns-empty">
                 <i class="pi pi-globe"></i>
-                <span>等待 DNS 请求</span>
+                <span>等待经过 Agent 的 DNS 请求</span>
               </div>
               <div v-else class="dns-record-list">
                 <div v-for="record in recentDnsRecords" :key="`${record.timestamp_ms}-${record.client}-${record.query}`" class="dns-record-row">

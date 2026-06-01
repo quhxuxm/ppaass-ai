@@ -12,6 +12,8 @@ const DNS_RECORD_CAPACITY: usize = 80;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsResolutionRecord {
     pub timestamp_ms: u128,
+    #[serde(default = "agent_dns_resolver")]
+    pub resolver: String,
     pub client: String,
     pub upstream: String,
     pub query: String,
@@ -19,6 +21,10 @@ pub struct DnsResolutionRecord {
     pub status: String,
     pub answers: Vec<String>,
     pub duration_ms: u128,
+}
+
+fn agent_dns_resolver() -> String {
+    "agent".to_string()
 }
 
 pub fn record_download(bytes: usize) {
