@@ -570,6 +570,8 @@ fn should_delete_recorded_route(record: &RouteRecord) -> bool {
     if matches!(record.kind, RouteKind::MacosScopedDefaultBypass) {
         return false;
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = record;
 
     true
 }
