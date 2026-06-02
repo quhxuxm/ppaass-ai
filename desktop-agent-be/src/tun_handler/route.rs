@@ -212,22 +212,26 @@ impl RouteGuard {
 
         if capture_system_dns {
             let dns_servers = system_dns_servers();
-            let dns_capture_ips = dns_servers
-                .iter()
-                .map(|server| server.ip)
-                .collect::<Vec<_>>();
-            install_dns_capture_routes(
-                &mut mgr,
-                DnsCaptureRouteContext {
-                    tun_if_index,
-                    dns_ips: &dns_capture_ips,
-                    proxy_ips,
-                    default_v4_gateway: default_v4_gw,
-                    default_v6_gateway: default_v6_gw,
-                },
-                &mut installed,
-                &mut lease,
-            );
+            if should_install_dns_capture_host_routes() {
+                let dns_capture_ips = dns_servers
+                    .iter()
+                    .map(|server| server.ip)
+                    .collect::<Vec<_>>();
+                install_dns_capture_routes(
+                    &mut mgr,
+                    DnsCaptureRouteContext {
+                        tun_if_index,
+                        dns_ips: &dns_capture_ips,
+                        proxy_ips,
+                        default_v4_gateway: default_v4_gw,
+                        default_v6_gateway: default_v6_gw,
+                    },
+                    &mut installed,
+                    &mut lease,
+                );
+            } else {
+                debug!("macOS TUN DNS 捕获使用 PF route-to，不安装 DNS host route");
+            }
             #[cfg(target_os = "macos")]
             {
                 pf_dns_guard = MacosPfDnsGuard::install(
@@ -251,7 +255,6 @@ impl RouteGuard {
             default_v4_if,
             default_v6_gw,
             default_v6_if,
-            &mut lease,
         );
 
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
@@ -408,17 +411,6 @@ impl RouteLease {
         }
     }
 
-    /// 直接以 `RouteRecord` 形式记录一条已安装路由。
-    /// 用于 macOS scoped default 等无法用 `route_manager::Route` 表达的路由。
-    #[cfg(target_os = "macos")]
-    fn record_raw(&mut self, record: RouteRecord) {
-        self.state.routes.push(record);
-        if let Err(e) = self.persist() {
-            self.persist_failed = true;
-            warn!("写入 TUN 路由状态文件 {} 失败：{e}", self.path.display());
-        }
-    }
-
     fn persist(&self) -> std::io::Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -523,6 +515,14 @@ fn interfaces_match(record: &RouteRecord, route: &Route) -> bool {
 }
 
 fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
+    if !should_delete_recorded_route(record) {
+        debug!(
+            "保留 macOS scoped default bypass，不在 TUN 关闭时删除：destination={}/{} gateway={:?} if_name={:?}",
+            record.destination, record.prefix, record.gateway, record.if_name
+        );
+        return true;
+    }
+
     let route = record.to_route();
     if let Some(matches) = matching_routes(mgr, record)
         && matches.is_empty()
@@ -563,6 +563,15 @@ fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
 
     warn!("删除 TUN 路由失败，路由表中仍存在匹配条目：{}", route);
     false
+}
+
+fn should_delete_recorded_route(record: &RouteRecord) -> bool {
+    #[cfg(target_os = "macos")]
+    if matches!(record.kind, RouteKind::MacosScopedDefaultBypass) {
+        return false;
+    }
+
+    true
 }
 
 fn recorded_route_exists(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
@@ -672,17 +681,18 @@ fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
         .clone()
         .or_else(|| interface_name_for_index(record.if_index));
 
-    if let Some(if_name) = if_name.as_deref()
-        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), false))
-    {
-        return true;
-    }
-
-    if record.gateway.is_some()
-        && let Some(if_name) = if_name.as_deref()
-        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), true))
-    {
-        return true;
+    if matches!(record.kind, RouteKind::DnsCapture) {
+        if let Some(if_name) = if_name.as_deref()
+            && record.gateway.is_some()
+            && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), true))
+        {
+            return true;
+        }
+        if let Some(if_name) = if_name.as_deref()
+            && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), false))
+        {
+            return true;
+        }
     }
 
     if record.gateway.is_some()
@@ -690,8 +700,22 @@ fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
     {
         return true;
     }
+    if run_route_cleanup_command(macos_route_delete_command(record, None, false)) {
+        return true;
+    }
+    if let Some(if_name) = if_name.as_deref()
+        && record.gateway.is_some()
+        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), true))
+    {
+        return true;
+    }
+    if let Some(if_name) = if_name.as_deref()
+        && run_route_cleanup_command(macos_route_delete_command(record, Some(if_name), false))
+    {
+        return true;
+    }
 
-    run_route_cleanup_command(macos_route_delete_command(record, None, false))
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -702,7 +726,9 @@ fn macos_route_delete_command(
 ) -> Command {
     let mut command = Command::new("route");
     command.arg("-n").arg("delete");
-    if record.destination.is_ipv6() {
+    if record.destination.is_ipv4() {
+        command.arg("-inet");
+    } else {
         command.arg("-inet6");
     }
     command.arg(if route_record_is_host(record) {
@@ -713,7 +739,7 @@ fn macos_route_delete_command(
     if let Some(if_scope) = if_scope {
         command.arg("-ifscope").arg(if_scope);
     }
-    command.arg(route_destination_arg(record));
+    append_macos_route_destination_args(&mut command, record);
     if include_gateway
         && let Some(gateway) = record.gateway
         && !is_unspecified_gateway(gateway, record.destination)
@@ -744,11 +770,33 @@ fn route_record_is_host(record: &RouteRecord) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn route_destination_arg(record: &RouteRecord) -> String {
+fn append_macos_route_destination_args(command: &mut Command, record: &RouteRecord) {
     if route_record_is_host(record) {
-        record.destination.to_string()
-    } else {
-        format!("{}/{}", record.destination, record.prefix)
+        command.arg(record.destination.to_string());
+        return;
+    }
+
+    if record.prefix == 0 {
+        command.arg("default");
+        return;
+    }
+
+    command.arg(record.destination.to_string());
+    match record.destination {
+        IpAddr::V4(_) => {
+            command.arg("-netmask").arg(record_mask_arg(record));
+        }
+        IpAddr::V6(_) => {
+            command.arg("-prefixlen").arg(record.prefix.to_string());
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn record_mask_arg(record: &RouteRecord) -> String {
+    match record.to_route().mask() {
+        IpAddr::V4(mask) => mask.to_string(),
+        IpAddr::V6(mask) => mask.to_string(),
     }
 }
 
@@ -919,6 +967,10 @@ fn dns_capture_route_targets_default_gateway(
     default_v6_gateway: Option<IpAddr>,
 ) -> bool {
     Some(ip) == default_v4_gateway || Some(ip) == default_v6_gateway
+}
+
+fn should_install_dns_capture_host_routes() -> bool {
+    !cfg!(target_os = "macos")
 }
 
 #[cfg(windows)]
@@ -1148,12 +1200,11 @@ fn install_macos_scoped_default_bypass(
     default_v4_if: Option<u32>,
     default_v6_gw: Option<IpAddr>,
     default_v6_if: Option<u32>,
-    lease: &mut RouteLease,
 ) {
     if let (Some(gw), Some(if_idx)) = (default_v4_gw, default_v4_if)
         && let Some(if_name) = interface_name_for_index(Some(if_idx))
     {
-        install_one_macos_scoped_default(&if_name, gw, false, lease);
+        install_one_macos_scoped_default(&if_name, gw, false);
     } else {
         debug!("跳过 macOS IPv4 scoped default bypass：默认网关或接口缺失");
     }
@@ -1161,7 +1212,7 @@ fn install_macos_scoped_default_bypass(
     if let (Some(gw), Some(if_idx)) = (default_v6_gw, default_v6_if)
         && let Some(if_name) = interface_name_for_index(Some(if_idx))
     {
-        install_one_macos_scoped_default(&if_name, gw, true, lease);
+        install_one_macos_scoped_default(&if_name, gw, true);
     } else {
         debug!("跳过 macOS IPv6 scoped default bypass：默认网关或接口缺失");
     }
@@ -1172,7 +1223,6 @@ fn install_one_macos_scoped_default(
     if_name: &str,
     gateway: IpAddr,
     is_ipv6: bool,
-    lease: &mut RouteLease,
 ) {
     // 形如：route -n add -ifscope en0 -net default 192.168.31.1
     let mut cmd = Command::new("/sbin/route");
@@ -1184,22 +1234,9 @@ fn install_one_macos_scoped_default(
 
     match cmd.output() {
         Ok(out) if out.status.success() => {
-            info!("已安装 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
-            let destination = if is_ipv6 {
-                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
-            } else {
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-            };
-            let if_index = interface_index_for_name(if_name);
-            let record = RouteRecord {
-                kind: RouteKind::MacosScopedDefaultBypass,
-                destination,
-                prefix: 0,
-                gateway: Some(gateway),
-                if_name: Some(if_name.to_string()),
-                if_index,
-            };
-            lease.record_raw(record);
+            info!(
+                "已安装 macOS scoped default bypass：ifscope={if_name} gateway={gateway}；关闭 TUN 时保留该路由"
+            );
         }
         Ok(out) => {
             let msg = command_output_message(&out);
@@ -1522,6 +1559,12 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn macos_uses_pf_instead_of_dns_capture_host_routes() {
+        assert!(!should_install_dns_capture_host_routes());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn parses_macos_route_get_gateway_even_when_interface_is_unknown() {
         let output = r#"
    route to: 140.82.30.214
@@ -1534,6 +1577,79 @@ destination: 140.82.30.214
             parse_macos_route_get_next_hop(output),
             Some((Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))), None))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_delete_split_default_uses_netmask_not_cidr() {
+        let record = RouteRecord {
+            kind: RouteKind::Ipv4SplitDefault,
+            destination: IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)),
+            prefix: 1,
+            gateway: None,
+            if_name: Some("utun8".to_string()),
+            if_index: Some(19),
+        };
+
+        let command = macos_route_delete_command(&record, None, false);
+        let args = command_args(&command);
+
+        assert_eq!(
+            args,
+            vec![
+                "-n",
+                "delete",
+                "-inet",
+                "-net",
+                "128.0.0.0",
+                "-netmask",
+                "128.0.0.0"
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_delete_dns_capture_route_can_scope_to_utun() {
+        let record = RouteRecord {
+            kind: RouteKind::DnsCapture,
+            destination: IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1)),
+            prefix: 32,
+            gateway: None,
+            if_name: Some("utun8".to_string()),
+            if_index: Some(19),
+        };
+
+        let command = macos_route_delete_command(&record, Some("utun8"), false);
+        let args = command_args(&command);
+
+        assert_eq!(
+            args,
+            vec![
+                "-n",
+                "delete",
+                "-inet",
+                "-host",
+                "-ifscope",
+                "utun8",
+                "192.168.31.1"
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keeps_scoped_default_bypass_records() {
+        let record = RouteRecord {
+            kind: RouteKind::MacosScopedDefaultBypass,
+            destination: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            prefix: 0,
+            gateway: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))),
+            if_name: Some("en0".to_string()),
+            if_index: Some(11),
+        };
+
+        assert!(!should_delete_recorded_route(&record));
     }
 
     #[cfg(target_os = "macos")]
@@ -1573,5 +1689,13 @@ destination: 140.82.30.214
 
         assert!(rules.contains("pass out quick on en1"));
         assert!(!rules.contains("pass out quick on en0"));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
     }
 }
