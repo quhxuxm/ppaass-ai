@@ -44,7 +44,7 @@ jobs:
 
       - name: Start agent
         run: |
-          cargo run --package desktop-agent --bin desktop-agent -- --config config/local/agent.toml &
+          cargo run --package desktop-agent-be --bin desktop-agent -- --config config/local/agent.toml &
           npx wait-on tcp:7070 -t 60000
 
       - name: Integration Tests

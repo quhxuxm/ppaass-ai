@@ -6,21 +6,21 @@ build-all:
 
 ## Build Individual Components
 build-agent:
-	cargo build --release -p desktop-agent
+	cargo build --release -p desktop-agent-be
 
 build-proxy:
 	cargo build --release -p proxy
 
 ## Run Components
 run-agent:
-	cargo run --release -p desktop-agent -- --config config/agent.toml
+	cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
 run-proxy:
 	cargo run --release -p proxy -- --config config/proxy.toml
 
 ## Development
 dev-agent:
-	RUST_LOG=debug cargo run -p desktop-agent -- --config config/agent.toml
+	RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
 dev-proxy:
 	RUST_LOG=debug cargo run -p proxy -- --config config/proxy.toml

@@ -36,7 +36,7 @@ The application consists of four main components:
 cargo build --release
 
 # Build specific component
-cargo build --release -p desktop-agent
+cargo build --release -p desktop-agent-be
 cargo build --release -p proxy
 ```
 
@@ -63,7 +63,7 @@ cargo run --release -p proxy -- --config config/proxy.toml
 5. Start the agent:
 
 ```bash
-cargo run --release -p desktop-agent -- --config config/agent.toml
+cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 ```
 
 6. Configure your applications to use the proxy at `127.0.0.1:1080`
@@ -133,7 +133,7 @@ Set log level via environment variable:
 
 ```bash
 RUST_LOG=info cargo run -p proxy
-RUST_LOG=debug cargo run -p desktop-agent
+RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent
 ```
 
 ## Development
@@ -142,7 +142,8 @@ RUST_LOG=debug cargo run -p desktop-agent
 
 ```
 ppaass-ai/
-├── desktop-agent/  # Client-side desktop agent
+├── desktop-agent-be/  # Client-side desktop agent backend
+├── desktop-agent-ui/       # Desktop agent UI
 ├── proxy/          # Server-side proxy
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities

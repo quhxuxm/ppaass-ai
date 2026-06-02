@@ -1,0 +1,57 @@
+[package]
+name = "desktop-agent-be"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "desktop-agent"
+path = "src/main.rs"
+
+[features]
+default = []
+zstd-compression = ["protocol/zstd-compression"]
+mimalloc-allocator = ["dep:mimalloc"]
+
+[dependencies]
+protocol = { path = "../protocol" }
+common = { path = "../common" }
+
+tokio.workspace = true
+tokio-yamux.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+config.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+fast-socks5.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+deadpool.workspace = true
+toml.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+mimalloc = { workspace = true, optional = true }
+rand.workspace = true
+pretty-hex.workspace = true
+tun-rs.workspace = true
+netstack-smoltcp.workspace = true
+route_manager.workspace = true
+if-addrs.workspace = true
+socket2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nix.workspace = true
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

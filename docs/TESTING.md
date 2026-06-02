@@ -63,7 +63,7 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p desktop-agent -- --config config/agent.toml
+cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 ```
 
 **Expected Output:**
@@ -301,7 +301,7 @@ jobs:
         run: cargo run --release -p proxy -- --config config/proxy.toml &
         
       - name: Start agent
-        run: cargo run --release -p desktop-agent -- --config config/agent.toml &
+        run: cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml &
         
       - name: Run integration tests
         run: ./run-tests.sh integration

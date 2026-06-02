@@ -1,0 +1,194 @@
+<script setup lang="ts">
+import Button from "primevue/button";
+import Card from "primevue/card";
+import InputNumber from "primevue/inputnumber";
+import InputText from "primevue/inputtext";
+import Select from "primevue/select";
+import SelectButton from "primevue/selectbutton";
+import Tag from "primevue/tag";
+import { directModeOptions, directRulePresets, logLevelOptions } from "../constants";
+import type { AgentConfigSummary, DirectRuleGroup } from "../types";
+
+defineProps<{
+  summary: AgentConfigSummary;
+  configLocked: boolean;
+  directModeLabel: string;
+  activeForwardingLabel: string;
+  tunModeLabel: string;
+  directRuleGroups: DirectRuleGroup[];
+  ruleDraft: string;
+}>();
+
+const emit = defineEmits<{
+  "set-field": [field: keyof AgentConfigSummary, value: unknown];
+  "update:ruleDraft": [value: string];
+  "add-direct-rules": [rules: string[]];
+  "add-draft-rules": [];
+  "remove-direct-rule": [index: number];
+}>();
+</script>
+
+<template>
+  <div class="content-grid">
+    <section class="card-group span-12">
+      <div class="card-group-heading">
+        <div>
+          <h2>系统运行参数</h2>
+          <p>{{ summary.log_level }} · {{ summary.effective_runtime_threads }} 线程</p>
+        </div>
+        <Tag value="全局" severity="secondary" />
+      </div>
+      <div class="content-grid">
+        <Card class="panel span-12">
+          <template #title><h2>运行参数</h2></template>
+          <template #content>
+            <div class="field-pair">
+              <label class="field">
+                <span><i class="pi pi-chart-line"></i>日志</span>
+                <Select :model-value="summary.log_level" :options="logLevelOptions" :disabled="configLocked" @update:model-value="emit('set-field', 'log_level', $event)" />
+              </label>
+              <label class="field">
+                <span><i class="pi pi-microchip"></i>线程</span>
+                <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
+              </label>
+            </div>
+          </template>
+        </Card>
+      </div>
+    </section>
+
+    <section class="card-group span-12">
+      <div class="card-group-heading">
+        <div>
+          <h2>流量策略</h2>
+          <p>direct_access</p>
+        </div>
+        <Tag :value="directModeLabel" severity="info" />
+      </div>
+      <div class="content-grid">
+        <Card class="panel span-12">
+          <template #title>
+            <div class="panel-heading inline">
+              <h2>共享直连策略</h2>
+              <Tag :value="directModeLabel" severity="info" />
+            </div>
+          </template>
+          <template #content>
+            <div class="policy-grid">
+              <label class="field direct-mode-field">
+                <span><i class="pi pi-directions"></i>模式</span>
+                <SelectButton
+                  :model-value="summary.direct_mode"
+                  :options="directModeOptions"
+                  option-label="label"
+                  option-value="value"
+                  :allow-empty="false"
+                  :disabled="configLocked"
+                  @update:model-value="emit('set-field', 'direct_mode', $event)"
+                />
+              </label>
+              <div class="policy-facts">
+                <div class="policy-fact"><span>当前转发</span><strong>{{ activeForwardingLabel }}</strong></div>
+                <div class="policy-fact"><span>规则数量</span><strong>{{ summary.direct_rules.length }} 条</strong></div>
+                <div class="policy-fact"><span>配置段</span><strong>direct_access</strong></div>
+              </div>
+            </div>
+            <div class="forwarding-methods">
+              <div class="forwarding-method">
+                <i class="pi pi-server"></i>
+                <div>
+                  <span>HTTP / SOCKS5 代理</span>
+                  <strong>{{ summary.listen_addr }}</strong>
+                </div>
+              </div>
+              <div class="forwarding-method">
+                <i class="pi pi-compass"></i>
+                <div>
+                  <span>TUN 模式</span>
+                  <strong>{{ tunModeLabel }} · {{ summary.tun_name }}</strong>
+                </div>
+              </div>
+            </div>
+          </template>
+        </Card>
+
+        <Card class="panel span-5">
+          <template #title><h2>快捷预设</h2></template>
+          <template #content>
+            <div class="preset-list">
+              <Button
+                v-for="preset in directRulePresets"
+                :key="preset.label"
+                :icon="preset.icon"
+                :label="preset.label"
+                severity="secondary"
+                outlined
+                :disabled="configLocked"
+                @click="emit('add-direct-rules', preset.rules)"
+              />
+            </div>
+          </template>
+        </Card>
+
+        <Card class="panel span-7">
+          <template #title>
+            <div class="panel-heading inline">
+              <h2>规则管理</h2>
+              <Tag :value="`${summary.direct_rules.length} 条`" severity="info" />
+            </div>
+          </template>
+          <template #content>
+            <div class="rule-manager">
+              <section class="rule-create">
+                <div class="section-heading">
+                  <span>添加规则</span>
+                  <strong>{{ directModeLabel }}</strong>
+                </div>
+                <div class="rule-compose">
+                  <label class="field rule-input-field">
+                    <span><i class="pi pi-plus-circle"></i>规则值</span>
+                    <InputText
+                      :model-value="ruleDraft"
+                      placeholder="域名 / 通配符 / CIDR"
+                      :disabled="configLocked"
+                      @keydown.enter.prevent="emit('add-draft-rules')"
+                      @update:model-value="emit('update:ruleDraft', String($event))"
+                    />
+                  </label>
+                  <Button icon="pi pi-plus" label="添加" severity="primary" :disabled="configLocked" @click="emit('add-draft-rules')" />
+                </div>
+              </section>
+
+              <section class="rule-inventory">
+                <div class="section-heading">
+                  <span>当前规则</span>
+                  <strong>{{ directRuleGroups.length }} 组</strong>
+                </div>
+                <div v-if="!summary.direct_rules.length" class="empty-rules">未配置</div>
+                <div v-else class="rule-group-list">
+                  <section v-for="group in directRuleGroups" :key="group.key" class="rule-group">
+                    <div class="rule-group-heading">
+                      <div>
+                        <i :class="group.icon"></i>
+                        <span>{{ group.label }}</span>
+                      </div>
+                      <strong>{{ group.items.length }}</strong>
+                    </div>
+                    <div class="rule-chip-list grouped">
+                      <div v-for="item in group.items" :key="`${group.key}-${item.rule}-${item.index}`" class="rule-chip">
+                        <span :title="item.rule">{{ item.rule }}</span>
+                        <button type="button" class="rule-chip-remove" aria-label="删除" :disabled="configLocked" @click="emit('remove-direct-rule', item.index)">
+                          <span class="rule-chip-remove-mark" aria-hidden="true"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </section>
+            </div>
+          </template>
+        </Card>
+      </div>
+    </section>
+  </div>
+</template>

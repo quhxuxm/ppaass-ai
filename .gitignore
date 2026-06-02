@@ -9,7 +9,9 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
-/agent-ui/node_modules
+/desktop-agent-ui/node_modules
+/desktop-agent-ui/dist
+/desktop-agent-ui/src-tauri/target
 /android-agent/.gradle
 /android-agent/build
 /android-agent/app/build

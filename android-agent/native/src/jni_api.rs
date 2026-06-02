@@ -1,6 +1,6 @@
 use jni::objects::{JClass, JObject, JString};
 use jni::strings::JNIString;
-use jni::sys::{jboolean, jint, jlong};
+use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{Env, EnvUnowned};
 use tokio_util::sync::CancellationToken;
 
@@ -146,6 +146,18 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_vpnUploadBytes<'loca
     _class: JClass<'local>,
 ) -> jlong {
     traffic_stats::upload_bytes().min(jlong::MAX as u64) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_dnsResolutionRecordsJson<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        let json = traffic_stats::dns_resolution_records_json();
+        Ok(env.new_string(json)?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
 fn throw(env: &mut Env<'_>, message: String) {

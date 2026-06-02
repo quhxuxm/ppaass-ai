@@ -10,7 +10,8 @@ All components have been generated and compiled successfully!
 
 ```
 ppaass-ai/
-├── desktop-agent/      # Client-side desktop proxy agent
+├── desktop-agent-be/           # Client-side desktop proxy agent backend
+├── desktop-agent-ui/           # Desktop agent UI
 │   ├── src/
 │   │   ├── main.rs           # Entry point
 │   │   ├── config.rs         # Configuration management
@@ -192,7 +193,7 @@ curl -x http://127.0.0.1:1080 http://example.com
 ## 📊 Project Statistics
 
 - **Total Lines of Code**: ~2,500+ lines
-- **Crates**: 4 (desktop-agent, proxy, protocol, common)
+- **Crates**: 4 core Rust crates (desktop-agent-be, proxy, protocol, common)
 - **Source Files**: 20+ Rust files
 - **Dependencies**: 25+ external crates
 - **Configuration Files**: 3 TOML files

@@ -61,7 +61,7 @@ The user management in proxy side should use the proxy users TOML configuration 
 - Important logic:
   - The configuration file format should be `TOML`.
   - The pooled connections from agent to proxy do not need to be reusable, but the pool should prewarm number of connections to improve performance.
-  - The whole project should be organized as a cargo workspace with two members: `desktop-agent` and `proxy`.
+  - The project should keep the desktop agent backend in `desktop-agent-be` and the server proxy in `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.
   - The codec should use `LengthDelimitedCodec` from `tokio-util` as the base codec.

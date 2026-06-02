@@ -51,6 +51,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
     private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
@@ -104,6 +108,7 @@ public class MainActivity extends Activity {
     private TextView uploadSpeed;
     private TextView trafficDownload;
     private TextView trafficUpload;
+    private LinearLayout dnsRecordList;
     private SpeedGaugeView speedGauge;
     private TrafficBarView trafficChart;
     private final long[] hourlyDownloadBytes = new long[24];
@@ -112,6 +117,7 @@ public class MainActivity extends Activity {
     private long lastRxBytes = -1;
     private long lastTxBytes = -1;
     private long lastTrafficSampleMs;
+    private String lastDnsRecordsStateKey = "";
     private final List<View> editableControls = new ArrayList<>();
     private final List<Button> screenTabButtons = new ArrayList<>();
     private final List<View> screenPages = new ArrayList<>();
@@ -356,6 +362,28 @@ public class MainActivity extends Activity {
         trafficDownload = statusTile(trafficRow, "Download", "0 B");
         trafficUpload = statusTile(trafficRow, "Upload", "0 B");
         dailyPanel.addView(trafficRow, matchWrap());
+
+        LinearLayout dnsPanel = panel(root);
+        sectionTitle(dnsPanel, "Agent DNS records");
+        TextView dnsSubtitle = mutedText("Last 80 DNS resolutions handled by Agent", 13f);
+        LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
+        dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
+        dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
+
+        ScrollView dnsScroll = new ScrollView(this);
+        dnsScroll.setVerticalScrollBarEnabled(true);
+        dnsScroll.setClipToPadding(false);
+        dnsScroll.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            dnsScroll.setNestedScrollingEnabled(true);
+        }
+        dnsRecordList = new LinearLayout(this);
+        dnsRecordList.setOrientation(LinearLayout.VERTICAL);
+        dnsRecordList.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dnsScroll.addView(dnsRecordList, matchWrap());
+        LinearLayout.LayoutParams dnsScrollParams = matchWrap();
+        dnsScrollParams.height = dp(300);
+        dnsPanel.addView(dnsScroll, dnsScrollParams);
     }
 
     private void buildConfigScreen(LinearLayout root) {
@@ -690,6 +718,7 @@ public class MainActivity extends Activity {
                     hourlyUploadBytes,
                     Calendar.getInstance().get(Calendar.HOUR_OF_DAY));
         }
+        updateDnsRecords();
     }
 
     private long currentVpnDownloadBytes() {
@@ -698,6 +727,137 @@ public class MainActivity extends Activity {
 
     private long currentVpnUploadBytes() {
         return Math.max(0, NativeAgent.vpnUploadBytes());
+    }
+
+    private void updateDnsRecords() {
+        if (dnsRecordList == null) {
+            return;
+        }
+
+        boolean running = isVpnRunning();
+        JSONArray records;
+        String recordsJson;
+        try {
+            recordsJson = NativeAgent.dnsResolutionRecordsJson();
+            String stateKey = running + ":" + recordsJson;
+            if (stateKey.equals(lastDnsRecordsStateKey)) {
+                return;
+            }
+            lastDnsRecordsStateKey = stateKey;
+            records = new JSONArray(recordsJson);
+        } catch (JSONException | RuntimeException e) {
+            dnsRecordList.removeAllViews();
+            addDnsEmptyRow("DNS records unavailable");
+            return;
+        }
+
+        dnsRecordList.removeAllViews();
+        if (records.length() == 0) {
+            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
+            return;
+        }
+
+        boolean hasAgentRecords = false;
+        for (int index = records.length() - 1; index >= 0; index--) {
+            JSONObject record = records.optJSONObject(index);
+            if (record != null && isAgentDnsRecord(record)) {
+                addDnsRecordRow(record);
+                hasAgentRecords = true;
+            }
+        }
+        if (!hasAgentRecords) {
+            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
+        }
+    }
+
+    private boolean isAgentDnsRecord(JSONObject record) {
+        return "agent".equals(record.optString("resolver", ""));
+    }
+
+    private void addDnsEmptyRow(String text) {
+        TextView empty = mutedText(text, 14f);
+        empty.setGravity(Gravity.CENTER);
+        empty.setTypeface(Typeface.DEFAULT_BOLD);
+        empty.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        dnsRecordList.addView(empty, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(72)));
+    }
+
+    private void addDnsRecordRow(JSONObject record) {
+        LinearLayout row = horizontalRow();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(9), dp(10), dp(9));
+        row.setMinimumHeight(dp(58));
+        row.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+        TextView query = titleText(record.optString("query", "<unknown>"), 14f);
+        query.setSingleLine(true);
+        query.setEllipsize(TextUtils.TruncateAt.END);
+        textColumn.addView(query, matchWrap());
+
+        TextView answer = mutedText(dnsAnswerLabel(record), 12f);
+        answer.setSingleLine(true);
+        answer.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams answerParams = matchWrap();
+        answerParams.setMargins(0, dp(3), 0, 0);
+        textColumn.addView(answer, answerParams);
+        row.addView(textColumn, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.VERTICAL);
+        meta.setGravity(Gravity.END);
+        TextView type = chip(record.optString("record_type", "DNS"), COLOR_ACCENT);
+        LinearLayout.LayoutParams typeParams = matchWrap();
+        typeParams.gravity = Gravity.END;
+        meta.addView(type, typeParams);
+
+        String statusText = record.optString("status", "UNKNOWN") + " · "
+                + Math.max(1, record.optLong("duration_ms", 0)) + " ms";
+        TextView status = mutedText(statusText, 11f);
+        status.setTextColor("NOERROR".equals(record.optString("status", ""))
+                ? COLOR_STATUS_RUNNING
+                : COLOR_ACTION_STOP);
+        status.setTypeface(Typeface.DEFAULT_BOLD);
+        status.setSingleLine(true);
+        LinearLayout.LayoutParams statusParams = matchWrap();
+        statusParams.setMargins(0, dp(4), 0, 0);
+        meta.addView(status, statusParams);
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        metaParams.setMargins(dp(10), 0, 0, 0);
+        row.addView(meta, metaParams);
+
+        LinearLayout.LayoutParams rowParams = matchWrap();
+        if (dnsRecordList.getChildCount() > 0) {
+            rowParams.setMargins(0, dp(8), 0, 0);
+        }
+        dnsRecordList.addView(row, rowParams);
+    }
+
+    private String dnsAnswerLabel(JSONObject record) {
+        JSONArray answers = record.optJSONArray("answers");
+        if (answers != null && answers.length() > 0) {
+            List<String> values = new ArrayList<>();
+            for (int i = 0; i < Math.min(3, answers.length()); i++) {
+                values.add(answers.optString(i));
+            }
+            return TextUtils.join(", ", values);
+        }
+        String status = record.optString("status", "");
+        if ("NOERROR".equals(status)) {
+            return "No answer records";
+        }
+        if ("TIMEOUT".equals(status)) {
+            return "Query timeout";
+        }
+        return record.optString("upstream", "Agent DNS");
     }
 
     private boolean ensureTrafficDay(long rxBytes, long txBytes) {

@@ -1,0 +1,26 @@
+{
+  "name": "desktop-agent-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 1420",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@primeuix/themes": "^2.0.3",
+    "@tauri-apps/api": "2.11.0",
+    "lucide": "^0.468.0",
+    "primeicons": "^7.0.0",
+    "primevue": "^4.5.5",
+    "vue": "^3.5.35"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.2",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

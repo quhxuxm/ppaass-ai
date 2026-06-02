@@ -18,10 +18,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Build desktop agent
-Write-Host "`nBuilding desktop-agent..." -ForegroundColor Cyan
-cargo build --release -p desktop-agent
+Write-Host "`nBuilding desktop-agent-be..." -ForegroundColor Cyan
+cargo build --release -p desktop-agent-be
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to build desktop-agent" -ForegroundColor Red
+    Write-Host "Failed to build desktop-agent-be" -ForegroundColor Red
     exit 1
 }
 

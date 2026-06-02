@@ -1,0 +1,253 @@
+use super::*;
+
+pub(super) async fn handle_tcp_connect(
+    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    target_addr: TargetAddr,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
+    let target_label = format_target_addr(&target_addr);
+
+    // 将目标地址转换为协议 Address
+    let address = convert_target_addr(&target_addr);
+
+    if direct_checker.is_direct(&address) {
+        // === 直连路径 ===
+        let target_str = address_to_string(&address);
+        info!("SOCKS5 CONNECT 使用直连连接到 {}", target_str);
+
+        match TcpStream::connect(&target_str).await {
+            Ok(mut target_stream) => {
+                // SOCKS5 要先回复成功，客户端才会开始发送 TCP payload。
+                let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+                let mut client_stream = protocol
+                    .reply_success(bind_addr)
+                    .await
+                    .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+                info!("SOCKS5 直连隧道已建立，开始数据中继");
+
+                match tokio::io::copy_bidirectional_with_sizes(
+                    &mut client_stream,
+                    &mut target_stream,
+                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                )
+                .await
+                {
+                    Ok((client_to_target, target_to_client)) => {
+                        info!(
+                            "直连 SOCKS5 中继完成: {} 字节发出, {} 字节接收",
+                            client_to_target, target_to_client
+                        );
+                        telemetry::emit_traffic(
+                            "SOCKS5 CONNECT (direct)",
+                            target_label,
+                            client_to_target,
+                            target_to_client,
+                        );
+                    }
+                    Err(e) => {
+                        debug!("直连 SOCKS5 中继结束: {}", e);
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                error!("直连到 {} 失败: {}", target_str, e);
+                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
+                Err(AgentError::Connection(format!("直连失败: {}", e)))
+            }
+        }
+    } else {
+        // === 代理路径 ===
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
+        {
+            Ok(stream) => {
+                info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                stream
+            }
+            Err(e) => {
+                error!("从连接池获取流失败: {}", e);
+                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
+                return Err(e);
+            }
+        };
+
+        // 发送成功回复，使用虚拟绑定地址
+        // 代理路径中真实出口在 proxy 端，agent 本地只返回占位绑定地址。
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut client_stream = protocol
+            .reply_success(bind_addr)
+            .await
+            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+        info!("SOCKS5 隧道已建立，开始数据中继");
+
+        // 启动双向数据中继
+        relay_data(
+            &mut client_stream,
+            connected_stream,
+            "SOCKS5 CONNECT",
+            target_label,
+        )
+        .await
+    }
+}
+
+pub(super) async fn handle_tcp_bind(
+    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    target_addr: TargetAddr,
+    pool: Arc<ConnectionPool>,
+    direct_checker: Arc<DirectAccessChecker>,
+) -> Result<()> {
+    info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
+    let target_label = format_target_addr(&target_addr);
+
+    // 将目标地址转换为协议 Address
+    let address = convert_target_addr(&target_addr);
+
+    // 在随机端口上绑定 TCP 套接字以接受传入连接
+    let listener = TcpListener::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| AgentError::Socks5(format!("绑定 TCP 套接字失败: {}", e)))?;
+
+    let bind_addr = listener
+        .local_addr()
+        .map_err(|e| AgentError::Socks5(format!("获取本地地址失败: {}", e)))?;
+
+    info!("SOCKS5 BIND 监听在 {}", bind_addr);
+
+    // 发送第一个成功回复，包含绑定地址
+    let _tcp_stream = protocol
+        .reply_success(bind_addr)
+        .await
+        .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
+
+    // 等待绑定地址上的传入连接
+    // BIND 不应无限等待远端连接，超时后释放监听端口。
+    match tokio::time::timeout(std::time::Duration::from_secs(30), listener.accept()).await {
+        Ok(Ok((mut incoming_stream, peer_addr))) => {
+            info!(
+                "SOCKS5 BIND: 接受来自 {} 的连接，目标 {:?}",
+                peer_addr, address
+            );
+
+            if direct_checker.is_direct(&address) {
+                // === 直连路径 ===
+                let target_str = address_to_string(&address);
+                info!("SOCKS5 BIND 使用直连连接到 {}", target_str);
+
+                match TcpStream::connect(&target_str).await {
+                    Ok(mut target_stream) => {
+                        info!("SOCKS5 BIND 直连隧道已建立，开始数据中继");
+                        match tokio::io::copy_bidirectional_with_sizes(
+                            &mut incoming_stream,
+                            &mut target_stream,
+                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                        )
+                        .await
+                        {
+                            Ok((c2t, t2c)) => {
+                                info!(
+                                    "直连 SOCKS5 BIND 中继完成: {} 字节发出, {} 字节接收",
+                                    c2t, t2c
+                                );
+                                telemetry::emit_traffic(
+                                    "SOCKS5 BIND (direct)",
+                                    target_label,
+                                    c2t,
+                                    t2c,
+                                );
+                            }
+                            Err(e) => {
+                                debug!("直连 SOCKS5 BIND 中继结束: {}", e);
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        error!("直连到目标失败: {}", e);
+                        Err(AgentError::Connection(format!("直连失败: {}", e)))
+                    }
+                }
+            } else {
+                // === 代理路径 ===
+                let connected_stream = match pool
+                    .as_ref()
+                    .get_connected_stream(address, TransportProtocol::Tcp)
+                    .await
+                {
+                    Ok(stream) => {
+                        info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                        stream
+                    }
+                    Err(e) => {
+                        error!("从连接池获取流失败: {}", e);
+                        return Err(e);
+                    }
+                };
+
+                info!("SOCKS5 BIND 隧道已建立，开始数据中继");
+
+                relay_data(
+                    &mut incoming_stream,
+                    connected_stream,
+                    "SOCKS5 BIND",
+                    target_label,
+                )
+                .await
+            }
+        }
+        Ok(Err(e)) => {
+            error!("接受传入连接失败: {}", e);
+            Err(AgentError::Socks5(format!("接受连接失败: {}", e)))
+        }
+        Err(_) => {
+            error!("SOCKS5 BIND: 等待传入连接超时");
+            Err(AgentError::Socks5("等待传入连接超时".to_string()))
+        }
+    }
+}
+
+async fn relay_data(
+    client_stream: &mut TcpStream,
+    connected_stream: ConnectedStream,
+    protocol: &str,
+    target: String,
+) -> Result<()> {
+    // 转换为 AsyncRead + AsyncWrite 兼容类型
+    let mut proxy_io = connected_stream.into_async_io();
+
+    // 使用 tokio 优化的双向拷贝
+    // 比手动 select 循环更高效：
+    // 1. 尽可能使用零拷贝
+    // 2. 优化的缓冲区
+    // 3. 正确处理背压
+    match tokio::io::copy_bidirectional_with_sizes(
+        client_stream,
+        &mut proxy_io,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+    )
+    .await
+    {
+        Ok((client_to_proxy, proxy_to_client)) => {
+            info!(
+                "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端",
+                client_to_proxy, proxy_to_client
+            );
+            telemetry::emit_traffic(protocol, target, client_to_proxy, proxy_to_client);
+        }
+        Err(e) => {
+            // 客户端关闭连接时出现的连接错误是预期的
+            debug!("SOCKS5 中继结束: {}", e);
+        }
+    }
+
+    Ok(())
+}

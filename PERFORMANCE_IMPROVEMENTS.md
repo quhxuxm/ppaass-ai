@@ -60,8 +60,8 @@ This document outlines the performance optimizations applied to fix critical per
 **Files Modified**:
 - [tests/src/performance_tests.rs](tests/src/performance_tests.rs)
 - [tests/src/mock_client.rs](tests/src/mock_client.rs)
-- [desktop-agent/src/http_handler.rs](desktop-agent/src/http_handler.rs)
-- [desktop-agent/src/connection_pool.rs](desktop-agent/src/connection_pool.rs)
+- [desktop-agent-be/src/http_handler.rs](desktop-agent-be/src/http_handler.rs)
+- [desktop-agent-be/src/connection_pool.rs](desktop-agent-be/src/connection_pool.rs)
 - [proxy/src/connection.rs](proxy/src/connection.rs)
 
 ### 4. **Added Request Rate Limiting** ✅
@@ -140,9 +140,9 @@ This document outlines the performance optimizations applied to fix critical per
   - Better integration with tokio runtime
 
 **Files Modified**:
-- [desktop-agent/src/connection_pool.rs](desktop-agent/src/connection_pool.rs) - Added `ProxyStreamIo` wrapper
-- [desktop-agent/src/http_handler.rs](desktop-agent/src/http_handler.rs) - Updated `tunnel()` to use `copy_bidirectional`
-- [desktop-agent/src/socks5_handler.rs](desktop-agent/src/socks5_handler.rs) - Updated `relay_data()` to use `copy_bidirectional`
+- [desktop-agent-be/src/connection_pool.rs](desktop-agent-be/src/connection_pool.rs) - Added `ProxyStreamIo` wrapper
+- [desktop-agent-be/src/http_handler.rs](desktop-agent-be/src/http_handler.rs) - Updated `tunnel()` to use `copy_bidirectional`
+- [desktop-agent-be/src/socks5_handler.rs](desktop-agent-be/src/socks5_handler.rs) - Updated `relay_data()` to use `copy_bidirectional`
 
 **Expected Impact**: 20-50% improvement in throughput for tunnel connections
 
