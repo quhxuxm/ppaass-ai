@@ -119,7 +119,9 @@ connection_timeout_secs = 30
 
 #### TUN helper startup behavior
 
-Desktop TUN mode needs permission to create the TUN device and change routes/DNS.
+Desktop TUN mode needs permission to create the TUN device, install routes, and
+on macOS install temporary PF rules that capture DNS traffic without changing
+the system DNS servers.
 On macOS, `start-agent.sh` and `start-agent.command` install the existing `desktop-agent` binary as a privileged helper-mode service when `[tun] enabled = true` and `macos_helper_enabled = true`. Later TUN starts use the helper socket instead of prompting for sudo every time. No separate helper binary is built or installed. To remove the installed service:
 
 ```bash

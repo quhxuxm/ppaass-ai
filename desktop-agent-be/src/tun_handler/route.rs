@@ -230,8 +230,12 @@ impl RouteGuard {
             );
             #[cfg(target_os = "macos")]
             {
-                pf_dns_guard =
-                    MacosPfDnsGuard::install(tun_if_index, _dns_capture_target, &dns_servers);
+                pf_dns_guard = MacosPfDnsGuard::install(
+                    tun_if_index,
+                    _dns_capture_target,
+                    &dns_servers,
+                    &macos_default_dns_interfaces(default_v4_if, default_v6_if),
+                );
             }
             flush_system_dns_cache();
         }
@@ -938,9 +942,15 @@ impl MacosPfDnsGuard {
         tun_if_index: u32,
         dns_capture_target: Ipv4Addr,
         dns_servers: &[SystemDnsServer],
+        default_interfaces: &[String],
     ) -> Option<Self> {
         let tun_if_name = interface_name_for_index(Some(tun_if_index))?;
-        let rules = macos_pf_dns_rules(&tun_if_name, dns_capture_target, dns_servers);
+        let rules = macos_pf_dns_rules(
+            &tun_if_name,
+            dns_capture_target,
+            dns_servers,
+            default_interfaces,
+        );
         if rules.trim().is_empty() {
             debug!("macOS TUN proxy_dns 未发现需要 PF 捕获的 scoped DNS");
             return None;
@@ -1007,23 +1017,67 @@ fn macos_pf_dns_rules(
     tun_if_name: &str,
     dns_capture_target: Ipv4Addr,
     dns_servers: &[SystemDnsServer],
+    default_interfaces: &[String],
 ) -> String {
     let mut rules = String::new();
     for server in dns_servers {
         let IpAddr::V4(dns_ip) = server.ip else {
             continue;
         };
-        let Some(interface_name) = server.interface_name.as_deref() else {
-            continue;
-        };
-        if interface_name == tun_if_name {
-            continue;
+        for interface_name in macos_dns_capture_interfaces(server, tun_if_name, default_interfaces)
+        {
+            rules.push_str(&format!(
+                "pass out quick on {interface_name} route-to ({tun_if_name} {dns_capture_target}) inet proto {{ udp tcp }} from any to {dns_ip} port = 53 keep state\n"
+            ));
         }
-        rules.push_str(&format!(
-            "pass out quick on {interface_name} route-to ({tun_if_name} {dns_capture_target}) inet proto {{ udp tcp }} from any to {dns_ip} port = 53 keep state\n"
-        ));
     }
     rules
+}
+
+#[cfg(target_os = "macos")]
+fn macos_dns_capture_interfaces(
+    server: &SystemDnsServer,
+    tun_if_name: &str,
+    default_interfaces: &[String],
+) -> Vec<String> {
+    let mut interfaces = Vec::new();
+    if let Some(interface_name) = server.interface_name.as_deref() {
+        push_macos_dns_capture_interface(&mut interfaces, interface_name, tun_if_name);
+    } else {
+        for interface_name in default_interfaces {
+            push_macos_dns_capture_interface(&mut interfaces, interface_name, tun_if_name);
+        }
+    }
+    interfaces
+}
+
+#[cfg(target_os = "macos")]
+fn push_macos_dns_capture_interface(
+    interfaces: &mut Vec<String>,
+    interface_name: &str,
+    tun_if_name: &str,
+) {
+    if interface_name == tun_if_name || interfaces.iter().any(|name| name == interface_name) {
+        return;
+    }
+    interfaces.push(interface_name.to_string());
+}
+
+#[cfg(target_os = "macos")]
+fn macos_default_dns_interfaces(
+    default_v4_if: Option<u32>,
+    default_v6_if: Option<u32>,
+) -> Vec<String> {
+    let mut interfaces = Vec::new();
+    for if_index in [default_v4_if, default_v6_if].into_iter().flatten() {
+        let Some(interface_name) = interface_name_for_index(Some(if_index)) else {
+            continue;
+        };
+        if !interfaces.iter().any(|name| name == &interface_name) {
+            interfaces.push(interface_name);
+        }
+    }
+    interfaces
 }
 
 #[cfg(target_os = "macos")]
@@ -1151,9 +1205,7 @@ fn install_one_macos_scoped_default(
             let msg = command_output_message(&out);
             // 已存在同样的 ifscope 默认路由属于幂等成功；仅记录调试日志。
             if msg.contains("File exists") || msg.contains("already in table") {
-                debug!(
-                    "macOS scoped default bypass 已存在：ifscope={if_name} gateway={gateway}"
-                );
+                debug!("macOS scoped default bypass 已存在：ifscope={if_name} gateway={gateway}");
             } else {
                 warn!(
                     "安装 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{msg}"
@@ -1482,5 +1534,44 @@ destination: 140.82.30.214
             parse_macos_route_get_next_hop(output),
             Some((Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))), None))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_pf_dns_rules_use_default_interface_when_scutil_omits_scope() {
+        let dns_servers = vec![SystemDnsServer {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1)),
+            interface_name: None,
+        }];
+
+        let rules = macos_pf_dns_rules(
+            "utun9",
+            Ipv4Addr::new(10, 10, 10, 2),
+            &dns_servers,
+            &["en0".to_string()],
+        );
+
+        assert!(rules.contains("pass out quick on en0"));
+        assert!(rules.contains("route-to (utun9 10.10.10.2)"));
+        assert!(rules.contains("to 192.168.31.1 port = 53"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_pf_dns_rules_prefer_scutil_scope_over_default_interface() {
+        let dns_servers = vec![SystemDnsServer {
+            ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            interface_name: Some("en1".to_string()),
+        }];
+
+        let rules = macos_pf_dns_rules(
+            "utun9",
+            Ipv4Addr::new(10, 10, 10, 2),
+            &dns_servers,
+            &["en0".to_string()],
+        );
+
+        assert!(rules.contains("pass out quick on en1"));
+        assert!(!rules.contains("pass out quick on en0"));
     }
 }
