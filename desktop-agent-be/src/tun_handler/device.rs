@@ -38,17 +38,23 @@ pub(super) fn tun_ipv4_peer(
 }
 
 #[cfg(target_os = "macos")]
-fn tun_ipv4_destination(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
+pub(super) fn tun_ipv4_destination(
+    ipv4: std::net::Ipv4Addr,
+    ipv4_prefix: u8,
+) -> Option<std::net::Ipv4Addr> {
     tun_ipv4_peer(ipv4, ipv4_prefix)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn tun_ipv4_destination(_ipv4: std::net::Ipv4Addr, _ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
+pub(super) fn tun_ipv4_destination(
+    _ipv4: std::net::Ipv4Addr,
+    _ipv4_prefix: u8,
+) -> Option<std::net::Ipv4Addr> {
     None
 }
 
 #[cfg(target_os = "macos")]
-fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
+pub(super) fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
     // macOS utun is point-to-point. Keep the configured CIDR for routing policy
     // and virtual peer selection, but install the interface address as a host
     // route so packets are delivered through the utun control socket.
@@ -56,7 +62,7 @@ fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
+pub(super) fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
     configured_prefix
 }
 

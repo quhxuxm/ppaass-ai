@@ -1,4 +1,5 @@
 use super::dns::DnsGuard;
+use super::device::{tun_ipv4_destination, tun_ipv4_interface_prefix, tun_ipv4_peer};
 use super::network;
 use super::route::{RouteGuard, cleanup_stale_routes, resolve_proxy_ips};
 use crate::error::{AgentError, Result as AgentResult};
@@ -141,8 +142,8 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
         .mtu(request.mtu)
         .ipv4(
             ipv4,
-            super::tun_ipv4_interface_prefix(ipv4_prefix),
-            super::tun_ipv4_destination(ipv4, ipv4_prefix),
+            tun_ipv4_interface_prefix(ipv4_prefix),
+            tun_ipv4_destination(ipv4, ipv4_prefix),
         );
     #[cfg(target_os = "macos")]
     {
@@ -163,7 +164,7 @@ fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun> {
         .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
 
     let proxy_ips = resolve_proxy_ips(&request.proxy_addrs);
-    let dns_capture_target = super::tun_ipv4_peer(ipv4, ipv4_prefix).unwrap_or(ipv4);
+    let dns_capture_target = tun_ipv4_peer(ipv4, ipv4_prefix).unwrap_or(ipv4);
     let route_guard = match RouteGuard::install(
         if_index,
         ipv4,

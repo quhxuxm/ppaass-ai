@@ -177,7 +177,6 @@ impl Drop for RouteGuard {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 /// 安装 macOS ifscope 默认路由，作为代理旁路 / 直连套接字的下一跳兜底。
 ///
 /// 没有这条路由时，使用 `IP_BOUND_IF` 绑定到物理接口的直连套接字会因

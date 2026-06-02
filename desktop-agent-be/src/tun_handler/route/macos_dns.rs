@@ -1,12 +1,12 @@
 use super::*;
 
-struct MacosPfDnsGuard {
+pub(super) struct MacosPfDnsGuard {
     token: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
 impl MacosPfDnsGuard {
-    fn install(
+    pub(super) fn install(
         tun_if_index: u32,
         dns_capture_target: Ipv4Addr,
         dns_servers: &[SystemDnsServer],

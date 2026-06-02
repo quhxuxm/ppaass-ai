@@ -43,15 +43,14 @@ pub(super) use guard::RouteGuard;
 use macos_dns::macos_pf_dns_rules;
 #[cfg(target_os = "macos")]
 use macos_dns::{
-    MacosPfDnsGuard, command_output_message, install_macos_scoped_default_bypass,
-    macos_default_dns_interfaces,
+    MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces,
 };
 #[cfg(all(test, target_os = "macos"))]
 use probe::parse_macos_route_get_next_hop;
 pub(super) use probe::{ProxyRoute, detect_proxy_route, resolve_proxy_ips};
 use probe::{find_default_route, route_next_hop};
 #[cfg(target_os = "macos")]
-use probe::{interface_index_for_name, interface_name_for_index};
+use probe::interface_name_for_index;
 pub(super) use state::cleanup_stale_routes;
 #[cfg(target_os = "macos")]
 use state::now_unix_secs;
