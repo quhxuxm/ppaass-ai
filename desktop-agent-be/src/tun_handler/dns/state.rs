@@ -108,16 +108,18 @@ where
     }
 
     fn persist(&mut self) {
-        if let Some(parent) = self
+        let create_parent_dir = match self
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            if let Err(e) = fs::create_dir_all(parent) {
-                warn!("创建 TUN DNS 状态目录 {} 失败：{e}", parent.display());
-                self.persist_failed = true;
-                return;
-            }
+            Some(parent) => fs::create_dir_all(parent).map_err(|e| (parent, e)),
+            None => Ok(()),
+        };
+        if let Err((parent, e)) = create_parent_dir {
+            warn!("创建 TUN DNS 状态目录 {} 失败：{e}", parent.display());
+            self.persist_failed = true;
+            return;
         }
         match serde_json::to_string_pretty(&self.state) {
             Ok(content) => {
