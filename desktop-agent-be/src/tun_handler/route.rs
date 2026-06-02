@@ -883,8 +883,15 @@ fn install_dns_capture_routes(
             continue;
         }
         if dns_capture_route_targets_default_gateway(*ip, default_v4_gateway, default_v6_gateway) {
-            warn!("系统 DNS {ip} 同时也是默认网关，跳过普通 DNS 捕获路由以避免网络中断");
-            continue;
+            if should_capture_default_gateway_dns_route() {
+                warn!(
+                    "系统 DNS {ip} 同时也是默认网关；Windows 将安装 TUN DNS 捕获路由，\
+                     不修改系统 DNS，DNS 请求进入 agent 后由 proxy 端解析"
+                );
+            } else {
+                warn!("系统 DNS {ip} 同时也是默认网关，跳过普通 DNS 捕获路由以避免网络中断");
+                continue;
+            }
         }
 
         let route = match ip {
@@ -908,6 +915,16 @@ fn dns_capture_route_targets_default_gateway(
     default_v6_gateway: Option<IpAddr>,
 ) -> bool {
     Some(ip) == default_v4_gateway || Some(ip) == default_v6_gateway
+}
+
+#[cfg(windows)]
+fn should_capture_default_gateway_dns_route() -> bool {
+    true
+}
+
+#[cfg(not(windows))]
+fn should_capture_default_gateway_dns_route() -> bool {
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -1417,7 +1434,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_dns_capture_route_when_dns_is_default_gateway() {
+    fn detects_dns_capture_route_when_dns_is_default_gateway() {
         let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
 
         assert!(dns_capture_route_targets_default_gateway(
@@ -1437,6 +1454,18 @@ mod tests {
             Some(gateway),
             None
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_captures_default_gateway_dns_route() {
+        assert!(should_capture_default_gateway_dns_route());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_keeps_default_gateway_dns_route_conservative() {
+        assert!(!should_capture_default_gateway_dns_route());
     }
 
     #[cfg(target_os = "macos")]
