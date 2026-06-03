@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import Button from "primevue/button";
 import Card from "primevue/card";
 import { tokenizeLogLine } from "../highlighters";
@@ -13,6 +13,17 @@ const emit = defineEmits<{
 }>();
 
 const highlightedLogs = computed(() => props.logs.map(tokenizeLogLine));
+const logView = ref<HTMLElement | null>(null);
+
+async function scrollToLatestLog() {
+  await nextTick();
+  if (logView.value) {
+    logView.value.scrollTop = logView.value.scrollHeight;
+  }
+}
+
+onMounted(scrollToLatestLog);
+watch(() => [props.logs.length, props.logs.at(-1)], scrollToLatestLog, { flush: "post" });
 </script>
 
 <template>
@@ -24,7 +35,7 @@ const highlightedLogs = computed(() => props.logs.map(tokenizeLogLine));
       </div>
     </template>
     <template #content>
-      <div class="log-view">
+      <div ref="logView" class="log-view">
         <div v-if="!logs.length" class="log-empty">暂无日志</div>
         <template v-else>
           <div

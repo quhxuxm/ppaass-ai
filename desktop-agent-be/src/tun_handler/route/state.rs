@@ -14,6 +14,9 @@ pub(crate) fn cleanup_stale_routes(route_state_file: Option<&str>) {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(super) enum RouteKind {
     ProxyBypass,
+    /// 局域网/链路本地/组播旁路路由，避免 TUN split-default 抢走
+    /// 依赖物理网络接口语义的发现与投屏流量。
+    LocalNetworkBypass,
     DnsCapture,
     Ipv4SplitDefault,
     Ipv6SplitDefault,

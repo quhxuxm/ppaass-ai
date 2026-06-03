@@ -1,3 +1,4 @@
+use super::guard::{local_network_bypass_routes, route_add_error_is_already_exists};
 use super::*;
 
 fn record(
@@ -81,6 +82,63 @@ fn allows_dns_capture_route_when_dns_is_not_default_gateway() {
         dns,
         Some(gateway),
         None
+    ));
+}
+
+#[test]
+fn local_network_bypass_routes_keep_private_ranges_on_default_gateway() {
+    let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+    let routes = local_network_bypass_routes(Some(gateway), Some(11));
+
+    let private_route = route_for(&routes, Ipv4Addr::new(192, 168, 0, 0), 16);
+    assert_eq!(private_route.gateway(), Some(gateway));
+    assert_eq!(private_route.if_index(), Some(11));
+
+    let multicast_route = route_for(&routes, Ipv4Addr::new(224, 0, 0, 0), 4);
+    assert_eq!(multicast_route.gateway(), None);
+    assert_eq!(multicast_route.if_index(), Some(11));
+}
+
+#[test]
+fn local_network_bypass_routes_skip_gateway_ranges_without_gateway() {
+    let routes = local_network_bypass_routes(None, Some(11));
+
+    assert!(
+        !routes
+            .iter()
+            .any(|route| route.destination() == IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)))
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.destination() == IpAddr::V4(Ipv4Addr::new(224, 0, 0, 0)))
+    );
+}
+
+#[test]
+fn local_network_bypass_record_matches_windows_on_link_gateway() {
+    let record = RouteRecord {
+        kind: RouteKind::LocalNetworkBypass,
+        destination: IpAddr::V4(Ipv4Addr::new(224, 0, 0, 0)),
+        prefix: 4,
+        gateway: None,
+        if_name: None,
+        if_index: Some(11),
+    };
+    let route = Route::new(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 0)), 4)
+        .with_if_index(11)
+        .with_gateway(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
+    assert!(record.matches_route(&route));
+}
+
+#[test]
+fn route_add_error_already_exists_matches_windows_messages() {
+    assert!(route_add_error_is_already_exists(
+        "The object already exists. (os error 5010)"
+    ));
+    assert!(route_add_error_is_already_exists(
+        "Cannot create a file when that file already exists. (os error 183)"
     ));
 }
 
@@ -236,4 +294,11 @@ fn command_args(command: &Command) -> Vec<String> {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect()
+}
+
+fn route_for(routes: &[Route], destination: Ipv4Addr, prefix: u8) -> &Route {
+    routes
+        .iter()
+        .find(|route| route.destination() == IpAddr::V4(destination) && route.prefix() == prefix)
+        .expect("expected route to be present")
 }
