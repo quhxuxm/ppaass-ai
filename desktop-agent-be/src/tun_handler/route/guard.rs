@@ -1,5 +1,49 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalNetworkBypassNextHop {
+    Gateway,
+    OnLink,
+}
+
+const LOCAL_NETWORK_BYPASS_SPECS: &[(Ipv4Addr, u8, LocalNetworkBypassNextHop)] = &[
+    (
+        Ipv4Addr::new(10, 0, 0, 0),
+        8,
+        LocalNetworkBypassNextHop::Gateway,
+    ),
+    (
+        Ipv4Addr::new(100, 64, 0, 0),
+        10,
+        LocalNetworkBypassNextHop::Gateway,
+    ),
+    (
+        Ipv4Addr::new(172, 16, 0, 0),
+        12,
+        LocalNetworkBypassNextHop::Gateway,
+    ),
+    (
+        Ipv4Addr::new(192, 168, 0, 0),
+        16,
+        LocalNetworkBypassNextHop::Gateway,
+    ),
+    (
+        Ipv4Addr::new(169, 254, 0, 0),
+        16,
+        LocalNetworkBypassNextHop::OnLink,
+    ),
+    (
+        Ipv4Addr::new(224, 0, 0, 0),
+        4,
+        LocalNetworkBypassNextHop::OnLink,
+    ),
+    (
+        Ipv4Addr::new(255, 255, 255, 255),
+        32,
+        LocalNetworkBypassNextHop::OnLink,
+    ),
+];
+
 pub(crate) struct RouteGuard {
     mgr: RouteManager,
     installed: Vec<Route>,
@@ -9,8 +53,8 @@ pub(crate) struct RouteGuard {
 }
 
 impl RouteGuard {
-    /// 先安装代理 /32 旁路路由，再安装指向 TUN 的 split-default 路由。
-    /// 顺序很重要：旁路路由必须先于默认重定向存在，否则内核无法到达代理。
+    /// 先安装代理 /32 与本地网络旁路路由，再安装指向 TUN 的 split-default 路由。
+    /// 顺序很重要：旁路路由必须先于默认重定向存在，否则内核无法到达代理和局域网。
     pub(crate) fn install(
         tun_if_index: u32,
         tun_ipv4: Ipv4Addr,
@@ -130,6 +174,17 @@ impl RouteGuard {
             default_v6_if,
         );
 
+        // direct_access 只能处理已经进入 TUN netstack 的连接；mDNS/SSDP/投屏/互联
+        // 这类局域网流量更依赖物理接口和组播语义。先安装更具体的本地网络旁路，
+        // 再安装 split-default，可让这些流量继续走原 Wi-Fi/以太网接口。
+        install_local_network_bypass_routes(
+            &mut mgr,
+            default_v4_gw,
+            default_v4_if,
+            &mut installed,
+            &mut lease,
+        );
+
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
         install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed, &mut lease);
         install_ipv6_split_routes(
@@ -175,6 +230,68 @@ impl Drop for RouteGuard {
             );
         }
     }
+}
+
+fn install_local_network_bypass_routes(
+    mgr: &mut RouteManager,
+    default_v4_gw: Option<IpAddr>,
+    default_v4_if: Option<u32>,
+    installed: &mut Vec<Route>,
+    lease: &mut RouteLease,
+) {
+    let routes = local_network_bypass_routes(default_v4_gw, default_v4_if);
+    if routes.is_empty() {
+        debug!("跳过局域网旁路路由：IPv4 默认网关或接口缺失");
+        return;
+    }
+
+    for route in routes {
+        match mgr.add(&route) {
+            Ok(()) => {
+                info!("已安装局域网旁路路由：{}", route);
+                lease.record_installed(RouteKind::LocalNetworkBypass, &route);
+                installed.push(route);
+            }
+            Err(e) => {
+                let message = e.to_string();
+                if route_add_error_is_already_exists(&message) {
+                    debug!("局域网旁路路由已存在：{}", route);
+                } else {
+                    warn!("安装局域网旁路路由 {} 失败：{message}", route);
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn local_network_bypass_routes(
+    default_v4_gw: Option<IpAddr>,
+    default_v4_if: Option<u32>,
+) -> Vec<Route> {
+    let Some(default_v4_if) = default_v4_if else {
+        return Vec::new();
+    };
+    let default_v4_gw = default_v4_gw.filter(IpAddr::is_ipv4);
+
+    LOCAL_NETWORK_BYPASS_SPECS
+        .iter()
+        .filter_map(|(destination, prefix, next_hop)| {
+            let route = Route::new(IpAddr::V4(*destination), *prefix).with_if_index(default_v4_if);
+            match next_hop {
+                LocalNetworkBypassNextHop::Gateway => {
+                    default_v4_gw.map(|gateway| route.with_gateway(gateway))
+                }
+                LocalNetworkBypassNextHop::OnLink => Some(route),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn route_add_error_is_already_exists(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("file exists")
+        || message.contains("already in table")
+        || message.contains("already exists")
 }
 
 /// 安装 macOS ifscope 默认路由，作为代理旁路 / 直连套接字的下一跳兜底。
