@@ -67,6 +67,6 @@ Android native 内部会分别维护 `tcp_pool` 和 `udp_pool`；两者的 pool 
 
 PPAASS Android Agent 声明支持 Android 系统设置里的“始终开启 VPN”。用户需要在系统设置中把 PPAASS 选为始终开启的 VPN；普通应用不能自行替用户打开该系统开关。
 
-当系统以始终开启模式拉起 Service 时，界面会显示 `Always-on VPN`，并禁用 App 内的停止按钮，断开操作交给 Android 系统设置处理。代理控制连接会在 native 建连前通过 `VpnService.protect(fd)` 排除出 VPN 路径，因此在“阻止无 VPN 连接”模式下也不会依赖把 App 自身加入 disallow-list。
+当系统以始终开启模式拉起 Service 时，界面会显示 `Always-on VPN`，同时仍保留 App 内的 `Stop` 按钮用于断开当前 VPN 会话。代理控制连接会在 native 建连前通过 `VpnService.protect(fd)` 排除出 VPN 路径，因此在“阻止无 VPN 连接”模式下也不会依赖把 App 自身加入 disallow-list。
 
 TUN 地址和 MTU 是 Android App 内部固定配置，分别为 `10.10.10.2/24`、禁用 IPv6、MTU 1500，因此 UI 中不会展示这些选项。Android 会指向 VPN 网络路径内的一个 routed DNS 地址；Rust 会把 UDP 53 端口包映射为 `ProxyDns`，因此最终由 proxy 机器按其系统配置选择上游 DNS。默认阻断 QUIC，以匹配 desktop TUN 模式，并让 Google Play / YouTube 在 proxy 路径无法可靠处理 UDP/443 时回退到 TCP/TLS。

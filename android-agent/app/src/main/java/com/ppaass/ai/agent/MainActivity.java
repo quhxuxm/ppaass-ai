@@ -624,9 +624,9 @@ public class MainActivity extends Activity {
 
         boolean running = isVpnRunning();
         boolean systemManaged = prefs.getBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false);
-        String label = systemManaged ? "Always-on" : running ? "Stop" : "Start";
+        String label = running ? "Stop" : "Start";
         int actionColor = running ? COLOR_ACTION_STOP : COLOR_ACTION_START;
-        updateFlipButton(label, actionColor, !systemManaged);
+        updateFlipButton(label, actionColor, true);
         if (vpnStatus != null) {
             vpnStatus.setText(systemManaged ? "Always-on VPN" : running ? "Connected" : "Stopped");
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
