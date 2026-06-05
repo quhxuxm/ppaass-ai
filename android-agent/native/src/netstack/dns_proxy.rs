@@ -8,19 +8,25 @@ use std::time::{Duration, Instant};
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::ForwardContext;
+use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
+use crate::android_log;
 use crate::error::Result;
 use crate::traffic_stats::{self, DnsResolutionRecord};
 
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
+const DIRECT_DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
@@ -108,6 +114,10 @@ async fn run_dns_proxy(
             }
         };
 
+        if try_send_direct_dns_response(&context, &netstack_tx, &first_request).await {
+            continue;
+        }
+
         let connected = connect_dns_stream(&context).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
@@ -116,7 +126,7 @@ async fn run_dns_proxy(
             }
             Err(e) => {
                 warn!("Android TUN DNS proxy connection failed: {e}");
-                android_log_error(format!("Android TUN DNS proxy connection failed: {e}"));
+                android_log::error(format!("Android TUN DNS proxy connection failed: {e}"));
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = tokio::time::sleep(reconnect_delay) => {}
@@ -139,6 +149,9 @@ async fn run_dns_proxy(
 
         loop {
             if let Some(request) = retry_request.take() {
+                if try_send_direct_dns_response(&context, &netstack_tx, &request).await {
+                    continue;
+                }
                 if let Err(e) =
                     send_dns_request(&mut writer, &mut pending, &mut next_id, &request).await
                 {
@@ -168,6 +181,9 @@ async fn run_dns_proxy(
                         let _ = writer.shutdown().await;
                         return;
                     };
+                    if try_send_direct_dns_response(&context, &netstack_tx, &request).await {
+                        continue;
+                    }
                     if let Err(e) = send_dns_request(
                         &mut writer,
                         &mut pending,
@@ -192,6 +208,7 @@ async fn run_dns_proxy(
                             let mut response = response_buf[..n].to_vec();
                             if let Err(e) = handle_dns_response(
                                 &netstack_tx,
+                                context.direct_domain_cache.as_ref(),
                                 &mut pending,
                                 &mut response,
                             ).await {
@@ -223,6 +240,158 @@ async fn connect_dns_stream(
         .await
 }
 
+async fn try_send_direct_dns_response(
+    context: &ForwardContext,
+    netstack_tx: &UdpWriter,
+    request: &DnsProxyRequest,
+) -> bool {
+    let Some(question) = parse_dns_question(&request.packet) else {
+        android_log::warn(format!(
+            "Android TUN DNS request parse failed bytes={}",
+            request.packet.len()
+        ));
+        return false;
+    };
+    if !context.direct_checker.is_direct_domain(&question.query) {
+        android_log::info(format!(
+            "Android TUN DNS PROXY_CANDIDATE {} {}",
+            question.query, question.record_type
+        ));
+        return false;
+    }
+
+    let started_at = Instant::now();
+    debug!(
+        "Android TUN DNS direct -> {} {} via {}",
+        question.query, question.record_type, request.target
+    );
+    android_log::info(format!(
+        "Android TUN DNS DIRECT {} {} via {}",
+        question.query, question.record_type, request.target
+    ));
+
+    let direct_result = timeout(
+        DIRECT_DNS_TIMEOUT,
+        query_direct_dns(request.target, &request.packet),
+    )
+    .await;
+
+    let mut response = match direct_result {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            warn!(
+                "Android TUN DNS direct query failed: {} {} via {}, error: {}",
+                question.query, question.record_type, request.target, e
+            );
+            android_log::warn(format!(
+                "Android TUN DNS DIRECT failed {} {} via {}: {}",
+                question.query, question.record_type, request.target, e
+            ));
+            build_dns_error_response(&request.packet, 2).unwrap_or_default()
+        }
+        Err(_) => {
+            warn!(
+                "Android TUN DNS direct query timed out: {} {} via {}",
+                question.query, question.record_type, request.target
+            );
+            android_log::warn(format!(
+                "Android TUN DNS DIRECT timeout {} {} via {}",
+                question.query, question.record_type, request.target
+            ));
+            build_dns_error_response(&request.packet, 2).unwrap_or_default()
+        }
+    };
+
+    if response.is_empty() {
+        return true;
+    }
+
+    let summary = parse_dns_response(&response).unwrap_or_else(|| DnsResponseSummary {
+        status: "INVALID".to_string(),
+        answers: Vec::new(),
+    });
+    context
+        .direct_domain_cache
+        .record_resolution(&question.query, &summary.answers);
+    record_direct_dns_result(
+        request,
+        &question,
+        &summary.status,
+        summary.answers,
+        started_at,
+    );
+
+    let mut tx = netstack_tx.lock().await;
+    if let Err(e) = tx
+        .send((response.split_off(0), request.target, request.client))
+        .await
+    {
+        debug!("Android TUN DNS direct response writeback failed: {e}");
+    }
+    true
+}
+
+async fn query_direct_dns(upstream: SocketAddr, packet: &[u8]) -> io::Result<Vec<u8>> {
+    let socket = bind_direct_dns_socket(upstream)?;
+    socket.send_to(packet, upstream).await?;
+    let mut response = vec![0u8; 65535];
+    let (n, _) = socket.recv_from(&mut response).await?;
+    response.truncate(n);
+    Ok(response)
+}
+
+fn bind_direct_dns_socket(upstream: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = Socket::new(
+        Domain::for_address(upstream),
+        Type::DGRAM,
+        Some(Protocol::UDP),
+    )?;
+    protect_direct_socket(&socket)?;
+    let bind_addr: SocketAddr = if upstream.is_ipv4() {
+        "0.0.0.0:0".parse().expect("valid IPv4 bind address")
+    } else {
+        "[::]:0".parse().expect("valid IPv6 bind address")
+    };
+    socket.bind(&SockAddr::from(bind_addr))?;
+    socket.set_nonblocking(true)?;
+    UdpSocket::from_std(socket.into())
+}
+
+fn protect_direct_socket(socket: &Socket) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        crate::socket_protector::protect_fd(socket.as_raw_fd())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = socket;
+        Ok(())
+    }
+}
+
+fn record_direct_dns_result(
+    request: &DnsProxyRequest,
+    question: &DnsQuestion,
+    status: &str,
+    answers: Vec<String>,
+    started_at: Instant,
+) {
+    traffic_stats::record_dns_resolution(DnsResolutionRecord {
+        timestamp_ms: traffic_stats::current_time_millis(),
+        resolver: "agent-direct".to_string(),
+        client: request.client.to_string(),
+        upstream: request.target.to_string(),
+        query: question.query.clone(),
+        record_type: question.record_type.clone(),
+        status: status.to_string(),
+        answers,
+        duration_ms: started_at.elapsed().as_millis(),
+    });
+}
+
 async fn send_dns_request<W>(
     writer: &mut W,
     pending: &mut HashMap<u16, PendingDnsRequest>,
@@ -238,6 +407,7 @@ where
     };
     let (query, record_type) = parse_dns_query(&request.packet)
         .unwrap_or_else(|| ("<unknown>".to_string(), "UNKNOWN".to_string()));
+    android_log::info(format!("Android TUN DNS PROXY {query} {record_type}"));
 
     cleanup_pending_dns(pending);
     let Some(upstream_id) = allocate_dns_id(pending, next_id) else {
@@ -276,6 +446,7 @@ where
 
 async fn handle_dns_response(
     netstack_tx: &UdpWriter,
+    direct_domain_cache: &DirectDomainCache,
     pending: &mut HashMap<u16, PendingDnsRequest>,
     response: &mut [u8],
 ) -> io::Result<()> {
@@ -293,6 +464,7 @@ async fn handle_dns_response(
         status: "INVALID".to_string(),
         answers: Vec::new(),
     });
+    direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
     traffic_stats::record_dns_resolution(DnsResolutionRecord {
         timestamp_ms: traffic_stats::current_time_millis(),
         resolver: "agent".to_string(),
@@ -363,7 +535,34 @@ fn write_dns_id(packet: &mut [u8], id: u16) {
     packet[1] = bytes[1];
 }
 
+fn build_dns_error_response(request: &[u8], rcode: u16) -> Option<Vec<u8>> {
+    let question = parse_dns_question(request)?;
+    let request_flags = read_u16(request, 2).unwrap_or(0);
+    let flags = 0x8000 | (request_flags & 0x0100) | 0x0080 | (rcode & 0x000f);
+
+    let mut response = Vec::with_capacity(question.question_end);
+    response.extend_from_slice(request.get(..2)?);
+    response.extend_from_slice(&flags.to_be_bytes());
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(request.get(12..question.question_end)?);
+    Some(response)
+}
+
+struct DnsQuestion {
+    query: String,
+    record_type: String,
+    question_end: usize,
+}
+
 fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
+    let question = parse_dns_question(packet)?;
+    Some((question.query, question.record_type))
+}
+
+fn parse_dns_question(packet: &[u8]) -> Option<DnsQuestion> {
     if packet.len() < 12 || read_u16(packet, 4)? == 0 {
         return None;
     }
@@ -371,7 +570,17 @@ fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
     let mut offset = 12;
     let query = parse_dns_name(packet, &mut offset)?;
     let record_type = dns_type_name(read_u16(packet, offset)?).to_string();
-    Some((query, record_type))
+    offset = offset.checked_add(2)?;
+    let _class = read_u16(packet, offset)?;
+    offset = offset.checked_add(2)?;
+    if offset > packet.len() {
+        return None;
+    }
+    Some(DnsQuestion {
+        query,
+        record_type,
+        question_end: offset,
+    })
 }
 
 fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
@@ -568,40 +777,6 @@ fn dns_rcode_name(rcode: u16) -> &'static str {
         5 => "REFUSED",
         _ => "ERROR",
     }
-}
-
-fn android_log_error(message: impl AsRef<str>) {
-    #[cfg(target_os = "android")]
-    {
-        use std::ffi::CString;
-
-        const ANDROID_LOG_ERROR: libc::c_int = 6;
-        let text = message.as_ref().replace('\0', " ");
-        let Ok(tag) = CString::new("PPAASS-Native") else {
-            return;
-        };
-        let Ok(text) = CString::new(text) else {
-            return;
-        };
-        unsafe {
-            __android_log_write(ANDROID_LOG_ERROR, tag.as_ptr(), text.as_ptr());
-        }
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = message;
-    }
-}
-
-#[cfg(target_os = "android")]
-#[link(name = "log")]
-unsafe extern "C" {
-    fn __android_log_write(
-        prio: libc::c_int,
-        tag: *const libc::c_char,
-        text: *const libc::c_char,
-    ) -> libc::c_int;
 }
 
 #[cfg(test)]

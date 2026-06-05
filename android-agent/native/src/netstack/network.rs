@@ -43,6 +43,14 @@ impl TunNetworks {
     }
 }
 
+pub(super) fn is_tun_local_udp_target(
+    source: SocketAddr,
+    target: SocketAddr,
+    tun_networks: TunNetworks,
+) -> bool {
+    tun_networks.contains_ip(source.ip()) && tun_networks.contains_ip(target.ip())
+}
+
 pub(super) fn reject_tun_target(
     transport: &str,
     source: SocketAddr,

@@ -3,6 +3,7 @@ package com.ppaass.ai.agent;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
@@ -28,6 +29,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -76,6 +78,9 @@ public class MainActivity extends Activity {
     private static final int COLOR_ACTION_STOP = Color.rgb(220, 38, 38);
     private static final int COLOR_STATUS_RUNNING = Color.rgb(22, 163, 74);
     private static final int COLOR_STATUS_STOPPED = Color.rgb(100, 116, 139);
+    private static final int DIRECT_RULE_LIST_VISIBLE_RULES = 10;
+    private static final int DIRECT_RULE_LIST_ROW_HEIGHT_DP = 48;
+    private static final int DIRECT_RULE_LIST_CHROME_HEIGHT_DP = 52;
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
@@ -86,6 +91,16 @@ public class MainActivity extends Activity {
     private Spinner compressionMode;
     private Spinner tcpMode;
     private Spinner udpMode;
+    private String directAccessModeValue;
+    private EditText directRuleDraft;
+    private LinearLayout directRuleGroupList;
+    private LinearLayout directRulesConfig;
+    private TextView directModeSummary;
+    private TextView directRuleCountSummary;
+    private TextView directRuleGroupSummary;
+    private View directRuleCountFact;
+    private final List<Button> directModeButtons = new ArrayList<>();
+    private final List<String> directRuleValues = new ArrayList<>();
     private EditText yamuxTcpSessions;
     private EditText yamuxTcpMaxStreamsPerSession;
     private EditText yamuxTcpOpenStreamTimeoutSecs;
@@ -226,6 +241,10 @@ public class MainActivity extends Activity {
         screenPages.clear();
         configTabButtons.clear();
         configTabPages.clear();
+        directModeButtons.clear();
+        directRuleValues.clear();
+        directRulesConfig = null;
+        directRuleCountFact = null;
         lastVpnToggleLabel = null;
         lastRxBytes = -1;
         lastTxBytes = -1;
@@ -242,7 +261,11 @@ public class MainActivity extends Activity {
         int horizontalPadding = dp(16);
         int topPadding = dp(20);
         int bottomPadding = dp(24);
-        root.setPadding(horizontalPadding, topPadding, horizontalPadding, bottomPadding);
+        root.setPadding(
+                horizontalPadding,
+                topPadding + systemBarInsetFallback("status_bar_height"),
+                horizontalPadding,
+                bottomPadding + systemBarInsetFallback("navigation_bar_height"));
         applySystemBarPadding(root, horizontalPadding, topPadding, horizontalPadding, bottomPadding);
         scroll.addView(root);
 
@@ -428,6 +451,8 @@ public class MainActivity extends Activity {
                 1,
                 0);
 
+        buildDirectAccessSection(root);
+
         LinearLayout tcpYamux = configSection(root, "TCP Yamux");
         yamuxTcpSessions = numberControl(
                 tcpYamux,
@@ -529,25 +554,564 @@ public class MainActivity extends Activity {
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
     }
 
+    private void buildDirectAccessSection(LinearLayout root) {
+        directAccessModeValue = normalizeDirectAccessMode(
+                prefs.getString("direct_access_mode", DefaultConfig.DIRECT_ACCESS_MODE));
+        directRuleValues.clear();
+        directRuleValues.addAll(normalizeDirectRules(parseDirectRuleInput(
+                prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
+
+        LinearLayout section = configSection(root, "Direct access");
+        TextView subtitle = mutedText("Shared direct policy", 13f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, 0, 0, dp(8));
+        section.addView(subtitle, subtitleParams);
+
+        addDirectModeControl(section);
+        addDirectPolicyFacts(section);
+        addForwardingMethodRows(section);
+        directRulesConfig = new LinearLayout(this);
+        directRulesConfig.setOrientation(LinearLayout.VERTICAL);
+        section.addView(directRulesConfig, matchWrap());
+        addDirectRulePresets(directRulesConfig);
+        addDirectRuleManager(directRulesConfig);
+        updateDirectModeButtons();
+        renderDirectRuleList();
+    }
+
+    private void addDirectModeControl(LinearLayout root) {
+        root.addView(controlLabel("Mode"), labelParams());
+        LinearLayout row = horizontalRow();
+        row.setPadding(dp(4), dp(4), dp(4), dp(4));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        addDirectModeButton(row, "All proxy", "proxy_all");
+        addDirectModeButton(row, "All direct", "direct_all");
+        addDirectModeButton(row, "By rules", "rules");
+        root.addView(row, matchWrap());
+    }
+
+    private void addDirectModeButton(LinearLayout row, String label, String value) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTag(value);
+        button.setTextSize(13f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(6), 0, dp(6), 0);
+        button.setOnClickListener(view -> {
+            directAccessModeValue = String.valueOf(view.getTag());
+            updateDirectModeButtons();
+        });
+        directModeButtons.add(button);
+        trackEditable(button);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(4), 0, 0, 0);
+        }
+        row.addView(button, params);
+    }
+
+    private void addDirectPolicyFacts(LinearLayout root) {
+        LinearLayout row = horizontalRow();
+        LinearLayout.LayoutParams rowParams = matchWrap();
+        rowParams.setMargins(0, dp(12), 0, 0);
+        directModeSummary = addPolicyFact(row, "Current mode", directModeLabel(directAccessModeValue));
+        directRuleCountSummary = addPolicyFact(row, "Rule count", directRuleCountLabel());
+        directRuleCountFact = directRuleCountSummary == null ? null : (View) directRuleCountSummary.getParent();
+        addPolicyFact(row, "Config section", "direct_access");
+        root.addView(row, rowParams);
+    }
+
+    private TextView addPolicyFact(LinearLayout row, String label, String value) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setPadding(dp(9), dp(8), dp(9), dp(8));
+        tile.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        TextView labelView = mutedText(label, 10f);
+        labelView.setSingleLine(true);
+        labelView.setEllipsize(TextUtils.TruncateAt.END);
+        tile.addView(labelView, matchWrap());
+
+        TextView valueView = titleText(value, 12f);
+        valueView.setSingleLine(true);
+        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams valueParams = matchWrap();
+        valueParams.setMargins(0, dp(3), 0, 0);
+        tile.addView(valueView, valueParams);
+
+        LinearLayout.LayoutParams tileParams = new LinearLayout.LayoutParams(0, dp(70), 1f);
+        if (row.getChildCount() > 0) {
+            tileParams.setMargins(dp(8), 0, 0, 0);
+        }
+        row.addView(tile, tileParams);
+        return valueView;
+    }
+
+    private void addForwardingMethodRows(LinearLayout root) {
+        LinearLayout methods = new LinearLayout(this);
+        methods.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams methodsParams = matchWrap();
+        methodsParams.setMargins(0, dp(12), 0, 0);
+        addForwardingMethod(methods, "Android VPN", "TUN traffic policy");
+        addForwardingMethod(methods, "Policy routing", "Uses the selected direct access mode");
+        root.addView(methods, methodsParams);
+    }
+
+    private void addForwardingMethod(LinearLayout root, String title, String detail) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(12), dp(9), dp(12), dp(9));
+        row.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+
+        TextView titleView = titleText(title, 13f);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(titleView, matchWrap());
+
+        TextView detailView = mutedText(detail, 11f);
+        detailView.setSingleLine(true);
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams detailParams = matchWrap();
+        detailParams.setMargins(0, dp(3), 0, 0);
+        row.addView(detailView, detailParams);
+
+        LinearLayout.LayoutParams rowParams = matchWrap();
+        if (root.getChildCount() > 0) {
+            rowParams.setMargins(0, dp(8), 0, 0);
+        }
+        root.addView(row, rowParams);
+    }
+
+    private void addDirectRulePresets(LinearLayout root) {
+        LinearLayout.LayoutParams headingParams = matchWrap();
+        headingParams.setMargins(0, dp(16), 0, dp(6));
+        root.addView(controlLabel("Quick presets"), headingParams);
+
+        LinearLayout firstRow = horizontalRow();
+        addPresetButton(firstRow, "Local", new String[]{"localhost", "127.0.0.0/8", "::1"});
+        addPresetButton(firstRow, "Private LAN", new String[]{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"});
+        root.addView(firstRow, matchWrap());
+
+        LinearLayout secondRow = horizontalRow();
+        LinearLayout.LayoutParams secondRowParams = matchWrap();
+        secondRowParams.setMargins(0, dp(8), 0, 0);
+        addPresetButton(secondRow, "China", new String[]{"*.cn"});
+        addPresetButton(secondRow, "Microsoft", new String[]{"*.microsoft.com", "*.bing.com"});
+        root.addView(secondRow, secondRowParams);
+
+        LinearLayout thirdRow = horizontalRow();
+        LinearLayout.LayoutParams thirdRowParams = matchWrap();
+        thirdRowParams.setMargins(0, dp(8), 0, 0);
+        addPresetButton(thirdRow, "YouTube", new String[]{
+                "youtube.com",
+                "*.youtube.com",
+                "youtu.be",
+                "*.youtu.be",
+                "youtubei.googleapis.com",
+                "youtube.googleapis.com",
+                "suggestqueries.google.com",
+                "googlevideo.com",
+                "*.googlevideo.com",
+                "ytimg.com",
+                "*.ytimg.com",
+                "ggpht.com",
+                "*.ggpht.com",
+                "*.gstatic.com"
+        });
+        root.addView(thirdRow, thirdRowParams);
+    }
+
+    private void addPresetButton(LinearLayout row, String label, String[] rules) {
+        Button button = secondaryButton(label);
+        button.setOnClickListener(view -> addDirectRules(rules));
+        trackEditable(button);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(8), 0, 0, 0);
+        }
+        row.addView(button, params);
+    }
+
+    private void addDirectRuleManager(LinearLayout root) {
+        LinearLayout heading = horizontalRow();
+        LinearLayout.LayoutParams headingParams = matchWrap();
+        headingParams.setMargins(0, dp(16), 0, dp(6));
+        TextView title = controlLabel("Rule management");
+        heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        directRuleGroupSummary = chip("0 groups", COLOR_ACCENT);
+        heading.addView(directRuleGroupSummary, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(heading, headingParams);
+
+        LinearLayout compose = horizontalRow();
+        directRuleDraft = new EditText(this);
+        directRuleDraft.setHint("Domain / wildcard / CIDR");
+        directRuleDraft.setSingleLine(true);
+        directRuleDraft.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        directRuleDraft.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        directRuleDraft.setTextColor(COLOR_TEXT);
+        directRuleDraft.setTextSize(15f);
+        directRuleDraft.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        directRuleDraft.setPadding(dp(12), 0, dp(12), 0);
+        directRuleDraft.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                addDraftDirectRules();
+                return true;
+            }
+            return false;
+        });
+        trackEditable(directRuleDraft);
+        compose.addView(directRuleDraft, new LinearLayout.LayoutParams(0, dp(48), 1f));
+
+        Button addButton = actionButton("Add", COLOR_ACCENT);
+        addButton.setOnClickListener(view -> addDraftDirectRules());
+        trackEditable(addButton);
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(dp(92), dp(48));
+        addParams.setMargins(dp(8), 0, 0, 0);
+        compose.addView(addButton, addParams);
+        root.addView(compose, matchWrap());
+
+        TextView inventoryLabel = controlLabel("Current rules");
+        LinearLayout.LayoutParams inventoryParams = labelParams();
+        inventoryParams.setMargins(0, dp(14), 0, dp(6));
+        root.addView(inventoryLabel, inventoryParams);
+
+        directRuleGroupList = new LinearLayout(this);
+        directRuleGroupList.setOrientation(LinearLayout.VERTICAL);
+
+        MaxHeightScrollView ruleScroll = new MaxHeightScrollView(
+                this,
+                directRuleListMaxHeightPx());
+        ruleScroll.setVerticalScrollBarEnabled(true);
+        ruleScroll.setScrollbarFadingEnabled(false);
+        ruleScroll.setClipToPadding(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            ruleScroll.setNestedScrollingEnabled(true);
+        }
+        ruleScroll.addView(directRuleGroupList, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(ruleScroll, matchWrap());
+    }
+
+    private int directRuleListMaxHeightPx() {
+        return dp(DIRECT_RULE_LIST_CHROME_HEIGHT_DP
+                + DIRECT_RULE_LIST_VISIBLE_RULES * DIRECT_RULE_LIST_ROW_HEIGHT_DP);
+    }
+
+    private Button secondaryButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(13f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setTextColor(COLOR_ACCENT_DARK);
+        button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        return button;
+    }
+
+    private void addDraftDirectRules() {
+        if (directRuleDraft == null) {
+            return;
+        }
+        addDirectRules(parseDirectRuleInput(directRuleDraft.getText().toString()));
+        directRuleDraft.setText("");
+    }
+
+    private void addDirectRules(String[] rules) {
+        List<String> values = new ArrayList<>();
+        Collections.addAll(values, rules);
+        addDirectRules(values);
+    }
+
+    private void addDirectRules(List<String> rules) {
+        List<String> merged = new ArrayList<>(directRuleValues);
+        merged.addAll(rules);
+        directRuleValues.clear();
+        directRuleValues.addAll(normalizeDirectRules(merged));
+        renderDirectRuleList();
+    }
+
+    private void removeDirectRule(int index) {
+        if (index < 0 || index >= directRuleValues.size()) {
+            return;
+        }
+        directRuleValues.remove(index);
+        renderDirectRuleList();
+    }
+
+    private void renderDirectRuleList() {
+        if (directRuleGroupList == null) {
+            return;
+        }
+        directRuleGroupList.removeAllViews();
+        int groupCount = 0;
+        groupCount += addDirectRuleGroup("Wildcard", "wildcard");
+        groupCount += addDirectRuleGroup("IP / CIDR", "network");
+        groupCount += addDirectRuleGroup("Domain", "domain");
+        groupCount += addDirectRuleGroup("Other", "other");
+
+        if (directRuleValues.isEmpty()) {
+            TextView empty = mutedText("Not configured", 14f);
+            empty.setGravity(Gravity.CENTER);
+            empty.setTypeface(Typeface.DEFAULT_BOLD);
+            empty.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+            directRuleGroupList.addView(empty, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(64)));
+        }
+
+        if (directRuleGroupSummary != null) {
+            directRuleGroupSummary.setText(groupCount + (groupCount == 1 ? " group" : " groups"));
+        }
+        updateDirectAccessSummary();
+    }
+
+    private int addDirectRuleGroup(String label, String groupKey) {
+        int count = 0;
+        for (String rule : directRuleValues) {
+            if (groupKey.equals(ruleGroupKey(rule))) {
+                count++;
+            }
+        }
+        if (count == 0) {
+            return 0;
+        }
+
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(dp(10), dp(9), dp(10), dp(10));
+        group.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        LinearLayout.LayoutParams groupParams = matchWrap();
+        if (directRuleGroupList.getChildCount() > 0) {
+            groupParams.setMargins(0, dp(8), 0, 0);
+        }
+
+        LinearLayout heading = horizontalRow();
+        TextView title = titleText(label, 13f);
+        heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView countView = mutedText(String.valueOf(count), 12f);
+        countView.setTypeface(Typeface.DEFAULT_BOLD);
+        heading.addView(countView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        group.addView(heading, matchWrap());
+
+        for (int i = 0; i < directRuleValues.size(); i++) {
+            String rule = directRuleValues.get(i);
+            if (!groupKey.equals(ruleGroupKey(rule))) {
+                continue;
+            }
+            addDirectRuleChip(group, rule, i);
+        }
+
+        directRuleGroupList.addView(group, groupParams);
+        return 1;
+    }
+
+    private void addDirectRuleChip(LinearLayout root, String rule, int index) {
+        LinearLayout row = horizontalRow();
+        row.setPadding(dp(10), dp(7), dp(7), dp(7));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        TextView text = titleText(rule, 12f);
+        text.setSingleLine(true);
+        text.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button remove = new Button(this);
+        remove.setText("x");
+        remove.setTextSize(12f);
+        remove.setTypeface(Typeface.DEFAULT_BOLD);
+        remove.setAllCaps(false);
+        remove.setMinHeight(0);
+        remove.setMinWidth(0);
+        remove.setPadding(0, 0, 0, 0);
+        remove.setTextColor(COLOR_ACTION_STOP);
+        remove.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        remove.setOnClickListener(view -> removeDirectRule(index));
+        trackEditable(remove);
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(34), dp(32));
+        removeParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(remove, removeParams);
+
+        LinearLayout.LayoutParams rowParams = matchWrap();
+        rowParams.setMargins(0, dp(8), 0, 0);
+        root.addView(row, rowParams);
+    }
+
+    private void updateDirectModeButtons() {
+        String selectedMode = normalizeDirectAccessMode(directAccessModeValue);
+        directAccessModeValue = selectedMode;
+        for (Button button : directModeButtons) {
+            boolean selected = selectedMode.equals(String.valueOf(button.getTag()));
+            button.setTextColor(selected ? Color.WHITE : COLOR_MUTED);
+            int fill = selected ? COLOR_ACCENT : COLOR_CONTROL;
+            int stroke = selected ? COLOR_ACCENT : COLOR_CONTROL;
+            button.setBackground(rounded(fill, stroke));
+            button.setElevation(selected ? dp(1) : 0);
+        }
+        updateDirectAccessSummary();
+        updateDirectRuleConfigVisibility();
+    }
+
+    private void updateDirectAccessSummary() {
+        if (directModeSummary != null) {
+            directModeSummary.setText(directModeLabel(directAccessModeValue));
+        }
+        if (directRuleCountSummary != null) {
+            directRuleCountSummary.setText(directRuleCountLabel());
+        }
+    }
+
+    private void updateDirectRuleConfigVisibility() {
+        int visibility = "rules".equals(normalizeDirectAccessMode(directAccessModeValue))
+                ? View.VISIBLE
+                : View.GONE;
+        if (directRulesConfig != null) {
+            directRulesConfig.setVisibility(visibility);
+        }
+        if (directRuleCountFact != null) {
+            directRuleCountFact.setVisibility(visibility);
+        }
+    }
+
+    private String directRuleCountLabel() {
+        int count = directRuleValues.size();
+        return count + (count == 1 ? " rule" : " rules");
+    }
+
+    private List<String> parseDirectRuleInput(String value) {
+        List<String> rules = new ArrayList<>();
+        if (value == null || value.trim().isEmpty()) {
+            return rules;
+        }
+        String[] tokens = value.split("[\\s,;\\uFF0C\\uFF1B]+");
+        for (String token : tokens) {
+            rules.add(token);
+        }
+        return rules;
+    }
+
+    private List<String> normalizeDirectRules(List<String> rules) {
+        List<String> normalized = new ArrayList<>();
+        HashSet<String> seen = new HashSet<>();
+        for (String rule : rules) {
+            if (rule == null) {
+                continue;
+            }
+            String value = rule.trim();
+            if (value.isEmpty()) {
+                continue;
+            }
+            String key = value.toLowerCase(Locale.US);
+            if (seen.contains(key)) {
+                continue;
+            }
+            seen.add(key);
+            normalized.add(value);
+        }
+        return normalized;
+    }
+
+    private String serializeDirectAccessRules() {
+        return TextUtils.join("\n", directRuleValues);
+    }
+
+    private String normalizeDirectAccessMode(String value) {
+        if (value == null) {
+            return DefaultConfig.DIRECT_ACCESS_MODE;
+        }
+        String normalized = value.trim().toLowerCase(Locale.US);
+        if ("proxy_all".equals(normalized)
+                || "direct_all".equals(normalized)
+                || "rules".equals(normalized)) {
+            return normalized;
+        }
+        return DefaultConfig.DIRECT_ACCESS_MODE;
+    }
+
+    private String directModeLabel(String mode) {
+        String normalized = normalizeDirectAccessMode(mode);
+        if ("direct_all".equals(normalized)) {
+            return "All direct";
+        }
+        if ("rules".equals(normalized)) {
+            return "By rules";
+        }
+        return "All proxy";
+    }
+
+    private String ruleGroupKey(String rule) {
+        String normalized = rule == null ? "" : rule.trim().toLowerCase(Locale.US);
+        if (normalized.contains("*")) {
+            return "wildcard";
+        }
+        if (isNetworkRule(normalized)) {
+            return "network";
+        }
+        if (normalized.matches("^[a-z0-9._-]+(\\.[a-z0-9._-]+)*$")) {
+            return "domain";
+        }
+        return "other";
+    }
+
+    private boolean isNetworkRule(String rule) {
+        return rule.matches("^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$")
+                || rule.matches("^([0-9a-f]{0,4}:){1,7}[0-9a-f]{0,4}(/\\d{1,3})?$");
+    }
+
     private void applySystemBarPadding(
             View view,
             int baseLeft,
             int baseTop,
             int baseRight,
             int baseBottom) {
+        int topFallback = systemBarInsetFallback("status_bar_height");
+        int bottomFallback = systemBarInsetFallback("navigation_bar_height");
         view.setOnApplyWindowInsetsListener((target, insets) -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 Insets systemBars = insets.getInsets(WindowInsets.Type.systemBars());
                 target.setPadding(
                         baseLeft + systemBars.left,
-                        baseTop + systemBars.top,
+                        baseTop + Math.max(systemBars.top, topFallback),
                         baseRight + systemBars.right,
-                        baseBottom + systemBars.bottom);
+                        baseBottom + Math.max(systemBars.bottom, bottomFallback));
             } else {
-                applyLegacySystemBarPadding(target, insets, baseLeft, baseTop, baseRight, baseBottom);
+                applyLegacySystemBarPadding(
+                        target,
+                        insets,
+                        baseLeft,
+                        baseTop,
+                        baseRight,
+                        baseBottom,
+                        topFallback,
+                        bottomFallback);
             }
             return insets;
         });
+    }
+
+    private int systemBarInsetFallback(String resourceName) {
+        if (Build.VERSION.SDK_INT < 35) {
+            return 0;
+        }
+        int resourceId = getResources().getIdentifier(resourceName, "dimen", "android");
+        if (resourceId == 0) {
+            return 0;
+        }
+        return getResources().getDimensionPixelSize(resourceId);
     }
 
     @SuppressWarnings("deprecation")
@@ -557,12 +1121,14 @@ public class MainActivity extends Activity {
             int baseLeft,
             int baseTop,
             int baseRight,
-            int baseBottom) {
+            int baseBottom,
+            int topFallback,
+            int bottomFallback) {
         target.setPadding(
                 baseLeft + insets.getSystemWindowInsetLeft(),
-                baseTop + insets.getSystemWindowInsetTop(),
+                baseTop + Math.max(insets.getSystemWindowInsetTop(), topFallback),
                 baseRight + insets.getSystemWindowInsetRight(),
-                baseBottom + insets.getSystemWindowInsetBottom());
+                baseBottom + Math.max(insets.getSystemWindowInsetBottom(), bottomFallback));
     }
 
     private void toggleVpn() {
@@ -980,6 +1546,8 @@ public class MainActivity extends Activity {
                 .putString("compression_mode", selectedCompressionMode())
                 .putString("tcp_mode", selectedTcpMode())
                 .putString("udp_mode", selectedUdpMode())
+                .putString("direct_access_mode", selectedDirectAccessMode())
+                .putString("direct_access_rules", serializeDirectAccessRules())
                 .putString("yamux_tcp_sessions", yamuxTcpSessions.getText().toString())
                 .putString(
                         "yamux_tcp_max_streams_per_session",
@@ -1058,6 +1626,10 @@ public class MainActivity extends Activity {
             return value;
         }
         return DefaultConfig.COMPRESSION_MODE;
+    }
+
+    private String selectedDirectAccessMode() {
+        return normalizeDirectAccessMode(directAccessModeValue);
     }
 
     private String selectedTransportMode(Spinner spinner, String fallback) {
@@ -1951,6 +2523,23 @@ public class MainActivity extends Activity {
             this.packageName = packageName;
             this.systemBadge = systemBadge;
             this.checkBox = checkBox;
+        }
+    }
+
+    private static final class MaxHeightScrollView extends ScrollView {
+        private final int maxHeightPx;
+
+        MaxHeightScrollView(Context context, int maxHeightPx) {
+            super(context);
+            this.maxHeightPx = maxHeightPx;
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int cappedHeightSpec = View.MeasureSpec.makeMeasureSpec(
+                    maxHeightPx,
+                    View.MeasureSpec.AT_MOST);
+            super.onMeasure(widthMeasureSpec, cappedHeightSpec);
         }
     }
 
