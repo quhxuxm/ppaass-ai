@@ -1,5 +1,5 @@
-use super::source::iface_addr_matches_dst;
-use if_addrs::get_if_addrs;
+use super::source::{cached_if_addrs, iface_addr_matches_dst, refresh_if_addrs};
+use if_addrs::Interface;
 use route_manager::{Route, RouteManager};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -117,9 +117,25 @@ fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
 }
 
 fn interface_name_for_route(route: &Route, dst_ip: IpAddr) -> io::Result<String> {
+    let interfaces = cached_if_addrs()?;
+    match interface_name_for_route_from_snapshot(route, dst_ip, &interfaces) {
+        Ok(interface) => Ok(interface),
+        Err(err) if should_refresh_if_addrs(&err) => {
+            let interfaces = refresh_if_addrs()?;
+            interface_name_for_route_from_snapshot(route, dst_ip, &interfaces)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn interface_name_for_route_from_snapshot(
+    route: &Route,
+    dst_ip: IpAddr,
+    interfaces: &[Interface],
+) -> io::Result<String> {
     // route_manager 能直接提供设备名时，仍确认该设备有目标地址族可用地址。
     if let Some(name) = route.if_name()
-        && interface_has_reachable_addr(name, dst_ip)?
+        && interface_has_reachable_addr(name, dst_ip, interfaces)
     {
         return Ok(name.to_string());
     }
@@ -132,14 +148,14 @@ fn interface_name_for_route(route: &Route, dst_ip: IpAddr) -> io::Result<String>
 
     // 某些平台只有 if_index，需要回查网卡地址列表转换成设备名。
     let mut fallback = None;
-    for iface in get_if_addrs()? {
+    for iface in interfaces {
         if iface.index != Some(index) {
             continue;
         }
 
         fallback.get_or_insert_with(|| iface.name.clone());
         if iface_addr_matches_dst(&iface.addr, dst_ip) {
-            return Ok(iface.name);
+            return Ok(iface.name.clone());
         }
     }
 
@@ -156,11 +172,18 @@ fn interface_name_for_route(route: &Route, dst_ip: IpAddr) -> io::Result<String>
     ))
 }
 
-fn interface_has_reachable_addr(name: &str, dst_ip: IpAddr) -> io::Result<bool> {
+fn interface_has_reachable_addr(name: &str, dst_ip: IpAddr, interfaces: &[Interface]) -> bool {
     // auto 选出的设备必须存在同地址族的可用源地址，后续才能成功 bind。
-    Ok(get_if_addrs()?
-        .into_iter()
-        .any(|iface| iface.name == name && iface_addr_matches_dst(&iface.addr, dst_ip)))
+    interfaces
+        .iter()
+        .any(|iface| iface.name.as_str() == name && iface_addr_matches_dst(&iface.addr, dst_ip))
+}
+
+fn should_refresh_if_addrs(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::AddrNotAvailable
+    )
 }
 
 #[cfg(test)]

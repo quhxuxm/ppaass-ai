@@ -81,9 +81,9 @@ pub(super) async fn handle_tun_udp(
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if let Some(domain) = direct_domain_cache
-            .domains_for_ip(target.ip())
-            .into_iter()
-            .find(|domain| direct_checker.is_direct_domain(domain))
+            .matching_domain_for_ip(target.ip(), |domain| {
+                direct_checker.is_direct_domain(domain)
+            })
         {
             match resolve_via_system("UDP", client, &domain, target.port(), target.ip()).await {
                 Ok(resolved) => {

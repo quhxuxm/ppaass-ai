@@ -72,9 +72,9 @@ async fn handle_tcp(
         && !proxy_dns_request
         && let Some(domain) = context
             .direct_domain_cache
-            .domains_for_ip(target.ip())
-            .into_iter()
-            .find(|domain| context.direct_checker.is_direct_domain(domain))
+            .matching_domain_for_ip(target.ip(), |domain| {
+                context.direct_checker.is_direct_domain(domain)
+            })
     {
         debug!(
             "Android TUN TCP cached direct domain matched: {} ({})",

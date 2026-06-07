@@ -95,9 +95,10 @@ pub(super) fn spawn_udp_sessions(
                     if !direct_match {
                         direct_match = context
                             .direct_domain_cache
-                            .domains_for_ip(target.ip())
-                            .into_iter()
-                            .any(|domain| context.direct_checker.is_direct_domain(&domain));
+                            .matching_domain_for_ip(target.ip(), |domain| {
+                                context.direct_checker.is_direct_domain(domain)
+                            })
+                            .is_some();
                     }
 
                     if block_quic && target.port() == 443 && !direct_match {
@@ -182,9 +183,9 @@ pub(super) async fn handle_tun_udp(
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if let Some(domain) = direct_domain_cache
-            .domains_for_ip(target.ip())
-            .into_iter()
-            .find(|domain| direct_checker.is_direct_domain(domain))
+            .matching_domain_for_ip(target.ip(), |domain| {
+                direct_checker.is_direct_domain(domain)
+            })
         {
             debug!(
                 "Android TUN UDP cached direct domain matched: {} ({})",

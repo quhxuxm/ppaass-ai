@@ -34,11 +34,11 @@ pub struct GlobalConnectionPermit {
 }
 
 pub struct UserConnectionPermit {
-    counters: Arc<UserConnectionCounters>,
+    counters: Option<Arc<UserConnectionCounters>>,
 }
 
 pub struct IdleConnectionPermit {
-    counters: Arc<UserConnectionCounters>,
+    counters: Option<Arc<UserConnectionCounters>>,
 }
 
 pub struct UdpRelayFlowPermit {
@@ -86,15 +86,25 @@ impl ConnectionLimiter {
     }
 
     pub fn try_acquire_user(&self, username: &str) -> Option<UserConnectionPermit> {
+        if self.inner.max_connections_per_user == 0 {
+            return Some(UserConnectionPermit { counters: None });
+        }
         let counters = self.user_counters(username);
         increment_limited(&counters.total, self.inner.max_connections_per_user)?;
-        Some(UserConnectionPermit { counters })
+        Some(UserConnectionPermit {
+            counters: Some(counters),
+        })
     }
 
     pub fn try_acquire_idle(&self, username: &str) -> Option<IdleConnectionPermit> {
+        if self.inner.max_idle_connections_per_user == 0 {
+            return Some(IdleConnectionPermit { counters: None });
+        }
         let counters = self.user_counters(username);
         increment_limited(&counters.idle, self.inner.max_idle_connections_per_user)?;
-        Some(IdleConnectionPermit { counters })
+        Some(IdleConnectionPermit {
+            counters: Some(counters),
+        })
     }
 
     pub fn active_total(&self) -> usize {
@@ -159,13 +169,17 @@ impl Drop for GlobalConnectionPermit {
 
 impl Drop for UserConnectionPermit {
     fn drop(&mut self) {
-        self.counters.total.fetch_sub(1, Ordering::AcqRel);
+        if let Some(counters) = &self.counters {
+            counters.total.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
 impl Drop for IdleConnectionPermit {
     fn drop(&mut self) {
-        self.counters.idle.fetch_sub(1, Ordering::AcqRel);
+        if let Some(counters) = &self.counters {
+            counters.idle.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -297,6 +311,7 @@ mod tests {
         assert!(limiter.try_acquire_user("alice").is_some());
         assert!(limiter.try_acquire_idle("alice").is_some());
         assert!(limiter.try_acquire_idle("alice").is_some());
+        assert_eq!(limiter.inner.users.len(), 0);
     }
 
     #[test]

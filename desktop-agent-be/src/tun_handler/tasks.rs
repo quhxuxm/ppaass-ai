@@ -186,9 +186,10 @@ pub(super) fn spawn_udp_sessions(
                     if !direct_match {
                         direct_match = context
                             .direct_domain_cache
-                            .domains_for_ip(target_addr.ip())
-                            .into_iter()
-                            .any(|domain| context.direct_checker.is_direct_domain(&domain));
+                            .matching_domain_for_ip(target_addr.ip(), |domain| {
+                                context.direct_checker.is_direct_domain(domain)
+                            })
+                            .is_some();
                     }
 
                     if block_quic && target_addr.port() == 443 && !direct_match {

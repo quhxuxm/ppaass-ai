@@ -59,10 +59,9 @@ pub(super) async fn handle_tun_tcp(
     //    通过 Agent 本机 DNS 重新解析以获得 agent 侧的 CDN IP。
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache
-            .domains_for_ip(target.ip())
-            .into_iter()
-            .find(|domain| direct_checker.is_direct_domain(domain))
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
+            direct_checker.is_direct_domain(domain)
+        })
     {
         direct_target = resolve_direct_target_via_system("TCP", source, target, &domain).await;
         if direct_target.is_none() {

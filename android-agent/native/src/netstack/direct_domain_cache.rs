@@ -51,7 +51,8 @@ impl DirectDomainCache {
         }
     }
 
-    pub(super) fn domains_for_ip(&self, ip: IpAddr) -> Vec<String> {
+    #[cfg(test)]
+    fn domains_for_ip(&self, ip: IpAddr) -> Vec<String> {
         let entry = match self.ip_to_domains.get(&ip) {
             Some(entry) => entry,
             None => return Vec::new(),
@@ -62,6 +63,26 @@ impl DirectDomainCache {
             return Vec::new();
         }
         entry.domains.clone()
+    }
+
+    pub(super) fn matching_domain_for_ip<F>(&self, ip: IpAddr, mut predicate: F) -> Option<String>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let entry = match self.ip_to_domains.get(&ip) {
+            Some(entry) => entry,
+            None => return None,
+        };
+        if entry.expires_at <= Instant::now() {
+            drop(entry);
+            self.ip_to_domains.remove(&ip);
+            return None;
+        }
+        entry
+            .domains
+            .iter()
+            .find(|domain| predicate(domain.as_str()))
+            .cloned()
     }
 }
 
@@ -99,6 +120,29 @@ mod tests {
         assert_eq!(
             cache.domains_for_ip("142.250.1.1".parse().unwrap()),
             vec!["www.youtube.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn finds_matching_domain_for_ip() {
+        let cache = DirectDomainCache::new(Duration::from_secs(60));
+        cache.record_resolution("www.youtube.com", &["142.250.1.1".to_string()]);
+        cache.record_resolution("youtubei.googleapis.com", &["142.250.1.1".to_string()]);
+
+        assert_eq!(
+            cache
+                .matching_domain_for_ip("142.250.1.1".parse().unwrap(), |domain| {
+                    domain.ends_with("googleapis.com")
+                })
+                .as_deref(),
+            Some("youtubei.googleapis.com")
+        );
+        assert!(
+            cache
+                .matching_domain_for_ip("142.250.1.1".parse().unwrap(), |domain| {
+                    domain == "example.com"
+                })
+                .is_none()
         );
     }
 }

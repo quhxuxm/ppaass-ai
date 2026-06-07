@@ -48,7 +48,7 @@ use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
 use tokio::task::JoinHandle;
@@ -58,6 +58,7 @@ use tun_rs::DeviceBuilder;
 
 const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
 const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
+const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TunForwardContext {
@@ -72,14 +73,18 @@ struct TunForwardContext {
 
 struct TunDirectEgress {
     proxy_addrs: Arc<Vec<String>>,
-    bind_interface: std::sync::RwLock<Option<common::BindInterface>>,
+    bind_interface: RwLock<Option<common::BindInterface>>,
+    refresh_lock: Mutex<()>,
+    last_refresh: RwLock<Option<Instant>>,
 }
 
 impl TunDirectEgress {
     fn new(proxy_addrs: Vec<String>, bind_interface: Option<common::BindInterface>) -> Self {
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
-            bind_interface: std::sync::RwLock::new(bind_interface),
+            bind_interface: RwLock::new(bind_interface),
+            refresh_lock: Mutex::new(()),
+            last_refresh: RwLock::new(None),
         }
     }
 
@@ -88,6 +93,34 @@ impl TunDirectEgress {
     }
 
     fn refresh_after_direct_failure(
+        &self,
+        target_ip: IpAddr,
+        tcp_pool: &ConnectionPool,
+        udp_pool: &ConnectionPool,
+        tun_networks: TunNetworks,
+    ) -> Option<common::BindInterface> {
+        if self.refresh_recently() {
+            return self.bind_interface();
+        }
+
+        let _guard = match self.refresh_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("direct access 物理出口刷新锁已恢复：{}", poisoned);
+                poisoned.into_inner()
+            }
+        };
+        if self.refresh_recently() {
+            return self.bind_interface();
+        }
+
+        let refreshed =
+            self.refresh_after_direct_failure_locked(target_ip, tcp_pool, udp_pool, tun_networks);
+        self.mark_refreshed();
+        refreshed
+    }
+
+    fn refresh_after_direct_failure_locked(
         &self,
         target_ip: IpAddr,
         tcp_pool: &ConnectionPool,
@@ -144,6 +177,19 @@ impl TunDirectEgress {
     fn update_bind_interface(&self, bind_interface: Option<common::BindInterface>) {
         if let Ok(mut guard) = self.bind_interface.write() {
             *guard = bind_interface.clone();
+        }
+    }
+
+    fn refresh_recently(&self) -> bool {
+        match self.last_refresh.read().ok().and_then(|guard| *guard) {
+            Some(last_refresh) => last_refresh.elapsed() < DIRECT_EGRESS_REFRESH_COOLDOWN,
+            None => false,
+        }
+    }
+
+    fn mark_refreshed(&self) {
+        if let Ok(mut guard) = self.last_refresh.write() {
+            *guard = Some(Instant::now());
         }
     }
 }

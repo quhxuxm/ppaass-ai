@@ -1,6 +1,26 @@
-use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, get_if_addrs};
+use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, Interface, get_if_addrs};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::sync::{LazyLock, RwLock};
+use std::time::{Duration, Instant};
+
+const IF_ADDRS_CACHE_TTL: Duration = Duration::from_secs(2);
+
+static IF_ADDRS_CACHE: LazyLock<RwLock<InterfaceAddrCache>> =
+    LazyLock::new(|| RwLock::new(InterfaceAddrCache::default()));
+
+#[derive(Default)]
+struct InterfaceAddrCache {
+    interfaces: Vec<Interface>,
+    refreshed_at: Option<Instant>,
+}
+
+impl InterfaceAddrCache {
+    fn is_fresh(&self) -> bool {
+        self.refreshed_at
+            .is_some_and(|refreshed_at| refreshed_at.elapsed() < IF_ADDRS_CACHE_TTL)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct BoundSource {
@@ -18,14 +38,59 @@ pub(super) fn interface_bind_addrs(
     interface: &str,
     dst: SocketAddr,
 ) -> io::Result<Vec<BoundSource>> {
+    let interfaces = cached_if_addrs()?;
+    match interface_bind_addrs_from_snapshot(interface, dst, &interfaces) {
+        Ok(sources) => Ok(sources),
+        Err(err) if should_refresh_if_addrs(&err) => {
+            let interfaces = refresh_if_addrs()?;
+            interface_bind_addrs_from_snapshot(interface, dst, &interfaces)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+pub(super) fn cached_if_addrs() -> io::Result<Vec<Interface>> {
+    if let Ok(cache) = IF_ADDRS_CACHE.read()
+        && cache.is_fresh()
+    {
+        return Ok(cache.interfaces.clone());
+    }
+
+    let mut cache = IF_ADDRS_CACHE
+        .write()
+        .map_err(|_| io::Error::other("网卡地址缓存锁已损坏"))?;
+    if cache.is_fresh() {
+        return Ok(cache.interfaces.clone());
+    }
+    refresh_if_addrs_locked(&mut cache)
+}
+
+pub(super) fn refresh_if_addrs() -> io::Result<Vec<Interface>> {
+    let mut cache = IF_ADDRS_CACHE
+        .write()
+        .map_err(|_| io::Error::other("网卡地址缓存锁已损坏"))?;
+    refresh_if_addrs_locked(&mut cache)
+}
+
+fn refresh_if_addrs_locked(cache: &mut InterfaceAddrCache) -> io::Result<Vec<Interface>> {
+    cache.interfaces = get_if_addrs()?;
+    cache.refreshed_at = Some(Instant::now());
+    Ok(cache.interfaces.clone())
+}
+
+fn interface_bind_addrs_from_snapshot(
+    interface: &str,
+    dst: SocketAddr,
+    interfaces: &[Interface],
+) -> io::Result<Vec<BoundSource>> {
     // 遍历系统网卡地址，找出指定设备上能连接目标地址族的本地源地址。
     let mut interface_exists = false;
     let mut address_family_exists = false;
     let mut candidates = Vec::new();
 
-    for iface in get_if_addrs()? {
+    for iface in interfaces {
         // 只处理用户配置或 auto 选中的那一块网卡。
-        if iface.name != interface {
+        if iface.name.as_str() != interface {
             continue;
         }
 
@@ -90,6 +155,13 @@ pub(super) fn interface_bind_addrs(
         .into_iter()
         .map(|candidate| candidate.source)
         .collect())
+}
+
+fn should_refresh_if_addrs(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::AddrNotAvailable
+    )
 }
 
 pub(super) fn iface_addr_matches_dst(addr: &IfAddr, dst_ip: IpAddr) -> bool {
