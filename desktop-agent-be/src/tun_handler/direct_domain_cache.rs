@@ -69,10 +69,7 @@ impl DirectDomainCache {
     where
         F: FnMut(&str) -> bool,
     {
-        let entry = match self.ip_to_domains.get(&ip) {
-            Some(entry) => entry,
-            None => return None,
-        };
+        let entry = self.ip_to_domains.get(&ip)?;
         if entry.expires_at <= Instant::now() {
             drop(entry);
             self.ip_to_domains.remove(&ip);

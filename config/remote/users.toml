@@ -12,6 +12,8 @@ ywIDAQAB
 -----END PUBLIC KEY-----
 """
 bandwidth_limit_mbps = 100
+# 不配置 expires_at 表示永不过期；配置时使用 RFC3339 时间。
+# expires_at = "2026-12-31T23:59:59Z"
 
 [users.user2]
 username = "user2"

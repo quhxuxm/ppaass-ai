@@ -87,6 +87,12 @@ impl ServerConnection {
             return Err(ProxyError::Authentication("Timestamp expired".to_string()));
         }
 
+        if user_config.is_expired_at(current_time)? {
+            warn!("用户 {} 已过期，拒绝建立 agent 连接", user_config.username);
+            self.send_auth_error("User expired").await?;
+            return Err(ProxyError::Authentication("User expired".to_string()));
+        }
+
         // 使用用户公钥解密 AES 密钥
         let user_public_key = RsaKeyPair::from_public_key_pem(&user_config.public_key_pem)
             .map_err(|e| ProxyError::Authentication(format!("Invalid public key: {}", e)))?;
