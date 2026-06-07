@@ -1,3 +1,10 @@
+//! TUN TCP 流处理。
+//!
+//! netstack 把系统 IP 包还原成 `TcpStream` 后进入这里。处理顺序是：
+//! 1. 过滤 TUN 自身网段和 proxy DNS 特例；
+//! 2. 用 IP/CIDR、DNS 缓存、SNI/Host 嗅探判断是否直连；
+//! 3. 命中直连则连真实目标，否则从 TCP 连接池拿 proxy stream 双向中继。
+
 use super::TunForwardContext;
 use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
@@ -235,6 +242,7 @@ async fn connect_direct_tcp(
     target: SocketAddr,
     bind_interface: Option<&BindInterface>,
 ) -> std::io::Result<TcpStream> {
+    // TUN 直连也要绑定物理接口，否则系统默认路由已指向 TUN 时会出现自回环。
     let socket = Socket::new(
         Domain::for_address(target),
         Type::STREAM,

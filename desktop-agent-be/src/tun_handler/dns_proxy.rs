@@ -1,3 +1,10 @@
+//! TUN DNS 代理。
+//!
+//! 当 TUN 捕获到 UDP/53 且启用 proxy_dns 时，DNS 请求会走这里：
+//! agent 通过 UDP 连接池连接 proxy 的 `Address::ProxyDns` 虚拟目标，让 proxy 端使用
+//! 它所在网络的 DNS 上游解析。同时本模块记录响应中的域名/IP 映射，供 direct_access
+//! 在后续 TCP/UDP IP 连接上还原域名规则。
+
 use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
@@ -39,6 +46,7 @@ struct DnsProxyRequest {
 }
 
 struct PendingDnsRequest {
+    // DNS ID 会被改写成 upstream_id；收到响应后再恢复 original_id 给客户端。
     client: SocketAddr,
     target: SocketAddr,
     original_id: u16,
@@ -90,6 +98,7 @@ async fn run_dns_proxy(
 ) {
     let mut pending = HashMap::new();
     let mut next_id = 0u16;
+    // 共享 DNS proxy 连接断开时，保留当前请求并在重连后优先重发。
     let mut retry_request = None;
     let mut reconnect_delay = Duration::from_millis(200);
 
@@ -237,6 +246,7 @@ where
         .unwrap_or_else(|| ("<unknown>".to_string(), "UNKNOWN".to_string()));
 
     cleanup_pending_dns(pending);
+    // 同一条共享连接上可能有多个并发 DNS 请求；改写 ID 用于区分响应归属。
     let Some(upstream_id) = allocate_dns_id(pending, next_id) else {
         warn!("TUN UDP DNS 待处理请求过多，已丢弃一个请求");
         return Ok(());
@@ -277,6 +287,7 @@ async fn handle_dns_response(
     pending: &mut HashMap<u16, PendingDnsRequest>,
     response: &mut [u8],
 ) -> io::Result<()> {
+    // 根据改写后的 upstream_id 找回原请求，恢复原始 DNS ID 后写回 netstack。
     let Some(upstream_id) = dns_id(response) else {
         debug!("TUN UDP DNS 回复过短，已丢弃");
         return Ok(());

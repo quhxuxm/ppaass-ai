@@ -1,3 +1,9 @@
+//! 直连规则匹配。
+//!
+//! agent 的所有入口（HTTP、SOCKS、TUN TCP/UDP）都会先把目标转换成 `protocol::Address`，
+//! 再用这里判断是否绕过 proxy。TUN 场景下如果目标已经是 IP，还会借助 DNS proxy
+//! 记录的 IP->域名缓存调用 `is_direct_domain` 做二次判断。
+
 use protocol::Address;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

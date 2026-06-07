@@ -1,3 +1,9 @@
+//! TUN UDP 会话处理。
+//!
+//! UDP 在 netstack 层没有连接生命周期，所以外层会按 source/target 近似会话化。
+//! 本模块负责单个会话的直连或代理中继；未命中直连规则的高并发普通 UDP
+//! 通常会被 `udp_relay.rs` 的共享 relay 接走。
+
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
@@ -91,6 +97,7 @@ pub(super) async fn handle_tun_udp(
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
     if !proxy_dns_request {
+        // UDP 没有 TCP 的 SNI 嗅探机会，主要依赖 IP/CIDR 和 DNS proxy 记录的域名缓存。
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if let Some(domain) = direct_domain_cache
@@ -345,6 +352,6 @@ fn bind_direct_udp(
 
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {
-        // Keep the session alive briefly so repeated dropped UDP retries do not spin up tasks.
+        // 保持会话短暂存活，避免应用持续重试被丢弃 UDP 时频繁创建/销毁任务。
     }
 }

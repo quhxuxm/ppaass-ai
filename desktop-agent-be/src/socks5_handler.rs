@@ -1,3 +1,9 @@
+//! 本地 SOCKS5 代理入口。
+//!
+//! TCP CONNECT/BIND 走 `tcp.rs`，UDP ASSOCIATE 走 `udp_associate.rs`。
+//! 本模块只负责 SOCKS5 握手、命令分发，以及把 fast-socks5 的目标地址
+//! 转成项目内部的 `protocol::Address`。
+
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
@@ -44,7 +50,7 @@ pub async fn handle_socks5_connection(
     // 使用新的 fast-socks5 1.0 API 和 Socks5ServerProtocol
     let protocol: Socks5ServerProtocol<TcpStream, Opened> = Socks5ServerProtocol::start(stream);
 
-    // 协商认证 - 为简单起见使用无认证方式
+    // 协商认证 - 本地代理默认无认证；用户身份由 agent->proxy 连接的密钥认证承担。
     let auth_state = protocol
         .negotiate_auth::<NoAuthentication>(&[NoAuthentication])
         .await

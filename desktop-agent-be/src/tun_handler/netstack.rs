@@ -1,7 +1,15 @@
+//! netstack supervisor。
+//!
+//! TUN 模式依赖用户态协议栈把 IP 包还原成 TCP/UDP 流。这里把一组相关任务
+//! 作为一个 generation 管理：runner、TUN<->stack 包桥、TCP listener、UDP sessions。
+//! 任一关键任务退出都会取消整组并重建，提升 TUN 模式长期运行的恢复能力。
+
 use super::*;
 
 struct NetstackGeneration {
+    // generation id 只用于日志，方便判断是否经历过重建。
     id: u64,
+    // 子 token 用于停止当前 generation，不影响父级 TUN shutdown token。
     shutdown: CancellationToken,
     runner: JoinHandle<NetstackRunnerExit>,
     tun_to_stack: JoinHandle<()>,
@@ -55,6 +63,7 @@ fn start_netstack_generation(
     block_quic: bool,
     parent_shutdown: &CancellationToken,
 ) -> Result<NetstackGeneration> {
+    // 每次 generation 都重新构建 StackBuilder，避免复用已经异常退出的内部状态。
     let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
         .enable_tcp(true)
         .enable_udp(true)
@@ -97,6 +106,7 @@ async fn run_netstack_supervisor(
     let mut restart_delay = Duration::from_millis(200);
 
     loop {
+        // 等待任一关键任务退出；只要不是外部 shutdown，就整体重建 generation。
         let stopped_task = tokio::select! {
             _ = shutdown.cancelled() => {
                 None
@@ -133,6 +143,7 @@ async fn run_netstack_supervisor(
             break;
         };
 
+        // 一个任务退出时，其余同 generation 任务也必须停止，否则会继续持有旧 stack 资源。
         stop_netstack_generation(generation, Some(stopped_task)).await;
         if shutdown.is_cancelled() {
             break;

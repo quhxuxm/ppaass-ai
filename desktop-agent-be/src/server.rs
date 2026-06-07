@@ -1,3 +1,9 @@
+//! Desktop Agent 本地服务层。
+//!
+//! 这一层负责监听本地端口，自动识别 SOCKS5/HTTP 客户端，并在需要时并行启动
+//! TUN 模式。真正的目标连接不会在这里建立，而是交给 `ConnectionPool` 获取
+//! 已认证的 agent->proxy 流，或由 `DirectAccessChecker` 决定直连。
+
 use crate::config::AgentConfig;
 use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
@@ -13,9 +19,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument};
 
 pub struct AgentServer {
+    // 全局只读配置；连接处理任务通过 Arc 克隆读取。
     config: Arc<AgentConfig>,
+    // TCP 语义的 proxy 连接池，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
     tcp_pool: Arc<ConnectionPool>,
+    // UDP 语义的 proxy 连接池，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
     udp_pool: Arc<ConnectionPool>,
+    // 直连规则：命中后绕过 proxy，直接使用本机网络出口连接目标。
     direct_access_checker: Arc<DirectAccessChecker>,
 }
 
@@ -144,7 +154,8 @@ async fn handle_connection(
     udp_pool: Arc<ConnectionPool>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
-    // 通过窥探第一个字节来检测协议类型
+    // 通过窥探第一个字节来检测协议类型。
+    // 同一个 listen_addr 同时服务 SOCKS5 和 HTTP 代理，减少用户配置成本。
     let mut buffer = [0u8; 1];
     stream.peek(&mut buffer).await?;
 

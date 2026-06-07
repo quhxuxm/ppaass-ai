@@ -62,17 +62,24 @@ const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TunForwardContext {
+    // TCP/UDP 两类 proxy 连接池分开，避免 UDP 高并发挤占 TCP 预热连接。
     tcp_pool: Arc<ConnectionPool>,
     udp_pool: Arc<ConnectionPool>,
+    // TUN TCP/UDP 都会复用同一套直连规则。
     direct_checker: Arc<DirectAccessChecker>,
+    // DNS proxy 会记录域名解析结果，TCP/UDP 后续可用 IP -> 域名映射命中直连规则。
     direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
+    // true 时，系统 DNS 请求会被映射成 proxy 端 DNS 虚拟目标。
     proxy_dns: bool,
+    // 直连路径的物理出口绑定信息，可在失败后刷新。
     direct_egress: Arc<TunDirectEgress>,
 }
 
 struct TunDirectEgress {
+    // 用 proxy 地址探测当前物理出口，防止 TUN 默认路由生效后误选到 TUN。
     proxy_addrs: Arc<Vec<String>>,
+    // 直连 socket 使用的物理接口绑定；macOS/Windows 常靠 if_index，Linux 可用 name。
     bind_interface: RwLock<Option<common::BindInterface>>,
     refresh_lock: Mutex<()>,
     last_refresh: RwLock<Option<Instant>>,
@@ -99,6 +106,7 @@ impl TunDirectEgress {
         udp_pool: &ConnectionPool,
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
+        // 直连失败后刷新物理出口，但用冷却时间避免大量连接同时触发路由探测。
         if self.refresh_recently() {
             return self.bind_interface();
         }
@@ -223,6 +231,7 @@ pub async fn run_tun_mode(
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
+    // 这个顺序非常关键：先固定控制连接出口，再安装 TUN/split-default 路由。
     let proxy_bind_interface =
         configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool, &shutdown).await;
 

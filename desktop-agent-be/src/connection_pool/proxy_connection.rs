@@ -1,3 +1,9 @@
+//! agent 到 proxy 的单条认证连接。
+//!
+//! 本模块把 `AgentConfig` 适配成 common crate 的 `ClientConnectionConfig`，
+//! 然后复用 common 的握手逻辑：TCP connect -> Auth -> 等待后续 Connect。
+//! legacy 连接池保存的就是这里创建出的 `ProxyConnection`。
+
 use std::{
     fs::read_to_string,
     net::{IpAddr, SocketAddr},
@@ -41,6 +47,7 @@ impl<'a> AgentClientConfig<'a> {
 impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     fn remote_addr(&self) -> String {
         // 每条代理连接随机选择一个 proxy 地址，实现简单负载分散。
+        // 如果某个地址不可达，本次连接会失败；上层连接池负责重试/补充。
         use rand::prelude::*;
         let mut rng = rand::rng();
         self.config
@@ -131,6 +138,7 @@ impl ProxyConnection {
         outer_address: Address,
         transport: TransportProtocol,
     ) -> Result<YamuxClientConnection> {
+        // Yamux 外层也走同一套认证配置，只是认证成功后立即 CONNECT 到虚拟 Yamux 地址。
         let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
         let yamux_settings = match transport {
             TransportProtocol::Udp => config.yamux.udp_settings(),

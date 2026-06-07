@@ -1,3 +1,9 @@
+//! Yamux 客户端外层连接。
+//!
+//! 这里先用 legacy Auth/Connect 建立到 proxy 的虚拟 Yamux 目标，然后在这条外层流上
+//! 创建 tokio-yamux session。每个真实目标连接通过打开子流并写入一个小的
+//! ConnectRequest 控制帧完成。
+
 use futures::StreamExt;
 use protocol::{
     Address, ConnectRequest, TransportProtocol, read_yamux_connect_response,
@@ -27,10 +33,12 @@ const MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION: usize = 16;
 
 #[derive(Clone)]
 pub struct YamuxClientConnection {
+    // tokio-yamux 控制句柄，用于打开新的出站子流。
     control: tokio_yamux::Control,
     settings: YamuxSettings,
     connect_response_timeout: Duration,
     open_stream_permits: Arc<Semaphore>,
+    // 控制同一外层 session 中存活的业务子流数量。
     stream_permits: Arc<Semaphore>,
     transport: TransportProtocol,
 }
@@ -78,6 +86,7 @@ impl YamuxClientConnection {
         }
 
         let connect_response_timeout = config.timeout_duration().max(settings.open_stream_timeout);
+        // 外层 session 先是一条普通已认证连接，再 CONNECT 到 TcpYamux/UdpYamux 虚拟地址。
         let auth_conn = AuthenticatedConnection::authenticate_only(config).await?;
         let (outer_stream, outer_stream_id) = auth_conn
             .connect_to_target(outer_address.clone(), transport)
@@ -92,6 +101,7 @@ impl YamuxClientConnection {
         let stream_permits = Arc::new(Semaphore::new(settings.max_streams_per_session));
 
         spawn_guarded("yamux client session", async move {
+            // agent 侧只主动打开子流；如果收到入站子流，说明对端行为不符合当前协议约定。
             while let Some(result) = session.next().await {
                 match result {
                     Ok(mut inbound_stream) => {
@@ -144,12 +154,14 @@ impl YamuxClientConnection {
             transport,
         };
 
+        // stream_permit 覆盖业务子流整个生命周期；YamuxClientStream Drop 后释放。
         let permit = self
             .stream_permits
             .clone()
             .acquire_owned()
             .await
             .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
+        // open_stream 本身也限流，避免短时间大量并发 open 卡住 session control。
         let open_permit = self
             .open_stream_permits
             .clone()
@@ -170,6 +182,7 @@ impl YamuxClientConnection {
         drop(open_permit);
 
         let response = tokio::time::timeout(self.connect_response_timeout, async {
+            // 子流第一帧是控制信息；收到 success 后，该子流才开始承载裸 payload。
             debug!("通过 Yamux 子流发送连接请求：{request:?}");
             write_yamux_connect_request(&mut stream, &request).await?;
             let response = read_yamux_connect_response(&mut stream).await?;

@@ -1,3 +1,8 @@
+//! 从连接池取得“已经连接目标”的流。
+//!
+//! 对上层 HTTP/SOCKS/TUN 来说，调用这里后拿到的就是可读写的目标流；
+//! 这里内部会决定用 Yamux 子流、legacy 预热连接，还是按需新建连接。
+
 use super::*;
 
 impl ConnectionPool {
@@ -10,6 +15,8 @@ impl ConnectionPool {
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
         if self.use_yamux && self.yamux_transport == Some(transport) {
+            // Yamux 是优先路径：不用为每个目标重新 TCP connect + Auth。
+            // auto 模式允许在 Yamux 外层不可用时回退 legacy，yamux 模式则直接报错。
             match self
                 .get_yamux_connected_stream(address.clone(), transport)
                 .await
@@ -26,6 +33,7 @@ impl ConnectionPool {
         }
 
         loop {
+            // legacy 路径：先尝试消费一条预热连接；池空时同步新建，保证请求可继续。
             let (conn, from_pool) = match self.pool.try_remove() {
                 Ok(conn) => {
                     // 取出的连接会被本次请求消费，不再归还池中。

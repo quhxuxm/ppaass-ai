@@ -1,3 +1,8 @@
+//! Desktop Agent 配置模型。
+//!
+//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、连接池、
+//! transport/Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
+
 use crate::direct_access::DirectAccessConfig;
 use common::{TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;

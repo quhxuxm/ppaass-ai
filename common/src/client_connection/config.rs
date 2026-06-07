@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use socket2::Socket;
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
 
-/// Optional interface constraint for outbound client connections.
+/// 出站客户端连接的可选接口约束。
+///
+/// `bind_addr` 负责绑定本地源 IP，`bind_interface` 负责按平台绑定网卡名或 if_index。
+/// TUN 模式会同时使用两者，确保 agent->proxy 控制连接不被默认路由重新送回 TUN。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindInterface {
     pub name: Option<String>,
