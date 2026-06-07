@@ -1,3 +1,9 @@
+//! Yamux 子流处理。
+//!
+//! 外层 session 只负责复用连接；每个子流打开后，第一帧仍然是一个小的
+//! `ConnectRequest` 控制帧，用来说明这个子流要连哪个真实目标。
+//! 连接成功后，子流本身就变成 agent 与目标之间的裸字节通道。
+
 use super::target::{relay_target_addr, target_addr_for_address};
 use super::udp_relay_flow::{
     QueuedUdpRelayData, QueuedUdpRelayResponse, UdpRelayFlow, UdpRelayFlowChannels,
@@ -20,6 +26,7 @@ pub(super) async fn handle_yamux_tcp_stream(
     bandwidth_monitor: Arc<BandwidthMonitor>,
     username: Option<String>,
 ) -> Result<()> {
+    // 子流控制帧不走 ProxyCodec，而是直接在 Yamux stream 内用长度前缀写 ConnectRequest。
     let connect_request = read_yamux_connect_request(&mut stream).await?;
     debug!(
         "[Yamux 连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
@@ -62,6 +69,7 @@ pub(super) async fn handle_yamux_tcp_stream(
     }
 
     if proxy_config.forward_mode {
+        // forward 模式下子流不直连目标，而是把子流接到下一跳 proxy 的 ClientStream。
         return handle_yamux_upstream_connect(stream, connect_request, proxy_config).await;
     }
 
@@ -136,6 +144,7 @@ pub(super) async fn handle_yamux_udp_stream(
     username: Option<String>,
     connection_limiter: ConnectionLimiter,
 ) -> Result<()> {
+    // UDP Yamux 子流也先读 ConnectRequest；后续根据目标类型进入单目标 UDP 或共享 UDP relay。
     let connect_request = read_yamux_connect_request(&mut stream).await?;
     debug!(
         "[Yamux UDP 连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
@@ -213,6 +222,7 @@ pub(super) async fn handle_yamux_udp_stream(
     }
 
     if matches!(connect_request.address, Address::UdpRelay) {
+        // 在 UDP Yamux 内再承载共享 UDP relay，用于让一个子流复用多个 UDP flow。
         send_yamux_connect_success(
             &mut stream,
             connect_request.request_id,
@@ -339,6 +349,7 @@ async fn relay_yamux_tcp_stream<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
+    // Yamux 子流天然就是 AsyncRead/AsyncWrite，所以 TCP 路径可直接与目标流双向拷贝。
     if idle_timeout_secs == 0 {
         match tokio::io::copy_bidirectional_with_sizes(
             &mut agent_stream,
@@ -448,6 +459,7 @@ async fn relay_yamux_udp_byte_stream<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
+    // UDP payload 需要保留数据报边界；DatagramStreamIo 在字节接口上做一层数据报封装。
     let mut agent_io = DatagramStreamIo::new(agent_stream);
     if idle_timeout_secs == 0 {
         match tokio::io::copy_bidirectional(&mut agent_io, &mut target_stream).await {
@@ -548,6 +560,7 @@ async fn relay_yamux_udp_stream(
     udp_socket: UdpSocket,
     idle_timeout_secs: u64,
 ) -> Result<()> {
+    // 单目标 UDP：一个 Yamux 子流对应一个已 connect 的 UDP socket。
     let agent_io = DatagramStreamIo::new(agent_stream);
     let udp_socket = Arc::new(udp_socket);
     let udp_recv = udp_socket.clone();

@@ -1,3 +1,9 @@
+//! 认证阶段与 pre-connect 等待阶段。
+//!
+//! 一条 agent TCP 连接进入 proxy 后，第一条业务消息必须是 `Auth`。
+//! proxy 先从 Auth 中取用户名查 `users.toml`，再用对应用户公钥校验/解出
+//! agent 发来的 AES 会话密钥。认证成功后，后续协议帧才会使用这把 AES key。
+
 use super::*;
 
 impl ServerConnection {
@@ -13,8 +19,8 @@ impl ServerConnection {
     /// 在不完成认证的情况下窥探认证请求并获取用户名
     #[instrument(skip(self))]
     pub async fn peek_auth_username(&mut self) -> Result<String> {
-        // 接收认证请求
-        // 第一个请求始终应为 AuthRequest（认证请求）？
+        // 接收认证请求。这里“窥探”不是偷看 TCP 缓冲区，而是正常读走第一帧，
+        // 只先提取 username；完整 AuthRequest 暂存到 pending_auth_request。
         let request = match self.read_request().await? {
             Some(req) => req,
             None => return Err(ProxyError::Connection("Connection closed".to_string())),
@@ -73,7 +79,8 @@ impl ServerConnection {
             hex::encode(&auth_request.encrypted_aes_key)
         );
 
-        // 校验用户名是否匹配
+        // 校验用户名是否匹配：TOML 表键、UserConfig.username、AuthRequest.username
+        // 三者必须指向同一个用户，避免拿 A 用户的配置认证 B 用户的请求。
         if auth_request.username != user_config.username {
             self.send_auth_error("Username mismatch").await?;
             return Err(ProxyError::Authentication("Username mismatch".to_string()));
@@ -87,13 +94,16 @@ impl ServerConnection {
             return Err(ProxyError::Authentication("Timestamp expired".to_string()));
         }
 
+        // 用户过期属于认证边界的一部分：过期账号不再进入后续 CONNECT/relay 阶段。
         if user_config.is_expired_at(current_time)? {
             warn!("用户 {} 已过期，拒绝建立 agent 连接", user_config.username);
             self.send_auth_error("User expired").await?;
             return Err(ProxyError::Authentication("User expired".to_string()));
         }
 
-        // 使用用户公钥解密 AES 密钥
+        // 使用用户公钥解出 AES 密钥。
+        // 这个项目的握手约定是：agent 持有私钥，proxy 持有公钥；
+        // 成功解出会话密钥说明 agent 能证明自己拥有该用户私钥。
         let user_public_key = RsaKeyPair::from_public_key_pem(&user_config.public_key_pem)
             .map_err(|e| ProxyError::Authentication(format!("Invalid public key: {}", e)))?;
 
@@ -138,7 +148,8 @@ impl ServerConnection {
 
         self.user_config = Some(user_config);
 
-        // 更新后续消息使用的加密状态
+        // 更新后续消息使用的加密状态。
+        // 注意要先发送未加密的 AuthResponse，再设置 cipher；agent 端也在收到成功响应后启用 AES。
         self.cipher_state.set_cipher(Arc::new(aes_cipher));
 
         debug!("认证成功");
