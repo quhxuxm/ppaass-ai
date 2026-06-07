@@ -73,22 +73,15 @@ pub(super) async fn handle_tun_udp(
         target.to_string()
     };
 
-    if block_quic && !proxy_dns_request && target.port() == 443 {
-        debug!(
-            "TUN UDP/443 QUIC 已阻断 -> {}，等待应用回退 TCP",
-            target_label
-        );
-        drain_dropped_udp(rx).await;
-        return Ok(());
-    }
-
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
     if !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
-        } else if let Some(domain) = direct_domain_cache.domain_for_ip(target.ip())
-            && direct_checker.is_direct_domain(&domain)
+        } else if let Some(domain) = direct_domain_cache
+            .domains_for_ip(target.ip())
+            .into_iter()
+            .find(|domain| direct_checker.is_direct_domain(domain))
         {
             match resolve_via_system("UDP", client, &domain, target.port(), target.ip()).await {
                 Ok(resolved) => {
@@ -107,6 +100,15 @@ pub(super) async fn handle_tun_udp(
                 }
             }
         }
+    }
+
+    if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
+        debug!(
+            "TUN UDP/443 QUIC 已阻断 -> {}，等待应用回退 TCP",
+            target_label
+        );
+        drain_dropped_udp(rx).await;
+        return Ok(());
     }
 
     if let Some(connect_target) = direct_target {

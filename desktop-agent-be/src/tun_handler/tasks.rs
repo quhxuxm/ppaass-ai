@@ -129,16 +129,14 @@ pub(super) fn spawn_udp_sessions(
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
-        let dns_proxy = context
-            .proxy_dns
-            .then(|| {
-                DnsProxy::spawn(
-                    context.udp_pool.clone(),
-                    udp_tx.clone(),
-                    context.direct_domain_cache.clone(),
-                    shutdown.clone(),
-                )
-            });
+        let dns_proxy = context.proxy_dns.then(|| {
+            DnsProxy::spawn(
+                context.udp_pool.clone(),
+                udp_tx.clone(),
+                context.direct_domain_cache.clone(),
+                shutdown.clone(),
+            )
+        });
         let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
 
         loop {
@@ -174,30 +172,32 @@ pub(super) fn spawn_udp_sessions(
                         debug!("TUN UDP 目标已拒绝：{e}");
                         continue;
                     }
-                    if block_quic && target_addr.port() == 443 {
-                        debug!("TUN UDP/443 QUIC 已阻断 -> {}", target_addr);
-                        continue;
-                    }
-
-                    let mut direct_match = context.direct_checker.is_direct(&address);
-                    if !direct_match
-                        && let Some(domain) =
-                            context.direct_domain_cache.domain_for_ip(target_addr.ip())
-                    {
-                        direct_match = context.direct_checker.is_direct_domain(&domain);
-                    }
-
-                    if !direct_match {
-                        udp_relay.send(source_addr, target_addr, data);
-                        continue;
-                    }
 
                     let key = (source_addr, target_addr);
-                    // 已存在会话时只把新 payload 投递给该会话任务。
+                    // 已存在的 direct 会话优先复用，避免域名缓存过期后把同一 UDP 流切到 proxy。
                     if let Some(tx) = sessions.get(&key).map(|t| t.clone()) {
                         if tx.try_send(data).is_err() {
                             debug!("TUN UDP 会话队列已满，丢弃一个 UDP 包 -> {}", target_addr);
                         }
+                        continue;
+                    }
+
+                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    if !direct_match {
+                        direct_match = context
+                            .direct_domain_cache
+                            .domains_for_ip(target_addr.ip())
+                            .into_iter()
+                            .any(|domain| context.direct_checker.is_direct_domain(&domain));
+                    }
+
+                    if block_quic && target_addr.port() == 443 && !direct_match {
+                        debug!("TUN UDP/443 QUIC 已阻断 -> {}", target_addr);
+                        continue;
+                    }
+
+                    if !direct_match {
+                        udp_relay.send(source_addr, target_addr, data);
                         continue;
                     }
 

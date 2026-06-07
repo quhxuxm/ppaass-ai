@@ -4,20 +4,20 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct DomainCacheEntry {
-    domain: String,
+    domains: Vec<String>,
     expires_at: Instant,
 }
 
 pub(super) struct DirectDomainCache {
     ttl: Duration,
-    ip_to_domain: DashMap<IpAddr, DomainCacheEntry>,
+    ip_to_domains: DashMap<IpAddr, DomainCacheEntry>,
 }
 
 impl DirectDomainCache {
     pub(super) fn new(ttl: Duration) -> Self {
         Self {
             ttl,
-            ip_to_domain: DashMap::new(),
+            ip_to_domains: DashMap::new(),
         }
     }
 
@@ -30,28 +30,75 @@ impl DirectDomainCache {
         let expires_at = Instant::now() + self.ttl;
         for answer in answers {
             if let Ok(ip) = answer.parse::<IpAddr>() {
-                self.ip_to_domain.insert(
-                    ip,
-                    DomainCacheEntry {
-                        domain: domain.clone(),
-                        expires_at,
-                    },
-                );
+                if let Some(mut entry) = self.ip_to_domains.get_mut(&ip) {
+                    if entry.expires_at <= Instant::now() {
+                        entry.domains.clear();
+                    }
+                    if !entry.domains.iter().any(|existing| existing == &domain) {
+                        entry.domains.push(domain.clone());
+                    }
+                    entry.expires_at = expires_at;
+                } else {
+                    self.ip_to_domains.insert(
+                        ip,
+                        DomainCacheEntry {
+                            domains: vec![domain.clone()],
+                            expires_at,
+                        },
+                    );
+                }
             }
         }
     }
 
-    pub(super) fn domain_for_ip(&self, ip: IpAddr) -> Option<String> {
-        let entry = self.ip_to_domain.get(&ip)?;
+    pub(super) fn domains_for_ip(&self, ip: IpAddr) -> Vec<String> {
+        let entry = match self.ip_to_domains.get(&ip) {
+            Some(entry) => entry,
+            None => return Vec::new(),
+        };
         if entry.expires_at <= Instant::now() {
             drop(entry);
-            self.ip_to_domain.remove(&ip);
-            return None;
+            self.ip_to_domains.remove(&ip);
+            return Vec::new();
         }
-        Some(entry.domain.clone())
+        entry.domains.clone()
     }
 }
 
 fn normalize_domain(domain: &str) -> String {
     domain.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_multiple_domains_for_shared_ip() {
+        let cache = DirectDomainCache::new(Duration::from_secs(60));
+        cache.record_resolution("www.youtube.com", &["142.250.1.1".to_string()]);
+        cache.record_resolution("youtubei.googleapis.com", &["142.250.1.1".to_string()]);
+
+        assert_eq!(
+            cache.domains_for_ip("142.250.1.1".parse().unwrap()),
+            vec![
+                "www.youtube.com".to_string(),
+                "youtubei.googleapis.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_non_ip_answers() {
+        let cache = DirectDomainCache::new(Duration::from_secs(60));
+        cache.record_resolution(
+            "www.youtube.com",
+            &["rr1.googlevideo.com".to_string(), "142.250.1.1".to_string()],
+        );
+
+        assert_eq!(
+            cache.domains_for_ip("142.250.1.1".parse().unwrap()),
+            vec!["www.youtube.com".to_string()]
+        );
+    }
 }
