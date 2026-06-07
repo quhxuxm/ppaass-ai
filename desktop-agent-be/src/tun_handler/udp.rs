@@ -34,6 +34,19 @@ pub(super) struct UdpSessionContext {
     pub(super) direct_egress: Arc<super::TunDirectEgress>,
 }
 
+struct DirectUdpRelayContext {
+    client: SocketAddr,
+    original_target: SocketAddr,
+    connect_target: SocketAddr,
+    target_label: String,
+    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    netstack_tx: UdpWriter,
+    direct_egress: Arc<super::TunDirectEgress>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
+    tun_networks: TunNetworks,
+}
+
 pub(super) async fn handle_tun_udp(
     client: SocketAddr,
     target: SocketAddr,
@@ -117,18 +130,18 @@ pub(super) async fn handle_tun_udp(
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         let target_str = address_to_string(&address);
         debug!("TUN UDP 直连 -> {}", target_str);
-        relay_direct_udp(
+        relay_direct_udp(DirectUdpRelayContext {
             client,
-            target,
+            original_target: target,
             connect_target,
-            direct_label,
+            target_label: direct_label,
             rx,
             netstack_tx,
             direct_egress,
             tcp_pool,
             udp_pool,
             tun_networks,
-        )
+        })
         .await?;
         return Ok(());
     }
@@ -199,18 +212,20 @@ pub(super) async fn handle_tun_udp(
     Ok(())
 }
 
-async fn relay_direct_udp(
-    client: SocketAddr,
-    original_target: SocketAddr,
-    connect_target: SocketAddr,
-    target_label: String,
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    netstack_tx: UdpWriter,
-    direct_egress: Arc<super::TunDirectEgress>,
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
-    tun_networks: TunNetworks,
-) -> Result<()> {
+async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
+    let DirectUdpRelayContext {
+        client,
+        original_target,
+        connect_target,
+        target_label,
+        mut rx,
+        netstack_tx,
+        direct_egress,
+        tcp_pool,
+        udp_pool,
+        tun_networks,
+    } = context;
+
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
     let socket = connect_direct_udp_with_refresh(
         connect_target,
