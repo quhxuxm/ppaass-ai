@@ -170,7 +170,7 @@ impl TunDirectEgress {
                 "无法从系统默认路由刷新 direct access 物理接口，保留旧接口绑定 {:?}",
                 self.bind_interface()
             );
-            return self.bind_interface();
+            self.bind_interface()
         }
     }
 
