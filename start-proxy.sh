@@ -11,6 +11,7 @@
 # Optional environment variables:
 #   PROXY_CONFIG=proxy.toml        Override config path
 #   PROXY_RESTART_DELAY=3          Seconds to wait before restarting proxy
+#   PROXY_START_TIMEOUT=15         Seconds to wait for startup verification
 
 set -u
 
@@ -23,6 +24,7 @@ SUPERVISOR_PID_FILE="$LOG_DIR/proxy-supervisor.pid"
 PROXY_PID_FILE="$LOG_DIR/proxy.pid"
 CONFIG_PATH="${PROXY_CONFIG:-proxy.toml}"
 RESTART_DELAY="${PROXY_RESTART_DELAY:-3}"
+START_TIMEOUT="${PROXY_START_TIMEOUT:-15}"
 
 read_pid() {
     local pid_file="$1"
@@ -34,6 +36,24 @@ read_pid() {
 is_running() {
     local pid="${1:-}"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+ensure_proxy_binary() {
+    if [ ! -f "./proxy" ]; then
+        echo "Error: ./proxy binary not found in script directory." >&2
+        return 1
+    fi
+
+    if [ ! -x "./proxy" ]; then
+        chmod +x ./proxy 2>/dev/null || true
+    fi
+
+    if [ ! -x "./proxy" ]; then
+        echo "Error: ./proxy binary is not executable." >&2
+        return 1
+    fi
+
+    return 0
 }
 
 wait_for_exit() {
@@ -128,6 +148,44 @@ status_proxy() {
     fi
 }
 
+tail_proxy_start_log() {
+    if [ -f "$LOG_DIR/proxy.out" ]; then
+        echo "Last proxy supervisor log lines:" >&2
+        tail -n 80 "$LOG_DIR/proxy.out" >&2
+    fi
+}
+
+wait_for_start() {
+    local timeout_secs="${1:-15}"
+    local elapsed=0
+    local supervisor_pid proxy_pid
+
+    while [ "$elapsed" -lt "$timeout_secs" ]; do
+        supervisor_pid="$(read_pid "$SUPERVISOR_PID_FILE")"
+        proxy_pid="$(read_pid "$PROXY_PID_FILE")"
+
+        if is_running "$supervisor_pid" && is_running "$proxy_pid"; then
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo "Error: Proxy did not start within ${timeout_secs}s." >&2
+    status_proxy >&2
+    tail_proxy_start_log
+    return 1
+}
+
+start_detached_supervisor() {
+    if command -v setsid >/dev/null 2>&1; then
+        nohup setsid bash "$SCRIPT_PATH" --supervisor > "$LOG_DIR/proxy.out" 2>&1 &
+    else
+        nohup bash "$SCRIPT_PATH" --supervisor > "$LOG_DIR/proxy.out" 2>&1 &
+    fi
+}
+
 run_supervisor() {
     local stop_requested=0
     local child_pid=""
@@ -151,8 +209,7 @@ run_supervisor() {
     trap request_stop INT TERM
 
     while [ "$stop_requested" -eq 0 ]; do
-        if [ ! -f "./proxy" ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') Error: ./proxy binary not found in script directory."
+        if ! ensure_proxy_binary; then
             break
         fi
 
@@ -188,8 +245,7 @@ run_supervisor() {
 }
 
 start_proxy() {
-    if [ ! -f "./proxy" ]; then
-        echo "Error: ./proxy binary not found in script directory."
+    if ! ensure_proxy_binary; then
         exit 1
     fi
 
@@ -197,10 +253,16 @@ start_proxy() {
     stop_proxy
 
     echo "Starting Proxy supervisor..."
-    nohup bash "$SCRIPT_PATH" --supervisor > "$LOG_DIR/proxy.out" 2>&1 &
+    start_detached_supervisor
     echo "$!" > "$SUPERVISOR_PID_FILE"
     echo "Proxy supervisor started with PID $!"
     echo "Logs: $SCRIPT_DIR/$LOG_DIR/proxy.out"
+
+    if ! wait_for_start "$START_TIMEOUT"; then
+        return 1
+    fi
+
+    status_proxy
 }
 
 case "${1:-start}" in
