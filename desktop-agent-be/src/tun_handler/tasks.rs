@@ -212,10 +212,11 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: context.proxy_dns,
                         block_quic,
                         netstack_tx: udp_tx.clone(),
+                        tcp_pool: context.tcp_pool.clone(),
                         udp_pool: context.udp_pool.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
-                        direct_bind_interface: context.direct_bind_interface.clone(),
+                        direct_egress: context.direct_egress.clone(),
                     };
                     spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。

@@ -3,7 +3,7 @@ use super::network::{
 };
 use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
-use crate::error::Result;
+use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use futures::SinkExt;
@@ -27,10 +27,11 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) block_quic: bool,
     pub(super) netstack_tx: UdpWriter,
+    pub(super) tcp_pool: Arc<ConnectionPool>,
     pub(super) udp_pool: Arc<ConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
-    pub(super) direct_bind_interface: Option<BindInterface>,
+    pub(super) direct_egress: Arc<super::TunDirectEgress>,
 }
 
 pub(super) async fn handle_tun_udp(
@@ -45,10 +46,11 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         block_quic,
         netstack_tx,
+        tcp_pool,
         udp_pool,
         direct_checker,
         direct_domain_cache,
-        direct_bind_interface,
+        direct_egress,
     } = context;
 
     // UDP 目标同样先处理 proxy DNS 虚拟地址。
@@ -122,7 +124,10 @@ pub(super) async fn handle_tun_udp(
             direct_label,
             rx,
             netstack_tx,
-            direct_bind_interface,
+            direct_egress,
+            tcp_pool,
+            udp_pool,
+            tun_networks,
         )
         .await?;
         return Ok(());
@@ -201,11 +206,21 @@ async fn relay_direct_udp(
     target_label: String,
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
-    direct_bind_interface: Option<BindInterface>,
+    direct_egress: Arc<super::TunDirectEgress>,
+    tcp_pool: Arc<ConnectionPool>,
+    udp_pool: Arc<ConnectionPool>,
+    tun_networks: TunNetworks,
 ) -> Result<()> {
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
-    let socket = bind_direct_udp(connect_target, direct_bind_interface.as_ref())?;
-    socket.connect(connect_target).await?;
+    let socket = connect_direct_udp_with_refresh(
+        connect_target,
+        &target_label,
+        direct_egress.as_ref(),
+        tcp_pool.as_ref(),
+        udp_pool.as_ref(),
+        tun_networks,
+    )
+    .await?;
     let socket = Arc::new(socket);
 
     let socket_w = socket.clone();
@@ -246,6 +261,48 @@ async fn relay_direct_udp(
     }
     telemetry::emit_traffic("TUN UDP (直连)", target_label, 0, 0);
     Ok(())
+}
+
+async fn connect_direct_udp_with_refresh(
+    target: SocketAddr,
+    target_label: &str,
+    direct_egress: &super::TunDirectEgress,
+    tcp_pool: &ConnectionPool,
+    udp_pool: &ConnectionPool,
+    tun_networks: TunNetworks,
+) -> Result<UdpSocket> {
+    let initial_bind_interface = direct_egress.bind_interface();
+    match connect_direct_udp(target, initial_bind_interface.as_ref()).await {
+        Ok(socket) => Ok(socket),
+        Err(first_err) => {
+            debug!(
+                "TUN UDP 直连首次失败，刷新物理出口后重试：target={} bind_interface={:?} error={}",
+                target_label, initial_bind_interface, first_err
+            );
+            let refreshed_bind_interface = direct_egress.refresh_after_direct_failure(
+                target.ip(),
+                tcp_pool,
+                udp_pool,
+                tun_networks,
+            );
+            connect_direct_udp(target, refreshed_bind_interface.as_ref())
+                .await
+                .map_err(|retry_err| {
+                    AgentError::Connection(format!(
+                        "UDP 直连 {target_label} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}"
+                    ))
+                })
+        }
+    }
+}
+
+async fn connect_direct_udp(
+    target: SocketAddr,
+    bind_interface: Option<&BindInterface>,
+) -> std::io::Result<UdpSocket> {
+    let socket = bind_direct_udp(target, bind_interface)?;
+    socket.connect(target).await?;
+    Ok(socket)
 }
 
 fn bind_direct_udp(

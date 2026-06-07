@@ -52,6 +52,13 @@ pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
     None
 }
 
+pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
+    let routes = RouteManager::new()
+        .and_then(|mut manager| manager.list())
+        .ok()?;
+    default_route(&routes, want_v6).and_then(route_bind_interface)
+}
+
 /// 将 `proxy_addrs` 中的每个 "host:port" 字符串解析为唯一 IP 列表。
 /// 解析失败的主机名会被静默跳过（会打印警告）。
 pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
@@ -95,6 +102,12 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
 /// 返回 (网关, if_index) 以供安装旁路路由使用。
 /// `want_v6 == true` 时查找 ::/0 而非 0.0.0.0/0。
 pub(super) fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpAddr>, Option<u32>) {
+    default_route(routes, want_v6)
+        .map(|route| (route.gateway(), route.if_index()))
+        .unwrap_or((None, None))
+}
+
+fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
     routes
         .iter()
         .filter(|route| {
@@ -111,8 +124,6 @@ pub(super) fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpA
             }
         })
         .max_by(|left, right| left.cmp(right))
-        .map(|route| (route.gateway(), route.if_index()))
-        .unwrap_or((None, None))
 }
 
 pub(super) fn route_next_hop(

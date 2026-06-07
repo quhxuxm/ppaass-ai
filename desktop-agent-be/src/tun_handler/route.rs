@@ -42,16 +42,20 @@ pub(super) use guard::RouteGuard;
 #[cfg(all(test, target_os = "macos"))]
 use macos_dns::macos_pf_dns_rules;
 #[cfg(target_os = "macos")]
-use macos_dns::{
-    MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces,
-};
-#[cfg(all(test, target_os = "macos"))]
-use probe::parse_macos_route_get_next_hop;
-pub(super) use probe::{ProxyRoute, detect_proxy_route, resolve_proxy_ips};
-use probe::{find_default_route, route_next_hop};
+use macos_dns::{MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces};
 #[cfg(target_os = "macos")]
 use probe::interface_name_for_index;
+#[cfg(all(test, target_os = "macos"))]
+use probe::parse_macos_route_get_next_hop;
+pub(super) use probe::{
+    ProxyRoute, detect_default_route_interface, detect_proxy_route, resolve_proxy_ips,
+};
+use probe::{find_default_route, route_next_hop};
 pub(super) use state::cleanup_stale_routes;
 #[cfg(target_os = "macos")]
 use state::now_unix_secs;
 use state::{RouteKind, RouteLease, RouteRecord, is_unspecified_gateway};
+
+pub(super) fn refresh_macos_scoped_default_bypass() {
+    guard::refresh_macos_scoped_default_bypass();
+}
