@@ -41,6 +41,7 @@ jobs:
               exit 1
               ;;
           esac
+          echo "DEPLOY_FOLDER=${{ secrets.DEPLOY_FOLDER }}" >> $GITHUB_ENV
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,7 +49,7 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential gcc pkg-config libssl-dev
+          apt-get install -y curl build-essential gcc pkg-config libssl-dev openssh-client sshpass
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -61,180 +62,221 @@ jobs:
       - name: Build Proxy (Linux)
         run: cargo build -p proxy --release
 
-      - name: Prepare remote deploy folder
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          script_stop: true
-          script: |
-            set -eu
-            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
-            case "$DEPLOY_DIR" in
-              "~")
-                DEPLOY_DIR="$HOME"
-                ;;
-              "~/"*)
-                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
-                ;;
-            esac
+      - name: Package proxy deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .deploy-proxy
+          mkdir -p .deploy-proxy
+          cp target/release/proxy .deploy-proxy/proxy
+          cp config/remote/proxy.toml .deploy-proxy/proxy.toml
+          cp config/remote/users.toml .deploy-proxy/users.toml
+          cp start-proxy.sh .deploy-proxy/start-proxy.sh
+          chmod +x .deploy-proxy/proxy .deploy-proxy/start-proxy.sh
 
-            mkdir -p "$DEPLOY_DIR"
+      - name: Prepare remote deploy folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+
+          export SSHPASS="$REMOTE_PASSWORD"
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_FOLDER"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+
+          mkdir -p "$DEPLOY_DIR"
+          REMOTE_SCRIPT
 
       - name: Stop running proxy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          script_stop: true
-          script: |
-            set -eu
-            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
-            case "$DEPLOY_DIR" in
-              "~")
-                DEPLOY_DIR="$HOME"
-                ;;
-              "~/"*)
-                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
-                ;;
-            esac
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
 
-            if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-              systemctl stop ppaass-proxy.service 2>/dev/null || true
-            fi
+          export SSHPASS="$REMOTE_PASSWORD"
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_FOLDER"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
 
-            if [ -f "$DEPLOY_DIR/start-proxy.sh" ]; then
-              chmod +x "$DEPLOY_DIR/start-proxy.sh"
-              "$DEPLOY_DIR/start-proxy.sh" stop || true
-            fi
+          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            systemctl stop ppaass-proxy.service 2>/dev/null || true
+          fi
 
-            process_id="$(
+          if [ -f "$DEPLOY_DIR/start-proxy.sh" ]; then
+            chmod +x "$DEPLOY_DIR/start-proxy.sh"
+            "$DEPLOY_DIR/start-proxy.sh" stop || true
+          fi
+
+          process_id="$(
+            ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
+              index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
+            '
+          )"
+          if [ -n "$process_id" ]; then
+            echo "Stopping existing proxy process(es): $process_id"
+            kill $process_id || true
+            sleep 5
+
+            stopped_process_id="$(
               ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
                 index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
               '
             )"
-            if [ -n "$process_id" ]; then
-              echo "Stopping existing proxy process(es): $process_id"
-              kill $process_id || true
-              sleep 5
-
-              stopped_process_id="$(
-                ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
-                  index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
-                '
-              )"
-              if [ -n "$stopped_process_id" ]; then
-                echo "Force stopping proxy process(es): $stopped_process_id"
-                kill -9 $stopped_process_id || true
-                sleep 2
-              fi
-
-              stopped_process_id="$(
-                ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
-                  index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
-                '
-              )"
-              if [ -n "$stopped_process_id" ]; then
-                echo "Failed to stop proxy process(es): $stopped_process_id"
-                exit 1
-              fi
-              echo "Stopped existing proxy process(es): $process_id"
-            else
-              echo "No running proxy process found"
+            if [ -n "$stopped_process_id" ]; then
+              echo "Force stopping proxy process(es): $stopped_process_id"
+              kill -9 $stopped_process_id || true
+              sleep 2
             fi
 
-      - name: Upload proxy binary
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          source: target/release/proxy
-          target: ${{ secrets.DEPLOY_FOLDER }}
-          strip_components: 2
-          overwrite: true
+            stopped_process_id="$(
+              ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
+                index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
+              '
+            )"
+            if [ -n "$stopped_process_id" ]; then
+              echo "Failed to stop proxy process(es): $stopped_process_id"
+              exit 1
+            fi
+            echo "Stopped existing proxy process(es): $process_id"
+          else
+            echo "No running proxy process found"
+          fi
+          REMOTE_SCRIPT
 
-      - name: Upload config files
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          source: "config/remote/proxy.toml,config/remote/users.toml"
-          target: ${{ secrets.DEPLOY_FOLDER }}
-          strip_components: 2
-          overwrite: true
+      - name: Upload proxy files
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
 
-      - name: Upload start script
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          source: start-proxy.sh
-          target: ${{ secrets.DEPLOY_FOLDER }}
-          strip_components: 0
-          overwrite: true
+          export SSHPASS="$REMOTE_PASSWORD"
+          REMOTE_UPLOAD_SCRIPT="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_FOLDER"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+
+          mkdir -p "$DEPLOY_DIR"
+          tar -xf - -C "$DEPLOY_DIR"
+          chmod +x "$DEPLOY_DIR/proxy" "$DEPLOY_DIR/start-proxy.sh"
+          REMOTE_SCRIPT
+          )"
+
+          tar -C .deploy-proxy -cf - . | sshpass -e ssh \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -euo pipefail -c $(printf '%q' "$REMOTE_UPLOAD_SCRIPT")"
 
       - name: Restart proxy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.REMOTE_HOST }}
-          username: ${{ env.REMOTE_USER }}
-          password: ${{ env.REMOTE_PASSWORD }}
-          script_stop: true
-          script: |
-            set -eu
-            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
-            case "$DEPLOY_DIR" in
-              "~")
-                DEPLOY_DIR="$HOME"
-                ;;
-              "~/"*)
-                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
-                ;;
-            esac
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
 
-            cd "$DEPLOY_DIR"
-            chmod +x ./proxy ./start-proxy.sh
-            test -f ./proxy.toml
-            test -f ./users.toml
+          export SSHPASS="$REMOTE_PASSWORD"
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_FOLDER"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
 
-            if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-              cat > /etc/systemd/system/ppaass-proxy.service <<EOF
-            [Unit]
-            Description=PPAASS Proxy
-            Wants=network-online.target
-            After=network-online.target
+          cd "$DEPLOY_DIR"
+          chmod +x ./proxy ./start-proxy.sh
+          test -f ./proxy.toml
+          test -f ./users.toml
 
-            [Service]
-            Type=simple
-            WorkingDirectory=$DEPLOY_DIR
-            ExecStart=$DEPLOY_DIR/proxy --config $DEPLOY_DIR/proxy.toml
-            Restart=always
-            RestartSec=3
-            TimeoutStopSec=20
-            LimitNOFILE=1048576
+          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+          cat > /etc/systemd/system/ppaass-proxy.service <<EOF
+          [Unit]
+          Description=PPAASS Proxy
+          Wants=network-online.target
+          After=network-online.target
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+          [Service]
+          Type=simple
+          WorkingDirectory=$DEPLOY_DIR
+          ExecStart=$DEPLOY_DIR/proxy --config $DEPLOY_DIR/proxy.toml
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
 
-              systemctl daemon-reload
-              systemctl enable ppaass-proxy.service
-              systemctl restart ppaass-proxy.service
-              sleep 3
+          [Install]
+          WantedBy=multi-user.target
+          EOF
 
-              if ! systemctl is-active --quiet ppaass-proxy.service; then
-                systemctl --no-pager --full status ppaass-proxy.service || true
-                journalctl -u ppaass-proxy.service -n 80 --no-pager || true
-                exit 1
-              fi
+            systemctl daemon-reload
+            systemctl enable ppaass-proxy.service
+            systemctl restart ppaass-proxy.service
+            sleep 3
 
-              systemctl --no-pager --full status ppaass-proxy.service
-            else
-              ./start-proxy.sh restart
-              ./start-proxy.sh status
+            if ! systemctl is-active --quiet ppaass-proxy.service; then
+              systemctl --no-pager --full status ppaass-proxy.service || true
+              journalctl -u ppaass-proxy.service -n 80 --no-pager || true
+              exit 1
             fi
+
+            systemctl --no-pager --full status ppaass-proxy.service
+          else
+            ./start-proxy.sh restart
+            ./start-proxy.sh status
+          fi
+          REMOTE_SCRIPT
