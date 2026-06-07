@@ -82,6 +82,15 @@ pub(super) fn spawn_udp_sessions(
                         debug!("Android TUN UDP target rejected: {e}");
                         continue;
                     }
+
+                    let key = (source, target);
+                    if let Some(tx) = sessions.get(&key).map(|tx| tx.clone()) {
+                        if tx.try_send(data).is_err() {
+                            debug!("Android TUN UDP direct session queue is full; dropping packet -> {}", target);
+                        }
+                        continue;
+                    }
+
                     let mut direct_match = context.direct_checker.is_direct(&address);
                     if !direct_match {
                         direct_match = context
@@ -98,14 +107,6 @@ pub(super) fn spawn_udp_sessions(
 
                     if !direct_match {
                         udp_relay.send(source, target, data);
-                        continue;
-                    }
-
-                    let key = (source, target);
-                    if let Some(tx) = sessions.get(&key).map(|tx| tx.clone()) {
-                        if tx.try_send(data).is_err() {
-                            debug!("Android TUN UDP direct session queue is full; dropping packet -> {}", target);
-                        }
                         continue;
                     }
 

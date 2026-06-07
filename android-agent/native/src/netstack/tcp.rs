@@ -4,7 +4,7 @@ use std::time::Duration;
 use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
 use futures::StreamExt;
 use protocol::TransportProtocol;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
@@ -214,10 +214,22 @@ async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
         Some(Protocol::TCP),
     )?;
     protect_direct_socket(&socket)?;
+    enable_direct_tcp_keepalive(&socket, target);
     socket.set_nonblocking(true)?;
 
     let socket = TcpSocket::from_std_stream(socket.into());
     socket.connect(target).await
+}
+
+fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(30))
+        .with_retries(4);
+
+    if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
+        debug!("Android TUN TCP direct keepalive setup failed target={target}: {err}");
+    }
 }
 
 fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
