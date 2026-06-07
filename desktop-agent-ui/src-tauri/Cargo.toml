@@ -27,3 +27,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
 windows-service = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

@@ -16,6 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, warn};
 
+use crate::android_log;
 use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
@@ -108,6 +109,10 @@ impl AndroidConnectionPool {
                 ),
                 Err(err) => {
                     warn!("failed to prewarm Android {} Yamux: {err}", self.pool_name);
+                    android_log::warn(format!(
+                        "Android {} Yamux prewarm failed: {err}",
+                        self.pool_name
+                    ));
                     return;
                 }
             }
@@ -249,7 +254,11 @@ impl AndroidConnectionPool {
                     warn!(
                         "failed to create Android {} connection: {err}",
                         self.pool_name
-                    )
+                    );
+                    android_log::warn(format!(
+                        "Android {} connection create failed: {err}",
+                        self.pool_name
+                    ));
                 }
                 Err(err) if err.is_cancelled() => {}
                 Err(err) => warn!("Android {} refill task join error: {err}", self.pool_name),
@@ -314,6 +323,10 @@ impl AndroidConnectionPool {
                         "Android {} Yamux session {} unusable; retrying: {message}",
                         self.pool_name, session.id
                     );
+                    android_log::warn(format!(
+                        "Android {} Yamux session unusable: {message}",
+                        self.pool_name
+                    ));
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
                     if attempts >= target_size.max(3) {
@@ -410,6 +423,10 @@ impl AndroidConnectionPool {
                 AndroidAgentError::Connection("failed to create Android Yamux session".into())
             });
             warn!("failed to refill Android {} Yamux: {err}", self.pool_name);
+            android_log::warn(format!(
+                "Android {} Yamux refill failed: {err}",
+                self.pool_name
+            ));
             return Err(err);
         }
 

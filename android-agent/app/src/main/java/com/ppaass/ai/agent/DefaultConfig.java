@@ -11,6 +11,15 @@ final class DefaultConfig {
     static final String COMPRESSION_MODE = "lz4";
     static final String TCP_MODE = "yamux";
     static final String UDP_MODE = "yamux";
+    static final String DIRECT_ACCESS_MODE = "proxy_all";
+    static final String DIRECT_ACCESS_RULES =
+            "localhost\n"
+                    + "*.local\n"
+                    + "127.0.0.0/8\n"
+                    + "10.0.0.0/8\n"
+                    + "172.16.0.0/12\n"
+                    + "192.168.0.0/16\n"
+                    + "::1";
     static final int TCP_YAMUX_SESSIONS = 5;
     static final int UDP_YAMUX_SESSIONS = 5;
     static final int TCP_YAMUX_MAX_STREAMS_PER_SESSION = 32;

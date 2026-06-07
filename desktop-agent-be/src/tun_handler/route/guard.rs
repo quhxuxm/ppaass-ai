@@ -324,6 +324,30 @@ fn install_macos_scoped_default_bypass(
 }
 
 #[cfg(target_os = "macos")]
+pub(super) fn refresh_macos_scoped_default_bypass() {
+    let mut mgr = match RouteManager::new() {
+        Ok(mgr) => mgr,
+        Err(e) => {
+            warn!("刷新 macOS scoped default bypass 时 RouteManager 初始化失败：{e}");
+            return;
+        }
+    };
+    let routes = match mgr.list() {
+        Ok(routes) => routes,
+        Err(e) => {
+            warn!("刷新 macOS scoped default bypass 时无法列出当前路由：{e}");
+            return;
+        }
+    };
+    let (default_v4_gw, default_v4_if) = find_default_route(&routes, false);
+    let (default_v6_gw, default_v6_if) = find_default_route(&routes, true);
+    install_macos_scoped_default_bypass(default_v4_gw, default_v4_if, default_v6_gw, default_v6_if);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn refresh_macos_scoped_default_bypass() {}
+
+#[cfg(target_os = "macos")]
 fn install_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: bool) {
     // 形如：route -n add -ifscope en0 -net default 192.168.31.1
     let mut cmd = Command::new("/sbin/route");

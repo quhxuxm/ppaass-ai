@@ -6,7 +6,7 @@ use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
 use protocol::TransportProtocol;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -29,12 +29,12 @@ pub(super) async fn handle_tun_tcp(
 ) -> Result<()> {
     let TunForwardContext {
         tcp_pool,
-        udp_pool: _,
+        udp_pool,
         direct_checker,
         direct_domain_cache,
         tun_networks,
         proxy_dns,
-        direct_bind_interface,
+        direct_egress,
     } = context;
 
     // 先把 TUN 目标地址转成代理协议地址，并处理 proxy DNS 特例。
@@ -59,8 +59,9 @@ pub(super) async fn handle_tun_tcp(
     //    通过 Agent 本机 DNS 重新解析以获得 agent 侧的 CDN IP。
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.domain_for_ip(target.ip())
-        && direct_checker.is_direct_domain(&domain)
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
+            direct_checker.is_direct_domain(domain)
+        })
     {
         direct_target = resolve_direct_target_via_system("TCP", source, target, &domain).await;
         if direct_target.is_none() {
@@ -100,9 +101,15 @@ pub(super) async fn handle_tun_tcp(
     if let Some(connect_target) = direct_target {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = format!("{} (原始目标 {})", connect_target, target);
-        let mut target_stream = connect_direct_tcp(connect_target, direct_bind_interface.as_ref())
-            .await
-            .map_err(|e| AgentError::Connection(format!("直连 {target_str} 失败：{e}")))?;
+        let mut target_stream = connect_direct_tcp_with_refresh(
+            connect_target,
+            &target_str,
+            direct_egress.as_ref(),
+            tcp_pool.as_ref(),
+            udp_pool.as_ref(),
+            tun_networks,
+        )
+        .await?;
         // 把嗅探时已经读出的字节先补发给目标，否则握手会丢首段。
         if !sniffed.is_empty()
             && let Err(e) = target_stream.write_all(&sniffed).await
@@ -234,9 +241,53 @@ async fn connect_direct_tcp(
         Some(Protocol::TCP),
     )?;
     bind_socket_to_interface(&socket, bind_interface, target)?;
+    enable_direct_tcp_keepalive(&socket, target);
     socket.set_nonblocking(true)?;
 
     let socket = TcpSocket::from_std_stream(socket.into());
     socket.connect(target).await
 }
 
+async fn connect_direct_tcp_with_refresh(
+    target: SocketAddr,
+    target_str: &str,
+    direct_egress: &super::TunDirectEgress,
+    tcp_pool: &crate::connection_pool::ConnectionPool,
+    udp_pool: &crate::connection_pool::ConnectionPool,
+    tun_networks: super::network::TunNetworks,
+) -> Result<TcpStream> {
+    let initial_bind_interface = direct_egress.bind_interface();
+    match connect_direct_tcp(target, initial_bind_interface.as_ref()).await {
+        Ok(stream) => Ok(stream),
+        Err(first_err) => {
+            debug!(
+                "TUN TCP 直连首次失败，刷新物理出口后重试：target={} bind_interface={:?} error={}",
+                target_str, initial_bind_interface, first_err
+            );
+            let refreshed_bind_interface = direct_egress.refresh_after_direct_failure(
+                target.ip(),
+                tcp_pool,
+                udp_pool,
+                tun_networks,
+            );
+            connect_direct_tcp(target, refreshed_bind_interface.as_ref())
+                .await
+                .map_err(|retry_err| {
+                    AgentError::Connection(format!(
+                        "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}"
+                    ))
+                })
+        }
+    }
+}
+
+fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(30))
+        .with_retries(4);
+
+    if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
+        debug!("TUN TCP 直连 keepalive 设置失败 target={target}: {err}");
+    }
+}

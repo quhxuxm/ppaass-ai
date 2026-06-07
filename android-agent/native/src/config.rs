@@ -5,6 +5,7 @@ use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
 
+use crate::direct_access::DirectAccessConfig;
 use crate::error::{AndroidAgentError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +37,9 @@ pub struct AndroidAgentConfig {
 
     #[serde(default)]
     pub yamux: YamuxConfig,
+
+    #[serde(default)]
+    pub direct_access: DirectAccessConfig,
 
     #[serde(default)]
     pub tun: AndroidTunConfig,

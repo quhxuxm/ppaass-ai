@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::path::BaseDirectory;
@@ -40,7 +40,10 @@ pub(crate) fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
     {
         fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
     }
-    let mut file = fs::File::create(path).map_err(|err| format!("保存配置失败：{err}"))?;
+    clear_readonly_file_attribute(path)
+        .map_err(|err| format!("准备写入配置失败：{}：{err}", path.display()))?;
+    let mut file =
+        fs::File::create(path).map_err(|err| format!("保存配置失败：{}：{err}", path.display()))?;
     file.write_all(raw.as_bytes())
         .map_err(|err| format!("写入配置失败：{err}"))?;
     file.sync_all()
@@ -94,6 +97,14 @@ pub(crate) fn install_bundled_agent_assets(
                 destination.display()
             )
         })?;
+        if deploy_path.ends_with("agent.toml") {
+            clear_readonly_file_attribute(&destination).map_err(|err| {
+                format!(
+                    "准备 Agent 配置资源可写失败：{}：{err}",
+                    destination.display()
+                )
+            })?;
+        }
         logs.push(format!("已部署默认 Agent 资源：{}", destination.display()));
     }
 
@@ -144,10 +155,7 @@ pub(crate) fn locate_config_path() -> Option<PathBuf> {
         "config/remote/agent.toml",
     ];
 
-    for base in ancestor_dirs()
-        .into_iter()
-        .chain(deployed_agent_dirs().into_iter())
-    {
+    for base in config_search_dirs() {
         for file_name in file_names {
             let path = base.join(file_name);
             if path.is_file() {
@@ -193,10 +201,39 @@ fn bundled_agent_resource_path(app: &tauri::App, resource_path: &str) -> Result<
         .ok_or_else(|| format!("找不到内置 Agent 资源：{resource_path}"))
 }
 
+fn clear_readonly_file_attribute(path: &Path) -> io::Result<()> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_file() || !metadata.permissions().readonly() {
+        return Ok(());
+    }
+
+    let mut permissions = metadata.permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions)
+}
+
 fn default_runtime_threads() -> usize {
     std::thread::available_parallelism()
         .map(|threads| threads.get())
         .unwrap_or(1)
+}
+
+fn config_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if cfg!(debug_assertions) {
+        for dir in ancestor_dirs().into_iter().chain(deployed_agent_dirs()) {
+            push_unique_path(&mut dirs, dir);
+        }
+    } else {
+        for dir in deployed_agent_dirs().into_iter().chain(ancestor_dirs()) {
+            push_unique_path(&mut dirs, dir);
+        }
+    }
+    dirs
 }
 
 fn str_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
@@ -302,5 +339,27 @@ pub(crate) fn make_absolute_path(path: &Path) -> PathBuf {
 fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
     if !candidates.iter().any(|candidate| candidate == &path) {
         candidates.push(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_config_file;
+    use std::fs;
+
+    #[test]
+    fn write_config_file_overwrites_readonly_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        fs::write(&path, "username = \"old\"\n").unwrap();
+
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        write_config_file(&path, "username = \"new\"\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "username = \"new\"\n");
+        assert!(!fs::metadata(&path).unwrap().permissions().readonly());
     }
 }

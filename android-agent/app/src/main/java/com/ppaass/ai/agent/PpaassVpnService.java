@@ -226,6 +226,11 @@ public class PpaassVpnService extends VpnService {
         JSONObject yamuxJson = new JSONObject()
                 .put("tcp", buildYamuxTransportJson(prefs, true))
                 .put("udp", buildYamuxTransportJson(prefs, false));
+        JSONObject directAccessJson = new JSONObject()
+                .put("mode", normalizeDirectAccessMode(
+                        prefs.getString("direct_access_mode", DefaultConfig.DIRECT_ACCESS_MODE)))
+                .put("rules", new JSONArray(tokens(
+                        prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
 
         return new JSONObject()
                 .put("proxy_addrs", new JSONArray(tokens(prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR))))
@@ -245,6 +250,7 @@ public class PpaassVpnService extends VpnService {
                         DefaultConfig.UDP_POOL_SIZE))
                 .put("transport", transportJson)
                 .put("yamux", yamuxJson)
+                .put("direct_access", directAccessJson)
                 .put("tun", tunJson);
     }
 
@@ -400,6 +406,19 @@ public class PpaassVpnService extends VpnService {
             return normalized;
         }
         return DefaultConfig.COMPRESSION_MODE;
+    }
+
+    private String normalizeDirectAccessMode(String value) {
+        if (value == null) {
+            return DefaultConfig.DIRECT_ACCESS_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("proxy_all".equals(normalized)
+                || "direct_all".equals(normalized)
+                || "rules".equals(normalized)) {
+            return normalized;
+        }
+        return DefaultConfig.DIRECT_ACCESS_MODE;
     }
 
     private List<String> tokens(String value) {
