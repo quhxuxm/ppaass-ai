@@ -61,29 +61,86 @@ jobs:
       - name: Build Proxy (Linux)
         run: cargo build -p proxy --release
 
+      - name: Prepare remote deploy folder
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.REMOTE_HOST }}
+          username: ${{ env.REMOTE_USER }}
+          password: ${{ env.REMOTE_PASSWORD }}
+          script_stop: true
+          script: |
+            set -eu
+            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
+            case "$DEPLOY_DIR" in
+              "~")
+                DEPLOY_DIR="$HOME"
+                ;;
+              "~/"*)
+                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+                ;;
+            esac
+
+            mkdir -p "$DEPLOY_DIR"
+
       - name: Stop running proxy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.REMOTE_HOST }}
           username: ${{ env.REMOTE_USER }}
           password: ${{ env.REMOTE_PASSWORD }}
+          script_stop: true
           script: |
-            if [ -f "${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh" ] && grep -q -- "--supervisor" "${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh"; then
-              chmod +x ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
-              ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh stop || true
+            set -eu
+            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
+            case "$DEPLOY_DIR" in
+              "~")
+                DEPLOY_DIR="$HOME"
+                ;;
+              "~/"*)
+                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+                ;;
+            esac
+
+            if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+              systemctl stop ppaass-proxy.service 2>/dev/null || true
             fi
 
-            process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+            if [ -f "$DEPLOY_DIR/start-proxy.sh" ]; then
+              chmod +x "$DEPLOY_DIR/start-proxy.sh"
+              "$DEPLOY_DIR/start-proxy.sh" stop || true
+            fi
+
+            process_id="$(
+              ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
+                index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
+              '
+            )"
             if [ -n "$process_id" ]; then
-              echo "Stopping existing proxy process with PID: $process_id"
-              kill -9 $process_id || true
+              echo "Stopping existing proxy process(es): $process_id"
+              kill $process_id || true
               sleep 5
-              stopped_process_id=$(ps -ef | grep "./proxy" | grep -v grep | awk '{print $2}')
+
+              stopped_process_id="$(
+                ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
+                  index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
+                '
+              )"
               if [ -n "$stopped_process_id" ]; then
-                echo "Failed to stop proxy process with PID: $stopped_process_id"
+                echo "Force stopping proxy process(es): $stopped_process_id"
+                kill -9 $stopped_process_id || true
+                sleep 2
+              fi
+
+              stopped_process_id="$(
+                ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
+                  index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
+                '
+              )"
+              if [ -n "$stopped_process_id" ]; then
+                echo "Failed to stop proxy process(es): $stopped_process_id"
                 exit 1
               fi
-              echo "Stopped existing proxy process with PID: $process_id"
+              echo "Stopped existing proxy process(es): $process_id"
             else
               echo "No running proxy process found"
             fi
@@ -127,6 +184,57 @@ jobs:
           host: ${{ env.REMOTE_HOST }}
           username: ${{ env.REMOTE_USER }}
           password: ${{ env.REMOTE_PASSWORD }}
+          script_stop: true
           script: |
-            chmod +x ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
-            ${{ secrets.DEPLOY_FOLDER }}/start-proxy.sh
+            set -eu
+            DEPLOY_DIR='${{ secrets.DEPLOY_FOLDER }}'
+            case "$DEPLOY_DIR" in
+              "~")
+                DEPLOY_DIR="$HOME"
+                ;;
+              "~/"*)
+                DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+                ;;
+            esac
+
+            cd "$DEPLOY_DIR"
+            chmod +x ./proxy ./start-proxy.sh
+            test -f ./proxy.toml
+            test -f ./users.toml
+
+            if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+              cat > /etc/systemd/system/ppaass-proxy.service <<EOF
+            [Unit]
+            Description=PPAASS Proxy
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory=$DEPLOY_DIR
+            ExecStart=$DEPLOY_DIR/proxy --config $DEPLOY_DIR/proxy.toml
+            Restart=always
+            RestartSec=3
+            TimeoutStopSec=20
+            LimitNOFILE=1048576
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+              systemctl daemon-reload
+              systemctl enable ppaass-proxy.service
+              systemctl restart ppaass-proxy.service
+              sleep 3
+
+              if ! systemctl is-active --quiet ppaass-proxy.service; then
+                systemctl --no-pager --full status ppaass-proxy.service || true
+                journalctl -u ppaass-proxy.service -n 80 --no-pager || true
+                exit 1
+              fi
+
+              systemctl --no-pager --full status ppaass-proxy.service
+            else
+              ./start-proxy.sh restart
+              ./start-proxy.sh status
+            fi
