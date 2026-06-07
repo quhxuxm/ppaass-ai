@@ -36,6 +36,7 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 deadpool = "0.13"
 toml = "1.1.2"
+time = { version = "0.3", features = ["parsing"] }
 rsa = "0.9"
 aes-gcm = "0.10"
 rand = "0.10"

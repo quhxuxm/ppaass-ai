@@ -90,6 +90,8 @@ public_key_pem = """
 -----END PUBLIC KEY-----
 """
 bandwidth_limit_mbps = 100
+# Optional. If omitted, the user never expires.
+expires_at = "2026-12-31T23:59:59Z"
 ```
 
 ### Step 3: Configure the Agent

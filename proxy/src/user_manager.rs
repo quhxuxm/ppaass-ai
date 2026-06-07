@@ -71,6 +71,7 @@ fn validate_users(users: &UsersConfig) -> Result<()> {
                 user.username
             )));
         }
+        user.expires_at_unix_timestamp()?;
     }
     Ok(())
 }
