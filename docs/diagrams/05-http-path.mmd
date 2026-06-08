@@ -1,0 +1,15 @@
+flowchart TD
+    A["本地 HTTP 客户端连接"] --> B["hyper http1 server"]
+    B --> C{"请求方法"}
+    C -->|"CONNECT"| D["解析 host:port 默认 443"]
+    C -->|"普通 HTTP"| E["从 Host/URI 解析 host:port 默认 80"]
+    D --> F{"direct_access?"}
+    E --> F
+    F -->|"直连"| G["TcpStream::connect 目标"]
+    F -->|"代理"| H["tcp_pool.get_connected_stream TCP"]
+    D --> I["CONNECT 成功后升级裸 TCP"]
+    H --> I
+    G --> J["copy_bidirectional"]
+    I --> J
+    E --> K["hyper client handshake"]
+    K --> L["发送普通 HTTP request"]

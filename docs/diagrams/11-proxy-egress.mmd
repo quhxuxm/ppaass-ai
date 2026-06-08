@@ -1,0 +1,8 @@
+flowchart LR
+    ConnectRequest["ConnectRequest"] --> EgressState["EgressState"]
+    EgressState -->|"outbound_interface 为空"| DefaultRoute["系统默认路由"]
+    EgressState -->|"outbound_interface=auto"| OriginalRoute["启动时/运行时探测原始物理出口"]
+    EgressState -->|"指定网卡"| BoundInterface["绑定指定网卡"]
+    DefaultRoute --> Target["Target"]
+    OriginalRoute --> Target
+    BoundInterface --> Target

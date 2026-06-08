@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant App as 本地应用
+    participant Agent as Agent入口
+    participant Pool as ConnectionPool
+    participant Proxy as Proxy
+    participant Target as Target
+
+    App->>Agent: HTTP/SOCKS/TUN TCP/UDP
+    Agent->>Agent: 解析目标 + direct_access 判断
+    alt 直连
+        Agent->>Target: 本机 socket 连接目标
+        Target-->>Agent: 响应
+        Agent-->>App: 响应
+    else 代理
+        Agent->>Pool: get_connected_stream(target, transport)
+        Pool->>Proxy: Auth if new outer connection
+        Proxy-->>Pool: AuthResponse
+        Pool->>Proxy: ConnectRequest
+        Proxy->>Target: connect target
+        Proxy-->>Pool: ConnectResponse
+        App->>Agent: payload
+        Agent->>Proxy: DataPacket / Yamux payload
+        Proxy->>Target: payload
+        Target-->>Proxy: response
+        Proxy-->>Agent: DataPacket / Yamux payload
+        Agent-->>App: response
+    end

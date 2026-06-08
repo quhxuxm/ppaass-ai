@@ -1,0 +1,20 @@
+flowchart TD
+    A["desktop-agent main"] --> B["解析 CLI"]
+    B --> C["读取 AgentConfig"]
+    C --> D["CLI 覆盖配置"]
+    D --> E["初始化 tracing"]
+    E --> F["构建 Tokio runtime"]
+    F --> G["AgentServer::new"]
+    G --> H["创建 DirectAccessChecker"]
+    H --> I["创建 tcp_pool 和 udp_pool"]
+    I --> J["AgentServer::run"]
+    J --> K["绑定 listen_addr"]
+    K --> L{"tun.enabled?"}
+    L -->|"否"| M["预热 tcp/udp pool"]
+    L -->|"是"| N["启动 run_tun_mode"]
+    M --> O["accept 本地连接"]
+    N --> O
+    O --> P["peek 首字节"]
+    P -->|"0x05"| Q["SOCKS5 handler"]
+    P -->|"HTTP 方法字母"| R["HTTP handler"]
+    P -->|"其他"| S["记录未知协议"]

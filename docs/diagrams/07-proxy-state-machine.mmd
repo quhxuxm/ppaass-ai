@@ -1,0 +1,23 @@
+stateDiagram-v2
+    [*] --> TcpAccepted
+    TcpAccepted --> AuthReading: 读取第一帧
+    AuthReading --> AuthFailed: 非 Auth / 用户不存在 / 时间戳过期 / 用户过期
+    AuthFailed --> Closed
+    AuthReading --> AuthOk: Auth 成功
+    AuthOk --> UserLimitRejected: 用户连接数超限
+    UserLimitRejected --> Closed
+    AuthOk --> PreConnectIdle: 等第一条 Connect
+    PreConnectIdle --> Closed: pre_connect_idle_timeout
+    PreConnectIdle --> ConnectDispatch: 收到 ConnectRequest
+    ConnectDispatch --> TcpRelay: Domain/IPv4/IPv6 + TCP
+    ConnectDispatch --> UdpRelaySingle: Domain/IPv4/IPv6/ProxyDns + UDP
+    ConnectDispatch --> SharedUdpRelay: Address UdpRelay
+    ConnectDispatch --> TcpYamuxSession: Address TcpYamux
+    ConnectDispatch --> UdpYamuxSession: Address UdpYamux
+    ConnectDispatch --> UpstreamProxy: forward_mode=true
+    TcpRelay --> Closed
+    UdpRelaySingle --> Closed
+    SharedUdpRelay --> Closed
+    TcpYamuxSession --> Closed
+    UdpYamuxSession --> Closed
+    UpstreamProxy --> Closed
