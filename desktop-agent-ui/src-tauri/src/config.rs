@@ -51,18 +51,29 @@ pub(crate) fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn set_tun_enabled_in_config(
+pub(crate) fn toggle_tun_enabled_in_config(
     path: Option<&Path>,
-    enabled: bool,
 ) -> Result<LoadedAgentConfig, String> {
-    let config_path = match path {
-        Some(path) => make_absolute_path(path),
+    let config_path = resolve_config_path(path)?;
+    let loaded = load_config_from_path(&config_path)?;
+    write_tun_enabled_to_config(&config_path, &loaded.raw, !loaded.summary.tun_enabled)
+}
+
+fn resolve_config_path(path: Option<&Path>) -> Result<PathBuf, String> {
+    match path {
+        Some(path) => Ok(make_absolute_path(path)),
         None => locate_config_path().ok_or_else(|| {
             "找不到 agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?,
-    };
-    let loaded = load_config_from_path(&config_path)?;
-    let raw = upsert_toml_bool(&loaded.raw, "tun", "enabled", enabled);
+        }),
+    }
+}
+
+fn write_tun_enabled_to_config(
+    config_path: &Path,
+    raw: &str,
+    enabled: bool,
+) -> Result<LoadedAgentConfig, String> {
+    let raw = upsert_toml_bool(raw, "tun", "enabled", enabled);
     write_config_file(&config_path, &raw)?;
 
     if let Some(primary_path) = primary_agent_config_path(&config_path) {
@@ -199,16 +210,10 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
             &["yamux", "udp", "connection_write_timeout_secs"],
         )
         .unwrap_or(10),
-        tcp_yamux_stream_window_size_kb: int_at(
-            &value,
-            &["yamux", "tcp", "stream_window_size_kb"],
-        )
-        .unwrap_or(2048) as usize,
-        udp_yamux_stream_window_size_kb: int_at(
-            &value,
-            &["yamux", "udp", "stream_window_size_kb"],
-        )
-        .unwrap_or(2048) as usize,
+        tcp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "tcp", "stream_window_size_kb"])
+            .unwrap_or(2048) as usize,
+        udp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "udp", "stream_window_size_kb"])
+            .unwrap_or(2048) as usize,
         tun_enabled: bool_at(&value, &["tun", "enabled"]).unwrap_or(false),
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
@@ -317,9 +322,7 @@ fn upsert_toml_bool(raw: &str, section: &str, key: &str, value: bool) -> String 
             .skip(section_start + 1)
             .find_map(|(index, line)| {
                 let trimmed = line.trim_start();
-                if trimmed.starts_with(key)
-                    && trimmed[key.len()..].trim_start().starts_with('=')
-                {
+                if trimmed.starts_with(key) && trimmed[key.len()..].trim_start().starts_with('=') {
                     Some(index)
                 } else {
                     None
@@ -475,7 +478,9 @@ fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 
 #[cfg(test)]
 mod tests {
-    use super::{summarize_config, upsert_toml_bool, write_config_file};
+    use super::{
+        summarize_config, toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
+    };
     use std::fs;
 
     #[test]
@@ -492,6 +497,25 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "username = \"new\"\n");
         assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+    }
+
+    #[test]
+    fn toggle_tun_enabled_in_config_flips_current_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        fs::write(&path, "[tun]\nenabled = false\n").unwrap();
+
+        let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
+        assert!(loaded.summary.tun_enabled);
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = true"));
+
+        let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
+        assert!(!loaded.summary.tun_enabled);
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = false"));
     }
 
     #[test]

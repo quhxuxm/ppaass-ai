@@ -26,6 +26,7 @@ pub struct ClientStream {
     pub stream_id: String,
     pub read_buf: Vec<u8>,
     pub read_pos: usize,
+    pub(crate) pending_write_len: Option<usize>,
 }
 
 impl ClientStream {
@@ -94,6 +95,17 @@ impl tokio::io::AsyncWrite for ClientStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
+        if let Some(len) = self.pending_write_len {
+            match Pin::new(&mut self.writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Ok(len));
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(std::io::Error::other(e))),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
@@ -106,7 +118,14 @@ impl tokio::io::AsyncWrite for ClientStream {
                     is_end: false,
                 };
                 match Pin::new(&mut self.writer).start_send(ProxyRequest::Data(packet)) {
-                    Ok(()) => Poll::Ready(Ok(buf.len())),
+                    Ok(()) => match Pin::new(&mut self.writer).poll_flush(cx) {
+                        Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.len())),
+                        Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),
+                        Poll::Pending => {
+                            self.pending_write_len = Some(buf.len());
+                            Poll::Pending
+                        }
+                    },
                     Err(e) => Poll::Ready(Err(std::io::Error::other(e))),
                 }
             }
@@ -117,13 +136,26 @@ impl tokio::io::AsyncWrite for ClientStream {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match Pin::new(&mut self.writer).poll_flush(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Ok(())) => {
+                self.pending_write_len = None;
+                Poll::Ready(Ok(()))
+            }
             Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if self.pending_write_len.is_some() {
+            match Pin::new(&mut self.writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.pending_write_len = None;
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(std::io::Error::other(e))),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         if !self.end_sent {
             // 发送流结束数据包
             let end_packet = protocol::DataPacket {

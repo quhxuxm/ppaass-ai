@@ -103,13 +103,17 @@ export function useDesktopAgent() {
 
   let trafficTimer: number | undefined;
   let agentTimer: number | undefined;
+  let configTimer: number | undefined;
   let dnsTimer: number | undefined;
   let pollingActive = false;
   let trafficRefreshInFlight = false;
   let agentRefreshInFlight = false;
+  let configRefreshInFlight = false;
   let dnsRefreshInFlight = false;
   let unlistenConfigUpdated: UnlistenFn | undefined;
   let unlistenTrayError: UnlistenFn | undefined;
+  let unlistenAgentStateUpdated: UnlistenFn | undefined;
+  let unlistenTrayInfo: UnlistenFn | undefined;
 
   onMounted(() => {
     pollingActive = true;
@@ -120,6 +124,7 @@ export function useDesktopAgent() {
       }
       startTrafficPolling();
       startAgentPolling();
+      startConfigPolling();
       startDnsPolling();
     });
   });
@@ -128,42 +133,62 @@ export function useDesktopAgent() {
     pollingActive = false;
     clearPollingTimer(trafficTimer);
     clearPollingTimer(agentTimer);
+    clearPollingTimer(configTimer);
     clearPollingTimer(dnsTimer);
     unlistenConfigUpdated?.();
     unlistenTrayError?.();
+    unlistenAgentStateUpdated?.();
+    unlistenTrayInfo?.();
   });
 
   async function registerTauriEventListeners() {
     try {
       unlistenConfigUpdated = await listen<LoadedAgentConfig>("agent-config-updated", (event) => {
-        applyExternalConfig(event.payload);
+        applyExternalConfig(event.payload, true);
       });
       unlistenTrayError = await listen<string>("agent-tray-error", (event) => {
         showToast("error", event.payload);
+      });
+      unlistenAgentStateUpdated = await listen<AgentState>("agent-state-updated", (event) => {
+        state.agent = event.payload;
+        void refreshConfigFromDisk(false);
+      });
+      unlistenTrayInfo = await listen<string>("agent-tray-info", (event) => {
+        showToast("success", event.payload);
       });
     } catch {
       // The event API is only available inside Tauri.
     }
   }
 
-  function applyExternalConfig(loaded: LoadedAgentConfig) {
+  function applyExternalConfig(loaded: LoadedAgentConfig, notify: boolean) {
     if (!loaded?.summary) {
       return;
     }
 
     const enabled = loaded.summary.tun_enabled;
+    const previousEnabled = state.config?.summary.tun_enabled;
     if (state.config && state.dirty) {
-      state.config.summary.tun_enabled = enabled;
-      state.config.raw = applyFieldToToml(state.config.raw, "tun_enabled", enabled);
+      state.config = {
+        ...state.config,
+        raw: applyFieldToToml(state.config.raw, "tun_enabled", enabled),
+        summary: {
+          ...state.config.summary,
+          tun_enabled: enabled
+        }
+      };
     } else {
       state.config = loaded;
       state.dirty = false;
     }
     state.diagnostics = null;
-    showToast(
-      "success",
-      `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，重启 Agent 后生效" : ""}`
-    );
+    if (notify && previousEnabled !== enabled) {
+      showToast(
+        "success",
+        `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，正在重启 Agent" : ""}`
+      );
+      void refreshAgentState();
+    }
   }
 
   async function boot() {
@@ -432,6 +457,47 @@ export function useDesktopAgent() {
     }
     if (pollingActive) {
       agentTimer = window.setTimeout(() => void pollAgentState(), 1200);
+    }
+  }
+
+  function startConfigPolling() {
+    void pollConfig();
+  }
+
+  async function pollConfig() {
+    if (!pollingActive) {
+      return;
+    }
+    if (!state.busy) {
+      await refreshConfigFromDisk(false);
+    }
+    if (pollingActive) {
+      configTimer = window.setTimeout(() => void pollConfig(), 1000);
+    }
+  }
+
+  async function refreshConfigFromDisk(notify: boolean) {
+    if (configRefreshInFlight || state.dirty || !state.config) {
+      return;
+    }
+    configRefreshInFlight = true;
+    try {
+      const current = state.config;
+      const loaded = await invokeOrFallback<LoadedAgentConfig>(
+        "load_agent_config",
+        { path: current.path },
+        () => current
+      );
+      if (!state.config || state.dirty) {
+        return;
+      }
+      if (loaded.path !== state.config.path || loaded.raw !== state.config.raw) {
+        applyExternalConfig(loaded, notify);
+      }
+    } catch {
+      // External config refresh is best-effort; keep the visible form stable.
+    } finally {
+      configRefreshInFlight = false;
     }
   }
 

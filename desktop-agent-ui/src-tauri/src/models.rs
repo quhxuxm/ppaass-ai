@@ -7,7 +7,7 @@ pub(crate) struct LoadedAgentConfig {
     pub(crate) summary: AgentConfigSummary,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AgentState {
     pub(crate) running: bool,
     pub(crate) managed: bool,
