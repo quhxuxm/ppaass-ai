@@ -12,6 +12,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
+    #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
     pub username: String,
@@ -213,6 +214,10 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
+fn default_listen_addr() -> String {
+    "0.0.0.0:10080".to_string()
+}
+
 fn default_compression_mode() -> String {
     "none".to_string()
 }
@@ -261,7 +266,7 @@ mod tests {
     use super::*;
 
     const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "127.0.0.1:10080"
+listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"

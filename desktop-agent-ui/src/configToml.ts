@@ -1,6 +1,6 @@
 import type { AgentConfigSummary } from "./types";
 
-export const fallbackRawConfig = `listen_addr = "127.0.0.1:10080"
+export const fallbackRawConfig = `listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
@@ -43,7 +43,46 @@ mode = "rules"
 rules = ["localhost", "*.local", "127.0.0.0/8"]
 `;
 
+const defaultFieldValues = {
+  listen_addr: "0.0.0.0:10080",
+  proxy_addrs: ["127.0.0.1:8080"],
+  username: "user1",
+  private_key_path: "keys/user1.pem",
+  tcp_pool_size: 10,
+  udp_pool_size: 5,
+  connect_timeout_secs: 30,
+  compression_mode: "none",
+  log_level: "info",
+  log_dir: "",
+  log_file: "desktop-agent.log",
+  tcp_mode: "auto",
+  udp_mode: "auto",
+  tcp_yamux_sessions: 5,
+  udp_yamux_sessions: 5,
+  tcp_yamux_max_streams_per_session: 256,
+  udp_yamux_max_streams_per_session: 256,
+  tcp_yamux_open_stream_timeout_secs: 10,
+  udp_yamux_open_stream_timeout_secs: 10,
+  tcp_yamux_keepalive_interval_secs: 30,
+  udp_yamux_keepalive_interval_secs: 30,
+  tcp_yamux_connection_write_timeout_secs: 10,
+  udp_yamux_connection_write_timeout_secs: 10,
+  tcp_yamux_stream_window_size_kb: 2048,
+  udp_yamux_stream_window_size_kb: 2048,
+  tun_enabled: false,
+  tun_name: "ppaass-tun",
+  tun_ipv4: "10.10.10.1/24",
+  tun_mtu: 1500,
+  tun_proxy_dns: false,
+  tun_block_quic: true,
+  direct_mode: "proxy_all",
+  direct_rules: []
+} satisfies Partial<Record<keyof AgentConfigSummary, unknown>>;
+
 export function coerceField(field: keyof AgentConfigSummary, value: unknown): unknown {
+  if (isBlankInput(value)) {
+    return defaultValueForField(field);
+  }
   if (typeof value === "boolean") {
     return value;
   }
@@ -57,6 +96,16 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
       "connect_timeout_secs",
       "tcp_yamux_sessions",
       "udp_yamux_sessions",
+      "tcp_yamux_max_streams_per_session",
+      "udp_yamux_max_streams_per_session",
+      "tcp_yamux_open_stream_timeout_secs",
+      "udp_yamux_open_stream_timeout_secs",
+      "tcp_yamux_keepalive_interval_secs",
+      "udp_yamux_keepalive_interval_secs",
+      "tcp_yamux_connection_write_timeout_secs",
+      "udp_yamux_connection_write_timeout_secs",
+      "tcp_yamux_stream_window_size_kb",
+      "udp_yamux_stream_window_size_kb",
       "tun_mtu",
       "runtime_threads"
     ].includes(field)
@@ -65,7 +114,8 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
     if (field === "runtime_threads") {
       return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
     }
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    const minimum = minimumNumberForField(field);
+    return Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
   }
   if (field === "proxy_addrs" || field === "direct_rules") {
     return String(value)
@@ -92,6 +142,16 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     udp_mode: { section: "transport", key: "udp_mode", kind: "string" },
     tcp_yamux_sessions: { section: "yamux.tcp", key: "sessions", kind: "number" },
     udp_yamux_sessions: { section: "yamux.udp", key: "sessions", kind: "number" },
+    tcp_yamux_max_streams_per_session: { section: "yamux.tcp", key: "max_streams_per_session", kind: "number" },
+    udp_yamux_max_streams_per_session: { section: "yamux.udp", key: "max_streams_per_session", kind: "number" },
+    tcp_yamux_open_stream_timeout_secs: { section: "yamux.tcp", key: "open_stream_timeout_secs", kind: "number" },
+    udp_yamux_open_stream_timeout_secs: { section: "yamux.udp", key: "open_stream_timeout_secs", kind: "number" },
+    tcp_yamux_keepalive_interval_secs: { section: "yamux.tcp", key: "keepalive_interval_secs", kind: "number" },
+    udp_yamux_keepalive_interval_secs: { section: "yamux.udp", key: "keepalive_interval_secs", kind: "number" },
+    tcp_yamux_connection_write_timeout_secs: { section: "yamux.tcp", key: "connection_write_timeout_secs", kind: "number" },
+    udp_yamux_connection_write_timeout_secs: { section: "yamux.udp", key: "connection_write_timeout_secs", kind: "number" },
+    tcp_yamux_stream_window_size_kb: { section: "yamux.tcp", key: "stream_window_size_kb", kind: "number" },
+    udp_yamux_stream_window_size_kb: { section: "yamux.udp", key: "stream_window_size_kb", kind: "number" },
     tun_enabled: { section: "tun", key: "enabled", kind: "bool" },
     tun_name: { section: "tun", key: "name", kind: "string" },
     tun_ipv4: { section: "tun", key: "ipv4", kind: "string" },
@@ -109,36 +169,46 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     return raw;
   }
 
-  return upsertTomlValue(raw, target.section, target.key, formatTomlValue(value, target.kind));
+  return upsertTomlValue(raw, target.section, target.key, formatTomlValue(value, target.kind, field));
 }
 
 export function summarizeRaw(raw: string): AgentConfigSummary {
   const runtimeThreads = normalizeRuntimeThreads(matchNumber(raw, null, "runtime_threads"));
   return {
-    listen_addr: matchString(raw, null, "listen_addr") ?? "127.0.0.1:10080",
-    proxy_addrs: matchStringArray(raw, "proxy_addrs"),
-    username: matchString(raw, null, "username") ?? "user1",
-    private_key_path: matchString(raw, null, "private_key_path") ?? "keys/user1.pem",
-    tcp_pool_size: matchNumber(raw, null, "tcp_pool_size") ?? 10,
-    udp_pool_size: matchNumber(raw, null, "udp_pool_size") ?? 5,
-    connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? 30,
-    compression_mode: matchString(raw, null, "compression_mode") ?? "none",
-    log_level: matchString(raw, null, "log_level") ?? "info",
+    listen_addr: stringOrDefault(matchString(raw, null, "listen_addr"), "listen_addr"),
+    proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
+    username: stringOrDefault(matchString(raw, null, "username"), "username"),
+    private_key_path: stringOrDefault(matchString(raw, null, "private_key_path"), "private_key_path"),
+    tcp_pool_size: matchNumber(raw, null, "tcp_pool_size") ?? defaultValueForField<number>("tcp_pool_size"),
+    udp_pool_size: matchNumber(raw, null, "udp_pool_size") ?? defaultValueForField<number>("udp_pool_size"),
+    connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
+    compression_mode: stringOrDefault(matchString(raw, null, "compression_mode"), "compression_mode"),
+    log_level: stringOrDefault(matchString(raw, null, "log_level"), "log_level"),
     log_dir: matchString(raw, null, "log_dir"),
-    log_file: matchString(raw, null, "log_file") ?? "desktop-agent.log",
+    log_file: stringOrDefault(matchString(raw, null, "log_file"), "log_file"),
     runtime_threads: runtimeThreads,
     effective_runtime_threads: runtimeThreads ?? defaultRuntimeThreads(),
-    tcp_mode: matchString(raw, "transport", "tcp_mode") ?? "auto",
-    udp_mode: matchString(raw, "transport", "udp_mode") ?? "auto",
-    tcp_yamux_sessions: matchNumber(raw, "yamux.tcp", "sessions") ?? 5,
-    udp_yamux_sessions: matchNumber(raw, "yamux.udp", "sessions") ?? 5,
-    tun_enabled: matchBool(raw, "tun", "enabled") ?? false,
-    tun_name: matchString(raw, "tun", "name") ?? "ppaass-tun",
-    tun_ipv4: matchString(raw, "tun", "ipv4") ?? "10.10.10.1/24",
-    tun_mtu: matchNumber(raw, "tun", "mtu") ?? 1500,
-    tun_proxy_dns: matchBool(raw, "tun", "proxy_dns") ?? false,
-    tun_block_quic: matchBool(raw, "tun", "block_quic") ?? true,
-    direct_mode: matchString(raw, "direct_access", "mode") ?? "proxy_all",
+    tcp_mode: stringOrDefault(matchString(raw, "transport", "tcp_mode"), "tcp_mode"),
+    udp_mode: stringOrDefault(matchString(raw, "transport", "udp_mode"), "udp_mode"),
+    tcp_yamux_sessions: matchNumber(raw, "yamux.tcp", "sessions") ?? defaultValueForField<number>("tcp_yamux_sessions"),
+    udp_yamux_sessions: matchNumber(raw, "yamux.udp", "sessions") ?? defaultValueForField<number>("udp_yamux_sessions"),
+    tcp_yamux_max_streams_per_session: matchNumber(raw, "yamux.tcp", "max_streams_per_session") ?? defaultValueForField<number>("tcp_yamux_max_streams_per_session"),
+    udp_yamux_max_streams_per_session: matchNumber(raw, "yamux.udp", "max_streams_per_session") ?? defaultValueForField<number>("udp_yamux_max_streams_per_session"),
+    tcp_yamux_open_stream_timeout_secs: matchNumber(raw, "yamux.tcp", "open_stream_timeout_secs") ?? defaultValueForField<number>("tcp_yamux_open_stream_timeout_secs"),
+    udp_yamux_open_stream_timeout_secs: matchNumber(raw, "yamux.udp", "open_stream_timeout_secs") ?? defaultValueForField<number>("udp_yamux_open_stream_timeout_secs"),
+    tcp_yamux_keepalive_interval_secs: matchNumber(raw, "yamux.tcp", "keepalive_interval_secs") ?? defaultValueForField<number>("tcp_yamux_keepalive_interval_secs"),
+    udp_yamux_keepalive_interval_secs: matchNumber(raw, "yamux.udp", "keepalive_interval_secs") ?? defaultValueForField<number>("udp_yamux_keepalive_interval_secs"),
+    tcp_yamux_connection_write_timeout_secs: matchNumber(raw, "yamux.tcp", "connection_write_timeout_secs") ?? defaultValueForField<number>("tcp_yamux_connection_write_timeout_secs"),
+    udp_yamux_connection_write_timeout_secs: matchNumber(raw, "yamux.udp", "connection_write_timeout_secs") ?? defaultValueForField<number>("udp_yamux_connection_write_timeout_secs"),
+    tcp_yamux_stream_window_size_kb: matchNumber(raw, "yamux.tcp", "stream_window_size_kb") ?? defaultValueForField<number>("tcp_yamux_stream_window_size_kb"),
+    udp_yamux_stream_window_size_kb: matchNumber(raw, "yamux.udp", "stream_window_size_kb") ?? defaultValueForField<number>("udp_yamux_stream_window_size_kb"),
+    tun_enabled: matchBool(raw, "tun", "enabled") ?? defaultValueForField<boolean>("tun_enabled"),
+    tun_name: stringOrDefault(matchString(raw, "tun", "name"), "tun_name"),
+    tun_ipv4: stringOrDefault(matchString(raw, "tun", "ipv4"), "tun_ipv4"),
+    tun_mtu: matchNumber(raw, "tun", "mtu") ?? defaultValueForField<number>("tun_mtu"),
+    tun_proxy_dns: matchBool(raw, "tun", "proxy_dns") ?? defaultValueForField<boolean>("tun_proxy_dns"),
+    tun_block_quic: matchBool(raw, "tun", "block_quic") ?? defaultValueForField<boolean>("tun_block_quic"),
+    direct_mode: stringOrDefault(matchString(raw, "direct_access", "mode"), "direct_mode"),
     direct_rules: matchStringArray(raw, "rules", "direct_access")
   };
 }
@@ -199,12 +269,13 @@ function findAssignmentBlockEnd(lines: string[], start: number) {
   return start + 1;
 }
 
-function formatTomlValue(value: unknown, kind: "string" | "number" | "bool" | "array") {
+function formatTomlValue(value: unknown, kind: "string" | "number" | "bool" | "array", field?: keyof AgentConfigSummary) {
   if (kind === "string") {
     return JSON.stringify(String(value ?? ""));
   }
   if (kind === "number") {
-    return String(Number(value) || 0);
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? String(numeric) : String(field ? defaultValueForField<number>(field) : 0);
   }
   if (kind === "bool") {
     return value ? "true" : "false";
@@ -219,6 +290,45 @@ function defaultRuntimeThreads() {
 
 function normalizeRuntimeThreads(value: number | undefined) {
   return value && value > 0 ? value : undefined;
+}
+
+function isBlankInput(value: unknown) {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+
+function defaultValueForField<T = unknown>(field: keyof AgentConfigSummary): T {
+  if (field === "runtime_threads" || field === "effective_runtime_threads") {
+    return defaultRuntimeThreads() as T;
+  }
+  const value = defaultFieldValues[field];
+  return (Array.isArray(value) ? [...value] : value) as T;
+}
+
+function stringOrDefault(value: string | undefined, field: keyof AgentConfigSummary) {
+  return value && value.trim() ? value : defaultValueForField<string>(field);
+}
+
+function arrayOrDefault(value: string[], field: keyof AgentConfigSummary) {
+  return value.length > 0 ? value : defaultValueForField<string[]>(field);
+}
+
+function minimumNumberForField(field: keyof AgentConfigSummary) {
+  if (
+    field === "tcp_yamux_sessions" ||
+    field === "udp_yamux_sessions" ||
+    field === "tcp_yamux_max_streams_per_session" ||
+    field === "udp_yamux_max_streams_per_session" ||
+    field === "tcp_yamux_open_stream_timeout_secs" ||
+    field === "udp_yamux_open_stream_timeout_secs" ||
+    field === "tcp_yamux_connection_write_timeout_secs" ||
+    field === "udp_yamux_connection_write_timeout_secs"
+  ) {
+    return 1;
+  }
+  if (field === "tcp_yamux_stream_window_size_kb" || field === "udp_yamux_stream_window_size_kb") {
+    return 256;
+  }
+  return 0;
 }
 
 function matchString(raw: string, section: string | null, key: string) {

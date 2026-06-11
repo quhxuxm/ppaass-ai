@@ -30,6 +30,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -81,6 +82,11 @@ public class MainActivity extends Activity {
     private static final int DIRECT_RULE_LIST_VISIBLE_RULES = 10;
     private static final int DIRECT_RULE_LIST_ROW_HEIGHT_DP = 48;
     private static final int DIRECT_RULE_LIST_CHROME_HEIGHT_DP = 52;
+    private static final TransportModeOption[] TRANSPORT_MODE_OPTIONS = {
+            new TransportModeOption("auto", "Auto"),
+            new TransportModeOption("yamux", "Yamux"),
+            new TransportModeOption("legacy", "Standard channel")
+    };
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
@@ -91,6 +97,10 @@ public class MainActivity extends Activity {
     private Spinner compressionMode;
     private Spinner tcpMode;
     private Spinner udpMode;
+    private LinearLayout tcpPoolConfig;
+    private LinearLayout udpPoolConfig;
+    private LinearLayout tcpYamuxConfig;
+    private LinearLayout udpYamuxConfig;
     private String directAccessModeValue;
     private EditText directRuleDraft;
     private LinearLayout directRuleGroupList;
@@ -411,13 +421,13 @@ public class MainActivity extends Activity {
 
     private void buildConfigScreen(LinearLayout root) {
         LinearLayout connection = configSection(root, "Connection");
-        proxyAddrs = field(connection, "Proxy addrs", prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
+        proxyAddrs = field(connection, "Proxy addrs", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        username = field(connection, "Username", prefs.getString("username", DefaultConfig.USERNAME));
+        username = field(connection, "Username", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
                 "Private key PEM",
-                DefaultConfig.normalizePrivateKeyPem(prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
+                DefaultConfig.normalizePrivateKeyPem(prefString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
                 5,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
@@ -427,131 +437,141 @@ public class MainActivity extends Activity {
                 runtime,
                 "Compression mode",
                 new String[]{"none", "lz4", "gzip", "zstd"},
-                prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE));
-        tcpMode = spinner(
-                runtime,
-                "TCP mode",
-                new String[]{"auto", "yamux", "legacy"},
-                prefs.getString("tcp_mode", DefaultConfig.TCP_MODE));
-        udpMode = spinner(
-                runtime,
-                "UDP mode",
-                new String[]{"auto", "yamux", "legacy"},
-                prefs.getString("udp_mode", DefaultConfig.UDP_MODE));
+                prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
+
+        LinearLayout tcpConfig = configSection(root, "TCP");
+        tcpMode = transportModeSpinner(tcpConfig, "Transport", prefString("tcp_mode", DefaultConfig.TCP_MODE));
+        tcpPoolConfig = configGroup(
+                tcpConfig,
+                "Connection pool",
+                "Applies in Standard channel and Auto");
         tcpPoolSize = numberControl(
-                runtime,
-                "TCP pool size",
-                prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
+                tcpPoolConfig,
+                "Pool size",
+                prefString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
                 1,
                 0);
-        udpPoolSize = numberControl(
-                runtime,
-                "UDP pool size",
-                prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
-                1,
-                0);
-
-        buildDirectAccessSection(root);
-
-        LinearLayout tcpYamux = configSection(root, "TCP Yamux");
+        tcpYamuxConfig = configGroup(
+                tcpConfig,
+                "TCP Yamux",
+                "Applies in Yamux and Auto");
         yamuxTcpSessions = numberControl(
-                tcpYamux,
-                "TCP Yamux sessions",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Outer sessions",
+                prefString(
                         "yamux_tcp_sessions",
                         String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
                 1,
                 1);
         yamuxTcpMaxStreamsPerSession = numberControl(
-                tcpYamux,
-                "TCP Yamux max streams/session",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Max streams/session",
+                prefString(
                         "yamux_tcp_max_streams_per_session",
                         String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
         yamuxTcpOpenStreamTimeoutSecs = numberControl(
-                tcpYamux,
-                "TCP Yamux open stream timeout",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Open stream timeout",
+                prefString(
                         "yamux_tcp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
         yamuxTcpKeepaliveIntervalSecs = numberControl(
-                tcpYamux,
-                "TCP Yamux keepalive interval",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Keepalive interval",
+                prefString(
                         "yamux_tcp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
         yamuxTcpConnectionWriteTimeoutSecs = numberControl(
-                tcpYamux,
-                "TCP Yamux write timeout",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Write timeout",
+                prefString(
                         "yamux_tcp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
         yamuxTcpStreamWindowSizeKb = numberControl(
-                tcpYamux,
-                "TCP Yamux stream window KB",
-                prefs.getString(
+                tcpYamuxConfig,
+                "Stream window KB",
+                prefString(
                         "yamux_tcp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
 
-        LinearLayout udpYamux = configSection(root, "UDP Yamux");
+        LinearLayout udpConfig = configSection(root, "UDP");
+        udpMode = transportModeSpinner(udpConfig, "Transport", prefString("udp_mode", DefaultConfig.UDP_MODE));
+        udpPoolConfig = configGroup(
+                udpConfig,
+                "Connection pool",
+                "Applies in Standard channel and Auto");
+        udpPoolSize = numberControl(
+                udpPoolConfig,
+                "Pool size",
+                prefString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
+                1,
+                0);
+        udpYamuxConfig = configGroup(
+                udpConfig,
+                "UDP Yamux",
+                "Applies in Yamux and Auto");
         yamuxUdpSessions = numberControl(
-                udpYamux,
-                "UDP Yamux sessions",
-                prefs.getString(
+                udpYamuxConfig,
+                "Outer sessions",
+                prefString(
                         "yamux_udp_sessions",
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
                 1);
         yamuxUdpMaxStreamsPerSession = numberControl(
-                udpYamux,
-                "UDP Yamux max streams/session",
-                prefs.getString(
+                udpYamuxConfig,
+                "Max streams/session",
+                prefString(
                         "yamux_udp_max_streams_per_session",
                         String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
         yamuxUdpOpenStreamTimeoutSecs = numberControl(
-                udpYamux,
-                "UDP Yamux open stream timeout",
-                prefs.getString(
+                udpYamuxConfig,
+                "Open stream timeout",
+                prefString(
                         "yamux_udp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
         yamuxUdpKeepaliveIntervalSecs = numberControl(
-                udpYamux,
-                "UDP Yamux keepalive interval",
-                prefs.getString(
+                udpYamuxConfig,
+                "Keepalive interval",
+                prefString(
                         "yamux_udp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
         yamuxUdpConnectionWriteTimeoutSecs = numberControl(
-                udpYamux,
-                "UDP Yamux write timeout",
-                prefs.getString(
+                udpYamuxConfig,
+                "Write timeout",
+                prefString(
                         "yamux_udp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
         yamuxUdpStreamWindowSizeKb = numberControl(
-                udpYamux,
-                "UDP Yamux stream window KB",
-                prefs.getString(
+                udpYamuxConfig,
+                "Stream window KB",
+                prefString(
                         "yamux_udp_stream_window_size_kb",
-                String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
+                        String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
+
+        updateTransportVisibility();
+
+        buildDirectAccessSection(root);
     }
 
     private void buildDirectAccessSection(LinearLayout root) {
@@ -1609,6 +1629,65 @@ public class MainActivity extends Activity {
         return spinner;
     }
 
+    private Spinner transportModeSpinner(LinearLayout root, String title, String selected) {
+        root.addView(controlLabel(title), labelParams());
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<TransportModeOption> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                TRANSPORT_MODE_OPTIONS);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        int selectedIndex = 0;
+        String normalized = normalizeTransportMode(selected, "auto");
+        for (int i = 0; i < TRANSPORT_MODE_OPTIONS.length; i++) {
+            if (TRANSPORT_MODE_OPTIONS[i].value.equalsIgnoreCase(normalized)) {
+                selectedIndex = i;
+                break;
+            }
+        }
+        spinner.setSelection(selectedIndex);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateTransportVisibility();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                updateTransportVisibility();
+            }
+        });
+        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setPadding(dp(12), 0, dp(12), 0);
+        root.addView(spinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+        trackEditable(spinner);
+        return spinner;
+    }
+
+    private void updateTransportVisibility() {
+        setVisible(tcpPoolConfig, usesStandardPool(selectedTcpMode()));
+        setVisible(udpPoolConfig, usesStandardPool(selectedUdpMode()));
+        setVisible(tcpYamuxConfig, usesYamux(selectedTcpMode()));
+        setVisible(udpYamuxConfig, usesYamux(selectedUdpMode()));
+    }
+
+    private void setVisible(View view, boolean visible) {
+        if (view != null) {
+            view.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private boolean usesYamux(String mode) {
+        return "yamux".equals(mode) || "auto".equals(mode);
+    }
+
+    private boolean usesStandardPool(String mode) {
+        return "legacy".equals(mode) || "auto".equals(mode);
+    }
+
     private String selectedTcpMode() {
         return selectedTransportMode(tcpMode, DefaultConfig.TCP_MODE);
     }
@@ -1636,11 +1715,40 @@ public class MainActivity extends Activity {
         if (spinner == null || spinner.getSelectedItem() == null) {
             return fallback;
         }
-        String value = spinner.getSelectedItem().toString().trim().toLowerCase();
+        Object selected = spinner.getSelectedItem();
+        if (selected instanceof TransportModeOption) {
+            return ((TransportModeOption) selected).value;
+        }
+        String value = selected.toString().trim().toLowerCase();
+        if ("standard channel".equals(value)) {
+            return "legacy";
+        }
         if ("yamux".equals(value) || "legacy".equals(value) || "auto".equals(value)) {
             return value;
         }
         return fallback;
+    }
+
+    private String normalizeTransportMode(String value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("auto".equals(normalized) || "yamux".equals(normalized) || "legacy".equals(normalized)) {
+            return normalized;
+        }
+        if ("standard channel".equals(normalized)) {
+            return "legacy";
+        }
+        return fallback;
+    }
+
+    private String prefString(String key, String fallback) {
+        String value = prefs.getString(key, fallback);
+        if (value == null || value.trim().isEmpty()) {
+            return fallback;
+        }
+        return value;
     }
 
     private EditText field(LinearLayout root, String title, String value) {
@@ -1777,6 +1885,30 @@ public class MainActivity extends Activity {
         section.setPadding(dp(18), dp(18), dp(18), dp(20));
         sectionTitle(section, title);
         return section;
+    }
+
+    private LinearLayout configGroup(LinearLayout root, String title, String appliesWhen) {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(dp(12), dp(10), dp(12), dp(12));
+        group.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        LinearLayout heading = horizontalRow();
+        TextView titleView = titleText(title, 13f);
+        heading.addView(titleView, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        TextView badge = chip(appliesWhen, COLOR_STATUS_STOPPED);
+        heading.addView(badge, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        group.addView(heading, matchWrap());
+
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, dp(12), 0, 0);
+        root.addView(group, params);
+        return group;
     }
 
     private LinearLayout screenTabBar() {
@@ -2523,6 +2655,21 @@ public class MainActivity extends Activity {
             this.packageName = packageName;
             this.systemBadge = systemBadge;
             this.checkBox = checkBox;
+        }
+    }
+
+    private static final class TransportModeOption {
+        final String value;
+        final String label;
+
+        TransportModeOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
         }
     }
 

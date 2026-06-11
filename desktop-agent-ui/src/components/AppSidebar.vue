@@ -7,6 +7,7 @@ import type { TabKey } from "../types";
 defineProps<{
   tabs: Array<{ key: TabKey; label: string; icon: string }>;
   activeTab: TabKey;
+  collapsed: boolean;
   running: boolean;
   runningLabel: string;
   runningSeverity: string;
@@ -16,17 +17,27 @@ defineProps<{
 
 const emit = defineEmits<{
   "update:activeTab": [value: TabKey];
+  "update:collapsed": [value: boolean];
 }>();
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside :class="['sidebar', { collapsed }]">
     <div class="brand">
       <div class="brand-mark">P</div>
-      <div>
+      <div class="brand-copy">
         <div class="brand-title">PPAASS</div>
         <div class="brand-subtitle">Desktop Agent</div>
       </div>
+      <Button
+        class="sidebar-toggle"
+        :icon="collapsed ? 'pi pi-angle-right' : 'pi pi-angle-left'"
+        text
+        rounded
+        :aria-label="collapsed ? '展开导航' : '收起导航'"
+        :title="collapsed ? '展开导航' : '收起导航'"
+        @click="emit('update:collapsed', !collapsed)"
+      />
     </div>
 
     <nav class="nav">
@@ -36,6 +47,7 @@ const emit = defineEmits<{
         :class="['nav-button', { active: activeTab === tab.key }]"
         :icon="tab.icon"
         :label="tab.label"
+        :title="tab.label"
         text
         @click="emit('update:activeTab', tab.key)"
       />

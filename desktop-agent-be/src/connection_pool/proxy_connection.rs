@@ -192,7 +192,7 @@ mod tests {
     use common::ClientConnectionConfig;
 
     const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "127.0.0.1:10080"
+listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"

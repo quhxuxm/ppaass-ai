@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { applyFieldToToml, coerceField, fallbackRawConfig, summarizeRaw } from "../configToml";
 import { directModeLabels, tabs } from "../constants";
 import { fallbackAgentState, fallbackConnectivityReport, fallbackTrafficSnapshot, loadFallbackConfig } from "../fallbacks";
@@ -107,9 +108,12 @@ export function useDesktopAgent() {
   let trafficRefreshInFlight = false;
   let agentRefreshInFlight = false;
   let dnsRefreshInFlight = false;
+  let unlistenConfigUpdated: UnlistenFn | undefined;
+  let unlistenTrayError: UnlistenFn | undefined;
 
   onMounted(() => {
     pollingActive = true;
+    void registerTauriEventListeners();
     void boot().finally(() => {
       if (!pollingActive) {
         return;
@@ -125,7 +129,42 @@ export function useDesktopAgent() {
     clearPollingTimer(trafficTimer);
     clearPollingTimer(agentTimer);
     clearPollingTimer(dnsTimer);
+    unlistenConfigUpdated?.();
+    unlistenTrayError?.();
   });
+
+  async function registerTauriEventListeners() {
+    try {
+      unlistenConfigUpdated = await listen<LoadedAgentConfig>("agent-config-updated", (event) => {
+        applyExternalConfig(event.payload);
+      });
+      unlistenTrayError = await listen<string>("agent-tray-error", (event) => {
+        showToast("error", event.payload);
+      });
+    } catch {
+      // The event API is only available inside Tauri.
+    }
+  }
+
+  function applyExternalConfig(loaded: LoadedAgentConfig) {
+    if (!loaded?.summary) {
+      return;
+    }
+
+    const enabled = loaded.summary.tun_enabled;
+    if (state.config && state.dirty) {
+      state.config.summary.tun_enabled = enabled;
+      state.config.raw = applyFieldToToml(state.config.raw, "tun_enabled", enabled);
+    } else {
+      state.config = loaded;
+      state.dirty = false;
+    }
+    state.diagnostics = null;
+    showToast(
+      "success",
+      `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，重启 Agent 后生效" : ""}`
+    );
+  }
 
   async function boot() {
     try {
@@ -256,7 +295,7 @@ export function useDesktopAgent() {
   }
 
   function setField(field: keyof AgentConfigSummary, value: unknown) {
-    if (!state.config || value === null || value === undefined || !ensureConfigEditable(false)) {
+    if (!state.config || !ensureConfigEditable(false)) {
       return;
     }
     const coerced = coerceField(field, value);

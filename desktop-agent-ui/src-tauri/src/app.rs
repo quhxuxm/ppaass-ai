@@ -23,7 +23,10 @@ use crate::runtime::AgentRuntime;
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
 use crate::tray::restore_main_window;
 #[cfg(any(windows, target_os = "macos"))]
-use crate::tray::{hide_window_to_tray, hide_window_to_tray_after_minimize, setup_system_tray};
+use crate::tray::{
+    hide_window_to_tray, hide_window_to_tray_after_minimize, setup_system_tray,
+    sync_tray_tun_checked,
+};
 #[cfg(windows)]
 use crate::windows_service::{
     install_and_start_windows_service, run_windows_service, send_service_request,
@@ -32,27 +35,35 @@ use crate::windows_service::{
 
 #[tauri::command]
 async fn load_agent_config(
+    app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
     path: Option<String>,
 ) -> Result<LoadedAgentConfig, String> {
     let runtime = runtime.inner().clone();
-    run_blocking("加载配置", move || {
+    let loaded = run_blocking("加载配置", move || {
         load_agent_config_inner(&runtime, path)
     })
-    .await
+    .await?;
+    #[cfg(any(windows, target_os = "macos"))]
+    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
+    Ok(loaded)
 }
 
 #[tauri::command]
 async fn save_agent_config(
+    app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
     path: String,
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
     let runtime = runtime.inner().clone();
-    run_blocking("保存配置", move || {
+    let loaded = run_blocking("保存配置", move || {
         save_agent_config_inner(&runtime, path, raw)
     })
-    .await
+    .await?;
+    #[cfg(any(windows, target_os = "macos"))]
+    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
+    Ok(loaded)
 }
 
 #[tauri::command]

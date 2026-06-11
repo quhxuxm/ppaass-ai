@@ -434,7 +434,7 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 ./run-tests.sh performance 100 60
 ```
 
-注意：文档和 CI 中有的示例使用 `127.0.0.1:7070`，当前 `config/local/agent.toml` 里是 `127.0.0.1:10080`。跑测试时要让 `AGENT_ADDR` 和实际配置一致。
+注意：文档和 CI 中有的示例使用 `127.0.0.1:7070`，当前 `config/local/agent.toml` 里是 `0.0.0.0:10080`。跑测试时要让 `AGENT_ADDR` 和实际配置一致。
 
 ## 18. CI 与部署
 

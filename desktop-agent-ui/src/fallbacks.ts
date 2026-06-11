@@ -21,7 +21,7 @@ export function fallbackAgentState(): AgentState {
 }
 
 export function fallbackConnectivityReport(currentSummary?: AgentConfigSummary): ConnectivityReport {
-  const listenAddr = currentSummary?.listen_addr ?? "127.0.0.1:10080";
+  const listenAddr = currentSummary?.listen_addr ?? "0.0.0.0:10080";
   const tunEnabled = currentSummary?.tun_enabled ?? false;
   const tunName = currentSummary?.tun_name ?? "ppaass-tun";
   const tunStatus = tunEnabled ? "TUN 状态需要 Tauri 运行时" : "TUN 未启用";
