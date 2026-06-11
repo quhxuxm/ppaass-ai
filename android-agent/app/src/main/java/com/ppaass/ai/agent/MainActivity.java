@@ -61,6 +61,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
     private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
+    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v1";
     private static final String PREF_TRAFFIC_DAY = "traffic_day";
     private static final String PREF_TRAFFIC_RX_BASE = "traffic_rx_base";
     private static final String PREF_TRAFFIC_TX_BASE = "traffic_tx_base";
@@ -173,6 +174,7 @@ public class MainActivity extends Activity {
         configureWindow();
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
         migrateModeDefaults();
+        migratePerformanceDefaults();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
     }
@@ -243,6 +245,47 @@ public class MainActivity extends Activity {
         }
 
         editor.apply();
+    }
+
+    private void migratePerformanceDefaults() {
+        if (prefs.getBoolean(PREF_PERFORMANCE_DEFAULTS_MIGRATED, false)) {
+            return;
+        }
+
+        SharedPreferences.Editor editor = prefs.edit()
+                .putBoolean(PREF_PERFORMANCE_DEFAULTS_MIGRATED, true);
+        migrateStringDefault(editor, "compression_mode", "lz4", DefaultConfig.COMPRESSION_MODE);
+        migrateStringDefault(
+                editor,
+                "yamux_tcp_max_streams_per_session",
+                "32",
+                String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION));
+        migrateStringDefault(
+                editor,
+                "yamux_udp_max_streams_per_session",
+                "32",
+                String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION));
+        migrateStringDefault(
+                editor,
+                "yamux_tcp_stream_window_size_kb",
+                "256",
+                String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB));
+        migrateStringDefault(
+                editor,
+                "yamux_udp_stream_window_size_kb",
+                "256",
+                String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB));
+        editor.apply();
+    }
+
+    private void migrateStringDefault(
+            SharedPreferences.Editor editor,
+            String key,
+            String oldDefault,
+            String newDefault) {
+        if (!prefs.contains(key) || oldDefault.equalsIgnoreCase(prefs.getString(key, oldDefault))) {
+            editor.putString(key, newDefault);
+        }
     }
 
     private void buildUi() {

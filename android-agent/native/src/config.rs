@@ -8,6 +8,8 @@ use socket2::Socket;
 use crate::direct_access::DirectAccessConfig;
 use crate::error::{AndroidAgentError, Result};
 
+pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
@@ -115,6 +117,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
     fn compression_mode(&self) -> CompressionMode {
         self.compression_mode.parse().unwrap_or_default()
+    }
+
+    fn tcp_socket_buffer_size(&self) -> Option<usize> {
+        Some(ANDROID_SOCKET_BUFFER_SIZE)
     }
 
     #[cfg(unix)]

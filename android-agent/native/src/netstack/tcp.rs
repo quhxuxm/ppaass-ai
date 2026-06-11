@@ -19,7 +19,7 @@ use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
 
 const SNIFF_MAX_BYTES: usize = 4096;
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
+const SNIFF_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -102,7 +102,7 @@ async fn handle_tcp(
 
     let mut sniffed = Vec::new();
     if direct_target.is_none() && !proxy_dns_request {
-        sniffed = sniff_first_bytes(&mut client).await;
+        sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
         {
@@ -201,7 +201,7 @@ async fn handle_tcp(
     Ok(())
 }
 
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> {
+async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
     let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
     let mut chunk = [0u8; 1024];
@@ -216,7 +216,12 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> 
         }
         match timeout(remaining, client.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
-            Ok(Ok(n)) => buffer.extend_from_slice(&chunk[..n]),
+            Ok(Ok(n)) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if sniff_domain(port, &buffer).is_some() {
+                    break;
+                }
+            }
             Ok(Err(e)) => {
                 debug!("Android TUN TCP sniff read failed: {e}");
                 break;
@@ -264,6 +269,8 @@ async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
 }
 
 fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
+    tune_direct_tcp_socket(socket, target);
+
     let keepalive = TcpKeepalive::new()
         .with_time(Duration::from_secs(60))
         .with_interval(Duration::from_secs(30))
@@ -271,6 +278,18 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("Android TUN TCP direct keepalive setup failed target={target}: {err}");
+    }
+}
+
+fn tune_direct_tcp_socket(socket: &Socket, target: SocketAddr) {
+    if let Err(err) = socket.set_tcp_nodelay(true) {
+        debug!("Android TUN TCP direct TCP_NODELAY setup failed target={target}: {err}");
+    }
+    if let Err(err) = socket.set_recv_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN TCP direct recv buffer setup failed target={target}: {err}");
+    }
+    if let Err(err) = socket.set_send_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN TCP direct send buffer setup failed target={target}: {err}");
     }
 }
 

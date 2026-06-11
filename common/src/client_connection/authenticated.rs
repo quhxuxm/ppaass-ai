@@ -260,6 +260,7 @@ where
             last_error = Some(e);
             continue;
         }
+        tune_proxy_socket(config, &socket, *dst);
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
             warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -334,6 +335,7 @@ where
             last_error = Some(e);
             continue;
         }
+        tune_proxy_socket(config, &socket, dst);
         if let Err(e) = socket.set_nonblocking(true) {
             warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -362,4 +364,19 @@ where
 
     Err(last_error
         .unwrap_or_else(|| std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))))
+}
+
+fn tune_proxy_socket<C>(config: &C, socket: &Socket, dst: SocketAddr)
+where
+    C: ClientConnectionConfig,
+{
+    let Some(buffer_size) = config.tcp_socket_buffer_size() else {
+        return;
+    };
+    if let Err(err) = socket.set_recv_buffer_size(buffer_size) {
+        warn!("设置代理连接 socket 接收缓冲失败 (dst={}): {err}", dst);
+    }
+    if let Err(err) = socket.set_send_buffer_size(buffer_size) {
+        warn!("设置代理连接 socket 发送缓冲失败 (dst={}): {err}", dst);
+    }
 }

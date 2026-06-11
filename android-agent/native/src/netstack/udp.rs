@@ -373,6 +373,7 @@ fn bind_direct_udp(target: SocketAddr) -> std::io::Result<UdpSocket> {
         Some(Protocol::UDP),
     )?;
     protect_direct_socket(&socket)?;
+    tune_direct_udp_socket(&socket, target);
 
     let bind_addr = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
@@ -384,6 +385,15 @@ fn bind_direct_udp(target: SocketAddr) -> std::io::Result<UdpSocket> {
 
     let std_socket: std::net::UdpSocket = socket.into();
     UdpSocket::from_std(std_socket)
+}
+
+fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {
+    if let Err(err) = socket.set_recv_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN UDP direct recv buffer setup failed target={target}: {err}");
+    }
+    if let Err(err) = socket.set_send_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN UDP direct send buffer setup failed target={target}: {err}");
+    }
 }
 
 fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {

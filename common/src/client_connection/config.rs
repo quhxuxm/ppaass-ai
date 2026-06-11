@@ -32,6 +32,11 @@ pub trait ClientConnectionConfig: Debug {
         CompressionMode::None
     }
 
+    /// Optional TCP socket send/receive buffer size for latency-sensitive clients.
+    fn tcp_socket_buffer_size(&self) -> Option<usize> {
+        None
+    }
+
     /// 可选的本地套接字绑定地址。
     /// 当返回 `Some` 时，使用 [`tokio::net::TcpSocket`] 在连接前绑定到该地址，
     /// 使 OS 强制通过拥有该 IP 的接口路由连接，绕过任何可能存在的 TUN 默认路由。
