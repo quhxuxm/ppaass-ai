@@ -9,6 +9,23 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tracing::{debug, info};
 
+const FORCE_PROXY_DOMAIN_SUFFIXES: &[&str] = &[
+    "google.com",
+    "google.cn",
+    "googleapis.com",
+    "googleapis.cn",
+    "googleusercontent.com",
+    "gstatic.com",
+    "gvt1.com",
+    "gvt2.com",
+    "youtube.com",
+    "youtube-nocookie.com",
+    "ytimg.com",
+    "googlevideo.com",
+    "ggpht.com",
+    "xn--ngstr-lra8j.com",
+];
+
 /// 确定是直连目标还是通过代理访问的模式
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -179,14 +196,17 @@ impl DirectAccessChecker {
     ///
     /// 用于 TUN 场景中目标已经是 IP，但通过 DNS 映射可还原原始域名时的判定。
     pub fn is_direct_domain(&self, host: &str) -> bool {
-        let host_lower = host.to_lowercase();
+        let host_lower = Self::normalize_domain(host);
         match self.mode {
             DirectAccessMode::ProxyAll => false,
             DirectAccessMode::DirectAll => true,
-            DirectAccessMode::Rules => self
-                .rules
-                .iter()
-                .any(|rule| Self::match_domain(rule, &host_lower)),
+            DirectAccessMode::Rules => {
+                !Self::is_force_proxy_domain(&host_lower)
+                    && self
+                        .rules
+                        .iter()
+                        .any(|rule| Self::match_domain(rule, &host_lower))
+            }
         }
     }
 
@@ -194,12 +214,16 @@ impl DirectAccessChecker {
     fn matches_any_rule(&self, address: &Address) -> bool {
         match address {
             Address::Domain { host, .. } => {
-                let host_lower = host.to_lowercase();
+                let host_lower = Self::normalize_domain(host);
 
                 // 首先尝试将域名解析为 IP 地址
                 // （有时域名会以 IP 字符串形式传入，如 "10.0.0.1"）
                 if let Ok(ip) = host_lower.parse::<IpAddr>() {
                     return self.rules.iter().any(|rule| Self::match_ip(rule, &ip));
+                }
+
+                if Self::is_force_proxy_domain(&host_lower) {
+                    return false;
                 }
 
                 // 与域名规则进行匹配
@@ -233,6 +257,16 @@ impl DirectAccessChecker {
             }
             _ => false,
         }
+    }
+
+    fn normalize_domain(host: &str) -> String {
+        host.trim().trim_end_matches('.').to_lowercase()
+    }
+
+    fn is_force_proxy_domain(host: &str) -> bool {
+        FORCE_PROXY_DOMAIN_SUFFIXES
+            .iter()
+            .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
     }
 
     fn match_ip(rule: &ParsedRule, ip: &IpAddr) -> bool {

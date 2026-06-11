@@ -5,6 +5,23 @@ use tracing::{debug, info};
 
 use crate::android_log;
 
+const FORCE_PROXY_DOMAIN_SUFFIXES: &[&str] = &[
+    "google.com",
+    "google.cn",
+    "googleapis.com",
+    "googleapis.cn",
+    "googleusercontent.com",
+    "gstatic.com",
+    "gvt1.com",
+    "gvt2.com",
+    "youtube.com",
+    "youtube-nocookie.com",
+    "ytimg.com",
+    "googlevideo.com",
+    "ggpht.com",
+    "xn--ngstr-lra8j.com",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DirectAccessMode {
@@ -146,10 +163,13 @@ impl DirectAccessChecker {
         match self.mode {
             DirectAccessMode::ProxyAll => false,
             DirectAccessMode::DirectAll => true,
-            DirectAccessMode::Rules => self
-                .rules
-                .iter()
-                .any(|rule| Self::match_domain(rule, &host_lower)),
+            DirectAccessMode::Rules => {
+                !Self::is_force_proxy_domain(&host_lower)
+                    && self
+                        .rules
+                        .iter()
+                        .any(|rule| Self::match_domain(rule, &host_lower))
+            }
         }
     }
 
@@ -160,6 +180,10 @@ impl DirectAccessChecker {
 
                 if let Ok(ip) = host_lower.parse::<IpAddr>() {
                     return self.rules.iter().any(|rule| Self::match_ip(rule, &ip));
+                }
+
+                if Self::is_force_proxy_domain(&host_lower) {
+                    return false;
                 }
 
                 self.rules
@@ -193,6 +217,12 @@ impl DirectAccessChecker {
 
     fn normalize_domain(host: &str) -> String {
         host.trim().trim_end_matches('.').to_lowercase()
+    }
+
+    fn is_force_proxy_domain(host: &str) -> bool {
+        FORCE_PROXY_DOMAIN_SUFFIXES
+            .iter()
+            .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
     }
 
     fn match_ip(rule: &ParsedRule, ip: &IpAddr) -> bool {
@@ -304,5 +334,20 @@ mod tests {
 
         assert!(checker.is_direct_domain("www.example.com"));
         assert!(!checker.is_direct_domain("10.1.2.3"));
+    }
+
+    #[test]
+    fn google_service_domains_are_forced_proxy_in_rules_mode() {
+        let checker =
+            DirectAccessChecker::new(&config(DirectAccessMode::Rules, &["*.cn", "*.com"]));
+
+        assert!(!checker.is_direct_domain("services.googleapis.cn"));
+        assert!(!checker.is_direct_domain("www.google.com"));
+        assert!(!checker.is_direct_domain("rr1---sn-2x3eenel.xn--ngstr-lra8j.com"));
+        assert!(!checker.is_direct(&Address::Domain {
+            host: "play.googleapis.com".to_string(),
+            port: 443,
+        }));
+        assert!(checker.is_direct_domain("example.cn"));
     }
 }

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use common::{
     AuthenticatedConnection, ClientStream, DatagramStreamIo, TcpTransportMode,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
-    spawn_guarded,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream, spawn_guarded,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -316,7 +316,7 @@ impl AndroidConnectionPool {
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    if is_yamux_target_connect_error(&message) {
+                    if is_yamux_actual_target_connect_error(&message) {
                         return Err(AndroidAgentError::Connection(message));
                     }
                     warn!(
@@ -327,6 +327,7 @@ impl AndroidConnectionPool {
                         "Android {} Yamux session unusable: {message}",
                         self.pool_name
                     ));
+                    session.connection.close().await;
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
                     if attempts >= target_size.max(3) {
@@ -532,12 +533,49 @@ impl Unpin for AndroidProxyStream {}
 
 fn should_fallback_yamux_error(err: &AndroidAgentError) -> bool {
     match err {
-        AndroidAgentError::Connection(message) => !is_yamux_target_connect_error(message),
+        AndroidAgentError::Connection(message) => {
+            is_yamux_session_error(message) || !is_yamux_actual_target_connect_error(message)
+        }
         AndroidAgentError::Io(_) => true,
         _ => false,
     }
 }
 
-fn is_yamux_target_connect_error(message: &str) -> bool {
-    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+fn is_yamux_actual_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:")
+}
+
+fn is_yamux_session_error(message: &str) -> bool {
+    message == YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE
+        || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        || message.contains("Yamux session")
+        || message.contains("connection closed")
+        || message.contains("broken pipe")
+        || message.contains("reset")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yamux_timeouts_can_fallback_or_retry() {
+        let err = AndroidAgentError::Connection(
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE.to_string(),
+        );
+        assert!(should_fallback_yamux_error(&err));
+        assert!(is_yamux_session_error(
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        ));
+        assert!(is_yamux_session_error(YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE));
+    }
+
+    #[test]
+    fn actual_target_connect_error_does_not_fallback() {
+        let err = AndroidAgentError::Connection("连接失败: Connection refused".to_string());
+        assert!(!should_fallback_yamux_error(&err));
+        assert!(is_yamux_actual_target_connect_error(
+            "连接失败: Connection refused"
+        ));
+    }
 }

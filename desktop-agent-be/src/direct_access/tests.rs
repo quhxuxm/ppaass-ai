@@ -213,6 +213,24 @@ fn test_mixed_rules() {
 }
 
 #[test]
+fn test_google_service_domains_are_forced_proxy_in_rules_mode() {
+    let config = DirectAccessConfig {
+        mode: DirectAccessMode::Rules,
+        rules: vec!["*.cn".to_string(), "*.com".to_string()],
+    };
+    let checker = DirectAccessChecker::new(&config);
+
+    assert!(!checker.is_direct_domain("services.googleapis.cn"));
+    assert!(!checker.is_direct_domain("www.google.com"));
+    assert!(!checker.is_direct_domain("rr1---sn-2x3eenel.xn--ngstr-lra8j.com"));
+    assert!(!checker.is_direct(&Address::Domain {
+        host: "play.googleapis.com".to_string(),
+        port: 443,
+    }));
+    assert!(checker.is_direct_domain("example.cn"));
+}
+
+#[test]
 fn test_case_insensitive_domain() {
     let config = DirectAccessConfig {
         mode: DirectAccessMode::Rules,

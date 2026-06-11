@@ -11,6 +11,7 @@ use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
 use common::spawn_guarded;
 use futures::{SinkExt, StreamExt};
+use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -190,13 +191,22 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut proxy_address = address.clone();
                     if !direct_match {
-                        direct_match = context
+                        if context
                             .direct_domain_cache
                             .matching_domain_for_ip(target_addr.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
-                            .is_some();
+                            .is_some()
+                        {
+                            direct_match = true;
+                        } else if let Some(domain) = context
+                            .direct_domain_cache
+                            .matching_domain_for_ip(target_addr.ip(), |_| true)
+                        {
+                            proxy_address = domain_address(&domain, target_addr.port());
+                        }
                     }
 
                     if block_quic && target_addr.port() == 443 && !direct_match {
@@ -205,7 +215,7 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     if !direct_match {
-                        udp_relay.send(source_addr, target_addr, data);
+                        udp_relay.send(source_addr, target_addr, proxy_address, data);
                         continue;
                     }
 
@@ -245,4 +255,11 @@ pub(super) fn spawn_udp_sessions(
         }
         debug!("udp_task 退出");
     })
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
 }

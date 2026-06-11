@@ -85,7 +85,10 @@ impl YamuxClientConnection {
             ));
         }
 
-        let connect_response_timeout = config.timeout_duration().max(settings.open_stream_timeout);
+        let connect_response_timeout = config
+            .timeout_duration()
+            .max(settings.open_stream_timeout)
+            .saturating_add(Duration::from_secs(5));
         // 外层 session 先是一条普通已认证连接，再 CONNECT 到 TcpYamux/UdpYamux 虚拟地址。
         let auth_conn = AuthenticatedConnection::authenticate_only(config).await?;
         let (outer_stream, outer_stream_id) = auth_conn

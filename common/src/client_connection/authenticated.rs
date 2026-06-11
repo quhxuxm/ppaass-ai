@@ -202,7 +202,6 @@ impl AuthenticatedConnection {
                 stream_id: request_id.clone(),
                 read_buf: Vec::new(),
                 read_pos: 0,
-                pending_write_len: None,
             },
             request_id,
         ))

@@ -12,7 +12,7 @@ use super::system_dns::resolve_via_system;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -58,6 +58,8 @@ pub(super) async fn handle_tun_tcp(
 
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
+    let mut proxy_address = address.clone();
+    let mut proxy_reason = None;
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
@@ -78,6 +80,15 @@ pub(super) async fn handle_tun_tcp(
             );
             direct_target = Some(target);
         }
+    }
+
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+    {
+        debug!("TUN TCP 缓存域名用于代理目标：{} ({})", target, domain);
+        proxy_address = domain_address(&domain, target.port());
+        proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
     // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
@@ -101,6 +112,10 @@ pub(super) async fn handle_tun_tcp(
                     );
                     direct_target = Some(target);
                 }
+            } else {
+                debug!("TUN TCP 嗅探域名用于代理目标：{} ({})", target, domain);
+                proxy_address = domain_address(&domain, target.port());
+                proxy_reason = Some(format!("嗅探域名 {domain}"));
             }
         }
     }
@@ -118,10 +133,12 @@ pub(super) async fn handle_tun_tcp(
         )
         .await?;
         // 把嗅探时已经读出的字节先补发给目标，否则握手会丢首段。
-        if !sniffed.is_empty()
-            && let Err(e) = target_stream.write_all(&sniffed).await
-        {
-            debug!("TUN TCP 直连补发首段字节失败：{e}");
+        if !sniffed.is_empty() {
+            if let Err(e) = target_stream.write_all(&sniffed).await {
+                debug!("TUN TCP 直连补发首段字节失败：{e}");
+            } else if let Err(e) = target_stream.flush().await {
+                debug!("TUN TCP 直连刷新首段字节失败：{e}");
+            }
         }
         match tokio::io::copy_bidirectional_with_sizes(
             &mut client,
@@ -146,16 +163,22 @@ pub(super) async fn handle_tun_tcp(
     } else {
         debug!("TUN TCP -> 代理 -> {}", target_label);
     }
+    let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
+    if !proxy_dns_request {
+        debug!("TUN TCP 代理目标：{}", proxy_label);
+    }
     let connected = tcp_pool
         .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
+        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
         .await?;
     let mut proxy_io = connected.into_async_io();
     // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
-    if !sniffed.is_empty()
-        && let Err(e) = proxy_io.write_all(&sniffed).await
-    {
-        debug!("TUN TCP 代理补发首段字节失败：{e}");
+    if !sniffed.is_empty() {
+        if let Err(e) = proxy_io.write_all(&sniffed).await {
+            debug!("TUN TCP 代理补发首段字节失败：{e}");
+        } else if let Err(e) = proxy_io.flush().await {
+            debug!("TUN TCP 代理刷新首段字节失败：{e}");
+        }
     }
     // TUN TCP 流和 proxy stream 都实现 AsyncRead/AsyncWrite，可直接双向中继。
     match tokio::io::copy_bidirectional_with_sizes(
@@ -211,6 +234,20 @@ fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
         80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
         // 其他端口默认按 TLS（含 443/8443/853 等）解析，失败再尝试 HTTP。
         _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
+    }
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
+}
+
+fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{reason}，原始目标 {target_label}"),
+        None => target_label.to_string(),
     }
 }
 

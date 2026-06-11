@@ -13,7 +13,7 @@ use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use futures::SinkExt;
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -96,6 +96,8 @@ pub(super) async fn handle_tun_udp(
 
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
+    let mut proxy_address = address.clone();
+    let mut proxy_reason = None;
     if !proxy_dns_request {
         // UDP 没有 TCP 的 SNI 嗅探机会，主要依赖 IP/CIDR 和 DNS proxy 记录的域名缓存。
         if direct_checker.is_direct(&address) {
@@ -122,6 +124,15 @@ pub(super) async fn handle_tun_udp(
                 }
             }
         }
+    }
+
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+    {
+        debug!("TUN UDP 缓存域名用于代理目标：{} ({})", target, domain);
+        proxy_address = domain_address(&domain, target.port());
+        proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
     if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
@@ -154,14 +165,15 @@ pub(super) async fn handle_tun_udp(
     }
 
     // 代理 UDP 路径通过连接池建立一个 UDP 语义的 proxy stream。
+    let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
     if proxy_dns_request {
         debug!("TUN UDP DNS -> 代理 -> {}", target_label);
     } else {
-        debug!("TUN UDP -> 代理 -> {}", target_label);
+        debug!("TUN UDP -> 代理 -> {}", proxy_label);
     }
     let connected = udp_pool
         .as_ref()
-        .get_connected_stream(address, TransportProtocol::Udp)
+        .get_connected_stream(proxy_address, TransportProtocol::Udp)
         .await?;
     let proxy_io = connected.into_async_io();
     let (mut reader, mut writer) = tokio::io::split(proxy_io);
@@ -353,5 +365,19 @@ fn bind_direct_udp(
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {
         // 保持会话短暂存活，避免应用持续重试被丢弃 UDP 时频繁创建/销毁任务。
+    }
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
+}
+
+fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{reason}，原始目标 {target_label}"),
+        None => target_label.to_string(),
     }
 }

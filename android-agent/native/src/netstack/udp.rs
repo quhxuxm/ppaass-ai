@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use common::spawn_guarded;
 use futures::{SinkExt, StreamExt};
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
@@ -92,13 +92,22 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut proxy_address = address.clone();
                     if !direct_match {
-                        direct_match = context
+                        if context
                             .direct_domain_cache
                             .matching_domain_for_ip(target.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
-                            .is_some();
+                            .is_some()
+                        {
+                            direct_match = true;
+                        } else if let Some(domain) = context
+                            .direct_domain_cache
+                            .matching_domain_for_ip(target.ip(), |_| true)
+                        {
+                            proxy_address = domain_address(&domain, target.port());
+                        }
                     }
 
                     if block_quic && target.port() == 443 && !direct_match {
@@ -107,7 +116,7 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     if !direct_match {
-                        udp_relay.send(source, target, data);
+                        udp_relay.send(source, target, proxy_address, data);
                         continue;
                     }
 
@@ -179,6 +188,8 @@ pub(super) async fn handle_tun_udp(
 
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
+    let mut proxy_address = address.clone();
+    let mut proxy_reason = None;
     if !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
@@ -194,6 +205,18 @@ pub(super) async fn handle_tun_udp(
             direct_label = format!("{} ({})", target_label, domain);
             direct_target = Some(target);
         }
+    }
+
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+    {
+        debug!(
+            "Android TUN UDP cached proxy domain matched: {} ({})",
+            target, domain
+        );
+        proxy_address = domain_address(&domain, target.port());
+        proxy_reason = Some(format!("cached domain {domain}"));
     }
 
     if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
@@ -220,20 +243,21 @@ pub(super) async fn handle_tun_udp(
         return Ok(());
     }
 
+    let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
     if proxy_dns_request {
         debug!("Android TUN UDP DNS -> proxy -> {}", target_label);
     } else {
-        debug!("Android TUN UDP fallback proxy -> {}", target_label);
-        android_log::info(format!("Android TUN UDP PROXY {target_label}"));
+        debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
+        android_log::info(format!("Android TUN UDP PROXY {proxy_label}"));
     }
     let proxy_io = match udp_pool
-        .get_connected_stream(address, TransportProtocol::Udp)
+        .get_connected_stream(proxy_address, TransportProtocol::Udp)
         .await
     {
         Ok(proxy_io) => proxy_io,
         Err(e) => {
             android_log::error(format!(
-                "Android TUN UDP PROXY connect failed {target_label}: {e}"
+                "Android TUN UDP PROXY connect failed {proxy_label}: {e}"
             ));
             return Err(e);
         }
@@ -379,4 +403,18 @@ fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
 
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {}
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
+}
+
+fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{reason}, original {target_label}"),
+        None => target_label.to_string(),
+    }
 }
