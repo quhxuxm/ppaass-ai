@@ -14,6 +14,7 @@ use common::{
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, Notify};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::android_log;
@@ -36,6 +37,7 @@ struct AndroidYamuxSession {
 
 pub struct AndroidConnectionPool {
     config: Arc<AndroidAgentConfig>,
+    shutdown: CancellationToken,
     pool_size: usize,
     pool_name: &'static str,
     connections: Mutex<VecDeque<PooledConnection>>,
@@ -53,6 +55,7 @@ pub struct AndroidConnectionPool {
 impl AndroidConnectionPool {
     pub fn new(
         config: Arc<AndroidAgentConfig>,
+        shutdown: CancellationToken,
         pool_size: usize,
         pool_name: &'static str,
     ) -> Arc<Self> {
@@ -74,6 +77,7 @@ impl AndroidConnectionPool {
             .unwrap_or(false);
         Arc::new(Self {
             config,
+            shutdown,
             pool_size,
             pool_name,
             connections: Mutex::new(VecDeque::new()),
@@ -90,6 +94,9 @@ impl AndroidConnectionPool {
     }
 
     pub async fn prewarm(self: &Arc<Self>) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         info!(
             "prewarming Android {} with {} connections",
             self.pool_name, self.pool_size
@@ -205,14 +212,21 @@ impl AndroidConnectionPool {
     async fn refill_task(self: Arc<Self>) {
         loop {
             tokio::select! {
+                _ = self.shutdown.cancelled() => break,
                 _ = self.refill_notify.notified() => {}
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            }
+            if self.shutdown.is_cancelled() {
+                break;
             }
             self.fill_to_target().await;
         }
     }
 
     async fn fill_to_target(&self) -> usize {
+        if self.shutdown.is_cancelled() {
+            return 0;
+        }
         if self.pool_size == 0 {
             return 0;
         }

@@ -93,6 +93,7 @@ public class MainActivity extends Activity {
     private EditText proxyAddrs;
     private EditText username;
     private EditText privateKey;
+    private EditText runtimeThreads;
     private EditText tcpPoolSize;
     private EditText udpPoolSize;
     private Spinner compressionMode;
@@ -476,6 +477,12 @@ public class MainActivity extends Activity {
 
         LinearLayout runtime = configSection(root, "Runtime");
         blockQuic = switchControl(runtime, "Block QUIC", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
+        runtimeThreads = numberControl(
+                runtime,
+                "Runtime threads",
+                prefString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
+                1,
+                1);
         compressionMode = spinner(
                 runtime,
                 "Compression mode",
@@ -1604,6 +1611,7 @@ public class MainActivity extends Activity {
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", "1500")
                 .putBoolean("block_quic", blockQuic.isChecked())
+                .putString("runtime_threads", runtimeThreads.getText().toString())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
                 .putString("compression_mode", selectedCompressionMode())
