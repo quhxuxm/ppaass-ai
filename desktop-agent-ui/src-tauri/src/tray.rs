@@ -35,6 +35,8 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 static TRAY_TUN_ITEM: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> = OnceLock::new();
 #[cfg(any(windows, target_os = "macos"))]
 static TRAY_TUN_TOGGLE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+#[cfg(any(windows, target_os = "macos"))]
+static TRAY_EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn setup_system_tray(
@@ -74,7 +76,7 @@ pub(crate) fn setup_system_tray(
             TRAY_TUN_ID => {
                 handle_tun_menu_event(app, &tun_item_for_event, runtime_for_event.clone())
             }
-            TRAY_EXIT_ID => app.exit(0),
+            TRAY_EXIT_ID => handle_exit_menu_event(app, runtime_for_event.clone()),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -108,6 +110,45 @@ pub(crate) fn sync_tray_tun_checked(app: &tauri::AppHandle, enabled: bool) {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
+fn handle_exit_menu_event(app: &tauri::AppHandle, runtime: Arc<AgentRuntime>) {
+    if TRAY_EXIT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        emit_to_main(app, "agent-tray-info", "正在退出，请稍候");
+        return;
+    }
+
+    if TRAY_TUN_TOGGLE_IN_PROGRESS.load(Ordering::SeqCst) {
+        TRAY_EXIT_IN_PROGRESS.store(false, Ordering::SeqCst);
+        emit_to_main(app, "agent-tray-error", "TUN 模式正在切换，请稍后再退出");
+        return;
+    }
+
+    let app = app.clone();
+    emit_to_main(&app, "agent-tray-info", "正在停止 Agent 并退出");
+
+    tauri::async_runtime::spawn_blocking(move || match stop_agent_inner_command(&runtime) {
+        Ok(state) if state.running => {
+            TRAY_EXIT_IN_PROGRESS.store(false, Ordering::SeqCst);
+            emit_to_main(&app, "agent-state-updated", state);
+            emit_to_main(&app, "agent-tray-error", "Agent 仍在运行，已取消退出");
+            restore_main_window(&app);
+        }
+        Ok(state) => {
+            emit_to_main(&app, "agent-state-updated", state);
+            app.exit(0);
+        }
+        Err(err) => {
+            TRAY_EXIT_IN_PROGRESS.store(false, Ordering::SeqCst);
+            emit_to_main(
+                &app,
+                "agent-tray-error",
+                format!("退出前停止 Agent 失败：{err}"),
+            );
+            restore_main_window(&app);
+        }
+    });
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 fn initial_tun_enabled() -> bool {
     tun_enabled_for_path(None)
 }
@@ -127,6 +168,13 @@ fn handle_tun_menu_event(
     item: &tauri::menu::CheckMenuItem<tauri::Wry>,
     runtime: Arc<AgentRuntime>,
 ) {
+    if TRAY_EXIT_IN_PROGRESS.load(Ordering::SeqCst) {
+        let config_path = current_ui_config_path(&runtime);
+        let _ = item.set_checked(tun_enabled_for_path(config_path.as_deref()));
+        emit_to_main(app, "agent-tray-info", "正在退出，请稍候");
+        return;
+    }
+
     if TRAY_TUN_TOGGLE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         let config_path = current_ui_config_path(&runtime);
         let _ = item.set_checked(tun_enabled_for_path(config_path.as_deref()));
