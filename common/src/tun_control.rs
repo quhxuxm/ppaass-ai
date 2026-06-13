@@ -17,6 +17,7 @@ pub enum TunHelperRequest {
         route_state_file: Option<String>,
         dns_state_file: Option<String>,
     },
+    RefreshMacosScopedDefaultBypass,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

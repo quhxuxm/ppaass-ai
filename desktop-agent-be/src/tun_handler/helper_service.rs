@@ -1,7 +1,9 @@
 use super::device::{tun_ipv4_destination, tun_ipv4_interface_prefix, tun_ipv4_peer};
 use super::dns::DnsGuard;
 use super::network;
-use super::route::{RouteGuard, cleanup_stale_routes, resolve_proxy_ips};
+use super::route::{
+    RouteGuard, cleanup_stale_routes, refresh_macos_scoped_default_bypass, resolve_proxy_ips,
+};
 use crate::error::{AgentError, Result as AgentResult};
 use anyhow::{Context, Result};
 use common::tun_control::{
@@ -202,6 +204,10 @@ fn handle_client(
             dns_state_file,
         } => {
             cleanup_stale(route_state_file.as_deref(), dns_state_file.as_deref());
+            send_response(stream, &TunHelperResponse::Ok, None)?;
+        }
+        TunHelperRequest::RefreshMacosScopedDefaultBypass => {
+            refresh_macos_scoped_default_bypass();
             send_response(stream, &TunHelperResponse::Ok, None)?;
         }
         TunHelperRequest::StopTun { lease_id } => {

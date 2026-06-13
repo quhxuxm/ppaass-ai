@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use super::guard::macos_scoped_default_command;
 use super::guard::{local_network_bypass_routes, route_add_error_is_already_exists};
 use super::*;
 
@@ -247,6 +249,31 @@ fn macos_keeps_scoped_default_bypass_records() {
     };
 
     assert!(!should_delete_recorded_route(&record));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_scoped_default_change_updates_ifscope_gateway() {
+    let command = macos_scoped_default_command(
+        "change",
+        "en0",
+        IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1)),
+        false,
+    );
+    let args = command_args(&command);
+
+    assert_eq!(
+        args,
+        vec![
+            "-n",
+            "change",
+            "-ifscope",
+            "en0",
+            "-net",
+            "default",
+            "192.168.50.1"
+        ]
+    );
 }
 
 #[cfg(target_os = "macos")]

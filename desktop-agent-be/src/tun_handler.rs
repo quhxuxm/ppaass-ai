@@ -30,7 +30,11 @@ use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
 use crate::privilege::ensure_tun_privileges_or_relaunch;
 #[cfg(target_os = "macos")]
-use crate::tun_helper_client::{HelperTunLease, start_tun as start_tun_via_helper};
+use crate::tun_helper_client::{
+    HelperTunLease,
+    refresh_macos_scoped_default_bypass as refresh_macos_scoped_default_bypass_via_helper,
+    start_tun as start_tun_via_helper,
+};
 use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
@@ -42,7 +46,8 @@ use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
 use proxy_routing::{configure_proxy_routing, install_route_guard};
 use route::{
     RouteGuard, cleanup_stale_routes, detect_default_route_interface, detect_proxy_route,
-    refresh_macos_scoped_default_bypass, resolve_proxy_ips,
+    refresh_macos_scoped_default_bypass as refresh_macos_scoped_default_bypass_local,
+    resolve_proxy_ips,
 };
 use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
@@ -81,15 +86,23 @@ struct TunDirectEgress {
     proxy_addrs: Arc<Vec<String>>,
     // 直连 socket 使用的物理接口绑定；macOS/Windows 常靠 if_index，Linux 可用 name。
     bind_interface: RwLock<Option<common::BindInterface>>,
+    #[cfg(target_os = "macos")]
+    helper_socket: Option<String>,
     refresh_lock: Mutex<()>,
     last_refresh: RwLock<Option<Instant>>,
 }
 
 impl TunDirectEgress {
-    fn new(proxy_addrs: Vec<String>, bind_interface: Option<common::BindInterface>) -> Self {
+    fn new(
+        proxy_addrs: Vec<String>,
+        bind_interface: Option<common::BindInterface>,
+        #[cfg(target_os = "macos")] helper_socket: Option<String>,
+    ) -> Self {
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
             bind_interface: RwLock::new(bind_interface),
+            #[cfg(target_os = "macos")]
+            helper_socket,
             refresh_lock: Mutex::new(()),
             last_refresh: RwLock::new(None),
         }
@@ -137,7 +150,7 @@ impl TunDirectEgress {
     ) -> Option<common::BindInterface> {
         let Some(route) = detect_proxy_route(self.proxy_addrs.as_slice()) else {
             warn!("刷新 direct access 物理出口失败：无法探测当前 proxy 出口路由");
-            refresh_macos_scoped_default_bypass();
+            self.refresh_macos_scoped_default_bypass();
             return self.refresh_default_route_interface(target_ip);
         };
 
@@ -146,11 +159,11 @@ impl TunDirectEgress {
                 "刷新 direct access 物理出口时探测到 TUN 地址 {}，尝试使用系统默认物理接口兜底",
                 route.local_ip,
             );
-            refresh_macos_scoped_default_bypass();
+            self.refresh_macos_scoped_default_bypass();
             return self.refresh_default_route_interface(target_ip);
         }
 
-        refresh_macos_scoped_default_bypass();
+        self.refresh_macos_scoped_default_bypass();
         let bind_interface = route.bind_interface.clone();
         self.update_bind_interface(bind_interface.clone());
         tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
@@ -162,6 +175,20 @@ impl TunDirectEgress {
             route.local_ip, bind_interface
         );
         bind_interface
+    }
+
+    fn refresh_macos_scoped_default_bypass(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(socket_path) = &self.helper_socket {
+                match refresh_macos_scoped_default_bypass_via_helper(socket_path) {
+                    Ok(()) => return,
+                    Err(err) => warn!("通过 TUN helper 刷新 macOS scoped default 失败：{err}"),
+                }
+            }
+        }
+
+        refresh_macos_scoped_default_bypass_local();
     }
 
     fn refresh_default_route_interface(&self, target_ip: IpAddr) -> Option<common::BindInterface> {
@@ -259,6 +286,8 @@ pub async fn run_tun_mode(
     let direct_egress = Arc::new(TunDirectEgress::new(
         proxy_addrs.clone(),
         proxy_bind_interface.clone(),
+        #[cfg(target_os = "macos")]
+        helper_managed_network.then(|| config.macos_helper_socket.clone()),
     ));
     let forward_context = TunForwardContext {
         tcp_pool: tcp_pool.clone(),
