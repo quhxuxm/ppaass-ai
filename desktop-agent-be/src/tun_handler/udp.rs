@@ -23,7 +23,6 @@ use tokio::time::{Duration, timeout};
 use tracing::{debug, trace};
 
 use super::direct_domain_cache::DirectDomainCache;
-use super::system_dns::resolve_via_system;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -107,22 +106,12 @@ pub(super) async fn handle_tun_udp(
                 direct_checker.is_direct_domain(domain)
             })
         {
-            match resolve_via_system("UDP", client, &domain, target.port(), target.ip()).await {
-                Ok(resolved) => {
-                    debug!(
-                        "TUN UDP 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
-                        target, domain, resolved
-                    );
-                    direct_label = format!("{} ({} -> {})", target_label, domain, resolved);
-                    direct_target = Some(resolved);
-                }
-                Err(e) => {
-                    debug!(
-                        "TUN UDP 域名规则命中但 Agent DNS 解析失败，回退代理：{} -> {}，错误：{}",
-                        target, domain, e
-                    );
-                }
-            }
+            debug!(
+                "TUN UDP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
+                target, domain
+            );
+            direct_label = format!("{} ({})", target_label, domain);
+            direct_target = Some(target);
         }
     }
 
