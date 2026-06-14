@@ -1,3 +1,9 @@
+//! proxy 入站服务层。
+//!
+//! 这一层只关心 agent 到 proxy 的“外层 TCP 连接”：监听、全局限流、
+//! 创建每连接上下文、执行认证阶段，然后把已认证连接交给 `ServerConnection`
+//! 去处理具体的 CONNECT / relay / Yamux 生命周期。
+
 use crate::bandwidth::BandwidthMonitor;
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
@@ -14,14 +20,20 @@ use tracing::{debug, error, info, instrument, warn};
 const OVER_IDLE_LIMIT_IMMEDIATE_CONNECT_GRACE: Duration = Duration::from_secs(1);
 
 pub struct ProxyServer {
+    // 运行期共享配置；每个连接只读它，所以放进 Arc 后廉价 clone。
     config: Arc<ProxyConfig>,
+    // 用户表在认证路径读取，内部用锁保证并发读安全。
     user_manager: Arc<UserManager>,
+    // 按用户统计上下行字节，用于粗粒度限速判断。
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    // 出站连接状态在启动时初始化，避免每次 CONNECT 都重新解析出站策略。
     egress_state: Arc<EgressState>,
+    // 入站 TCP 连接、用户连接、idle 连接、UDP relay flow 的统一保护阀。
     connection_limiter: ConnectionLimiter,
 }
 
 struct ConnectionContext {
+    // 拆成 context 是为了让 accept loop 只负责接入，把连接生命周期移动到独立任务。
     proxy_config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
@@ -67,6 +79,8 @@ impl ProxyServer {
         info!("代理服务器正在监听 {}", self.config.listen_addr);
 
         loop {
+            // 同时等待新连接和 Ctrl-C。收到关闭信号后退出 accept loop，
+            // 已经 spawn 出去的连接任务会按各自的 IO/idle 规则结束。
             tokio::select! {
                 result = listener.accept() => {
                     match result {
@@ -121,6 +135,8 @@ async fn handle_connection(
     stream: TcpStream,
     _connection_permit: GlobalConnectionPermit,
 ) -> Result<()> {
+    // 这个 permit 只要还活着，就代表全局连接数占用中。
+    // 参数名前带下划线是为了说明后续不会显式使用它，释放靠 Drop 完成。
     if let Err(err) = stream.set_nodelay(true) {
         warn!("设置入站代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
     }
@@ -194,6 +210,7 @@ async fn handle_connection(
         }
     };
 
+    // 认证通过后再占用用户连接数，避免未知用户/认证失败连接污染用户计数。
     let Some(_user_permit) = connection_limiter.try_acquire_user(&username) else {
         warn!(
             "用户 '{}' 连接数已达上限（{}），正在关闭新连接",
@@ -202,6 +219,7 @@ async fn handle_connection(
         return Ok(());
     };
 
+    // idle permit 只覆盖“已认证但还没有第一个 Connect”的预热线路。
     let idle_permit = match connection_limiter.try_acquire_idle(&username) {
         Some(permit) => Some(permit),
         None => {

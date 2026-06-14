@@ -1,3 +1,8 @@
+//! TUN netstack 的任务分发。
+//!
+//! 这里把原始 TUN 包桥接到用户态协议栈，并把协议栈产出的 TCP/UDP 流分发到
+//! `handle_tun_tcp`、`handle_tun_udp`、DNS proxy 或共享 UDP relay。
+
 use super::TunForwardContext;
 use super::dns_proxy::DnsProxy;
 use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
@@ -6,6 +11,7 @@ use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
 use common::spawn_guarded;
 use futures::{SinkExt, StreamExt};
+use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -129,6 +135,7 @@ pub(super) fn spawn_udp_sessions(
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
+        // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
             DnsProxy::spawn(
                 context.udp_pool.clone(),
@@ -137,6 +144,7 @@ pub(super) fn spawn_udp_sessions(
                 shutdown.clone(),
             )
         });
+        // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
         let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
 
         loop {
@@ -183,13 +191,22 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut proxy_address = address.clone();
                     if !direct_match {
-                        direct_match = context
+                        if context
                             .direct_domain_cache
                             .matching_domain_for_ip(target_addr.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
-                            .is_some();
+                            .is_some()
+                        {
+                            direct_match = true;
+                        } else if let Some(domain) = context
+                            .direct_domain_cache
+                            .matching_domain_for_ip(target_addr.ip(), |_| true)
+                        {
+                            proxy_address = domain_address(&domain, target_addr.port());
+                        }
                     }
 
                     if block_quic && target_addr.port() == 443 && !direct_match {
@@ -198,7 +215,7 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     if !direct_match {
-                        udp_relay.send(source_addr, target_addr, data);
+                        udp_relay.send(source_addr, target_addr, proxy_address, data);
                         continue;
                     }
 
@@ -238,4 +255,11 @@ pub(super) fn spawn_udp_sessions(
         }
         debug!("udp_task 退出");
     })
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
 }

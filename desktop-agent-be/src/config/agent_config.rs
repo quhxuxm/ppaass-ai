@@ -1,3 +1,8 @@
+//! Desktop Agent 配置模型。
+//!
+//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、连接池、
+//! transport/Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
+
 use crate::direct_access::DirectAccessConfig;
 use common::{TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
@@ -7,6 +12,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
+    #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
     pub username: String,
@@ -208,6 +214,10 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
+fn default_listen_addr() -> String {
+    "0.0.0.0:10080".to_string()
+}
+
 fn default_compression_mode() -> String {
     "none".to_string()
 }
@@ -256,7 +266,7 @@ mod tests {
     use super::*;
 
     const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "127.0.0.1:10080"
+listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"

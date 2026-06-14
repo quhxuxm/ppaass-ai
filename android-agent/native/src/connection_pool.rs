@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 
 use common::{
     AuthenticatedConnection, ClientStream, DatagramStreamIo, TcpTransportMode,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
-    spawn_guarded,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream, spawn_guarded,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, Notify};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::android_log;
@@ -36,6 +37,7 @@ struct AndroidYamuxSession {
 
 pub struct AndroidConnectionPool {
     config: Arc<AndroidAgentConfig>,
+    shutdown: CancellationToken,
     pool_size: usize,
     pool_name: &'static str,
     connections: Mutex<VecDeque<PooledConnection>>,
@@ -53,6 +55,7 @@ pub struct AndroidConnectionPool {
 impl AndroidConnectionPool {
     pub fn new(
         config: Arc<AndroidAgentConfig>,
+        shutdown: CancellationToken,
         pool_size: usize,
         pool_name: &'static str,
     ) -> Arc<Self> {
@@ -74,6 +77,7 @@ impl AndroidConnectionPool {
             .unwrap_or(false);
         Arc::new(Self {
             config,
+            shutdown,
             pool_size,
             pool_name,
             connections: Mutex::new(VecDeque::new()),
@@ -90,6 +94,9 @@ impl AndroidConnectionPool {
     }
 
     pub async fn prewarm(self: &Arc<Self>) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         info!(
             "prewarming Android {} with {} connections",
             self.pool_name, self.pool_size
@@ -205,14 +212,21 @@ impl AndroidConnectionPool {
     async fn refill_task(self: Arc<Self>) {
         loop {
             tokio::select! {
+                _ = self.shutdown.cancelled() => break,
                 _ = self.refill_notify.notified() => {}
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            }
+            if self.shutdown.is_cancelled() {
+                break;
             }
             self.fill_to_target().await;
         }
     }
 
     async fn fill_to_target(&self) -> usize {
+        if self.shutdown.is_cancelled() {
+            return 0;
+        }
         if self.pool_size == 0 {
             return 0;
         }
@@ -316,7 +330,7 @@ impl AndroidConnectionPool {
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    if is_yamux_target_connect_error(&message) {
+                    if is_yamux_actual_target_connect_error(&message) {
                         return Err(AndroidAgentError::Connection(message));
                     }
                     warn!(
@@ -327,6 +341,7 @@ impl AndroidConnectionPool {
                         "Android {} Yamux session unusable: {message}",
                         self.pool_name
                     ));
+                    session.connection.close().await;
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
                     if attempts >= target_size.max(3) {
@@ -532,12 +547,49 @@ impl Unpin for AndroidProxyStream {}
 
 fn should_fallback_yamux_error(err: &AndroidAgentError) -> bool {
     match err {
-        AndroidAgentError::Connection(message) => !is_yamux_target_connect_error(message),
+        AndroidAgentError::Connection(message) => {
+            is_yamux_session_error(message) || !is_yamux_actual_target_connect_error(message)
+        }
         AndroidAgentError::Io(_) => true,
         _ => false,
     }
 }
 
-fn is_yamux_target_connect_error(message: &str) -> bool {
-    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+fn is_yamux_actual_target_connect_error(message: &str) -> bool {
+    message.starts_with("连接失败:")
+}
+
+fn is_yamux_session_error(message: &str) -> bool {
+    message == YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE
+        || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        || message.contains("Yamux session")
+        || message.contains("connection closed")
+        || message.contains("broken pipe")
+        || message.contains("reset")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yamux_timeouts_can_fallback_or_retry() {
+        let err = AndroidAgentError::Connection(
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE.to_string(),
+        );
+        assert!(should_fallback_yamux_error(&err));
+        assert!(is_yamux_session_error(
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        ));
+        assert!(is_yamux_session_error(YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE));
+    }
+
+    #[test]
+    fn actual_target_connect_error_does_not_fallback() {
+        let err = AndroidAgentError::Connection("连接失败: Connection refused".to_string());
+        assert!(!should_fallback_yamux_error(&err));
+        assert!(is_yamux_actual_target_connect_error(
+            "连接失败: Connection refused"
+        ));
+    }
 }

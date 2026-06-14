@@ -1,16 +1,24 @@
+//! UDP relay flow 之间共享的小型数据结构。
+//!
+//! 这里的队列项会持有 `UdpRelayBufferedBytesPermit`，表示对应 payload 已经计入
+//! 全局缓冲预算。队列项被发送、丢弃或任务退出时 permit Drop，预算随之释放。
+
 use super::*;
 
 pub(super) struct UdpRelayFlow {
+    // 主 relay 循环通过这个 sender 把同一 flow_id 的上行 UDP payload 送给 flow 任务。
     pub(super) tx: tokio::sync::mpsc::Sender<QueuedUdpRelayData>,
 }
 
 pub(super) struct QueuedUdpRelayData {
     pub(super) data: Vec<u8>,
+    // 持有期间表示这段上行 payload 仍在内部队列中占用内存预算。
     pub(super) _buffer_permit: UdpRelayBufferedBytesPermit,
 }
 
 pub(super) struct QueuedUdpRelayResponse {
     pub(super) packet: UdpRelayPacket,
+    // 持有期间表示这段下行 payload 仍在内部队列中占用内存预算。
     pub(super) _buffer_permit: UdpRelayBufferedBytesPermit,
 }
 

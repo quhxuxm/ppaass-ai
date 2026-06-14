@@ -1,3 +1,9 @@
+//! 本地 HTTP 代理入口。
+//!
+//! HTTP CONNECT 会升级成裸 TCP 隧道，普通 HTTP 请求则通过 hyper client 转发。
+//! 两条路径都会先由 `DirectAccessChecker` 判定是否直连；否则通过 `ConnectionPool`
+//! 取得 agent->proxy 的目标流。
+
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
@@ -152,6 +158,8 @@ async fn handle_connect(
             .unwrap())
     } else {
         // === 代理路径: 通过代理隧道连接 ===
+        // 必须先向 proxy 完成目标 Connect，再给客户端 200。
+        // 这样目标不可达时客户端能收到明确的 BAD_GATEWAY，而不是拿到半开的隧道。
         let connected_stream = match pool
             .as_ref()
             .get_connected_stream(address, TransportProtocol::Tcp)
@@ -201,7 +209,7 @@ async fn tunnel(
     connected_stream: ConnectedStream,
     target: String,
 ) -> std::result::Result<(), AgentError> {
-    // 转换为 AsyncRead + AsyncWrite 兼容类型
+    // HTTP upgraded stream 和 proxy stream 都转成 AsyncRead + AsyncWrite 后即可双向拷贝。
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 

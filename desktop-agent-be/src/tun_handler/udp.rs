@@ -1,3 +1,9 @@
+//! TUN UDP 会话处理。
+//!
+//! UDP 在 netstack 层没有连接生命周期，所以外层会按 source/target 近似会话化。
+//! 本模块负责单个会话的直连或代理中继；未命中直连规则的高并发普通 UDP
+//! 通常会被 `udp_relay.rs` 的共享 relay 接走。
+
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
@@ -7,7 +13,7 @@ use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use futures::SinkExt;
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -17,7 +23,6 @@ use tokio::time::{Duration, timeout};
 use tracing::{debug, trace};
 
 use super::direct_domain_cache::DirectDomainCache;
-use super::system_dns::resolve_via_system;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -90,7 +95,10 @@ pub(super) async fn handle_tun_udp(
 
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
+    let mut proxy_address = address.clone();
+    let mut proxy_reason = None;
     if !proxy_dns_request {
+        // UDP 没有 TCP 的 SNI 嗅探机会，主要依赖 IP/CIDR 和 DNS proxy 记录的域名缓存。
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if let Some(domain) = direct_domain_cache
@@ -98,23 +106,22 @@ pub(super) async fn handle_tun_udp(
                 direct_checker.is_direct_domain(domain)
             })
         {
-            match resolve_via_system("UDP", client, &domain, target.port(), target.ip()).await {
-                Ok(resolved) => {
-                    debug!(
-                        "TUN UDP 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
-                        target, domain, resolved
-                    );
-                    direct_label = format!("{} ({} -> {})", target_label, domain, resolved);
-                    direct_target = Some(resolved);
-                }
-                Err(e) => {
-                    debug!(
-                        "TUN UDP 域名规则命中但 Agent DNS 解析失败，回退代理：{} -> {}，错误：{}",
-                        target, domain, e
-                    );
-                }
-            }
+            debug!(
+                "TUN UDP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
+                target, domain
+            );
+            direct_label = format!("{} ({})", target_label, domain);
+            direct_target = Some(target);
         }
+    }
+
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+    {
+        debug!("TUN UDP 缓存域名用于代理目标：{} ({})", target, domain);
+        proxy_address = domain_address(&domain, target.port());
+        proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
     if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
@@ -147,14 +154,15 @@ pub(super) async fn handle_tun_udp(
     }
 
     // 代理 UDP 路径通过连接池建立一个 UDP 语义的 proxy stream。
+    let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
     if proxy_dns_request {
         debug!("TUN UDP DNS -> 代理 -> {}", target_label);
     } else {
-        debug!("TUN UDP -> 代理 -> {}", target_label);
+        debug!("TUN UDP -> 代理 -> {}", proxy_label);
     }
     let connected = udp_pool
         .as_ref()
-        .get_connected_stream(address, TransportProtocol::Udp)
+        .get_connected_stream(proxy_address, TransportProtocol::Udp)
         .await?;
     let proxy_io = connected.into_async_io();
     let (mut reader, mut writer) = tokio::io::split(proxy_io);
@@ -345,6 +353,20 @@ fn bind_direct_udp(
 
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {
-        // Keep the session alive briefly so repeated dropped UDP retries do not spin up tasks.
+        // 保持会话短暂存活，避免应用持续重试被丢弃 UDP 时频繁创建/销毁任务。
+    }
+}
+
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
+}
+
+fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{reason}，原始目标 {target_label}"),
+        None => target_label.to_string(),
     }
 }

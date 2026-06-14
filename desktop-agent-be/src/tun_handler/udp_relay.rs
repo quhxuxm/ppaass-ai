@@ -1,4 +1,8 @@
-use super::network::socket_addr_to_address;
+//! TUN 普通 UDP 的共享 proxy relay。
+//!
+//! 与 `handle_tun_udp` 的单会话 proxy stream 不同，这里把多个 UDP source/target flow
+//! 复用到一条 `Address::UdpRelay` 连接上。适合 QUIC 等高并发 UDP，能减少频繁建连。
+
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
 use common::spawn_guarded;
@@ -28,6 +32,7 @@ pub(super) struct UdpRelay {
 struct UdpRelayRequest {
     client: SocketAddr,
     target: SocketAddr,
+    address: Address,
     packet: Vec<u8>,
 }
 
@@ -51,7 +56,9 @@ impl Hash for UdpFlowKey {
 }
 
 struct UdpRelayState {
+    // (client,target) -> flow_id，保证同一 UDP flow 在 proxy 端对应同一个 UDP socket。
     flow_ids: HashMap<UdpFlowKey, u64>,
+    // flow_id -> (client,target)，用于把 proxy 响应写回正确的 netstack 方向。
     flows: HashMap<u64, UdpFlowKey>,
     last_seen: HashMap<u64, Instant>,
     next_flow_id: u64,
@@ -126,10 +133,17 @@ impl UdpRelay {
         Arc::new(Self { tx })
     }
 
-    pub(super) fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
+    pub(super) fn send(
+        &self,
+        client: SocketAddr,
+        target: SocketAddr,
+        address: Address,
+        packet: Vec<u8>,
+    ) {
         match self.tx.try_send(UdpRelayRequest {
             client,
             target,
+            address,
             packet,
         }) {
             Ok(()) => {}
@@ -146,6 +160,7 @@ async fn run_udp_relay(
     shutdown: CancellationToken,
 ) {
     let mut state = UdpRelayState::new();
+    // 写入失败时保留当前请求，重建共享连接后优先重发，避免首包直接丢失。
     let mut retry_request = None;
     let mut reconnect_delay = Duration::from_millis(200);
 
@@ -274,10 +289,11 @@ async fn send_udp_request<W>(
 where
     W: AsyncWrite + Unpin,
 {
+    // 每个 TUN UDP datagram 被编码成 UdpRelayPacket，proxy 根据 flow_id/address 发往目标。
     let flow_id = state.flow_id(request.client, request.target);
     let packet = UdpRelayPacket {
         flow_id,
-        address: socket_addr_to_address(request.target),
+        address: request.address.clone(),
         data: request.packet.clone(),
     }
     .encode()
@@ -292,6 +308,7 @@ async fn handle_udp_response(
     state: &UdpRelayState,
     response: &[u8],
 ) -> io::Result<()> {
+    // proxy 回复带 flow_id；agent 还原原始 client/target 后写回 netstack。
     let packet = UdpRelayPacket::decode(response).map_err(io::Error::other)?;
     let Some(flow) = state.flow(packet.flow_id) else {
         debug!("TUN UDP 收到无匹配 flow 的回复 id={}", packet.flow_id);

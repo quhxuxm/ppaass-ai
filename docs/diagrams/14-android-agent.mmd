@@ -1,0 +1,11 @@
+flowchart TD
+    JavaUI["MainActivity Java UI"] --> Prefs["SharedPreferences"]
+    Prefs --> Service["PpaassVpnService"]
+    Service --> Builder["VpnService.Builder"]
+    Builder --> Fd["TUN fd detachFd"]
+    Service --> JNI["NativeAgent.start fd + config JSON + service"]
+    JNI --> Protector["VpnService.protect socket fd"]
+    JNI --> Rust["android-agent/native Rust"]
+    Rust --> Netstack["netstack-smoltcp"]
+    Netstack --> Pool["Android TCP/UDP pool"]
+    Pool --> Proxy["PPAASS Proxy"]

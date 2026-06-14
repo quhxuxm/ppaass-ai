@@ -1,10 +1,17 @@
+//! CONNECT 分流层。
+//!
+//! 认证后的第一条 `ConnectRequest` 会到这里。它不直接搬数据，而是先根据
+//! `Address` 和 `TransportProtocol` 决定后续生命周期：直连 TCP/UDP、
+//! 共享 UDP relay、Yamux 外层 session，或 forward 到上游 proxy。
+
 use super::*;
 
 impl ServerConnection {
     pub(super) async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         debug!("连接请求：{:?}", connect_request.address);
 
-        // 检查用户带宽限制
+        // 检查用户带宽限制。
+        // 这里是在“新建连接/子流”时做粗粒度判断；实际字节数在 relay 层持续记录。
         if let Some(user_config) = &self.user_config
             && !self
                 .bandwidth_monitor
@@ -19,6 +26,8 @@ impl ServerConnection {
                 .await;
         }
 
+        // TcpYamux / UdpYamux / UdpRelay 都是协议内的“虚拟地址”，
+        // 它们不代表真实目标服务器，而是告诉 proxy 建立某种复用/共享通道。
         if matches!(connect_request.address, Address::TcpYamux) {
             if self.proxy_config.transport.tcp_mode == TcpTransportMode::Legacy {
                 return self
@@ -89,6 +98,7 @@ impl ServerConnection {
             return self.handle_upstream_connect(connect_request).await;
         }
 
+        // 普通 Domain/IPv4/IPv6 目标到这里才会被转换成 Tokio 可连接的 host:port。
         let target_addr = self.target_addr_for_request(&connect_request.address)?;
         match connect_request.transport {
             TransportProtocol::Tcp => self.handle_tcp_connect(connect_request, &target_addr).await,
@@ -105,6 +115,7 @@ impl ServerConnection {
         debug!("正在将请求转发到上游代理");
 
         // 转发模式下 proxy 作为客户端连接下一跳 proxy，再把 agent 流量接过去。
+        // 对 agent 来说下游 proxy 仍像目标连接；对本 proxy 来说上游 proxy 是 AsyncRead/AsyncWrite。
         match UpstreamConnection::connect(
             &self.proxy_config,
             connect_request.address.clone(),
@@ -144,6 +155,7 @@ impl ServerConnection {
         target_addr: &str,
     ) -> Result<()> {
         // 通过启动时共享的出站状态连接目标，避免每次请求重新读取路由表。
+        // 超时只包 connect 阶段；连接建立后的空闲控制交给 relay 层。
         let connect_timeout = Duration::from_secs(self.proxy_config.connect_timeout_secs);
         match tokio::time::timeout(connect_timeout, self.egress_state.connect_tcp(target_addr))
             .await
@@ -198,6 +210,7 @@ impl ServerConnection {
         debug!("正在处理 UDP 连接请求：{connect_request:?}");
 
         // UDP 也复用同一份出站状态，保持 TCP/UDP 的出口选择一致。
+        // tokio 的 UDP connect 只是固定默认对端，后续 send/recv 不需要每包携带地址。
         match self.egress_state.connect_udp(target_addr).await {
             Ok(socket) => {
                 debug!(

@@ -1,3 +1,8 @@
+//! 已连接目标的统一流类型。
+//!
+//! 上层不需要知道目标流来自 legacy DataPacket、TCP Yamux 子流还是 UDP Yamux 子流；
+//! 调用 `into_async_io` 后统一得到 `AsyncRead + AsyncWrite`，可直接用于双向中继。
+
 use super::proxy_stream_io::ProxyStreamIo;
 use common::{DatagramStreamIo, YamuxClientStream};
 use futures::stream::{SplitSink, SplitStream};
@@ -15,15 +20,18 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 /// 通过代理连接到目标的已连接流
 /// 处理双向数据传输
 pub enum ConnectedStream {
+    // legacy 模式：同一条 agent->proxy TCP 连接通过 stream_id 承载目标数据。
     Framed {
         writer: FramedWriter,
         reader: FramedReader,
         stream_id: String,
     },
+    // TCP Yamux 子流：子流本身已经是裸字节通道。
     Yamux {
         stream: YamuxClientStream,
         stream_id: String,
     },
+    // UDP Yamux 子流：用 DatagramStreamIo 保留 UDP 数据报边界。
     YamuxDatagram {
         stream: DatagramStreamIo<YamuxClientStream>,
         stream_id: String,

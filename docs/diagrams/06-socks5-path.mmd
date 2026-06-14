@@ -1,0 +1,14 @@
+flowchart TD
+    A["SOCKS5 客户端"] --> B["NoAuthentication 握手"]
+    B --> C["读取 command 和 target"]
+    C -->|"TCP CONNECT"| D{"direct_access?"}
+    D -->|"是"| E["直连目标 TCP"]
+    D -->|"否"| F["tcp_pool 连接 Proxy 目标"]
+    E --> G["copy_bidirectional"]
+    F --> G
+    C -->|"TCP BIND"| H["监听端口等待远端连接"]
+    C -->|"UDP ASSOCIATE"| I["建立 UDP 控制会话"]
+    I --> J["UDP 包与目标地址转换"]
+    J --> K{"direct_access?"}
+    K -->|"是"| L["本地 UDP 直连"]
+    K -->|"否"| M["udp_pool / UdpRelay"]

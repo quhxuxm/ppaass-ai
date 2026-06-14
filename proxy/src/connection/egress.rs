@@ -1,3 +1,9 @@
+//! proxy 访问目标服务器的出站连接层。
+//!
+//! 默认情况下直接使用系统路由；配置 `outbound_interface` 后，会先选择出站设备和本地源地址，
+//! 再把 TCP/UDP socket 绑定到指定接口。`auto` 模式会根据路由表选择原始默认出口，
+//! 用于避免 proxy 与 TUN/agent 同机运行时，proxy 的目标流量又被路由回 TUN。
+
 mod auto;
 mod bind;
 mod route_guard;
@@ -16,11 +22,14 @@ pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 pub struct EgressState {
+    // None 表示完全交给系统默认路由；Some 表示需要做接口/源地址绑定。
     interface: Option<InterfaceSelection>,
 }
 
 enum InterfaceSelection {
+    // 显式指定的网卡名，例如 en0、eth0、Ethernet。
     Named(String),
+    // 逻辑值 auto：按目标地址和路由表动态选择出口网卡。
     Auto(AutoInterfaceSelector),
 }
 
@@ -86,6 +95,7 @@ async fn connect_tcp_with_interface(
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
+        // 一个域名可能解析出多个 IPv4/IPv6 地址；逐个尝试能提升可达性。
         // 对每个解析出的目标地址，先确定要绑定的出站设备。
         let interface = match egress_state.interface_for_dst(dst) {
             Ok(interface) => interface,
@@ -135,6 +145,7 @@ async fn connect_udp_with_interface(
     let mut resolved = false;
     for dst in tokio::net::lookup_host(target_addr).await? {
         resolved = true;
+        // UDP 也遍历所有解析结果；只有成功 bind + connect 的 socket 才会返回给 relay。
         // UDP 与 TCP 使用相同的出口设备选择，确保两种协议路径一致。
         let interface = match egress_state.interface_for_dst(dst) {
             Ok(interface) => interface,

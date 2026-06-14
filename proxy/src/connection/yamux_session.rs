@@ -1,3 +1,9 @@
+//! Yamux 外层 session 管理。
+//!
+//! agent 先通过普通 PPAASS 协议 CONNECT 到 `Address::TcpYamux` 或 `Address::UdpYamux`。
+//! 从那一刻起，当前 request_id 的 DataPacket payload 就不再表示某个目标连接的数据，
+//! 而是承载一整个 Yamux session；每个 Yamux 子流再单独发送自己的 ConnectRequest。
+
 use super::*;
 
 impl ServerConnection {
@@ -9,6 +15,8 @@ impl ServerConnection {
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
+        // 外层 Yamux session 仍然跑在 PPAASS DataPacket 上：
+        // Sink 负责把 Yamux 写出的字节重新封成当前 stream_id 的 DataPacket。
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
@@ -18,6 +26,7 @@ impl ServerConnection {
         };
 
         let stream_id_stop = stream_id.clone();
+        // StreamReader 负责把当前 stream_id 的 DataPacket payload 拼回 Yamux 需要的字节流。
         let stream = (&mut self.reader)
             .take_while(move |res| {
                 let continue_stream = match res {
@@ -56,6 +65,8 @@ impl ServerConnection {
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
         let agent_io = AgentIo { reader, writer };
+        // 到这里，packet-based 的 agent 连接已经被适配成 AsyncRead/AsyncWrite，
+        // 可以交给 tokio-yamux 当作服务端 session 来 accept 子流。
         let mut session = Session::new_server(
             agent_io,
             self.proxy_config.yamux.tcp_settings().to_tokio_config(),
@@ -69,6 +80,7 @@ impl ServerConnection {
         while let Some(result) = session.next().await {
             match result {
                 Ok(stream) => {
+                    // 每个 Yamux 子流是一个独立目标连接；并发处理，互不阻塞。
                     prune_finished_yamux_stream_tasks(&mut stream_tasks);
                     let proxy_config = proxy_config.clone();
                     let egress_state = egress_state.clone();
@@ -108,6 +120,7 @@ impl ServerConnection {
         let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
+        // UDP Yamux 外层与 TCP Yamux 同理，只是子流里只接受 UDP 语义的 ConnectRequest。
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
@@ -117,6 +130,7 @@ impl ServerConnection {
         };
 
         let stream_id_stop = stream_id.clone();
+        // 当前外层 stream 结束时，Yamux session 也应结束并回收所有子流任务。
         let stream = (&mut self.reader)
             .take_while(move |res| {
                 let continue_stream = match res {
@@ -204,6 +218,7 @@ impl ServerConnection {
 }
 
 fn prune_finished_yamux_stream_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
+    // session 可能长期存在，定期丢掉已完成任务句柄，避免 Vec 持续增长。
     tasks.retain(|task| !task.is_finished());
 }
 
@@ -222,6 +237,7 @@ async fn abort_yamux_stream_tasks(
     );
 
     for task in &tasks {
+        // 外层连接断开后，未完成子流已经没有可写回 agent 的通道，直接取消。
         task.abort();
     }
 

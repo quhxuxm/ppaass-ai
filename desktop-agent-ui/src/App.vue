@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import ProgressSpinner from "primevue/progressspinner";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
@@ -45,6 +46,8 @@ const {
   tunDiagnosticsLabel,
   tunModeLabel
 } = useDesktopAgent();
+
+const sidebarCollapsed = ref(false);
 </script>
 
 <template>
@@ -54,16 +57,18 @@ const {
     @paste.capture="guardIntegerPaste"
     @input.capture="sanitizeIntegerInput"
   >
-    <div class="shell">
+    <div :class="['shell', { 'sidebar-collapsed': sidebarCollapsed }]">
       <AppSidebar
         :tabs="tabs"
         :active-tab="state.activeTab"
+        :collapsed="sidebarCollapsed"
         :running="running"
         :running-label="runningLabel"
         :running-severity="runningSeverity"
         :pid="state.agent.pid"
         :config-path="state.config?.path"
         @update:active-tab="state.activeTab = $event"
+        @update:collapsed="sidebarCollapsed = $event"
       />
 
       <section class="workspace">

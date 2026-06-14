@@ -1,3 +1,8 @@
+//! SOCKS5 UDP ASSOCIATE 控制与本地 UDP 入口。
+//!
+//! TCP 控制连接只负责告诉客户端“请把 UDP 包发到哪个本地地址”，并维持会话生命周期。
+//! 真正的 UDP 数据包在本模块解析 SOCKS5 UDP 头后，按直连规则选择本地直连或共享 UDP relay。
+
 use super::udp_relay::SocksUdpRelay;
 use super::*;
 
@@ -10,7 +15,7 @@ pub(super) async fn handle_udp_associate(
 ) -> Result<()> {
     info!("处理 UDP ASSOCIATE");
 
-    // 在随机端口上绑定 UDP 套接字
+    // 在随机端口上绑定 UDP 套接字，客户端后续会把 SOCKS5 UDP datagram 发到这里。
     let udp_bind_addr = udp_associate_bind_addr(control_local_ip);
     let udp_socket = UdpSocket::bind(udp_bind_addr)
         .await
@@ -34,7 +39,7 @@ pub(super) async fn handle_udp_associate(
 
     // 客户端向 `bind_addr` 发送 UDP 数据包
 
-    // 需要保持 TCP 流存活以维持关联
+    // 需要保持 TCP 流存活以维持关联；客户端关闭 TCP 控制连接后，UDP 会话也结束。
     let keep_alive = async move {
         let mut buf = [0u8; 1];
         // 如果 read 返回 0（EOF）或错误，表示客户端已关闭连接
@@ -126,6 +131,7 @@ async fn process_udp_traffic(
             }
         };
         let payload = packet_data[3 + header_len..].to_vec();
+        // dest_key 以目标地址为粒度复用直连 UDP 会话；代理路径统一交给 SocksUdpRelay。
         let dest_key = format!("{:?}", dest_addr);
         debug!("解析 UDP 目标地址: {:?}", dest_addr);
         if !streams.contains_key(&dest_key) {

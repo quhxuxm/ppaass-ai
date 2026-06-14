@@ -1,3 +1,9 @@
+//! legacy proxy stream 的字节流适配器。
+//!
+//! proxy 协议层读写的是 `ProxyRequest::Data` / `ProxyResponse::Data`；
+//! HTTP/SOCKS/TUN 中继层想要的是裸 `AsyncRead + AsyncWrite`。
+//! `ProxyStreamIo` 把两者拼起来，隐藏 DataPacket 的封包/拆包细节。
+
 use super::data_packet_sink::DataPacketSink;
 use super::response_stream::ResponseStream;
 use bytes::Bytes;

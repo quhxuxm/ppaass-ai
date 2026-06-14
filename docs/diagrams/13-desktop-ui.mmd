@@ -1,0 +1,8 @@
+flowchart LR
+    Vue["Vue 页面"] -->|"invoke"| TauriCmd["Tauri commands"]
+    TauriCmd --> Config["读写 agent.toml"]
+    TauriCmd --> Runtime["AgentRuntime"]
+    Runtime --> Thread["后台线程"]
+    Thread --> Embedded["desktop_agent_be::run_agent"]
+    TauriCmd --> Diagnostics["curl / TUN 诊断"]
+    TauriCmd --> Telemetry["流量和 DNS 记录"]

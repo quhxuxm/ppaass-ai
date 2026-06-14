@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::ForwardContext;
-use super::network::socket_addr_to_address;
 use super::udp::UdpWriter;
 use crate::error::Result;
 
@@ -29,6 +28,7 @@ pub(super) struct UdpRelay {
 struct UdpRelayRequest {
     client: SocketAddr,
     target: SocketAddr,
+    address: Address,
     packet: Vec<u8>,
 }
 
@@ -114,10 +114,17 @@ impl UdpRelay {
         Arc::new(Self { tx })
     }
 
-    pub(super) fn send(&self, client: SocketAddr, target: SocketAddr, packet: Vec<u8>) {
+    pub(super) fn send(
+        &self,
+        client: SocketAddr,
+        target: SocketAddr,
+        address: Address,
+        packet: Vec<u8>,
+    ) {
         match self.tx.try_send(UdpRelayRequest {
             client,
             target,
+            address,
             packet,
         }) {
             Ok(()) => {}
@@ -271,7 +278,7 @@ where
     let flow_id = state.flow_id(request.client, request.target);
     let packet = UdpRelayPacket {
         flow_id,
-        address: socket_addr_to_address(request.target),
+        address: request.address.clone(),
         data: request.packet.clone(),
     }
     .encode()

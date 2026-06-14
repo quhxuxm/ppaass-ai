@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
 use futures::StreamExt;
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -19,7 +19,7 @@ use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
 
 const SNIFF_MAX_BYTES: usize = 4096;
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
+const SNIFF_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -64,6 +64,8 @@ async fn handle_tcp(
 
     let mut direct_target = None;
     let mut direct_reason = None;
+    let mut proxy_address = address.clone();
+    let mut proxy_reason = None;
     if !proxy_dns_request && context.direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
@@ -84,9 +86,23 @@ async fn handle_tcp(
         direct_target = Some(target);
     }
 
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && let Some(domain) = context
+            .direct_domain_cache
+            .matching_domain_for_ip(target.ip(), |_| true)
+    {
+        debug!(
+            "Android TUN TCP cached proxy domain matched: {} ({})",
+            target, domain
+        );
+        proxy_address = domain_address(&domain, target.port());
+        proxy_reason = Some(format!("cached domain {domain}"));
+    }
+
     let mut sniffed = Vec::new();
     if direct_target.is_none() && !proxy_dns_request {
-        sniffed = sniff_first_bytes(&mut client).await;
+        sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
         {
@@ -101,6 +117,13 @@ async fn handle_tcp(
                 );
                 direct_reason = Some(format!("sniffed domain {domain}"));
                 direct_target = Some(target);
+            } else {
+                debug!(
+                    "Android TUN TCP sniffed proxy domain matched: {} ({})",
+                    target, domain
+                );
+                proxy_address = domain_address(&domain, target.port());
+                proxy_reason = Some(format!("sniffed domain {domain}"));
             }
         }
     }
@@ -116,10 +139,12 @@ async fn handle_tcp(
             android_log::warn(format!("Android TUN TCP DIRECT failed {target_str}: {e}"));
             AndroidAgentError::Connection(format!("direct connect {target_str} failed: {e}"))
         })?;
-        if !sniffed.is_empty()
-            && let Err(e) = target_stream.write_all(&sniffed).await
-        {
-            debug!("Android TUN TCP direct initial bytes write failed: {e}");
+        if !sniffed.is_empty() {
+            if let Err(e) = target_stream.write_all(&sniffed).await {
+                debug!("Android TUN TCP direct initial bytes write failed: {e}");
+            } else if let Err(e) = target_stream.flush().await {
+                debug!("Android TUN TCP direct initial bytes flush failed: {e}");
+            }
         }
         if let Err(e) = tokio::io::copy_bidirectional_with_sizes(
             &mut client,
@@ -135,29 +160,32 @@ async fn handle_tcp(
         return Ok(());
     }
 
+    let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
     if proxy_dns_request {
         debug!("Android TUN TCP DNS -> proxy -> {}", target_label);
     } else {
-        debug!("Android TUN TCP proxy -> {}", target_label);
-        android_log::info(format!("Android TUN TCP PROXY {target_label}"));
+        debug!("Android TUN TCP proxy -> {}", proxy_label);
+        android_log::info(format!("Android TUN TCP PROXY {proxy_label}"));
     }
     let mut proxy_io = match context
         .tcp_pool
-        .get_connected_stream(address, TransportProtocol::Tcp)
+        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
         .await
     {
         Ok(proxy_io) => proxy_io,
         Err(e) => {
             android_log::error(format!(
-                "Android TUN TCP PROXY connect failed {target_label}: {e}"
+                "Android TUN TCP PROXY connect failed {proxy_label}: {e}"
             ));
             return Err(e);
         }
     };
-    if !sniffed.is_empty()
-        && let Err(e) = proxy_io.write_all(&sniffed).await
-    {
-        debug!("Android TUN TCP proxy initial bytes write failed: {e}");
+    if !sniffed.is_empty() {
+        if let Err(e) = proxy_io.write_all(&sniffed).await {
+            debug!("Android TUN TCP proxy initial bytes write failed: {e}");
+        } else if let Err(e) = proxy_io.flush().await {
+            debug!("Android TUN TCP proxy initial bytes flush failed: {e}");
+        }
     }
     if let Err(e) = tokio::io::copy_bidirectional_with_sizes(
         &mut client,
@@ -173,7 +201,7 @@ async fn handle_tcp(
     Ok(())
 }
 
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> {
+async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
     let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
     let mut chunk = [0u8; 1024];
@@ -188,7 +216,12 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> 
         }
         match timeout(remaining, client.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
-            Ok(Ok(n)) => buffer.extend_from_slice(&chunk[..n]),
+            Ok(Ok(n)) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if sniff_domain(port, &buffer).is_some() {
+                    break;
+                }
+            }
             Ok(Err(e)) => {
                 debug!("Android TUN TCP sniff read failed: {e}");
                 break;
@@ -207,6 +240,20 @@ fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
     }
 }
 
+fn domain_address(domain: &str, port: u16) -> Address {
+    Address::Domain {
+        host: domain.to_string(),
+        port,
+    }
+}
+
+fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{reason}, original {target_label}"),
+        None => target_label.to_string(),
+    }
+}
+
 async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
     let socket = Socket::new(
         Domain::for_address(target),
@@ -222,6 +269,8 @@ async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
 }
 
 fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
+    tune_direct_tcp_socket(socket, target);
+
     let keepalive = TcpKeepalive::new()
         .with_time(Duration::from_secs(60))
         .with_interval(Duration::from_secs(30))
@@ -229,6 +278,18 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("Android TUN TCP direct keepalive setup failed target={target}: {err}");
+    }
+}
+
+fn tune_direct_tcp_socket(socket: &Socket, target: SocketAddr) {
+    if let Err(err) = socket.set_tcp_nodelay(true) {
+        debug!("Android TUN TCP direct TCP_NODELAY setup failed target={target}: {err}");
+    }
+    if let Err(err) = socket.set_recv_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN TCP direct recv buffer setup failed target={target}: {err}");
+    }
+    if let Err(err) = socket.set_send_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
+        debug!("Android TUN TCP direct send buffer setup failed target={target}: {err}");
     }
 }
 

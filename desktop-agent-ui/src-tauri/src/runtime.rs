@@ -9,6 +9,7 @@ use crate::logging::UiLogBuffer;
 pub(crate) struct AgentRuntime {
     pub(crate) agent: Mutex<Option<EmbeddedAgent>>,
     pub(crate) config_path: Mutex<Option<PathBuf>>,
+    pub(crate) ui_config_path: Mutex<Option<PathBuf>>,
     pub(crate) logs: UiLogBuffer,
     pub(crate) last_error: Arc<Mutex<Option<String>>>,
 }
@@ -23,6 +24,7 @@ impl AgentRuntime {
         Self {
             agent: Mutex::new(None),
             config_path: Mutex::new(None),
+            ui_config_path: Mutex::new(None),
             logs: UiLogBuffer::new(1200),
             last_error: Arc::new(Mutex::new(None)),
         }

@@ -1,0 +1,4 @@
+flowchart LR
+    Agent["Agent"] --> ProxyA["Proxy A: forward_mode=true"]
+    ProxyA -->|"复用 common ClientConnection"| ProxyB["上游 Proxy B"]
+    ProxyB --> Target["真实目标"]

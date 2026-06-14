@@ -1,3 +1,9 @@
+//! 单条 agent 连接的协议状态机。
+//!
+//! `server` 模块接入的是 TCP socket；进入这里后，socket 会被 `ProxyCodec`
+//! 包装成 PPAASS 协议帧。认证成功前只接受 `Auth`，认证成功后等待第一个
+//! `Connect`，随后根据目标类型进入 legacy relay、UDP relay 或 Yamux session。
+
 mod agent_io;
 mod auth;
 mod connect;
@@ -52,12 +58,20 @@ use tracing::{debug, error, instrument, trace, warn};
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 
+const PROXY_FRAMED_INITIAL_CAPACITY: usize = 8 * 1024;
+const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = DEFAULT_STREAM_RELAY_BUFFER_SIZE;
+
 pub struct ServerConnection {
+    // 写回 agent 的协议响应流。所有 ConnectResponse/Data 都从这里出去。
     writer: FramedWriter,
+    // 从 agent 读入的协议请求流。认证、Connect、Data 都从这里进入。
     reader: FramedReader,
+    // 认证成功后保存用户配置；relay 阶段用它做带宽统计和限速判断。
     user_config: Option<UserConfig>,
     bandwidth_monitor: Arc<BandwidthMonitor>,
+    // 每条外层 TCP 连接独立一份加密状态：认证前无 AES，认证后设置 AES cipher。
     cipher_state: Arc<CipherState>,
+    // `peek_auth_username` 会先读走 AuthRequest，这里暂存给后续 authenticate 继续校验。
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
@@ -74,8 +88,9 @@ impl ServerConnection {
         connection_limiter: ConnectionLimiter,
     ) -> Self {
         // 每条 agent TCP 连接都有独立的编解码器和加密状态。
+        // compression_mode 在连接创建时确定，AES cipher 在认证成功后再写入同一个 state。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
-        let framed = Framed::new(stream, ProxyCodec::new(Some(cipher_state.clone())));
+        let framed = proxy_framed_stream(stream, ProxyCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
 
         Self {
@@ -90,4 +105,13 @@ impl ServerConnection {
             connection_limiter,
         }
     }
+}
+
+fn proxy_framed_stream(stream: TcpStream, codec: ProxyCodec) -> Framed<TcpStream, ProxyCodec> {
+    // Large transfers are streamed in relay-sized chunks. Keep the protocol buffers small
+    // initially, and force framed backpressure before multiple encoded chunks can pile up
+    // behind a slow agent.
+    let mut framed = Framed::with_capacity(stream, codec, PROXY_FRAMED_INITIAL_CAPACITY);
+    framed.set_backpressure_boundary(PROXY_FRAMED_BACKPRESSURE_BOUNDARY);
+    framed
 }

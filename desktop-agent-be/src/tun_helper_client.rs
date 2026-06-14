@@ -97,6 +97,27 @@ mod unix {
         }
     }
 
+    pub(crate) fn refresh_macos_scoped_default_bypass(socket_path: &str) -> Result<()> {
+        let mut stream = UnixStream::connect(socket_path).map_err(|e| {
+            AgentError::Connection(format!(
+                "连接 TUN helper 刷新 macOS scoped default 失败：{e}"
+            ))
+        })?;
+        write_frame(
+            &mut stream,
+            &TunHelperRequest::RefreshMacosScopedDefaultBypass,
+        )?;
+        let _ = recv_fd_marker(&stream)?;
+        let response: TunHelperResponse = read_frame(&mut stream)?;
+        match response {
+            TunHelperResponse::Ok => Ok(()),
+            TunHelperResponse::Error { message } => Err(AgentError::Connection(message)),
+            other => Err(AgentError::Connection(format!(
+                "TUN helper 刷新 macOS scoped default 返回了意外响应：{other:?}"
+            ))),
+        }
+    }
+
     fn stop_tun(socket_path: &str, lease_id: &str) -> Result<()> {
         let mut stream = UnixStream::connect(socket_path)
             .map_err(|e| AgentError::Connection(format!("连接 TUN helper 清理 lease 失败：{e}")))?;
@@ -199,4 +220,6 @@ mod unix {
 
 #[cfg(target_os = "macos")]
 #[allow(unused_imports)]
-pub(crate) use unix::{HelperTunDevice, HelperTunLease, start_tun};
+pub(crate) use unix::{
+    HelperTunDevice, HelperTunLease, refresh_macos_scoped_default_bypass, start_tun,
+};

@@ -1,3 +1,9 @@
+//! TUN 模式下 agent->proxy 控制连接的旁路准备。
+//!
+//! TUN 一旦接管默认路由，agent 自己连接 proxy 的 TCP 连接也可能被送回 TUN。
+//! 因此在安装 TUN 路由前，需要先探测当前物理出口 IP/接口，并写入连接池，
+//! 后续新建 proxy 连接都会绑定到这个物理出口。
+
 use super::device::tun_ipv4_peer;
 use super::route;
 use super::*;
@@ -52,6 +58,7 @@ pub(super) async fn configure_proxy_routing(
 
     let mut bind_interface = None;
     if let Some(route) = proxy_route {
+        // 这里设置的是连接池的“未来连接”绑定；已有连接不会被迁移。
         bind_interface = route.bind_interface.clone();
         info!(
             "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口（尝试 {} 次，用时 {:?}）",
@@ -130,6 +137,7 @@ pub(super) fn install_route_guard(
     proxy_addrs: &[String],
 ) -> Option<RouteGuard> {
     // 解析 proxy IP 后安装旁路和 split-default 路由；失败时继续运行但不接管全局路由。
+    // route guard 的 Drop 会负责恢复路由状态。
     let proxy_ips = resolve_proxy_ips(proxy_addrs);
     let dns_capture_target = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix).unwrap_or(tun_ipv4);
     match RouteGuard::install(

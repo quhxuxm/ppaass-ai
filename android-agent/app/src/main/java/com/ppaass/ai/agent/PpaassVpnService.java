@@ -238,7 +238,9 @@ public class PpaassVpnService extends VpnService {
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
-                .put("runtime_threads", DefaultConfig.RUNTIME_THREADS)
+                .put("runtime_threads", parsePositiveInt(
+                        prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
+                        DefaultConfig.RUNTIME_THREADS))
                 .put("connect_timeout_secs", 30)
                 .put("compression_mode", normalizeCompressionMode(
                         prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE)))

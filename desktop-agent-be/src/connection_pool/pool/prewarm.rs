@@ -1,6 +1,13 @@
+//! legacy 连接池预热与后台补充。
+//!
+//! 预热连接只完成 agent->proxy 认证，不携带目标地址。上层真正需要连接目标时，
+//! 才从池中取出一条连接发送 `ConnectRequest`。这能把用户请求路径上的认证延迟
+//! 提前摊到后台。
+
 use super::*;
 
 struct RefillTaskContext {
+    // 后台补充任务需要的字段集中放在 context，避免 spawn 时捕获整个 ConnectionPool。
     refill_notify: Arc<Notify>,
     pool: Pool<ProxyConnection>,
     config: Arc<AgentConfig>,
@@ -84,6 +91,7 @@ impl ConnectionPool {
         );
 
         if self.use_yamux {
+            // Yamux 模式下预热的是长期 session，不需要 legacy 的一次性连接池。
             match self.ensure_yamux_sessions(self.yamux_target_size()).await {
                 Ok(success_count) => {
                     info!(

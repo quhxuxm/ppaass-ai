@@ -1,3 +1,9 @@
+//! proxy 可执行入口。
+//!
+//! 这里负责把“进程级”的事情准备好：读取配置、覆盖命令行参数、初始化日志、
+//! 校验出站网卡配置、构建 Tokio runtime，然后把真正的网络服务交给 `ProxyServer`。
+//! 具体的认证、CONNECT 分流和数据中继都在 `server` 与 `connection` 模块中。
+
 mod bandwidth;
 mod config;
 mod connection;
@@ -58,10 +64,11 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // 先加载配置
+    // 先加载配置文件，再让命令行参数覆盖配置项。
+    // 这样同一份 proxy.toml 可用于生产默认值，本地调试时只覆盖少量参数。
     let mut config = ProxyConfig::load(&args.config)?;
 
-    // 使用命令行参数覆盖配置
+    // 使用命令行参数覆盖配置。
     if let Some(listen) = args.listen {
         config.listen_addr = listen;
     }
@@ -81,7 +88,7 @@ fn main() -> Result<()> {
         config.outbound_interface = Some(outbound_interface);
     }
 
-    // 如果日志目录不存在，则创建
+    // 日志初始化要在大部分 info!/warn! 之前完成；配置了 log_dir 时提前创建目录。
     if let Some(ref log_dir) = config.log_dir {
         std::fs::create_dir_all(log_dir)?;
     }
@@ -130,6 +137,8 @@ fn main() -> Result<()> {
         );
         info!("用户配置文件：{}", config.users_path);
 
+        // 主监听循环外面包一层 panic 恢复：单次服务 run panic 后重新建 listener。
+        // 普通错误仍返回给进程，避免配置/绑定等硬错误被无限重启掩盖。
         loop {
             let server = ProxyServer::new(config.clone()).await?;
             match AssertUnwindSafe(server.run()).catch_unwind().await {

@@ -1,3 +1,8 @@
+//! Yamux 连接池。
+//!
+//! 每个 `YamuxClientConnection` 是一条已认证、已 CONNECT 到 `TcpYamux` 或
+//! `UdpYamux` 的外层 session。真实目标连接通过在 session 内打开子流完成。
+
 use super::*;
 
 impl ConnectionPool {
@@ -11,6 +16,7 @@ impl ConnectionPool {
 
         loop {
             self.ensure_yamux_sessions(target_size).await?;
+            // 简单轮询选择 session，避免所有新子流压到同一条外层连接。
             let session = self
                 .next_yamux_session()
                 .await
@@ -23,6 +29,7 @@ impl ConnectionPool {
             {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
+                    // UDP Yamux 子流需要保留数据报边界，因此包装成 DatagramStreamIo。
                     return if transport == TransportProtocol::Udp {
                         Ok(ConnectedStream::new_yamux_datagram(stream, request_id))
                     } else {
@@ -58,6 +65,7 @@ impl ConnectionPool {
             return Ok(0);
         }
 
+        // 同一时间只允许一个补充任务创建 session，避免并发请求把 session 数打爆。
         let _guard = self.yamux_refill_lock.lock().await;
         let current_size = self.yamux_sessions.lock().await.len();
         if current_size >= target_size {

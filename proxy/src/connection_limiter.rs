@@ -1,3 +1,8 @@
+//! proxy 资源保护阀。
+//!
+//! 所有限制都用“获取 permit，Drop 自动释放”的方式表达：连接/flow/缓冲数据只要还活着，
+//! 对应 permit 就还占用计数。这样正常返回、错误返回、任务取消都会走 Drop，减少手动减计数遗漏。
+
 use crate::config::ProxyConfig;
 use dashmap::DashMap;
 use std::sync::{
@@ -12,8 +17,11 @@ pub struct ConnectionLimiter {
 }
 
 struct ConnectionLimiterInner {
+    // 全局连接数用 Semaphore 做硬上限；0 表示不启用该限制。
     global: Option<Arc<Semaphore>>,
+    // active_total 单独记录当前值，便于日志输出，即使 global 为 None 也能统计。
     active_total: AtomicUsize,
+    // 用户维度的 total/idle 计数按需创建，避免启动时为所有用户预分配。
     users: DashMap<String, Arc<UserConnectionCounters>>,
     max_connections_per_user: usize,
     max_idle_connections_per_user: usize,
@@ -29,15 +37,18 @@ struct UserConnectionCounters {
 }
 
 pub struct GlobalConnectionPermit {
+    // 有全局上限时持有 semaphore permit；无限制时为 None，但 active_total 仍会统计。
     _permit: Option<OwnedSemaphorePermit>,
     limiter: Arc<ConnectionLimiterInner>,
 }
 
 pub struct UserConnectionPermit {
+    // max_connections_per_user 为 0 时不占用用户计数，因此 counters 为 None。
     counters: Option<Arc<UserConnectionCounters>>,
 }
 
 pub struct IdleConnectionPermit {
+    // max_idle_connections_per_user 为 0 时不占用 idle 计数，因此 counters 为 None。
     counters: Option<Arc<UserConnectionCounters>>,
 }
 
@@ -74,6 +85,7 @@ impl ConnectionLimiter {
     }
 
     pub fn try_acquire_global(&self) -> Option<GlobalConnectionPermit> {
+        // 先获取 semaphore，再增加 active_total；获取失败时不污染统计值。
         let permit = match &self.inner.global {
             Some(semaphore) => Some(semaphore.clone().try_acquire_owned().ok()?),
             None => None,
@@ -126,6 +138,7 @@ impl ConnectionLimiter {
         &self,
         bytes: usize,
     ) -> Option<UdpRelayBufferedBytesPermit> {
+        // bytes 为 0 或配置 0 表示不限制缓冲字节；仍返回一个空 permit 统一调用方逻辑。
         if bytes == 0 || self.inner.max_udp_relay_buffered_bytes == 0 {
             return Some(UdpRelayBufferedBytesPermit {
                 limiter: self.inner.clone(),
@@ -208,6 +221,7 @@ fn increment_limited_by(counter: &AtomicUsize, limit: usize, amount: usize) -> O
         return Some(());
     }
     loop {
+        // CAS 循环保证并发场景下不会超过上限；checked_add 防止 usize 溢出。
         let current = counter.load(Ordering::Acquire);
         let next = current.checked_add(amount)?;
         if limit != 0 && next > limit {

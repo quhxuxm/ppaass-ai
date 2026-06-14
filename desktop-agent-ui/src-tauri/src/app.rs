@@ -23,7 +23,10 @@ use crate::runtime::AgentRuntime;
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
 use crate::tray::restore_main_window;
 #[cfg(any(windows, target_os = "macos"))]
-use crate::tray::{hide_window_to_tray, hide_window_to_tray_after_minimize, setup_system_tray};
+use crate::tray::{
+    hide_window_to_tray, hide_window_to_tray_after_minimize, setup_system_tray,
+    sync_tray_tun_checked,
+};
 #[cfg(windows)]
 use crate::windows_service::{
     install_and_start_windows_service, run_windows_service, send_service_request,
@@ -32,27 +35,35 @@ use crate::windows_service::{
 
 #[tauri::command]
 async fn load_agent_config(
+    app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
     path: Option<String>,
 ) -> Result<LoadedAgentConfig, String> {
     let runtime = runtime.inner().clone();
-    run_blocking("加载配置", move || {
+    let loaded = run_blocking("加载配置", move || {
         load_agent_config_inner(&runtime, path)
     })
-    .await
+    .await?;
+    #[cfg(any(windows, target_os = "macos"))]
+    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
+    Ok(loaded)
 }
 
 #[tauri::command]
 async fn save_agent_config(
+    app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
     path: String,
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
     let runtime = runtime.inner().clone();
-    run_blocking("保存配置", move || {
+    let loaded = run_blocking("保存配置", move || {
         save_agent_config_inner(&runtime, path, raw)
     })
-    .await
+    .await?;
+    #[cfg(any(windows, target_os = "macos"))]
+    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
+    Ok(loaded)
 }
 
 #[tauri::command]
@@ -113,6 +124,7 @@ fn load_agent_config_inner(
 
     let loaded = load_config_from_path(&config_path)?;
     apply_ui_log_level(runtime, &loaded.summary.log_level);
+    remember_ui_config_path(runtime, &loaded.path)?;
     Ok(loaded)
 }
 
@@ -132,12 +144,21 @@ fn save_agent_config_inner(
     };
 
     apply_ui_log_level(runtime, &loaded.summary.log_level);
+    remember_ui_config_path(runtime, &loaded.path)?;
     #[cfg(windows)]
     let _ = send_service_request(&ServiceRequest::SetLogLevel {
         log_level: loaded.summary.log_level.clone(),
     });
 
     Ok(loaded)
+}
+
+fn remember_ui_config_path(runtime: &AgentRuntime, path: &str) -> Result<(), String> {
+    *runtime
+        .ui_config_path
+        .lock()
+        .map_err(|_| "UI 配置路径状态锁已损坏".to_string())? = Some(PathBuf::from(path));
+    Ok(())
 }
 
 pub(crate) fn run() {
@@ -171,6 +192,8 @@ pub(crate) fn run() {
     let runtime = Arc::new(AgentRuntime::new());
     runtime.logs.install_tracing();
     let setup_logs = runtime.logs.clone();
+    #[cfg(any(windows, target_os = "macos"))]
+    let setup_runtime = runtime.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -180,7 +203,8 @@ pub(crate) fn run() {
             install_bundled_agent_assets(app, &setup_logs)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
             #[cfg(any(windows, target_os = "macos"))]
-            setup_system_tray(app).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            setup_system_tray(app, setup_runtime.clone())
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
             #[cfg(target_os = "macos")]
             check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())

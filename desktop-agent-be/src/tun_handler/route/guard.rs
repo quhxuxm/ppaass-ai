@@ -350,12 +350,7 @@ pub(super) fn refresh_macos_scoped_default_bypass() {}
 #[cfg(target_os = "macos")]
 fn install_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: bool) {
     // 形如：route -n add -ifscope en0 -net default 192.168.31.1
-    let mut cmd = Command::new("/sbin/route");
-    cmd.arg("-n").arg("add");
-    if is_ipv6 {
-        cmd.arg("-inet6");
-    }
-    cmd.args(["-ifscope", if_name, "-net", "default", &gateway.to_string()]);
+    let mut cmd = macos_scoped_default_command("add", if_name, gateway, is_ipv6);
 
     match cmd.output() {
         Ok(out) if out.status.success() => {
@@ -365,9 +360,10 @@ fn install_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: boo
         }
         Ok(out) => {
             let msg = command_output_message(&out);
-            // 已存在同样的 ifscope 默认路由属于幂等成功；仅记录调试日志。
-            if msg.contains("File exists") || msg.contains("already in table") {
-                debug!("macOS scoped default bypass 已存在：ifscope={if_name} gateway={gateway}");
+            // 待机恢复或 Wi-Fi 切换后，ifscope default 可能仍存在但网关已过期。
+            // add 返回已存在时主动更新下一跳，避免 IP_BOUND_IF 直连继续查到旧网关。
+            if route_add_error_is_already_exists(&msg) {
+                replace_one_macos_scoped_default(if_name, gateway, is_ipv6);
             } else {
                 warn!(
                     "安装 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{msg}"
@@ -376,6 +372,79 @@ fn install_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: boo
         }
         Err(e) => warn!("运行 route add -ifscope 安装 macOS scoped default bypass 失败：{e}"),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn replace_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: bool) {
+    let mut change = macos_scoped_default_command("change", if_name, gateway, is_ipv6);
+    match change.output() {
+        Ok(out) if out.status.success() => {
+            info!("已刷新 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
+            return;
+        }
+        Ok(out) => {
+            debug!(
+                "route change 刷新 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{}",
+                command_output_message(&out)
+            );
+        }
+        Err(e) => debug!(
+            "运行 route change 刷新 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{e}"
+        ),
+    }
+
+    let mut delete = macos_scoped_default_delete_command(if_name, is_ipv6);
+    match delete.output() {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => debug!(
+            "route delete 清理旧 macOS scoped default bypass 失败 ifscope={if_name}：{}",
+            command_output_message(&out)
+        ),
+        Err(e) => debug!(
+            "运行 route delete 清理旧 macOS scoped default bypass 失败 ifscope={if_name}：{e}"
+        ),
+    }
+
+    let mut add = macos_scoped_default_command("add", if_name, gateway, is_ipv6);
+    match add.output() {
+        Ok(out) if out.status.success() => {
+            info!("已重建 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
+        }
+        Ok(out) => warn!(
+            "重建 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{}",
+            command_output_message(&out)
+        ),
+        Err(e) => warn!(
+            "运行 route add 重建 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{e}"
+        ),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn macos_scoped_default_command(
+    action: &str,
+    if_name: &str,
+    gateway: IpAddr,
+    is_ipv6: bool,
+) -> Command {
+    let mut command = Command::new("/sbin/route");
+    command.arg("-n").arg(action);
+    if is_ipv6 {
+        command.arg("-inet6");
+    }
+    command.args(["-ifscope", if_name, "-net", "default", &gateway.to_string()]);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn macos_scoped_default_delete_command(if_name: &str, is_ipv6: bool) -> Command {
+    let mut command = Command::new("/sbin/route");
+    command.arg("-n").arg("delete");
+    if is_ipv6 {
+        command.arg("-inet6");
+    }
+    command.args(["-ifscope", if_name, "-net", "default"]);
+    command
 }
 
 fn install_ipv4_split_routes(

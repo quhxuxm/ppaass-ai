@@ -1,3 +1,9 @@
+//! Desktop Agent 可执行入口。
+//!
+//! 这里负责进程级初始化：读取 agent.toml、应用命令行覆盖、启动日志和 Tokio runtime，
+//! 然后把真正的本地代理服务交给 `AgentServer`。如果启用 TUN 模式，`AgentServer`
+//! 会同时保留本地 HTTP/SOCKS 监听和系统级 TUN 转发。
+
 mod cli;
 mod config;
 mod connection_pool;
@@ -28,6 +34,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 fn main() -> Result<()> {
     let args = CliArgs::parse();
 
+    // macOS 的 TUN helper 是同一个二进制的另一种运行模式：
+    // 主进程通过本地 socket 请求 helper 做需要权限的 TUN/路由操作。
     #[cfg(target_os = "macos")]
     if args.tun_helper_service {
         return tun_handler::helper_service::run(
@@ -42,7 +50,8 @@ fn main() -> Result<()> {
         anyhow::bail!("TUN helper service mode is only supported on macOS");
     }
 
-    // 加载配置文件
+    // 加载配置文件，再用命令行参数覆盖少量运行时选项。
+    // 这样本地调试可临时改 listen/proxy/TUN 参数，而不必修改配置文件。
     let mut config = AgentConfig::load(&args.config)?;
 
     // ── 基础参数覆盖 ──────────────────────────────────────────────────────────

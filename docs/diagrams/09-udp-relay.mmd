@@ -1,0 +1,8 @@
+flowchart LR
+    Agent["Agent UdpRelay"] -->|"DataPacket payload = UdpRelayPacket"| Proxy["Proxy Shared UDP Relay"]
+    Proxy --> Table["flow_id -> UDP socket"]
+    Table --> TargetA["目标 A"]
+    Table --> TargetB["目标 B"]
+    TargetA --> Table
+    TargetB --> Table
+    Table -->|"UdpRelayPacket(flow_id,address,data)"| Agent

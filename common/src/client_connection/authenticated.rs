@@ -1,3 +1,9 @@
+//! agent/proxy 级联场景共用的客户端握手逻辑。
+//!
+//! Desktop agent 用它连接远端 proxy；proxy 的 forward 模式也复用它连接下一跳 proxy。
+//! 生命周期是：TCP connect -> 发送 Auth -> 收到 AuthResponse 后启用 AES ->
+//! 发送 ConnectRequest -> 返回 `ClientStream` 做数据中继。
+
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
@@ -23,6 +29,7 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 /// 已认证的客户端连接，用于连接远端代理
 /// 可用于发送连接请求到远端代理，或转换为流
 pub struct AuthenticatedConnection {
+    // 认证成功后保留下来的 framed writer/reader；后续 Connect 和 Data 继续复用同一 TCP 连接。
     writer: FramedWriter,
     reader: FramedReader,
     timeout: Duration,
@@ -52,12 +59,14 @@ impl AuthenticatedConnection {
             warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
         }
 
-        // 2. 设置编解码器
+        // 2. 设置编解码器。认证成功前 cipher_state 只有压缩配置，没有 AES cipher。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
         let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
         let (mut writer, mut reader) = framed.split();
 
-        // 3. 准备认证
+        // 3. 准备认证。
+        // agent 生成一次性 AES 会话密钥，再用用户私钥处理后发给 proxy；
+        // proxy 用用户公钥还原/校验，成功后双方切换到同一 AES cipher。
         let aes_cipher = AesGcmCipher::new();
         let aes_key = *aes_cipher.key();
 
@@ -110,6 +119,8 @@ impl AuthenticatedConnection {
                 ));
             }
             info!("已通过远端代理认证");
+            // 必须在收到成功 AuthResponse 后再启用 AES；
+            // 否则会把认证响应本身当成加密帧读取，双方状态就错位。
             cipher_state.set_cipher(Arc::new(aes_cipher));
         } else {
             return Err(std::io::Error::new(
@@ -131,7 +142,7 @@ impl AuthenticatedConnection {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<(ClientStream, String), std::io::Error> {
-        // 6. 发送连接请求
+        // 6. 发送连接请求。request_id 后续就是 DataPacket 的 stream_id。
         let request_id = crate::generate_id();
         let connect_request = ConnectRequest {
             request_id: request_id.clone(),
@@ -249,6 +260,7 @@ where
             last_error = Some(e);
             continue;
         }
+        tune_proxy_socket(config, &socket, *dst);
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
             warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -323,6 +335,7 @@ where
             last_error = Some(e);
             continue;
         }
+        tune_proxy_socket(config, &socket, dst);
         if let Err(e) = socket.set_nonblocking(true) {
             warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -351,4 +364,19 @@ where
 
     Err(last_error
         .unwrap_or_else(|| std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))))
+}
+
+fn tune_proxy_socket<C>(config: &C, socket: &Socket, dst: SocketAddr)
+where
+    C: ClientConnectionConfig,
+{
+    let Some(buffer_size) = config.tcp_socket_buffer_size() else {
+        return;
+    };
+    if let Err(err) = socket.set_recv_buffer_size(buffer_size) {
+        warn!("设置代理连接 socket 接收缓冲失败 (dst={}): {err}", dst);
+    }
+    if let Err(err) = socket.set_send_buffer_size(buffer_size) {
+        warn!("设置代理连接 socket 发送缓冲失败 (dst={}): {err}", dst);
+    }
 }

@@ -21,6 +21,7 @@ import {
   readOverviewCardOrder,
   saveOverviewCardOrder
 } from "../overviewLayout";
+import { transportModeLabel } from "../constants";
 import type {
   AgentConfigSummary,
   AgentState,
@@ -238,7 +239,7 @@ function hourlyBarHeight(bytes: number) {
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
             <Tag
               v-else-if="card.key === 'egress'"
-              :value="`${summary.tcp_mode.toUpperCase()} / ${summary.udp_mode.toUpperCase()}`"
+              :value="`${transportModeLabel(summary.tcp_mode)} / ${transportModeLabel(summary.udp_mode)}`"
               severity="info"
             />
             <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />

@@ -1,3 +1,7 @@
+//! 写方向适配器：裸字节 -> `ProxyRequest::Data`。
+//!
+//! 每个 sink 固定绑定一个 stream_id，确保写入的数据都发给 proxy 端对应的目标流。
+
 use futures::Sink;
 use futures::stream::SplitSink;
 use protocol::{AgentCodec, DataPacket, ProxyRequest};

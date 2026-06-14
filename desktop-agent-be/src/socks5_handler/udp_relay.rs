@@ -1,3 +1,8 @@
+//! SOCKS5 UDP 的共享 proxy relay。
+//!
+//! 多个 SOCKS5 UDP 目标会复用一条 `Address::UdpRelay` proxy stream。
+//! 每个客户端/目标组合映射到一个 flow_id，proxy 端据此维护真实 UDP socket。
+
 use super::udp_associate::create_udp_packet;
 use super::*;
 
@@ -35,7 +40,9 @@ impl Hash for SocksUdpFlowKey {
 }
 
 pub(super) struct SocksUdpRelayState {
+    // (client,target) -> flow_id，保证同一 UDP 会话在 proxy 端复用同一个 socket。
     flow_ids: HashMap<SocksUdpFlowKey, u64>,
+    // flow_id -> (client,target)，用于把 proxy 响应重新封装后发回 SOCKS 客户端。
     flows: HashMap<u64, (SocketAddr, Address)>,
     next_flow_id: u64,
 }
@@ -223,6 +230,7 @@ async fn send_socks_udp_request<W>(
 where
     W: AsyncWrite + Unpin,
 {
+    // SOCKS5 UDP payload 先包成 UdpRelayPacket，再写入共享 proxy stream。
     let flow_id = state.flow_id(request.client, &request.target);
     let packet = UdpRelayPacket {
         flow_id,
@@ -241,6 +249,7 @@ async fn handle_socks_udp_response(
     state: &SocksUdpRelayState,
     response: &[u8],
 ) -> std::io::Result<()> {
+    // proxy 返回的 UdpRelayPacket 需要恢复成 SOCKS5 UDP response packet。
     let packet = UdpRelayPacket::decode(response).map_err(std::io::Error::other)?;
     let Some((client, target)) = state.flow(packet.flow_id) else {
         debug!("SOCKS5 UDP 收到无匹配 flow 的回复 id={}", packet.flow_id);

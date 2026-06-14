@@ -1,3 +1,8 @@
+//! legacy `ClientStream` 适配器。
+//!
+//! `AuthenticatedConnection::connect_to_target` 成功后返回它。上层写入裸字节时，
+//! 它会封装成 `ProxyRequest::Data`；读取时，它从 `ProxyResponse::Data` 中拆出 payload。
+
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, Stream};
 use protocol::{AgentCodec, ProxyRequest, ProxyResponse};
@@ -11,9 +16,13 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 
 /// 流包装器，在 ProxyRequest/Response 与 AsyncRead/AsyncWrite 之间转换
 pub struct ClientStream {
+    // 写给 proxy 的请求半边。
     pub writer: FramedWriter,
+    // 从 proxy 读取响应的半边。
     pub reader: FramedReader,
+    // shutdown 只能发送一次空 end 包。
     pub end_sent: bool,
+    // 与 ConnectRequest.request_id 相同，用于区分目标流。
     pub stream_id: String,
     pub read_buf: Vec<u8>,
     pub read_pos: usize,

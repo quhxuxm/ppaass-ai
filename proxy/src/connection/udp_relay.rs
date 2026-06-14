@@ -1,3 +1,9 @@
+//! 共享 UDP relay。
+//!
+//! 与 legacy `relay_udp` 的“一条连接只对应一个 UDP 目标”不同，这里一条
+//! agent->proxy 连接可以承载多个 UDP 目标。agent 把每个 UDP 包包成
+//! `UdpRelayPacket { flow_id, address, data }`，proxy 按 flow_id 维护独立 UDP socket。
+
 use super::target::relay_target_addr;
 use super::udp_relay_flow::{
     QueuedUdpRelayData, QueuedUdpRelayResponse, UdpRelayFlow, UdpRelayFlowChannels,
@@ -12,11 +18,14 @@ impl ServerConnection {
         connect_request: ConnectRequest,
     ) -> Result<()> {
         debug!("正在建立 UDP 共享中继");
+        // 先告诉 agent 共享中继已经建立；后续所有 UDP 数据都走同一个 request_id。
         self.send_connect_success(connect_request.request_id.clone(), "UDP relay connected")
             .await?;
 
         let username = self.user_config.as_ref().map(|c| c.username.clone());
         let channel_size = udp_relay_channel_size(&self.proxy_config);
+        // response_tx：各个 flow 任务把目标响应送回主 relay 循环。
+        // flow_done_tx：flow 空闲/失败退出后通知主循环清理 flows 表。
         let (response_tx, mut response_rx) =
             tokio::sync::mpsc::channel::<QueuedUdpRelayResponse>(channel_size);
         let (flow_done_tx, mut flow_done_rx) = tokio::sync::mpsc::channel::<u64>(channel_size);
@@ -24,6 +33,7 @@ impl ServerConnection {
             idle_timeout: Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs),
             channel_size,
         };
+        // flow_id -> flow 发送队列。每个 flow 背后有一个已 connect 的 UDP socket。
         let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
         let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
         let stream_id = connect_request.request_id;
@@ -66,6 +76,8 @@ impl ServerConnection {
                         self.bandwidth_monitor.record_received(user, packet.data.len() as u64);
                     }
 
+                    // agent 的 DataPacket payload 内部还包了一层 UdpRelayPacket，
+                    // 这层携带 flow_id 和真正的 UDP 目标地址。
                     let relay_packet = match UdpRelayPacket::decode(&packet.data) {
                         Ok(packet) => packet,
                         Err(e) => {
@@ -75,6 +87,7 @@ impl ServerConnection {
                     };
 
                     if !flows.contains_key(&relay_packet.flow_id) {
+                        // 新 flow 第一次出现时才创建 UDP socket；超过 per-connection 或全局上限则丢弃。
                         if max_flows != 0 && flows.len() >= max_flows {
                             warn!(
                                 "UDP relay flow 数已达上限（{}），丢弃 flow {} 的数据包",
@@ -116,6 +129,8 @@ impl ServerConnection {
 
                     let flow_id = relay_packet.flow_id;
                     if let Some(flow) = flows.get(&flow_id) {
+                        // 队列中的 payload 会持有 buffer permit，直到实际被发送或丢弃。
+                        // 这样全局 buffered bytes 能真实反映积压数据量。
                         let Some(buffer_permit) = try_acquire_udp_relay_buffer(
                             &self.connection_limiter,
                             self.proxy_config.max_udp_relay_buffered_bytes,
@@ -142,6 +157,7 @@ impl ServerConnection {
                 }
                 response = response_rx.recv() => {
                     let Some(response) = response else { break };
+                    // 目标响应重新编码成 UdpRelayPacket，再包回当前 stream_id 的 DataPacket。
                     let encoded = response
                         .packet
                         .encode()
@@ -180,6 +196,7 @@ impl ServerConnection {
         options: UdpRelayFlowOptions,
     ) -> Result<UdpRelayFlow> {
         let target_addr = relay_target_addr(&address)?;
+        // flow 创建时就把 UDP socket connect 到具体目标，后续只需 send/recv payload。
         let socket = self
             .egress_state
             .connect_udp(&target_addr)
@@ -196,6 +213,7 @@ impl ServerConnection {
         let flow_idle_timeout = options.idle_timeout;
 
         spawn_guarded("proxy udp relay flow", async move {
+            // flow_permit 的生命周期绑定到任务；任务退出即释放全局 UDP flow 计数。
             let _flow_permit = flow_permit;
             let mut buf = vec![0u8; 65535];
             let idle = tokio::time::sleep(flow_idle_timeout);
@@ -227,6 +245,7 @@ impl ServerConnection {
                     read = socket.recv(&mut buf) => {
                         match read {
                             Ok(n) => {
+                                // 下行响应也计入全局缓冲预算，防止目标大量回包压垮内存。
                                 let Some(buffer_permit) = try_acquire_udp_relay_buffer(
                                     &connection_limiter,
                                     max_buffered_bytes,

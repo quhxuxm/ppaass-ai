@@ -70,8 +70,18 @@ pub async fn run_android_agent(
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_pool = AndroidConnectionPool::new(config.clone(), config.tcp_pool_size, "tcp_pool");
-    let udp_pool = AndroidConnectionPool::new(config.clone(), config.udp_pool_size, "udp_pool");
+    let tcp_pool = AndroidConnectionPool::new(
+        config.clone(),
+        shutdown.clone(),
+        config.tcp_pool_size,
+        "tcp_pool",
+    );
+    let udp_pool = AndroidConnectionPool::new(
+        config.clone(),
+        shutdown.clone(),
+        config.udp_pool_size,
+        "udp_pool",
+    );
     let tcp_pool_for_prewarm = tcp_pool.clone();
     spawn_guarded("android tcp pool prewarm", async move {
         tcp_pool_for_prewarm.prewarm().await;

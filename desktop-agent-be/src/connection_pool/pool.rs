@@ -1,3 +1,9 @@
+//! agent 到 proxy 的连接池。
+//!
+//! 池里的 legacy 连接是“只完成认证、尚未 Connect 目标”的预热连接；
+//! 取出后会发送一次 `ConnectRequest` 并被本次请求消费，不再归还池。
+//! 如果启用 Yamux，池维护的是长期外层 session，每次请求在 session 内开子流。
+
 use super::connected_stream::ConnectedStream;
 use super::proxy_connection::ProxyConnection;
 use crate::config::AgentConfig;
@@ -23,6 +29,7 @@ mod yamux;
 
 #[derive(Clone)]
 struct YamuxSessionHandle {
+    // 本地递增 ID 只用于移除故障 session，不参与协议。
     id: usize,
     connection: YamuxClientConnection,
 }
@@ -48,9 +55,12 @@ pub struct ConnectionPool {
     /// TUN 模式激活时保存物理出口接口。
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     use_yamux: bool,
+    // auto/yamux/legacy 配置影响是否优先尝试 Yamux，以及失败时能否回退 legacy。
     yamux_mode: Option<TcpTransportMode>,
     yamux_transport: Option<TransportProtocol>,
+    // 外层虚拟地址：TCP 池连 TcpYamux，UDP 池连 UdpYamux。
     yamux_outer_address: Option<Address>,
+    // 长期复用的 Yamux 外层 session 集合。
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
     yamux_refill_lock: Arc<Mutex<()>>,
     yamux_next_index: AtomicUsize,

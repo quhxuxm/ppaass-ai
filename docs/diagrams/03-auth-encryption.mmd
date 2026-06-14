@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant A as Agent/common AuthenticatedConnection
+    participant P as Proxy ServerConnection
+    participant U as users.toml
+
+    A->>A: 生成随机 AES-256 key
+    A->>A: 读取用户私钥 PEM
+    A->>A: 用私钥操作包装 AES key
+    A->>P: Auth(username, timestamp, encrypted_aes_key)
+    P->>U: 根据 username 查公钥、限速、过期时间
+    U-->>P: UserConfig
+    P->>P: 校验 username 一致性
+    P->>P: 校验 timestamp 防重放窗口
+    P->>P: 校验 expires_at
+    P->>P: 用公钥还原 AES key
+    P-->>A: AuthResponse(success, session_id)
+    A->>A: 收到成功响应后启用 AES
+    P->>P: 发送成功响应后启用 AES

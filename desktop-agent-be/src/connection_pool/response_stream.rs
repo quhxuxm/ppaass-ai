@@ -1,3 +1,8 @@
+//! 读方向适配器：`ProxyResponse::Data` -> 裸字节。
+//!
+//! legacy 连接中所有响应都来自同一个 framed reader，这里只产出当前 stream_id 的 payload，
+//! 让上层看到像普通 TCP 流一样的读取接口。
+
 use bytes::Bytes;
 use futures::Stream;
 use futures::stream::SplitStream;

@@ -1,0 +1,10 @@
+flowchart LR
+    MockTarget["Mock target servers<br/>HTTP 9090 TCP 9091 UDP 9092"]
+    Proxy["Proxy 8080"]
+    Agent["Agent 7070/10080"]
+    Runner["Integration/Performance Runner"]
+
+    Runner -->|"HTTP through Agent"| Agent
+    Runner -->|"SOCKS5 TCP/UDP through Agent"| Agent
+    Agent --> Proxy
+    Proxy --> MockTarget

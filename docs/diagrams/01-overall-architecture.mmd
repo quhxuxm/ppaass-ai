@@ -1,0 +1,29 @@
+flowchart LR
+    Browser["浏览器/应用"] -->|"HTTP / SOCKS5"| AgentListen["Desktop Agent 本地监听"]
+    OS["系统流量"] -->|"TUN packets"| TunDevice["Desktop TUN 设备"]
+    AndroidApps["Android 应用流量"] -->|"VpnService fd"| AndroidNative["Android Rust Native"]
+
+    AgentListen --> AgentRouter["协议识别与目标解析"]
+    TunDevice --> Netstack["netstack-smoltcp: IP 包还原 TCP/UDP"]
+    Netstack --> TunRouter["TUN TCP/UDP/DNS/直连规则"]
+    AndroidNative --> AndroidNetstack["Android netstack"]
+
+    AgentRouter --> DirectCheck{"direct_access 命中?"}
+    TunRouter --> DirectCheck
+    AndroidNetstack --> AndroidDirect{"direct_access 命中?"}
+
+    DirectCheck -->|"是"| LocalTarget["本机直连目标"]
+    AndroidDirect -->|"是"| AndroidDirectSocket["受 protect 的直连 socket"]
+
+    DirectCheck -->|"否"| Pool["Agent TCP/UDP ConnectionPool"]
+    AndroidDirect -->|"否"| AndroidPool["Android TCP/UDP Pool"]
+
+    Pool -->|"Auth + Connect + Data"| Proxy["Proxy Server"]
+    AndroidPool -->|"Auth + Connect + Data"| Proxy
+
+    Proxy --> Auth["用户认证/过期/带宽检查"]
+    Auth --> ConnectDispatch["Connect 分流"]
+    ConnectDispatch -->|"普通 TCP/UDP"| Target["目标服务器"]
+    ConnectDispatch -->|"UdpRelay"| UdpRelay["共享 UDP relay"]
+    ConnectDispatch -->|"TcpYamux/UdpYamux"| Yamux["Yamux 外层 session"]
+    ConnectDispatch -->|"forward_mode"| Upstream["上游 PPAASS Proxy"]

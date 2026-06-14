@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct LoadedAgentConfig {
     pub(crate) path: String,
     pub(crate) raw: String,
     pub(crate) summary: AgentConfigSummary,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AgentState {
     pub(crate) running: bool,
     pub(crate) managed: bool,
@@ -36,6 +36,16 @@ pub(crate) struct AgentConfigSummary {
     pub(crate) udp_mode: String,
     pub(crate) tcp_yamux_sessions: usize,
     pub(crate) udp_yamux_sessions: usize,
+    pub(crate) tcp_yamux_max_streams_per_session: usize,
+    pub(crate) udp_yamux_max_streams_per_session: usize,
+    pub(crate) tcp_yamux_open_stream_timeout_secs: u64,
+    pub(crate) udp_yamux_open_stream_timeout_secs: u64,
+    pub(crate) tcp_yamux_keepalive_interval_secs: u64,
+    pub(crate) udp_yamux_keepalive_interval_secs: u64,
+    pub(crate) tcp_yamux_connection_write_timeout_secs: u64,
+    pub(crate) udp_yamux_connection_write_timeout_secs: u64,
+    pub(crate) tcp_yamux_stream_window_size_kb: usize,
+    pub(crate) udp_yamux_stream_window_size_kb: usize,
     pub(crate) tun_enabled: bool,
     pub(crate) tun_name: String,
     pub(crate) tun_ipv4: String,

@@ -1,3 +1,8 @@
+//! SOCKS5 TCP 命令处理。
+//!
+//! CONNECT 是常规浏览器/应用代理路径；BIND 较少用，但同样会在直连或代理路径中
+//! 最终转换成一个 `AsyncRead + AsyncWrite` 双向中继。
+
 use super::*;
 
 pub(super) async fn handle_tcp_connect(
@@ -8,7 +13,7 @@ pub(super) async fn handle_tcp_connect(
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
 
-    // 将目标地址转换为协议 Address
+    // 将目标地址转换为协议 Address，之后直连规则和 proxy Connect 都使用同一表示。
     let address = convert_target_addr(&target_addr);
 
     if direct_checker.is_direct(&address) {
@@ -220,7 +225,7 @@ async fn relay_data(
     protocol: &str,
     target: String,
 ) -> Result<()> {
-    // 转换为 AsyncRead + AsyncWrite 兼容类型
+    // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
     let mut proxy_io = connected_stream.into_async_io();
 
     // 使用 tokio 优化的双向拷贝

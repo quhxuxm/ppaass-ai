@@ -18,6 +18,16 @@ export type AgentConfigSummary = {
   udp_mode: string;
   tcp_yamux_sessions: number;
   udp_yamux_sessions: number;
+  tcp_yamux_max_streams_per_session: number;
+  udp_yamux_max_streams_per_session: number;
+  tcp_yamux_open_stream_timeout_secs: number;
+  udp_yamux_open_stream_timeout_secs: number;
+  tcp_yamux_keepalive_interval_secs: number;
+  udp_yamux_keepalive_interval_secs: number;
+  tcp_yamux_connection_write_timeout_secs: number;
+  udp_yamux_connection_write_timeout_secs: number;
+  tcp_yamux_stream_window_size_kb: number;
+  udp_yamux_stream_window_size_kb: number;
   tun_enabled: boolean;
   tun_name: string;
   tun_ipv4: string;
