@@ -58,6 +58,9 @@ use tracing::{debug, error, instrument, trace, warn};
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 
+const PROXY_FRAMED_INITIAL_CAPACITY: usize = 8 * 1024;
+const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = DEFAULT_STREAM_RELAY_BUFFER_SIZE;
+
 pub struct ServerConnection {
     // 写回 agent 的协议响应流。所有 ConnectResponse/Data 都从这里出去。
     writer: FramedWriter,
@@ -87,7 +90,7 @@ impl ServerConnection {
         // 每条 agent TCP 连接都有独立的编解码器和加密状态。
         // compression_mode 在连接创建时确定，AES cipher 在认证成功后再写入同一个 state。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
-        let framed = Framed::new(stream, ProxyCodec::new(Some(cipher_state.clone())));
+        let framed = proxy_framed_stream(stream, ProxyCodec::new(Some(cipher_state.clone())));
         let (writer, reader) = framed.split();
 
         Self {
@@ -102,4 +105,13 @@ impl ServerConnection {
             connection_limiter,
         }
     }
+}
+
+fn proxy_framed_stream(stream: TcpStream, codec: ProxyCodec) -> Framed<TcpStream, ProxyCodec> {
+    // Large transfers are streamed in relay-sized chunks. Keep the protocol buffers small
+    // initially, and force framed backpressure before multiple encoded chunks can pile up
+    // behind a slow agent.
+    let mut framed = Framed::with_capacity(stream, codec, PROXY_FRAMED_INITIAL_CAPACITY);
+    framed.set_backpressure_boundary(PROXY_FRAMED_BACKPRESSURE_BOUNDARY);
+    framed
 }

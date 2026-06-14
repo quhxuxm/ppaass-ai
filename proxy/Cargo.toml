@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = []
+default = ["mimalloc-allocator"]
 zstd-compression = ["protocol/zstd-compression"]
 mimalloc-allocator = ["dep:mimalloc"]
 
