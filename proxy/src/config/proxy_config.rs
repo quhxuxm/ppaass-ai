@@ -25,8 +25,8 @@ pub struct ProxyConfig {
     #[serde(default = "default_log_file")]
     pub log_file: String,
 
-    /// Tokio 运行时工作线程数（默认使用 CPU 核心数）
-    #[serde(default)]
+    /// Tokio 运行时工作线程数（默认 4，适合 512M 小内存 proxy）。
+    #[serde(default = "default_runtime_threads")]
     pub runtime_threads: Option<usize>,
 
     /// 数据传输压缩模式：none、zstd、lz4、gzip
@@ -161,7 +161,7 @@ fn default_tcp_relay_idle_timeout_secs() -> u64 {
 }
 
 fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
-    0
+    300
 }
 
 fn default_auth_timeout_secs() -> u64 {
@@ -169,23 +169,23 @@ fn default_auth_timeout_secs() -> u64 {
 }
 
 fn default_max_connections() -> usize {
-    4096
-}
-
-fn default_max_connections_per_user() -> usize {
-    1024
-}
-
-fn default_max_idle_connections_per_user() -> usize {
-    128
-}
-
-fn default_max_udp_relay_flows_per_connection() -> usize {
     512
 }
 
+fn default_max_connections_per_user() -> usize {
+    128
+}
+
+fn default_max_idle_connections_per_user() -> usize {
+    32
+}
+
+fn default_max_udp_relay_flows_per_connection() -> usize {
+    128
+}
+
 fn default_max_udp_relay_flows() -> usize {
-    1024
+    256
 }
 
 fn default_udp_relay_idle_timeout_secs() -> u64 {
@@ -193,15 +193,19 @@ fn default_udp_relay_idle_timeout_secs() -> u64 {
 }
 
 fn default_udp_relay_channel_size() -> usize {
-    256
+    64
 }
 
 fn default_max_udp_relay_buffered_bytes() -> usize {
-    64 * 1024 * 1024
+    16 * 1024 * 1024
 }
 
 fn default_async_runtime_stack_size_mb() -> usize {
-    4
+    2
+}
+
+fn default_runtime_threads() -> Option<usize> {
+    Some(4)
 }
 
 impl ProxyConfig {
@@ -224,7 +228,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yamux_tcp_relay_idle_timeout_defaults_to_unlimited() {
+    fn yamux_tcp_relay_idle_timeout_defaults_to_small_memory_friendly_limit() {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
@@ -234,7 +238,7 @@ tcp_relay_idle_timeout_secs = 300
         .unwrap();
 
         assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
-        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 0);
+        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 300);
     }
 
     #[test]
@@ -246,9 +250,9 @@ listen_addr = "127.0.0.1:0"
         )
         .unwrap();
 
-        assert_eq!(config.max_udp_relay_flows_per_connection, 512);
-        assert_eq!(config.max_udp_relay_flows, 1024);
-        assert_eq!(config.udp_relay_channel_size, 256);
-        assert_eq!(config.max_udp_relay_buffered_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.max_udp_relay_flows_per_connection, 128);
+        assert_eq!(config.max_udp_relay_flows, 256);
+        assert_eq!(config.udp_relay_channel_size, 64);
+        assert_eq!(config.max_udp_relay_buffered_bytes, 16 * 1024 * 1024);
     }
 }

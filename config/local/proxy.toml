@@ -32,14 +32,14 @@ outbound_interface = "auto"
 # 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
 # dns_upstream_addr = "8.8.8.8:53"
 
-# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
-# runtime_threads = 4
+# Tokio 运行时工作线程数（512M 小内存实例建议 4）
+runtime_threads = 4
 
 # 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300
 
-# 异步运行时栈的最大大小，单位 MB（默认：4 MB）
-async_runtime_stack_size_mb = 4
+# 异步运行时栈的最大大小，单位 MB（默认：2 MB）
+async_runtime_stack_size_mb = 2
 
 # 转发模式配置
 # --------------------------
@@ -77,8 +77,8 @@ pre_connect_idle_timeout_secs = 120
 tcp_relay_idle_timeout_secs = 300
 
 # Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
-# 默认不限制，避免 WebSocket、SSH 等 TCP 长连接被子流 idle 切断。
-yamux_tcp_relay_idle_timeout_secs = 0
+# 512M 小内存实例建议保留 idle 回收，避免浏览器长连接长期占用子流和窗口。
+yamux_tcp_relay_idle_timeout_secs = 300
 
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
@@ -92,13 +92,13 @@ udp_relay_idle_timeout_secs = 60
 # max_udp_relay_flows 限制 proxy 全局 UDP relay flow 数；每个 flow 持有一个 UDP socket。
 # udp_relay_channel_size 限制每个 UDP relay 内部队列最多缓存的包数量。
 # max_udp_relay_buffered_bytes 限制 proxy 全局 UDP relay 队列积压 payload 字节数。
-# max_connections = 4096
-# max_connections_per_user = 1024
-# max_idle_connections_per_user = 128
-# max_udp_relay_flows_per_connection = 512
-# max_udp_relay_flows = 1024
-# udp_relay_channel_size = 256
-# max_udp_relay_buffered_bytes = 67108864
+max_connections = 512
+max_connections_per_user = 128
+max_idle_connections_per_user = 32
+max_udp_relay_flows_per_connection = 128
+max_udp_relay_flows = 256
+udp_relay_channel_size = 64
+max_udp_relay_buffered_bytes = 16777216
 
 [transport]
 # proxy 端 legacy 表示拒绝对应 Yamux 外层连接；auto/yamux 均接受 Yamux 和旧协议。
@@ -106,15 +106,15 @@ tcp_mode = "auto"
 udp_mode = "auto"
 
 [yamux.tcp]
-# proxy 端是 Yamux acceptor，上限应不小于所有 agent 的对应配置。
-max_streams_per_session = 1024
+# proxy 端是 Yamux acceptor；如 agent 单 session 需要更高并发，可同步调大 agent/proxy。
+max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 30
-stream_window_size_kb = 2048
+connection_write_timeout_secs = 10
+stream_window_size_kb = 512
 
 [yamux.udp]
-# proxy 端是 Yamux acceptor，上限应不小于所有 agent 的对应配置。
-max_streams_per_session = 1024
+# proxy 端是 Yamux acceptor；如 agent 单 session 需要更高并发，可同步调大 agent/proxy。
+max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 30
-stream_window_size_kb = 2048
+connection_write_timeout_secs = 10
+stream_window_size_kb = 512
