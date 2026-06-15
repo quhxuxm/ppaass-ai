@@ -7,9 +7,7 @@ pub(crate) struct ProxyRoute {
 }
 
 pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
-    let routes = RouteManager::new()
-        .and_then(|mut manager| manager.list())
-        .ok();
+    let routes = list_routes();
 
     for entry in proxy_addrs {
         // 缺省端口只用于触发 OS 路由选择，不会真正发包。
@@ -27,10 +25,7 @@ pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
                 && sock.connect(dst).is_ok()
                 && let Ok(local) = sock.local_addr()
             {
-                let route_interface = routes
-                    .as_deref()
-                    .and_then(|routes| best_route(routes, dst.ip()))
-                    .and_then(route_bind_interface);
+                let route_interface = route_bind_interface_for_dst(routes.as_deref(), dst.ip());
                 let local_interface = interface_for_local_ip(local.ip());
                 if let (Some(local_interface), Some(route_interface)) =
                     (&local_interface, &route_interface)
@@ -53,10 +48,21 @@ pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
 }
 
 pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
-    let routes = RouteManager::new()
-        .and_then(|mut manager| manager.list())
-        .ok()?;
-    default_route(&routes, want_v6).and_then(route_bind_interface)
+    let routes = list_routes()?;
+    let route = default_route(&routes, want_v6)?;
+    route_bind_interface(route)
+}
+
+fn list_routes() -> Option<Vec<Route>> {
+    let mut manager = RouteManager::new().ok()?;
+    let routes = manager.list().ok()?;
+    Some(routes)
+}
+
+fn route_bind_interface_for_dst(routes: Option<&[Route]>, dst: IpAddr) -> Option<BindInterface> {
+    let routes = routes?;
+    let route = best_route(routes, dst)?;
+    route_bind_interface(route)
 }
 
 /// 将 `proxy_addrs` 中的每个 "host:port" 字符串解析为唯一 IP 列表。
@@ -242,9 +248,9 @@ pub(super) fn interface_name_for_index(if_index: Option<u32>) -> Option<String> 
 
 #[cfg(target_os = "macos")]
 pub(super) fn interface_index_for_name(name: &str) -> Option<u32> {
-    if_addrs::get_if_addrs()
+    let interface = if_addrs::get_if_addrs()
         .ok()?
         .into_iter()
-        .find(|interface| interface.name == name)
-        .and_then(|interface| interface.index)
+        .find(|interface| interface.name == name)?;
+    interface.index
 }

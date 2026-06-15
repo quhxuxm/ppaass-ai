@@ -27,13 +27,9 @@ use tracing::{debug, error, instrument};
 /// 从 HTTP 请求中提取主机和端口，正确处理 IPv6 地址
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     // 首先尝试从 Host 头获取
-    if let Some(host_header) = req
-        .headers()
-        .get(hyper::header::HOST)
-        // 显式标注闭包参数类型以帮助类型推断
-        .and_then(|h: &hyper::header::HeaderValue| h.to_str().ok())
+    if let Some(host_header) = req.headers().get(hyper::header::HOST)
+        && let Ok(host_header) = host_header.to_str()
     {
-        let host_header: &str = host_header;
         // 处理 IPv6 地址: [::1]:8080
         if host_header.starts_with('[') {
             // IPv6 格式

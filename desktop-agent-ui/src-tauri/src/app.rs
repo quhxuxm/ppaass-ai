@@ -200,11 +200,9 @@ pub(crate) fn run() {
             restore_main_window(app);
         }))
         .setup(move |app| {
-            install_bundled_agent_assets(app, &setup_logs)
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            install_bundled_agent_assets(app, &setup_logs).map_err(io::Error::other)?;
             #[cfg(any(windows, target_os = "macos"))]
-            setup_system_tray(app, setup_runtime.clone())
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            setup_system_tray(app, setup_runtime.clone()).map_err(io::Error::other)?;
             #[cfg(target_os = "macos")]
             check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())

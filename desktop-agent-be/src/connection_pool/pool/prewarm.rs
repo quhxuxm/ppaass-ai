@@ -44,12 +44,14 @@ impl ConnectionPool {
                 for _ in 0..to_create {
                     let config = context.config.clone();
                     let semaphore = semaphore.clone();
-                    let bind_ip = context.proxy_bind_ip.read().ok().and_then(|g| *g);
-                    let bind_interface = context
-                        .proxy_bind_interface
-                        .read()
-                        .ok()
-                        .and_then(|g| g.clone());
+                    let bind_ip = match context.proxy_bind_ip.read() {
+                        Ok(guard) => *guard,
+                        Err(_) => None,
+                    };
+                    let bind_interface = match context.proxy_bind_interface.read() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => None,
+                    };
                     set.spawn(async move {
                         // permit 生命周期覆盖整个认证过程。
                         let _permit = semaphore.acquire().await.ok();

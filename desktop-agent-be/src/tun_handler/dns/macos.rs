@@ -39,8 +39,7 @@ impl DnsGuard {
             return None;
         }
 
-        let interface = bind_interface.and_then(|interface| interface.name.as_deref());
-        let Some(interface) = interface else {
+        let Some(interface) = bind_interface_name(bind_interface) else {
             warn!("TUN proxy_dns 已启用，但未检测到物理出口接口；跳过系统 DNS 临时切换");
             return None;
         };
@@ -88,6 +87,10 @@ impl DnsGuard {
             lease,
         })
     }
+}
+
+fn bind_interface_name(bind_interface: Option<&BindInterface>) -> Option<&str> {
+    bind_interface?.name.as_deref()
 }
 
 impl Drop for DnsGuard {

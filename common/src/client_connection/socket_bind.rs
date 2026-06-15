@@ -20,12 +20,29 @@ use windows_sys::Win32::Networking::WinSock::{
 };
 
 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+fn bind_interface_name(bind_interface: Option<&BindInterface>) -> Option<&str> {
+    bind_interface?.name.as_deref()
+}
+
+#[cfg(any(
+    windows,
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "tvos",
+    target_os = "visionos",
+    target_os = "watchos",
+))]
+fn bind_interface_index(bind_interface: Option<&BindInterface>) -> Option<u32> {
+    bind_interface?.index
+}
+
+#[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
 pub fn bind_socket_to_interface(
     socket: &Socket,
     bind_interface: Option<&BindInterface>,
     _dst: SocketAddr,
 ) -> std::io::Result<()> {
-    let Some(interface) = bind_interface.and_then(|interface| interface.name.as_deref()) else {
+    let Some(interface) = bind_interface_name(bind_interface) else {
         return Ok(());
     };
     if interface.as_bytes().contains(&0) {
@@ -49,7 +66,7 @@ pub fn bind_socket_to_interface(
     bind_interface: Option<&BindInterface>,
     dst: SocketAddr,
 ) -> std::io::Result<()> {
-    let Some(index) = bind_interface.and_then(|interface| interface.index) else {
+    let Some(index) = bind_interface_index(bind_interface) else {
         return Ok(());
     };
     let Some(index) = NonZeroU32::new(index) else {
@@ -69,7 +86,7 @@ pub fn bind_socket_to_interface(
     bind_interface: Option<&BindInterface>,
     dst: SocketAddr,
 ) -> std::io::Result<()> {
-    let Some(index) = bind_interface.and_then(|interface| interface.index) else {
+    let Some(index) = bind_interface_index(bind_interface) else {
         return Ok(());
     };
     if index == 0 {

@@ -24,13 +24,14 @@ fn is_elevated() -> bool {
 
 #[cfg(unix)]
 fn is_elevated() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|uid| uid.trim().parse::<u32>().ok())
-        == Some(0)
+    current_uid() == Some(0)
+}
+
+#[cfg(unix)]
+fn current_uid() -> Option<u32> {
+    let output = Command::new("id").arg("-u").output().ok()?;
+    let uid = String::from_utf8(output.stdout).ok()?;
+    uid.trim().parse::<u32>().ok()
 }
 
 #[cfg(windows)]

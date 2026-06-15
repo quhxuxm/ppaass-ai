@@ -16,15 +16,16 @@ struct ProxyClientConfig<'a> {
 impl<'a> ProxyClientConfig<'a> {
     fn new(config: &'a ProxyConfig) -> Result<Self> {
         // 转发模式依赖三项配置；提前校验能把错误定位在连接上游之前。
-        config
-            .upstream_proxy_addrs
-            .as_ref()
-            .and_then(|addrs| if addrs.is_empty() { None } else { Some(()) })
-            .ok_or_else(|| {
-                ProxyError::Configuration(
-                    "Upstream proxy addresses not configured or empty".to_string(),
-                )
-            })?;
+        let addrs = config.upstream_proxy_addrs.as_ref().ok_or_else(|| {
+            ProxyError::Configuration(
+                "Upstream proxy addresses not configured or empty".to_string(),
+            )
+        })?;
+        if addrs.is_empty() {
+            return Err(ProxyError::Configuration(
+                "Upstream proxy addresses not configured or empty".to_string(),
+            ));
+        }
         config.upstream_username.as_ref().ok_or_else(|| {
             ProxyError::Configuration("Upstream username not configured".to_string())
         })?;

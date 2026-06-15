@@ -64,13 +64,13 @@ pub fn protect_fd(fd: std::os::fd::RawFd) -> io::Result<()> {
     let protected = protector
         .vm
         .attach_current_thread(|env| -> jni::errors::Result<bool> {
-            env.call_method(
+            let value = env.call_method(
                 protector.service.as_obj(),
                 jni::jni_str!("protectSocket"),
                 jni::jni_sig!("(I)Z"),
                 &[JValue::Int(fd as jint)],
-            )
-            .and_then(|value| value.z())
+            )?;
+            value.z()
         })
         .map_err(|err| io::Error::other(err.to_string()))?;
     if protected {

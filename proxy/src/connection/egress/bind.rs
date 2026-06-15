@@ -42,8 +42,9 @@ pub(super) fn bind_socket_to_interface(
     dst: SocketAddr,
 ) -> io::Result<()> {
     // Apple 系统按 IPv4/IPv6 分别使用 if_index 绑定设备。
-    let index = interface_index
-        .and_then(NonZeroU32::new)
+    let interface_index = interface_index
+        .ok_or_else(|| io::Error::other(format!("网络设备 {interface} 没有有效 if_index")))?;
+    let index = NonZeroU32::new(interface_index)
         .ok_or_else(|| io::Error::other(format!("网络设备 {interface} 没有有效 if_index")))?;
 
     if dst.is_ipv4() {

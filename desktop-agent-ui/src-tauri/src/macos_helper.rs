@@ -298,7 +298,9 @@ fn macos_tun_helper_ping(socket_path: &str) -> Result<(), String> {
     let len = (payload.len() as u32).to_be_bytes();
     stream
         .write_all(&len)
-        .and_then(|_| stream.write_all(payload))
+        .map_err(|err| format!("发送 TUN helper probe 失败：{err}"))?;
+    stream
+        .write_all(payload)
         .map_err(|err| format!("发送 TUN helper probe 失败：{err}"))?;
 
     let mut marker = [0u8; 1];

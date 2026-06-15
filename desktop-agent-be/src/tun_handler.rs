@@ -109,7 +109,8 @@ impl TunDirectEgress {
     }
 
     fn bind_interface(&self) -> Option<common::BindInterface> {
-        self.bind_interface.read().ok().and_then(|g| g.clone())
+        let guard = self.bind_interface.read().ok()?;
+        guard.clone()
     }
 
     fn refresh_after_direct_failure(
@@ -216,10 +217,13 @@ impl TunDirectEgress {
     }
 
     fn refresh_recently(&self) -> bool {
-        match self.last_refresh.read().ok().and_then(|guard| *guard) {
-            Some(last_refresh) => last_refresh.elapsed() < DIRECT_EGRESS_REFRESH_COOLDOWN,
-            None => false,
-        }
+        self.last_refresh_time()
+            .is_some_and(|last_refresh| last_refresh.elapsed() < DIRECT_EGRESS_REFRESH_COOLDOWN)
+    }
+
+    fn last_refresh_time(&self) -> Option<Instant> {
+        let guard = self.last_refresh.read().ok()?;
+        *guard
     }
 
     fn mark_refreshed(&self) {

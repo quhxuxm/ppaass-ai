@@ -88,9 +88,7 @@ pub(crate) fn run_curl_check(
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let http_code = curl_field(&stdout, "http_code")
-                .and_then(|value| value.parse::<u16>().ok())
-                .filter(|value| *value > 0);
+            let http_code = parse_http_code(&stdout);
             let errormsg = curl_field(&stdout, "errormsg")
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| stderr.trim().to_string());
@@ -138,19 +136,21 @@ pub(crate) fn connect_addr(listen_addr: &str) -> Option<SocketAddr> {
     if let Ok(addr) = listen_addr.parse::<SocketAddr>() {
         return Some(normalize_listen_addr(addr));
     }
-    listen_addr
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addrs| addrs.next())
-        .map(normalize_listen_addr)
+    let mut addrs = listen_addr.to_socket_addrs().ok()?;
+    addrs.next().map(normalize_listen_addr)
 }
 
 fn curl_field(output: &str, key: &str) -> Option<String> {
     output.lines().find_map(|line| {
-        line.strip_prefix(key)
-            .and_then(|value| value.strip_prefix('='))
-            .map(ToOwned::to_owned)
+        let value = line.strip_prefix(key)?;
+        value.strip_prefix('=').map(ToOwned::to_owned)
     })
+}
+
+fn parse_http_code(output: &str) -> Option<u16> {
+    let value = curl_field(output, "http_code")?;
+    let code = value.parse::<u16>().ok()?;
+    (code > 0).then_some(code)
 }
 
 fn normalize_listen_addr(addr: SocketAddr) -> SocketAddr {
@@ -262,23 +262,21 @@ fn macos_active_tun_route_interface() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn route_get_interface(target: &str) -> Option<String> {
-    Command::new("route")
+    let output = Command::new("route")
         .args(["-n", "get", target])
         .output()
-        .ok()
-        .and_then(|output| {
-            if !output.status.success() {
-                return None;
-            }
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .find_map(|line| {
-                    line.trim()
-                        .strip_prefix("interface:")
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .map(ToOwned::to_owned)
-                })
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("interface:")
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned)
         })
 }
 

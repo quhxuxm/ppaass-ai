@@ -141,14 +141,13 @@ impl ConnectionPool {
 
     fn get_proxy_bind_ip(&self) -> Option<IpAddr> {
         // 读取失败时保守退回不绑定，让连接错误暴露给上层日志。
-        self.proxy_bind_ip.read().ok().and_then(|g| *g)
+        let guard = self.proxy_bind_ip.read().ok()?;
+        *guard
     }
 
     fn get_proxy_bind_interface(&self) -> Option<BindInterface> {
-        self.proxy_bind_interface
-            .read()
-            .ok()
-            .and_then(|g| g.clone())
+        let guard = self.proxy_bind_interface.read().ok()?;
+        guard.clone()
     }
 }
 

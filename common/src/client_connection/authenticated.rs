@@ -157,16 +157,12 @@ impl AuthenticatedConnection {
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            self.reader
-                .next()
-                .await
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::ConnectionAborted,
-                        "连接期间远端关闭了连接",
-                    )
-                })
-                .and_then(|r| r)
+            self.reader.next().await.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "连接期间远端关闭了连接",
+                )
+            })?
         })
         .await
         {

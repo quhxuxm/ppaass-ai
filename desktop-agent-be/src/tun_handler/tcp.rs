@@ -121,16 +121,16 @@ pub(super) async fn handle_tun_tcp(
     if let Some(connect_target) = direct_target {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = format!("{} (原始目标 {})", connect_target, target);
-        let mut target_stream = connect_direct_tcp_with_refresh(
-            connect_target,
-            &target_str,
-            direct_domain.as_deref(),
+        let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
+            target: connect_target,
+            target_str: &target_str,
+            direct_domain: direct_domain.as_deref(),
             source,
-            direct_egress.as_ref(),
-            tcp_pool.as_ref(),
-            udp_pool.as_ref(),
+            direct_egress: direct_egress.as_ref(),
+            tcp_pool: tcp_pool.as_ref(),
+            udp_pool: udp_pool.as_ref(),
             tun_networks,
-        )
+        })
         .await?;
         // 把嗅探时已经读出的字节先补发给目标，否则握手会丢首段。
         if !sniffed.is_empty() {
@@ -300,16 +300,30 @@ async fn connect_direct_tcp(
         })?
 }
 
-async fn connect_direct_tcp_with_refresh(
+struct DirectTcpRefreshContext<'a> {
     target: SocketAddr,
-    target_str: &str,
-    direct_domain: Option<&str>,
+    target_str: &'a str,
+    direct_domain: Option<&'a str>,
     source: SocketAddr,
-    direct_egress: &super::TunDirectEgress,
-    tcp_pool: &crate::connection_pool::ConnectionPool,
-    udp_pool: &crate::connection_pool::ConnectionPool,
+    direct_egress: &'a super::TunDirectEgress,
+    tcp_pool: &'a crate::connection_pool::ConnectionPool,
+    udp_pool: &'a crate::connection_pool::ConnectionPool,
     tun_networks: super::network::TunNetworks,
+}
+
+async fn connect_direct_tcp_with_refresh(
+    context: DirectTcpRefreshContext<'_>,
 ) -> Result<TcpStream> {
+    let DirectTcpRefreshContext {
+        target,
+        target_str,
+        direct_domain,
+        source,
+        direct_egress,
+        tcp_pool,
+        udp_pool,
+        tun_networks,
+    } = context;
     let initial_bind_interface = direct_egress.bind_interface();
     match connect_direct_tcp(target, initial_bind_interface.as_ref()).await {
         Ok(stream) => Ok(stream),
@@ -327,31 +341,27 @@ async fn connect_direct_tcp_with_refresh(
             match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
                 Ok(stream) => Ok(stream),
                 Err(retry_err) => {
-                    if let Some(domain) = direct_domain {
-                        if let Some(resolved) =
+                    if let Some(domain) = direct_domain
+                        && let Some(resolved) =
                             resolve_direct_target_via_system("TCP", source, target, domain).await
-                        {
-                            if resolved != target {
-                                debug!(
-                                    "TUN TCP 原始 IP 直连失败，尝试系统 DNS 兜底：{} -> {}",
-                                    domain, resolved
-                                );
-                                return connect_direct_tcp(
-                                    resolved,
-                                    refreshed_bind_interface.as_ref(),
-                                )
+                    {
+                        if resolved != target {
+                            debug!(
+                                "TUN TCP 原始 IP 直连失败，尝试系统 DNS 兜底：{} -> {}",
+                                domain, resolved
+                            );
+                            return connect_direct_tcp(resolved, refreshed_bind_interface.as_ref())
                                 .await
                                 .map_err(|resolved_err| {
                                     AgentError::Connection(format!(
                                         "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}；系统 DNS 解析 {domain} -> {resolved} 后仍失败={resolved_err}"
                                     ))
                                 });
-                            }
-                            debug!(
-                                "TUN TCP 系统 DNS 兜底仍指向原始目标：{} -> {}",
-                                domain, resolved
-                            );
                         }
+                        debug!(
+                            "TUN TCP 系统 DNS 兜底仍指向原始目标：{} -> {}",
+                            domain, resolved
+                        );
                     }
 
                     Err(AgentError::Connection(format!(

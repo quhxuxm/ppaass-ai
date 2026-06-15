@@ -156,10 +156,14 @@ fn initial_tun_enabled() -> bool {
 #[cfg(any(windows, target_os = "macos"))]
 fn tun_enabled_for_path(path: Option<&Path>) -> bool {
     let config_path = path.map(Path::to_path_buf).or_else(locate_config_path);
-    config_path
-        .and_then(|path| load_config_from_path(&path).ok())
-        .map(|config| config.summary.tun_enabled)
-        .unwrap_or(false)
+    load_tun_enabled(config_path).unwrap_or(false)
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn load_tun_enabled(path: Option<PathBuf>) -> Option<bool> {
+    let path = path?;
+    let config = load_config_from_path(&path).ok()?;
+    Some(config.summary.tun_enabled)
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -254,18 +258,14 @@ fn remember_current_ui_config_path(runtime: &AgentRuntime, path: &str) {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {
-    runtime
-        .ui_config_path
-        .lock()
-        .ok()
-        .and_then(|path| path.clone())
-        .or_else(|| {
-            runtime
-                .config_path
-                .lock()
-                .ok()
-                .and_then(|path| path.clone())
-        })
+    cloned_path_from_lock(&runtime.ui_config_path)
+        .or_else(|| cloned_path_from_lock(&runtime.config_path))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn cloned_path_from_lock(lock: &std::sync::Mutex<Option<PathBuf>>) -> Option<PathBuf> {
+    let path = lock.lock().ok()?;
+    path.clone()
 }
 
 #[cfg(any(windows, target_os = "macos"))]

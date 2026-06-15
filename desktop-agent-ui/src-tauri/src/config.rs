@@ -1,5 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::path::BaseDirectory;
@@ -74,13 +76,13 @@ fn write_tun_enabled_to_config(
     enabled: bool,
 ) -> Result<LoadedAgentConfig, String> {
     let raw = upsert_toml_bool(raw, "tun", "enabled", enabled);
-    write_config_file(&config_path, &raw)?;
+    write_config_file(config_path, &raw)?;
 
-    if let Some(primary_path) = primary_agent_config_path(&config_path) {
+    if let Some(primary_path) = primary_agent_config_path(config_path) {
         write_config_file(&primary_path, &raw)?;
         load_config_from_path(&primary_path)
     } else {
-        load_config_from_path(&config_path)
+        load_config_from_path(config_path)
     }
 }
 
@@ -289,8 +291,18 @@ fn clear_readonly_file_attribute(path: &Path) -> io::Result<()> {
     }
 
     let mut permissions = metadata.permissions();
-    permissions.set_readonly(false);
+    clear_readonly_permissions(&mut permissions);
     fs::set_permissions(path, permissions)
+}
+
+#[cfg(unix)]
+fn clear_readonly_permissions(permissions: &mut fs::Permissions) {
+    permissions.set_mode(permissions.mode() | 0o200);
+}
+
+#[cfg(not(unix))]
+fn clear_readonly_permissions(permissions: &mut fs::Permissions) {
+    permissions.set_readonly(false);
 }
 
 fn upsert_toml_bool(raw: &str, section: &str, key: &str, value: bool) -> String {
@@ -383,15 +395,12 @@ fn string_or(value: &Value, path: &[&str], default: &str) -> String {
 }
 
 fn int_at(value: &Value, path: &[&str]) -> Option<u64> {
-    value_at(value, path)?.as_integer().and_then(
-        |value| {
-            if value >= 0 {
-                Some(value as u64)
-            } else {
-                None
-            }
-        },
-    )
+    let value = value_at(value, path)?.as_integer()?;
+    if value >= 0 {
+        Some(value as u64)
+    } else {
+        None
+    }
 }
 
 fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
@@ -399,16 +408,19 @@ fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
 }
 
 fn string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
-    value_at(value, path)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(items) = array_at(value, path) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn array_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a [Value]> {
+    let items = value_at(value, path)?.as_array()?;
+    Some(items.as_slice())
 }
 
 fn value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {

@@ -39,7 +39,7 @@ pub(crate) fn run_connectivity_tests_blocking(
     ];
 
     let mut result_jobs = Vec::new();
-    for (target, url) in targets.iter().copied() {
+    for &(target, url) in &targets {
         for (protocol, proxy) in &protocols {
             let target = target.to_string();
             let protocol = (*protocol).to_string();
@@ -62,7 +62,7 @@ pub(crate) fn run_connectivity_tests_blocking(
         let tun_route = format!("tun://{tun_name}");
         if tun_ready {
             let mut tun_jobs = Vec::new();
-            for (target, url) in targets.iter().copied() {
+            for &(target, url) in &targets {
                 let target = target.to_string();
                 let url = url.to_string();
                 let tun_route = tun_route.clone();

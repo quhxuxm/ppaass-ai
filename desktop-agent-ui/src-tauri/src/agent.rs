@@ -356,13 +356,12 @@ fn agent_base_dir(config_path: &Path) -> PathBuf {
 }
 
 fn find_agent_base_dir(config_path: &Path) -> Option<PathBuf> {
-    config_path.parent().and_then(|parent| {
-        parent
-            .ancestors()
-            .take(8)
-            .find(|ancestor| is_agent_base_dir(ancestor))
-            .map(Path::to_path_buf)
-    })
+    let parent = config_path.parent()?;
+    parent
+        .ancestors()
+        .take(8)
+        .find(|ancestor| is_agent_base_dir(ancestor))
+        .map(Path::to_path_buf)
 }
 
 fn is_agent_base_dir(path: &Path) -> bool {
@@ -388,11 +387,8 @@ fn wait_for_agent_start(runtime: &AgentRuntime) -> Result<(), String> {
 }
 
 fn last_agent_error(runtime: &AgentRuntime) -> Option<String> {
-    runtime
-        .last_error
-        .lock()
-        .ok()
-        .and_then(|last_error| last_error.clone())
+    let last_error = runtime.last_error.lock().ok()?;
+    last_error.clone()
 }
 
 fn ensure_start_privileges(config_path: &Path) -> Result<(), String> {
