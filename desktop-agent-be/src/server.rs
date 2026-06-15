@@ -71,17 +71,14 @@ impl AgentServer {
             let udp_pool = self.udp_pool.clone();
             let direct_access_checker = self.direct_access_checker.clone();
             let tun_shutdown = shutdown.clone();
-            tun_tasks.spawn(async move {
-                run_tun_mode(
-                    tun_cfg,
-                    proxy_addrs,
-                    tcp_pool,
-                    udp_pool,
-                    direct_access_checker,
-                    tun_shutdown,
-                )
-                .await
-            });
+            tun_tasks.spawn(run_tun_mode(
+                tun_cfg,
+                proxy_addrs,
+                tcp_pool,
+                udp_pool,
+                direct_access_checker,
+                tun_shutdown,
+            ));
             tun_task_running = true;
         } else {
             // 纯代理模式可以直接预热连接池；TUN 模式会在路由就绪后预热。
