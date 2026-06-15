@@ -74,7 +74,7 @@ pre_connect_idle_timeout_secs = 120
 
 # TCP relay 空闲超时时间，单位秒；建立 CONNECT 后若双向都无数据活动会关闭。
 # 0 表示不限制（默认：300）
-tcp_relay_idle_timeout_secs = 300
+tcp_relay_idle_timeout_secs = 0
 
 # Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
 # 512M 小内存实例建议保留 idle 回收，避免浏览器长连接长期占用子流和窗口。
@@ -108,10 +108,10 @@ udp_mode = "auto"
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+stream_window_size_kb = 2048
 
 [yamux.udp]
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+stream_window_size_kb = 2048

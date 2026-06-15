@@ -78,7 +78,7 @@ tcp_relay_idle_timeout_secs = 300
 
 # Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
 # 512M 小内存实例建议保留 idle 回收，避免浏览器长连接长期占用子流和窗口。
-yamux_tcp_relay_idle_timeout_secs = 300
+yamux_tcp_relay_idle_timeout_secs = 0
 
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
@@ -110,11 +110,11 @@ udp_mode = "auto"
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+stream_window_size_kb = 2048
 
 [yamux.udp]
 # proxy 端是 Yamux acceptor；如 agent 单 session 需要更高并发，可同步调大 agent/proxy。
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+stream_window_size_kb = 2048
