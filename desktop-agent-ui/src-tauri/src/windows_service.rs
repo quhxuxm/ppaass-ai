@@ -1,10 +1,7 @@
 #![cfg(windows)]
 
 use std::fs;
-use std::io::{self, Read, Write};
-use std::net::{
-    Shutdown as TcpShutdown, SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream,
-};
+use std::net::SocketAddr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -13,6 +10,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::runtime::Builder;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use windows_service::{
     define_windows_service,
@@ -86,27 +87,34 @@ pub(crate) fn windows_service_matches_current_exe() -> Result<bool, String> {
 }
 
 pub(crate) fn send_service_request(request: &ServiceRequest) -> Result<ServiceResponse, String> {
+    let runtime = Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|err| format!("初始化服务 IPC runtime 失败：{err}"))?;
+    runtime.block_on(send_service_request_async(request))
+}
+
+async fn send_service_request_async(request: &ServiceRequest) -> Result<ServiceResponse, String> {
     let addr = SERVICE_IPC_ADDR
         .parse::<SocketAddr>()
         .map_err(|err| format!("服务 IPC 地址无效：{err}"))?;
-    let mut stream = StdTcpStream::connect_timeout(&addr, Duration::from_millis(600))
+    let mut stream = timeout(Duration::from_millis(600), TcpStream::connect(addr))
+        .await
+        .map_err(|_| "连接 Agent 服务超时".to_string())?
         .map_err(|err| format!("无法连接 Agent 服务：{err}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|err| format!("设置服务 IPC 读超时失败：{err}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(8)))
-        .map_err(|err| format!("设置服务 IPC 写超时失败：{err}"))?;
 
     let payload = serde_json::to_vec(request).map_err(|err| format!("编码服务请求失败：{err}"))?;
-    stream
-        .write_all(&payload)
+    timeout(Duration::from_secs(8), stream.write_all(&payload))
+        .await
+        .map_err(|_| "发送服务请求超时".to_string())?
         .map_err(|err| format!("发送服务请求失败：{err}"))?;
-    let _ = stream.shutdown(TcpShutdown::Write);
+    let _ = stream.shutdown().await;
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
+    timeout(Duration::from_secs(8), stream.read_to_string(&mut response))
+        .await
+        .map_err(|_| "读取服务响应超时".to_string())?
         .map_err(|err| format!("读取服务响应失败：{err}"))?;
     serde_json::from_str(&response).map_err(|err| format!("解析服务响应失败：{err}"))
 }
@@ -366,45 +374,63 @@ fn set_service_status(
 }
 
 fn run_service_ipc(runtime: Arc<AgentRuntime>, shutdown: CancellationToken) {
-    let listener = match StdTcpListener::bind(SERVICE_IPC_ADDR) {
+    let async_runtime = match Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            runtime
+                .logs
+                .push(format!("初始化服务 IPC runtime 失败：{err}"));
+            return;
+        }
+    };
+
+    async_runtime.block_on(run_service_ipc_async(runtime, shutdown));
+}
+
+async fn run_service_ipc_async(runtime: Arc<AgentRuntime>, shutdown: CancellationToken) {
+    let listener = match TcpListener::bind(SERVICE_IPC_ADDR).await {
         Ok(listener) => listener,
         Err(err) => {
             runtime.logs.push(format!("服务 IPC 监听失败：{err}"));
             return;
         }
     };
-    let _ = listener.set_nonblocking(true);
     runtime
         .logs
         .push(format!("服务 IPC 已监听：{SERVICE_IPC_ADDR}"));
 
-    while !shutdown.is_cancelled() {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                let response = handle_service_request(&runtime, &mut stream);
-                let payload = serde_json::to_vec(&response).unwrap_or_else(|err| {
-                    format!(
-                        "{{\"ok\":false,\"state\":null,\"traffic\":null,\"error\":\"编码响应失败：{err}\"}}"
-                    )
-                    .into_bytes()
-                });
-                let _ = stream.write_all(&payload);
-                let _ = stream.shutdown(TcpShutdown::Both);
-            }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(80));
-            }
-            Err(err) => {
-                runtime.logs.push(format!("服务 IPC 接收失败：{err}"));
-                std::thread::sleep(Duration::from_millis(200));
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok((mut stream, _)) => respond_to_service_request(&runtime, &mut stream).await,
+                    Err(err) => runtime.logs.push(format!("服务 IPC 接收失败：{err}")),
+                }
             }
         }
     }
 }
 
-fn handle_service_request(runtime: &AgentRuntime, stream: &mut StdTcpStream) -> ServiceResponse {
+async fn respond_to_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) {
+    let response = handle_service_request(runtime, stream).await;
+    let payload = serde_json::to_vec(&response).unwrap_or_else(|err| {
+        format!(
+            "{{\"ok\":false,\"state\":null,\"traffic\":null,\"error\":\"编码响应失败：{err}\"}}"
+        )
+        .into_bytes()
+    });
+    let _ = stream.write_all(&payload).await;
+    let _ = stream.shutdown().await;
+}
+
+async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) -> ServiceResponse {
     let mut payload = String::new();
-    if let Err(err) = stream.read_to_string(&mut payload) {
+    if let Err(err) = stream.read_to_string(&mut payload).await {
         return service_error(format!("读取服务请求失败：{err}"));
     }
 

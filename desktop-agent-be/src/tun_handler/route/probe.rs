@@ -1,4 +1,5 @@
 use super::*;
+use tokio::net::UdpSocket;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProxyRoute {
@@ -6,7 +7,7 @@ pub(crate) struct ProxyRoute {
     pub(crate) bind_interface: Option<BindInterface>,
 }
 
-pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
+pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
     let routes = list_routes();
 
     for entry in proxy_addrs {
@@ -21,8 +22,8 @@ pub(crate) fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
         {
             // connected UDP socket 会让 OS 选择本地出口地址。
             let bind_str = if dst.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
-            if let Ok(sock) = std::net::UdpSocket::bind(bind_str)
-                && sock.connect(dst).is_ok()
+            if let Ok(sock) = UdpSocket::bind(bind_str).await
+                && sock.connect(dst).await.is_ok()
                 && let Ok(local) = sock.local_addr()
             {
                 let route_interface = route_bind_interface_for_dst(routes.as_deref(), dst.ip());

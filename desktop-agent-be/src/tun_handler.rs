@@ -53,7 +53,7 @@ use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
 use tokio::task::JoinHandle;
@@ -88,7 +88,7 @@ struct TunDirectEgress {
     bind_interface: RwLock<Option<common::BindInterface>>,
     #[cfg(target_os = "macos")]
     helper_socket: Option<String>,
-    refresh_lock: Mutex<()>,
+    refresh_lock: tokio::sync::Mutex<()>,
     last_refresh: RwLock<Option<Instant>>,
 }
 
@@ -103,7 +103,7 @@ impl TunDirectEgress {
             bind_interface: RwLock::new(bind_interface),
             #[cfg(target_os = "macos")]
             helper_socket,
-            refresh_lock: Mutex::new(()),
+            refresh_lock: tokio::sync::Mutex::new(()),
             last_refresh: RwLock::new(None),
         }
     }
@@ -113,7 +113,7 @@ impl TunDirectEgress {
         guard.clone()
     }
 
-    fn refresh_after_direct_failure(
+    async fn refresh_after_direct_failure(
         &self,
         target_ip: IpAddr,
         tcp_pool: &ConnectionPool,
@@ -125,31 +125,26 @@ impl TunDirectEgress {
             return self.bind_interface();
         }
 
-        let _guard = match self.refresh_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                warn!("direct access 物理出口刷新锁已恢复：{}", poisoned);
-                poisoned.into_inner()
-            }
-        };
+        let _guard = self.refresh_lock.lock().await;
         if self.refresh_recently() {
             return self.bind_interface();
         }
 
-        let refreshed =
-            self.refresh_after_direct_failure_locked(target_ip, tcp_pool, udp_pool, tun_networks);
+        let refreshed = self
+            .refresh_after_direct_failure_locked(target_ip, tcp_pool, udp_pool, tun_networks)
+            .await;
         self.mark_refreshed();
         refreshed
     }
 
-    fn refresh_after_direct_failure_locked(
+    async fn refresh_after_direct_failure_locked(
         &self,
         target_ip: IpAddr,
         tcp_pool: &ConnectionPool,
         udp_pool: &ConnectionPool,
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
-        let Some(route) = detect_proxy_route(self.proxy_addrs.as_slice()) else {
+        let Some(route) = detect_proxy_route(self.proxy_addrs.as_slice()).await else {
             warn!("刷新 direct access 物理出口失败：无法探测当前 proxy 出口路由");
             self.refresh_macos_scoped_default_bypass();
             return self.refresh_default_route_interface(target_ip);

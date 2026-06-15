@@ -399,8 +399,7 @@ fn bind_direct_udp(target: SocketAddr) -> std::io::Result<UdpSocket> {
     socket.bind(&SockAddr::from(bind_addr))?;
     socket.set_nonblocking(true)?;
 
-    let std_socket: std::net::UdpSocket = socket.into();
-    UdpSocket::from_std(std_socket)
+    UdpSocket::from_std(socket.into())
 }
 
 fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {

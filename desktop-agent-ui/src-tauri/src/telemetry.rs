@@ -27,9 +27,9 @@ pub(crate) fn get_dns_resolution_records_inner(
         if response.ok {
             return Ok(response.dns_records.unwrap_or_default());
         }
-        return Err(response
+        Err(response
             .error
-            .unwrap_or_else(|| "Agent 服务 DNS 解析记录请求失败".to_string()));
+            .unwrap_or_else(|| "Agent 服务 DNS 解析记录请求失败".to_string()))
     }
 
     #[cfg(not(windows))]

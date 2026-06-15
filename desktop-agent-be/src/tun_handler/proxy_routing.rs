@@ -22,7 +22,7 @@ pub(super) async fn configure_proxy_routing(
     let mut last_partial_route = None;
     let proxy_route = loop {
         attempts += 1;
-        match detect_proxy_route(proxy_addrs) {
+        match detect_proxy_route(proxy_addrs).await {
             Some(route) if proxy_route_has_interface(&route) => break Some(route),
             Some(route) => {
                 debug!(

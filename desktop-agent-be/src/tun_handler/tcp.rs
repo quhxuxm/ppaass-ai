@@ -332,12 +332,9 @@ async fn connect_direct_tcp_with_refresh(
                 "TUN TCP 直连首次失败，刷新物理出口后重试：target={} bind_interface={:?} error={}",
                 target_str, initial_bind_interface, first_err
             );
-            let refreshed_bind_interface = direct_egress.refresh_after_direct_failure(
-                target.ip(),
-                tcp_pool,
-                udp_pool,
-                tun_networks,
-            );
+            let refreshed_bind_interface = direct_egress
+                .refresh_after_direct_failure(target.ip(), tcp_pool, udp_pool, tun_networks)
+                .await;
             match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
                 Ok(stream) => Ok(stream),
                 Err(retry_err) => {

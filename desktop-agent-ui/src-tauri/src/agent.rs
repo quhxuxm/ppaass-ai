@@ -47,7 +47,7 @@ pub(crate) fn start_agent_command(
 ) -> Result<AgentState, String> {
     #[cfg(windows)]
     {
-        return start_agent_via_windows_service(config_path, &runtime.logs);
+        start_agent_via_windows_service(config_path, &runtime.logs)
     }
 
     #[cfg(not(windows))]

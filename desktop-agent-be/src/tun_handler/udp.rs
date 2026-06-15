@@ -302,12 +302,9 @@ async fn connect_direct_udp_with_refresh(
                 "TUN UDP 直连首次失败，刷新物理出口后重试：target={} bind_interface={:?} error={}",
                 target_label, initial_bind_interface, first_err
             );
-            let refreshed_bind_interface = direct_egress.refresh_after_direct_failure(
-                target.ip(),
-                tcp_pool,
-                udp_pool,
-                tun_networks,
-            );
+            let refreshed_bind_interface = direct_egress
+                .refresh_after_direct_failure(target.ip(), tcp_pool, udp_pool, tun_networks)
+                .await;
             connect_direct_udp(target, refreshed_bind_interface.as_ref())
                 .await
                 .map_err(|retry_err| {
@@ -347,8 +344,7 @@ fn bind_direct_udp(
     socket.bind(&SockAddr::from(bind_addr))?;
     socket.set_nonblocking(true)?;
 
-    let std_socket: std::net::UdpSocket = socket.into();
-    UdpSocket::from_std(std_socket)
+    UdpSocket::from_std(socket.into())
 }
 
 async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {

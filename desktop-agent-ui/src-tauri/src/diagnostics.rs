@@ -1,8 +1,10 @@
 use std::fs;
-use std::net::TcpStream as StdTcpStream;
 use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio::runtime::Builder;
+use tokio::time::timeout;
 
 use crate::config::{locate_config_path, summarize_config};
 use crate::models::{ConnectivityCheck, ConnectivityReport};
@@ -26,7 +28,7 @@ pub(crate) fn run_connectivity_tests_blocking(
     let tun_enabled = summary.tun_enabled;
     let tun_name = summary.tun_name.clone();
     let agent_reachable = connect_addr(&listen_addr)
-        .map(|addr| StdTcpStream::connect_timeout(&addr, Duration::from_millis(900)).is_ok())
+        .map(|addr| tcp_connect_timeout(addr, Duration::from_millis(900)))
         .unwrap_or(false);
 
     let targets = [
@@ -99,4 +101,16 @@ pub(crate) fn run_connectivity_tests_blocking(
 
 fn collect_connectivity_checks(jobs: Vec<JoinHandle<ConnectivityCheck>>) -> Vec<ConnectivityCheck> {
     jobs.into_iter().filter_map(|job| job.join().ok()).collect()
+}
+
+fn tcp_connect_timeout(addr: std::net::SocketAddr, duration: Duration) -> bool {
+    let Ok(runtime) = Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    else {
+        return false;
+    };
+    runtime
+        .block_on(async { matches!(timeout(duration, TcpStream::connect(addr)).await, Ok(Ok(_))) })
 }
