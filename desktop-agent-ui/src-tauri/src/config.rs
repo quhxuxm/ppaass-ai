@@ -24,6 +24,26 @@ static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(path);
     let raw = fs::read_to_string(&config_path).map_err(|err| format!("读取配置失败：{err}"))?;
+    loaded_config_from_raw(config_path, raw)
+}
+
+pub(crate) fn load_default_config(
+    app: &tauri::AppHandle,
+    current_path: Option<&str>,
+) -> Result<LoadedAgentConfig, String> {
+    let default_path = default_agent_config_resource_path(app)?;
+    let raw = fs::read_to_string(&default_path)
+        .map_err(|err| format!("读取默认配置失败：{}：{err}", default_path.display()))?;
+    let config_path = current_path
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| make_absolute_path(Path::new(value)))
+        .or_else(locate_config_path)
+        .unwrap_or_else(|| make_absolute_path(Path::new("agent.toml")));
+
+    loaded_config_from_raw(config_path, raw)
+}
+
+fn loaded_config_from_raw(config_path: PathBuf, raw: String) -> Result<LoadedAgentConfig, String> {
     let summary = summarize_config(&raw)?;
     let display_path = config_path
         .canonicalize()
@@ -278,6 +298,21 @@ fn bundled_agent_resource_path(app: &tauri::App, resource_path: &str) -> Result<
         .map(|base| base.join(resource_path))
         .find(|path| path.is_file())
         .ok_or_else(|| format!("找不到内置 Agent 资源：{resource_path}"))
+}
+
+fn default_agent_config_resource_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource_path = "config/local/agent.toml";
+    if let Ok(path) = app.path().resolve(resource_path, BaseDirectory::Resource) {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    ancestor_dirs()
+        .into_iter()
+        .map(|base| base.join(resource_path))
+        .find(|path| path.is_file())
+        .ok_or_else(|| format!("找不到内置 Agent 默认配置：{resource_path}"))
 }
 
 fn clear_readonly_file_attribute(path: &Path) -> io::Result<()> {

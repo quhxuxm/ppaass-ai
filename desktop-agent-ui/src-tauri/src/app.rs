@@ -6,8 +6,8 @@ use crate::agent::{
     apply_ui_log_level, get_agent_state_inner, start_agent_command, stop_agent_inner_command,
 };
 use crate::config::{
-    install_bundled_agent_assets, load_config_from_path, locate_config_path, make_absolute_path,
-    primary_agent_config_path, write_config_file,
+    install_bundled_agent_assets, load_config_from_path, load_default_config, locate_config_path,
+    make_absolute_path, primary_agent_config_path, write_config_file,
 };
 use crate::diagnostics::run_connectivity_tests_blocking;
 #[cfg(target_os = "macos")]
@@ -64,6 +64,17 @@ async fn save_agent_config(
     #[cfg(any(windows, target_os = "macos"))]
     sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
     Ok(loaded)
+}
+
+#[tauri::command]
+async fn load_default_agent_config(
+    app: tauri::AppHandle,
+    path: Option<String>,
+) -> Result<LoadedAgentConfig, String> {
+    run_blocking("加载默认配置", move || {
+        load_default_config(&app, path.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -231,6 +242,7 @@ pub(crate) fn run() {
         .invoke_handler(tauri::generate_handler![
             load_agent_config,
             save_agent_config,
+            load_default_agent_config,
             get_agent_state,
             start_agent,
             stop_agent,

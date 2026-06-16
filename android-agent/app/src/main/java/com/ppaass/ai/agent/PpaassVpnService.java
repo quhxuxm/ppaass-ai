@@ -213,7 +213,9 @@ public class PpaassVpnService extends VpnService {
         JSONObject tunJson = new JSONObject()
                 .put("ipv4", prefs.getString("tun_ipv4", DefaultConfig.TUN_IPV4))
                 .put("ipv6", prefs.getString("tun_ipv6", DefaultConfig.TUN_IPV6))
-                .put("mtu", parseInt(prefs.getString("mtu", "1500"), 1500))
+                .put("mtu", parseInt(
+                        prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
+                        DefaultConfig.TUN_MTU))
                 .put("proxy_dns", true)
                 .put("block_quic", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
         JSONObject transportJson = new JSONObject()

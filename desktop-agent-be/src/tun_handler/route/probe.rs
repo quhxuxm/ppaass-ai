@@ -7,6 +7,7 @@ pub(crate) struct ProxyRoute {
     pub(crate) bind_interface: Option<BindInterface>,
 }
 
+/// 根据 `proxy_addrs` 中的地址，探测 OS 选择的本地出口地址和接口，以便安装 TUN 旁路路由。
 pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
     let routes = list_routes();
 
@@ -54,12 +55,15 @@ pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterf
     route_bind_interface(route)
 }
 
+/// 列出当前系统路由表；失败时返回 None。
 fn list_routes() -> Option<Vec<Route>> {
     let mut manager = RouteManager::new().ok()?;
     let routes = manager.list().ok()?;
+    debug!("当前系统路由表：\n{routes:?}");
     Some(routes)
 }
 
+/// 查找目的地址 `dst` 的最佳路由，并返回该路由绑定的接口（如果有）。
 fn route_bind_interface_for_dst(routes: Option<&[Route]>, dst: IpAddr) -> Option<BindInterface> {
     let routes = routes?;
     let route = best_route(routes, dst)?;
@@ -189,7 +193,9 @@ pub(super) fn parse_macos_route_get_next_hop(
     }
 }
 
+/// 查找目的地址 `dst` 的最佳路由，并返回该路由绑定的接口（如果有）。
 fn best_route(routes: &[Route], dst: IpAddr) -> Option<&Route> {
+    // OS 路由表中可能存在多条匹配的路由；优先选择 prefix 长度最长的那条。
     routes
         .iter()
         .filter(|route| route.destination().is_ipv4() == dst.is_ipv4() && route.contains(&dst))

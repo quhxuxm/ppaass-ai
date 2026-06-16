@@ -43,6 +43,7 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -128,6 +129,7 @@ public class MainActivity extends Activity {
     private Switch blockQuic;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
+    private Button restoreDefaultsButton;
     private AlertDialog appSelectorDialog;
     private Button vpnToggle;
     private TextView vpnStatus;
@@ -464,6 +466,18 @@ public class MainActivity extends Activity {
     }
 
     private void buildConfigScreen(LinearLayout root) {
+        LinearLayout actions = configSection(root, "Configuration");
+        TextView actionsSubtitle = mutedText("Restore all Agent settings to the built-in defaults", 13f);
+        LinearLayout.LayoutParams actionsSubtitleParams = matchWrap();
+        actionsSubtitleParams.setMargins(0, 0, 0, dp(10));
+        actions.addView(actionsSubtitle, actionsSubtitleParams);
+        restoreDefaultsButton = actionButton("Restore defaults", COLOR_ACCENT);
+        restoreDefaultsButton.setOnClickListener(view -> restoreDefaultConfig());
+        trackEditable(restoreDefaultsButton);
+        actions.addView(restoreDefaultsButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+
         LinearLayout connection = configSection(root, "Connection");
         proxyAddrs = field(connection, "Proxy addrs", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -1609,7 +1623,7 @@ public class MainActivity extends Activity {
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
-                .putString("mtu", "1500")
+                .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
                 .putBoolean("block_quic", blockQuic.isChecked())
                 .putString("runtime_threads", runtimeThreads.getText().toString())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
@@ -1652,6 +1666,80 @@ public class MainActivity extends Activity {
                         "yamux_udp_stream_window_size_kb",
                         yamuxUdpStreamWindowSizeKb.getText().toString())
                 .apply();
+    }
+
+    private void restoreDefaultConfig() {
+        if (isVpnRunning()) {
+            Toast.makeText(this, "Stop VPN before changing config", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
+        username.setText(DefaultConfig.USERNAME);
+        privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
+        blockQuic.setChecked(DefaultConfig.BLOCK_QUIC);
+        runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
+        tcpPoolSize.setText(String.valueOf(DefaultConfig.TCP_POOL_SIZE));
+        udpPoolSize.setText(String.valueOf(DefaultConfig.UDP_POOL_SIZE));
+        setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
+        setTransportMode(tcpMode, DefaultConfig.TCP_MODE);
+        setTransportMode(udpMode, DefaultConfig.UDP_MODE);
+        yamuxTcpSessions.setText(String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS));
+        yamuxTcpMaxStreamsPerSession.setText(String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION));
+        yamuxTcpOpenStreamTimeoutSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS));
+        yamuxTcpKeepaliveIntervalSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS));
+        yamuxTcpConnectionWriteTimeoutSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS));
+        yamuxTcpStreamWindowSizeKb.setText(String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB));
+        yamuxUdpSessions.setText(String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS));
+        yamuxUdpMaxStreamsPerSession.setText(String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION));
+        yamuxUdpOpenStreamTimeoutSecs.setText(String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS));
+        yamuxUdpKeepaliveIntervalSecs.setText(String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS));
+        yamuxUdpConnectionWriteTimeoutSecs.setText(String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS));
+        yamuxUdpStreamWindowSizeKb.setText(String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB));
+        directAccessModeValue = DefaultConfig.DIRECT_ACCESS_MODE;
+        directRuleValues.clear();
+        directRuleValues.addAll(normalizeDirectRules(parseDirectRuleInput(DefaultConfig.DIRECT_ACCESS_RULES)));
+        if (directRuleDraft != null) {
+            directRuleDraft.setText("");
+        }
+
+        updateTransportVisibility();
+        updateDirectModeButtons();
+        renderDirectRuleList();
+        saveConfig();
+        prefs.edit().putStringSet("vpn_apps", Collections.emptySet()).apply();
+        updateSelectedAppsSummary();
+        Toast.makeText(this, "Default config restored", Toast.LENGTH_SHORT).show();
+    }
+
+    private void setSpinnerValue(Spinner spinner, String value) {
+        if (spinner == null || spinner.getAdapter() == null) {
+            return;
+        }
+        for (int i = 0; i < spinner.getAdapter().getCount(); i++) {
+            Object item = spinner.getAdapter().getItem(i);
+            if (item != null && String.valueOf(item).equalsIgnoreCase(value)) {
+                spinner.setSelection(i);
+                return;
+            }
+        }
+        spinner.setSelection(0);
+    }
+
+    private void setTransportMode(Spinner spinner, String fallback) {
+        if (spinner == null || spinner.getAdapter() == null) {
+            return;
+        }
+        String normalized = normalizeTransportMode(fallback, fallback);
+        for (int i = 0; i < spinner.getAdapter().getCount(); i++) {
+            Object item = spinner.getAdapter().getItem(i);
+            if (item instanceof TransportModeOption
+                    && ((TransportModeOption) item).value.equalsIgnoreCase(normalized)) {
+                spinner.setSelection(i);
+                return;
+            }
+        }
+        spinner.setSelection(0);
     }
 
     private Spinner spinner(LinearLayout root, String title, String[] values, String selected) {

@@ -239,6 +239,31 @@ export function useDesktopAgent() {
     }
   }
 
+  async function restoreDefaultConfig() {
+    if (!state.config || !ensureConfigEditable()) {
+      return;
+    }
+    if (!hasTauri()) {
+      showToast("error", "当前环境无法读取内置默认配置");
+      return;
+    }
+
+    try {
+      state.busy = true;
+      state.config = await invoke<LoadedAgentConfig>("load_default_agent_config", {
+        path: state.config.path
+      });
+      state.ruleDraft = "";
+      state.diagnostics = null;
+      state.dirty = true;
+      showToast("success", "已恢复默认配置，保存后生效");
+    } catch (error) {
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
   async function startAgent() {
     if (!state.config) {
       return;
@@ -630,6 +655,7 @@ export function useDesktopAgent() {
     refreshAgentState,
     reloadAll,
     removeDirectRule,
+    restoreDefaultConfig,
     runDiagnostics,
     running,
     runningLabel,

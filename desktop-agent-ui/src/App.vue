@@ -30,6 +30,7 @@ const {
   refreshAgentState,
   reloadAll,
   removeDirectRule,
+  restoreDefaultConfig,
   runDiagnostics,
   running,
   runningLabel,
@@ -76,9 +77,11 @@ const sidebarCollapsed = ref(false);
           :subtitle="summary.listen_addr || state.statusText"
           :running="running"
           :config-locked="configLocked"
+          :config-available="Boolean(state.config)"
           :dirty="state.dirty"
           :busy="state.busy"
           @reload="reloadAll"
+          @restore-default-config="restoreDefaultConfig"
           @save="saveConfig"
           @start="startAgent"
           @stop="stopAgent"

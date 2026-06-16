@@ -1,47 +1,7 @@
 import type { AgentConfigSummary } from "./types";
+import fallbackRawConfigSource from "../../config/local/agent.toml?raw";
 
-export const fallbackRawConfig = `listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
-username = "user1"
-private_key_path = "keys/user1.pem"
-tcp_pool_size = 5
-udp_pool_size = 5
-connect_timeout_secs = 20
-compression_mode = "lz4"
-log_level = "info"
-
-[transport]
-tcp_mode = "yamux"
-udp_mode = "yamux"
-
-[yamux.tcp]
-sessions = 5
-max_streams_per_session = 256
-open_stream_timeout_secs = 10
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 2048
-
-[yamux.udp]
-sessions = 5
-max_streams_per_session = 256
-open_stream_timeout_secs = 10
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 2048
-
-[tun]
-enabled = false
-name = "ppaass-tun"
-ipv4 = "10.10.10.1/24"
-mtu = 1500
-proxy_dns = true
-block_quic = true
-
-[direct_access]
-mode = "rules"
-rules = ["localhost", "*.local", "127.0.0.0/8"]
-`;
+export const fallbackRawConfig = fallbackRawConfigSource;
 
 const defaultFieldValues = {
   listen_addr: "0.0.0.0:10080",

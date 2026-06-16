@@ -5,12 +5,14 @@ defineProps<{
   subtitle: string;
   running: boolean;
   configLocked: boolean;
+  configAvailable: boolean;
   dirty: boolean;
   busy: boolean;
 }>();
 
 const emit = defineEmits<{
   reload: [];
+  "restore-default-config": [];
   save: [];
   start: [];
   stop: [];
@@ -25,6 +27,14 @@ const emit = defineEmits<{
     </div>
     <div class="toolbar">
       <Button icon="pi pi-refresh" severity="secondary" outlined rounded aria-label="重新载入" @click="emit('reload')" />
+      <Button
+        icon="pi pi-undo"
+        label="恢复默认"
+        severity="secondary"
+        outlined
+        :disabled="!configAvailable || configLocked || busy"
+        @click="emit('restore-default-config')"
+      />
       <Button
         icon="pi pi-save"
         severity="secondary"
