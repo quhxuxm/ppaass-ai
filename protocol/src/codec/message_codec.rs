@@ -2,6 +2,7 @@ use super::CipherState;
 use crate::compression::{CompressionMode, compress, decompress};
 use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
 use bytes::{Bytes, BytesMut};
+use std::fmt::Write as _;
 use std::io;
 use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
@@ -9,6 +10,8 @@ use tracing::error;
 
 /// 启用压缩的最小负载大小（避免小消息产生额外开销）
 const MIN_COMPRESSION_SIZE: usize = 64;
+const LENGTH_PREFIX_BYTES: usize = 4;
+const PROTOCOL_PREFIX_PREVIEW_BYTES: usize = 16;
 
 /// 使用长度分隔帧的代理协议消息编解码器。
 /// 封装 tokio-util 的 LengthDelimitedCodec 以实现可靠的消息分帧。
@@ -39,6 +42,32 @@ impl MessageCodec {
         error!("{}: {}", context, err);
         io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", context, err))
     }
+
+    fn oversized_frame_error(src: &BytesMut) -> Option<io::Error> {
+        if src.len() < LENGTH_PREFIX_BYTES {
+            return None;
+        }
+
+        let declared_frame_len =
+            u32::from_be_bytes(src[..LENGTH_PREFIX_BYTES].try_into().ok()?) as usize;
+        if declared_frame_len <= MAX_MESSAGE_SIZE {
+            return None;
+        }
+
+        let preview_len = src.len().min(PROTOCOL_PREFIX_PREVIEW_BYTES);
+        let preview = &src[..preview_len];
+        Some(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "frame size too big: declared_frame_len={} max_frame_len={} first_bytes_hex=\"{}\" first_bytes_ascii=\"{}\" hint=\"{}\"",
+                declared_frame_len,
+                MAX_MESSAGE_SIZE,
+                hex_preview(preview),
+                ascii_preview(preview),
+                protocol_prefix_hint(preview)
+            ),
+        ))
+    }
 }
 
 impl Default for MessageCodec {
@@ -52,6 +81,10 @@ impl Decoder for MessageCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if let Some(err) = Self::oversized_frame_error(src) {
+            return Err(err);
+        }
+
         let frame = match self.inner.decode(src)? {
             Some(frame) => frame,
             None => return Ok(None),
@@ -77,6 +110,94 @@ impl Decoder for MessageCodec {
         }
 
         Ok(Some(message))
+    }
+}
+
+fn protocol_prefix_hint(prefix: &[u8]) -> &'static str {
+    if prefix.starts_with(b"GET ")
+        || prefix.starts_with(b"POST ")
+        || prefix.starts_with(b"HEAD ")
+        || prefix.starts_with(b"PUT ")
+        || prefix.starts_with(b"DELETE ")
+        || prefix.starts_with(b"PATCH ")
+        || prefix.starts_with(b"OPTIONS ")
+        || prefix.starts_with(b"CONNECT ")
+    {
+        return "疑似 HTTP 请求；请检查浏览器或系统代理是否直接指向了 PPAASS proxy 端口";
+    }
+
+    if prefix.starts_with(b"PRI * HTTP/2.0") {
+        return "疑似 HTTP/2 preface；请检查 HTTP 客户端是否直接指向了 PPAASS proxy 端口";
+    }
+
+    if prefix.len() >= 3 && prefix[0] == 0x16 && prefix[1] == 0x03 {
+        return "疑似 TLS/HTTPS ClientHello；请检查 HTTPS 流量是否直接打到了 PPAASS proxy 端口";
+    }
+
+    if prefix.first() == Some(&0x05) {
+        return "疑似 SOCKS5；请检查 SOCKS 客户端是否指向了远端 PPAASS proxy，而不是本地 agent";
+    }
+
+    if prefix.starts_with(b"SSH-") {
+        return "疑似 SSH；请检查 PPAASS proxy 是否监听在预期端口";
+    }
+
+    "首包不是有效的 PPAASS 长度分隔协议帧；请检查 endpoint、端口以及 agent/proxy 版本是否匹配"
+}
+
+fn hex_preview(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(3));
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn ascii_preview(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                char::from(*byte)
+            } else {
+                '.'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_util::codec::Decoder;
+
+    #[test]
+    fn oversized_frame_error_identifies_http_prefix() {
+        let mut codec = MessageCodec::default();
+        let mut src = BytesMut::from(&b"GET / HTTP/1.1\r\n"[..]);
+
+        let err = codec.decode(&mut src).expect_err("HTTP prefix should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("frame size too big"));
+        assert!(message.contains("declared_frame_len=1195725856"));
+        assert!(message.contains("first_bytes_ascii=\"GET / HTTP/1.1..\""));
+        assert!(message.contains("疑似 HTTP 请求"));
+    }
+
+    #[test]
+    fn oversized_frame_error_identifies_tls_prefix() {
+        let mut codec = MessageCodec::default();
+        let mut src = BytesMut::from(&[0x16, 0x03, 0x01, 0x02, 0x00, 0x01][..]);
+
+        let err = codec.decode(&mut src).expect_err("TLS prefix should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("frame size too big"));
+        assert!(message.contains("疑似 TLS/HTTPS ClientHello"));
     }
 }
 
