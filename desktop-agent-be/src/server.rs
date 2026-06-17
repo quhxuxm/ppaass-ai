@@ -33,7 +33,10 @@ impl AgentServer {
     #[instrument(skip(config))]
     pub async fn new(config: AgentConfig) -> Result<Self> {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
-        let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
+        let direct_access_checker = Arc::new(DirectAccessChecker::with_proxy_addrs(
+            &config.direct_access,
+            &config.proxy_addrs,
+        ));
         let config = Arc::new(config);
         // TCP/UDP 分别维护到 proxy 的已认证预热连接，避免两类流量互相挤占。
         let tcp_pool = Arc::new(ConnectionPool::new(config.clone()));

@@ -6,7 +6,7 @@
 
 use protocol::Address;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use tracing::{debug, info};
 
 const FORCE_PROXY_DOMAIN_SUFFIXES: &[&str] = &[
@@ -76,23 +76,33 @@ enum ParsedRule {
 pub struct DirectAccessChecker {
     mode: DirectAccessMode,
     rules: Vec<ParsedRule>,
+    proxy_hosts: Vec<String>,
+    proxy_ips: Vec<IpAddr>,
 }
 
 impl DirectAccessChecker {
     /// 从配置创建新的检查器。
     /// 规则在构造时一次性解析，以实现高效匹配。
+    #[cfg(test)]
     pub fn new(config: &DirectAccessConfig) -> Self {
+        Self::with_proxy_addrs(config, &[])
+    }
+
+    pub fn with_proxy_addrs(config: &DirectAccessConfig, proxy_addrs: &[String]) -> Self {
         // 无效规则会被跳过，避免一个坏规则让整个 agent 无法启动。
         let rules: Vec<ParsedRule> = config
             .rules
             .iter()
             .filter_map(|rule| Self::parse_rule(rule))
             .collect();
+        let (proxy_hosts, proxy_ips) = Self::parse_proxy_endpoints(proxy_addrs);
 
         info!(
-            "直连访问检查器已初始化: 模式={:?}, 已加载 {} 条规则",
+            "直连访问检查器已初始化: 模式={:?}, 已加载 {} 条规则，保护 {} 个 proxy host / {} 个 proxy IP",
             config.mode,
-            rules.len()
+            rules.len(),
+            proxy_hosts.len(),
+            proxy_ips.len()
         );
         for (i, rule) in rules.iter().enumerate() {
             debug!("  规则[{}]: {:?}", i, rule);
@@ -101,6 +111,8 @@ impl DirectAccessChecker {
         Self {
             mode: config.mode.clone(),
             rules,
+            proxy_hosts,
+            proxy_ips,
         }
     }
 
@@ -177,10 +189,14 @@ impl DirectAccessChecker {
     /// 直连返回 `true`，代理访问返回 `false`。
     pub fn is_direct(&self, address: &Address) -> bool {
         // 模式先决定大方向，rules 模式才进入具体匹配。
-        let result = match self.mode {
-            DirectAccessMode::ProxyAll => false,
-            DirectAccessMode::DirectAll => true,
-            DirectAccessMode::Rules => self.matches_any_rule(address),
+        let result = if self.is_proxy_endpoint(address) {
+            true
+        } else {
+            match self.mode {
+                DirectAccessMode::ProxyAll => false,
+                DirectAccessMode::DirectAll => true,
+                DirectAccessMode::Rules => self.matches_any_rule(address),
+            }
         };
 
         debug!(
@@ -190,6 +206,30 @@ impl DirectAccessChecker {
         );
 
         result
+    }
+
+    fn is_proxy_endpoint(&self, address: &Address) -> bool {
+        match address {
+            Address::Domain { host, .. } => {
+                let host_lower = Self::normalize_domain(host);
+                if self.proxy_hosts.iter().any(|proxy| proxy == &host_lower) {
+                    return true;
+                }
+                host_lower
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| self.proxy_ips.contains(&ip))
+            }
+            Address::Ipv4 { addr, .. } => {
+                self.proxy_ips.contains(&IpAddr::V4(Ipv4Addr::from(*addr)))
+            }
+            Address::Ipv6 { addr, .. } => {
+                self.proxy_ips.contains(&IpAddr::V6(Ipv6Addr::from(*addr)))
+            }
+            Address::ProxyDns { .. }
+            | Address::TcpYamux
+            | Address::UdpYamux
+            | Address::UdpRelay => false,
+        }
     }
 
     /// 仅使用域名规则判断是否应直连。
@@ -263,6 +303,36 @@ impl DirectAccessChecker {
         host.trim().trim_end_matches('.').to_lowercase()
     }
 
+    fn parse_proxy_endpoints(proxy_addrs: &[String]) -> (Vec<String>, Vec<IpAddr>) {
+        let mut hosts = Vec::new();
+        let mut ips = Vec::new();
+        for entry in proxy_addrs {
+            if let Some(host) = proxy_host(entry) {
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+
+            let candidate = if entry.contains(':') {
+                entry.clone()
+            } else {
+                format!("{entry}:0")
+            };
+            match candidate.to_socket_addrs() {
+                Ok(iter) => {
+                    for socket_addr in iter {
+                        let ip = socket_addr.ip();
+                        if !ips.contains(&ip) {
+                            ips.push(ip);
+                        }
+                    }
+                }
+                Err(err) => debug!("解析 proxy endpoint {entry} 失败：{err}"),
+            }
+        }
+        (hosts, ips)
+    }
+
     fn is_force_proxy_domain(host: &str) -> bool {
         FORCE_PROXY_DOMAIN_SUFFIXES
             .iter()
@@ -304,6 +374,27 @@ pub fn address_to_string(address: &Address) -> String {
         Address::UdpYamux => "udp-yamux".to_string(),
         Address::UdpRelay => "udp-relay".to_string(),
     }
+}
+
+fn proxy_host(entry: &str) -> Option<String> {
+    let entry = entry.trim().trim_end_matches('.');
+    if entry.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = entry.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return Some(rest[..end].to_lowercase());
+    }
+
+    if let Some((host, port)) = entry.rsplit_once(':')
+        && port.parse::<u16>().is_ok()
+    {
+        return Some(host.trim().trim_end_matches('.').to_lowercase());
+    }
+
+    Some(entry.to_lowercase())
 }
 
 #[cfg(test)]

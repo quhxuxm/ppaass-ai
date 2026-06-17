@@ -12,6 +12,7 @@ use tracing::error;
 const MIN_COMPRESSION_SIZE: usize = 64;
 const LENGTH_PREFIX_BYTES: usize = 4;
 const PROTOCOL_PREFIX_PREVIEW_BYTES: usize = 16;
+const MIN_SUPPORTED_PROTOCOL_VERSION: u8 = 1;
 
 /// 使用长度分隔帧的代理协议消息编解码器。
 /// 封装 tokio-util 的 LengthDelimitedCodec 以实现可靠的消息分帧。
@@ -92,10 +93,13 @@ impl Decoder for MessageCodec {
 
         let mut message: Message =
             bitcode::deserialize(&frame).map_err(|e| Self::io_error("消息反序列化失败", e))?;
-        if message.version != PROTOCOL_VERSION {
+        if !(MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&message.version) {
             return Err(Self::io_error(
                 "协议版本不匹配",
-                format!("received={} expected={}", message.version, PROTOCOL_VERSION),
+                format!(
+                    "received={} supported={}..={}",
+                    message.version, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION
+                ),
             ));
         }
 
@@ -225,7 +229,24 @@ mod tests {
         let message = err.to_string();
 
         assert!(message.contains("协议版本不匹配"));
-        assert!(message.contains(&format!("expected={PROTOCOL_VERSION}")));
+        assert!(message.contains(&format!(
+            "supported={MIN_SUPPORTED_PROTOCOL_VERSION}..={PROTOCOL_VERSION}"
+        )));
+    }
+
+    #[test]
+    fn decode_accepts_legacy_protocol_version() {
+        let mut encoder = MessageCodec::default();
+        let mut decoder = MessageCodec::default();
+        let mut src = BytesMut::new();
+        let mut message = Message::new(MessageType::Data, b"payload".to_vec());
+        message.version = MIN_SUPPORTED_PROTOCOL_VERSION;
+
+        encoder.encode(message, &mut src).unwrap();
+        let decoded = decoder.decode(&mut src).unwrap().unwrap();
+
+        assert_eq!(decoded.version, MIN_SUPPORTED_PROTOCOL_VERSION);
+        assert_eq!(decoded.payload, b"payload");
     }
 
     #[test]

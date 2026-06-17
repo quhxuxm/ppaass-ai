@@ -69,7 +69,10 @@ pub async fn run_android_agent(
 
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
     let config = Arc::new(config);
-    let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
+    let direct_checker = Arc::new(DirectAccessChecker::with_proxy_addrs(
+        &config.direct_access,
+        &config.proxy_addrs,
+    ));
     let tcp_pool = AndroidConnectionPool::new(
         config.clone(),
         shutdown.clone(),

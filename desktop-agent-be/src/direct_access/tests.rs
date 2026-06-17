@@ -15,6 +15,38 @@ fn test_proxy_all_mode() {
 }
 
 #[test]
+fn test_proxy_endpoints_are_direct_even_in_proxy_all_mode() {
+    let config = DirectAccessConfig {
+        mode: DirectAccessMode::ProxyAll,
+        rules: vec![],
+    };
+    let checker = DirectAccessChecker::with_proxy_addrs(
+        &config,
+        &[
+            "140.82.30.214:80".to_string(),
+            "proxy.example.com:443".to_string(),
+        ],
+    );
+
+    assert!(checker.is_direct(&Address::Domain {
+        host: "140.82.30.214".to_string(),
+        port: 80,
+    }));
+    assert!(checker.is_direct(&Address::Ipv4 {
+        addr: [140, 82, 30, 214],
+        port: 443,
+    }));
+    assert!(checker.is_direct(&Address::Domain {
+        host: "proxy.example.com".to_string(),
+        port: 80,
+    }));
+    assert!(!checker.is_direct(&Address::Ipv4 {
+        addr: [8, 8, 8, 8],
+        port: 53,
+    }));
+}
+
+#[test]
 fn test_direct_all_mode() {
     let config = DirectAccessConfig {
         mode: DirectAccessMode::DirectAll,
