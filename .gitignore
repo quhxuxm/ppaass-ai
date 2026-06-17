@@ -12,6 +12,7 @@ Cargo.lock
 /desktop-agent-ui/node_modules
 /desktop-agent-ui/dist
 /desktop-agent-ui/src-tauri/target
+/desktop-agent-ui/src-tauri/gen
 /android-agent/.gradle
 /android-agent/build
 /android-agent/app/build
