@@ -190,7 +190,8 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
 
-                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut direct_match = context.direct_egress.is_proxy_ip(target_addr.ip())
+                        || context.direct_checker.is_direct(&address);
                     let mut proxy_address = address.clone();
                     if !direct_match {
                         if context

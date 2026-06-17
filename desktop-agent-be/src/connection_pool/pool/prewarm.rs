@@ -86,7 +86,7 @@ impl ConnectionPool {
 
     /// 用初始连接预热连接池，然后启动后台补充任务。
     #[instrument(skip(self))]
-    pub async fn prewarm(&self) {
+    pub async fn prewarm(self: &Arc<Self>) {
         info!(
             "正在预热 {} 连接池，目标 {} 条连接",
             self.pool_name, self.pool_size
@@ -94,12 +94,15 @@ impl ConnectionPool {
 
         if self.use_yamux {
             // Yamux 模式下预热的是长期 session，不需要 legacy 的一次性连接池。
-            match self.ensure_yamux_sessions(self.yamux_target_size()).await {
+            let target_size = self.yamux_target_size();
+            let ready_size = target_size.min(1);
+            match self.ensure_yamux_sessions(ready_size).await {
                 Ok(success_count) => {
                     info!(
-                        "{} Yamux 连接池已预热 {} 条连接",
-                        self.pool_name, success_count
+                        "{} Yamux 连接池已预热 {} 条连接，后台目标 {} 条",
+                        self.pool_name, success_count, target_size
                     );
+                    self.spawn_yamux_refill_task(target_size);
                     return;
                 }
                 Err(err) if self.yamux_mode == Some(TcpTransportMode::Auto) => {

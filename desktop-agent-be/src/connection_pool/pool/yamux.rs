@@ -12,10 +12,14 @@ impl ConnectionPool {
         transport: TransportProtocol,
     ) -> Result<ConnectedStream> {
         let target_size = self.yamux_target_size();
+        let ready_size = target_size.min(1);
         let mut attempts = 0usize;
 
         loop {
-            self.ensure_yamux_sessions(target_size).await?;
+            self.ensure_yamux_sessions(ready_size).await?;
+            if target_size > ready_size {
+                self.refill_notify.notify_one();
+            }
             // 简单轮询选择 session，避免所有新子流压到同一条外层连接。
             let session = self
                 .next_yamux_session()
@@ -149,6 +153,36 @@ impl ConnectionPool {
         }
 
         Ok(success_count)
+    }
+
+    pub(super) fn spawn_yamux_refill_task(self: &Arc<Self>, target_size: usize) {
+        if target_size <= 1 || self.yamux_refill_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let pool = self.clone();
+        spawn_guarded("desktop yamux connection pool refill", async move {
+            loop {
+                tokio::select! {
+                    _ = pool.refill_notify.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+
+                let current_size = pool.yamux_sessions.lock().await.len();
+                if current_size >= target_size {
+                    continue;
+                }
+
+                match pool.ensure_yamux_sessions(target_size).await {
+                    Ok(created) if created > 0 => debug!(
+                        "{} Yamux 后台补足完成：新增 {} 条 session，目标 {} 条",
+                        pool.pool_name, created, target_size
+                    ),
+                    Ok(_) => {}
+                    Err(err) => warn!("{} Yamux 后台补足失败：{}", pool.pool_name, err),
+                }
+            }
+        });
     }
 
     async fn next_yamux_session(&self) -> Option<YamuxSessionHandle> {

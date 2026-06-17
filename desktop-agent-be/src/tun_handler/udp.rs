@@ -99,7 +99,10 @@ pub(super) async fn handle_tun_udp(
     let mut proxy_reason = None;
     if !proxy_dns_request {
         // UDP 没有 TCP 的 SNI 嗅探机会，主要依赖 IP/CIDR 和 DNS proxy 记录的域名缓存。
-        if direct_checker.is_direct(&address) {
+        if direct_egress.is_proxy_ip(target.ip()) {
+            debug!("TUN UDP 命中 proxy IP 保护，强制直连 -> {}", target);
+            direct_target = Some(target);
+        } else if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if let Some(domain) = direct_domain_cache
             .matching_domain_for_ip(target.ip(), |domain| {

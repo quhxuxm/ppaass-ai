@@ -16,7 +16,7 @@ use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, instrument, warn};
@@ -63,6 +63,7 @@ pub struct ConnectionPool {
     // 长期复用的 Yamux 外层 session 集合。
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
     yamux_refill_lock: Arc<Mutex<()>>,
+    yamux_refill_started: AtomicBool,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
 }
@@ -115,6 +116,7 @@ impl ConnectionPool {
             yamux_outer_address,
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
             yamux_refill_lock: Arc::new(Mutex::new(())),
+            yamux_refill_started: AtomicBool::new(false),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
         }

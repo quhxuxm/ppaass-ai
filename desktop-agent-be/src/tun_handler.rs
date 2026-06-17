@@ -84,6 +84,9 @@ struct TunForwardContext {
 struct TunDirectEgress {
     // 用 proxy 地址探测当前物理出口，防止 TUN 默认路由生效后误选到 TUN。
     proxy_addrs: Arc<Vec<String>>,
+    // proxy IP 绝不能再通过 proxy 连接池转发，否则当系统路由短暂捕获
+    // agent->proxy 控制连接时会形成递归。
+    proxy_ips: Arc<Vec<IpAddr>>,
     // 直连 socket 使用的物理接口绑定；macOS/Windows 常靠 if_index，Linux 可用 name。
     bind_interface: RwLock<Option<common::BindInterface>>,
     #[cfg(target_os = "macos")]
@@ -98,8 +101,10 @@ impl TunDirectEgress {
         bind_interface: Option<common::BindInterface>,
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
+        let proxy_ips = resolve_proxy_ips(&proxy_addrs);
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
+            proxy_ips: Arc::new(proxy_ips),
             bind_interface: RwLock::new(bind_interface),
             #[cfg(target_os = "macos")]
             helper_socket,
@@ -111,6 +116,10 @@ impl TunDirectEgress {
     fn bind_interface(&self) -> Option<common::BindInterface> {
         let guard = self.bind_interface.read().ok()?;
         guard.clone()
+    }
+
+    fn is_proxy_ip(&self, ip: IpAddr) -> bool {
+        self.proxy_ips.contains(&ip)
     }
 
     async fn refresh_after_direct_failure(
@@ -349,4 +358,24 @@ fn cleanup_stale_dns(dns_state_file: Option<&str>) {
         std::net::Ipv4Addr::UNSPECIFIED,
         dns_state_file,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn tun_direct_egress_records_proxy_ips() {
+        let egress = TunDirectEgress::new(
+            vec!["140.82.30.214:80".to_string(), "127.0.0.1:8080".to_string()],
+            None,
+            #[cfg(target_os = "macos")]
+            None,
+        );
+
+        assert!(egress.is_proxy_ip(IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214))));
+        assert!(!egress.is_proxy_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(!egress.is_proxy_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
 }

@@ -63,7 +63,10 @@ pub(super) async fn handle_tun_tcp(
     let mut direct_domain = None;
     let mut proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request && direct_checker.is_direct(&address) {
+    if !proxy_dns_request && direct_egress.is_proxy_ip(target.ip()) {
+        debug!("TUN TCP 命中 proxy IP 保护，强制直连 -> {}", target);
+        direct_target = Some(target);
+    } else if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
 
