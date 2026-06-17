@@ -140,6 +140,10 @@ async fn handle_connection(
     if let Err(err) = stream.set_nodelay(true) {
         warn!("设置入站代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
     }
+    let peer_addr = stream
+        .peer_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
 
     let ConnectionContext {
         proxy_config,
@@ -168,7 +172,7 @@ async fn handle_connection(
         let username = match connection.peek_auth_username().await {
             Ok(username) => username,
             Err(e) => {
-                error!("从认证请求获取用户名失败：{}", e);
+                error!("从认证请求获取用户名失败（peer={}）：{}", peer_addr, e);
                 return Err(e);
             }
         };
