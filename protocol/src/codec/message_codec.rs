@@ -1,6 +1,6 @@
 use super::CipherState;
 use crate::compression::{CompressionMode, compress, decompress};
-use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
+use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType, PROTOCOL_VERSION};
 use bytes::{Bytes, BytesMut};
 use std::fmt::Write as _;
 use std::io;
@@ -92,6 +92,12 @@ impl Decoder for MessageCodec {
 
         let mut message: Message =
             bitcode::deserialize(&frame).map_err(|e| Self::io_error("消息反序列化失败", e))?;
+        if message.version != PROTOCOL_VERSION {
+            return Err(Self::io_error(
+                "协议版本不匹配",
+                format!("received={} expected={}", message.version, PROTOCOL_VERSION),
+            ));
+        }
 
         if let Some(cipher) = self.state.cipher.get()
             && Self::needs_crypto(message.message_type)
@@ -172,7 +178,10 @@ fn ascii_preview(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{AuthRequest, AuthResponse, ProxyRequest, ProxyResponse};
+    use crate::{AgentCodec, ProxyCodec};
     use tokio_util::codec::Decoder;
+    use tokio_util::codec::Encoder;
 
     #[test]
     fn oversized_frame_error_identifies_http_prefix() {
@@ -198,6 +207,60 @@ mod tests {
 
         assert!(message.contains("frame size too big"));
         assert!(message.contains("疑似 TLS/HTTPS ClientHello"));
+    }
+
+    #[test]
+    fn decode_rejects_protocol_version_mismatch() {
+        let mut encoder = MessageCodec::default();
+        let mut decoder = MessageCodec::default();
+        let mut src = BytesMut::new();
+        let mut message = Message::new(MessageType::Data, b"payload".to_vec());
+        message.version = PROTOCOL_VERSION.saturating_add(1);
+
+        encoder.encode(message, &mut src).unwrap();
+
+        let err = decoder
+            .decode(&mut src)
+            .expect_err("version mismatch should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("协议版本不匹配"));
+        assert!(message.contains(&format!("expected={PROTOCOL_VERSION}")));
+    }
+
+    #[test]
+    fn agent_and_proxy_codecs_roundtrip_auth_messages() {
+        let mut agent_encoder = AgentCodec::new(None);
+        let mut proxy_decoder = ProxyCodec::new(None);
+        let mut request_buf = BytesMut::new();
+        let request = ProxyRequest::Auth(AuthRequest {
+            username: "user1".to_string(),
+            timestamp: 123,
+            encrypted_aes_key: vec![1, 2, 3, 4],
+        });
+
+        agent_encoder
+            .encode(request.clone(), &mut request_buf)
+            .unwrap();
+        let decoded_request = proxy_decoder.decode(&mut request_buf).unwrap().unwrap();
+
+        assert!(matches!(decoded_request, ProxyRequest::Auth(_)));
+
+        let mut proxy_encoder = ProxyCodec::new(None);
+        let mut agent_decoder = AgentCodec::new(None);
+        let mut response_buf = BytesMut::new();
+        let response = ProxyResponse::Auth(AuthResponse {
+            success: true,
+            message: "ok".to_string(),
+            session_id: Some("session-1".to_string()),
+        });
+
+        proxy_encoder
+            .encode(response.clone(), &mut response_buf)
+            .unwrap();
+        let decoded_response = agent_decoder.decode(&mut response_buf).unwrap().unwrap();
+
+        assert!(matches!(decoded_response, ProxyResponse::Auth(_)));
     }
 }
 
