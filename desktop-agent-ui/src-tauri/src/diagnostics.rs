@@ -10,6 +10,7 @@ use crate::config::{locate_config_path, summarize_config};
 use crate::models::{ConnectivityCheck, ConnectivityReport};
 use crate::network::{
     connect_addr, failed_connectivity_check, probe_tun_ready, proxy_url, run_curl_check,
+    run_quic_check,
 };
 use crate::process_util::current_time_millis;
 
@@ -32,8 +33,16 @@ pub(crate) fn run_connectivity_tests_blocking(
         .unwrap_or(false);
 
     let targets = [
-        ("Google", "https://www.google.com/generate_204"),
-        ("YouTube", "https://www.youtube.com/generate_204"),
+        (
+            "Google",
+            "https://www.google.com/generate_204",
+            "www.google.com",
+        ),
+        (
+            "YouTube",
+            "https://www.youtube.com/generate_204",
+            "www.youtube.com",
+        ),
     ];
     let protocols = [
         ("HTTP", proxy_url("http", &listen_addr)),
@@ -41,7 +50,7 @@ pub(crate) fn run_connectivity_tests_blocking(
     ];
 
     let mut result_jobs = Vec::new();
-    for &(target, url) in &targets {
+    for &(target, url, _) in &targets {
         for (protocol, proxy) in &protocols {
             let target = target.to_string();
             let protocol = (*protocol).to_string();
@@ -64,21 +73,34 @@ pub(crate) fn run_connectivity_tests_blocking(
         let tun_route = format!("tun://{tun_name}");
         if tun_ready {
             let mut tun_jobs = Vec::new();
-            for &(target, url) in &targets {
-                let target = target.to_string();
+            for &(target, url, quic_host) in &targets {
+                let tun_target = target.to_string();
                 let url = url.to_string();
-                let tun_route = tun_route.clone();
+                let tun_route_for_http = tun_route.clone();
                 tun_jobs.push(thread::spawn(move || {
-                    run_curl_check(&target, "TUN", &url, None, &tun_route)
+                    run_curl_check(&tun_target, "TUN", &url, None, &tun_route_for_http)
+                }));
+                let quic_target = target.to_string();
+                let quic_host = quic_host.to_string();
+                let tun_route_for_quic = tun_route.clone();
+                tun_jobs.push(thread::spawn(move || {
+                    run_quic_check(&quic_target, &quic_host, &tun_route_for_quic)
                 }));
             }
             tun_results = collect_connectivity_checks(tun_jobs);
         } else {
-            for (target, url) in targets.iter().copied() {
+            for (target, url, quic_host) in targets.iter().copied() {
                 tun_results.push(failed_connectivity_check(
                     target,
                     "TUN",
                     url,
+                    &tun_route,
+                    &tun_status,
+                ));
+                tun_results.push(failed_connectivity_check(
+                    target,
+                    "QUIC",
+                    &format!("quic://{quic_host}:443"),
                     &tun_route,
                     &tun_status,
                 ));

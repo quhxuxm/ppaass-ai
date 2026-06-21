@@ -83,7 +83,7 @@ const emit = defineEmits<{
       <template #content>
         <div class="diagnostic-list">
           <div v-if="diagnosticsRunning" class="diagnostic-row muted">
-            <div><strong>后台测试中</strong><span>Google / YouTube · HTTP / SOCKS5 / TUN</span></div>
+            <div><strong>后台测试中</strong><span>Google / YouTube · HTTP / SOCKS5 / TUN / QUIC</span></div>
             <span>等待结果</span>
           </div>
           <div v-if="!diagnostics && !diagnosticsRunning" class="diagnostic-row muted">
@@ -96,6 +96,10 @@ const emit = defineEmits<{
           </div>
           <div v-if="!diagnostics && !diagnosticsRunning" class="diagnostic-row muted">
             <div><strong>TUN</strong><span>{{ summary.tun_enabled ? summary.tun_name : "未启用" }}</span></div>
+            <span>{{ summary.tun_enabled ? "未测试" : "跳过" }}</span>
+          </div>
+          <div v-if="!diagnostics && !diagnosticsRunning" class="diagnostic-row muted">
+            <div><strong>QUIC</strong><span>UDP/443 Version Negotiation</span></div>
             <span>{{ summary.tun_enabled ? "未测试" : "跳过" }}</span>
           </div>
           <div v-if="diagnostics && !diagnostics.tun_enabled" class="diagnostic-row muted">

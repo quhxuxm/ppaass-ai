@@ -39,16 +39,28 @@ export function fallbackConnectivityReport(currentSummary?: AgentConfigSummary):
     }))
   );
   const tunResults = tunEnabled
-    ? targets.map((target) => ({
-      target,
-      protocol: "TUN",
-      url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
-      proxy_url: `tun://${tunName}`,
-      success: false,
-      http_code: null,
-      duration_ms: 0,
-      error: tunStatus
-    }))
+    ? targets.flatMap((target) => [
+      {
+        target,
+        protocol: "TUN",
+        url: target === "Google" ? "https://www.google.com/generate_204" : "https://www.youtube.com/generate_204",
+        proxy_url: `tun://${tunName}`,
+        success: false,
+        http_code: null,
+        duration_ms: 0,
+        error: tunStatus
+      },
+      {
+        target,
+        protocol: "QUIC",
+        url: target === "Google" ? "quic://www.google.com:443" : "quic://www.youtube.com:443",
+        proxy_url: `tun://${tunName}`,
+        success: false,
+        http_code: null,
+        duration_ms: 0,
+        error: tunStatus
+      }
+    ])
     : [];
 
   return {
