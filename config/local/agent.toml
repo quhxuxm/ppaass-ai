@@ -97,6 +97,8 @@ mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
+# 默认允许 UDP/443 QUIC，经共享 UDP relay 转发；如需强制浏览器回退 TCP/TLS，改为 true。
+block_quic = false
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"
 wintun_file = "wintun.dll"

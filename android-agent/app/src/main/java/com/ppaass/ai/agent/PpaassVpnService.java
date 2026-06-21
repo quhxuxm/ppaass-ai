@@ -314,22 +314,29 @@ public class PpaassVpnService extends VpnService {
     private void applyAppSelection(Builder builder) {
         SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
         Set<String> selected = new HashSet<>(prefs.getStringSet("vpn_apps", Collections.emptySet()));
-        selected.remove(getPackageName());
-
         if (selected.isEmpty()) {
             return;
         }
 
-        int allowed = 0;
+        int configuredAppCount = 0;
+        for (String packageName : selected) {
+            if (!getPackageName().equals(packageName)) {
+                configuredAppCount++;
+            }
+        }
+        selected.add(getPackageName());
+        int configuredAllowed = 0;
         for (String packageName : selected) {
             try {
                 builder.addAllowedApplication(packageName);
-                allowed++;
+                if (!getPackageName().equals(packageName)) {
+                    configuredAllowed++;
+                }
             } catch (PackageManager.NameNotFoundException ignored) {
             }
         }
 
-        if (allowed == 0) {
+        if (configuredAppCount > 0 && configuredAllowed == 0) {
             throw new IllegalStateException("No selected VPN apps are installed");
         }
     }

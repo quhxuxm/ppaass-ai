@@ -249,6 +249,8 @@ pub async fn run_tun_mode(
     let block_quic = config.block_quic;
     if block_quic {
         info!("TUN UDP/443 QUIC 流量将被阻断，浏览器会回退到 TCP/TLS");
+    } else {
+        info!("TUN UDP/443 QUIC 流量将通过 UDP relay 转发");
     }
 
     // 先解析 TUN 网段，后续会用它识别异常回环目标。

@@ -187,7 +187,7 @@ fn default_tun_mtu() -> u16 {
 }
 
 fn default_tun_block_quic() -> bool {
-    true
+    false
 }
 
 fn default_macos_tun_helper_enabled() -> bool {
@@ -286,5 +286,12 @@ private_key_path = "keys/user1.pem"
                 .unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::Lz4);
+    }
+
+    #[test]
+    fn tun_allows_quic_by_default() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert!(!config.tun.block_quic);
     }
 }

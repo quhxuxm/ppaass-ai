@@ -45,6 +45,16 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -89,6 +99,10 @@ public class MainActivity extends Activity {
             new TransportModeOption("yamux", "Yamux"),
             new TransportModeOption("legacy", "Standard channel")
     };
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
+    private static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
+    private static final int QUIC_RESERVED_VERSION = 0x0a0a0a0a;
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
@@ -138,6 +152,9 @@ public class MainActivity extends Activity {
     private TextView trafficDownload;
     private TextView trafficUpload;
     private LinearLayout dnsRecordList;
+    private Button connectivityTestButton;
+    private TextView connectivitySummary;
+    private LinearLayout connectivityResultList;
     private SpeedGaugeView speedGauge;
     private TrafficBarView trafficChart;
     private final long[] hourlyDownloadBytes = new long[24];
@@ -147,6 +164,7 @@ public class MainActivity extends Activity {
     private long lastTxBytes = -1;
     private long lastTrafficSampleMs;
     private String lastDnsRecordsStateKey = "";
+    private boolean connectivityTestsRunning;
     private final List<View> editableControls = new ArrayList<>();
     private final List<Button> screenTabButtons = new ArrayList<>();
     private final List<View> screenPages = new ArrayList<>();
@@ -417,6 +435,8 @@ public class MainActivity extends Activity {
         appsRowParams.setMargins(0, dp(4), 0, 0);
         apps.addView(appsRow, appsRowParams);
 
+        buildConnectivityPanel(root);
+
         LinearLayout dashboard = panel(root);
         sectionTitle(dashboard, "Live dashboard");
         speedGauge = new SpeedGaugeView();
@@ -463,6 +483,35 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams dnsScrollParams = matchWrap();
         dnsScrollParams.height = dp(300);
         dnsPanel.addView(dnsScroll, dnsScrollParams);
+    }
+
+    private void buildConnectivityPanel(LinearLayout root) {
+        LinearLayout panel = panel(root);
+        sectionTitle(panel, "VPN connectivity");
+        TextView subtitle = mutedText("Google / YouTube HTTPS and QUIC over the VPN path", 13f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(2), 0, dp(10));
+        panel.addView(subtitle, subtitleParams);
+
+        LinearLayout actionRow = horizontalRow();
+        connectivitySummary = mutedText("Start VPN, then run tests", 13f);
+        connectivitySummary.setTypeface(Typeface.DEFAULT_BOLD);
+        actionRow.addView(connectivitySummary, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        connectivityTestButton = actionButton("Test", COLOR_ACCENT);
+        connectivityTestButton.setOnClickListener(view -> runConnectivityTests());
+        actionRow.addView(connectivityTestButton, new LinearLayout.LayoutParams(dp(104), dp(42)));
+        panel.addView(actionRow, matchWrap());
+
+        connectivityResultList = new LinearLayout(this);
+        connectivityResultList.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams resultParams = matchWrap();
+        resultParams.setMargins(0, dp(10), 0, 0);
+        panel.addView(connectivityResultList, resultParams);
+        addConnectivityEmptyRow("No tests run");
     }
 
     private void buildConfigScreen(LinearLayout root) {
@@ -1283,6 +1332,7 @@ public class MainActivity extends Activity {
             vpnStatus.setBackground(rounded(statusColor, statusColor));
         }
         updateConfigEditability(!running);
+        updateConnectivityButton();
     }
 
     private void updateFlipButton(String label, int color, boolean enabled) {
@@ -1422,6 +1472,284 @@ public class MainActivity extends Activity {
 
     private boolean isAgentDnsRecord(JSONObject record) {
         return "agent".equals(record.optString("resolver", ""));
+    }
+
+    private void updateConnectivityButton() {
+        if (connectivityTestButton == null) {
+            return;
+        }
+        boolean running = isVpnRunning();
+        connectivityTestButton.setEnabled(running && !connectivityTestsRunning);
+        connectivityTestButton.setText(connectivityTestsRunning ? "Testing" : "Test");
+        connectivityTestButton.setBackground(rounded(
+                running ? COLOR_ACCENT : COLOR_STATUS_STOPPED,
+                running ? COLOR_ACCENT : COLOR_STATUS_STOPPED));
+        if (connectivitySummary != null && !running && !connectivityTestsRunning) {
+            connectivitySummary.setText("Start VPN, then run tests");
+        }
+    }
+
+    private void runConnectivityTests() {
+        if (connectivityTestsRunning) {
+            return;
+        }
+        if (!isVpnRunning()) {
+            Toast.makeText(this, "Start VPN before running tests", Toast.LENGTH_SHORT).show();
+            updateConnectivityButton();
+            return;
+        }
+
+        connectivityTestsRunning = true;
+        updateConnectivityButton();
+        if (connectivitySummary != null) {
+            connectivitySummary.setText("Testing Google and YouTube");
+        }
+        if (connectivityResultList != null) {
+            connectivityResultList.removeAllViews();
+            addConnectivityEmptyRow("Running HTTPS and QUIC checks");
+        }
+
+        new Thread(() -> {
+            List<ConnectivityCheckResult> results = new ArrayList<>();
+            results.add(runHttpsConnectivityCheck(
+                    "Google",
+                    "https://www.google.com/generate_204"));
+            results.add(runHttpsConnectivityCheck(
+                    "YouTube",
+                    "https://www.youtube.com/generate_204"));
+            results.add(runQuicConnectivityCheck("Google", "www.google.com"));
+            results.add(runQuicConnectivityCheck("YouTube", "www.youtube.com"));
+
+            runOnUiThread(() -> {
+                connectivityTestsRunning = false;
+                renderConnectivityResults(results);
+                updateConnectivityButton();
+            });
+        }, "ppaass-connectivity-tests").start();
+    }
+
+    private ConnectivityCheckResult runHttpsConnectivityCheck(String target, String urlString) {
+        long started = SystemClock.elapsedRealtime();
+        long rxBefore = currentVpnDownloadBytes();
+        long txBefore = currentVpnUploadBytes();
+        HttpURLConnection connection = null;
+        boolean networkOk = false;
+        String detail;
+        try {
+            URL url = new URL(urlString);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(CONNECTIVITY_TIMEOUT_MS);
+            connection.setReadTimeout(CONNECTIVITY_TIMEOUT_MS);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("User-Agent", "PPAASS-Android-Agent/diagnostic");
+
+            int code = connection.getResponseCode();
+            networkOk = code >= 200 && code < 400;
+            drainSmallResponse(code >= 400 ? connection.getErrorStream() : connection.getInputStream());
+            detail = "HTTP " + code;
+        } catch (IOException | RuntimeException error) {
+            detail = compactError(error);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+        return finishConnectivityResult(target, "HTTPS", networkOk, detail, started, rxBefore, txBefore);
+    }
+
+    private ConnectivityCheckResult runQuicConnectivityCheck(String target, String host) {
+        long started = SystemClock.elapsedRealtime();
+        long rxBefore = currentVpnDownloadBytes();
+        long txBefore = currentVpnUploadBytes();
+        boolean networkOk = false;
+        String detail;
+
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.setSoTimeout(CONNECTIVITY_TIMEOUT_MS);
+            InetAddress address = resolveIpv4(host);
+            byte[] dcid = randomConnectionId();
+            byte[] scid = randomConnectionId();
+            byte[] probe = quicVersionNegotiationProbe(dcid, scid);
+            DatagramPacket outbound = new DatagramPacket(probe, probe.length, address, 443);
+            socket.send(outbound);
+
+            byte[] response = new byte[1500];
+            DatagramPacket inbound = new DatagramPacket(response, response.length);
+            socket.receive(inbound);
+            networkOk = isQuicVersionNegotiationResponse(response, inbound.getLength());
+            detail = networkOk
+                    ? "QUIC VN " + inbound.getLength() + " B from " + inbound.getAddress().getHostAddress()
+                    : "UDP/443 replied, but not QUIC VN";
+        } catch (SocketTimeoutException error) {
+            detail = "UDP/443 timeout";
+        } catch (IOException | RuntimeException error) {
+            detail = compactError(error);
+        }
+
+        return finishConnectivityResult(target, "QUIC", networkOk, detail, started, rxBefore, txBefore);
+    }
+
+    private InetAddress resolveIpv4(String host) throws IOException {
+        InetAddress[] addresses = InetAddress.getAllByName(host);
+        for (InetAddress address : addresses) {
+            if (address instanceof Inet4Address) {
+                return address;
+            }
+        }
+        if (addresses.length > 0) {
+            return addresses[0];
+        }
+        throw new IOException("No address for " + host);
+    }
+
+    private ConnectivityCheckResult finishConnectivityResult(
+            String target,
+            String protocol,
+            boolean networkOk,
+            String detail,
+            long started,
+            long rxBefore,
+            long txBefore) {
+        long durationMs = Math.max(0, SystemClock.elapsedRealtime() - started);
+        long rxDelta = Math.max(0, currentVpnDownloadBytes() - rxBefore);
+        long txDelta = Math.max(0, currentVpnUploadBytes() - txBefore);
+        boolean vpnObserved = rxDelta > 0 || txDelta > 0;
+        boolean success = networkOk && vpnObserved;
+        String resultDetail = networkOk && !vpnObserved
+                ? detail + " · no VPN byte delta"
+                : detail;
+        return new ConnectivityCheckResult(
+                target,
+                protocol,
+                success,
+                resultDetail,
+                durationMs,
+                rxDelta,
+                txDelta);
+    }
+
+    private void drainSmallResponse(InputStream stream) throws IOException {
+        if (stream == null) {
+            return;
+        }
+        try (InputStream input = stream) {
+            byte[] buffer = new byte[256];
+            input.read(buffer);
+        }
+    }
+
+    private byte[] randomConnectionId() {
+        byte[] value = new byte[8];
+        SECURE_RANDOM.nextBytes(value);
+        return value;
+    }
+
+    private byte[] quicVersionNegotiationProbe(byte[] dcid, byte[] scid) {
+        byte[] packet = new byte[QUIC_MIN_INITIAL_PACKET_BYTES];
+        SECURE_RANDOM.nextBytes(packet);
+        int offset = 0;
+        packet[offset++] = (byte) 0xc0;
+        packet[offset++] = (byte) ((QUIC_RESERVED_VERSION >>> 24) & 0xff);
+        packet[offset++] = (byte) ((QUIC_RESERVED_VERSION >>> 16) & 0xff);
+        packet[offset++] = (byte) ((QUIC_RESERVED_VERSION >>> 8) & 0xff);
+        packet[offset++] = (byte) (QUIC_RESERVED_VERSION & 0xff);
+        packet[offset++] = (byte) dcid.length;
+        System.arraycopy(dcid, 0, packet, offset, dcid.length);
+        offset += dcid.length;
+        packet[offset++] = (byte) scid.length;
+        System.arraycopy(scid, 0, packet, offset, scid.length);
+        return packet;
+    }
+
+    private boolean isQuicVersionNegotiationResponse(byte[] data, int length) {
+        return length >= 7
+                && (data[0] & 0x80) != 0
+                && data[1] == 0
+                && data[2] == 0
+                && data[3] == 0
+                && data[4] == 0;
+    }
+
+    private String compactError(Throwable error) {
+        String message = error.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return error.getClass().getSimpleName();
+        }
+        return message.length() > 120 ? message.substring(0, 117) + "..." : message;
+    }
+
+    private void renderConnectivityResults(List<ConnectivityCheckResult> results) {
+        if (connectivityResultList == null) {
+            return;
+        }
+        connectivityResultList.removeAllViews();
+        int passed = 0;
+        for (ConnectivityCheckResult result : results) {
+            if (result.success) {
+                passed++;
+            }
+            addConnectivityResultRow(result);
+        }
+        if (connectivitySummary != null) {
+            connectivitySummary.setText(passed + "/" + results.size() + " checks passed");
+        }
+    }
+
+    private void addConnectivityEmptyRow(String text) {
+        if (connectivityResultList == null) {
+            return;
+        }
+        TextView empty = mutedText(text, 14f);
+        empty.setGravity(Gravity.CENTER);
+        empty.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        connectivityResultList.addView(empty, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(54)));
+    }
+
+    private void addConnectivityResultRow(ConnectivityCheckResult result) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(10), dp(9), dp(10), dp(9));
+        row.setMinimumHeight(dp(76));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        LinearLayout heading = horizontalRow();
+        TextView name = titleText(result.target + " " + result.protocol, 14f);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        heading.addView(name, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        TextView status = chip(result.success ? "PASS" : "FAIL",
+                result.success ? COLOR_STATUS_RUNNING : COLOR_ACTION_STOP);
+        heading.addView(status, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(heading, matchWrap());
+
+        TextView detail = mutedText(result.detail, 12f);
+        detail.setMaxLines(2);
+        detail.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams detailParams = matchWrap();
+        detailParams.setMargins(0, dp(4), 0, 0);
+        row.addView(detail, detailParams);
+
+        TextView meta = mutedText(
+                result.durationMs + " ms · VPN ↓" + formatBytes(result.rxDelta)
+                        + " ↑" + formatBytes(result.txDelta),
+                11f);
+        LinearLayout.LayoutParams metaParams = matchWrap();
+        metaParams.setMargins(0, dp(3), 0, 0);
+        row.addView(meta, metaParams);
+
+        LinearLayout.LayoutParams rowParams = matchWrap();
+        if (connectivityResultList.getChildCount() > 0) {
+            rowParams.setMargins(0, dp(8), 0, 0);
+        }
+        connectivityResultList.addView(row, rowParams);
     }
 
     private void addDnsEmptyRow(String text) {
@@ -2794,6 +3122,33 @@ public class MainActivity extends Activity {
             this.packageName = packageName;
             this.systemBadge = systemBadge;
             this.checkBox = checkBox;
+        }
+    }
+
+    private static final class ConnectivityCheckResult {
+        final String target;
+        final String protocol;
+        final boolean success;
+        final String detail;
+        final long durationMs;
+        final long rxDelta;
+        final long txDelta;
+
+        ConnectivityCheckResult(
+                String target,
+                String protocol,
+                boolean success,
+                String detail,
+                long durationMs,
+                long rxDelta,
+                long txDelta) {
+            this.target = target;
+            this.protocol = protocol;
+            this.success = success;
+            this.detail = detail;
+            this.durationMs = durationMs;
+            this.rxDelta = rxDelta;
+            this.txDelta = txDelta;
         }
     }
 

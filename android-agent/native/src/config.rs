@@ -177,5 +177,17 @@ fn default_proxy_dns() -> bool {
 }
 
 fn default_block_quic() -> bool {
-    true
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tun_allows_quic_by_default() {
+        let config = AndroidTunConfig::default();
+
+        assert!(!config.block_quic);
+    }
 }

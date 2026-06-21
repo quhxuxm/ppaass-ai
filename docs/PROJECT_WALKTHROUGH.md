@@ -266,7 +266,7 @@ TUN 模式里的关键细节：
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - 如果 DNS 缓存没命中，TCP 路径还会嗅探 TLS SNI 或 HTTP Host。
-- 默认阻断未命中直连规则的 UDP/443 QUIC，让浏览器回退到 TCP/TLS。
+- 默认允许未命中直连规则的 UDP/443 QUIC 走共享 UDP relay；需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
@@ -389,7 +389,7 @@ Android 和桌面 TUN 的相同点：
 
 - 都用 `netstack-smoltcp`。
 - 都复用 `common` 和 `protocol`。
-- 都支持 TCP/UDP pool、Yamux、direct_access、proxy DNS、QUIC 阻断。
+- 都支持 TCP/UDP pool、Yamux、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。
 
 不同点：
 

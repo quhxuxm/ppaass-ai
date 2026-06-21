@@ -241,7 +241,7 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
-        tun_block_quic: bool_at(&value, &["tun", "block_quic"]).unwrap_or(true),
+        tun_block_quic: bool_at(&value, &["tun", "block_quic"]).unwrap_or(false),
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
         direct_rules: string_array_at(&value, &["direct_access", "rules"]),
     })
@@ -605,6 +605,21 @@ stream_window_size_kb = 1024
         assert_eq!(summary.udp_yamux_connection_write_timeout_secs, 9);
         assert_eq!(summary.tcp_yamux_stream_window_size_kb, 768);
         assert_eq!(summary.udp_yamux_stream_window_size_kb, 1024);
+    }
+
+    #[test]
+    fn summarize_config_allows_tun_quic_by_default() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#,
+        )
+        .unwrap();
+
+        assert!(!summary.tun_block_quic);
     }
 
     #[test]
