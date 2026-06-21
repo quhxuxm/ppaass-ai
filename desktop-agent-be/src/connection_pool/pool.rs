@@ -16,7 +16,7 @@ use deadpool::unmanaged::Pool;
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, instrument, warn};
@@ -48,6 +48,8 @@ pub struct ConnectionPool {
     available: Arc<AtomicUsize>,
     /// 连接在池中停留的最长时间
     max_connection_age: Duration,
+    /// 后台预热任务是否已经启动，避免重复启动补池任务。
+    prewarm_started: AtomicBool,
     /// TUN 模式激活时保存物理网卡的 IP 地址。
     /// 每个新建的代理 TCP 连接都会绑定到该 IP，确保流量从物理接口出，
     /// 而不会回环进入 TUN 设备。
@@ -107,6 +109,7 @@ impl ConnectionPool {
             refill_notify,
             available,
             max_connection_age,
+            prewarm_started: AtomicBool::new(false),
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             use_yamux,

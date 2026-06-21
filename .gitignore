@@ -9,6 +9,9 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+package-lock.json
+Cargo.lock
+/node_modules
 /desktop-agent-ui/node_modules
 /desktop-agent-ui/dist
 /desktop-agent-ui/src-tauri/target

@@ -19,6 +19,22 @@ struct RefillTaskContext {
 }
 
 impl ConnectionPool {
+    /// 后台启动一次连接池预热。
+    ///
+    /// 请求路径不依赖预热成功：池空时仍会按需创建连接。后台预热只负责提前摊薄
+    /// agent->proxy 的认证成本，因此不应该阻塞本地监听或 TUN 转发启动。
+    pub fn spawn_prewarm_once(self: &Arc<Self>, task_name: &'static str) {
+        if self.prewarm_started.swap(true, Ordering::AcqRel) {
+            debug!("{} 连接池预热已启动，跳过重复请求", self.pool_name);
+            return;
+        }
+
+        let pool = self.clone();
+        spawn_guarded(task_name, async move {
+            pool.prewarm().await;
+        });
+    }
+
     #[instrument(skip(context), fields(pool_name = context.pool_name, target_size = context.target_size))]
     async fn refill_task(context: RefillTaskContext) {
         loop {

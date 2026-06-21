@@ -13,6 +13,7 @@ pub(crate) struct UiLogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
     capacity: usize,
     filter: Arc<Mutex<Option<reload::Handle<EnvFilter, Registry>>>>,
+    log_level: Arc<Mutex<&'static str>>,
 }
 
 impl UiLogBuffer {
@@ -21,6 +22,7 @@ impl UiLogBuffer {
             lines: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
             filter: Arc::new(Mutex::new(None)),
+            log_level: Arc::new(Mutex::new("info")),
         }
     }
 
@@ -42,7 +44,8 @@ impl UiLogBuffer {
     }
 
     pub(crate) fn install_tracing(&self) {
-        let (filter, handle) = reload::Layer::new(log_filter("info"));
+        let initial_level = self.log_level.lock().map(|level| *level).unwrap_or("info");
+        let (filter, handle) = reload::Layer::new(log_filter(initial_level));
         let layer = fmt::layer()
             .with_writer(UiLogMakeWriter {
                 buffer: self.clone(),
@@ -75,14 +78,22 @@ impl UiLogBuffer {
             .lock()
             .map_err(|_| "日志级别状态锁已损坏".to_string())?
             .clone();
-        let Some(handle) = handle else {
-            return Ok(());
-        };
+        let mut current = self
+            .log_level
+            .lock()
+            .map_err(|_| "日志级别状态锁已损坏".to_string())?;
 
-        handle
-            .reload(log_filter(normalized))
-            .map_err(|err| format!("更新 UI 日志级别失败：{err}"))?;
-        self.push(format!("UI 日志级别已切换为：{normalized}"));
+        if *current == normalized {
+            return Ok(());
+        }
+
+        if let Some(handle) = handle {
+            handle
+                .reload(log_filter(normalized))
+                .map_err(|err| format!("更新 UI 日志级别失败：{err}"))?;
+            self.push(format!("UI 日志级别已切换为：{normalized}"));
+        }
+        *current = normalized;
         Ok(())
     }
 }
