@@ -50,6 +50,40 @@ enum Commands {
         #[arg(short, long, default_value = "performance-report.html")]
         output: String,
     },
+    /// 运行 UDP 专项性能测试（SOCKS5 UDP ASSOCIATE -> UDP echo）
+    UdpPerformance {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// UDP echo 目标主机
+        #[arg(long, default_value = "127.0.0.1")]
+        target_host: String,
+
+        /// UDP echo 目标端口
+        #[arg(long, default_value = "9092")]
+        target_port: u16,
+
+        /// 并发 UDP flow 数
+        #[arg(short, long, default_value = "100")]
+        concurrency: usize,
+
+        /// 测试持续时间（秒）
+        #[arg(short, long, default_value = "60")]
+        duration: u64,
+
+        /// 每个 UDP payload 的字节数
+        #[arg(long, default_value = "1200")]
+        payload_size: usize,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "udp-performance-report.html")]
+        output: String,
+    },
     /// 启动模拟目标服务器
     MockTarget {
         /// HTTP 服务器端口
@@ -103,6 +137,40 @@ async fn main() -> Result<()> {
 
             report::generate_reports(&results, &output)?;
             tracing::info!("性能报告已生成：{}", output);
+        }
+        Commands::UdpPerformance {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            concurrency,
+            duration,
+            payload_size,
+            output,
+        } => {
+            tracing::info!("正在运行 UDP 专项性能测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "目标：{}:{}，并发 flow：{}，payload={} bytes，持续时间：{} 秒",
+                target_host,
+                target_port,
+                concurrency,
+                payload_size,
+                duration
+            );
+
+            let results = performance_tests::run_udp_performance_tests(
+                &agent_addr,
+                &target_host,
+                target_port,
+                concurrency,
+                duration,
+                payload_size,
+            )
+            .await?;
+
+            report::generate_udp_reports(&results, &output)?;
+            tracing::info!("UDP 性能报告已生成：{}", output);
         }
         Commands::MockTarget {
             http_port,

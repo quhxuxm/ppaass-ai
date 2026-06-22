@@ -144,10 +144,12 @@ async fn send_udp_relay_response_batch(
     )
     .await?;
     let mut extra_buffer_permits = Vec::new();
+    let mut batch_size = 1usize;
 
     for _ in 1..UDP_RELAY_RESPONSE_BATCH_LIMIT {
         match response_rx.try_recv() {
             Ok(response) => {
+                batch_size += 1;
                 // `feed_udp_relay_response` 会把响应排入 Framed sink，但数据可能还在
                 // sink/codec/socket 的内部缓冲里。因此这里收集 permit，等本批 flush
                 // 成功后再释放，保证 buffered bytes 统计覆盖真实写出前的积压。
@@ -171,6 +173,9 @@ async fn send_udp_relay_response_batch(
         .flush()
         .await
         .map_err(|e| ProxyError::Connection(format!("Failed to flush UDP relay responses: {e}")))?;
+    if batch_size > 1 {
+        debug!("UDP relay response 批量 flush：batch_size={batch_size}");
+    }
     // 明确 drop 是为了强调 permit 的释放点：只有这一批数据完成 flush 后，才把下行
     // buffered bytes 从全局预算中扣回去。
     drop(first_buffer_permit);

@@ -89,6 +89,38 @@ case "$MODE" in
         echo "  - ${OUTPUT_FILE%.html}.json"
         echo "  - ${OUTPUT_FILE%.html}.md"
         ;;
+
+    udp-performance)
+        PAYLOAD_SIZE="${4:-1200}"
+        echo -e "${YELLOW}Running UDP performance tests...${NC}"
+        echo "Agent: $AGENT_ADDR"
+        echo "Proxy: $PROXY_ADDR"
+        echo "Concurrency: $CONCURRENCY"
+        echo "Duration: ${DURATION}s"
+        echo "Payload size: ${PAYLOAD_SIZE} bytes"
+        echo ""
+        echo "Make sure the following are running:"
+        echo "  1. Agent server on $AGENT_ADDR"
+        echo "  2. Proxy server on $PROXY_ADDR"
+        echo "  3. Mock target servers (run: $0 mock-target)"
+        echo ""
+        read -p "Press Enter to continue or Ctrl+C to cancel..."
+
+        OUTPUT_FILE="udp-performance-report-$(date +%Y%m%d-%H%M%S).html"
+        cargo run --release -p integration-tests -- udp-performance \
+            --agent-addr "$AGENT_ADDR" \
+            --proxy-addr "$PROXY_ADDR" \
+            --concurrency "$CONCURRENCY" \
+            --duration "$DURATION" \
+            --payload-size "$PAYLOAD_SIZE" \
+            --output "$OUTPUT_FILE"
+
+        echo -e "${GREEN}✓ UDP performance test complete${NC}"
+        echo "Reports generated:"
+        echo "  - ${OUTPUT_FILE}"
+        echo "  - ${OUTPUT_FILE%.html}.json"
+        echo "  - ${OUTPUT_FILE%.html}.md"
+        ;;
     
     all)
         echo -e "${YELLOW}Running all tests...${NC}"
@@ -139,6 +171,7 @@ case "$MODE" in
         echo "  mock-target          Start mock target servers (HTTP on 9090, TCP on 9091)"
         echo "  integration          Run integration tests"
         echo "  performance [c] [d]  Run performance tests with [c]=concurrency, [d]=duration"
+        echo "  udp-performance [c] [d] [p] Run UDP performance tests with payload [p] bytes"
         echo "  all [c] [d]          Run all tests"
         echo "  help                 Show this help message"
         echo ""
@@ -150,6 +183,7 @@ case "$MODE" in
         echo "  $0 mock-target"
         echo "  $0 integration"
         echo "  $0 performance 200 120"
+        echo "  $0 udp-performance 200 120 1200"
         echo "  $0 all 100 60"
         echo "  AGENT_ADDR=10.0.0.1:7070 $0 integration"
         ;;

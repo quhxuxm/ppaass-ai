@@ -75,6 +75,14 @@ impl UdpRelayState {
         self.flows.get(&flow_id).copied()
     }
 
+    fn active_flows(&self) -> usize {
+        self.flows.len()
+    }
+
+    fn tracked_flow_keys(&self) -> usize {
+        self.flow_ids.len()
+    }
+
     fn next_available_flow_id(&mut self) -> u64 {
         loop {
             let id = self.next_flow_id;
@@ -228,7 +236,14 @@ async fn run_udp_relay(
                     let _ = writer.shutdown().await;
                     break;
                 }
-                _ = cleanup.tick() => state.cleanup_expired(),
+                _ = cleanup.tick() => {
+                    state.cleanup_expired();
+                    debug!(
+                        "Android TUN UDP relay shard stats: active_flows={} tracked_flow_keys={}",
+                        state.active_flows(),
+                        state.tracked_flow_keys()
+                    );
+                },
                 maybe_request = rx.recv() => {
                     let Some(request) = maybe_request else {
                         let _ = writer.shutdown().await;

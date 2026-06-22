@@ -77,6 +77,14 @@ impl SocksUdpRelayState {
         self.flows.get(&flow_id)
     }
 
+    fn active_flows(&self) -> usize {
+        self.flows.len()
+    }
+
+    fn tracked_flow_keys(&self) -> usize {
+        self.flow_ids.len()
+    }
+
     fn next_available_flow_id(&mut self) -> u64 {
         loop {
             let id = self.next_flow_id;
@@ -164,6 +172,8 @@ async fn run_socks_udp_relay(
 
         info!("SOCKS5 UDP 已建立共享 proxy 连接");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
+        let mut metrics = tokio::time::interval(Duration::from_secs(60));
+        metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let idle = tokio::time::sleep(SOCKS_UDP_RELAY_CONNECTION_IDLE);
         tokio::pin!(idle);
         retry_request = Some(first_request);
@@ -201,6 +211,13 @@ async fn run_socks_udp_relay(
                     );
                     let _ = writer.shutdown().await;
                     break;
+                }
+                _ = metrics.tick() => {
+                    debug!(
+                        "SOCKS5 UDP relay shard 观测：active_flows={} tracked_flow_keys={}",
+                        state.active_flows(),
+                        state.tracked_flow_keys()
+                    );
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {

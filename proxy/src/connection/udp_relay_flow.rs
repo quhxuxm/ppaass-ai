@@ -121,7 +121,13 @@ impl UdpRelayFlowSet {
     pub(super) fn remove(&mut self, flow_id: u64) {
         // flow 任务在 idle、socket 错误、队列关闭等情况下都会发送 done 通知。
         // 这里删除表项后，后续同一 flow_id 如果再次出现，会重新创建 UDP socket。
-        self.flows.remove(&flow_id);
+        if self.flows.remove(&flow_id).is_some() {
+            debug!(
+                "{} flow {flow_id} 已清理，active_flows={}",
+                self.context.relay_label,
+                self.flows.len()
+            );
+        }
     }
 
     pub(super) async fn dispatch(&mut self, relay_packet: UdpRelayPacket) {
@@ -206,6 +212,11 @@ impl UdpRelayFlowSet {
         {
             Ok(flow) => {
                 self.flows.insert(flow_id, flow);
+                debug!(
+                    "{} flow {flow_id} 已创建，active_flows={}",
+                    self.context.relay_label,
+                    self.flows.len()
+                );
                 true
             }
             Err(e) => {

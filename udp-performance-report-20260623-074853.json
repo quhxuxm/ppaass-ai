@@ -1,0 +1,30 @@
+{
+  "test_duration_secs": 60,
+  "agent_addr": "127.0.0.1:7080",
+  "target_addr": "127.0.0.1:9092",
+  "concurrency": 100,
+  "payload_size": 1200,
+  "total_datagrams": 2585666,
+  "successful_datagrams": 2585666,
+  "failed_datagrams": 0,
+  "packet_loss_percent": 0.0,
+  "datagrams_per_second": 42564.44594768074,
+  "throughput_mbps": 817.2373621954702,
+  "udp_metrics": {
+    "total_datagrams": 2585666,
+    "successful": 2585666,
+    "failed": 0,
+    "avg_rtt_ms": 2.3191418999979105,
+    "min_rtt_ms": 0.208,
+    "max_rtt_ms": 112.511,
+    "p50_rtt_ms": 1.937,
+    "p95_rtt_ms": 4.503,
+    "p99_rtt_ms": 10.119,
+    "total_bytes_transferred": 6205598400
+  },
+  "system_metrics": {
+    "cpu_usage_percent": 98.437904,
+    "memory_usage_mb": 13093,
+    "peak_memory_mb": 13246
+  }
+}

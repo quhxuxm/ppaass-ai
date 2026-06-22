@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPAASS UDP Relay Performance Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 24px;
+            background: #f6f7f9;
+            color: #222;
+        }
+        .container {
+            max-width: 1040px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 28px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+        }
+        h1 { margin-top: 0; }
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            margin: 22px 0;
+        }
+        .metric-card {
+            border: 1px solid #d8dee8;
+            border-radius: 8px;
+            padding: 16px;
+            background: #fbfcfe;
+        }
+        .metric-card h3 {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: #526070;
+        }
+        .metric-card .value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e4e8ef;
+            text-align: left;
+        }
+        th {
+            background: #eef2f7;
+        }
+        .ok { color: #137333; font-weight: 600; }
+        .bad { color: #b3261e; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PPAASS UDP Relay Performance Test Report</h1>
+        <p><strong>Agent:</strong> 127.0.0.1:7080 &nbsp; <strong>Target:</strong> 127.0.0.1:9092 &nbsp; <strong>Duration:</strong> 5 seconds</p>
+        <p><strong>Concurrency:</strong> 10 UDP flows &nbsp; <strong>Payload:</strong> 1200 bytes</p>
+
+        <div class="summary">
+            <div class="metric-card"><h3>Total Datagrams</h3><div class="value">143449</div></div>
+            <div class="metric-card"><h3>Success Rate</h3><div class="value">100.00%</div></div>
+            <div class="metric-card"><h3>Datagrams/sec</h3><div class="value">28260.73</div></div>
+            <div class="metric-card"><h3>Throughput</h3><div class="value">542.61 Mbps</div></div>
+        </div>
+
+        <h2>UDP RTT Metrics</h2>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Successful</td><td class="ok">143449</td></tr>
+            <tr><td>Failed</td><td class="bad">0</td></tr>
+            <tr><td>Failure Rate</td><td>0.00%</td></tr>
+            <tr><td>Average RTT</td><td>0.347 ms</td></tr>
+            <tr><td>Min RTT</td><td>0.132 ms</td></tr>
+            <tr><td>P50 RTT</td><td>0.315 ms</td></tr>
+            <tr><td>P95 RTT</td><td>0.539 ms</td></tr>
+            <tr><td>P99 RTT</td><td>0.822 ms</td></tr>
+            <tr><td>Max RTT</td><td>54.527 ms</td></tr>
+            <tr><td>Total Bytes Transferred</td><td>344277600</td></tr>
+        </table>
+
+        <h2>System Metrics</h2>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>CPU Usage</td><td>85.24%</td></tr>
+            <tr><td>Memory Usage</td><td>12730 MB</td></tr>
+            <tr><td>Peak Memory</td><td>12775 MB</td></tr>
+        </table>
+    </div>
+</body>
+</html>
