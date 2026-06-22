@@ -167,8 +167,7 @@ pub(crate) fn install_bundled_agent_assets(
 }
 
 pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
-    let value = raw
-        .parse::<Value>()
+    let value = toml::from_str::<Value>(raw)
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     let runtime_threads = int_at(&value, &["runtime_threads"])
         .filter(|value| *value > 0)

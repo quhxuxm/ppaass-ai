@@ -23,5 +23,5 @@ tokio-yamux.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 
-jni = "0.22.4"
-libc = "0.2"
+jni.workspace = true
+libc.workspace = true
