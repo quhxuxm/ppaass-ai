@@ -4,20 +4,12 @@
 //! `ConnectRequest` 控制帧，用来说明这个子流要连哪个真实目标。
 //! 连接成功后，子流本身就变成 agent 与目标之间的裸字节通道。
 
-use super::target::{relay_target_addr, target_addr_for_address};
+use super::target::target_addr_for_address;
 use super::udp_relay_flow::{
-    QueuedUdpRelayData, QueuedUdpRelayResponse, UdpRelayFlow, UdpRelayFlowChannels,
-    UdpRelayFlowOptions, try_acquire_udp_relay_buffer, udp_relay_channel_size,
+    QueuedUdpRelayResponse, UDP_RELAY_RESPONSE_BATCH_LIMIT, UdpRelayFlowChannels, UdpRelayFlowSet,
+    udp_relay_channel_size,
 };
 use super::*;
-use std::collections::HashMap;
-
-struct YamuxUdpRelayFlowContext {
-    egress_state: Arc<EgressState>,
-    channels: UdpRelayFlowChannels,
-    connection_limiter: ConnectionLimiter,
-    max_buffered_bytes: usize,
-}
 
 pub(super) async fn handle_yamux_tcp_stream(
     mut stream: StreamHandle,
@@ -646,19 +638,31 @@ async fn relay_yamux_udp_relay_stream(
     username: Option<String>,
     connection_limiter: ConnectionLimiter,
 ) -> Result<()> {
+    // UDP Yamux 子流本身是字节流；`DatagramStreamIo` 在子流上加长度前缀，
+    // 保留 UDP datagram 边界。这样上层 relay 每次 read/write 都对应一个完整
+    // `UdpRelayPacket`，不会把多个 UDP 包粘在一起，也不会拆半包。
     let agent_io = DatagramStreamIo::new(agent_stream);
     let (mut reader, mut writer) = tokio::io::split(agent_io);
-    let channel_size = udp_relay_channel_size(&proxy_config);
+    let channel_size = udp_relay_channel_size(proxy_config.as_ref());
     let (response_tx, mut response_rx) =
         tokio::sync::mpsc::channel::<QueuedUdpRelayResponse>(channel_size);
     let (flow_done_tx, mut flow_done_rx) = tokio::sync::mpsc::channel::<u64>(channel_size);
-    let flow_options = UdpRelayFlowOptions {
-        idle_timeout: Duration::from_secs(proxy_config.udp_relay_idle_timeout_secs),
-        channel_size,
-    };
-    let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
-    let max_flows = proxy_config.max_udp_relay_flows_per_connection;
-    let relay_idle_timeout = flow_options.idle_timeout;
+    // 与 legacy UDP relay 共用同一个 flow 管理核心。Yamux 路径只保留两点差异：
+    // 1. 从 Yamux datagram 子流读取 agent 侧 UdpRelayPacket；
+    // 2. 把目标响应编码后直接写回同一个 Yamux datagram 子流。
+    // UDP socket 创建、flow 上限、buffered bytes 预算和 done 清理都在 FlowSet 内部完成。
+    let mut flow_set = UdpRelayFlowSet::new(
+        proxy_config.as_ref(),
+        egress_state,
+        connection_limiter,
+        UdpRelayFlowChannels {
+            response_tx: response_tx.clone(),
+            flow_done_tx: flow_done_tx.clone(),
+        },
+        "Yamux UDP relay",
+        "proxy yamux udp relay flow",
+    );
+    let relay_idle_timeout = flow_set.idle_timeout();
     let relay_idle = tokio::time::sleep(relay_idle_timeout);
     tokio::pin!(relay_idle);
     let mut request_buf = vec![0u8; 1024 * 1024];
@@ -684,6 +688,8 @@ async fn relay_yamux_udp_relay_stream(
 
                 relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
                 if let Some(user) = &username {
+                    // 这里统计的是 agent -> proxy 外层 datagram 的字节数，也就是编码后的
+                    // `UdpRelayPacket` 大小；与 legacy 路径保持同一口径。
                     bandwidth_monitor.record_received(user, n as u64);
                 }
 
@@ -695,90 +701,21 @@ async fn relay_yamux_udp_relay_stream(
                     }
                 };
 
-                if !flows.contains_key(&relay_packet.flow_id) {
-                    if max_flows != 0 && flows.len() >= max_flows {
-                        warn!(
-                            "Yamux UDP relay flow 数已达上限（{}），丢弃 flow {} 的数据包",
-                            max_flows, relay_packet.flow_id
-                        );
-                        continue;
-                    }
-                    let Some(flow_permit) = connection_limiter.try_acquire_udp_relay_flow() else {
-                        warn!(
-                            "proxy 全局 UDP relay flow 数已达上限（当前={}，上限={}），丢弃 flow {} 的数据包",
-                            connection_limiter.active_udp_relay_flows(),
-                            proxy_config.max_udp_relay_flows,
-                            relay_packet.flow_id
-                        );
-                        continue;
-                    };
-                    let flow_context = YamuxUdpRelayFlowContext {
-                        egress_state: egress_state.clone(),
-                        channels: UdpRelayFlowChannels {
-                            response_tx: response_tx.clone(),
-                            flow_done_tx: flow_done_tx.clone(),
-                        },
-                        connection_limiter: connection_limiter.clone(),
-                        max_buffered_bytes: proxy_config.max_udp_relay_buffered_bytes,
-                    };
-                    match spawn_yamux_udp_relay_flow(
-                        relay_packet.flow_id,
-                        relay_packet.address.clone(),
-                        flow_permit,
-                        flow_options,
-                        flow_context,
-                    ).await {
-                        Ok(flow) => {
-                            flows.insert(relay_packet.flow_id, flow);
-                        }
-                        Err(e) => {
-                            debug!(
-                                "Yamux UDP relay flow {} 连接目标失败：{}",
-                                relay_packet.flow_id, e
-                            );
-                            continue;
-                        }
-                    }
-                }
-
-                let flow_id = relay_packet.flow_id;
-                if let Some(flow) = flows.get(&flow_id) {
-                    let Some(buffer_permit) = try_acquire_udp_relay_buffer(
-                        &connection_limiter,
-                        proxy_config.max_udp_relay_buffered_bytes,
-                        flow_id,
-                        relay_packet.data.len(),
-                        "上行",
-                    ) else {
-                        continue;
-                    };
-                    let queued = QueuedUdpRelayData {
-                        data: relay_packet.data,
-                        _buffer_permit: buffer_permit,
-                    };
-                    match flow.tx.try_send(queued) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => {
-                            debug!("Yamux UDP relay flow {flow_id} 发送队列已满，丢弃一个 UDP 数据包");
-                        }
-                        Err(TrySendError::Closed(_)) => {
-                            flows.remove(&flow_id);
-                        }
-                    }
-                }
+                flow_set.dispatch(relay_packet).await;
             }
             response = response_rx.recv() => {
                 let Some(response) = response else { break };
-                let encoded = response
-                    .packet
-                    .encode()
-                    .map_err(ProxyError::Protocol)?;
-                if let Some(user) = &username {
-                    bandwidth_monitor.record_sent(user, encoded.len() as u64);
-                }
+                // Yamux 子流写回仍然可能被慢 agent 或 Yamux 窗口阻塞，所以保留
+                // relay_idle_timeout 作为写超时。批量 helper 内部只做非阻塞 drain，
+                // 不会在等待更多响应时卡住这里。
                 match tokio::time::timeout(relay_idle_timeout, async {
-                    writer.write_all(&encoded).await?;
-                    writer.flush().await
+                    write_yamux_udp_relay_response_batch(
+                        &mut writer,
+                        &mut response_rx,
+                        response,
+                        username.as_deref(),
+                        bandwidth_monitor.as_ref(),
+                    ).await
                 }).await {
                     Ok(Ok(())) => {
                         relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
@@ -795,7 +732,7 @@ async fn relay_yamux_udp_relay_stream(
             }
             done = flow_done_rx.recv() => {
                 let Some(flow_id) = done else { break };
-                flows.remove(&flow_id);
+                flow_set.remove(flow_id);
             }
         }
     }
@@ -804,104 +741,66 @@ async fn relay_yamux_udp_relay_stream(
     Ok(())
 }
 
-async fn spawn_yamux_udp_relay_flow(
-    flow_id: u64,
-    address: Address,
-    flow_permit: UdpRelayFlowPermit,
-    options: UdpRelayFlowOptions,
-    context: YamuxUdpRelayFlowContext,
-) -> Result<UdpRelayFlow> {
-    let YamuxUdpRelayFlowContext {
-        egress_state,
-        channels,
-        connection_limiter,
-        max_buffered_bytes,
-    } = context;
-    let target_addr = relay_target_addr(&address)?;
-    let socket = egress_state.connect_udp(&target_addr).await.map_err(|e| {
-        ProxyError::Connection(format!("Failed to connect Yamux UDP relay target: {e}"))
-    })?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<QueuedUdpRelayData>(options.channel_size);
-    let response_address = address.clone();
-    let response_tx = channels.response_tx;
-    let flow_done_tx = channels.flow_done_tx;
-    let flow_idle_timeout = options.idle_timeout;
+async fn write_yamux_udp_relay_response_batch<W>(
+    writer: &mut W,
+    response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
+    first_response: QueuedUdpRelayResponse,
+    username: Option<&str>,
+    bandwidth_monitor: &BandwidthMonitor,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    // 首个 response 已由 `recv().await` 拿到；随后短批量 drain 已就绪响应。
+    // 和 legacy 路径一样，permit 会一直持有到本批 flush 完成，防止写缓冲中仍有
+    // 数据时过早释放全局 buffered bytes 预算。
+    let first_buffer_permit =
+        write_yamux_udp_relay_response(writer, first_response, username, bandwidth_monitor).await?;
+    let mut extra_buffer_permits = Vec::new();
 
-    spawn_guarded("proxy yamux udp relay flow", async move {
-        let _flow_permit = flow_permit;
-        let mut buf = vec![0u8; 65535];
-        let idle = tokio::time::sleep(flow_idle_timeout);
-        tokio::pin!(idle);
-
-        loop {
-            tokio::select! {
-                _ = &mut idle => break,
-                maybe_data = rx.recv() => {
-                    let Some(queued) = maybe_data else { break };
-                    let data = queued.data;
-                    match tokio::time::timeout(flow_idle_timeout, socket.send(&data)).await {
-                        Ok(Ok(_)) => {
-                            idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
-                        }
-                        Ok(Err(e)) => {
-                            debug!("Yamux UDP relay flow {flow_id} 发送失败：{e}");
-                            break;
-                        }
-                        Err(_) => {
-                            debug!(
-                                "Yamux UDP relay flow {flow_id} 发送超过 {} 秒，关闭该 flow",
-                                flow_idle_timeout.as_secs()
-                            );
-                            break;
-                        }
-                    }
-                }
-                read = socket.recv(&mut buf) => {
-                    match read {
-                        Ok(n) => {
-                            let Some(buffer_permit) = try_acquire_udp_relay_buffer(
-                                &connection_limiter,
-                                max_buffered_bytes,
-                                flow_id,
-                                n,
-                                "下行",
-                            ) else {
-                                debug!("Yamux UDP relay flow {flow_id} 响应缓冲预算不足，关闭该 flow 以释放 socket");
-                                break;
-                            };
-                            let response = QueuedUdpRelayResponse {
-                                packet: UdpRelayPacket {
-                                    flow_id,
-                                    address: response_address.clone(),
-                                    data: buf[..n].to_vec(),
-                                },
-                                _buffer_permit: buffer_permit,
-                            };
-                            match response_tx.try_send(response) {
-                                Ok(()) => {
-                                    idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
-                                }
-                                Err(TrySendError::Full(_)) => {
-                                    debug!("Yamux UDP relay flow {flow_id} 响应队列已满，关闭该 flow 以释放 socket");
-                                    break;
-                                }
-                                Err(TrySendError::Closed(_)) => break,
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Yamux UDP relay flow {flow_id} 接收失败：{e}");
-                            break;
-                        }
-                    }
-                }
+    for _ in 1..UDP_RELAY_RESPONSE_BATCH_LIMIT {
+        match response_rx.try_recv() {
+            Ok(response) => {
+                extra_buffer_permits.push(
+                    write_yamux_udp_relay_response(writer, response, username, bandwidth_monitor)
+                        .await?,
+                );
             }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
         }
-        drop(socket);
-        let _ = flow_done_tx.send(flow_id).await;
-        debug!("Yamux UDP relay flow {flow_id} 已结束");
-    });
+    }
 
-    Ok(UdpRelayFlow { tx })
+    // `DatagramStreamIo` 的 write_all 只把一个 datagram 交给 SinkWriter；flush 才会
+    // 推动底层 Yamux 子流实际写出。因此本批次最后统一 flush，减少每个回包一次 flush
+    // 的开销，同时保留 datagram 边界。
+    writer.flush().await?;
+    drop(first_buffer_permit);
+    drop(extra_buffer_permits);
+    Ok(())
+}
+
+async fn write_yamux_udp_relay_response<W>(
+    writer: &mut W,
+    response: QueuedUdpRelayResponse,
+    username: Option<&str>,
+    bandwidth_monitor: &BandwidthMonitor,
+) -> Result<UdpRelayBufferedBytesPermit>
+where
+    W: AsyncWrite + Unpin,
+{
+    let QueuedUdpRelayResponse {
+        packet,
+        _buffer_permit: buffer_permit,
+    } = response;
+    // 这里不包 `ProxyResponse::Data`，因为 Yamux 子流本身已经代表当前 request。
+    // 写入的是一帧完整的 UdpRelayPacket，DatagramStreamIo 会额外加长度前缀。
+    let encoded = packet.encode().map_err(ProxyError::Protocol)?;
+    if let Some(user) = username {
+        bandwidth_monitor.record_sent(user, encoded.len() as u64);
+    }
+    writer.write_all(&encoded).await?;
+    Ok(buffer_permit)
 }
 
 async fn send_yamux_connect_success<W>(

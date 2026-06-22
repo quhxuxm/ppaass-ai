@@ -4,13 +4,11 @@
 //! agent->proxy 连接可以承载多个 UDP 目标。agent 把每个 UDP 包包成
 //! `UdpRelayPacket { flow_id, address, data }`，proxy 按 flow_id 维护独立 UDP socket。
 
-use super::target::relay_target_addr;
 use super::udp_relay_flow::{
-    QueuedUdpRelayData, QueuedUdpRelayResponse, UdpRelayFlow, UdpRelayFlowChannels,
-    UdpRelayFlowOptions, try_acquire_udp_relay_buffer, udp_relay_channel_size,
+    QueuedUdpRelayResponse, UDP_RELAY_RESPONSE_BATCH_LIMIT, UdpRelayFlowChannels, UdpRelayFlowSet,
+    udp_relay_channel_size,
 };
 use super::*;
-use std::collections::HashMap;
 
 impl ServerConnection {
     pub(super) async fn handle_udp_relay_connect(
@@ -29,15 +27,25 @@ impl ServerConnection {
         let (response_tx, mut response_rx) =
             tokio::sync::mpsc::channel::<QueuedUdpRelayResponse>(channel_size);
         let (flow_done_tx, mut flow_done_rx) = tokio::sync::mpsc::channel::<u64>(channel_size);
-        let flow_options = UdpRelayFlowOptions {
-            idle_timeout: Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs),
-            channel_size,
-        };
-        // flow_id -> flow 发送队列。每个 flow 背后有一个已 connect 的 UDP socket。
-        let mut flows: HashMap<u64, UdpRelayFlow> = HashMap::new();
-        let max_flows = self.proxy_config.max_udp_relay_flows_per_connection;
+        // legacy UDP relay 的外层是 `ProxyRequest/ProxyResponse::Data`。flow 的创建、
+        // 上下行队列、buffer permit 和 socket 生命周期都交给 `UdpRelayFlowSet`；
+        // 本函数只负责：
+        // 1. 从 agent 的 DataPacket 里解析 UdpRelayPacket；
+        // 2. 把目标响应重新包回当前 request_id 对应的 DataPacket；
+        // 3. 管理这条共享 relay 连接自身的 idle 生命周期。
+        let mut flow_set = UdpRelayFlowSet::new(
+            self.proxy_config.as_ref(),
+            self.egress_state.clone(),
+            self.connection_limiter.clone(),
+            UdpRelayFlowChannels {
+                response_tx: response_tx.clone(),
+                flow_done_tx: flow_done_tx.clone(),
+            },
+            "UDP relay",
+            "proxy udp relay flow",
+        );
         let stream_id = connect_request.request_id;
-        let relay_idle_timeout = flow_options.idle_timeout;
+        let relay_idle_timeout = flow_set.idle_timeout();
         let relay_idle = tokio::time::sleep(relay_idle_timeout);
         tokio::pin!(relay_idle);
 
@@ -70,6 +78,8 @@ impl ServerConnection {
                         continue;
                     }
 
+                    // 任何有效上行包都表示共享 relay 仍在使用中，重置连接级 idle。
+                    // flow 自己还有 per-flow idle；连接级 idle 只用于整条共享通道无流量时退出。
                     relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
 
                     if let Some(user) = &username {
@@ -86,99 +96,26 @@ impl ServerConnection {
                         }
                     };
 
-                    if !flows.contains_key(&relay_packet.flow_id) {
-                        // 新 flow 第一次出现时才创建 UDP socket；超过 per-connection 或全局上限则丢弃。
-                        if max_flows != 0 && flows.len() >= max_flows {
-                            warn!(
-                                "UDP relay flow 数已达上限（{}），丢弃 flow {} 的数据包",
-                                max_flows, relay_packet.flow_id
-                            );
-                            continue;
-                        }
-                        let Some(flow_permit) = self.connection_limiter.try_acquire_udp_relay_flow() else {
-                            warn!(
-                                "proxy 全局 UDP relay flow 数已达上限（当前={}，上限={}），丢弃 flow {} 的数据包",
-                                self.connection_limiter.active_udp_relay_flows(),
-                                self.proxy_config.max_udp_relay_flows,
-                                relay_packet.flow_id
-                            );
-                            continue;
-                        };
-                        match self.spawn_udp_relay_flow(
-                            relay_packet.flow_id,
-                            relay_packet.address.clone(),
-                            UdpRelayFlowChannels {
-                                response_tx: response_tx.clone(),
-                                flow_done_tx: flow_done_tx.clone(),
-                            },
-                            flow_permit,
-                            flow_options,
-                        ).await {
-                            Ok(flow) => {
-                                flows.insert(relay_packet.flow_id, flow);
-                            }
-                            Err(e) => {
-                                debug!(
-                                    "UDP relay flow {} 连接目标失败：{}",
-                                    relay_packet.flow_id, e
-                                );
-                                continue;
-                            }
-                        }
-                    }
-
-                    let flow_id = relay_packet.flow_id;
-                    if let Some(flow) = flows.get(&flow_id) {
-                        // 队列中的 payload 会持有 buffer permit，直到实际被发送或丢弃。
-                        // 这样全局 buffered bytes 能真实反映积压数据量。
-                        let Some(buffer_permit) = try_acquire_udp_relay_buffer(
-                            &self.connection_limiter,
-                            self.proxy_config.max_udp_relay_buffered_bytes,
-                            flow_id,
-                            relay_packet.data.len(),
-                            "上行",
-                        ) else {
-                            continue;
-                        };
-                        let queued = QueuedUdpRelayData {
-                            data: relay_packet.data,
-                            _buffer_permit: buffer_permit,
-                        };
-                        match flow.tx.try_send(queued) {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
-                                debug!("UDP relay flow {flow_id} 发送队列已满，丢弃一个 UDP 数据包");
-                            }
-                            Err(TrySendError::Closed(_)) => {
-                                flows.remove(&flow_id);
-                            }
-                        }
-                    }
+                    flow_set.dispatch(relay_packet).await;
                 }
                 response = response_rx.recv() => {
                     let Some(response) = response else { break };
-                    // 目标响应重新编码成 UdpRelayPacket，再包回当前 stream_id 的 DataPacket。
-                    let encoded = response
-                        .packet
-                        .encode()
-                        .map_err(ProxyError::Protocol)?;
-                    if let Some(user) = &username {
-                        self.bandwidth_monitor.record_sent(user, encoded.len() as u64);
-                    }
-                    let packet = protocol::DataPacket {
-                        stream_id: stream_id.clone(),
-                        data: encoded,
-                        is_end: false,
-                    };
-                    self.writer
-                        .send(ProxyResponse::Data(packet))
-                        .await
-                        .map_err(|e| ProxyError::Connection(format!("Failed to send UDP relay response: {e}")))?;
+                    // 下行响应可能在同一 tick 内已经积压多个。这里一次取出一小批一起 feed，
+                    // 最后统一 flush，减少高包率场景下 `send().await`/flush 对 relay 主循环
+                    // 的唤醒压力。批量大小由公共常量控制，避免 drain 过多导致上行读取延迟。
+                    send_udp_relay_response_batch(
+                        &mut self.writer,
+                        &mut response_rx,
+                        response,
+                        &stream_id,
+                        username.as_deref(),
+                        self.bandwidth_monitor.as_ref(),
+                    ).await?;
                     relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
                 }
                 done = flow_done_rx.recv() => {
                     let Some(flow_id) = done else { break };
-                    flows.remove(&flow_id);
+                    flow_set.remove(flow_id);
                 }
             }
         }
@@ -186,108 +123,86 @@ impl ServerConnection {
         debug!("UDP 共享中继已结束");
         Ok(())
     }
+}
 
-    async fn spawn_udp_relay_flow(
-        &self,
-        flow_id: u64,
-        address: Address,
-        channels: UdpRelayFlowChannels,
-        flow_permit: UdpRelayFlowPermit,
-        options: UdpRelayFlowOptions,
-    ) -> Result<UdpRelayFlow> {
-        let target_addr = relay_target_addr(&address)?;
-        // flow 创建时就把 UDP socket connect 到具体目标，后续只需 send/recv payload。
-        let socket = self
-            .egress_state
-            .connect_udp(&target_addr)
-            .await
-            .map_err(|e| {
-                ProxyError::Connection(format!("Failed to connect UDP relay target: {e}"))
-            })?;
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<QueuedUdpRelayData>(options.channel_size);
-        let response_address = address.clone();
-        let connection_limiter = self.connection_limiter.clone();
-        let max_buffered_bytes = self.proxy_config.max_udp_relay_buffered_bytes;
-        let response_tx = channels.response_tx;
-        let flow_done_tx = channels.flow_done_tx;
-        let flow_idle_timeout = options.idle_timeout;
+async fn send_udp_relay_response_batch(
+    writer: &mut FramedWriter,
+    response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
+    first_response: QueuedUdpRelayResponse,
+    stream_id: &str,
+    username: Option<&str>,
+    bandwidth_monitor: &BandwidthMonitor,
+) -> Result<()> {
+    // 首个响应来自 `recv().await`，一定存在；额外响应用 `try_recv` 非阻塞 drain。
+    // 常见低流量场景不会分配 extra_buffer_permits，只有实际 drain 到更多响应才扩容。
+    let first_buffer_permit = feed_udp_relay_response(
+        writer,
+        first_response,
+        stream_id,
+        username,
+        bandwidth_monitor,
+    )
+    .await?;
+    let mut extra_buffer_permits = Vec::new();
 
-        spawn_guarded("proxy udp relay flow", async move {
-            // flow_permit 的生命周期绑定到任务；任务退出即释放全局 UDP flow 计数。
-            let _flow_permit = flow_permit;
-            let mut buf = vec![0u8; 65535];
-            let idle = tokio::time::sleep(flow_idle_timeout);
-            tokio::pin!(idle);
-
-            loop {
-                tokio::select! {
-                    _ = &mut idle => break,
-                    maybe_data = rx.recv() => {
-                        let Some(queued) = maybe_data else { break };
-                        let data = queued.data;
-                        match tokio::time::timeout(flow_idle_timeout, socket.send(&data)).await {
-                            Ok(Ok(_)) => {
-                                idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
-                            }
-                            Ok(Err(e)) => {
-                                debug!("UDP relay flow {flow_id} 发送失败：{e}");
-                                break;
-                            }
-                            Err(_) => {
-                                debug!(
-                                    "UDP relay flow {flow_id} 发送超过 {} 秒，关闭该 flow",
-                                    flow_idle_timeout.as_secs()
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    read = socket.recv(&mut buf) => {
-                        match read {
-                            Ok(n) => {
-                                // 下行响应也计入全局缓冲预算，防止目标大量回包压垮内存。
-                                let Some(buffer_permit) = try_acquire_udp_relay_buffer(
-                                    &connection_limiter,
-                                    max_buffered_bytes,
-                                    flow_id,
-                                    n,
-                                    "下行",
-                                ) else {
-                                    debug!("UDP relay flow {flow_id} 响应缓冲预算不足，关闭该 flow 以释放 socket");
-                                    break;
-                                };
-                                let response = QueuedUdpRelayResponse {
-                                    packet: UdpRelayPacket {
-                                        flow_id,
-                                        address: response_address.clone(),
-                                        data: buf[..n].to_vec(),
-                                    },
-                                    _buffer_permit: buffer_permit,
-                                };
-                                match response_tx.try_send(response) {
-                                    Ok(()) => {
-                                        idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
-                                    }
-                                    Err(TrySendError::Full(_)) => {
-                                        debug!("UDP relay flow {flow_id} 响应队列已满，关闭该 flow 以释放 socket");
-                                        break;
-                                    }
-                                    Err(TrySendError::Closed(_)) => break,
-                                }
-                            }
-                            Err(e) => {
-                                debug!("UDP relay flow {flow_id} 接收失败：{e}");
-                                break;
-                            }
-                        }
-                    }
-                }
+    for _ in 1..UDP_RELAY_RESPONSE_BATCH_LIMIT {
+        match response_rx.try_recv() {
+            Ok(response) => {
+                // `feed_udp_relay_response` 会把响应排入 Framed sink，但数据可能还在
+                // sink/codec/socket 的内部缓冲里。因此这里收集 permit，等本批 flush
+                // 成功后再释放，保证 buffered bytes 统计覆盖真实写出前的积压。
+                extra_buffer_permits.push(
+                    feed_udp_relay_response(
+                        writer,
+                        response,
+                        stream_id,
+                        username,
+                        bandwidth_monitor,
+                    )
+                    .await?,
+                );
             }
-            drop(socket);
-            let _ = flow_done_tx.send(flow_id).await;
-            debug!("UDP relay flow {flow_id} 已结束");
-        });
-
-        Ok(UdpRelayFlow { tx })
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        }
     }
+
+    writer
+        .flush()
+        .await
+        .map_err(|e| ProxyError::Connection(format!("Failed to flush UDP relay responses: {e}")))?;
+    // 明确 drop 是为了强调 permit 的释放点：只有这一批数据完成 flush 后，才把下行
+    // buffered bytes 从全局预算中扣回去。
+    drop(first_buffer_permit);
+    drop(extra_buffer_permits);
+    Ok(())
+}
+
+async fn feed_udp_relay_response(
+    writer: &mut FramedWriter,
+    response: QueuedUdpRelayResponse,
+    stream_id: &str,
+    username: Option<&str>,
+    bandwidth_monitor: &BandwidthMonitor,
+) -> Result<UdpRelayBufferedBytesPermit> {
+    let QueuedUdpRelayResponse {
+        packet,
+        _buffer_permit: buffer_permit,
+    } = response;
+    // 目标响应重新编码成 UdpRelayPacket，再包回当前 stream_id 的 DataPacket。
+    // 使用 `feed` 而不是 `send`，让调用方可以批量排队后统一 flush。
+    let encoded = packet.encode().map_err(ProxyError::Protocol)?;
+    if let Some(user) = username {
+        bandwidth_monitor.record_sent(user, encoded.len() as u64);
+    }
+    let packet = protocol::DataPacket {
+        stream_id: stream_id.to_owned(),
+        data: encoded,
+        is_end: false,
+    };
+    writer
+        .feed(ProxyResponse::Data(packet))
+        .await
+        .map_err(|e| ProxyError::Connection(format!("Failed to queue UDP relay response: {e}")))?;
+    Ok(buffer_permit)
 }
