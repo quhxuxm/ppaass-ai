@@ -11,16 +11,16 @@
   },
   "dependencies": {
     "@primeuix/themes": "^2.0.3",
-    "@tauri-apps/api": "2.6.0",
-    "lucide": "^0.468.0",
+    "@tauri-apps/api": "^2.11.1",
+    "lucide": "^1.21.0",
     "primeicons": "^7.0.0",
     "primevue": "^4.5.5",
-    "vue": "^3.5.35"
+    "vue": "^3.5.38"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.6.2",
+    "@tauri-apps/cli": "^2.11.3",
     "@vitejs/plugin-vue": "^6.0.7",
-    "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
   }
 }

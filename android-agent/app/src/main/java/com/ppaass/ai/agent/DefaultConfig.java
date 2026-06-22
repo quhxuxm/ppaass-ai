@@ -6,7 +6,7 @@ final class DefaultConfig {
     static final String TUN_IPV4 = "10.10.10.2/24";
     static final String TUN_IPV6 = "";
     static final int TUN_MTU = 1500;
-    static final boolean BLOCK_QUIC = true;
+    static final boolean BLOCK_QUIC = false;
     static final int TCP_POOL_SIZE = 32;
     static final int UDP_POOL_SIZE = 32;
     static final String COMPRESSION_MODE = "none";

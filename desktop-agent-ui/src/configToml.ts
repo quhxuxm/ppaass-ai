@@ -34,7 +34,7 @@ const defaultFieldValues = {
   tun_ipv4: "10.10.10.1/24",
   tun_mtu: 1500,
   tun_proxy_dns: false,
-  tun_block_quic: true,
+  tun_block_quic: false,
   direct_mode: "proxy_all",
   direct_rules: []
 } satisfies Partial<Record<keyof AgentConfigSummary, unknown>>;
