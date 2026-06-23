@@ -5,6 +5,7 @@
 
 use super::udp_associate::create_udp_packet;
 use super::*;
+use crate::telemetry;
 use std::collections::hash_map::DefaultHasher;
 
 const SOCKS_UDP_RELAY_CHANNEL_SIZE: usize = 4096;
@@ -276,7 +277,9 @@ where
     .map_err(std::io::Error::other)?;
 
     writer.write_all(&packet).await?;
-    writer.flush().await
+    writer.flush().await?;
+    telemetry::record_traffic(request.packet.len() as u64, 0);
+    Ok(())
 }
 
 async fn handle_socks_udp_response(
@@ -292,6 +295,8 @@ async fn handle_socks_udp_response(
     };
 
     let response = create_udp_packet(target, &packet.data).map_err(std::io::Error::other)?;
+    let response_payload_len = packet.data.len();
     udp_socket.send_to(&response, client).await?;
+    telemetry::record_traffic(0, response_payload_len as u64);
     Ok(())
 }

@@ -97,7 +97,7 @@ pub(super) async fn handle_tun_tcp(
     //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
     let mut sniffed: Vec<u8> = Vec::new();
     if direct_target.is_none() && !proxy_dns_request {
-        sniffed = sniff_first_bytes(&mut client).await;
+        sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
         {
@@ -201,7 +201,7 @@ pub(super) async fn handle_tun_tcp(
 
 /// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
 /// 个字节用于域名嗅探。读取到的数据在后续转发时会被原样补发。
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> {
+async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
     let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
     let mut chunk = [0u8; 1024];
@@ -216,7 +216,12 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> 
         }
         match timeout(remaining, client.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
-            Ok(Ok(n)) => buffer.extend_from_slice(&chunk[..n]),
+            Ok(Ok(n)) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if sniff_buffer_ready(port, &buffer) {
+                    break;
+                }
+            }
             Ok(Err(e)) => {
                 debug!("TUN TCP 嗅探读取出错：{e}");
                 break;
@@ -227,6 +232,31 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> 
     }
 
     buffer
+}
+
+fn sniff_buffer_ready(port: u16, buf: &[u8]) -> bool {
+    if sniff_domain(port, buf).is_some() {
+        return true;
+    }
+
+    // 如果已经拿到完整的 TLS record 或 HTTP 头，即使没有解析出域名也不要继续等
+    // `SNIFF_TIMEOUT`。Cloudflare/ECH 或无 Host 的连接在 TUN 下否则会给每条新 TCP
+    // 连接额外叠加一次首包等待，对 HLS `.ts` 分片这类高频短连接尤其明显。
+    has_complete_tls_record(buf) || has_complete_http_headers(buf)
+}
+
+fn has_complete_tls_record(buf: &[u8]) -> bool {
+    if buf.len() < 5 || buf[0] != 0x16 {
+        return false;
+    }
+    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+    buf.len() >= 5usize.saturating_add(record_len)
+}
+
+fn has_complete_http_headers(buf: &[u8]) -> bool {
+    std::str::from_utf8(buf)
+        .map(|text| text.contains("\r\n\r\n"))
+        .unwrap_or(false)
 }
 
 fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
@@ -379,5 +409,30 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("TUN TCP 直连 keepalive 设置失败 target={target}: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniff_buffer_waits_for_complete_tls_record() {
+        let partial = [0x16, 0x03, 0x01, 0x00, 0x03, 0x01];
+        let complete = [0x16, 0x03, 0x01, 0x00, 0x03, 0x01, 0x02, 0x03];
+
+        assert!(!has_complete_tls_record(&partial));
+        assert!(has_complete_tls_record(&complete));
+        assert!(sniff_buffer_ready(443, &complete));
+    }
+
+    #[test]
+    fn sniff_buffer_stops_on_complete_http_headers() {
+        let partial = b"GET / HTTP/1.1\r\nHost: example.com\r\n";
+        let complete = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+        assert!(!has_complete_http_headers(partial));
+        assert!(has_complete_http_headers(complete));
+        assert!(sniff_buffer_ready(80, complete));
     }
 }

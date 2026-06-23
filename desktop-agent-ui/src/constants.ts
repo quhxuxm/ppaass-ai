@@ -46,3 +46,19 @@ export const directModeOptions = [
   { label: "直连", value: "direct_all" },
   { label: "规则", value: "rules" }
 ];
+
+export const quicPolicyLabels: Record<string, string> = {
+  allow: "允许",
+  direct_if_rule_match: "仅直连 QUIC",
+  block: "全部阻断"
+};
+
+export const quicPolicyOptions = [
+  { label: quicPolicyLabels.allow, value: "allow" },
+  { label: quicPolicyLabels.direct_if_rule_match, value: "direct_if_rule_match" },
+  { label: quicPolicyLabels.block, value: "block" }
+];
+
+export function quicPolicyLabel(policy: string) {
+  return quicPolicyLabels[policy] ?? policy;
+}

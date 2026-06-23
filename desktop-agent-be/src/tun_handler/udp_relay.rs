@@ -6,6 +6,7 @@
 
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
+use crate::telemetry;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
@@ -14,23 +15,26 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
 const UDP_RELAY_SHARD_COUNT: usize = 4;
+const UDP_RELAY_REQUEST_BATCH_LIMIT: usize = 32;
 const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 pub(super) struct UdpRelay {
     shards: Vec<mpsc::Sender<UdpRelayRequest>>,
+    stats: Arc<UdpRelayStats>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct UdpRelayRequest {
     client: SocketAddr,
     target: SocketAddr,
@@ -64,6 +68,64 @@ struct UdpRelayState {
     flows: HashMap<u64, UdpFlowKey>,
     last_seen: HashMap<u64, Instant>,
     next_flow_id: u64,
+}
+
+#[derive(Debug, Default)]
+struct UdpRelayStats {
+    sent_packets: AtomicU64,
+    sent_payload_bytes: AtomicU64,
+    send_batches: AtomicU64,
+    send_batched_packets: AtomicU64,
+    response_packets: AtomicU64,
+    response_payload_bytes: AtomicU64,
+    queue_drops: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct UdpRelayStatsSnapshot {
+    sent_packets: u64,
+    sent_payload_bytes: u64,
+    send_batches: u64,
+    send_batched_packets: u64,
+    response_packets: u64,
+    response_payload_bytes: u64,
+    queue_drops: u64,
+}
+
+impl UdpRelayStats {
+    fn record_sent_batch(&self, packets: usize, payload_bytes: usize) {
+        self.sent_packets
+            .fetch_add(packets as u64, Ordering::Relaxed);
+        self.sent_payload_bytes
+            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
+        self.send_batches.fetch_add(1, Ordering::Relaxed);
+        if packets > 1 {
+            self.send_batched_packets
+                .fetch_add(packets as u64, Ordering::Relaxed);
+        }
+    }
+
+    fn record_response(&self, payload_bytes: usize) {
+        self.response_packets.fetch_add(1, Ordering::Relaxed);
+        self.response_payload_bytes
+            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
+    }
+
+    fn record_queue_drop(&self) {
+        self.queue_drops.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
+        UdpRelayStatsSnapshot {
+            sent_packets: self.sent_packets.swap(0, Ordering::Relaxed),
+            sent_payload_bytes: self.sent_payload_bytes.swap(0, Ordering::Relaxed),
+            send_batches: self.send_batches.swap(0, Ordering::Relaxed),
+            send_batched_packets: self.send_batched_packets.swap(0, Ordering::Relaxed),
+            response_packets: self.response_packets.swap(0, Ordering::Relaxed),
+            response_payload_bytes: self.response_payload_bytes.swap(0, Ordering::Relaxed),
+            queue_drops: self.queue_drops.swap(0, Ordering::Relaxed),
+        }
+    }
 }
 
 impl UdpRelayState {
@@ -136,16 +198,24 @@ impl UdpRelay {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let mut shards = Vec::with_capacity(UDP_RELAY_SHARD_COUNT);
+        let stats = Arc::new(UdpRelayStats::default());
         for shard_index in 0..UDP_RELAY_SHARD_COUNT {
             let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
             shards.push(tx);
             debug!("启动 TUN UDP 共享 relay shard {shard_index}");
             spawn_guarded(
                 "desktop tun udp relay",
-                run_udp_relay(pool.clone(), netstack_tx.clone(), rx, shutdown.clone()),
+                run_udp_relay(
+                    pool.clone(),
+                    netstack_tx.clone(),
+                    rx,
+                    shutdown.clone(),
+                    stats.clone(),
+                ),
             );
         }
-        Arc::new(Self { shards })
+        spawn_udp_relay_stats_logger(stats.clone(), shutdown);
+        Arc::new(Self { shards, stats })
     }
 
     pub(super) fn send(
@@ -163,7 +233,10 @@ impl UdpRelay {
             packet,
         }) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => debug!("TUN UDP 共享转发队列已满，丢弃一个 UDP 包"),
+            Err(TrySendError::Full(_)) => {
+                self.stats.record_queue_drop();
+                debug!("TUN UDP 共享转发队列已满，丢弃一个 UDP 包");
+            }
             Err(TrySendError::Closed(_)) => debug!("TUN UDP 共享转发器已关闭，丢弃请求"),
         }
     }
@@ -182,6 +255,7 @@ async fn run_udp_relay(
     netstack_tx: UdpWriter,
     mut rx: mpsc::Receiver<UdpRelayRequest>,
     shutdown: CancellationToken,
+    stats: Arc<UdpRelayStats>,
 ) {
     let mut state = UdpRelayState::new();
     // 写入失败时保留当前请求，重建共享连接后优先重发，避免首包直接丢失。
@@ -231,7 +305,9 @@ async fn run_udp_relay(
 
         loop {
             if let Some(request) = retry_request.take() {
-                if let Err(e) = send_udp_request(&mut writer, &mut state, &request).await {
+                if let Err((e, request)) =
+                    send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
+                {
                     debug!("TUN UDP 共享连接写入失败：{e}");
                     retry_request = Some(request);
                     break;
@@ -267,7 +343,9 @@ async fn run_udp_relay(
                         let _ = writer.shutdown().await;
                         return;
                     };
-                    if let Err(e) = send_udp_request(&mut writer, &mut state, &request).await {
+                    if let Err((e, request)) =
+                        send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
+                    {
                         debug!("TUN UDP 共享连接写入失败：{e}");
                         retry_request = Some(request);
                         break;
@@ -281,12 +359,16 @@ async fn run_udp_relay(
                             break;
                         }
                         Ok(n) => {
-                            if let Err(e) = handle_udp_response(
+                            match handle_udp_response(
                                 &netstack_tx,
                                 &state,
                                 &response_buf[..n],
                             ).await {
-                                debug!("TUN UDP 回复写回失败：{e}");
+                                Ok(payload_bytes) => {
+                                    stats.record_response(payload_bytes);
+                                    telemetry::record_traffic(0, payload_bytes as u64);
+                                }
+                                Err(e) => debug!("TUN UDP 回复写回失败：{e}"),
                             }
                             idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_CONNECTION_IDLE);
                         }
@@ -312,7 +394,53 @@ async fn connect_udp_relay_stream(
     Ok(connected.into_async_io())
 }
 
-async fn send_udp_request<W>(
+async fn send_udp_request_batch<W>(
+    writer: &mut W,
+    state: &mut UdpRelayState,
+    first_request: UdpRelayRequest,
+    rx: &mut mpsc::Receiver<UdpRelayRequest>,
+    stats: &UdpRelayStats,
+) -> Result<(), (io::Error, UdpRelayRequest)>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut batch = Vec::with_capacity(UDP_RELAY_REQUEST_BATCH_LIMIT);
+    batch.push(first_request);
+    for _ in 1..UDP_RELAY_REQUEST_BATCH_LIMIT {
+        match rx.try_recv() {
+            Ok(request) => batch.push(request),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+
+    // QUIC/实时 UDP 在 TUN 下会产生高包率。逐包 flush 会让 agent->proxy 外层
+    // 连接承担大量唤醒和小写入开销；这里保留“一个 UDP datagram 编成一个
+    // UdpRelayPacket”的边界，只把已经排队的一小批包统一 flush。
+    let mut payload_bytes = 0usize;
+    for request in &batch {
+        write_udp_request(writer, state, request)
+            .await
+            .map_err(|err| (err, request.clone()))?;
+        payload_bytes += request.packet.len();
+    }
+
+    writer
+        .flush()
+        .await
+        .map_err(|err| (err, batch[0].clone()))?;
+    stats.record_sent_batch(batch.len(), payload_bytes);
+    telemetry::record_traffic(payload_bytes as u64, 0);
+    if batch.len() > 1 {
+        debug!(
+            "TUN UDP relay request 批量 flush：batch_size={}",
+            batch.len()
+        );
+    }
+    Ok(())
+}
+
+async fn write_udp_request<W>(
     writer: &mut W,
     state: &mut UdpRelayState,
     request: &UdpRelayRequest,
@@ -330,24 +458,60 @@ where
     .encode()
     .map_err(io::Error::other)?;
 
-    writer.write_all(&packet).await?;
-    writer.flush().await
+    writer.write_all(&packet).await
 }
 
 async fn handle_udp_response(
     netstack_tx: &UdpWriter,
     state: &UdpRelayState,
     response: &[u8],
-) -> io::Result<()> {
+) -> io::Result<usize> {
     // proxy 回复带 flow_id；agent 还原原始 client/target 后写回 netstack。
     let packet = UdpRelayPacket::decode(response).map_err(io::Error::other)?;
     let Some(flow) = state.flow(packet.flow_id) else {
         debug!("TUN UDP 收到无匹配 flow 的回复 id={}", packet.flow_id);
-        return Ok(());
+        return Ok(0);
     };
 
+    let payload_bytes = packet.data.len();
     let mut s = netstack_tx.lock().await;
-    s.send((packet.data, flow.target, flow.client)).await
+    s.send((packet.data, flow.target, flow.client)).await?;
+    Ok(payload_bytes)
+}
+
+fn spawn_udp_relay_stats_logger(stats: Arc<UdpRelayStats>, shutdown: CancellationToken) {
+    spawn_guarded("desktop tun udp relay stats", async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    let snapshot = stats.snapshot_and_reset();
+                    if snapshot.sent_packets == 0
+                        && snapshot.response_packets == 0
+                        && snapshot.queue_drops == 0
+                    {
+                        continue;
+                    }
+
+                    // TUN 下无法看到 HTTPS/QUIC 内部 URL，这里按共享 UDP relay 维度输出
+                    // 低频聚合指标，用于判断卡顿是否来自 agent 侧队列丢包或高包率 flush 压力。
+                    info!(
+                        "TUN UDP relay 观测：sent_packets={} sent_payload_bytes={} responses={} response_payload_bytes={} batches={} batched_packets={} queue_drops={}",
+                        snapshot.sent_packets,
+                        snapshot.sent_payload_bytes,
+                        snapshot.response_packets,
+                        snapshot.response_payload_bytes,
+                        snapshot.send_batches,
+                        snapshot.send_batched_packets,
+                        snapshot.queue_drops
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -386,7 +550,9 @@ mod tests {
         };
         let (mut writer, mut reader) = tokio::io::duplex(4096);
 
-        send_udp_request(&mut writer, &mut state, &request)
+        let mut rx = tokio::sync::mpsc::channel(1).1;
+        let stats = UdpRelayStats::default();
+        send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
             .await
             .unwrap();
         drop(writer);

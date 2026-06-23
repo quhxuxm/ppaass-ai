@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import Card from "primevue/card";
 import InputText from "primevue/inputtext";
+import Select from "primevue/select";
 import Tag from "primevue/tag";
 import ToggleSwitch from "primevue/toggleswitch";
+import { quicPolicyOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
 defineProps<{
@@ -93,11 +95,18 @@ const emit = defineEmits<{
                 <span>Proxy DNS</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
-              <div class="switch-row">
-                <span>阻断 QUIC</span>
-                <ToggleSwitch :model-value="summary.tun_block_quic" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_block_quic', $event)" />
-              </div>
             </div>
+            <label class="field">
+              <span><i class="pi pi-bolt"></i>QUIC 策略</span>
+              <Select
+                :model-value="summary.tun_quic_policy"
+                :options="quicPolicyOptions"
+                option-label="label"
+                option-value="value"
+                :disabled="configLocked"
+                @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
+              />
+            </label>
           </template>
         </Card>
       </div>
