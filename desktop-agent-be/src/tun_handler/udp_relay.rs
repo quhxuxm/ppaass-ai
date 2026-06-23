@@ -1,14 +1,15 @@
 //! TUN 普通 UDP 的共享 proxy relay。
 //!
 //! 与 `handle_tun_udp` 的单会话 proxy stream 不同，这里把多个 UDP source/target flow
-//! 复用到一条 `Address::UdpRelay` 连接上。适合 QUIC 等高并发 UDP，能减少频繁建连。
+//! 按稳定哈希分片到多条 `Address::UdpRelay` 连接上。适合 QUIC 等高并发 UDP，
+//! 能减少频繁建连，同时避免所有 flow 都挤在单条 relay stream 上。
 
 use super::udp::UdpWriter;
 use crate::connection_pool::ConnectionPool;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
@@ -21,11 +22,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+const UDP_RELAY_SHARD_COUNT: usize = 4;
 const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 pub(super) struct UdpRelay {
-    tx: mpsc::Sender<UdpRelayRequest>,
+    shards: Vec<mpsc::Sender<UdpRelayRequest>>,
 }
 
 #[derive(Clone)]
@@ -92,6 +94,14 @@ impl UdpRelayState {
         self.flows.get(&flow_id).copied()
     }
 
+    fn active_flows(&self) -> usize {
+        self.flows.len()
+    }
+
+    fn tracked_flow_keys(&self) -> usize {
+        self.flow_ids.len()
+    }
+
     fn next_available_flow_id(&mut self) -> u64 {
         loop {
             let id = self.next_flow_id;
@@ -125,12 +135,17 @@ impl UdpRelay {
         netstack_tx: UdpWriter,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
-        let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
-        spawn_guarded(
-            "desktop tun udp relay",
-            run_udp_relay(pool, netstack_tx, rx, shutdown),
-        );
-        Arc::new(Self { tx })
+        let mut shards = Vec::with_capacity(UDP_RELAY_SHARD_COUNT);
+        for shard_index in 0..UDP_RELAY_SHARD_COUNT {
+            let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
+            shards.push(tx);
+            debug!("启动 TUN UDP 共享 relay shard {shard_index}");
+            spawn_guarded(
+                "desktop tun udp relay",
+                run_udp_relay(pool.clone(), netstack_tx.clone(), rx, shutdown.clone()),
+            );
+        }
+        Arc::new(Self { shards })
     }
 
     pub(super) fn send(
@@ -140,7 +155,8 @@ impl UdpRelay {
         address: Address,
         packet: Vec<u8>,
     ) {
-        match self.tx.try_send(UdpRelayRequest {
+        let shard_index = udp_relay_shard_index(client, target, self.shards.len());
+        match self.shards[shard_index].try_send(UdpRelayRequest {
             client,
             target,
             address,
@@ -151,6 +167,14 @@ impl UdpRelay {
             Err(TrySendError::Closed(_)) => debug!("TUN UDP 共享转发器已关闭，丢弃请求"),
         }
     }
+}
+
+fn udp_relay_shard_index(client: SocketAddr, target: SocketAddr, shard_count: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    let key = UdpFlowKey { client, target };
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() % shard_count as u64) as usize
 }
 
 async fn run_udp_relay(
@@ -230,7 +254,14 @@ async fn run_udp_relay(
                     let _ = writer.shutdown().await;
                     break;
                 }
-                _ = cleanup.tick() => state.cleanup_expired(),
+                _ = cleanup.tick() => {
+                    state.cleanup_expired();
+                    debug!(
+                        "TUN UDP relay shard 观测：active_flows={} tracked_flow_keys={}",
+                        state.active_flows(),
+                        state.tracked_flow_keys()
+                    );
+                },
                 maybe_request = rx.recv() => {
                     let Some(request) = maybe_request else {
                         let _ = writer.shutdown().await;

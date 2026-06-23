@@ -246,12 +246,8 @@ pub async fn run_tun_mode(
     if proxy_dns {
         info!("TUN DNS 请求将交给 proxy 端默认 DNS 处理");
     }
-    let block_quic = config.block_quic;
-    if block_quic {
-        info!("TUN UDP/443 QUIC 流量将被阻断，浏览器会回退到 TCP/TLS");
-    } else {
-        info!("TUN UDP/443 QUIC 流量将通过 UDP relay 转发");
-    }
+    let quic_policy = config.effective_quic_policy();
+    info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
 
     // 先解析 TUN 网段，后续会用它识别异常回环目标。
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
@@ -303,7 +299,7 @@ pub async fn run_tun_mode(
         device.clone(),
         config.mtu as usize,
         forward_context,
-        block_quic,
+        quic_policy,
         shutdown.clone(),
     )?;
     let route_guard = if helper_managed_network {

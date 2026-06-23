@@ -1,0 +1,35 @@
+{
+  "test_mode": "probe",
+  "test_duration_secs": 4,
+  "agent_addr": "127.0.0.1:7080",
+  "target_host": "cloudflare.com",
+  "target_port": 443,
+  "concurrency": 1,
+  "configured_attempts": 20,
+  "total_probes": 20,
+  "successful_vn_responses": 20,
+  "failed_probes": 0,
+  "response_rate_percent": 100.0,
+  "probes_per_second": 4.243074268544382,
+  "throughput_mbps": 0.04165001702003166,
+  "supported_versions": [
+    "0x00000001"
+  ],
+  "quic_metrics": {
+    "total_probes": 20,
+    "successful_vn_responses": 20,
+    "failed_probes": 0,
+    "avg_rtt_ms": 233.776,
+    "min_rtt_ms": 200.192,
+    "max_rtt_ms": 847.359,
+    "p50_rtt_ms": 201.343,
+    "p95_rtt_ms": 205.055,
+    "p99_rtt_ms": 847.359,
+    "total_bytes_transferred": 24540
+  },
+  "system_metrics": {
+    "cpu_usage_percent": 13.356631,
+    "memory_usage_mb": 12446,
+    "peak_memory_mb": 12446
+  }
+}

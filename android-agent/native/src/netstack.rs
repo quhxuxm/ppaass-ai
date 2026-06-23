@@ -54,17 +54,21 @@ pub async fn run_android_agent(
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6);
     let mtu = config.tun.mtu as usize;
     let proxy_dns = config.tun.proxy_dns;
-    let block_quic = config.tun.block_quic;
+    let quic_policy = config.tun.effective_quic_policy();
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, block_quic={}, tcp_pool_size={}, udp_pool_size={}",
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp_pool_size={}, udp_pool_size={}",
         config.tun.ipv4,
         config.tun.ipv6,
         mtu,
         proxy_dns,
-        block_quic,
+        quic_policy,
         config.tcp_pool_size,
         config.udp_pool_size
+    );
+    info!(
+        "Android TUN UDP/443 QUIC policy: {}",
+        quic_policy.description_zh()
     );
 
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
@@ -99,7 +103,7 @@ pub async fn run_android_agent(
         proxy_dns,
     };
     let netstack_task =
-        spawn_netstack_supervisor(device, mtu, context, block_quic, shutdown.clone())?;
+        spawn_netstack_supervisor(device, mtu, context, quic_policy, shutdown.clone())?;
 
     shutdown.cancelled().await;
     info!("Android TUN agent shutdown requested");

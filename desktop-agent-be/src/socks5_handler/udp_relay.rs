@@ -1,16 +1,18 @@
 //! SOCKS5 UDP 的共享 proxy relay。
 //!
-//! 多个 SOCKS5 UDP 目标会复用一条 `Address::UdpRelay` proxy stream。
+//! 多个 SOCKS5 UDP 目标会按稳定哈希分片到多条 `Address::UdpRelay` proxy stream。
 //! 每个客户端/目标组合映射到一个 flow_id，proxy 端据此维护真实 UDP socket。
 
 use super::udp_associate::create_udp_packet;
 use super::*;
+use std::collections::hash_map::DefaultHasher;
 
 const SOCKS_UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+const SOCKS_UDP_RELAY_SHARD_COUNT: usize = 4;
 const SOCKS_UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 pub(super) struct SocksUdpRelay {
-    tx: tokio::sync::mpsc::Sender<SocksUdpRelayRequest>,
+    shards: Vec<tokio::sync::mpsc::Sender<SocksUdpRelayRequest>>,
 }
 
 #[derive(Clone)]
@@ -75,6 +77,14 @@ impl SocksUdpRelayState {
         self.flows.get(&flow_id)
     }
 
+    fn active_flows(&self) -> usize {
+        self.flows.len()
+    }
+
+    fn tracked_flow_keys(&self) -> usize {
+        self.flow_ids.len()
+    }
+
     fn next_available_flow_id(&mut self) -> u64 {
         loop {
             let id = self.next_flow_id;
@@ -88,14 +98,19 @@ impl SocksUdpRelayState {
 
 impl SocksUdpRelay {
     pub(super) fn spawn(pool: Arc<ConnectionPool>, udp_socket: Arc<UdpSocket>) -> Arc<Self> {
-        let (tx, rx) = tokio::sync::mpsc::channel(SOCKS_UDP_RELAY_CHANNEL_SIZE);
-        tokio::spawn(run_socks_udp_relay(pool, udp_socket, rx));
-        Arc::new(Self { tx })
+        let mut shards = Vec::with_capacity(SOCKS_UDP_RELAY_SHARD_COUNT);
+        for shard_index in 0..SOCKS_UDP_RELAY_SHARD_COUNT {
+            let (tx, rx) = tokio::sync::mpsc::channel(SOCKS_UDP_RELAY_CHANNEL_SIZE);
+            shards.push(tx);
+            debug!("启动 SOCKS5 UDP 共享 relay shard {shard_index}");
+            tokio::spawn(run_socks_udp_relay(pool.clone(), udp_socket.clone(), rx));
+        }
+        Arc::new(Self { shards })
     }
 
     pub(super) async fn send(&self, client: SocketAddr, target: Address, packet: Vec<u8>) {
-        if self
-            .tx
+        let shard_index = socks_udp_relay_shard_index(client, &target, self.shards.len());
+        if self.shards[shard_index]
             .send(SocksUdpRelayRequest {
                 client,
                 target,
@@ -107,6 +122,17 @@ impl SocksUdpRelay {
             debug!("SOCKS5 UDP 共享转发器已关闭，丢弃请求");
         }
     }
+}
+
+fn socks_udp_relay_shard_index(client: SocketAddr, target: &Address, shard_count: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    let key = SocksUdpFlowKey {
+        client,
+        target: format!("{target:?}"),
+    };
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() % shard_count as u64) as usize
 }
 
 async fn run_socks_udp_relay(
@@ -146,6 +172,8 @@ async fn run_socks_udp_relay(
 
         info!("SOCKS5 UDP 已建立共享 proxy 连接");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
+        let mut metrics = tokio::time::interval(Duration::from_secs(60));
+        metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let idle = tokio::time::sleep(SOCKS_UDP_RELAY_CONNECTION_IDLE);
         tokio::pin!(idle);
         retry_request = Some(first_request);
@@ -183,6 +211,13 @@ async fn run_socks_udp_relay(
                     );
                     let _ = writer.shutdown().await;
                     break;
+                }
+                _ = metrics.tick() => {
+                    debug!(
+                        "SOCKS5 UDP relay shard 观测：active_flows={} tracked_flow_keys={}",
+                        state.active_flows(),
+                        state.tracked_flow_keys()
+                    );
                 }
                 read = reader.read(&mut response_buf) => {
                     match read {

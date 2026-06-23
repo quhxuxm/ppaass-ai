@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,10 +19,11 @@ use crate::error::Result;
 
 const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
+const UDP_RELAY_SHARD_COUNT: usize = 4;
 const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 pub(super) struct UdpRelay {
-    tx: mpsc::Sender<UdpRelayRequest>,
+    shards: Vec<mpsc::Sender<UdpRelayRequest>>,
 }
 
 #[derive(Clone)]
@@ -73,6 +75,14 @@ impl UdpRelayState {
         self.flows.get(&flow_id).copied()
     }
 
+    fn active_flows(&self) -> usize {
+        self.flows.len()
+    }
+
+    fn tracked_flow_keys(&self) -> usize {
+        self.flow_ids.len()
+    }
+
     fn next_available_flow_id(&mut self) -> u64 {
         loop {
             let id = self.next_flow_id;
@@ -106,12 +116,17 @@ impl UdpRelay {
         netstack_tx: UdpWriter,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
-        let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
-        spawn_guarded(
-            "android tun udp relay",
-            run_udp_relay(context, netstack_tx, rx, shutdown),
-        );
-        Arc::new(Self { tx })
+        let mut shards = Vec::with_capacity(UDP_RELAY_SHARD_COUNT);
+        for shard_index in 0..UDP_RELAY_SHARD_COUNT {
+            let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
+            shards.push(tx);
+            debug!("starting Android TUN UDP relay shard {shard_index}");
+            spawn_guarded(
+                "android tun udp relay",
+                run_udp_relay(context.clone(), netstack_tx.clone(), rx, shutdown.clone()),
+            );
+        }
+        Arc::new(Self { shards })
     }
 
     pub(super) fn send(
@@ -121,7 +136,8 @@ impl UdpRelay {
         address: Address,
         packet: Vec<u8>,
     ) {
-        match self.tx.try_send(UdpRelayRequest {
+        let shard_index = udp_relay_shard_index(client, target, self.shards.len());
+        match self.shards[shard_index].try_send(UdpRelayRequest {
             client,
             target,
             address,
@@ -136,6 +152,14 @@ impl UdpRelay {
             }
         }
     }
+}
+
+fn udp_relay_shard_index(client: SocketAddr, target: SocketAddr, shard_count: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    let key = UdpFlowKey { client, target };
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() % shard_count as u64) as usize
 }
 
 async fn run_udp_relay(
@@ -212,7 +236,14 @@ async fn run_udp_relay(
                     let _ = writer.shutdown().await;
                     break;
                 }
-                _ = cleanup.tick() => state.cleanup_expired(),
+                _ = cleanup.tick() => {
+                    state.cleanup_expired();
+                    debug!(
+                        "Android TUN UDP relay shard stats: active_flows={} tracked_flow_keys={}",
+                        state.active_flows(),
+                        state.tracked_flow_keys()
+                    );
+                },
                 maybe_request = rx.recv() => {
                     let Some(request) = maybe_request else {
                         let _ = writer.shutdown().await;

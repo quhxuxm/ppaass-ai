@@ -11,7 +11,7 @@ use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
-use common::{BindInterface, bind_socket_to_interface};
+use common::{BindInterface, QuicPolicy, bind_socket_to_interface};
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -30,7 +30,7 @@ pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteH
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
-    pub(super) block_quic: bool,
+    pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) tcp_pool: Arc<ConnectionPool>,
     pub(super) udp_pool: Arc<ConnectionPool>,
@@ -62,7 +62,7 @@ pub(super) async fn handle_tun_udp(
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
-        block_quic,
+        quic_policy,
         netstack_tx,
         tcp_pool,
         udp_pool,
@@ -124,10 +124,13 @@ pub(super) async fn handle_tun_udp(
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
-    if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
+    if !proxy_dns_request
+        && target.port() == 443
+        && quic_policy.should_block_udp443(direct_target.is_some())
+    {
         debug!(
-            "TUN UDP/443 QUIC 已阻断 -> {}，等待应用回退 TCP",
-            target_label
+            "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}，等待应用回退 TCP",
+            quic_policy, target_label
         );
         drain_dropped_udp(rx).await;
         return Ok(());

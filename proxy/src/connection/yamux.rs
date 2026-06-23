@@ -757,10 +757,12 @@ where
     let first_buffer_permit =
         write_yamux_udp_relay_response(writer, first_response, username, bandwidth_monitor).await?;
     let mut extra_buffer_permits = Vec::new();
+    let mut batch_size = 1usize;
 
     for _ in 1..UDP_RELAY_RESPONSE_BATCH_LIMIT {
         match response_rx.try_recv() {
             Ok(response) => {
+                batch_size += 1;
                 extra_buffer_permits.push(
                     write_yamux_udp_relay_response(writer, response, username, bandwidth_monitor)
                         .await?,
@@ -775,6 +777,9 @@ where
     // 推动底层 Yamux 子流实际写出。因此本批次最后统一 flush，减少每个回包一次 flush
     // 的开销，同时保留 datagram 边界。
     writer.flush().await?;
+    if batch_size > 1 {
+        debug!("Yamux UDP relay response 批量 flush：batch_size={batch_size}");
+    }
     drop(first_buffer_permit);
     drop(extra_buffer_permits);
     Ok(())

@@ -5,6 +5,7 @@
 //! 任一关键任务退出都会取消整组并重建，提升 TUN 模式长期运行的恢复能力。
 
 use super::*;
+use common::QuicPolicy;
 
 struct NetstackGeneration {
     // generation id 只用于日志，方便判断是否经历过重建。
@@ -37,7 +38,7 @@ pub(super) fn spawn_netstack_supervisor(
     device: Arc<tun_rs::AsyncDevice>,
     mtu: usize,
     context: TunForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
 ) -> Result<JoinHandle<()>> {
     install_known_smoltcp_panic_hook();
@@ -46,12 +47,12 @@ pub(super) fn spawn_netstack_supervisor(
         device.clone(),
         mtu,
         context.clone(),
-        block_quic,
+        quic_policy,
         &shutdown,
     )?;
 
     Ok(spawn_guarded("desktop netstack supervisor", async move {
-        run_netstack_supervisor(device, mtu, context, block_quic, shutdown, initial).await;
+        run_netstack_supervisor(device, mtu, context, quic_policy, shutdown, initial).await;
     }))
 }
 
@@ -60,7 +61,7 @@ fn start_netstack_generation(
     device: Arc<tun_rs::AsyncDevice>,
     mtu: usize,
     context: TunForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     parent_shutdown: &CancellationToken,
 ) -> Result<NetstackGeneration> {
     // 每次 generation 都重新构建 StackBuilder，避免复用已经异常退出的内部状态。
@@ -81,7 +82,12 @@ fn start_netstack_generation(
     let (tun_to_stack, stack_to_tun) =
         spawn_packet_bridge(device, stack, mtu, generation_shutdown.clone());
     let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
-    let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, generation_shutdown.clone());
+    let udp_task = spawn_udp_sessions(
+        udp_socket,
+        context,
+        quic_policy,
+        generation_shutdown.clone(),
+    );
 
     Ok(NetstackGeneration {
         id,
@@ -98,7 +104,7 @@ async fn run_netstack_supervisor(
     device: Arc<tun_rs::AsyncDevice>,
     mtu: usize,
     context: TunForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
     mut generation: NetstackGeneration,
 ) {
@@ -163,7 +169,7 @@ async fn run_netstack_supervisor(
                 device.clone(),
                 mtu,
                 context.clone(),
-                block_quic,
+                quic_policy,
                 &shutdown,
             ) {
                 Ok(next) => {

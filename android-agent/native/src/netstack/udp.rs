@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
-use common::spawn_guarded;
+use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
 use futures::{SinkExt, StreamExt};
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -36,7 +36,7 @@ const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
-    pub(super) block_quic: bool,
+    pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_pool: Arc<AndroidConnectionPool>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
@@ -47,7 +47,7 @@ pub(super) struct UdpSessionContext {
 pub(super) fn spawn_udp_sessions(
     udp_socket: netstack_smoltcp::UdpSocket,
     context: ForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     spawn_guarded("android udp sessions", async move {
@@ -58,6 +58,8 @@ pub(super) fn spawn_udp_sessions(
             .proxy_dns
             .then(|| DnsProxy::spawn(context.clone(), udp_tx.clone(), shutdown.clone()));
         let udp_relay = UdpRelay::spawn(context.clone(), udp_tx.clone(), shutdown.clone());
+        let quic_stats = Arc::new(QuicUdpStats::default());
+        spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
         loop {
             tokio::select! {
@@ -88,6 +90,9 @@ pub(super) fn spawn_udp_sessions(
 
                     let key = (source, target);
                     if let Some(tx) = sessions.get(&key).map(|tx| tx.clone()) {
+                        if target.port() == 443 {
+                            quic_stats.record_direct();
+                        }
                         if tx.try_send(data).is_err() {
                             debug!("Android TUN UDP direct session queue is full; dropping packet -> {}", target);
                         }
@@ -113,16 +118,27 @@ pub(super) fn spawn_udp_sessions(
                         }
                     }
 
-                    if block_quic && target.port() == 443 && !direct_match {
-                        debug!("Android TUN UDP/443 QUIC dropped -> {}", target);
+                    if target.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                        quic_stats.record_blocked();
+                        debug!(
+                            "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
+                            quic_policy,
+                            target
+                        );
                         continue;
                     }
 
                     if !direct_match {
+                        if target.port() == 443 {
+                            quic_stats.record_proxied();
+                        }
                         udp_relay.send(source, target, proxy_address, data);
                         continue;
                     }
 
+                    if target.port() == 443 {
+                        quic_stats.record_direct();
+                    }
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
@@ -131,7 +147,7 @@ pub(super) fn spawn_udp_sessions(
                     let session_context = UdpSessionContext {
                         tun_networks: context.tun_networks,
                         proxy_dns: context.proxy_dns,
-                        block_quic,
+                        quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_pool: context.udp_pool.clone(),
                         direct_checker: context.direct_checker.clone(),
@@ -151,6 +167,31 @@ pub(super) fn spawn_udp_sessions(
     })
 }
 
+fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationToken) {
+    spawn_guarded("android quic udp stats", async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    let snapshot = stats.snapshot_and_reset();
+                    if snapshot.observed > 0 {
+                        debug!(
+                            "Android TUN UDP/443 QUIC stats: observed={} direct={} proxied={} blocked={}",
+                            snapshot.observed,
+                            snapshot.direct,
+                            snapshot.proxied,
+                            snapshot.blocked
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub(super) async fn handle_tun_udp(
     client: SocketAddr,
     target: SocketAddr,
@@ -160,7 +201,7 @@ pub(super) async fn handle_tun_udp(
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
-        block_quic,
+        quic_policy,
         netstack_tx,
         udp_pool,
         direct_checker,
@@ -224,8 +265,14 @@ pub(super) async fn handle_tun_udp(
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
-    if block_quic && !proxy_dns_request && target.port() == 443 && direct_target.is_none() {
-        debug!("Android TUN UDP/443 QUIC dropped -> {}", target_label);
+    if !proxy_dns_request
+        && target.port() == 443
+        && quic_policy.should_block_udp443(direct_target.is_some())
+    {
+        debug!(
+            "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
+            quic_policy, target_label
+        );
         drain_dropped_udp(rx, shutdown).await;
         return Ok(());
     }
