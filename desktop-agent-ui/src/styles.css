@@ -703,7 +703,7 @@ body.overview-dragging * {
 
 .status-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1768,8 +1768,9 @@ body.overview-dragging * {
   font-size: 14px;
   line-height: 1.6;
   tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .toml-highlight {
@@ -1781,8 +1782,8 @@ body.overview-dragging * {
 }
 
 .toml-highlight code {
-  display: block;
-  min-width: 0;
+  display: inline-block;
+  min-width: 100%;
   white-space: inherit;
 }
 
@@ -1806,6 +1807,9 @@ body.overview-dragging * {
   box-shadow: none !important;
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
 }
 
 .toml-editor::selection {
@@ -1815,8 +1819,9 @@ body.overview-dragging * {
 .toml-line {
   display: block;
   min-height: 22px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .toml-section {

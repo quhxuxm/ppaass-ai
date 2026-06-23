@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import Card from "primevue/card";
-import InputNumber from "primevue/inputnumber";
+import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import SelectButton from "primevue/selectbutton";
@@ -75,7 +75,7 @@ function usesDirectPool(mode: string) {
         <div class="field-pair">
           <label class="field">
             <span><i class="pi pi-clock"></i>控制连接超时</span>
-            <InputNumber
+            <ConfigNumberInput
               :model-value="summary.connect_timeout_secs"
               :min="0"
               :allow-empty="false"
@@ -91,6 +91,18 @@ function usesDirectPool(mode: string) {
               :options="compressionOptions"
               :disabled="configLocked"
               @update:model-value="emit('set-field', 'compression_mode', $event)"
+            />
+          </label>
+          <label class="field">
+            <span><i class="pi pi-arrows-h"></i>TCP relay buffer</span>
+            <ConfigNumberInput
+              :model-value="summary.tcp_relay_buffer_size_kb"
+              suffix=" KB"
+              :min="0"
+              :allow-empty="false"
+              :disabled="configLocked"
+              :use-grouping="false"
+              @update:model-value="emit('set-field', 'tcp_relay_buffer_size_kb', $event)"
             />
           </label>
         </div>
@@ -123,7 +135,7 @@ function usesDirectPool(mode: string) {
             连接池
             <Tag class="mode-effect-tag" value="常规通道、自动时生效" severity="secondary" />
           </span>
-          <InputNumber :model-value="summary.tcp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_pool_size', $event)" />
+          <ConfigNumberInput :model-value="summary.tcp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_pool_size', $event)" />
         </label>
 
         <section v-if="usesYamux(summary.tcp_mode)" class="policy-section yamux-settings">
@@ -137,31 +149,31 @@ function usesDirectPool(mode: string) {
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
-              <InputNumber :model-value="summary.tcp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_sessions', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_sessions', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>
-              <InputNumber :model-value="summary.tcp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_max_streams_per_session', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_max_streams_per_session', $event)" />
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
-              <InputNumber :model-value="summary.tcp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_open_stream_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_open_stream_timeout_secs', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-heart"></i>Keepalive</span>
-              <InputNumber :model-value="summary.tcp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_keepalive_interval_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_keepalive_interval_secs', $event)" />
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-send"></i>写超时</span>
-              <InputNumber :model-value="summary.tcp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_connection_write_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_connection_write_timeout_secs', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-window-maximize"></i>流控窗口</span>
-              <InputNumber :model-value="summary.tcp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_stream_window_size_kb', $event)" />
+              <ConfigNumberInput :model-value="summary.tcp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_stream_window_size_kb', $event)" />
             </label>
           </div>
         </section>
@@ -194,7 +206,7 @@ function usesDirectPool(mode: string) {
             连接池
             <Tag class="mode-effect-tag" value="常规通道、自动时生效" severity="secondary" />
           </span>
-          <InputNumber :model-value="summary.udp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_pool_size', $event)" />
+          <ConfigNumberInput :model-value="summary.udp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_pool_size', $event)" />
         </label>
 
         <section v-if="usesYamux(summary.udp_mode)" class="policy-section yamux-settings">
@@ -208,31 +220,31 @@ function usesDirectPool(mode: string) {
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
-              <InputNumber :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>
-              <InputNumber :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
-              <InputNumber :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-heart"></i>Keepalive</span>
-              <InputNumber :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-send"></i>写超时</span>
-              <InputNumber :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
             </label>
             <label class="field">
               <span><i class="pi pi-window-maximize"></i>流控窗口</span>
-              <InputNumber :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
             </label>
           </div>
         </section>

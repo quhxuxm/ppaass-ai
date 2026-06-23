@@ -38,9 +38,8 @@ pub struct ProxyConfig {
 
     /// TCP relay 每个方向的拷贝 buffer 大小，单位 KB。
     ///
-    /// legacy TCP relay 和 Yamux TCP 子流都会使用该值。默认 64KB 保持旧行为；
-    /// 如果主要传大文件或跨区域链路，可在压测后尝试 128/256KB。
-    /// 0 表示使用默认值，运行时会限制在 4KB..=1MB。
+    /// legacy TCP relay 和 Yamux TCP 子流都会使用该值。默认 256KB；
+    /// 0 表示使用该内置默认值。非 0 值运行时会限制在 4KB..=1MB。
     #[serde(default = "default_stream_relay_buffer_size_kb")]
     pub tcp_relay_buffer_size_kb: usize,
 
@@ -272,7 +271,7 @@ listen_addr = "127.0.0.1:0"
     }
 
     #[test]
-    fn tcp_relay_buffer_size_defaults_to_legacy_value() {
+    fn tcp_relay_buffer_size_defaults_to_256kb() {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
@@ -280,6 +279,7 @@ listen_addr = "127.0.0.1:0"
         )
         .unwrap();
 
-        assert_eq!(config.tcp_relay_buffer_size(), 64 * 1024);
+        assert_eq!(config.tcp_relay_buffer_size_kb, 256);
+        assert_eq!(config.tcp_relay_buffer_size(), 256 * 1024);
     }
 }

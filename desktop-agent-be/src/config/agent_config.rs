@@ -40,8 +40,8 @@ pub struct AgentConfig {
     /// TCP relay 每个方向的拷贝 buffer 大小，单位 KB。
     ///
     /// 该值同时作用于 HTTP CONNECT、SOCKS5 TCP 和 TUN TCP 的双向拷贝。
-    /// 默认 64KB 保持旧行为；高吞吐、大 RTT 链路可尝试 128/256KB。
-    /// 0 表示使用默认值，运行时会限制在 4KB..=1MB，避免误配置。
+    /// 默认 256KB；0 表示使用该内置默认值。非 0 值运行时会限制在
+    /// 4KB..=1MB，避免误配置。
     #[serde(default = "default_stream_relay_buffer_size_kb")]
     pub tcp_relay_buffer_size_kb: usize,
 
@@ -333,10 +333,11 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn tcp_relay_buffer_size_defaults_to_legacy_value() {
+    fn tcp_relay_buffer_size_defaults_to_256kb() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
-        assert_eq!(config.tcp_relay_buffer_size(), 64 * 1024);
+        assert_eq!(config.tcp_relay_buffer_size_kb, 256);
+        assert_eq!(config.tcp_relay_buffer_size(), 256 * 1024);
     }
 
     #[test]

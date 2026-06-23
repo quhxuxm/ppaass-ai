@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Button from "primevue/button";
 import Card from "primevue/card";
-import InputNumber from "primevue/inputnumber";
+import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import SelectButton from "primevue/selectbutton";
@@ -49,7 +49,7 @@ const emit = defineEmits<{
               </label>
               <label class="field">
                 <span><i class="pi pi-microchip"></i>线程</span>
-                <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
+                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
               </label>
             </div>
           </template>

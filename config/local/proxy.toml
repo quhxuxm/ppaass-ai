@@ -24,9 +24,9 @@ log_level = "info"
 compression_mode = "none"
 
 # TCP relay 每个方向的拷贝 buffer，单位 KB。
-# legacy TCP relay 和 Yamux TCP 子流都会使用该值；默认 64KB 与旧版本一致。
-# 大文件/高 RTT 链路可压测 128 或 256；过大 buffer 会提高每连接内存占用。
-tcp_relay_buffer_size_kb = 64
+# legacy TCP relay 和 Yamux TCP 子流都会使用该值；默认 256KB。
+# 大文件/高 RTT 链路通常更受益；过大 buffer 会提高每连接内存占用。
+tcp_relay_buffer_size_kb = 256
 
 # 连接目标服务器时使用的出站网络设备名。
 # 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时建议使用 "auto"，

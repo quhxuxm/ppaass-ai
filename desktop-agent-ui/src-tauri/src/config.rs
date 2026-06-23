@@ -181,6 +181,8 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tcp_pool_size: int_at(&value, &["tcp_pool_size"]).unwrap_or(10) as usize,
         udp_pool_size: int_at(&value, &["udp_pool_size"]).unwrap_or(5) as usize,
         connect_timeout_secs: int_at(&value, &["connect_timeout_secs"]).unwrap_or(30),
+        tcp_relay_buffer_size_kb: int_at(&value, &["tcp_relay_buffer_size_kb"]).unwrap_or(256)
+            as usize,
         compression_mode: string_or(&value, &["compression_mode"], "none"),
         log_level: string_or(&value, &["log_level"], "info"),
         log_dir: string_at(&value, &["log_dir"]),
@@ -572,6 +574,7 @@ listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+tcp_relay_buffer_size_kb = 128
 
 [yamux.tcp]
 sessions = 2
@@ -593,6 +596,7 @@ stream_window_size_kb = 1024
         .unwrap();
 
         assert_eq!(summary.tcp_yamux_sessions, 2);
+        assert_eq!(summary.tcp_relay_buffer_size_kb, 128);
         assert_eq!(summary.udp_yamux_sessions, 3);
         assert_eq!(summary.tcp_yamux_max_streams_per_session, 64);
         assert_eq!(summary.udp_yamux_max_streams_per_session, 32);
@@ -619,6 +623,7 @@ private_key_path = "keys/user1.pem"
         .unwrap();
 
         assert!(!summary.tun_block_quic);
+        assert_eq!(summary.tcp_relay_buffer_size_kb, 256);
     }
 
     #[test]

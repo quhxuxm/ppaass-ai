@@ -4,7 +4,7 @@
 //! buffer 大小各自散落，很难做性能 profile。这里统一把配置里的 KB 值转换成
 //! 字节，并保留一个保守上下限，避免误配置导致极小 buffer 抖动或单连接占用过大。
 
-pub const DEFAULT_STREAM_RELAY_BUFFER_SIZE: usize = 64 * 1024;
+pub const DEFAULT_STREAM_RELAY_BUFFER_SIZE: usize = 256 * 1024;
 pub const MIN_STREAM_RELAY_BUFFER_SIZE: usize = 4 * 1024;
 pub const MAX_STREAM_RELAY_BUFFER_SIZE: usize = 1024 * 1024;
 
@@ -32,6 +32,11 @@ mod tests {
             stream_relay_buffer_size_from_kb(0),
             DEFAULT_STREAM_RELAY_BUFFER_SIZE
         );
+    }
+
+    #[test]
+    fn default_config_value_is_256kb() {
+        assert_eq!(default_stream_relay_buffer_size_kb(), 256);
     }
 
     #[test]

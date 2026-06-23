@@ -8,6 +8,7 @@ export type AgentConfigSummary = {
   tcp_pool_size: number;
   udp_pool_size: number;
   connect_timeout_secs: number;
+  tcp_relay_buffer_size_kb: number;
   compression_mode: string;
   log_level: string;
   log_dir?: string | null;
