@@ -2,7 +2,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
+use common::{QuicPolicy, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use futures::FutureExt;
 use netstack_smoltcp::StackBuilder;
 use tokio::task::JoinHandle;
@@ -45,7 +45,7 @@ pub(super) fn spawn_netstack_supervisor(
     device: Arc<AndroidTunDevice>,
     mtu: usize,
     context: ForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
 ) -> Result<JoinHandle<()>> {
     install_known_smoltcp_panic_hook();
@@ -54,12 +54,12 @@ pub(super) fn spawn_netstack_supervisor(
         device.clone(),
         mtu,
         context.clone(),
-        block_quic,
+        quic_policy,
         &shutdown,
     )?;
 
     Ok(spawn_guarded("android netstack supervisor", async move {
-        run_netstack_supervisor(device, mtu, context, block_quic, shutdown, initial).await;
+        run_netstack_supervisor(device, mtu, context, quic_policy, shutdown, initial).await;
     }))
 }
 
@@ -68,7 +68,7 @@ fn start_netstack_generation(
     device: Arc<AndroidTunDevice>,
     mtu: usize,
     context: ForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     parent_shutdown: &CancellationToken,
 ) -> Result<NetstackGeneration> {
     let (stack, runner, udp_socket, tcp_listener) = StackBuilder::default()
@@ -94,7 +94,12 @@ fn start_netstack_generation(
         parent_shutdown.clone(),
     );
     let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
-    let udp_task = spawn_udp_sessions(udp_socket, context, block_quic, generation_shutdown.clone());
+    let udp_task = spawn_udp_sessions(
+        udp_socket,
+        context,
+        quic_policy,
+        generation_shutdown.clone(),
+    );
 
     Ok(NetstackGeneration {
         id,
@@ -111,7 +116,7 @@ async fn run_netstack_supervisor(
     device: Arc<AndroidTunDevice>,
     mtu: usize,
     context: ForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
     mut generation: NetstackGeneration,
 ) {
@@ -172,7 +177,7 @@ async fn run_netstack_supervisor(
                 device.clone(),
                 mtu,
                 context.clone(),
-                block_quic,
+                quic_policy,
                 &shutdown,
             ) {
                 Ok(next) => {

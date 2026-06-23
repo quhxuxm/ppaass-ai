@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, TransportConfig, YamuxConfig};
+use common::{ClientConnectionConfig, QuicPolicy, TransportConfig, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
@@ -61,8 +61,14 @@ pub struct AndroidTunConfig {
     #[serde(default = "default_proxy_dns")]
     pub proxy_dns: bool,
 
+    /// 旧配置项：true 时只允许命中直连规则的 UDP/443 QUIC。
+    /// Android UI 目前仍写入该 bool；native 层会把它映射成细粒度策略。
     #[serde(default = "default_block_quic")]
     pub block_quic: bool,
+
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
+    #[serde(default)]
+    pub quic_policy: Option<QuicPolicy>,
 }
 
 impl Default for AndroidTunConfig {
@@ -73,7 +79,22 @@ impl Default for AndroidTunConfig {
             mtu: default_tun_mtu(),
             proxy_dns: default_proxy_dns(),
             block_quic: default_block_quic(),
+            quic_policy: None,
         }
+    }
+}
+
+impl AndroidTunConfig {
+    /// 返回最终生效的 QUIC 策略；显式 `quic_policy` 优先，旧 `block_quic`
+    /// 只作为兼容兜底，避免 Android UI 还未升级时改变用户现有语义。
+    pub fn effective_quic_policy(&self) -> QuicPolicy {
+        self.quic_policy.unwrap_or({
+            if self.block_quic {
+                QuicPolicy::DirectIfRuleMatch
+            } else {
+                QuicPolicy::Allow
+            }
+        })
     }
 }
 
@@ -189,5 +210,24 @@ mod tests {
         let config = AndroidTunConfig::default();
 
         assert!(!config.block_quic);
+        assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn legacy_block_quic_maps_to_direct_if_rule_match() {
+        let config: AndroidTunConfig = serde_json::from_str(r#"{"block_quic":true}"#).unwrap();
+
+        assert_eq!(
+            config.effective_quic_policy(),
+            QuicPolicy::DirectIfRuleMatch
+        );
+    }
+
+    #[test]
+    fn explicit_quic_policy_overrides_legacy_block_quic() {
+        let config: AndroidTunConfig =
+            serde_json::from_str(r#"{"block_quic":true,"quic_policy":"block"}"#).unwrap();
+
+        assert_eq!(config.effective_quic_policy(), QuicPolicy::Block);
     }
 }

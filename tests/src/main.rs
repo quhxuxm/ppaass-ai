@@ -84,6 +84,70 @@ enum Commands {
         #[arg(short, long, default_value = "udp-performance-report.html")]
         output: String,
     },
+    /// 运行 QUIC Version Negotiation 连通性探针（SOCKS5 UDP -> UDP/443）
+    QuicProbe {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// QUIC 目标主机，支持域名或 IP
+        #[arg(long, default_value = "cloudflare.com")]
+        target_host: String,
+
+        /// QUIC 目标端口
+        #[arg(long, default_value = "443")]
+        target_port: u16,
+
+        /// 探针次数
+        #[arg(long, default_value = "20")]
+        attempts: usize,
+
+        /// 单次探针超时时间（毫秒）
+        #[arg(long, default_value = "3000")]
+        timeout_ms: u64,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "quic-probe-report.html")]
+        output: String,
+    },
+    /// 运行 QUIC UDP/443 专项压测（重复发送 Version Negotiation 探针）
+    QuicPerformance {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// QUIC 目标主机，支持域名或 IP
+        #[arg(long, default_value = "cloudflare.com")]
+        target_host: String,
+
+        /// QUIC 目标端口
+        #[arg(long, default_value = "443")]
+        target_port: u16,
+
+        /// 并发 UDP/443 flow 数
+        #[arg(short, long, default_value = "20")]
+        concurrency: usize,
+
+        /// 测试持续时间（秒）
+        #[arg(short, long, default_value = "30")]
+        duration: u64,
+
+        /// 单次探针超时时间（毫秒）
+        #[arg(long, default_value = "3000")]
+        timeout_ms: u64,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "quic-performance-report.html")]
+        output: String,
+    },
     /// 启动模拟目标服务器
     MockTarget {
         /// HTTP 服务器端口
@@ -171,6 +235,71 @@ async fn main() -> Result<()> {
 
             report::generate_udp_reports(&results, &output)?;
             tracing::info!("UDP 性能报告已生成：{}", output);
+        }
+        Commands::QuicProbe {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            attempts,
+            timeout_ms,
+            output,
+        } => {
+            tracing::info!("正在运行 QUIC Version Negotiation 探针");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "目标：{}:{}，attempts={}，timeout={}ms",
+                target_host,
+                target_port,
+                attempts,
+                timeout_ms
+            );
+
+            let results = performance_tests::run_quic_probe_tests(
+                &agent_addr,
+                &target_host,
+                target_port,
+                attempts,
+                timeout_ms,
+            )
+            .await?;
+
+            report::generate_quic_reports(&results, &output)?;
+            tracing::info!("QUIC 探针报告已生成：{}", output);
+        }
+        Commands::QuicPerformance {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            concurrency,
+            duration,
+            timeout_ms,
+            output,
+        } => {
+            tracing::info!("正在运行 QUIC UDP/443 专项压测");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "目标：{}:{}，并发 flow：{}，持续时间：{} 秒，timeout={}ms",
+                target_host,
+                target_port,
+                concurrency,
+                duration,
+                timeout_ms
+            );
+
+            let results = performance_tests::run_quic_performance_tests(
+                &agent_addr,
+                &target_host,
+                target_port,
+                concurrency,
+                duration,
+                timeout_ms,
+            )
+            .await?;
+
+            report::generate_quic_reports(&results, &output)?;
+            tracing::info!("QUIC 压测报告已生成：{}", output);
         }
         Commands::MockTarget {
             http_port,

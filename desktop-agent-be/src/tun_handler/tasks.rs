@@ -9,11 +9,12 @@ use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
-use common::spawn_guarded;
+use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
 use futures::{SinkExt, StreamExt};
 use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -127,7 +128,7 @@ pub(super) fn spawn_tcp_listener(
 pub(super) fn spawn_udp_sessions(
     udp_socket: netstack_smoltcp::UdpSocket,
     context: TunForwardContext,
-    block_quic: bool,
+    quic_policy: QuicPolicy,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     spawn_guarded("desktop udp sessions", async move {
@@ -146,6 +147,8 @@ pub(super) fn spawn_udp_sessions(
         });
         // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
         let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
+        let quic_stats = Arc::new(QuicUdpStats::default());
+        spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
         loop {
             tokio::select! {
@@ -184,6 +187,9 @@ pub(super) fn spawn_udp_sessions(
                     let key = (source_addr, target_addr);
                     // 已存在的 direct 会话优先复用，避免域名缓存过期后把同一 UDP 流切到 proxy。
                     if let Some(tx) = sessions.get(&key).map(|t| t.clone()) {
+                        if target_addr.port() == 443 {
+                            quic_stats.record_direct();
+                        }
                         if tx.try_send(data).is_err() {
                             debug!("TUN UDP 会话队列已满，丢弃一个 UDP 包 -> {}", target_addr);
                         }
@@ -209,16 +215,27 @@ pub(super) fn spawn_udp_sessions(
                         }
                     }
 
-                    if block_quic && target_addr.port() == 443 && !direct_match {
-                        debug!("TUN UDP/443 QUIC 已阻断 -> {}", target_addr);
+                    if target_addr.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                        quic_stats.record_blocked();
+                        debug!(
+                            "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}",
+                            quic_policy,
+                            target_addr
+                        );
                         continue;
                     }
 
                     if !direct_match {
+                        if target_addr.port() == 443 {
+                            quic_stats.record_proxied();
+                        }
                         udp_relay.send(source_addr, target_addr, proxy_address, data);
                         continue;
                     }
 
+                    if target_addr.port() == 443 {
+                        quic_stats.record_direct();
+                    }
                     // 新会话先入表，再发送首包，避免首包在任务启动前丢失。
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
                     sessions.insert(key, tx.clone());
@@ -228,7 +245,7 @@ pub(super) fn spawn_udp_sessions(
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
                         proxy_dns: context.proxy_dns,
-                        block_quic,
+                        quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_pool: context.tcp_pool.clone(),
                         udp_pool: context.udp_pool.clone(),
@@ -255,6 +272,31 @@ pub(super) fn spawn_udp_sessions(
         }
         debug!("udp_task 退出");
     })
+}
+
+fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationToken) {
+    spawn_guarded("desktop quic udp stats", async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    let snapshot = stats.snapshot_and_reset();
+                    if snapshot.observed > 0 {
+                        debug!(
+                            "TUN UDP/443 QUIC 观测：observed={} direct={} proxied={} blocked={}",
+                            snapshot.observed,
+                            snapshot.direct,
+                            snapshot.proxied,
+                            snapshot.blocked
+                        );
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn domain_address(domain: &str, port: u16) -> Address {

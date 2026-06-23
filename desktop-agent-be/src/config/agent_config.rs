@@ -4,7 +4,9 @@
 //! transport/Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
-use common::{TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
+use common::{
+    QuicPolicy, TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
+};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -108,9 +110,21 @@ pub struct TunConfig {
     #[serde(default)]
     pub proxy_dns: bool,
 
-    /// 是否阻断 UDP/443 QUIC 流量，让浏览器回退到 TCP/TLS。
+    /// 旧配置项：是否阻断未命中直连规则的 UDP/443 QUIC 流量。
+    ///
+    /// 新配置建议使用 `quic_policy`：
+    /// - allow：按普通 UDP 转发，未命中直连规则时走 UDP relay。
+    /// - direct_if_rule_match：只允许直连规则命中的 QUIC，其余 UDP/443 丢弃。
+    /// - block：全部 UDP/443 丢弃。
+    ///
+    /// 为兼容历史配置，未显式设置 `quic_policy` 时，`block_quic = true`
+    /// 会映射为 `direct_if_rule_match`。
     #[serde(default = "default_tun_block_quic")]
     pub block_quic: bool,
+
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
+    #[serde(default)]
+    pub quic_policy: Option<QuicPolicy>,
 
     /// Windows TUN 模式所需的 wintun.dll 路径。
     /// 不设置时会依次检查 desktop-agent.exe 同目录、当前目录和 PATH。
@@ -153,6 +167,7 @@ impl Default for TunConfig {
             mtu: default_tun_mtu(),
             proxy_dns: false,
             block_quic: default_tun_block_quic(),
+            quic_policy: None,
             wintun_file: None,
             route_state_file: None,
             dns_state_file: None,
@@ -261,6 +276,22 @@ impl AgentConfig {
     }
 }
 
+impl TunConfig {
+    /// 返回最终生效的 QUIC 策略。
+    ///
+    /// 这里特意把旧 `block_quic` 的兼容逻辑放在配置层，转发路径只消费
+    /// `QuicPolicy`，后续新增策略时不用再到多处业务代码里拼 bool 条件。
+    pub fn effective_quic_policy(&self) -> QuicPolicy {
+        self.quic_policy.unwrap_or({
+            if self.block_quic {
+                QuicPolicy::DirectIfRuleMatch
+            } else {
+                QuicPolicy::Allow
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +324,38 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert!(!config.tun.block_quic);
+        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn legacy_block_quic_maps_to_direct_if_rule_match() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+block_quic = true
+"#),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.tun.effective_quic_policy(),
+            QuicPolicy::DirectIfRuleMatch
+        );
+    }
+
+    #[test]
+    fn explicit_quic_policy_overrides_legacy_block_quic() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+block_quic = true
+quic_policy = "allow"
+"#),
+        )
+        .unwrap();
+
+        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
     }
 }

@@ -1,6 +1,7 @@
 pub mod client_connection;
 pub mod datagram_stream;
 pub mod error;
+pub mod quic;
 pub mod task_guard;
 pub mod tun_control;
 pub mod yamux_settings;
@@ -14,6 +15,7 @@ pub use client_connection::{
 };
 pub use datagram_stream::DatagramStreamIo;
 pub use error::{CommonError, Result};
+pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
 pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 pub use yamux_settings::{
     TcpTransportMode, TransportConfig, YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig,
