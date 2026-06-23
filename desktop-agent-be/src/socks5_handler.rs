@@ -8,7 +8,6 @@ use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
-use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
 use dashmap::DashMap;
 use fast_socks5::server::{
     NoAuthentication, Socks5ServerProtocol, SocksServerError,

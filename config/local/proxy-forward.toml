@@ -23,6 +23,11 @@ log_level = "debug"
 # - gzip：Gzip 压缩，兼容性广，速度较慢
 compression_mode = "lz4"
 
+# TCP relay 每个方向的拷贝 buffer，单位 KB。
+# legacy TCP relay 和 Yamux TCP 子流都会使用该值；默认 64KB 与旧版本一致。
+# 大文件/高 RTT 链路可压测 128 或 256；过大 buffer 会提高每连接内存占用。
+tcp_relay_buffer_size_kb = 64
+
 # 连接目标服务器时使用的出站网络设备名。
 # 不设置时使用系统默认路由；与启用 TUN 的 agent 同机运行时可设置为 "auto"，
 # proxy 会绑定到原始默认路由对应的物理网卡，避免出站流量回到 TUN。

@@ -12,6 +12,7 @@ pub(super) async fn handle_tcp_connect(
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
+    let relay_buffer_size = pool.tcp_relay_buffer_size();
 
     // 将目标地址转换为协议 Address，之后直连规则和 proxy Connect 都使用同一表示。
     let address = convert_target_addr(&target_addr);
@@ -35,8 +36,8 @@ pub(super) async fn handle_tcp_connect(
                 match tokio::io::copy_bidirectional_with_sizes(
                     &mut client_stream,
                     &mut target_stream,
-                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                    relay_buffer_size,
+                    relay_buffer_size,
                 )
                 .await
                 {
@@ -98,6 +99,7 @@ pub(super) async fn handle_tcp_connect(
             connected_stream,
             "SOCKS5 CONNECT",
             target_label,
+            relay_buffer_size,
         )
         .await
     }
@@ -111,6 +113,7 @@ pub(super) async fn handle_tcp_bind(
 ) -> Result<()> {
     info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
     let target_label = format_target_addr(&target_addr);
+    let relay_buffer_size = pool.tcp_relay_buffer_size();
 
     // 将目标地址转换为协议 Address
     let address = convert_target_addr(&target_addr);
@@ -152,8 +155,8 @@ pub(super) async fn handle_tcp_bind(
                         match tokio::io::copy_bidirectional_with_sizes(
                             &mut incoming_stream,
                             &mut target_stream,
-                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                            relay_buffer_size,
+                            relay_buffer_size,
                         )
                         .await
                         {
@@ -204,6 +207,7 @@ pub(super) async fn handle_tcp_bind(
                     connected_stream,
                     "SOCKS5 BIND",
                     target_label,
+                    relay_buffer_size,
                 )
                 .await
             }
@@ -224,6 +228,7 @@ async fn relay_data(
     connected_stream: ConnectedStream,
     protocol: &str,
     target: String,
+    relay_buffer_size: usize,
 ) -> Result<()> {
     // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
     let mut proxy_io = connected_stream.into_async_io();
@@ -236,15 +241,15 @@ async fn relay_data(
     match tokio::io::copy_bidirectional_with_sizes(
         client_stream,
         &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        relay_buffer_size,
+        relay_buffer_size,
     )
     .await
     {
         Ok((client_to_proxy, proxy_to_client)) => {
             info!(
-                "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端",
-                client_to_proxy, proxy_to_client
+                "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
+                client_to_proxy, proxy_to_client, relay_buffer_size
             );
             telemetry::emit_traffic(protocol, target, client_to_proxy, proxy_to_client);
         }

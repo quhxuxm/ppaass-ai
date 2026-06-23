@@ -9,7 +9,6 @@ use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use bytes::Bytes;
-use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -133,11 +132,14 @@ async fn handle_connect(
         debug!("CONNECT 使用直连连接到 {}", target);
 
         let target_for_spawn = target.clone();
+        let relay_buffer_size = pool.tcp_relay_buffer_size();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
-                    if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
+                    if let Err(e) =
+                        tunnel_direct(upgraded, &target_for_spawn, relay_buffer_size).await
+                    {
                         error!("直连隧道错误: {}", e);
                     }
                 }
@@ -178,11 +180,14 @@ async fn handle_connect(
         };
 
         // proxy 连接已建立后再升级客户端连接，避免给客户端过早成功响应。
+        let relay_buffer_size = pool.tcp_relay_buffer_size();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功 {}:{}", host, port);
-                    if let Err(e) = tunnel(upgraded, connected_stream, target).await {
+                    if let Err(e) =
+                        tunnel(upgraded, connected_stream, target, relay_buffer_size).await
+                    {
                         error!("隧道错误: {}", e);
                     }
                 }
@@ -204,6 +209,7 @@ async fn tunnel(
     upgraded: Upgraded,
     connected_stream: ConnectedStream,
     target: String,
+    relay_buffer_size: usize,
 ) -> std::result::Result<(), AgentError> {
     // HTTP upgraded stream 和 proxy stream 都转成 AsyncRead + AsyncWrite 后即可双向拷贝。
     let mut client_io = TokioIo::new(upgraded);
@@ -217,15 +223,15 @@ async fn tunnel(
     match tokio::io::copy_bidirectional_with_sizes(
         &mut client_io,
         &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        relay_buffer_size,
+        relay_buffer_size,
     )
     .await
     {
         Ok((client_to_proxy, proxy_to_client)) => {
             debug!(
-                "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端",
-                client_to_proxy, proxy_to_client
+                "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
+                client_to_proxy, proxy_to_client, relay_buffer_size
             );
             telemetry::emit_traffic("HTTP CONNECT", target, client_to_proxy, proxy_to_client);
         }
@@ -239,7 +245,11 @@ async fn tunnel(
 }
 
 /// 直连隧道: 不通过代理直接连接目标
-async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
+async fn tunnel_direct(
+    upgraded: Upgraded,
+    target: &str,
+    relay_buffer_size: usize,
+) -> std::result::Result<(), AgentError> {
     // 直连 CONNECT 跳过 proxy，直接把 upgraded client 和目标 TCP 流相连。
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
@@ -247,15 +257,15 @@ async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<
     match tokio::io::copy_bidirectional_with_sizes(
         &mut client_io,
         &mut target_stream,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        relay_buffer_size,
+        relay_buffer_size,
     )
     .await
     {
         Ok((client_to_target, target_to_client)) => {
             debug!(
-                "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端",
-                client_to_target, target_to_client
+                "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端, buffer={} bytes",
+                client_to_target, target_to_client, relay_buffer_size
             );
             telemetry::emit_traffic(
                 "HTTP CONNECT (direct)",

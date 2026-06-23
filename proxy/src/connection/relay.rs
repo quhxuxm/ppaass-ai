@@ -245,18 +245,22 @@ impl ServerConnection {
         let agent_io = AgentIo { reader, writer };
 
         let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
+        let relay_buffer_size = self.proxy_config.tcp_relay_buffer_size();
         if tcp_relay_idle_timeout_secs == 0 {
             // 兼容旧行为：不配置超时时按任一端关闭来结束中继。
             let mut agent_io = agent_io;
             match tokio::io::copy_bidirectional_with_sizes(
                 target_stream,
                 &mut agent_io,
-                DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-                DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                relay_buffer_size,
+                relay_buffer_size,
             )
             .await
             {
-                Ok((up, down)) => debug!("中继已结束：上行 {}，下行 {}", up, down),
+                Ok((up, down)) => debug!(
+                    "中继已结束：上行 {}，下行 {}，buffer={} bytes",
+                    up, down, relay_buffer_size
+                ),
                 Err(e) => debug!("中继错误：{}", e),
             }
             return Ok(());
@@ -272,8 +276,8 @@ impl ServerConnection {
         let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
         let mut up_bytes: u64 = 0;
         let mut down_bytes: u64 = 0;
-        let mut agent_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
-        let mut target_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
+        let mut agent_buf = vec![0u8; relay_buffer_size];
+        let mut target_buf = vec![0u8; relay_buffer_size];
 
         loop {
             tokio::select! {
@@ -343,7 +347,10 @@ impl ServerConnection {
             }
         }
 
-        debug!("中继已结束：上行 {}，下行 {}", up_bytes, down_bytes);
+        debug!(
+            "中继已结束：上行 {}，下行 {}，buffer={} bytes",
+            up_bytes, down_bytes, relay_buffer_size
+        );
 
         Ok(())
     }

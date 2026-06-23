@@ -13,6 +13,11 @@ connect_timeout_secs = 20
 # 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
 compression_mode = "lz4"
 
+# TCP relay 每个方向的拷贝 buffer，单位 KB。
+# 默认 64KB 与旧版本一致；大文件/高 RTT 链路可压测 128 或 256。
+# 过大 buffer 会增加每条 TCP relay 的内存占用，运行时会限制在 4KB..=1MB。
+tcp_relay_buffer_size_kb = 64
+
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
 # 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
 # 使 agent 在代理关闭连接前主动替换连接。

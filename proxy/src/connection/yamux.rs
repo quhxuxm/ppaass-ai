@@ -96,6 +96,7 @@ pub(super) async fn handle_yamux_tcp_stream(
                 stream,
                 target_stream,
                 proxy_config.yamux_tcp_relay_idle_timeout_secs,
+                proxy_config.tcp_relay_buffer_size(),
             )
             .await?;
         }
@@ -316,6 +317,7 @@ async fn handle_yamux_upstream_connect(
                 stream,
                 upstream_conn.into_stream(),
                 proxy_config.yamux_tcp_relay_idle_timeout_secs,
+                proxy_config.tcp_relay_buffer_size(),
             )
             .await?;
         }
@@ -337,6 +339,7 @@ async fn relay_yamux_tcp_stream<S>(
     mut agent_stream: StreamHandle,
     mut target_stream: S,
     idle_timeout_secs: u64,
+    relay_buffer_size: usize,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
@@ -346,12 +349,15 @@ where
         match tokio::io::copy_bidirectional_with_sizes(
             &mut agent_stream,
             &mut target_stream,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            relay_buffer_size,
+            relay_buffer_size,
         )
         .await
         {
-            Ok((up, down)) => debug!("Yamux 子流中继已结束：上行 {}，下行 {}", up, down),
+            Ok((up, down)) => debug!(
+                "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",
+                up, down, relay_buffer_size
+            ),
             Err(e) => debug!("Yamux 子流中继错误：{}", e),
         }
         return Ok(());
@@ -365,8 +371,8 @@ where
     let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
     let mut up_bytes: u64 = 0;
     let mut down_bytes: u64 = 0;
-    let mut agent_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
-    let mut target_buf = [0u8; DEFAULT_STREAM_RELAY_BUFFER_SIZE];
+    let mut agent_buf = vec![0u8; relay_buffer_size];
+    let mut target_buf = vec![0u8; relay_buffer_size];
 
     loop {
         tokio::select! {
@@ -437,8 +443,8 @@ where
     }
 
     debug!(
-        "Yamux 子流中继已结束：上行 {}，下行 {}",
-        up_bytes, down_bytes
+        "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",
+        up_bytes, down_bytes, relay_buffer_size
     );
     Ok(())
 }

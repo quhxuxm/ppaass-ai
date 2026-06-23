@@ -35,6 +35,8 @@ CONCURRENCY="${2:-100}"
 DURATION="${3:-60}"
 AGENT_ADDR="${AGENT_ADDR:-127.0.0.1:7070}"
 PROXY_ADDR="${PROXY_ADDR:-127.0.0.1:8080}"
+TCP_TARGET_HOST="${TCP_TARGET_HOST:-127.0.0.1}"
+TCP_TARGET_PORT="${TCP_TARGET_PORT:-9091}"
 
 case "$MODE" in
     mock-target)
@@ -116,6 +118,41 @@ case "$MODE" in
             --output "$OUTPUT_FILE"
 
         echo -e "${GREEN}✓ UDP performance test complete${NC}"
+        echo "Reports generated:"
+        echo "  - ${OUTPUT_FILE}"
+        echo "  - ${OUTPUT_FILE%.html}.json"
+        echo "  - ${OUTPUT_FILE%.html}.md"
+        ;;
+
+    tcp-performance)
+        PAYLOAD_SIZE="${4:-65536}"
+        echo -e "${YELLOW}Running TCP performance tests...${NC}"
+        echo "Agent: $AGENT_ADDR"
+        echo "Proxy: $PROXY_ADDR"
+        echo "Target: ${TCP_TARGET_HOST}:${TCP_TARGET_PORT}"
+        echo "Concurrency: $CONCURRENCY"
+        echo "Duration: ${DURATION}s"
+        echo "Payload size: ${PAYLOAD_SIZE} bytes"
+        echo ""
+        echo "Make sure the following are running:"
+        echo "  1. Agent server on $AGENT_ADDR"
+        echo "  2. Proxy server on $PROXY_ADDR"
+        echo "  3. Mock target servers (run: $0 mock-target)"
+        echo ""
+        read -p "Press Enter to continue or Ctrl+C to cancel..."
+
+        OUTPUT_FILE="tcp-performance-report-$(date +%Y%m%d-%H%M%S).html"
+        cargo run --release -p integration-tests -- tcp-performance \
+            --agent-addr "$AGENT_ADDR" \
+            --proxy-addr "$PROXY_ADDR" \
+            --target-host "$TCP_TARGET_HOST" \
+            --target-port "$TCP_TARGET_PORT" \
+            --concurrency "$CONCURRENCY" \
+            --duration "$DURATION" \
+            --payload-size "$PAYLOAD_SIZE" \
+            --output "$OUTPUT_FILE"
+
+        echo -e "${GREEN}✓ TCP performance test complete${NC}"
         echo "Reports generated:"
         echo "  - ${OUTPUT_FILE}"
         echo "  - ${OUTPUT_FILE%.html}.json"
@@ -239,6 +276,7 @@ case "$MODE" in
         echo "  integration          Run integration tests"
         echo "  performance [c] [d]  Run performance tests with [c]=concurrency, [d]=duration"
         echo "  udp-performance [c] [d] [p] Run UDP performance tests with payload [p] bytes"
+        echo "  tcp-performance [c] [d] [p] Run TCP relay performance tests with payload [p] bytes"
         echo "  quic-probe [attempts] [target] [timeout_ms] Run QUIC UDP/443 connectivity probe"
         echo "  quic-performance [c] [d] [target] [timeout_ms] Run QUIC UDP/443 performance tests"
         echo "  all [c] [d]          Run all tests"
@@ -247,12 +285,15 @@ case "$MODE" in
         echo "Environment variables:"
         echo "  AGENT_ADDR           Agent server address (default: 127.0.0.1:7070)"
         echo "  PROXY_ADDR           Proxy server address (default: 127.0.0.1:8080)"
+        echo "  TCP_TARGET_HOST      TCP echo target host (default: 127.0.0.1)"
+        echo "  TCP_TARGET_PORT      TCP echo target port (default: 9091)"
         echo ""
         echo "Examples:"
         echo "  $0 mock-target"
         echo "  $0 integration"
         echo "  $0 performance 200 120"
         echo "  $0 udp-performance 200 120 1200"
+        echo "  $0 tcp-performance 200 120 65536"
         echo "  $0 quic-probe 20 cloudflare.com 3000"
         echo "  $0 quic-performance 20 30 cloudflare.com 3000"
         echo "  $0 all 100 60"

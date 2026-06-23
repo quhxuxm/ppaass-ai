@@ -84,6 +84,40 @@ enum Commands {
         #[arg(short, long, default_value = "udp-performance-report.html")]
         output: String,
     },
+    /// 运行 TCP 专项性能测试（SOCKS5 CONNECT -> TCP echo）
+    TcpPerformance {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// TCP echo 目标主机
+        #[arg(long, default_value = "127.0.0.1")]
+        target_host: String,
+
+        /// TCP echo 目标端口
+        #[arg(long, default_value = "9091")]
+        target_port: u16,
+
+        /// 并发 TCP 连接数
+        #[arg(short, long, default_value = "100")]
+        concurrency: usize,
+
+        /// 测试持续时间（秒）
+        #[arg(short, long, default_value = "60")]
+        duration: u64,
+
+        /// 每次写入的 TCP payload 字节数
+        #[arg(long, default_value = "65536")]
+        payload_size: usize,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "tcp-performance-report.html")]
+        output: String,
+    },
     /// 运行 QUIC Version Negotiation 连通性探针（SOCKS5 UDP -> UDP/443）
     QuicProbe {
         /// 代理服务器地址
@@ -235,6 +269,40 @@ async fn main() -> Result<()> {
 
             report::generate_udp_reports(&results, &output)?;
             tracing::info!("UDP 性能报告已生成：{}", output);
+        }
+        Commands::TcpPerformance {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            concurrency,
+            duration,
+            payload_size,
+            output,
+        } => {
+            tracing::info!("正在运行 TCP 专项性能测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "目标：{}:{}，并发连接：{}，payload={} bytes，持续时间：{} 秒",
+                target_host,
+                target_port,
+                concurrency,
+                payload_size,
+                duration
+            );
+
+            let results = performance_tests::run_tcp_performance_tests(
+                &agent_addr,
+                &target_host,
+                target_port,
+                concurrency,
+                duration,
+                payload_size,
+            )
+            .await?;
+
+            report::generate_tcp_reports(&results, &output)?;
+            tracing::info!("TCP 性能报告已生成：{}", output);
         }
         Commands::QuicProbe {
             proxy_addr,

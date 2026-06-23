@@ -11,7 +11,7 @@ use super::network::{address_for_tun_target, reject_tun_target};
 use super::system_dns::resolve_via_system;
 use crate::error::{AgentError, Result};
 use crate::telemetry;
-use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
+use common::{BindInterface, bind_socket_to_interface};
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
@@ -45,6 +45,7 @@ pub(super) async fn handle_tun_tcp(
         proxy_dns,
         direct_egress,
     } = context;
+    let relay_buffer_size = tcp_pool.tcp_relay_buffer_size();
 
     // 先把 TUN 目标地址转成代理协议地址，并处理 proxy DNS 特例。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
@@ -143,8 +144,8 @@ pub(super) async fn handle_tun_tcp(
         match tokio::io::copy_bidirectional_with_sizes(
             &mut client,
             &mut target_stream,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            relay_buffer_size,
+            relay_buffer_size,
         )
         .await
         {
@@ -184,8 +185,8 @@ pub(super) async fn handle_tun_tcp(
     match tokio::io::copy_bidirectional_with_sizes(
         &mut client,
         &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        relay_buffer_size,
+        relay_buffer_size,
     )
     .await
     {
