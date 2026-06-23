@@ -9,6 +9,7 @@ mod error;
 mod http_handler;
 mod privilege;
 mod socks5_handler;
+mod tcp_relay;
 mod tun_handler;
 mod tun_helper_client;
 

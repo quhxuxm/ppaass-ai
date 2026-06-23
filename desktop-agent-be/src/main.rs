@@ -13,6 +13,7 @@ mod http_handler;
 mod privilege;
 mod server;
 mod socks5_handler;
+mod tcp_relay;
 mod telemetry;
 mod tun_handler;
 mod tun_helper_client;

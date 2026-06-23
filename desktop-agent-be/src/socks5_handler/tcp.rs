@@ -4,6 +4,7 @@
 //! 最终转换成一个 `AsyncRead + AsyncWrite` 双向中继。
 
 use super::*;
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
 pub(super) async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
@@ -33,24 +34,24 @@ pub(super) async fn handle_tcp_connect(
 
                 info!("SOCKS5 直连隧道已建立，开始数据中继");
 
-                match tokio::io::copy_bidirectional_with_sizes(
+                match relay_tcp_bidirectional(
                     &mut client_stream,
                     &mut target_stream,
                     relay_buffer_size,
-                    relay_buffer_size,
+                    TcpRelayOptions::standard(&target_label),
                 )
                 .await
                 {
-                    Ok((client_to_target, target_to_client)) => {
+                    Ok(stats) => {
                         info!(
                             "直连 SOCKS5 中继完成: {} 字节发出, {} 字节接收",
-                            client_to_target, target_to_client
+                            stats.client_to_remote, stats.remote_to_client
                         );
                         telemetry::emit_traffic(
                             "SOCKS5 CONNECT (direct)",
                             target_label,
-                            client_to_target,
-                            target_to_client,
+                            stats.client_to_remote,
+                            stats.remote_to_client,
                         );
                     }
                     Err(e) => {
@@ -152,24 +153,24 @@ pub(super) async fn handle_tcp_bind(
                 match TcpStream::connect(&target_str).await {
                     Ok(mut target_stream) => {
                         info!("SOCKS5 BIND 直连隧道已建立，开始数据中继");
-                        match tokio::io::copy_bidirectional_with_sizes(
+                        match relay_tcp_bidirectional(
                             &mut incoming_stream,
                             &mut target_stream,
                             relay_buffer_size,
-                            relay_buffer_size,
+                            TcpRelayOptions::standard(&target_label),
                         )
                         .await
                         {
-                            Ok((c2t, t2c)) => {
+                            Ok(stats) => {
                                 info!(
                                     "直连 SOCKS5 BIND 中继完成: {} 字节发出, {} 字节接收",
-                                    c2t, t2c
+                                    stats.client_to_remote, stats.remote_to_client
                                 );
                                 telemetry::emit_traffic(
                                     "SOCKS5 BIND (direct)",
                                     target_label,
-                                    c2t,
-                                    t2c,
+                                    stats.client_to_remote,
+                                    stats.remote_to_client,
                                 );
                             }
                             Err(e) => {
@@ -231,27 +232,29 @@ async fn relay_data(
     relay_buffer_size: usize,
 ) -> Result<()> {
     // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
+    // 具体双向 relay 统一交给 tcp_relay 模块处理，和 TUN/HTTP CONNECT 保持
+    // 相同的 flush 与半关闭语义。
     let mut proxy_io = connected_stream.into_async_io();
 
-    // 使用 tokio 优化的双向拷贝
-    // 比手动 select 循环更高效：
-    // 1. 尽可能使用零拷贝
-    // 2. 优化的缓冲区
-    // 3. 正确处理背压
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         client_stream,
         &mut proxy_io,
         relay_buffer_size,
-        relay_buffer_size,
+        TcpRelayOptions::standard(&target),
     )
     .await
     {
-        Ok((client_to_proxy, proxy_to_client)) => {
+        Ok(stats) => {
             info!(
                 "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
-                client_to_proxy, proxy_to_client, relay_buffer_size
+                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
             );
-            telemetry::emit_traffic(protocol, target, client_to_proxy, proxy_to_client);
+            telemetry::emit_traffic(
+                protocol,
+                target,
+                stats.client_to_remote,
+                stats.remote_to_client,
+            );
         }
         Err(e) => {
             // 客户端关闭连接时出现的连接错误是预期的

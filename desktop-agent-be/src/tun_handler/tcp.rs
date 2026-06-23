@@ -11,6 +11,7 @@ use super::network::{address_for_tun_target, reject_tun_target};
 use super::system_dns::resolve_via_system;
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use protocol::{Address, TransportProtocol};
@@ -18,7 +19,7 @@ use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -32,10 +33,6 @@ const SNIFF_MAX_BYTES: usize = 4096;
 const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-/// netstack-smoltcp 的 `shutdown()` 会等到 TCP socket 进入完全 Closed；
-/// 对 TUN 写回浏览器这一侧，我们只需要触发写半边关闭并给 FIN 一个短暂推进窗口。
-const TUN_TCP_CLIENT_SHUTDOWN_GRACE: Duration = Duration::from_millis(200);
-
 type ProxyPreconnect = (Address, JoinHandle<Result<ConnectedStream>>);
 
 pub(super) async fn handle_tun_tcp(
@@ -163,16 +160,21 @@ pub(super) async fn handle_tun_tcp(
                 debug!("TUN TCP 直连刷新首段字节失败：{e}");
             }
         }
-        match tokio::io::copy_bidirectional_with_sizes(
+        match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
             relay_buffer_size,
-            relay_buffer_size,
+            TcpRelayOptions::standard(&target_str),
         )
         .await
         {
-            Ok((c2t, t2c)) => {
-                telemetry::emit_traffic("TUN TCP (直连)", target_label, c2t, t2c);
+            Ok(stats) => {
+                telemetry::emit_traffic(
+                    "TUN TCP (直连)",
+                    target_label,
+                    stats.client_to_remote,
+                    stats.remote_to_client,
+                );
             }
             Err(e) => debug!("TUN TCP 直连中继结束：{e}"),
         }
@@ -192,6 +194,7 @@ pub(super) async fn handle_tun_tcp(
     }
     let connected =
         get_proxy_stream(tcp_pool.clone(), proxy_address, proxy_preconnect.take()).await?;
+    let proxy_is_framed = connected.is_framed();
     let mut proxy_io = connected.into_async_io();
     // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
     if !sniffed.is_empty() {
@@ -201,103 +204,30 @@ pub(super) async fn handle_tun_tcp(
             debug!("TUN TCP 代理刷新首段字节失败：{e}");
         }
     }
-    match relay_tun_tcp_proxy_with_flush(
+    match relay_tcp_bidirectional(
         &mut client,
         &mut proxy_io,
         relay_buffer_size,
-        &proxy_label,
+        if proxy_is_framed {
+            TcpRelayOptions::tun_framed(&proxy_label)
+        } else {
+            TcpRelayOptions::tun(&proxy_label)
+        },
     )
     .await
     {
-        Ok((c2p, p2c)) => {
-            telemetry::emit_traffic("TUN TCP", target_label, c2p, p2c);
+        Ok(stats) => {
+            telemetry::emit_traffic(
+                "TUN TCP",
+                target_label,
+                stats.client_to_remote,
+                stats.remote_to_client,
+            );
         }
         Err(e) => debug!("TUN TCP 中继结束：{e}"),
     }
     let _ = client.shutdown().await;
     Ok(())
-}
-
-async fn relay_tun_tcp_proxy_with_flush<C, P>(
-    client: &mut C,
-    proxy_io: &mut P,
-    relay_buffer_size: usize,
-    label: &str,
-) -> std::io::Result<(u64, u64)>
-where
-    C: AsyncRead + AsyncWrite + Unpin,
-    P: AsyncRead + AsyncWrite + Unpin,
-{
-    let (mut client_reader, mut client_writer) = tokio::io::split(client);
-    let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
-    let mut client_buf = vec![0u8; relay_buffer_size];
-    let mut proxy_buf = vec![0u8; relay_buffer_size];
-
-    // 两个方向必须真正并发推进。尤其是 netstack-smoltcp 的写半边
-    // shutdown 可能要等浏览器侧完全关闭；如果在单个 select 分支里直接 await，
-    // 就会挡住另一方向继续读取 FIN/窗口更新，表现成尾部偶发卡住或截断。
-    let client_to_proxy = async {
-        let mut bytes = 0u64;
-        loop {
-            match client_reader.read(&mut client_buf).await {
-                Ok(0) => {
-                    proxy_writer.shutdown().await?;
-                    break;
-                }
-                Ok(n) => {
-                    // 常规通道的 proxy 写端是 SinkWriter<DataPacketSink>。只 poll_write
-                    // 不一定立刻把 framed 数据推到底层 socket；HLS/HTTP2 中后续
-                    // WINDOW_UPDATE 或请求体如果滞留，服务端会发一部分后停住。
-                    // 因此 TUN TCP 代理路径每次写入后显式 flush。
-                    proxy_writer.write_all(&client_buf[..n]).await?;
-                    proxy_writer.flush().await?;
-                    bytes += n as u64;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok::<u64, std::io::Error>(bytes)
-    };
-
-    let proxy_to_client = async {
-        let mut bytes = 0u64;
-        loop {
-            match proxy_reader.read(&mut proxy_buf).await {
-                Ok(0) => {
-                    shutdown_tun_client_writer(&mut client_writer, label).await?;
-                    break;
-                }
-                Ok(n) => {
-                    client_writer.write_all(&proxy_buf[..n]).await?;
-                    client_writer.flush().await?;
-                    bytes += n as u64;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok::<u64, std::io::Error>(bytes)
-    };
-
-    tokio::try_join!(client_to_proxy, proxy_to_client)
-}
-
-async fn shutdown_tun_client_writer<W>(writer: &mut W, label: &str) -> std::io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    match timeout(TUN_TCP_CLIENT_SHUTDOWN_GRACE, writer.shutdown()).await {
-        Ok(result) => result,
-        Err(_) => {
-            // 对 netstack-smoltcp 来说，第一次 poll_shutdown 已经把 send_state
-            // 标成 Close；后续由 netstack runner 继续把 send_buffer 排空并发送 FIN。
-            // 这里不无限等待 TCP 完全 Closed，避免 relay 任务卡住另一方向的推进。
-            debug!(
-                "TUN TCP 写回浏览器 shutdown 等待超过 {:?}，继续结束 relay：target={}",
-                TUN_TCP_CLIENT_SHUTDOWN_GRACE, label
-            );
-            Ok(())
-        }
-    }
 }
 
 /// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
@@ -602,7 +532,6 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn sniff_buffer_waits_for_complete_tls_record() {
@@ -622,43 +551,5 @@ mod tests {
         assert!(!has_complete_http_headers(partial));
         assert!(has_complete_http_headers(complete));
         assert!(sniff_buffer_ready(80, complete));
-    }
-
-    #[tokio::test]
-    async fn proxy_relay_keeps_response_after_client_half_close() {
-        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
-        let (mut proxy_relay, mut proxy_peer) = tokio::io::duplex(1024);
-
-        let relay = tokio::spawn(async move {
-            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy_relay, 64, "test").await
-        });
-
-        // 模拟浏览器请求方向先结束。TUN relay 不能因此停止读取 proxy 响应，
-        // 否则 HLS 分片会出现“前半段到了，尾部没到”的截断。
-        client_peer.write_all(b"GET").await.unwrap();
-        client_peer.shutdown().await.unwrap();
-
-        let mut request = [0u8; 3];
-        proxy_peer.read_exact(&mut request).await.unwrap();
-        assert_eq!(&request, b"GET");
-
-        let mut eof_probe = [0u8; 1];
-        assert_eq!(proxy_peer.read(&mut eof_probe).await.unwrap(), 0);
-
-        proxy_peer.write_all(b"complete-body").await.unwrap();
-        proxy_peer.shutdown().await.unwrap();
-
-        let mut response = Vec::new();
-        client_peer.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, b"complete-body");
-
-        let (client_to_proxy, proxy_to_client) =
-            tokio::time::timeout(Duration::from_secs(5), relay)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        assert_eq!(client_to_proxy, 3);
-        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
     }
 }

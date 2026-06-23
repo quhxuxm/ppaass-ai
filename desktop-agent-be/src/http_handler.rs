@@ -7,6 +7,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -211,29 +212,30 @@ async fn tunnel(
     target: String,
     relay_buffer_size: usize,
 ) -> std::result::Result<(), AgentError> {
-    // HTTP upgraded stream 和 proxy stream 都转成 AsyncRead + AsyncWrite 后即可双向拷贝。
+    // HTTP CONNECT 隧道与 TUN/SOCKS 共用统一 TCP relay，避免代理路径的
+    // DataPacket flush/半关闭语义在不同入口出现分叉。
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 
-    // 使用 tokio 优化的双向拷贝
-    // 比手动 select 循环更高效：
-    // 1. 尽可能使用零拷贝
-    // 2. 优化的缓冲区
-    // 3. 正确处理背压
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         &mut client_io,
         &mut proxy_io,
         relay_buffer_size,
-        relay_buffer_size,
+        TcpRelayOptions::standard(&target),
     )
     .await
     {
-        Ok((client_to_proxy, proxy_to_client)) => {
+        Ok(stats) => {
             debug!(
                 "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
-                client_to_proxy, proxy_to_client, relay_buffer_size
+                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
             );
-            telemetry::emit_traffic("HTTP CONNECT", target, client_to_proxy, proxy_to_client);
+            telemetry::emit_traffic(
+                "HTTP CONNECT",
+                target,
+                stats.client_to_remote,
+                stats.remote_to_client,
+            );
         }
         Err(e) => {
             // 客户端关闭连接时出现的连接错误是预期的
@@ -254,24 +256,24 @@ async fn tunnel_direct(
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
 
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         &mut client_io,
         &mut target_stream,
         relay_buffer_size,
-        relay_buffer_size,
+        TcpRelayOptions::standard(target),
     )
     .await
     {
-        Ok((client_to_target, target_to_client)) => {
+        Ok(stats) => {
             debug!(
                 "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端, buffer={} bytes",
-                client_to_target, target_to_client, relay_buffer_size
+                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
             );
             telemetry::emit_traffic(
                 "HTTP CONNECT (direct)",
                 target,
-                client_to_target,
-                target_to_client,
+                stats.client_to_remote,
+                stats.remote_to_client,
             );
         }
         Err(e) => {
