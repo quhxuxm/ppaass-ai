@@ -9,15 +9,18 @@ use super::TunForwardContext;
 use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
 use super::system_dns::resolve_via_system;
+use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::debug;
 
@@ -29,6 +32,10 @@ const SNIFF_MAX_BYTES: usize = 4096;
 const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// 常规通道如果中途无进展，低频输出累计字节，帮助定位卡在上行还是下行。
+const TCP_RELAY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+type ProxyPreconnect = (Address, JoinHandle<Result<ConnectedStream>>);
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -93,6 +100,19 @@ pub(super) async fn handle_tun_tcp(
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
+    let mut proxy_preconnect = if direct_target.is_none() {
+        // TUN TCP 嗅探和 proxy stream 获取原本是串行的：先等首包/解析域名，再从
+        // 连接池拿 proxy 流。视频分片会频繁建短 TCP 连接，这两个等待叠加时容易
+        // 形成可见卡顿。这里先按当前已知目标预连接；如果后续 sniff 命中直连或
+        // 改写了 proxy 域名，会取消这个任务，保持路由语义不变。
+        Some(spawn_proxy_preconnect(
+            tcp_pool.clone(),
+            proxy_address.clone(),
+        ))
+    } else {
+        None
+    };
+
     // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
     //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
     let mut sniffed: Vec<u8> = Vec::new();
@@ -120,6 +140,7 @@ pub(super) async fn handle_tun_tcp(
     }
 
     if let Some(connect_target) = direct_target {
+        abort_proxy_preconnect(proxy_preconnect.take());
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = format!("{} (原始目标 {})", connect_target, target);
         let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
@@ -168,10 +189,8 @@ pub(super) async fn handle_tun_tcp(
     if !proxy_dns_request {
         debug!("TUN TCP 代理目标：{}", proxy_label);
     }
-    let connected = tcp_pool
-        .as_ref()
-        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
-        .await?;
+    let connected =
+        get_proxy_stream(tcp_pool.clone(), proxy_address, proxy_preconnect.take()).await?;
     let mut proxy_io = connected.into_async_io();
     // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
     if !sniffed.is_empty() {
@@ -181,12 +200,11 @@ pub(super) async fn handle_tun_tcp(
             debug!("TUN TCP 代理刷新首段字节失败：{e}");
         }
     }
-    // TUN TCP 流和 proxy stream 都实现 AsyncRead/AsyncWrite，可直接双向中继。
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tun_tcp_proxy_with_flush(
         &mut client,
         &mut proxy_io,
         relay_buffer_size,
-        relay_buffer_size,
+        &proxy_label,
     )
     .await
     {
@@ -197,6 +215,88 @@ pub(super) async fn handle_tun_tcp(
     }
     let _ = client.shutdown().await;
     Ok(())
+}
+
+async fn relay_tun_tcp_proxy_with_flush<C, P>(
+    client: &mut C,
+    proxy_io: &mut P,
+    relay_buffer_size: usize,
+    label: &str,
+) -> std::io::Result<(u64, u64)>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    P: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
+    let mut client_buf = vec![0u8; relay_buffer_size];
+    let mut proxy_buf = vec![0u8; relay_buffer_size];
+    let mut client_done = false;
+    let mut proxy_done = false;
+    let mut client_to_proxy = 0u64;
+    let mut proxy_to_client = 0u64;
+    let mut last_client_to_proxy = 0u64;
+    let mut last_proxy_to_client = 0u64;
+    let mut progress_log = tokio::time::interval(TCP_RELAY_PROGRESS_LOG_INTERVAL);
+    progress_log.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        if client_done && proxy_done {
+            break;
+        }
+
+        tokio::select! {
+            read = client_reader.read(&mut client_buf), if !client_done => {
+                match read {
+                    Ok(0) => {
+                        client_done = true;
+                        proxy_writer.shutdown().await?;
+                    }
+                    Ok(n) => {
+                        // 常规通道的 proxy 写端是 SinkWriter<DataPacketSink>。只 poll_write
+                        // 不一定立刻把 framed 数据推到底层 socket；HLS/HTTP2 中后续
+                        // WINDOW_UPDATE 或请求体如果滞留，服务端会发一部分后停住。
+                        // 因此 TUN TCP 代理路径每次写入后显式 flush。
+                        proxy_writer.write_all(&client_buf[..n]).await?;
+                        proxy_writer.flush().await?;
+                        client_to_proxy += n as u64;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            read = proxy_reader.read(&mut proxy_buf), if !proxy_done => {
+                match read {
+                    Ok(0) => {
+                        proxy_done = true;
+                        client_writer.shutdown().await?;
+                    }
+                    Ok(n) => {
+                        client_writer.write_all(&proxy_buf[..n]).await?;
+                        client_writer.flush().await?;
+                        proxy_to_client += n as u64;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            _ = progress_log.tick() => {
+                if client_to_proxy == last_client_to_proxy && proxy_to_client == last_proxy_to_client {
+                    if client_to_proxy > 0 || proxy_to_client > 0 {
+                        debug!(
+                            "TUN TCP relay 暂无进展：target={} client_to_proxy={} proxy_to_client={}",
+                            label,
+                            client_to_proxy,
+                            proxy_to_client
+                        );
+                    }
+                } else {
+                    last_client_to_proxy = client_to_proxy;
+                    last_proxy_to_client = proxy_to_client;
+                }
+            }
+        }
+    }
+
+    Ok((client_to_proxy, proxy_to_client))
 }
 
 /// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
@@ -282,6 +382,92 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     }
 }
 
+fn spawn_proxy_preconnect(
+    tcp_pool: Arc<ConnectionPool>,
+    proxy_address: Address,
+) -> ProxyPreconnect {
+    let address_for_task = proxy_address.clone();
+    let task = tokio::spawn(async move {
+        tcp_pool
+            .as_ref()
+            .get_connected_stream(address_for_task, TransportProtocol::Tcp)
+            .await
+    });
+    (proxy_address, task)
+}
+
+fn abort_proxy_preconnect(preconnect: Option<ProxyPreconnect>) {
+    if let Some((_, task)) = preconnect {
+        task.abort();
+    }
+}
+
+async fn get_proxy_stream(
+    tcp_pool: Arc<ConnectionPool>,
+    proxy_address: Address,
+    preconnect: Option<ProxyPreconnect>,
+) -> Result<ConnectedStream> {
+    if let Some((preconnect_address, task)) = preconnect {
+        if same_proxy_address(&preconnect_address, &proxy_address) {
+            debug!("TUN TCP 复用 sniff 期间建立的 proxy stream");
+            return task.await.map_err(|e| {
+                AgentError::Connection(format!("TUN TCP proxy 预连接任务失败：{e}"))
+            })?;
+        }
+
+        // sniff 后如果目标从 IP 改为域名，或者命中其他目标，必须丢弃预连接，
+        // 按最终 proxy_address 重新连接，避免优化改变路由选择。
+        task.abort();
+    }
+
+    tcp_pool
+        .as_ref()
+        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
+        .await
+}
+
+fn same_proxy_address(left: &Address, right: &Address) -> bool {
+    match (left, right) {
+        (
+            Address::Domain {
+                host: left_host,
+                port: left_port,
+            },
+            Address::Domain {
+                host: right_host,
+                port: right_port,
+            },
+        ) => left_port == right_port && left_host.eq_ignore_ascii_case(right_host),
+        (
+            Address::Ipv4 {
+                addr: left_addr,
+                port: left_port,
+            },
+            Address::Ipv4 {
+                addr: right_addr,
+                port: right_port,
+            },
+        ) => left_addr == right_addr && left_port == right_port,
+        (
+            Address::Ipv6 {
+                addr: left_addr,
+                port: left_port,
+            },
+            Address::Ipv6 {
+                addr: right_addr,
+                port: right_port,
+            },
+        ) => left_addr == right_addr && left_port == right_port,
+        (Address::ProxyDns { port: left_port }, Address::ProxyDns { port: right_port }) => {
+            left_port == right_port
+        }
+        (Address::UdpRelay, Address::UdpRelay)
+        | (Address::TcpYamux, Address::TcpYamux)
+        | (Address::UdpYamux, Address::UdpYamux) => true,
+        _ => false,
+    }
+}
+
 async fn resolve_direct_target_via_system(
     transport: &'static str,
     source: SocketAddr,
@@ -337,7 +523,7 @@ struct DirectTcpRefreshContext<'a> {
     direct_domain: Option<&'a str>,
     source: SocketAddr,
     direct_egress: &'a super::TunDirectEgress,
-    tcp_pool: &'a crate::connection_pool::ConnectionPool,
+    tcp_pool: &'a ConnectionPool,
     udp_pool: &'a crate::connection_pool::ConnectionPool,
     tun_networks: super::network::TunNetworks,
 }

@@ -99,6 +99,11 @@ public class MainActivity extends Activity {
             new TransportModeOption("yamux", "Yamux"),
             new TransportModeOption("legacy", "Standard channel")
     };
+    private static final QuicPolicyOption[] QUIC_POLICY_OPTIONS = {
+            new QuicPolicyOption("allow", "Allow"),
+            new QuicPolicyOption("direct_if_rule_match", "Direct if rule match"),
+            new QuicPolicyOption("block", "Block")
+    };
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
     private static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
@@ -140,7 +145,7 @@ public class MainActivity extends Activity {
     private EditText yamuxUdpKeepaliveIntervalSecs;
     private EditText yamuxUdpConnectionWriteTimeoutSecs;
     private EditText yamuxUdpStreamWindowSizeKb;
-    private Switch blockQuic;
+    private Spinner quicPolicy;
     private TextView selectedAppsSummary;
     private Button selectAppsButton;
     private Button restoreDefaultsButton;
@@ -539,7 +544,7 @@ public class MainActivity extends Activity {
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
         LinearLayout runtime = configSection(root, "Runtime");
-        blockQuic = switchControl(runtime, "Block QUIC", prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC));
+        quicPolicy = quicPolicySpinner(runtime, "QUIC policy", prefQuicPolicy());
         runtimeThreads = numberControl(
                 runtime,
                 "Runtime threads",
@@ -1945,6 +1950,7 @@ public class MainActivity extends Activity {
     }
 
     private void saveConfig() {
+        String quicPolicyValue = selectedQuicPolicy();
         prefs.edit()
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
@@ -1952,7 +1958,10 @@ public class MainActivity extends Activity {
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
-                .putBoolean("block_quic", blockQuic.isChecked())
+                // quic_policy 是新 native 使用的细粒度策略；block_quic 继续写入，
+                // 方便用户从旧 APK/旧配置升级或回滚时保持接近原来的语义。
+                .putString("quic_policy", quicPolicyValue)
+                .putBoolean("block_quic", legacyBlockQuic(quicPolicyValue))
                 .putString("runtime_threads", runtimeThreads.getText().toString())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
@@ -2005,7 +2014,7 @@ public class MainActivity extends Activity {
         proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
-        blockQuic.setChecked(DefaultConfig.BLOCK_QUIC);
+        setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
         tcpPoolSize.setText(String.valueOf(DefaultConfig.TCP_POOL_SIZE));
         udpPoolSize.setText(String.valueOf(DefaultConfig.UDP_POOL_SIZE));
@@ -2063,6 +2072,22 @@ public class MainActivity extends Activity {
             Object item = spinner.getAdapter().getItem(i);
             if (item instanceof TransportModeOption
                     && ((TransportModeOption) item).value.equalsIgnoreCase(normalized)) {
+                spinner.setSelection(i);
+                return;
+            }
+        }
+        spinner.setSelection(0);
+    }
+
+    private void setQuicPolicy(Spinner spinner, String fallback) {
+        if (spinner == null || spinner.getAdapter() == null) {
+            return;
+        }
+        String normalized = normalizeQuicPolicy(fallback);
+        for (int i = 0; i < spinner.getAdapter().getCount(); i++) {
+            Object item = spinner.getAdapter().getItem(i);
+            if (item instanceof QuicPolicyOption
+                    && ((QuicPolicyOption) item).value.equalsIgnoreCase(normalized)) {
                 spinner.setSelection(i);
                 return;
             }
@@ -2134,6 +2159,25 @@ public class MainActivity extends Activity {
         return spinner;
     }
 
+    private Spinner quicPolicySpinner(LinearLayout root, String title, String selected) {
+        root.addView(controlLabel(title), labelParams());
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<QuicPolicyOption> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                QUIC_POLICY_OPTIONS);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        setQuicPolicy(spinner, selected);
+        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setPadding(dp(12), 0, dp(12), 0);
+        root.addView(spinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+        trackEditable(spinner);
+        return spinner;
+    }
+
     private void updateTransportVisibility() {
         setVisible(tcpPoolConfig, usesStandardPool(selectedTcpMode()));
         setVisible(udpPoolConfig, usesStandardPool(selectedUdpMode()));
@@ -2172,6 +2216,46 @@ public class MainActivity extends Activity {
             return value;
         }
         return DefaultConfig.COMPRESSION_MODE;
+    }
+
+    private String prefQuicPolicy() {
+        String stored = prefs.getString("quic_policy", null);
+        if (stored != null) {
+            return normalizeQuicPolicy(stored);
+        }
+
+        // 兼容旧偏好：旧开关只表示“阻断未命中直连规则的 UDP/443”，不是全部阻断。
+        return prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC)
+                ? "direct_if_rule_match"
+                : DefaultConfig.QUIC_POLICY;
+    }
+
+    private String selectedQuicPolicy() {
+        if (quicPolicy == null || quicPolicy.getSelectedItem() == null) {
+            return DefaultConfig.QUIC_POLICY;
+        }
+        Object selected = quicPolicy.getSelectedItem();
+        if (selected instanceof QuicPolicyOption) {
+            return normalizeQuicPolicy(((QuicPolicyOption) selected).value);
+        }
+        return normalizeQuicPolicy(selected.toString());
+    }
+
+    private String normalizeQuicPolicy(String value) {
+        if (value == null) {
+            return DefaultConfig.QUIC_POLICY;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("allow".equals(normalized)
+                || "direct_if_rule_match".equals(normalized)
+                || "block".equals(normalized)) {
+            return normalized;
+        }
+        return DefaultConfig.QUIC_POLICY;
+    }
+
+    private boolean legacyBlockQuic(String quicPolicyValue) {
+        return !"allow".equals(normalizeQuicPolicy(quicPolicyValue));
     }
 
     private String selectedDirectAccessMode() {
@@ -3157,6 +3241,21 @@ public class MainActivity extends Activity {
         final String label;
 
         TransportModeOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private static final class QuicPolicyOption {
+        final String value;
+        final String label;
+
+        QuicPolicyOption(String value, String label) {
             this.value = value;
             this.label = label;
         }

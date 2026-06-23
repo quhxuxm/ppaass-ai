@@ -242,110 +242,23 @@ impl ServerConnection {
         let reader = StreamReader::new(stream);
 
         // AgentIo 让 packet-based 的 agent 连接呈现为 AsyncRead/AsyncWrite。
-        let agent_io = AgentIo { reader, writer };
+        let mut agent_io = AgentIo { reader, writer };
 
         let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
         let relay_buffer_size = self.proxy_config.tcp_relay_buffer_size();
-        if tcp_relay_idle_timeout_secs == 0 {
-            // 兼容旧行为：不配置超时时按任一端关闭来结束中继。
-            let mut agent_io = agent_io;
-            match tokio::io::copy_bidirectional_with_sizes(
-                target_stream,
-                &mut agent_io,
-                relay_buffer_size,
-                relay_buffer_size,
-            )
-            .await
-            {
-                Ok((up, down)) => debug!(
-                    "中继已结束：上行 {}，下行 {}，buffer={} bytes",
-                    up, down, relay_buffer_size
-                ),
-                Err(e) => debug!("中继错误：{}", e),
-            }
-            return Ok(());
-        }
+        let idle_timeout = if tcp_relay_idle_timeout_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(tcp_relay_idle_timeout_secs))
+        };
 
-        let idle_timeout = Duration::from_secs(tcp_relay_idle_timeout_secs);
-        let idle = tokio::time::sleep(idle_timeout);
-        tokio::pin!(idle);
-
-        // 手写 select 版本是为了给“读”和“写”都加 idle/写入超时控制；
-        // 只用 copy_bidirectional 无法区分长期空闲和正常长连接策略。
-        let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
-        let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
-        let mut up_bytes: u64 = 0;
-        let mut down_bytes: u64 = 0;
-        let mut agent_buf = vec![0u8; relay_buffer_size];
-        let mut target_buf = vec![0u8; relay_buffer_size];
-
-        loop {
-            tokio::select! {
-                _ = &mut idle => {
-                    debug!(
-                        "TCP 中继空闲超过 {} 秒，关闭连接",
-                        idle_timeout.as_secs()
-                    );
-                    break;
-                }
-                read = agent_reader.read(&mut agent_buf) => {
-                    match read {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            up_bytes += n as u64;
-                            match tokio::time::timeout(idle_timeout, async {
-                                target_writer.write_all(&agent_buf[..n]).await?;
-                                target_writer.flush().await
-                            }).await {
-                                Ok(Ok(())) => {
-                                    idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                                }
-                                Ok(Err(e)) => {
-                                    debug!("TCP relay 写入目标失败：{}", e);
-                                    break;
-                                }
-                                Err(_) => {
-                                    debug!("TCP relay 写入目标超过 {} 秒，关闭连接", idle_timeout.as_secs());
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!("TCP relay 读取 agent 数据失败：{}", e);
-                            break;
-                        }
-                    }
-                }
-                read = target_reader.read(&mut target_buf) => {
-                    match read {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            down_bytes += n as u64;
-                            match tokio::time::timeout(idle_timeout, async {
-                                agent_writer.write_all(&target_buf[..n]).await?;
-                                agent_writer.flush().await
-                            }).await {
-                                Ok(Ok(())) => {
-                                    idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                                }
-                                Ok(Err(e)) => {
-                                    debug!("TCP relay 写回 agent 失败：{}", e);
-                                    break;
-                                }
-                                Err(_) => {
-                                    debug!("TCP relay 写回 agent 超过 {} 秒，关闭连接", idle_timeout.as_secs());
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!("TCP relay 读取目标数据失败：{}", e);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        let (up_bytes, down_bytes) = relay_tcp_with_half_close(
+            target_stream,
+            &mut agent_io,
+            idle_timeout,
+            relay_buffer_size,
+        )
+        .await?;
 
         debug!(
             "中继已结束：上行 {}，下行 {}，buffer={} bytes",
@@ -353,5 +266,259 @@ impl ServerConnection {
         );
 
         Ok(())
+    }
+}
+
+async fn relay_tcp_with_half_close<T, A>(
+    target_stream: &mut T,
+    agent_io: &mut A,
+    idle_timeout: Option<Duration>,
+    relay_buffer_size: usize,
+) -> io::Result<(u64, u64)>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    // TCP relay 只保留这一套实现：始终使用明确的半关闭状态机。
+    // `idle_timeout = None` 只关闭超时控制，不再回退到 copy_bidirectional，
+    // 避免不同配置下出现两套 EOF/shutdown 语义。
+    let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(3600)));
+    tokio::pin!(idle);
+
+    let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
+    let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_io);
+    let mut up_bytes: u64 = 0;
+    let mut down_bytes: u64 = 0;
+    let mut agent_buf = vec![0u8; relay_buffer_size];
+    let mut target_buf = vec![0u8; relay_buffer_size];
+    let mut agent_done = false;
+    let mut target_done = false;
+
+    loop {
+        if agent_done && target_done {
+            break;
+        }
+
+        tokio::select! {
+            _ = &mut idle, if idle_timeout.is_some() => {
+                let timeout = idle_timeout.expect("select guard ensures timeout exists");
+                debug!("TCP 中继空闲超过 {} 秒，关闭连接", timeout.as_secs());
+                break;
+            }
+            read = agent_reader.read(&mut agent_buf), if !agent_done => {
+                match read {
+                    Ok(0) => {
+                        agent_done = true;
+                        // agent->target 方向结束只代表请求方向 EOF。TCP 支持半关闭，
+                        // 目标服务器仍可能继续返回响应体；这里仅关闭目标写半边，
+                        // 继续保留 target->agent 方向，避免 HLS 分片读到一半就被截断。
+                        match run_tcp_relay_io(idle_timeout, target_writer.shutdown()).await {
+                            Ok(true) => {
+                                if let Some(timeout) = idle_timeout {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                }
+                            }
+                            Ok(false) => {
+                                let timeout = idle_timeout.expect("timeout result requires timeout");
+                                debug!(
+                                    "TCP relay 关闭目标写半边超过 {} 秒，关闭连接",
+                                    timeout.as_secs()
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("TCP relay 关闭目标写半边失败：{}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(n) => {
+                        up_bytes += n as u64;
+                        match run_tcp_relay_io(idle_timeout, async {
+                            target_writer.write_all(&agent_buf[..n]).await?;
+                            target_writer.flush().await
+                        }).await {
+                            Ok(true) => {
+                                if let Some(timeout) = idle_timeout {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                }
+                            }
+                            Ok(false) => {
+                                let timeout = idle_timeout.expect("timeout result requires timeout");
+                                debug!("TCP relay 写入目标超过 {} 秒，关闭连接", timeout.as_secs());
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("TCP relay 写入目标失败：{}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("TCP relay 读取 agent 数据失败：{}", e);
+                        break;
+                    }
+                }
+            }
+            read = target_reader.read(&mut target_buf), if !target_done => {
+                match read {
+                    Ok(0) => {
+                        target_done = true;
+                        // target->agent 方向结束时也只关闭写回 agent 的半边，并发送
+                        // DataPacket end 标记。agent 仍可在另一方向完成剩余写入或 EOF
+                        // 传播，保持和 copy_bidirectional 一致的半关闭语义。
+                        match run_tcp_relay_io(idle_timeout, agent_writer.shutdown()).await {
+                            Ok(true) => {
+                                if let Some(timeout) = idle_timeout {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                }
+                            }
+                            Ok(false) => {
+                                let timeout = idle_timeout.expect("timeout result requires timeout");
+                                debug!(
+                                    "TCP relay 关闭 agent 写半边超过 {} 秒，关闭连接",
+                                    timeout.as_secs()
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("TCP relay 关闭 agent 写半边失败：{}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(n) => {
+                        down_bytes += n as u64;
+                        match run_tcp_relay_io(idle_timeout, async {
+                            agent_writer.write_all(&target_buf[..n]).await?;
+                            agent_writer.flush().await
+                        }).await {
+                            Ok(true) => {
+                                if let Some(timeout) = idle_timeout {
+                                    idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                }
+                            }
+                            Ok(false) => {
+                                let timeout = idle_timeout.expect("timeout result requires timeout");
+                                debug!("TCP relay 写回 agent 超过 {} 秒，关闭连接", timeout.as_secs());
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("TCP relay 写回 agent 失败：{}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("TCP relay 读取目标数据失败：{}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((up_bytes, down_bytes))
+}
+
+async fn run_tcp_relay_io<F>(idle_timeout: Option<Duration>, operation: F) -> io::Result<bool>
+where
+    F: std::future::Future<Output = io::Result<()>>,
+{
+    // 返回值含义：true 表示操作完成，false 表示命中超时。
+    // 这样 timeout=0/None 时仍复用同一套 relay 状态机，只是不包 timeout。
+    if let Some(timeout) = idle_timeout {
+        match tokio::time::timeout(timeout, operation).await {
+            Ok(result) => result.map(|_| true),
+            Err(_) => Ok(false),
+        }
+    } else {
+        operation.await.map(|_| true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn relay_keeps_target_response_after_agent_half_close() {
+        let (mut target_relay, mut target_peer) = tokio::io::duplex(1024);
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                Some(Duration::from_secs(5)),
+                64,
+            )
+            .await
+        });
+
+        // 模拟 agent 请求方向先结束：这在协议层表现为空 end 包或 TCP FIN。
+        // relay 不能因此立即结束，否则目标随后返回的响应体会被截断。
+        agent_peer.write_all(b"GET").await.unwrap();
+        agent_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        target_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(target_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        target_peer.write_all(b"complete-body").await.unwrap();
+        target_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        agent_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (up_bytes, down_bytes) = tokio::time::timeout(Duration::from_secs(5), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(up_bytes, 3);
+        assert_eq!(down_bytes, b"complete-body".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn relay_keeps_half_close_when_idle_timeout_disabled() {
+        let (mut target_relay, mut target_peer) = tokio::io::duplex(1024);
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(&mut target_relay, &mut agent_relay, None, 64).await
+        });
+
+        // timeout=0 的配置现在只表示“不启用超时”，不能再切回旧的
+        // copy_bidirectional 路径；半关闭语义必须和启用超时时完全一致。
+        agent_peer.write_all(b"GET").await.unwrap();
+        agent_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        target_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(target_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        target_peer.write_all(b"complete-body").await.unwrap();
+        target_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        agent_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (up_bytes, down_bytes) = tokio::time::timeout(Duration::from_secs(5), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(up_bytes, 3);
+        assert_eq!(down_bytes, b"complete-body".len() as u64);
     }
 }

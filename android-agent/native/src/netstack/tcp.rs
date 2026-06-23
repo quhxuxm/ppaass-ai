@@ -19,7 +19,12 @@ use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
 
 const SNIFF_MAX_BYTES: usize = 4096;
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(100);
+/// Android VPN 中视频 App/浏览器也会产生大量 HTTPS 短连接；嗅探等待需要压低，
+/// 否则每个 HLS 分片请求都会额外叠加首包延迟。
+const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
+/// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口，避免 TLS record
+/// 被慢速拆包时把 VPN 数据面卡到总超时。
+const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -101,7 +106,7 @@ async fn handle_tcp(
     }
 
     let mut sniffed = Vec::new();
-    if direct_target.is_none() && !proxy_dns_request {
+    if direct_target.is_none() && !proxy_dns_request && proxy_reason.is_none() {
         sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
@@ -214,11 +219,16 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) 
         if remaining.is_zero() {
             break;
         }
-        match timeout(remaining, client.read(&mut chunk)).await {
+        let read_timeout = if buffer.is_empty() {
+            remaining
+        } else {
+            remaining.min(SNIFF_INTER_READ_TIMEOUT)
+        };
+        match timeout(read_timeout, client.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
                 buffer.extend_from_slice(&chunk[..n]);
-                if sniff_domain(port, &buffer).is_some() {
+                if sniff_buffer_ready(port, &buffer) {
                     break;
                 }
             }
@@ -231,6 +241,32 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) 
     }
 
     buffer
+}
+
+fn sniff_buffer_ready(port: u16, buf: &[u8]) -> bool {
+    if sniff_domain(port, buf).is_some() {
+        return true;
+    }
+
+    // Android VPN 模式下，浏览器和视频 App 的 HTTPS/HLS 请求经常表现为大量短 TCP
+    // 连接。如果 TLS ClientHello 没有可见 SNI（例如 ECH、特殊握手或非标准客户端），
+    // 继续等满 SNIFF_TIMEOUT 会给每条新连接叠加首包延迟；一旦已经拿到完整 TLS
+    // record 或完整 HTTP 头，就立即放行，把已读字节原样补发给目标或 proxy。
+    has_complete_tls_record(buf) || has_complete_http_headers(buf)
+}
+
+fn has_complete_tls_record(buf: &[u8]) -> bool {
+    if buf.len() < 5 || buf[0] != 0x16 {
+        return false;
+    }
+    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+    buf.len() >= 5usize.saturating_add(record_len)
+}
+
+fn has_complete_http_headers(buf: &[u8]) -> bool {
+    std::str::from_utf8(buf)
+        .map(|text| text.contains("\r\n\r\n"))
+        .unwrap_or(false)
 }
 
 fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
@@ -305,5 +341,29 @@ fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
     {
         let _ = socket;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniff_buffer_waits_for_complete_tls_record() {
+        let partial_tls = [0x16, 0x03, 0x01, 0x00, 0x04, 0x01, 0x02];
+        let complete_tls = [0x16, 0x03, 0x01, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04];
+
+        assert!(!sniff_buffer_ready(443, &partial_tls));
+        assert!(sniff_buffer_ready(443, &complete_tls));
+    }
+
+    #[test]
+    fn sniff_buffer_stops_on_complete_http_headers() {
+        let partial_http = b"GET / HTTP/1.1\r\nHost: example.com\r\n";
+        let complete_http = b"GET / HTTP/1.1\r\nUser-Agent: test\r\n\r\n";
+
+        assert!(!has_complete_http_headers(partial_http));
+        assert!(has_complete_http_headers(complete_http));
+        assert!(sniff_buffer_ready(443, complete_http));
     }
 }
