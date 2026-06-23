@@ -49,7 +49,10 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // 关闭时发送一个空的 end 包，让 agent 明确知道该 stream 已结束。
+        // 关闭时只发送协议内的空 end 包，让 agent 明确知道该 stream 已结束。
+        // 不在这里 poll_close 底层 framed writer：legacy TCP relay 是双向半关闭，
+        // target->agent 的响应方向结束，不代表 agent->target 方向或承载 TCP 连接
+        // 也要立刻关闭。过早关闭承载层会让桌面 TUN 下的 HLS/HTTP2 分片偶发截断。
         if !self.end_sent {
             match Pin::new(&mut self.inner).poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
@@ -66,6 +69,8 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
             }
         }
 
-        Pin::new(&mut self.inner).poll_close(cx)
+        // end 包必须 flush 出去；真正关闭底层连接交给 relay 完整结束后的
+        // ServerConnection 生命周期处理。
+        Pin::new(&mut self.inner).poll_flush(cx)
     }
 }

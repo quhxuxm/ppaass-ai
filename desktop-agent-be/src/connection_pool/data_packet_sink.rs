@@ -69,7 +69,10 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // 首先发送流结束消息，让 proxy 关闭对应目标流。
+        // 这里只表达“当前代理 stream 的请求方向结束”，不能顺手关闭底层
+        // framed writer。底层 TCP 连接还承担从 proxy 读回响应的另一半；
+        // 如果这里过早 poll_close，某些 HLS/HTTP2 分片在响应尚未排空时会看到
+        // 承载连接半关闭，表现成分片偶发下载不完整。
         if !self.end_sent {
             let this = self.as_mut().get_mut();
             let request = this.create_data_request(&[], true);
@@ -92,9 +95,10 @@ impl<'a> Sink<&'a [u8]> for DataPacketSink {
             }
         }
 
-        // 然后关闭底层 writer，完成 SinkWriter 的关闭语义。
+        // 与 common::ClientStream::poll_shutdown 保持一致：发送 end 包后只 flush。
+        // 真正的底层连接关闭由 relay 两个方向都结束后的 drop/外层生命周期处理。
         Pin::new(&mut self.writer)
-            .poll_close(cx)
+            .poll_flush(cx)
             .map_err(|e| io::Error::other(e.to_string()))
     }
 }
