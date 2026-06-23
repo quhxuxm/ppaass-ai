@@ -5,7 +5,7 @@ use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
 use futures::StreamExt;
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -192,18 +192,81 @@ async fn handle_tcp(
             debug!("Android TUN TCP proxy initial bytes flush failed: {e}");
         }
     }
-    if let Err(e) = tokio::io::copy_bidirectional_with_sizes(
-        &mut client,
-        &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-    )
-    .await
+    if let Err(e) =
+        relay_tun_tcp_proxy_with_flush(&mut client, &mut proxy_io, DEFAULT_STREAM_RELAY_BUFFER_SIZE)
+            .await
     {
         debug!("Android TUN TCP proxy relay ended: {e}");
     }
     let _ = client.shutdown().await;
     Ok(())
+}
+
+async fn relay_tun_tcp_proxy_with_flush<C, P>(
+    client: &mut C,
+    proxy_io: &mut P,
+    relay_buffer_size: usize,
+) -> std::io::Result<(u64, u64)>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    P: AsyncRead + AsyncWrite + Unpin,
+{
+    // Android VPN 的 proxy 路径最终会落到 legacy ClientStream 或 Yamux stream。
+    // legacy 常规通道写入的是 DataPacket 协议帧：只 poll_write 可能先停在 framed
+    // writer 的内部缓冲中。这里和桌面 TUN proxy 路径保持一致，每次转发后显式
+    // flush，同时用半关闭状态机保留 TCP 的单方向 EOF 语义，避免视频分片响应被
+    // 过早截断。
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
+    let mut client_buf = vec![0u8; relay_buffer_size];
+    let mut proxy_buf = vec![0u8; relay_buffer_size];
+    let mut client_done = false;
+    let mut proxy_done = false;
+    let mut client_to_proxy = 0u64;
+    let mut proxy_to_client = 0u64;
+
+    loop {
+        if client_done && proxy_done {
+            break;
+        }
+
+        tokio::select! {
+            read = client_reader.read(&mut client_buf), if !client_done => {
+                match read {
+                    Ok(0) => {
+                        client_done = true;
+                        // 客户端请求方向 EOF 只关闭 proxy 写半边，响应方向仍要继续
+                        // 排空；这对 HLS/HTTPS 分片尤其重要。
+                        proxy_writer.shutdown().await?;
+                    }
+                    Ok(n) => {
+                        proxy_writer.write_all(&client_buf[..n]).await?;
+                        proxy_writer.flush().await?;
+                        client_to_proxy += n as u64;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            read = proxy_reader.read(&mut proxy_buf), if !proxy_done => {
+                match read {
+                    Ok(0) => {
+                        proxy_done = true;
+                        // proxy 响应方向 EOF 时只通知本地 TCP 写半边结束；如果客户
+                        // 端还有待发送数据，另一方向仍可自然走到 EOF。
+                        client_writer.shutdown().await?;
+                    }
+                    Ok(n) => {
+                        client_writer.write_all(&proxy_buf[..n]).await?;
+                        client_writer.flush().await?;
+                        proxy_to_client += n as u64;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+
+    Ok((client_to_proxy, proxy_to_client))
 }
 
 async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
@@ -347,6 +410,7 @@ fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn sniff_buffer_waits_for_complete_tls_record() {
@@ -365,5 +429,43 @@ mod tests {
         assert!(!has_complete_http_headers(partial_http));
         assert!(has_complete_http_headers(complete_http));
         assert!(sniff_buffer_ready(443, complete_http));
+    }
+
+    #[tokio::test]
+    async fn proxy_relay_keeps_response_after_client_half_close() {
+        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
+        let (mut proxy_relay, mut proxy_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy_relay, 64).await
+        });
+
+        // 模拟 Android VPN 里的请求方向先结束。relay 只能关闭 proxy 写半边，
+        // 不能因此丢掉 proxy 随后返回的响应体。
+        client_peer.write_all(b"GET").await.unwrap();
+        client_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        proxy_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(proxy_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        proxy_peer.write_all(b"complete-body").await.unwrap();
+        proxy_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        client_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (client_to_proxy, proxy_to_client) =
+            tokio::time::timeout(Duration::from_secs(5), relay)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert_eq!(client_to_proxy, 3);
+        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
     }
 }
