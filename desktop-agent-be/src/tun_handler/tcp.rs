@@ -32,8 +32,9 @@ const SNIFF_MAX_BYTES: usize = 4096;
 const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-/// 常规通道如果中途无进展，低频输出累计字节，帮助定位卡在上行还是下行。
-const TCP_RELAY_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+/// netstack-smoltcp 的 `shutdown()` 会等到 TCP socket 进入完全 Closed；
+/// 对 TUN 写回浏览器这一侧，我们只需要触发写半边关闭并给 FIN 一个短暂推进窗口。
+const TUN_TCP_CLIENT_SHUTDOWN_GRACE: Duration = Duration::from_millis(200);
 
 type ProxyPreconnect = (Address, JoinHandle<Result<ConnectedStream>>);
 
@@ -231,72 +232,72 @@ where
     let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
     let mut client_buf = vec![0u8; relay_buffer_size];
     let mut proxy_buf = vec![0u8; relay_buffer_size];
-    let mut client_done = false;
-    let mut proxy_done = false;
-    let mut client_to_proxy = 0u64;
-    let mut proxy_to_client = 0u64;
-    let mut last_client_to_proxy = 0u64;
-    let mut last_proxy_to_client = 0u64;
-    let mut progress_log = tokio::time::interval(TCP_RELAY_PROGRESS_LOG_INTERVAL);
-    progress_log.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    loop {
-        if client_done && proxy_done {
-            break;
+    // 两个方向必须真正并发推进。尤其是 netstack-smoltcp 的写半边
+    // shutdown 可能要等浏览器侧完全关闭；如果在单个 select 分支里直接 await，
+    // 就会挡住另一方向继续读取 FIN/窗口更新，表现成尾部偶发卡住或截断。
+    let client_to_proxy = async {
+        let mut bytes = 0u64;
+        loop {
+            match client_reader.read(&mut client_buf).await {
+                Ok(0) => {
+                    proxy_writer.shutdown().await?;
+                    break;
+                }
+                Ok(n) => {
+                    // 常规通道的 proxy 写端是 SinkWriter<DataPacketSink>。只 poll_write
+                    // 不一定立刻把 framed 数据推到底层 socket；HLS/HTTP2 中后续
+                    // WINDOW_UPDATE 或请求体如果滞留，服务端会发一部分后停住。
+                    // 因此 TUN TCP 代理路径每次写入后显式 flush。
+                    proxy_writer.write_all(&client_buf[..n]).await?;
+                    proxy_writer.flush().await?;
+                    bytes += n as u64;
+                }
+                Err(e) => return Err(e),
+            }
         }
+        Ok::<u64, std::io::Error>(bytes)
+    };
 
-        tokio::select! {
-            read = client_reader.read(&mut client_buf), if !client_done => {
-                match read {
-                    Ok(0) => {
-                        client_done = true;
-                        proxy_writer.shutdown().await?;
-                    }
-                    Ok(n) => {
-                        // 常规通道的 proxy 写端是 SinkWriter<DataPacketSink>。只 poll_write
-                        // 不一定立刻把 framed 数据推到底层 socket；HLS/HTTP2 中后续
-                        // WINDOW_UPDATE 或请求体如果滞留，服务端会发一部分后停住。
-                        // 因此 TUN TCP 代理路径每次写入后显式 flush。
-                        proxy_writer.write_all(&client_buf[..n]).await?;
-                        proxy_writer.flush().await?;
-                        client_to_proxy += n as u64;
-                    }
-                    Err(e) => return Err(e),
+    let proxy_to_client = async {
+        let mut bytes = 0u64;
+        loop {
+            match proxy_reader.read(&mut proxy_buf).await {
+                Ok(0) => {
+                    shutdown_tun_client_writer(&mut client_writer, label).await?;
+                    break;
                 }
-            }
-            read = proxy_reader.read(&mut proxy_buf), if !proxy_done => {
-                match read {
-                    Ok(0) => {
-                        proxy_done = true;
-                        client_writer.shutdown().await?;
-                    }
-                    Ok(n) => {
-                        client_writer.write_all(&proxy_buf[..n]).await?;
-                        client_writer.flush().await?;
-                        proxy_to_client += n as u64;
-                    }
-                    Err(e) => return Err(e),
+                Ok(n) => {
+                    client_writer.write_all(&proxy_buf[..n]).await?;
+                    client_writer.flush().await?;
+                    bytes += n as u64;
                 }
+                Err(e) => return Err(e),
             }
-            _ = progress_log.tick() => {
-                if client_to_proxy == last_client_to_proxy && proxy_to_client == last_proxy_to_client {
-                    if client_to_proxy > 0 || proxy_to_client > 0 {
-                        debug!(
-                            "TUN TCP relay 暂无进展：target={} client_to_proxy={} proxy_to_client={}",
-                            label,
-                            client_to_proxy,
-                            proxy_to_client
-                        );
-                    }
-                } else {
-                    last_client_to_proxy = client_to_proxy;
-                    last_proxy_to_client = proxy_to_client;
-                }
-            }
+        }
+        Ok::<u64, std::io::Error>(bytes)
+    };
+
+    tokio::try_join!(client_to_proxy, proxy_to_client)
+}
+
+async fn shutdown_tun_client_writer<W>(writer: &mut W, label: &str) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match timeout(TUN_TCP_CLIENT_SHUTDOWN_GRACE, writer.shutdown()).await {
+        Ok(result) => result,
+        Err(_) => {
+            // 对 netstack-smoltcp 来说，第一次 poll_shutdown 已经把 send_state
+            // 标成 Close；后续由 netstack runner 继续把 send_buffer 排空并发送 FIN。
+            // 这里不无限等待 TCP 完全 Closed，避免 relay 任务卡住另一方向的推进。
+            debug!(
+                "TUN TCP 写回浏览器 shutdown 等待超过 {:?}，继续结束 relay：target={}",
+                TUN_TCP_CLIENT_SHUTDOWN_GRACE, label
+            );
+            Ok(())
         }
     }
-
-    Ok((client_to_proxy, proxy_to_client))
 }
 
 /// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
@@ -601,6 +602,7 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn sniff_buffer_waits_for_complete_tls_record() {
@@ -620,5 +622,43 @@ mod tests {
         assert!(!has_complete_http_headers(partial));
         assert!(has_complete_http_headers(complete));
         assert!(sniff_buffer_ready(80, complete));
+    }
+
+    #[tokio::test]
+    async fn proxy_relay_keeps_response_after_client_half_close() {
+        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
+        let (mut proxy_relay, mut proxy_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy_relay, 64, "test").await
+        });
+
+        // 模拟浏览器请求方向先结束。TUN relay 不能因此停止读取 proxy 响应，
+        // 否则 HLS 分片会出现“前半段到了，尾部没到”的截断。
+        client_peer.write_all(b"GET").await.unwrap();
+        client_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        proxy_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(proxy_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        proxy_peer.write_all(b"complete-body").await.unwrap();
+        proxy_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        client_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (client_to_proxy, proxy_to_client) =
+            tokio::time::timeout(Duration::from_secs(5), relay)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert_eq!(client_to_proxy, 3);
+        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
     }
 }
