@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
 use futures::{SinkExt, StreamExt};
-use protocol::{Address, TransportProtocol};
+use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
@@ -100,21 +100,20 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
-                    let mut proxy_address = address.clone();
+                    let proxy_address = address.clone();
                     if !direct_match {
-                        if context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target.ip(), |domain| {
+                        // UDP/QUIC 代理目标保持原始 IP；只有域名规则可能改判直连时，
+                        // 才需要查 DNS cache。这样可以避免 proxy 端重新 DNS 到不同
+                        // CDN 边缘节点，减少 HTTP/3 视频播放抖动。
+                        if context.direct_checker.has_domain_direct_rules()
+                            && context
+                                .direct_domain_cache
+                                .matching_domain_for_ip(target.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
                             .is_some()
                         {
                             direct_match = true;
-                        } else if let Some(domain) = context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target.ip(), |_| true)
-                        {
-                            proxy_address = domain_address(&domain, target.port());
                         }
                     }
 
@@ -234,15 +233,16 @@ pub(super) async fn handle_tun_udp(
 
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
-        } else if let Some(domain) = direct_domain_cache
-            .matching_domain_for_ip(target.ip(), |domain| {
-                direct_checker.is_direct_domain(domain)
-            })
+        } else if direct_checker.has_domain_direct_rules()
+            && let Some(domain) = direct_domain_cache
+                .matching_domain_for_ip(target.ip(), |domain| {
+                    direct_checker.is_direct_domain(domain)
+                })
         {
             debug!(
                 "Android TUN UDP cached direct domain matched: {} ({})",
@@ -258,10 +258,9 @@ pub(super) async fn handle_tun_udp(
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
         debug!(
-            "Android TUN UDP cached proxy domain matched: {} ({})",
+            "Android TUN UDP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
             target, domain
         );
-        proxy_address = domain_address(&domain, target.port());
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
@@ -486,13 +485,6 @@ async fn drain_dropped_udp(
                 }
             }
         }
-    }
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
     }
 }
 

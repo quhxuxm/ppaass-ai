@@ -9,7 +9,7 @@
 ///
 /// 缓冲区中通常会包含一个完整的 TLS Record（不超过 16KB），
 /// 这里手工解析协议字段，避免引入额外依赖。
-pub(super) fn extract_tls_sni(buf: &[u8]) -> Option<String> {
+pub(crate) fn extract_tls_sni(buf: &[u8]) -> Option<String> {
     // TLS Record header: type(1)=22(handshake), version(2), length(2)
     if buf.len() < 5 || buf[0] != 0x16 {
         return None;
@@ -104,7 +104,7 @@ pub(super) fn extract_tls_sni(buf: &[u8]) -> Option<String> {
 ///
 /// 调用方需要保证缓冲区中至少包含完整的请求头；若数据不足，
 /// 函数会返回 `None`，调用方可以选择继续读取或放弃嗅探。
-pub(super) fn extract_http_host(buf: &[u8]) -> Option<String> {
+pub(crate) fn extract_http_host(buf: &[u8]) -> Option<String> {
     // 必须能看到请求行末尾（CRLF），否则直接放弃避免误判。
     let text = std::str::from_utf8(buf).ok()?;
     let header_end = text.find("\r\n\r\n").unwrap_or(text.len());

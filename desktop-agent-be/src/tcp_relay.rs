@@ -6,7 +6,7 @@
 //!
 //! 这里集中处理三件事：
 //! 1. 默认路径走 Tokio copy，保留较好的吞吐和批量 flush 行为；
-//! 2. legacy DataPacket/SinkWriter 可按需开启逐写 flush，避免请求/窗口更新滞留；
+//! 2. legacy DataPacket/SinkWriter 只在写向 proxy 的方向逐写 flush，避免请求/窗口更新滞留；
 //! 3. TUN 写回浏览器时只发起 shutdown，不等待 netstack-smoltcp 完全 Closed。
 
 use std::future::poll_fn;
@@ -16,6 +16,16 @@ use std::task::Poll;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
+
+/// TUN 写回本地客户端时的批量 flush 阈值。
+///
+/// netstack/TUN 写端可能需要 flush 推动 send buffer，但对每个小块都 flush 会增加调度
+/// 抖动。64KB 与 proxy 侧下行批量策略保持一致，适合 HLS/视频分片这种连续下行。
+const TCP_RELAY_CLIENT_FLUSH_BYTES: usize = 64 * 1024;
+/// TUN 下行未达到阈值时的最大等待窗口。
+///
+/// 2ms 足够合并同一波 TLS record/DataPacket，又不会让小响应或视频分片尾部明显变慢。
+const TCP_RELAY_CLIENT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// 一次双向 TCP relay 的字节统计。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,9 +73,22 @@ pub struct TcpRelayOptions<'a> {
     pub label: &'a str,
     /// remote->client 方向 EOF 后，关闭本地客户端写半边的方式。
     pub client_shutdown: ClientShutdownMode,
-    /// 是否每次 write 后立即 flush。只应给 legacy framed DataPacket 通道开启；
-    /// 裸 TCP/Yamux 使用 Tokio copy 或延迟 flush 吞吐更稳。
-    pub flush_each_write: bool,
+    /// client->remote 方向是否每次 write 后立即 flush。
+    ///
+    /// legacy framed proxy stream 的写端是 SinkWriter<DataPacketSink>，如果请求方向
+    /// 不及时 flush，HTTP CONNECT / TLS ClientHello / HTTP2 window update 可能先停在
+    /// framed writer 缓冲里，浏览器就会感到首包或窗口推进有顿挫。
+    pub flush_client_to_remote_each_write: bool,
+    /// remote->client 方向是否每次 write 后立即 flush。
+    ///
+    /// 这个方向通常写回本地 TCP socket 或 TUN netstack。逐块 flush 对吞吐帮助很小，
+    /// 反而会让大视频分片被拆成更多调度点；因此 framed proxy 只开启请求方向 flush。
+    pub flush_remote_to_client_each_write: bool,
+    /// remote->client 方向是否使用轻量批量 flush。
+    ///
+    /// TUN/netstack 写端既不能每个小块都 flush，也不应该完全等到 EOF 才 flush；
+    /// 这个开关让响应方向按“字节阈值或短时间窗口”推出去，降低视频播放抖动。
+    pub batch_remote_to_client_flush: bool,
     /// 是否强制使用手写 relay。TUN 需要特殊 shutdown；普通路径可走 Tokio copy。
     pub force_manual: bool,
 }
@@ -75,7 +98,9 @@ impl<'a> TcpRelayOptions<'a> {
         Self {
             label,
             client_shutdown: ClientShutdownMode::AwaitClosed,
-            flush_each_write: false,
+            flush_client_to_remote_each_write: false,
+            flush_remote_to_client_each_write: false,
+            batch_remote_to_client_flush: false,
             force_manual: false,
         }
     }
@@ -84,7 +109,9 @@ impl<'a> TcpRelayOptions<'a> {
         Self {
             label,
             client_shutdown: ClientShutdownMode::InitiateOnly,
-            flush_each_write: false,
+            flush_client_to_remote_each_write: false,
+            flush_remote_to_client_each_write: false,
+            batch_remote_to_client_flush: true,
             force_manual: true,
         }
     }
@@ -93,7 +120,9 @@ impl<'a> TcpRelayOptions<'a> {
         Self {
             label,
             client_shutdown: ClientShutdownMode::InitiateOnly,
-            flush_each_write: true,
+            flush_client_to_remote_each_write: true,
+            flush_remote_to_client_each_write: false,
+            batch_remote_to_client_flush: true,
             force_manual: true,
         }
     }
@@ -106,7 +135,9 @@ impl<'a> TcpRelayOptions<'a> {
         Self {
             label,
             client_shutdown: ClientShutdownMode::AwaitClosed,
-            flush_each_write: true,
+            flush_client_to_remote_each_write: true,
+            flush_remote_to_client_each_write: false,
+            batch_remote_to_client_flush: false,
             force_manual: true,
         }
     }
@@ -126,7 +157,11 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     R: AsyncRead + AsyncWrite + Unpin,
 {
-    if !options.force_manual && !options.flush_each_write {
+    if !options.force_manual
+        && !options.flush_client_to_remote_each_write
+        && !options.flush_remote_to_client_each_write
+        && !options.batch_remote_to_client_flush
+    {
         let (client_to_remote, remote_to_client) = tokio::io::copy_bidirectional_with_sizes(
             client,
             remote,
@@ -155,7 +190,7 @@ where
                 Ok(0) => {
                     // 本地请求方向 EOF 只表示 remote 写半边应该结束，remote->client
                     // 方向仍要继续排空。
-                    if !options.flush_each_write
+                    if !options.flush_client_to_remote_each_write
                         && let Err(error) = remote_writer.flush().await
                     {
                         return RelayDirectionOutcome::err(bytes, error);
@@ -169,9 +204,9 @@ where
                     if let Err(error) = remote_writer.write_all(&client_buf[..n]).await {
                         return RelayDirectionOutcome::err(bytes, error);
                     }
-                    // legacy DataPacket/SinkWriter 需要 flush 才能推动 framed writer。
-                    // 裸 TCP/Yamux 不开启逐写 flush，避免高吞吐分片被小 flush 打碎。
-                    if options.flush_each_write
+                    // legacy DataPacket/SinkWriter 需要 flush 才能推动 framed writer；
+                    // 这里特指浏览器/应用写向 proxy 的请求方向，避免首包和窗口更新滞留。
+                    if options.flush_client_to_remote_each_write
                         && let Err(error) = remote_writer.flush().await
                     {
                         return RelayDirectionOutcome::err(bytes, error);
@@ -186,31 +221,61 @@ where
 
     let remote_to_client = async {
         let mut bytes = 0u64;
+        let mut pending_flush_bytes = 0usize;
+        let flush_timer = tokio::time::sleep(TCP_RELAY_CLIENT_FLUSH_INTERVAL);
+        tokio::pin!(flush_timer);
+
         loop {
-            match remote_reader.read(&mut remote_buf).await {
-                Ok(0) => {
-                    if !options.flush_each_write
-                        && let Err(error) = client_writer.flush().await
-                    {
+            tokio::select! {
+                _ = &mut flush_timer, if options.batch_remote_to_client_flush && pending_flush_bytes > 0 => {
+                    // TUN 写回浏览器/App 的下行采用短窗口批量 flush：既保证数据不会
+                    // 长时间停在 netstack 写缓冲，也避免视频大响应每个小块都触发 flush。
+                    if let Err(error) = client_writer.flush().await {
                         return RelayDirectionOutcome::err(bytes, error);
                     }
-                    if let Err(error) = shutdown_client_writer(&mut client_writer, options).await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    break;
+                    pending_flush_bytes = 0;
                 }
-                Ok(n) => {
-                    if let Err(error) = client_writer.write_all(&remote_buf[..n]).await {
-                        return RelayDirectionOutcome::err(bytes, error);
+                read = remote_reader.read(&mut remote_buf) => {
+                    match read {
+                        Ok(0) => {
+                            if (!options.flush_remote_to_client_each_write || pending_flush_bytes > 0)
+                                && let Err(error) = client_writer.flush().await
+                            {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            if let Err(error) = shutdown_client_writer(&mut client_writer, options).await {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            break;
+                        }
+                        Ok(n) => {
+                            if let Err(error) = client_writer.write_all(&remote_buf[..n]).await {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            if options.flush_remote_to_client_each_write
+                                && let Err(error) = client_writer.flush().await
+                            {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            if options.batch_remote_to_client_flush {
+                                let should_arm_timer = pending_flush_bytes == 0;
+                                pending_flush_bytes = pending_flush_bytes.saturating_add(n);
+                                if pending_flush_bytes >= TCP_RELAY_CLIENT_FLUSH_BYTES {
+                                    if let Err(error) = client_writer.flush().await {
+                                        return RelayDirectionOutcome::err(bytes, error);
+                                    }
+                                    pending_flush_bytes = 0;
+                                } else if should_arm_timer {
+                                    flush_timer.as_mut().reset(
+                                        tokio::time::Instant::now() + TCP_RELAY_CLIENT_FLUSH_INTERVAL,
+                                    );
+                                }
+                            }
+                            bytes += n as u64;
+                        }
+                        Err(error) => return RelayDirectionOutcome::err(bytes, error),
                     }
-                    if options.flush_each_write
-                        && let Err(error) = client_writer.flush().await
-                    {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    bytes += n as u64;
                 }
-                Err(error) => return RelayDirectionOutcome::err(bytes, error),
             }
         }
         RelayDirectionOutcome::ok(bytes)

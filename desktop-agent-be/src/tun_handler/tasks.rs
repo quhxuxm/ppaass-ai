@@ -11,7 +11,6 @@ use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
 use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
 use futures::{SinkExt, StreamExt};
-use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,21 +196,20 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
-                    let mut proxy_address = address.clone();
+                    let proxy_address = address.clone();
                     if !direct_match {
-                        if context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target_addr.ip(), |domain| {
+                        // UDP/QUIC 只有在域名规则可能改判为直连时才查缓存。
+                        // 非直连代理目标始终保留原始 IP，避免 proxy 端重新 DNS 到
+                        // 不同 CDN 边缘节点后出现播放抖动。
+                        if context.direct_checker.has_domain_direct_rules()
+                            && context
+                                .direct_domain_cache
+                                .matching_domain_for_ip(target_addr.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
                             .is_some()
                         {
                             direct_match = true;
-                        } else if let Some(domain) = context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target_addr.ip(), |_| true)
-                        {
-                            proxy_address = domain_address(&domain, target_addr.port());
                         }
                     }
 
@@ -297,11 +295,4 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
             }
         }
     });
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
-    }
 }

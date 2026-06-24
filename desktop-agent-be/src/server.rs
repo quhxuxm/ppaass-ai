@@ -113,6 +113,12 @@ impl AgentServer {
                     match accept_result {
                         Ok((stream, addr)) => {
                             debug!("接受来自 {} 的连接", addr);
+                            // 本地浏览器到 agent 的连接多为 HTTP CONNECT/SOCKS 隧道。
+                            // 关闭 Nagle 可以避免小的 TLS/HTTP2 控制帧在本地入口被延迟合并，
+                            // 对视频分片这种频繁建连/窗口更新的场景更稳。
+                            if let Err(err) = stream.set_nodelay(true) {
+                                debug!("设置本地入口 TCP_NODELAY 失败，继续使用默认行为：{err}");
+                            }
                             // 每个客户端连接独立处理，复用对应协议的连接池和直连规则。
                             let tcp_pool = self.tcp_pool.clone();
                             let udp_pool = self.udp_pool.clone();

@@ -67,11 +67,16 @@ pub(super) async fn handle_tun_tcp(
     } else {
         target.to_string()
     };
+    // 只有域名规则可能把“已解析成 IP 的 TUN 目标”改判为直连时，才需要首包嗅探。
+    // 在默认全代理或仅 IP/CIDR 规则下，嗅探不会改变 proxy 目标；跳过它可以去掉
+    // HLS/视频分片短连接上的首包等待。
+    let should_sniff_domain_for_direct =
+        !proxy_dns_request && direct_checker.has_domain_direct_rules();
 
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
     let mut direct_domain = None;
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
@@ -80,7 +85,7 @@ pub(super) async fn handle_tun_tcp(
     // 2. 缓存中已知 IP -> 域名映射且命中域名规则：先使用原始 IP 直连，
     //    避免 macOS 待机恢复后系统 DNS 慢解析阻塞直连路径。
     if direct_target.is_none()
-        && !proxy_dns_request
+        && should_sniff_domain_for_direct
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
             direct_checker.is_direct_domain(domain)
         })
@@ -97,16 +102,19 @@ pub(super) async fn handle_tun_tcp(
         && !proxy_dns_request
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
-        debug!("TUN TCP 缓存域名用于代理目标：{} ({})", target, domain);
-        proxy_address = domain_address(&domain, target.port());
+        debug!(
+            "TUN TCP 缓存域名用于代理标签：{} ({})，代理目标保留原始 IP",
+            target, domain
+        );
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
     let mut proxy_preconnect = if direct_target.is_none() {
         // TUN TCP 嗅探和 proxy stream 获取原本是串行的：先等首包/解析域名，再从
         // 连接池拿 proxy 流。视频分片会频繁建短 TCP 连接，这两个等待叠加时容易
-        // 形成可见卡顿。这里先按当前已知目标预连接；如果后续 sniff 命中直连或
-        // 改写了 proxy 域名，会取消这个任务，保持路由语义不变。
+        // 形成可见卡顿。这里先按原始 IP 目标预连接；如果后续 sniff 命中直连，
+        // 会取消这个任务。若 sniff 只得到“仍需代理”的域名，则继续保留原始 IP，
+        // 避免视频 CDN 因 proxy 端重新 DNS 落到不同边缘节点而抖动。
         Some(spawn_proxy_preconnect(
             tcp_pool.clone(),
             proxy_address.clone(),
@@ -118,7 +126,7 @@ pub(super) async fn handle_tun_tcp(
     // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
     //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
     let mut sniffed: Vec<u8> = Vec::new();
-    if direct_target.is_none() && !proxy_dns_request && proxy_reason.is_none() {
+    if direct_target.is_none() && should_sniff_domain_for_direct && proxy_reason.is_none() {
         sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
@@ -134,8 +142,10 @@ pub(super) async fn handle_tun_tcp(
                 direct_domain = Some(domain);
                 direct_target = Some(target);
             } else {
-                debug!("TUN TCP 嗅探域名用于代理目标：{} ({})", target, domain);
-                proxy_address = domain_address(&domain, target.port());
+                debug!(
+                    "TUN TCP 嗅探域名用于代理标签：{} ({})，代理目标保留原始 IP",
+                    target, domain
+                );
                 proxy_reason = Some(format!("嗅探域名 {domain}"));
             }
         }
@@ -305,13 +315,6 @@ fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
         80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
         // 其他端口默认按 TLS（含 443/8443/853 等）解析，失败再尝试 HTTP。
         _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
     }
 }
 
@@ -535,6 +538,9 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("TUN TCP 直连 keepalive 设置失败 target={target}: {err}");
+    }
+    if let Err(err) = socket.set_tcp_nodelay(true) {
+        debug!("TUN TCP 直连 TCP_NODELAY 设置失败 target={target}: {err}");
     }
 }
 

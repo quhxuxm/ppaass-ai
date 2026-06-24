@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
 use futures::StreamExt;
-use protocol::{Address, TransportProtocol};
+use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -28,6 +28,15 @@ const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
 /// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口，避免 TLS record
 /// 被慢速拆包时把 VPN 数据面卡到总超时。
 const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
+/// Android TUN 写回 App/浏览器时的批量 flush 阈值。
+///
+/// 视频分片下行是连续大响应，逐块 flush 会增加 VPN 数据面任务唤醒；完全等 EOF
+/// 又会拖慢 HTTP/2 长连接上的小响应。因此这里采用和桌面/proxy 一致的短批处理策略。
+const TCP_RELAY_CLIENT_FLUSH_BYTES: usize = 64 * 1024;
+/// Android TUN 下行批量 flush 的最大等待时间。
+///
+/// 2ms 可以合并同一波 TLS record/DataPacket，同时让分片尾部和小控制帧快速返回。
+const TCP_RELAY_CLIENT_FLUSH_INTERVAL: Duration = Duration::from_millis(2);
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -69,17 +78,22 @@ async fn handle_tcp(
     } else {
         target.to_string()
     };
+    // 只有域名直连规则可能改变路由时，才需要首包 SNI/Host 嗅探。
+    // 全代理或仅 IP/CIDR 规则下，嗅探结果只会变成日志标签，继续等待会拖慢
+    // HLS/视频分片这种高频短连接。
+    let should_sniff_domain_for_direct =
+        !proxy_dns_request && context.direct_checker.has_domain_direct_rules();
 
     let mut direct_target = None;
     let mut direct_reason = None;
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && context.direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
 
     if direct_target.is_none()
-        && !proxy_dns_request
+        && should_sniff_domain_for_direct
         && let Some(domain) = context
             .direct_domain_cache
             .matching_domain_for_ip(target.ip(), |domain| {
@@ -101,15 +115,14 @@ async fn handle_tcp(
             .matching_domain_for_ip(target.ip(), |_| true)
     {
         debug!(
-            "Android TUN TCP cached proxy domain matched: {} ({})",
+            "Android TUN TCP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
             target, domain
         );
-        proxy_address = domain_address(&domain, target.port());
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
     let mut sniffed = Vec::new();
-    if direct_target.is_none() && !proxy_dns_request && proxy_reason.is_none() {
+    if direct_target.is_none() && should_sniff_domain_for_direct && proxy_reason.is_none() {
         sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
@@ -127,10 +140,9 @@ async fn handle_tcp(
                 direct_target = Some(target);
             } else {
                 debug!(
-                    "Android TUN TCP sniffed proxy domain matched: {} ({})",
+                    "Android TUN TCP sniffed proxy domain matched for label only: {} ({})，proxy target keeps original IP",
                     target, domain
                 );
-                proxy_address = domain_address(&domain, target.port());
                 proxy_reason = Some(format!("sniffed domain {domain}"));
             }
         }
@@ -215,10 +227,10 @@ where
     P: AsyncRead + AsyncWrite + Unpin,
 {
     // Android VPN 的 proxy 路径最终会落到 legacy ClientStream 或 Yamux stream。
-    // legacy 常规通道写入的是 DataPacket 协议帧：只 poll_write 可能先停在 framed
-    // writer 的内部缓冲中。这里和桌面 TUN proxy 路径保持一致，每次转发后显式
-    // flush，同时用半关闭状态机保留 TCP 的单方向 EOF 语义，避免视频分片响应被
-    // 过早截断。
+    // legacy 常规通道写入的是 DataPacket 协议帧：请求方向必须及时 flush，避免
+    // TLS ClientHello、HTTP/2 window update 或小请求停在 framed writer 缓冲里。
+    // 响应方向写回 App/浏览器时则使用短窗口批量 flush，减少视频分片下行的大量
+    // 小 flush 抖动，同时用半关闭状态机保留 TCP 的单方向 EOF 语义，避免响应被截断。
     let (mut client_reader, mut client_writer) = tokio::io::split(client);
     let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
     let mut client_buf = vec![0u8; relay_buffer_size];
@@ -254,29 +266,57 @@ where
 
     let proxy_to_client = async {
         let mut bytes = 0u64;
+        let mut pending_flush_bytes = 0usize;
+        let flush_timer = tokio::time::sleep(TCP_RELAY_CLIENT_FLUSH_INTERVAL);
+        tokio::pin!(flush_timer);
+
         loop {
-            match proxy_reader.read(&mut proxy_buf).await {
-                Ok(0) => {
-                    // netstack-smoltcp 的 shutdown 会等到底层 TCP 完全 Closed。
-                    // VPN/TUN 场景只需要触发 FIN；如果在这里等待完全关闭，会把每个
-                    // 视频短连接的尾部延迟放大，并可能挡住另一方向自然收尾。
-                    if let Err(error) =
-                        shutdown_client_writer_initiate_only(&mut client_writer).await
-                    {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    break;
-                }
-                Ok(n) => {
-                    if let Err(error) = client_writer.write_all(&proxy_buf[..n]).await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
+            tokio::select! {
+                _ = &mut flush_timer, if pending_flush_bytes > 0 => {
+                    // proxy->client 是视频分片主下行。按极短时间窗口 flush，避免
+                    // 每个小块都唤醒 VPN 数据面，也避免数据长期停留在写缓冲。
                     if let Err(error) = client_writer.flush().await {
                         return RelayDirectionOutcome::err(bytes, error);
                     }
-                    bytes += n as u64;
+                    pending_flush_bytes = 0;
                 }
-                Err(error) => return RelayDirectionOutcome::err(bytes, error),
+                read = proxy_reader.read(&mut proxy_buf) => {
+                    match read {
+                        Ok(0) => {
+                            if let Err(error) = client_writer.flush().await {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            // netstack-smoltcp 的 shutdown 会等到底层 TCP 完全 Closed。
+                            // VPN/TUN 场景只需要触发 FIN；如果在这里等待完全关闭，会把每个
+                            // 视频短连接的尾部延迟放大，并可能挡住另一方向自然收尾。
+                            if let Err(error) =
+                                shutdown_client_writer_initiate_only(&mut client_writer).await
+                            {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            break;
+                        }
+                        Ok(n) => {
+                            if let Err(error) = client_writer.write_all(&proxy_buf[..n]).await {
+                                return RelayDirectionOutcome::err(bytes, error);
+                            }
+                            let should_arm_timer = pending_flush_bytes == 0;
+                            pending_flush_bytes = pending_flush_bytes.saturating_add(n);
+                            if pending_flush_bytes >= TCP_RELAY_CLIENT_FLUSH_BYTES {
+                                if let Err(error) = client_writer.flush().await {
+                                    return RelayDirectionOutcome::err(bytes, error);
+                                }
+                                pending_flush_bytes = 0;
+                            } else if should_arm_timer {
+                                flush_timer.as_mut().reset(
+                                    tokio::time::Instant::now() + TCP_RELAY_CLIENT_FLUSH_INTERVAL,
+                                );
+                            }
+                            bytes += n as u64;
+                        }
+                        Err(error) => return RelayDirectionOutcome::err(bytes, error),
+                    }
+                }
             }
         }
         RelayDirectionOutcome::ok(bytes)
@@ -394,13 +434,6 @@ fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
     match port {
         80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
         _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
     }
 }
 

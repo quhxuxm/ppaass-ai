@@ -265,6 +265,9 @@ async fn tunnel_direct(
     // 直连 CONNECT 跳过 proxy，直接把 upgraded client 和目标 TCP 流相连。
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
+    if let Err(err) = target_stream.set_nodelay(true) {
+        debug!("HTTP CONNECT 直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
+    }
 
     match relay_tcp_bidirectional(
         &mut client_io,
@@ -339,7 +342,12 @@ async fn handle_regular_request(
         debug!("HTTP 请求使用直连连接到 {}", target);
 
         let target_stream = match TcpStream::connect(&target).await {
-            Ok(s) => s,
+            Ok(s) => {
+                if let Err(err) = s.set_nodelay(true) {
+                    debug!("HTTP 普通请求直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
+                }
+                s
+            }
             Err(e) => {
                 error!("直连到 {} 失败: {}", target, e);
                 return Ok(Response::builder()

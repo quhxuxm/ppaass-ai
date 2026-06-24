@@ -173,6 +173,20 @@ impl DirectAccessChecker {
         }
     }
 
+    /// 是否存在可能把 TUN IP 目标改判为直连的域名规则。
+    ///
+    /// Android VPN/TUN 入口通常只能看到已解析的 IP。若当前是全代理，或 rules 中
+    /// 只有 IP/CIDR，首包嗅探出的 SNI/Host 不会改变路由，只会拖慢视频分片短连接。
+    pub fn has_domain_direct_rules(&self) -> bool {
+        matches!(self.mode, DirectAccessMode::Rules)
+            && self.rules.iter().any(|rule| {
+                matches!(
+                    rule,
+                    ParsedRule::ExactDomain(_) | ParsedRule::WildcardDomain(_)
+                )
+            })
+    }
+
     fn matches_any_rule(&self, address: &Address) -> bool {
         match address {
             Address::Domain { host, .. } => {
@@ -334,6 +348,20 @@ mod tests {
 
         assert!(checker.is_direct_domain("www.example.com"));
         assert!(!checker.is_direct_domain("10.1.2.3"));
+    }
+
+    #[test]
+    fn domain_direct_rule_presence_ignores_proxy_all_and_ip_only_rules() {
+        let proxy_all =
+            DirectAccessChecker::new(&config(DirectAccessMode::ProxyAll, &["example.com"]));
+        assert!(!proxy_all.has_domain_direct_rules());
+
+        let ip_only = DirectAccessChecker::new(&config(DirectAccessMode::Rules, &["10.0.0.0/8"]));
+        assert!(!ip_only.has_domain_direct_rules());
+
+        let domain_rule =
+            DirectAccessChecker::new(&config(DirectAccessMode::Rules, &["*.example.com"]));
+        assert!(domain_rule.has_domain_direct_rules());
     }
 
     #[test]

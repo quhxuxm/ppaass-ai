@@ -6,6 +6,18 @@
 
 use super::*;
 
+/// proxy 写回 agent 的 TCP 响应批量 flush 阈值。
+///
+/// HLS/视频分片下行通常是连续大响应，如果每读到一个 TLS record/DataPacket 就立刻
+/// flush，会在 agent/proxy 承载连接上制造大量小写出和任务唤醒，表现为浏览器播放
+/// 抖动。64KB 能把连续下行合并成更稳定的批次，同时仍保持较低首包延迟。
+const TCP_RELAY_AGENT_FLUSH_BYTES: usize = 64 * 1024;
+/// 即使未达到字节阈值，也只等待一个极短窗口。
+///
+/// 这个窗口保护小响应、HTTP/2 控制帧和视频分片尾部：目标侧短暂停顿时，已有数据会
+/// 很快发回 agent，不会等到连接 EOF 或下一大块数据。
+const TCP_RELAY_AGENT_FLUSH_INTERVAL: Duration = Duration::from_millis(2);
+
 impl ServerConnection {
     #[instrument(skip(self, udp_socket))]
     pub(super) async fn relay_udp(
@@ -297,6 +309,9 @@ where
     let mut target_buf = vec![0u8; relay_buffer_size];
     let mut agent_done = false;
     let mut target_done = false;
+    let mut pending_agent_flush_bytes = 0usize;
+    let agent_flush_timer = tokio::time::sleep(TCP_RELAY_AGENT_FLUSH_INTERVAL);
+    tokio::pin!(agent_flush_timer);
 
     loop {
         if agent_done && target_done {
@@ -304,6 +319,31 @@ where
         }
 
         tokio::select! {
+            _ = &mut agent_flush_timer, if pending_agent_flush_bytes > 0 => {
+                // target->agent 是视频分片的主下行方向。这里按极短时间窗口统一 flush，
+                // 减少每个小块都穿透到承载连接的调度抖动；若 flush 超时或失败，
+                // 只结束下行方向，仍让另一方向按半关闭状态机自然收尾。
+                match flush_pending_agent_writer(
+                    &mut agent_writer,
+                    &mut pending_agent_flush_bytes,
+                    idle_timeout,
+                ).await {
+                    Ok(true) => {
+                        if let Some(timeout) = idle_timeout {
+                            idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                        }
+                    }
+                    Ok(false) => {
+                        let timeout = idle_timeout.expect("timeout result requires timeout");
+                        debug!("TCP relay 批量 flush 写回 agent 超过 {} 秒，关闭下行", timeout.as_secs());
+                        target_done = true;
+                    }
+                    Err(e) => {
+                        debug!("TCP relay 批量 flush 写回 agent 失败：{}", e);
+                        target_done = true;
+                    }
+                }
+            }
             _ = &mut idle, if idle_timeout.is_some() => {
                 let timeout = idle_timeout.expect("select guard ensures timeout exists");
                 debug!("TCP 中继空闲超过 {} 秒，关闭连接", timeout.as_secs());
@@ -371,6 +411,13 @@ where
                         // target->agent 方向结束时也只关闭写回 agent 的半边，并发送
                         // DataPacket end 标记。agent 仍可在另一方向完成剩余写入或 EOF
                         // 传播，保持和 copy_bidirectional 一致的半关闭语义。
+                        if let Err(e) = flush_pending_agent_writer(
+                            &mut agent_writer,
+                            &mut pending_agent_flush_bytes,
+                            idle_timeout,
+                        ).await {
+                            debug!("TCP relay 下行 EOF 前 flush 写回 agent 失败：{}", e);
+                        }
                         match run_tcp_relay_io(idle_timeout, agent_writer.shutdown()).await {
                             Ok(true) => {
                                 if let Some(timeout) = idle_timeout {
@@ -394,12 +441,40 @@ where
                     Ok(n) => {
                         down_bytes += n as u64;
                         match run_tcp_relay_io(idle_timeout, async {
-                            agent_writer.write_all(&target_buf[..n]).await?;
-                            agent_writer.flush().await
+                            agent_writer.write_all(&target_buf[..n]).await
                         }).await {
                             Ok(true) => {
+                                let should_arm_timer = pending_agent_flush_bytes == 0;
+                                pending_agent_flush_bytes =
+                                    pending_agent_flush_bytes.saturating_add(n);
                                 if let Some(timeout) = idle_timeout {
                                     idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                }
+                                if pending_agent_flush_bytes >= TCP_RELAY_AGENT_FLUSH_BYTES {
+                                    match flush_pending_agent_writer(
+                                        &mut agent_writer,
+                                        &mut pending_agent_flush_bytes,
+                                        idle_timeout,
+                                    ).await {
+                                        Ok(true) => {
+                                            if let Some(timeout) = idle_timeout {
+                                                idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                                            }
+                                        }
+                                        Ok(false) => {
+                                            let timeout = idle_timeout.expect("timeout result requires timeout");
+                                            debug!("TCP relay 写回 agent 后 flush 超过 {} 秒，关闭下行", timeout.as_secs());
+                                            target_done = true;
+                                        }
+                                        Err(e) => {
+                                            debug!("TCP relay 写回 agent 后 flush 失败：{}", e);
+                                            target_done = true;
+                                        }
+                                    }
+                                } else if should_arm_timer {
+                                    agent_flush_timer.as_mut().reset(
+                                        tokio::time::Instant::now() + TCP_RELAY_AGENT_FLUSH_INTERVAL,
+                                    );
                                 }
                             }
                             Ok(false) => {
@@ -423,6 +498,27 @@ where
     }
 
     Ok((up_bytes, down_bytes))
+}
+
+async fn flush_pending_agent_writer<W>(
+    writer: &mut W,
+    pending_bytes: &mut usize,
+    idle_timeout: Option<Duration>,
+) -> io::Result<bool>
+where
+    W: AsyncWrite + Unpin,
+{
+    if *pending_bytes == 0 {
+        return Ok(true);
+    }
+
+    // pending_bytes 表示已经写入 SinkWriter/承载流、但还没有显式 flush 的下行字节。
+    // flush 成功后才清零，便于 timeout/error 日志准确反映是否还有待推出的数据。
+    let completed = run_tcp_relay_io(idle_timeout, writer.flush()).await?;
+    if completed {
+        *pending_bytes = 0;
+    }
+    Ok(completed)
 }
 
 async fn run_tcp_relay_io<F>(idle_timeout: Option<Duration>, operation: F) -> io::Result<bool>
