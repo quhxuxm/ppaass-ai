@@ -4,6 +4,7 @@
 //! `ConnectRequest` 控制帧，用来说明这个子流要连哪个真实目标。
 //! 连接成功后，子流本身就变成 agent 与目标之间的裸字节通道。
 
+use super::relay::relay_tcp_with_half_close;
 use super::target::target_addr_for_address;
 use super::udp_relay_flow::{
     QueuedUdpRelayResponse, UDP_RELAY_RESPONSE_BATCH_LIMIT, UdpRelayFlowChannels, UdpRelayFlowSet,
@@ -344,103 +345,26 @@ async fn relay_yamux_tcp_stream<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
-    // Yamux 子流天然就是 AsyncRead/AsyncWrite，所以 TCP 路径可直接与目标流双向拷贝。
-    if idle_timeout_secs == 0 {
-        match tokio::io::copy_bidirectional_with_sizes(
-            &mut agent_stream,
-            &mut target_stream,
-            relay_buffer_size,
-            relay_buffer_size,
-        )
-        .await
-        {
-            Ok((up, down)) => debug!(
-                "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",
-                up, down, relay_buffer_size
-            ),
-            Err(e) => debug!("Yamux 子流中继错误：{}", e),
-        }
-        return Ok(());
-    }
-
-    let idle_timeout = Duration::from_secs(idle_timeout_secs);
-    let idle = tokio::time::sleep(idle_timeout);
-    tokio::pin!(idle);
-
-    let (mut agent_reader, mut agent_writer) = tokio::io::split(agent_stream);
-    let (mut target_reader, mut target_writer) = tokio::io::split(target_stream);
-    let mut up_bytes: u64 = 0;
-    let mut down_bytes: u64 = 0;
-    let mut agent_buf = vec![0u8; relay_buffer_size];
-    let mut target_buf = vec![0u8; relay_buffer_size];
-
-    loop {
-        tokio::select! {
-            _ = &mut idle => {
-                debug!(
-                    "Yamux TCP 子流空闲超过 {} 秒，关闭连接",
-                    idle_timeout.as_secs()
-                );
-                break;
-            }
-            read = agent_reader.read(&mut agent_buf) => {
-                match read {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        up_bytes += n as u64;
-                        match tokio::time::timeout(idle_timeout, async {
-                            target_writer.write_all(&agent_buf[..n]).await?;
-                            target_writer.flush().await
-                        }).await {
-                            Ok(Ok(())) => {
-                                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                            }
-                            Ok(Err(e)) => {
-                                debug!("Yamux TCP relay 写入目标失败：{}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                debug!("Yamux TCP relay 写入目标超过 {} 秒，关闭连接", idle_timeout.as_secs());
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Yamux TCP relay 读取 agent 数据失败：{}", e);
-                        break;
-                    }
-                }
-            }
-            read = target_reader.read(&mut target_buf) => {
-                match read {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        down_bytes += n as u64;
-                        match tokio::time::timeout(idle_timeout, async {
-                            agent_writer.write_all(&target_buf[..n]).await?;
-                            agent_writer.flush().await
-                        }).await {
-                            Ok(Ok(())) => {
-                                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                            }
-                            Ok(Err(e)) => {
-                                debug!("Yamux TCP relay 写回 agent 失败：{}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                debug!("Yamux TCP relay 写回 agent 超过 {} 秒，关闭连接", idle_timeout.as_secs());
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Yamux TCP relay 读取目标数据失败：{}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Yamux 子流天然就是 AsyncRead/AsyncWrite，但不能简单使用“任一方向
+    // read == 0 就整体退出”的循环。浏览器下载 HLS 分片时，请求方向可能很快
+    // 半关闭，而目标服务器随后仍会继续返回完整响应体；如果这里直接 break，
+    // agent 侧就会看到分片只下载了一部分。
+    //
+    // 因此 Yamux TCP 也复用 legacy TCP 的半关闭状态机：一个方向 EOF 只 shutdown
+    // 对端写半边，另一个方向继续排空。`idle_timeout_secs == 0` 仅表示关闭空闲
+    // 超时，不再切换到另一套 copy_bidirectional 语义。
+    let idle_timeout = if idle_timeout_secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(idle_timeout_secs))
+    };
+    let (up_bytes, down_bytes) = relay_tcp_with_half_close(
+        &mut target_stream,
+        &mut agent_stream,
+        idle_timeout,
+        relay_buffer_size,
+    )
+    .await?;
 
     debug!(
         "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",

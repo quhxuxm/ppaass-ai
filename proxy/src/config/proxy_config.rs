@@ -95,7 +95,7 @@ pub struct ProxyConfig {
     pub tcp_relay_idle_timeout_secs: u64,
 
     /// Yamux TCP 子流空闲超时时间（秒）。
-    /// 0 表示不限制；默认不限制，避免 WebSocket、SSH 等长连接被子流 idle 误杀。
+    /// 0 表示不限制；默认 300 秒，与普通 TCP relay 保持一致，避免异常子流长期占用资源。
     #[serde(default = "default_yamux_tcp_relay_idle_timeout_secs")]
     pub yamux_tcp_relay_idle_timeout_secs: u64,
 

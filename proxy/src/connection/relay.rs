@@ -269,7 +269,7 @@ impl ServerConnection {
     }
 }
 
-async fn relay_tcp_with_half_close<T, A>(
+pub(super) async fn relay_tcp_with_half_close<T, A>(
     target_stream: &mut T,
     agent_io: &mut A,
     idle_timeout: Option<Duration>,
