@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, QuicPolicy, TransportConfig, YamuxConfig};
+use common::{ClientConnectionConfig, QuicPolicy, TcpTransportMode, TransportConfig, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
@@ -34,7 +34,9 @@ pub struct AndroidAgentConfig {
     #[serde(default = "default_udp_pool_size")]
     pub udp_pool_size: usize,
 
-    #[serde(default)]
+    /// Android 默认 TCP 使用常规通道，避免浏览器/视频 App 的多个 TCP 分片连接
+    /// 被 Yamux 塞进同一条外层 TCP 后互相队头阻塞；UDP 仍保持 auto。
+    #[serde(default = "default_android_transport_config")]
     pub transport: TransportConfig,
 
     #[serde(default)]
@@ -173,6 +175,13 @@ fn default_runtime_threads() -> usize {
     4
 }
 
+fn default_android_transport_config() -> TransportConfig {
+    TransportConfig {
+        tcp_mode: TcpTransportMode::Legacy,
+        udp_mode: TcpTransportMode::Auto,
+    }
+}
+
 fn default_tcp_pool_size() -> usize {
     5
 }
@@ -211,6 +220,17 @@ mod tests {
 
         assert!(!config.block_quic);
         assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn android_agent_defaults_tcp_to_legacy_transport() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"k"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.transport.tcp_mode, TcpTransportMode::Legacy);
+        assert_eq!(config.transport.udp_mode, TcpTransportMode::Auto);
     }
 
     #[test]

@@ -5,8 +5,9 @@
 
 use crate::direct_access::DirectAccessConfig;
 use common::{
-    QuicPolicy, TransportConfig, YamuxConfig, default_stream_relay_buffer_size_kb,
-    stream_relay_buffer_size_from_kb, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
+    QuicPolicy, TcpTransportMode, TransportConfig, YamuxConfig,
+    default_stream_relay_buffer_size_kb, stream_relay_buffer_size_from_kb,
+    tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
 };
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,11 @@ pub struct AgentConfig {
     pub pool_max_connection_age_secs: u64,
 
     /// TCP/UDP 传输模式：auto、yamux、legacy。
-    #[serde(default)]
+    ///
+    /// Desktop 默认 TCP 使用常规通道。Yamux 把多个浏览器 TCP 连接复用到同一条
+    /// 外层 TCP，HLS/视频分片并发下载时容易受到外层队头阻塞影响；需要时仍可
+    /// 在 UI/TOML 中显式选择 yamux 或 auto。UDP 保持 auto，继续优先利用 UDP Yamux。
+    #[serde(default = "default_agent_transport_config")]
     pub transport: TransportConfig,
 
     /// Yamux 多路复用配置。TCP 与 UDP 使用各自独立的 Yamux 外层连接池。
@@ -264,6 +269,13 @@ fn default_async_runtime_stack_size_mb() -> usize {
     4
 }
 
+fn default_agent_transport_config() -> TransportConfig {
+    TransportConfig {
+        tcp_mode: TcpTransportMode::Legacy,
+        udp_mode: TcpTransportMode::Auto,
+    }
+}
+
 impl AgentConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         // 配置加载只做 TOML 反序列化和默认值填充，运行期语义由各模块校验。
@@ -338,6 +350,14 @@ private_key_path = "keys/user1.pem"
 
         assert_eq!(config.tcp_relay_buffer_size_kb, 256);
         assert_eq!(config.tcp_relay_buffer_size(), 256 * 1024);
+    }
+
+    #[test]
+    fn desktop_agent_defaults_tcp_to_legacy_transport() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert_eq!(config.transport.tcp_mode, TcpTransportMode::Legacy);
+        assert_eq!(config.transport.udp_mode, TcpTransportMode::Auto);
     }
 
     #[test]

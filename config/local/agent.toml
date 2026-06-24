@@ -41,10 +41,11 @@ async_runtime_stack_size_mb = 4
 # runtime_threads = 4
 
 [transport]
-# TCP 传输模式：auto 优先 Yamux，失败时回退旧协议；可选 auto、yamux、legacy。
-tcp_mode = "yamux"
+# TCP 默认使用常规通道。Yamux 会把多个浏览器 TCP 连接复用到同一条外层 TCP，
+# HLS/视频分片并发下载时容易受到外层队头阻塞影响；需要压测时再显式改成 yamux/auto。
+tcp_mode = "legacy"
 # UDP 传输模式：UDP Yamux 与 TCP Yamux 使用独立外层 session；可选 auto、yamux、legacy。
-udp_mode = "yamux"
+udp_mode = "auto"
 
 [yamux.tcp]
 # TCP Yamux 外层连接数。
@@ -52,7 +53,7 @@ udp_mode = "yamux"
 # 反而可能让单个视频分片读得更碎。只有确认外层连接数不足时再手动调高。
 sessions = 5
 # 每条 TCP Yamux 外层连接允许的并发子流数。
-max_streams_per_session = 256
+max_streams_per_session = 32
 # 打开 TCP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
 open_stream_timeout_secs = 10
 # TCP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
@@ -66,7 +67,7 @@ stream_window_size_kb = 8192
 # UDP Yamux 外层连接数。
 sessions = 5
 # 每条 UDP Yamux 外层连接允许的并发子流数。
-max_streams_per_session = 256
+max_streams_per_session = 32
 # 打开 UDP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
 open_stream_timeout_secs = 10
 # UDP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。

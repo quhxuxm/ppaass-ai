@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// TCP Yamux 外层连接保持保守默认值。实测 HLS/TUN 场景下盲目增大外层
-// session 会增加 agent<->proxy 侧的长期连接竞争，反而可能让单个分片读得更碎。
-// 并发度仍通过 UI/TOML 暴露给用户按链路手动调整。
+// TCP Yamux 外层连接保持保守默认值。HLS/视频分片会并发打开多条短 TCP；
+// 如果单条 Yamux session 承载过多子流，外层 TCP 的队头阻塞会被放大成播放卡顿。
+// 因此默认单 session 子流上限压低，真正需要高并发时再通过 UI/TOML 手动调高。
 pub const DEFAULT_TCP_YAMUX_SESSIONS: usize = 5;
-pub const DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION: usize = 256;
+pub const DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION: usize = 32;
 pub const DEFAULT_YAMUX_OPEN_STREAM_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_YAMUX_KEEPALIVE_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS: u64 = 10;
@@ -315,11 +315,30 @@ stream_window_size_kb = 1024
     }
 
     #[test]
+    fn client_yamux_defaults_limit_single_session_fanout() {
+        let config = YamuxConfig::default();
+        let tcp = config.tcp_settings();
+        let udp = config.udp_settings();
+
+        // 默认单 session 子流数保持较低，避免 HLS/视频分片并发下载时所有请求
+        // 都堆到同一条外层 TCP 上。用户仍可在 TOML/UI 中显式调高。
+        assert_eq!(
+            tcp.max_streams_per_session,
+            DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION
+        );
+        assert_eq!(
+            udp.max_streams_per_session,
+            DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION
+        );
+        assert_eq!(DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION, 32);
+    }
+
+    #[test]
     fn rejects_legacy_flat_yamux_config() {
         let err = toml::from_str::<YamuxConfig>(
             r#"
 sessions = 5
-max_streams_per_session = 256
+max_streams_per_session = 32
 "#,
         )
         .unwrap_err();
@@ -333,7 +352,7 @@ max_streams_per_session = 256
             r#"
 [tcp]
 sessions = 5
-max_streams_per_session = 256
+max_streams_per_session = 32
 "#,
         )
         .unwrap_err();
@@ -347,7 +366,7 @@ max_streams_per_session = 256
             r#"
 [tcp]
 open_stream_timeout_secs = 10
-max_streams_per_session = 256
+max_streams_per_session = 32
 "#,
         )
         .unwrap_err();

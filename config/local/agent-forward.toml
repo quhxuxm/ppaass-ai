@@ -42,14 +42,14 @@ async_runtime_stack_size_mb = 4
 # console_port = 6679
 
 [transport]
-tcp_mode = "auto"
+tcp_mode = "legacy"
 udp_mode = "auto"
 
 [yamux.tcp]
-# TCP Yamux 外层连接数。保守默认 5 条；TUN/HLS 场景下盲目增大该值会增加
-# agent<->proxy 侧竞争，反而可能让单个视频分片读得更碎。
+# TCP 默认不启用 Yamux。显式启用时也要控制单 session 子流数，避免视频分片
+# 并发下载全部挤在同一条外层 TCP 上。
 sessions = 5
-max_streams_per_session = 256
+max_streams_per_session = 32
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
@@ -57,7 +57,7 @@ stream_window_size_kb = 8192
 
 [yamux.udp]
 sessions = 5
-max_streams_per_session = 256
+max_streams_per_session = 32
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
