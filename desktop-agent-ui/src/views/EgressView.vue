@@ -93,18 +93,6 @@ function usesDirectPool(mode: string) {
               @update:model-value="emit('set-field', 'compression_mode', $event)"
             />
           </label>
-          <label class="field">
-            <span><i class="pi pi-arrows-h"></i>TCP relay buffer</span>
-            <ConfigNumberInput
-              :model-value="summary.tcp_relay_buffer_size_kb"
-              suffix=" KB"
-              :min="0"
-              :allow-empty="false"
-              :disabled="configLocked"
-              :use-grouping="false"
-              @update:model-value="emit('set-field', 'tcp_relay_buffer_size_kb', $event)"
-            />
-          </label>
         </div>
       </template>
     </Card>

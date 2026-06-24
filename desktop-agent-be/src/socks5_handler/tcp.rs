@@ -13,7 +13,6 @@ pub(super) async fn handle_tcp_connect(
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
-    let relay_buffer_size = pool.tcp_relay_buffer_size();
 
     // 将目标地址转换为协议 Address，之后直连规则和 proxy Connect 都使用同一表示。
     let address = convert_target_addr(&target_addr);
@@ -41,7 +40,6 @@ pub(super) async fn handle_tcp_connect(
                 match relay_tcp_bidirectional(
                     &mut client_stream,
                     &mut target_stream,
-                    relay_buffer_size,
                     TcpRelayOptions::standard(&target_label),
                 )
                 .await
@@ -109,7 +107,6 @@ pub(super) async fn handle_tcp_connect(
             connected_stream,
             "SOCKS5 CONNECT",
             target_label,
-            relay_buffer_size,
         )
         .await
     }
@@ -123,7 +120,6 @@ pub(super) async fn handle_tcp_bind(
 ) -> Result<()> {
     info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
     let target_label = format_target_addr(&target_addr);
-    let relay_buffer_size = pool.tcp_relay_buffer_size();
 
     // 将目标地址转换为协议 Address
     let address = convert_target_addr(&target_addr);
@@ -171,7 +167,6 @@ pub(super) async fn handle_tcp_bind(
                         match relay_tcp_bidirectional(
                             &mut incoming_stream,
                             &mut target_stream,
-                            relay_buffer_size,
                             TcpRelayOptions::standard(&target_label),
                         )
                         .await
@@ -224,7 +219,6 @@ pub(super) async fn handle_tcp_bind(
                     connected_stream,
                     "SOCKS5 BIND",
                     target_label,
-                    relay_buffer_size,
                 )
                 .await
             }
@@ -245,32 +239,23 @@ async fn relay_data(
     connected_stream: ConnectedStream,
     protocol: &str,
     target: String,
-    relay_buffer_size: usize,
 ) -> Result<()> {
     // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
-    // 但 relay 策略不能完全无差别：legacy Framed 写端是 DataPacketSink/SinkWriter，
-    // 如果使用 Tokio copy 路径，写入可能先停在 framed writer 缓冲里，SOCKS5 客户端
-    // 会感知为首包慢、交互顿一下或小请求迟迟不出去。Yamux 子流本身是裸字节流，
-    // 继续走标准 copy，避免逐写 flush 把吞吐打碎。
-    let proxy_is_framed = connected_stream.is_framed();
+    // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为 framed/Yamux
+    // 分叉不同 flush 或半关闭策略，避免同一视频分片在不同入口表现不一致。
     let mut proxy_io = connected_stream.into_async_io();
 
     match relay_tcp_bidirectional(
         client_stream,
         &mut proxy_io,
-        relay_buffer_size,
-        if proxy_is_framed {
-            TcpRelayOptions::framed_proxy(&target)
-        } else {
-            TcpRelayOptions::standard(&target)
-        },
+        TcpRelayOptions::standard(&target),
     )
     .await
     {
         Ok(stats) => {
             info!(
-                "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
-                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
+                "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端",
+                stats.client_to_remote, stats.remote_to_client
             );
             telemetry::emit_traffic(
                 protocol,

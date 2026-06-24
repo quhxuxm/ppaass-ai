@@ -26,7 +26,6 @@ pub(crate) struct AgentConfigSummary {
     pub(crate) tcp_pool_size: usize,
     pub(crate) udp_pool_size: usize,
     pub(crate) connect_timeout_secs: u64,
-    pub(crate) tcp_relay_buffer_size_kb: usize,
     pub(crate) compression_mode: String,
     pub(crate) log_level: String,
     pub(crate) log_dir: Option<String>,

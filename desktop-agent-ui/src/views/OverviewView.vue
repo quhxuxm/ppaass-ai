@@ -295,11 +295,6 @@ function hourlyBarHeight(bytes: number) {
             <strong>{{ summary.compression_mode }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-arrows-h"></i>
-            <span>Relay buffer</span>
-            <strong>{{ summary.tcp_relay_buffer_size_kb }} KB</strong>
-          </div>
-          <div class="metric-tile">
             <i class="pi pi-chart-line"></i>
             <span>日志</span>
             <strong>{{ summary.log_level }}</strong>

@@ -1,14 +1,14 @@
-use std::future::poll_fn;
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::task::Poll;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
+use common::spawn_guarded;
 use futures::StreamExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -28,15 +28,92 @@ const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
 /// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口，避免 TLS record
 /// 被慢速拆包时把 VPN 数据面卡到总超时。
 const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
-/// Android TUN 写回 App/浏览器时的批量 flush 阈值。
-///
-/// 视频分片下行是连续大响应，逐块 flush 会增加 VPN 数据面任务唤醒；完全等 EOF
-/// 又会拖慢 HTTP/2 长连接上的小响应。因此这里采用和桌面/proxy 一致的短批处理策略。
-const TCP_RELAY_CLIENT_FLUSH_BYTES: usize = 64 * 1024;
-/// Android TUN 下行批量 flush 的最大等待时间。
-///
-/// 2ms 可以合并同一波 TLS record/DataPacket，同时让分片尾部和小控制帧快速返回。
-const TCP_RELAY_CLIENT_FLUSH_INTERVAL: Duration = Duration::from_millis(2);
+
+struct AndroidTcpRelayIo<'a, S> {
+    inner: &'a mut S,
+    label: &'a str,
+}
+
+impl<'a, S> AndroidTcpRelayIo<'a, S> {
+    fn new(inner: &'a mut S, label: &'a str) -> Self {
+        Self { inner, label }
+    }
+}
+
+impl<S> AsyncRead for AndroidTcpRelayIo<'_, S>
+where
+    S: AsyncRead + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S> AsyncWrite for AndroidTcpRelayIo<'_, S>
+where
+    S: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut *this.inner).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) if can_ignore_tcp_shutdown_error(&error) => {
+                // Android TUN 里的请求方向经常比响应方向先结束。BrokenPipe/Reset
+                // 多数只是对端已经先关写半边，不能因为这个取消响应方向剩余数据；
+                // 否则浏览器看到的 HLS 分片就可能“读了一半停住”。
+                debug!(
+                    "Android TUN TCP relay 忽略 {} shutdown 错误：{}",
+                    this.label, error
+                );
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+async fn relay_tun_tcp_bidirectional<C, R>(
+    client: &mut C,
+    remote: &mut R,
+    label: &str,
+) -> io::Result<(u64, u64)>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    R: AsyncRead + AsyncWrite + Unpin,
+{
+    // Android 端不再维护单独 buffer 或手写 flush 状态机；直连、legacy proxy、
+    // Yamux proxy 都统一适配成 AsyncRead/AsyncWrite 后交给 Tokio copy_bidirectional。
+    let mut client_io = AndroidTcpRelayIo::new(client, label);
+    let mut remote_io = AndroidTcpRelayIo::new(remote, label);
+    tokio::io::copy_bidirectional(&mut client_io, &mut remote_io).await
+}
+
+fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::NotConnected
+    )
+}
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -166,15 +243,9 @@ async fn handle_tcp(
                 debug!("Android TUN TCP direct initial bytes flush failed: {e}");
             }
         }
-        if let Err(e) = tokio::io::copy_bidirectional_with_sizes(
-            &mut client,
-            &mut target_stream,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        )
-        .await
-        {
-            debug!("Android TUN TCP direct relay ended: {e}");
+        match relay_tun_tcp_bidirectional(&mut client, &mut target_stream, "direct").await {
+            Ok((up, down)) => debug!("Android TUN TCP direct relay ended up={up} down={down}"),
+            Err(e) => debug!("Android TUN TCP direct relay ended: {e}"),
         }
         let _ = client.shutdown().await;
         return Ok(());
@@ -207,164 +278,12 @@ async fn handle_tcp(
             debug!("Android TUN TCP proxy initial bytes flush failed: {e}");
         }
     }
-    if let Err(e) =
-        relay_tun_tcp_proxy_with_flush(&mut client, &mut proxy_io, DEFAULT_STREAM_RELAY_BUFFER_SIZE)
-            .await
-    {
-        debug!("Android TUN TCP proxy relay ended: {e}");
+    match relay_tun_tcp_bidirectional(&mut client, &mut proxy_io, "proxy").await {
+        Ok((up, down)) => debug!("Android TUN TCP proxy relay ended up={up} down={down}"),
+        Err(e) => debug!("Android TUN TCP proxy relay ended: {e}"),
     }
     let _ = client.shutdown().await;
     Ok(())
-}
-
-async fn relay_tun_tcp_proxy_with_flush<C, P>(
-    client: &mut C,
-    proxy_io: &mut P,
-    relay_buffer_size: usize,
-) -> std::io::Result<(u64, u64)>
-where
-    C: AsyncRead + AsyncWrite + Unpin,
-    P: AsyncRead + AsyncWrite + Unpin,
-{
-    // Android VPN 的 proxy 路径最终会落到 legacy ClientStream 或 Yamux stream。
-    // legacy 常规通道写入的是 DataPacket 协议帧：请求方向必须及时 flush，避免
-    // TLS ClientHello、HTTP/2 window update 或小请求停在 framed writer 缓冲里。
-    // 响应方向写回 App/浏览器时则使用短窗口批量 flush，减少视频分片下行的大量
-    // 小 flush 抖动，同时用半关闭状态机保留 TCP 的单方向 EOF 语义，避免响应被截断。
-    let (mut client_reader, mut client_writer) = tokio::io::split(client);
-    let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
-    let mut client_buf = vec![0u8; relay_buffer_size];
-    let mut proxy_buf = vec![0u8; relay_buffer_size];
-
-    // 两个方向必须各自收尾。不能因为请求方向 shutdown/write 出现 BrokenPipe
-    // 就取消响应方向，否则 HLS 分片的响应体还在写回 VPN 客户端时会被截断。
-    let client_to_proxy = async {
-        let mut bytes = 0u64;
-        loop {
-            match client_reader.read(&mut client_buf).await {
-                Ok(0) => {
-                    // 客户端请求方向 EOF 只关闭 proxy 写半边，响应方向仍要继续排空。
-                    if let Err(error) = proxy_writer.shutdown().await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    break;
-                }
-                Ok(n) => {
-                    if let Err(error) = proxy_writer.write_all(&client_buf[..n]).await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    if let Err(error) = proxy_writer.flush().await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    bytes += n as u64;
-                }
-                Err(error) => return RelayDirectionOutcome::err(bytes, error),
-            }
-        }
-        RelayDirectionOutcome::ok(bytes)
-    };
-
-    let proxy_to_client = async {
-        let mut bytes = 0u64;
-        let mut pending_flush_bytes = 0usize;
-        let flush_timer = tokio::time::sleep(TCP_RELAY_CLIENT_FLUSH_INTERVAL);
-        tokio::pin!(flush_timer);
-
-        loop {
-            tokio::select! {
-                _ = &mut flush_timer, if pending_flush_bytes > 0 => {
-                    // proxy->client 是视频分片主下行。按极短时间窗口 flush，避免
-                    // 每个小块都唤醒 VPN 数据面，也避免数据长期停留在写缓冲。
-                    if let Err(error) = client_writer.flush().await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    pending_flush_bytes = 0;
-                }
-                read = proxy_reader.read(&mut proxy_buf) => {
-                    match read {
-                        Ok(0) => {
-                            if let Err(error) = client_writer.flush().await {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            // netstack-smoltcp 的 shutdown 会等到底层 TCP 完全 Closed。
-                            // VPN/TUN 场景只需要触发 FIN；如果在这里等待完全关闭，会把每个
-                            // 视频短连接的尾部延迟放大，并可能挡住另一方向自然收尾。
-                            if let Err(error) =
-                                shutdown_client_writer_initiate_only(&mut client_writer).await
-                            {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            break;
-                        }
-                        Ok(n) => {
-                            if let Err(error) = client_writer.write_all(&proxy_buf[..n]).await {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            let should_arm_timer = pending_flush_bytes == 0;
-                            pending_flush_bytes = pending_flush_bytes.saturating_add(n);
-                            if pending_flush_bytes >= TCP_RELAY_CLIENT_FLUSH_BYTES {
-                                if let Err(error) = client_writer.flush().await {
-                                    return RelayDirectionOutcome::err(bytes, error);
-                                }
-                                pending_flush_bytes = 0;
-                            } else if should_arm_timer {
-                                flush_timer.as_mut().reset(
-                                    tokio::time::Instant::now() + TCP_RELAY_CLIENT_FLUSH_INTERVAL,
-                                );
-                            }
-                            bytes += n as u64;
-                        }
-                        Err(error) => return RelayDirectionOutcome::err(bytes, error),
-                    }
-                }
-            }
-        }
-        RelayDirectionOutcome::ok(bytes)
-    };
-
-    let (client_to_proxy, proxy_to_client) = tokio::join!(client_to_proxy, proxy_to_client);
-    if let Some(error) = &client_to_proxy.error {
-        debug!(
-            "Android TUN TCP client->proxy relay ended with error after preserving response side: {error}"
-        );
-    }
-    if let Some(error) = &proxy_to_client.error {
-        debug!(
-            "Android TUN TCP proxy->client relay ended with error after preserving request side: {error}"
-        );
-    }
-
-    Ok((client_to_proxy.bytes, proxy_to_client.bytes))
-}
-
-#[derive(Debug)]
-struct RelayDirectionOutcome {
-    bytes: u64,
-    error: Option<std::io::Error>,
-}
-
-impl RelayDirectionOutcome {
-    fn ok(bytes: u64) -> Self {
-        Self { bytes, error: None }
-    }
-
-    fn err(bytes: u64, error: std::io::Error) -> Self {
-        Self {
-            bytes,
-            error: Some(error),
-        }
-    }
-}
-
-async fn shutdown_client_writer_initiate_only<W>(writer: &mut W) -> std::io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    poll_fn(|cx| match Pin::new(&mut *writer).poll_shutdown(cx) {
-        Poll::Ready(result) => Poll::Ready(result),
-        Poll::Pending => Poll::Ready(Ok(())),
-    })
-    .await
 }
 
 async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
@@ -532,7 +451,7 @@ mod tests {
         let (mut proxy_relay, mut proxy_peer) = tokio::io::duplex(1024);
 
         let relay = tokio::spawn(async move {
-            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy_relay, 64).await
+            relay_tun_tcp_bidirectional(&mut client_relay, &mut proxy_relay, "test").await
         });
 
         // 模拟 Android VPN 里的请求方向先结束。relay 只能关闭 proxy 写半边，
@@ -570,7 +489,7 @@ mod tests {
         let mut proxy = ShutdownErrorProxy::new(b"complete-body");
 
         let relay = tokio::spawn(async move {
-            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy, 64).await
+            relay_tun_tcp_bidirectional(&mut client_relay, &mut proxy, "test").await
         });
 
         client_peer.write_all(b"GET").await.unwrap();

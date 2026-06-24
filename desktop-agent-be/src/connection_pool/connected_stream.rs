@@ -67,12 +67,6 @@ impl ConnectedStream {
         }
     }
 
-    pub fn is_framed(&self) -> bool {
-        // legacy Framed 流的写端是 DataPacketSink/SinkWriter，写入后需要更积极
-        // flush；Yamux 子流和裸 TCP 更接近普通字节流，不应套逐写 flush。
-        matches!(self, Self::Framed { .. })
-    }
-
     /// 转换为兼容 AsyncRead + AsyncWrite 的流，用于 copy_bidirectional
     pub fn into_async_io(self) -> ConnectedStreamIo {
         // 后续 HTTP/SOCKS/TUN 中继都使用统一的 AsyncRead/AsyncWrite 视图。

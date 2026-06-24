@@ -15,11 +15,6 @@ connect_timeout_secs = 20
 # 本地示例默认关闭压缩，把 CPU 留给 relay 和浏览器解码。
 compression_mode = "none"
 
-# TCP relay 每个方向的拷贝 buffer，单位 KB。
-# 默认 256KB；大文件/高 RTT 链路通常更受益。
-# 过大 buffer 会增加每条 TCP relay 的内存占用，运行时会限制在 4KB..=1MB。
-tcp_relay_buffer_size_kb = 256
-
 # 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
 # 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
 # 使 agent 在代理关闭连接前主动替换连接。

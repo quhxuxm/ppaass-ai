@@ -53,7 +53,6 @@ pub(super) async fn handle_tun_tcp(
         proxy_dns,
         direct_egress,
     } = context;
-    let relay_buffer_size = tcp_pool.tcp_relay_buffer_size();
 
     // 先把 TUN 目标地址转成代理协议地址，并处理 proxy DNS 特例。
     let (address, proxy_dns_request) = address_for_tun_target(target, proxy_dns);
@@ -171,7 +170,6 @@ pub(super) async fn handle_tun_tcp(
         match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
-            relay_buffer_size,
             TcpRelayOptions::standard(&target_str),
         )
         .await
@@ -202,7 +200,6 @@ pub(super) async fn handle_tun_tcp(
     }
     let connected =
         get_proxy_stream(tcp_pool.clone(), proxy_address, proxy_preconnect.take()).await?;
-    let proxy_is_framed = connected.is_framed();
     let mut proxy_io = connected.into_async_io();
     // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
     if !sniffed.is_empty() {
@@ -215,12 +212,7 @@ pub(super) async fn handle_tun_tcp(
     match relay_tcp_bidirectional(
         &mut client,
         &mut proxy_io,
-        relay_buffer_size,
-        if proxy_is_framed {
-            TcpRelayOptions::tun_framed(&proxy_label)
-        } else {
-            TcpRelayOptions::tun(&proxy_label)
-        },
+        TcpRelayOptions::tun(&proxy_label),
     )
     .await
     {

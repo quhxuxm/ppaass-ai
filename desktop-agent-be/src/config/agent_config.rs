@@ -6,7 +6,6 @@
 use crate::direct_access::DirectAccessConfig;
 use common::{
     QuicPolicy, TcpTransportMode, TransportConfig, YamuxConfig,
-    default_stream_relay_buffer_size_kb, stream_relay_buffer_size_from_kb,
     tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
 };
 use protocol::CompressionMode;
@@ -37,14 +36,6 @@ pub struct AgentConfig {
     /// 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
-
-    /// TCP relay 每个方向的拷贝 buffer 大小，单位 KB。
-    ///
-    /// 该值同时作用于 HTTP CONNECT、SOCKS5 TCP 和 TUN TCP 的双向拷贝。
-    /// 默认 256KB；0 表示使用该内置默认值。非 0 值运行时会限制在
-    /// 4KB..=1MB，避免误配置。
-    #[serde(default = "default_stream_relay_buffer_size_kb")]
-    pub tcp_relay_buffer_size_kb: usize,
 
     /// 连接池中连接的最大存活时间（秒）。
     /// 超过此时间的连接会被丢弃并替换为新连接，避免因代理端的空闲超时
@@ -278,10 +269,6 @@ impl AgentConfig {
     pub fn get_compression_mode(&self) -> CompressionMode {
         self.compression_mode.parse().unwrap_or_default()
     }
-
-    pub fn tcp_relay_buffer_size(&self) -> usize {
-        stream_relay_buffer_size_from_kb(self.tcp_relay_buffer_size_kb)
-    }
 }
 
 impl TunConfig {
@@ -316,14 +303,6 @@ private_key_path = "keys/user1.pem"
                 .unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::Lz4);
-    }
-
-    #[test]
-    fn tcp_relay_buffer_size_defaults_to_256kb() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert_eq!(config.tcp_relay_buffer_size_kb, 256);
-        assert_eq!(config.tcp_relay_buffer_size(), 256 * 1024);
     }
 
     #[test]

@@ -152,10 +152,6 @@ impl ConnectionPool {
         let guard = self.proxy_bind_interface.read().ok()?;
         guard.clone()
     }
-
-    pub fn tcp_relay_buffer_size(&self) -> usize {
-        self.config.tcp_relay_buffer_size()
-    }
 }
 
 fn pool_capacity(pool_size: usize) -> usize {

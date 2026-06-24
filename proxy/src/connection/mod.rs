@@ -33,7 +33,7 @@ use crate::connection_limiter::{
 };
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
-use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, DatagramStreamIo, TcpTransportMode, spawn_guarded};
+use common::{DatagramStreamIo, TcpTransportMode, spawn_guarded};
 use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -59,7 +59,7 @@ type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 
 const PROXY_FRAMED_INITIAL_CAPACITY: usize = 8 * 1024;
-const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = DEFAULT_STREAM_RELAY_BUFFER_SIZE;
+const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = 64 * 1024;
 
 pub struct ServerConnection {
     // 写回 agent 的协议响应流。所有 ConnectResponse/Data 都从这里出去。
@@ -108,9 +108,8 @@ impl ServerConnection {
 }
 
 fn proxy_framed_stream(stream: TcpStream, codec: ProxyCodec) -> Framed<TcpStream, ProxyCodec> {
-    // Large transfers are streamed in relay-sized chunks. Keep the protocol buffers small
-    // initially, and force framed backpressure before multiple encoded chunks can pile up
-    // behind a slow agent.
+    // 协议 framed 缓冲只负责限制代理协议层积压，不再暴露为用户可调的 TCP 中继参数。
+    // 初始容量保持较小，backpressure 边界也只允许少量 DataPacket 在慢 agent 后面积压。
     let mut framed = Framed::with_capacity(stream, codec, PROXY_FRAMED_INITIAL_CAPACITY);
     framed.set_backpressure_boundary(PROXY_FRAMED_BACKPRESSURE_BOUNDARY);
     framed

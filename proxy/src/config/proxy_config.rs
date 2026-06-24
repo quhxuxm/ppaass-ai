@@ -1,7 +1,4 @@
-use common::{
-    TransportConfig, YamuxServerConfig, default_stream_relay_buffer_size_kb,
-    stream_relay_buffer_size_from_kb,
-};
+use common::{TransportConfig, YamuxServerConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -35,13 +32,6 @@ pub struct ProxyConfig {
     /// 数据传输压缩模式：none、zstd、lz4、gzip
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
-
-    /// TCP relay 每个方向的拷贝 buffer 大小，单位 KB。
-    ///
-    /// legacy TCP relay 和 Yamux TCP 子流都会使用该值。默认 256KB；
-    /// 0 表示使用该内置默认值。非 0 值运行时会限制在 4KB..=1MB。
-    #[serde(default = "default_stream_relay_buffer_size_kb")]
-    pub tcp_relay_buffer_size_kb: usize,
 
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
@@ -231,10 +221,6 @@ impl ProxyConfig {
         // 未知压缩值回退到协议默认值，避免错误配置直接导致启动失败。
         self.compression_mode.parse().unwrap_or_default()
     }
-
-    pub fn tcp_relay_buffer_size(&self) -> usize {
-        stream_relay_buffer_size_from_kb(self.tcp_relay_buffer_size_kb)
-    }
 }
 
 #[cfg(test)]
@@ -268,18 +254,5 @@ listen_addr = "127.0.0.1:0"
         assert_eq!(config.max_udp_relay_flows, 256);
         assert_eq!(config.udp_relay_channel_size, 64);
         assert_eq!(config.max_udp_relay_buffered_bytes, 16 * 1024 * 1024);
-    }
-
-    #[test]
-    fn tcp_relay_buffer_size_defaults_to_256kb() {
-        let config: ProxyConfig = toml::from_str(
-            r#"
-listen_addr = "127.0.0.1:0"
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(config.tcp_relay_buffer_size_kb, 256);
-        assert_eq!(config.tcp_relay_buffer_size(), 256 * 1024);
     }
 }

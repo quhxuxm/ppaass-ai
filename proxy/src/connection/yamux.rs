@@ -97,7 +97,6 @@ pub(super) async fn handle_yamux_tcp_stream(
                 stream,
                 target_stream,
                 proxy_config.yamux_tcp_relay_idle_timeout_secs,
-                proxy_config.tcp_relay_buffer_size(),
             )
             .await?;
         }
@@ -318,7 +317,6 @@ async fn handle_yamux_upstream_connect(
                 stream,
                 upstream_conn.into_stream(),
                 proxy_config.yamux_tcp_relay_idle_timeout_secs,
-                proxy_config.tcp_relay_buffer_size(),
             )
             .await?;
         }
@@ -340,35 +338,25 @@ async fn relay_yamux_tcp_stream<S>(
     mut agent_stream: StreamHandle,
     mut target_stream: S,
     idle_timeout_secs: u64,
-    relay_buffer_size: usize,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
-    // Yamux 子流天然就是 AsyncRead/AsyncWrite，但不能简单使用“任一方向
-    // read == 0 就整体退出”的循环。浏览器下载 HLS 分片时，请求方向可能很快
-    // 半关闭，而目标服务器随后仍会继续返回完整响应体；如果这里直接 break，
-    // agent 侧就会看到分片只下载了一部分。
-    //
-    // 因此 Yamux TCP 也复用 legacy TCP 的半关闭状态机：一个方向 EOF 只 shutdown
-    // 对端写半边，另一个方向继续排空。`idle_timeout_secs == 0` 仅表示关闭空闲
-    // 超时，不再切换到另一套 copy_bidirectional 语义。
+    // Yamux 子流天然就是 AsyncRead/AsyncWrite，因此和 legacy TCP 共用同一套
+    // copy_bidirectional 核心：请求方向半关闭时只关闭目标写半边，响应方向继续
+    // 排空；目标方向 EOF 时也只结束当前子流的写半边。这样常规通道和 Yamux TCP
+    // 的半关闭语义保持一致，减少视频分片在两条路径上表现不一致的问题。
     let idle_timeout = if idle_timeout_secs == 0 {
         None
     } else {
         Some(Duration::from_secs(idle_timeout_secs))
     };
-    let (up_bytes, down_bytes) = relay_tcp_with_half_close(
-        &mut target_stream,
-        &mut agent_stream,
-        idle_timeout,
-        relay_buffer_size,
-    )
-    .await?;
+    let (up_bytes, down_bytes) =
+        relay_tcp_with_half_close(&mut target_stream, &mut agent_stream, idle_timeout).await?;
 
     debug!(
-        "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",
-        up_bytes, down_bytes, relay_buffer_size
+        "Yamux 子流中继已结束：上行 {}，下行 {}",
+        up_bytes, down_bytes
     );
     Ok(())
 }

@@ -210,7 +210,7 @@ Mermaid 源码：[08-legacy-datapacket.mmd](diagrams/08-legacy-datapacket.mmd)
 
 - Agent 侧 `ProxyStreamIo` 把 `ProxyRequest::Data` / `ProxyResponse::Data` 适配成 `AsyncRead + AsyncWrite`。
 - Proxy 侧 `AgentIo` 和 `BytesToProxyResponseSink` 做反向适配。
-- 上层 HTTP/SOCKS/TUN 只看到普通字节流，所以可以使用 `copy_bidirectional_with_sizes`。
+- 上层 HTTP/SOCKS/TUN 只看到普通字节流，所以统一使用 `tokio::io::copy_bidirectional`，让 Tokio 维护半关闭与拷贝缓冲策略。
 
 ## 11. UDP relay
 

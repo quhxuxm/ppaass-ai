@@ -132,14 +132,11 @@ async fn handle_connect(
         debug!("CONNECT 使用直连连接到 {}", target);
 
         let target_for_spawn = target.clone();
-        let relay_buffer_size = pool.tcp_relay_buffer_size();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
-                    if let Err(e) =
-                        tunnel_direct(upgraded, &target_for_spawn, relay_buffer_size).await
-                    {
+                    if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
                         error!("直连隧道错误: {}", e);
                     }
                 }
@@ -163,7 +160,6 @@ async fn handle_connect(
         //
         // 若 proxy 连接随后失败，隧道任务会直接结束 upgraded 连接；浏览器会按普通
         // TCP/TLS 失败处理并重试，比每个 CONNECT 都阻塞等待更适合高频媒体请求。
-        let relay_buffer_size = pool.tcp_relay_buffer_size();
         let pool_for_tunnel = pool.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
@@ -188,9 +184,7 @@ async fn handle_connect(
                             return;
                         }
                     };
-                    if let Err(e) =
-                        tunnel(upgraded, connected_stream, target, relay_buffer_size).await
-                    {
+                    if let Err(e) = tunnel(upgraded, connected_stream, target).await {
                         error!("隧道错误: {}", e);
                     }
                 }
@@ -212,35 +206,24 @@ async fn tunnel(
     upgraded: Upgraded,
     connected_stream: ConnectedStream,
     target: String,
-    relay_buffer_size: usize,
 ) -> std::result::Result<(), AgentError> {
-    // HTTP CONNECT 隧道与 TUN/SOCKS 共用统一 TCP relay，避免代理路径的
-    // DataPacket flush/半关闭语义在不同入口出现分叉。
-    //
-    // legacy framed stream 的写端是 SinkWriter<DataPacketSink>。对这类流使用
-    // copy_bidirectional 时，小块 TLS/HTTP2 数据可能停留在 framed writer 缓冲里，
-    // 浏览器体验会表现成 CONNECT 已建立但后续读写偶发顿住；因此 framed 路径
-    // 使用逐写 flush。Yamux 子流是裸字节流，仍保留标准 copy 以维持吞吐。
-    let proxy_is_framed = connected_stream.is_framed();
+    // HTTP CONNECT、SOCKS、TUN 的 TCP 字节流统一走 copy_bidirectional。
+    // legacy DataPacket 和 Yamux 都先通过 ConnectedStream 转成 AsyncRead/AsyncWrite，
+    // 调用点不再按 framed/Yamux 分支切换不同 relay 语义。
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 
     match relay_tcp_bidirectional(
         &mut client_io,
         &mut proxy_io,
-        relay_buffer_size,
-        if proxy_is_framed {
-            TcpRelayOptions::framed_proxy(&target)
-        } else {
-            TcpRelayOptions::standard(&target)
-        },
+        TcpRelayOptions::standard(&target),
     )
     .await
     {
         Ok(stats) => {
             debug!(
-                "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端, buffer={} bytes",
-                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
+                "CONNECT 隧道关闭: {} 字节 客户端->代理, {} 字节 代理->客户端",
+                stats.client_to_remote, stats.remote_to_client
             );
             telemetry::emit_traffic(
                 "HTTP CONNECT",
@@ -259,11 +242,7 @@ async fn tunnel(
 }
 
 /// 直连隧道: 不通过代理直接连接目标
-async fn tunnel_direct(
-    upgraded: Upgraded,
-    target: &str,
-    relay_buffer_size: usize,
-) -> std::result::Result<(), AgentError> {
+async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
     // 直连 CONNECT 跳过 proxy，直接把 upgraded client 和目标 TCP 流相连。
     let mut client_io = TokioIo::new(upgraded);
     let mut target_stream = TcpStream::connect(target).await?;
@@ -274,15 +253,14 @@ async fn tunnel_direct(
     match relay_tcp_bidirectional(
         &mut client_io,
         &mut target_stream,
-        relay_buffer_size,
         TcpRelayOptions::standard(target),
     )
     .await
     {
         Ok(stats) => {
             debug!(
-                "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端, buffer={} bytes",
-                stats.client_to_remote, stats.remote_to_client, relay_buffer_size
+                "直连 CONNECT 隧道关闭: {} 字节 客户端->目标, {} 字节 目标->客户端",
+                stats.client_to_remote, stats.remote_to_client
             );
             telemetry::emit_traffic(
                 "HTTP CONNECT (direct)",

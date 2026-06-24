@@ -1,31 +1,18 @@
 //! 桌面端 TCP 隧道中继的统一实现。
 //!
 //! TUN、HTTP CONNECT、SOCKS CONNECT/BIND 最终都是“本地客户端流 <-> 远端流”的
-//! 双向字节中继。过去各入口分别使用 `copy_bidirectional_with_sizes` 或手写循环，
-//! 容易出现某一路径修了半关闭/flush，另一条路径仍保留旧行为。
+//! 双向字节中继。这里刻意只保留 Tokio `copy_bidirectional` 这一套
+//! 字节流搬运逻辑，避免 TUN、HTTP、SOCKS 在半关闭/flush 行为上出现分叉。
 //!
-//! 这里集中处理三件事：
-//! 1. 默认路径走 Tokio copy，保留较好的吞吐和批量 flush 行为；
-//! 2. legacy DataPacket/SinkWriter 只在写向 proxy 的方向逐写 flush，避免请求/窗口更新滞留；
-//! 3. TUN 写回浏览器时只发起 shutdown，不等待 netstack-smoltcp 完全 Closed。
+//! `TcpRelayOptions` 仍保留不同入口的构造函数，方便日志和调用点表达语义；真正
+//! 的 relay 不再根据入口切换实现。
 
-use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
-use std::task::Poll;
+use std::task::{Context, Poll};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::debug;
-
-/// TUN 写回本地客户端时的批量 flush 阈值。
-///
-/// netstack/TUN 写端可能需要 flush 推动 send buffer，但对每个小块都 flush 会增加调度
-/// 抖动。64KB 与 proxy 侧下行批量策略保持一致，适合 HLS/视频分片这种连续下行。
-const TCP_RELAY_CLIENT_FLUSH_BYTES: usize = 64 * 1024;
-/// TUN 下行未达到阈值时的最大等待窗口。
-///
-/// 2ms 足够合并同一波 TLS record/DataPacket，又不会让小响应或视频分片尾部明显变慢。
-const TCP_RELAY_CLIENT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// 一次双向 TCP relay 的字节统计。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,36 +21,64 @@ pub struct TcpRelayStats {
     pub remote_to_client: u64,
 }
 
-#[derive(Debug)]
-struct RelayDirectionOutcome {
-    bytes: u64,
-    error: Option<io::Error>,
+struct RelayCopyIo<'a, S> {
+    inner: &'a mut S,
+    label: &'a str,
 }
 
-impl RelayDirectionOutcome {
-    fn ok(bytes: u64) -> Self {
-        Self { bytes, error: None }
+impl<'a, S> RelayCopyIo<'a, S> {
+    fn new(inner: &'a mut S, label: &'a str) -> Self {
+        Self { inner, label }
+    }
+}
+
+impl<S> AsyncRead for RelayCopyIo<'_, S>
+where
+    S: AsyncRead + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S> AsyncWrite for RelayCopyIo<'_, S>
+where
+    S: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_write(cx, buf)
     }
 
-    fn err(bytes: u64, error: io::Error) -> Self {
-        Self {
-            bytes,
-            error: Some(error),
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut *this.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut *this.inner).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) if can_ignore_tcp_shutdown_error(&error) => {
+                // 统一使用 copy_bidirectional 后，shutdown 错误必须保持“半关闭尾部
+                // 容错”语义：BrokenPipe/Reset/NotConnected 通常只是对端已经先关了
+                // 写半边，不应该让另一个方向尚未排空的响应被取消。
+                debug!("TCP relay 忽略 {} shutdown 错误：{}", this.label, error);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
         }
     }
-}
-
-/// 本地客户端写半边的关闭方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientShutdownMode {
-    /// 普通 TCP/HTTP/SOCKS 路径：等待 writer 完成标准 shutdown。
-    AwaitClosed,
-    /// TUN/netstack 路径：只 poll 一次 shutdown，触发 FIN 后立刻返回。
-    ///
-    /// netstack-smoltcp 的 shutdown 会等到底层 TCP 进入完全 Closed；每个 HLS 分片
-    /// 尾部都等待这个状态会放大卡顿。第一次 poll 已经把 send_state 标成 Close，
-    /// runner 会继续排空 send_buffer 并发送 FIN。
-    InitiateOnly,
 }
 
 /// 中继结束策略。
@@ -71,75 +86,15 @@ pub enum ClientShutdownMode {
 pub struct TcpRelayOptions<'a> {
     /// 日志标签，用于定位具体目标。
     pub label: &'a str,
-    /// remote->client 方向 EOF 后，关闭本地客户端写半边的方式。
-    pub client_shutdown: ClientShutdownMode,
-    /// client->remote 方向是否每次 write 后立即 flush。
-    ///
-    /// legacy framed proxy stream 的写端是 SinkWriter<DataPacketSink>，如果请求方向
-    /// 不及时 flush，HTTP CONNECT / TLS ClientHello / HTTP2 window update 可能先停在
-    /// framed writer 缓冲里，浏览器就会感到首包或窗口推进有顿挫。
-    pub flush_client_to_remote_each_write: bool,
-    /// remote->client 方向是否每次 write 后立即 flush。
-    ///
-    /// 这个方向通常写回本地 TCP socket 或 TUN netstack。逐块 flush 对吞吐帮助很小，
-    /// 反而会让大视频分片被拆成更多调度点；因此 framed proxy 只开启请求方向 flush。
-    pub flush_remote_to_client_each_write: bool,
-    /// remote->client 方向是否使用轻量批量 flush。
-    ///
-    /// TUN/netstack 写端既不能每个小块都 flush，也不应该完全等到 EOF 才 flush；
-    /// 这个开关让响应方向按“字节阈值或短时间窗口”推出去，降低视频播放抖动。
-    pub batch_remote_to_client_flush: bool,
-    /// 是否强制使用手写 relay。TUN 需要特殊 shutdown；普通路径可走 Tokio copy。
-    pub force_manual: bool,
 }
 
 impl<'a> TcpRelayOptions<'a> {
     pub fn standard(label: &'a str) -> Self {
-        Self {
-            label,
-            client_shutdown: ClientShutdownMode::AwaitClosed,
-            flush_client_to_remote_each_write: false,
-            flush_remote_to_client_each_write: false,
-            batch_remote_to_client_flush: false,
-            force_manual: false,
-        }
+        Self { label }
     }
 
     pub fn tun(label: &'a str) -> Self {
-        Self {
-            label,
-            client_shutdown: ClientShutdownMode::InitiateOnly,
-            flush_client_to_remote_each_write: false,
-            flush_remote_to_client_each_write: false,
-            batch_remote_to_client_flush: true,
-            force_manual: true,
-        }
-    }
-
-    pub fn tun_framed(label: &'a str) -> Self {
-        Self {
-            label,
-            client_shutdown: ClientShutdownMode::InitiateOnly,
-            flush_client_to_remote_each_write: true,
-            flush_remote_to_client_each_write: false,
-            batch_remote_to_client_flush: true,
-            force_manual: true,
-        }
-    }
-
-    /// HTTP CONNECT / SOCKS5 代理入口连接到 legacy framed proxy stream 时使用。
-    ///
-    /// framed 写端需要逐写 flush，确保 DataPacket 不滞留；但本地客户端是普通
-    /// TCP socket，不是 netstack-smoltcp，因此 EOF 后仍等待标准 shutdown 完成。
-    pub fn framed_proxy(label: &'a str) -> Self {
-        Self {
-            label,
-            client_shutdown: ClientShutdownMode::AwaitClosed,
-            flush_client_to_remote_each_write: true,
-            flush_remote_to_client_each_write: false,
-            batch_remote_to_client_flush: false,
-            force_manual: true,
-        }
+        Self { label }
     }
 }
 
@@ -150,184 +105,32 @@ impl<'a> TcpRelayOptions<'a> {
 pub async fn relay_tcp_bidirectional<C, R>(
     client: &mut C,
     remote: &mut R,
-    relay_buffer_size: usize,
     options: TcpRelayOptions<'_>,
 ) -> io::Result<TcpRelayStats>
 where
     C: AsyncRead + AsyncWrite + Unpin,
     R: AsyncRead + AsyncWrite + Unpin,
 {
-    if !options.force_manual
-        && !options.flush_client_to_remote_each_write
-        && !options.flush_remote_to_client_each_write
-        && !options.batch_remote_to_client_flush
-    {
-        let (client_to_remote, remote_to_client) = tokio::io::copy_bidirectional_with_sizes(
-            client,
-            remote,
-            relay_buffer_size,
-            relay_buffer_size,
-        )
-        .await?;
-        return Ok(TcpRelayStats {
-            client_to_remote,
-            remote_to_client,
-        });
-    }
-
-    let (mut client_reader, mut client_writer) = tokio::io::split(client);
-    let (mut remote_reader, mut remote_writer) = tokio::io::split(remote);
-    let mut client_buf = vec![0u8; relay_buffer_size];
-    let mut remote_buf = vec![0u8; relay_buffer_size];
-
-    // client->remote 与 remote->client 必须并发，而不是放进单个 select 分支后
-    // 在分支里长时间 await write/shutdown。后者会让一侧的慢 shutdown 挡住另一侧
-    // 读取 FIN、窗口更新或剩余响应数据。
-    let client_to_remote = async {
-        let mut bytes = 0u64;
-        loop {
-            match client_reader.read(&mut client_buf).await {
-                Ok(0) => {
-                    // 本地请求方向 EOF 只表示 remote 写半边应该结束，remote->client
-                    // 方向仍要继续排空。
-                    if !options.flush_client_to_remote_each_write
-                        && let Err(error) = remote_writer.flush().await
-                    {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    if let Err(error) = remote_writer.shutdown().await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    break;
-                }
-                Ok(n) => {
-                    if let Err(error) = remote_writer.write_all(&client_buf[..n]).await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    // legacy DataPacket/SinkWriter 需要 flush 才能推动 framed writer；
-                    // 这里特指浏览器/应用写向 proxy 的请求方向，避免首包和窗口更新滞留。
-                    if options.flush_client_to_remote_each_write
-                        && let Err(error) = remote_writer.flush().await
-                    {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    bytes += n as u64;
-                }
-                Err(error) => return RelayDirectionOutcome::err(bytes, error),
-            }
-        }
-        RelayDirectionOutcome::ok(bytes)
-    };
-
-    let remote_to_client = async {
-        let mut bytes = 0u64;
-        let mut pending_flush_bytes = 0usize;
-        let flush_timer = tokio::time::sleep(TCP_RELAY_CLIENT_FLUSH_INTERVAL);
-        tokio::pin!(flush_timer);
-
-        loop {
-            tokio::select! {
-                _ = &mut flush_timer, if options.batch_remote_to_client_flush && pending_flush_bytes > 0 => {
-                    // TUN 写回浏览器/App 的下行采用短窗口批量 flush：既保证数据不会
-                    // 长时间停在 netstack 写缓冲，也避免视频大响应每个小块都触发 flush。
-                    if let Err(error) = client_writer.flush().await {
-                        return RelayDirectionOutcome::err(bytes, error);
-                    }
-                    pending_flush_bytes = 0;
-                }
-                read = remote_reader.read(&mut remote_buf) => {
-                    match read {
-                        Ok(0) => {
-                            if (!options.flush_remote_to_client_each_write || pending_flush_bytes > 0)
-                                && let Err(error) = client_writer.flush().await
-                            {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            if let Err(error) = shutdown_client_writer(&mut client_writer, options).await {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            break;
-                        }
-                        Ok(n) => {
-                            if let Err(error) = client_writer.write_all(&remote_buf[..n]).await {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            if options.flush_remote_to_client_each_write
-                                && let Err(error) = client_writer.flush().await
-                            {
-                                return RelayDirectionOutcome::err(bytes, error);
-                            }
-                            if options.batch_remote_to_client_flush {
-                                let should_arm_timer = pending_flush_bytes == 0;
-                                pending_flush_bytes = pending_flush_bytes.saturating_add(n);
-                                if pending_flush_bytes >= TCP_RELAY_CLIENT_FLUSH_BYTES {
-                                    if let Err(error) = client_writer.flush().await {
-                                        return RelayDirectionOutcome::err(bytes, error);
-                                    }
-                                    pending_flush_bytes = 0;
-                                } else if should_arm_timer {
-                                    flush_timer.as_mut().reset(
-                                        tokio::time::Instant::now() + TCP_RELAY_CLIENT_FLUSH_INTERVAL,
-                                    );
-                                }
-                            }
-                            bytes += n as u64;
-                        }
-                        Err(error) => return RelayDirectionOutcome::err(bytes, error),
-                    }
-                }
-            }
-        }
-        RelayDirectionOutcome::ok(bytes)
-    };
-
-    // 这里不能使用 try_join!。TUN/浏览器/远端服务器关闭 TCP 半边的时序并不总是
-    // 对称，请求方向在 shutdown 时出现 BrokenPipe 往往只表示对端已经不再接收
-    // 请求体；此时响应方向可能还有 HLS 分片数据正在写回浏览器。若 try_join!
-    // 立即取消另一个 future，就会制造“分片只下载了一部分”的假截断。
-    let (client_to_remote, remote_to_client) = tokio::join!(client_to_remote, remote_to_client);
-    let client_to_remote_error = client_to_remote.error;
-    let remote_to_client_error = remote_to_client.error;
-    if let Some(error) = &client_to_remote_error {
-        debug!(
-            "TCP relay client->remote 方向结束时有错误，已继续等待 remote->client 排空：target={} error={}",
-            options.label, error
-        );
-    }
-    if let Some(error) = &remote_to_client_error {
-        debug!(
-            "TCP relay remote->client 方向结束时有错误，已继续等待 client->remote 收尾：target={} error={}",
-            options.label, error
-        );
-    }
+    // 所有 TCP 入口都走同一个 copy_bidirectional。不要在这里按
+    // TUN/HTTP/SOCKS/framed proxy 分叉，否则后续排查卡顿时会再次出现“某个入口
+    // 修好了、另一个入口还保留旧半关闭语义”的问题。
+    // 使用 Tokio 默认 8KB buffer，避免 relay buffer 变成另一个调参变量。
+    let mut client_io = RelayCopyIo::new(client, options.label);
+    let mut remote_io = RelayCopyIo::new(remote, options.label);
+    let (client_to_remote, remote_to_client) =
+        tokio::io::copy_bidirectional(&mut client_io, &mut remote_io).await?;
 
     Ok(TcpRelayStats {
-        client_to_remote: client_to_remote.bytes,
-        remote_to_client: remote_to_client.bytes,
+        client_to_remote,
+        remote_to_client,
     })
 }
 
-async fn shutdown_client_writer<W>(writer: &mut W, options: TcpRelayOptions<'_>) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    match options.client_shutdown {
-        ClientShutdownMode::AwaitClosed => writer.shutdown().await,
-        ClientShutdownMode::InitiateOnly => {
-            let result = poll_fn(|cx| match Pin::new(&mut *writer).poll_shutdown(cx) {
-                Poll::Ready(result) => Poll::Ready(result),
-                Poll::Pending => Poll::Ready(Ok(())),
-            })
-            .await;
-            if result.is_ok() {
-                debug!(
-                    "TCP relay 已触发本地客户端写半边关闭，不等待完全 Closed：target={}",
-                    options.label
-                );
-            }
-            result
-        }
-    }
+fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::NotConnected
+    )
 }
 
 #[cfg(test)]
@@ -347,7 +150,6 @@ mod tests {
             relay_tcp_bidirectional(
                 &mut client_relay,
                 &mut remote_relay,
-                64,
                 TcpRelayOptions::standard("test"),
             )
             .await
@@ -380,7 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_framed_relay_keeps_response_after_client_half_close() {
+    async fn copy_relay_keeps_response_for_tun_labeled_stream() {
         let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
         let (mut remote_relay, mut remote_peer) = tokio::io::duplex(1024);
 
@@ -388,8 +190,7 @@ mod tests {
             relay_tcp_bidirectional(
                 &mut client_relay,
                 &mut remote_relay,
-                64,
-                TcpRelayOptions::tun_framed("test"),
+                TcpRelayOptions::tun("test"),
             )
             .await
         });
@@ -421,18 +222,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_relay_does_not_cancel_response_when_request_shutdown_errors() {
+    async fn copy_relay_does_not_cancel_response_when_request_shutdown_errors() {
         let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
         let mut remote = ShutdownErrorRemote::new(b"complete-body");
 
         let relay = tokio::spawn(async move {
-            relay_tcp_bidirectional(
-                &mut client_relay,
-                &mut remote,
-                64,
-                TcpRelayOptions::tun("test"),
-            )
-            .await
+            relay_tcp_bidirectional(&mut client_relay, &mut remote, TcpRelayOptions::tun("test"))
+                .await
         });
 
         client_peer.write_all(b"GET").await.unwrap();

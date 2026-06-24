@@ -254,7 +254,6 @@ mod tests {
             log_file: "proxy.log".to_string(),
             runtime_threads: None,
             compression_mode: "none".to_string(),
-            tcp_relay_buffer_size_kb: common::default_stream_relay_buffer_size_kb(),
             replay_attack_tolerance: 300,
             transport: common::TransportConfig::default(),
             yamux: common::YamuxServerConfig::default(),
