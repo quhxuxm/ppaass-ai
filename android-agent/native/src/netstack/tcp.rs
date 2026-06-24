@@ -1,4 +1,7 @@
+use std::future::poll_fn;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::Poll;
 use std::time::Duration;
 
 use common::{DEFAULT_STREAM_RELAY_BUFFER_SIZE, spawn_guarded};
@@ -220,53 +223,108 @@ where
     let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy_io);
     let mut client_buf = vec![0u8; relay_buffer_size];
     let mut proxy_buf = vec![0u8; relay_buffer_size];
-    let mut client_done = false;
-    let mut proxy_done = false;
-    let mut client_to_proxy = 0u64;
-    let mut proxy_to_client = 0u64;
 
-    loop {
-        if client_done && proxy_done {
-            break;
-        }
-
-        tokio::select! {
-            read = client_reader.read(&mut client_buf), if !client_done => {
-                match read {
-                    Ok(0) => {
-                        client_done = true;
-                        // 客户端请求方向 EOF 只关闭 proxy 写半边，响应方向仍要继续
-                        // 排空；这对 HLS/HTTPS 分片尤其重要。
-                        proxy_writer.shutdown().await?;
+    // 两个方向必须各自收尾。不能因为请求方向 shutdown/write 出现 BrokenPipe
+    // 就取消响应方向，否则 HLS 分片的响应体还在写回 VPN 客户端时会被截断。
+    let client_to_proxy = async {
+        let mut bytes = 0u64;
+        loop {
+            match client_reader.read(&mut client_buf).await {
+                Ok(0) => {
+                    // 客户端请求方向 EOF 只关闭 proxy 写半边，响应方向仍要继续排空。
+                    if let Err(error) = proxy_writer.shutdown().await {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
-                    Ok(n) => {
-                        proxy_writer.write_all(&client_buf[..n]).await?;
-                        proxy_writer.flush().await?;
-                        client_to_proxy += n as u64;
-                    }
-                    Err(e) => return Err(e),
+                    break;
                 }
-            }
-            read = proxy_reader.read(&mut proxy_buf), if !proxy_done => {
-                match read {
-                    Ok(0) => {
-                        proxy_done = true;
-                        // proxy 响应方向 EOF 时只通知本地 TCP 写半边结束；如果客户
-                        // 端还有待发送数据，另一方向仍可自然走到 EOF。
-                        client_writer.shutdown().await?;
+                Ok(n) => {
+                    if let Err(error) = proxy_writer.write_all(&client_buf[..n]).await {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
-                    Ok(n) => {
-                        client_writer.write_all(&proxy_buf[..n]).await?;
-                        client_writer.flush().await?;
-                        proxy_to_client += n as u64;
+                    if let Err(error) = proxy_writer.flush().await {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
-                    Err(e) => return Err(e),
+                    bytes += n as u64;
                 }
+                Err(error) => return RelayDirectionOutcome::err(bytes, error),
             }
         }
+        RelayDirectionOutcome::ok(bytes)
+    };
+
+    let proxy_to_client = async {
+        let mut bytes = 0u64;
+        loop {
+            match proxy_reader.read(&mut proxy_buf).await {
+                Ok(0) => {
+                    // netstack-smoltcp 的 shutdown 会等到底层 TCP 完全 Closed。
+                    // VPN/TUN 场景只需要触发 FIN；如果在这里等待完全关闭，会把每个
+                    // 视频短连接的尾部延迟放大，并可能挡住另一方向自然收尾。
+                    if let Err(error) =
+                        shutdown_client_writer_initiate_only(&mut client_writer).await
+                    {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    if let Err(error) = client_writer.write_all(&proxy_buf[..n]).await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
+                    if let Err(error) = client_writer.flush().await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
+                    bytes += n as u64;
+                }
+                Err(error) => return RelayDirectionOutcome::err(bytes, error),
+            }
+        }
+        RelayDirectionOutcome::ok(bytes)
+    };
+
+    let (client_to_proxy, proxy_to_client) = tokio::join!(client_to_proxy, proxy_to_client);
+    if let Some(error) = &client_to_proxy.error {
+        debug!(
+            "Android TUN TCP client->proxy relay ended with error after preserving response side: {error}"
+        );
+    }
+    if let Some(error) = &proxy_to_client.error {
+        debug!(
+            "Android TUN TCP proxy->client relay ended with error after preserving request side: {error}"
+        );
     }
 
-    Ok((client_to_proxy, proxy_to_client))
+    Ok((client_to_proxy.bytes, proxy_to_client.bytes))
+}
+
+#[derive(Debug)]
+struct RelayDirectionOutcome {
+    bytes: u64,
+    error: Option<std::io::Error>,
+}
+
+impl RelayDirectionOutcome {
+    fn ok(bytes: u64) -> Self {
+        Self { bytes, error: None }
+    }
+
+    fn err(bytes: u64, error: std::io::Error) -> Self {
+        Self {
+            bytes,
+            error: Some(error),
+        }
+    }
+}
+
+async fn shutdown_client_writer_initiate_only<W>(writer: &mut W) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    poll_fn(|cx| match Pin::new(&mut *writer).poll_shutdown(cx) {
+        Poll::Ready(result) => Poll::Ready(result),
+        Poll::Pending => Poll::Ready(Ok(())),
+    })
+    .await
 }
 
 async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
@@ -410,7 +468,11 @@ fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use std::collections::VecDeque;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     #[test]
     fn sniff_buffer_waits_for_complete_tls_record() {
@@ -467,5 +529,101 @@ mod tests {
                 .unwrap();
         assert_eq!(client_to_proxy, 3);
         assert_eq!(proxy_to_client, b"complete-body".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn proxy_relay_keeps_response_when_request_shutdown_errors() {
+        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
+        let mut proxy = ShutdownErrorProxy::new(b"complete-body");
+
+        let relay = tokio::spawn(async move {
+            relay_tun_tcp_proxy_with_flush(&mut client_relay, &mut proxy, 64).await
+        });
+
+        client_peer.write_all(b"GET").await.unwrap();
+        client_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        client_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (client_to_proxy, proxy_to_client) =
+            tokio::time::timeout(Duration::from_secs(5), relay)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert_eq!(client_to_proxy, 3);
+        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
+    }
+
+    struct ShutdownErrorProxy {
+        state: Arc<Mutex<ShutdownErrorProxyState>>,
+    }
+
+    struct ShutdownErrorProxyState {
+        body: VecDeque<u8>,
+        body_released: bool,
+        read_waker: Option<Waker>,
+    }
+
+    impl ShutdownErrorProxy {
+        fn new(body: &[u8]) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(ShutdownErrorProxyState {
+                    body: body.iter().copied().collect(),
+                    body_released: false,
+                    read_waker: None,
+                })),
+            }
+        }
+    }
+
+    impl AsyncRead for ShutdownErrorProxy {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            if !state.body_released {
+                state.read_waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+
+            while buf.remaining() > 0 {
+                let Some(byte) = state.body.pop_front() else {
+                    break;
+                };
+                buf.put_slice(&[byte]);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ShutdownErrorProxy {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            state.body_released = true;
+            if let Some(waker) = state.read_waker.take() {
+                waker.wake();
+            }
+            Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "synthetic shutdown error",
+            )))
+        }
     }
 }

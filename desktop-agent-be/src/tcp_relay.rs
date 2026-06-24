@@ -24,6 +24,25 @@ pub struct TcpRelayStats {
     pub remote_to_client: u64,
 }
 
+#[derive(Debug)]
+struct RelayDirectionOutcome {
+    bytes: u64,
+    error: Option<io::Error>,
+}
+
+impl RelayDirectionOutcome {
+    fn ok(bytes: u64) -> Self {
+        Self { bytes, error: None }
+    }
+
+    fn err(bytes: u64, error: io::Error) -> Self {
+        Self {
+            bytes,
+            error: Some(error),
+        }
+    }
+}
+
 /// 本地客户端写半边的关闭方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientShutdownMode {
@@ -123,25 +142,33 @@ where
                 Ok(0) => {
                     // 本地请求方向 EOF 只表示 remote 写半边应该结束，remote->client
                     // 方向仍要继续排空。
-                    if !options.flush_each_write {
-                        remote_writer.flush().await?;
+                    if !options.flush_each_write
+                        && let Err(error) = remote_writer.flush().await
+                    {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
-                    remote_writer.shutdown().await?;
+                    if let Err(error) = remote_writer.shutdown().await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
                     break;
                 }
                 Ok(n) => {
-                    remote_writer.write_all(&client_buf[..n]).await?;
+                    if let Err(error) = remote_writer.write_all(&client_buf[..n]).await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
                     // legacy DataPacket/SinkWriter 需要 flush 才能推动 framed writer。
                     // 裸 TCP/Yamux 不开启逐写 flush，避免高吞吐分片被小 flush 打碎。
-                    if options.flush_each_write {
-                        remote_writer.flush().await?;
+                    if options.flush_each_write
+                        && let Err(error) = remote_writer.flush().await
+                    {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
                     bytes += n as u64;
                 }
-                Err(e) => return Err(e),
+                Err(error) => return RelayDirectionOutcome::err(bytes, error),
             }
         }
-        Ok::<u64, io::Error>(bytes)
+        RelayDirectionOutcome::ok(bytes)
     };
 
     let remote_to_client = async {
@@ -149,30 +176,56 @@ where
         loop {
             match remote_reader.read(&mut remote_buf).await {
                 Ok(0) => {
-                    if !options.flush_each_write {
-                        client_writer.flush().await?;
+                    if !options.flush_each_write
+                        && let Err(error) = client_writer.flush().await
+                    {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
-                    shutdown_client_writer(&mut client_writer, options).await?;
+                    if let Err(error) = shutdown_client_writer(&mut client_writer, options).await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
                     break;
                 }
                 Ok(n) => {
-                    client_writer.write_all(&remote_buf[..n]).await?;
-                    if options.flush_each_write {
-                        client_writer.flush().await?;
+                    if let Err(error) = client_writer.write_all(&remote_buf[..n]).await {
+                        return RelayDirectionOutcome::err(bytes, error);
+                    }
+                    if options.flush_each_write
+                        && let Err(error) = client_writer.flush().await
+                    {
+                        return RelayDirectionOutcome::err(bytes, error);
                     }
                     bytes += n as u64;
                 }
-                Err(e) => return Err(e),
+                Err(error) => return RelayDirectionOutcome::err(bytes, error),
             }
         }
-        Ok::<u64, io::Error>(bytes)
+        RelayDirectionOutcome::ok(bytes)
     };
 
-    let (client_to_remote, remote_to_client) =
-        tokio::try_join!(client_to_remote, remote_to_client)?;
+    // 这里不能使用 try_join!。TUN/浏览器/远端服务器关闭 TCP 半边的时序并不总是
+    // 对称，请求方向在 shutdown 时出现 BrokenPipe 往往只表示对端已经不再接收
+    // 请求体；此时响应方向可能还有 HLS 分片数据正在写回浏览器。若 try_join!
+    // 立即取消另一个 future，就会制造“分片只下载了一部分”的假截断。
+    let (client_to_remote, remote_to_client) = tokio::join!(client_to_remote, remote_to_client);
+    let client_to_remote_error = client_to_remote.error;
+    let remote_to_client_error = remote_to_client.error;
+    if let Some(error) = &client_to_remote_error {
+        debug!(
+            "TCP relay client->remote 方向结束时有错误，已继续等待 remote->client 排空：target={} error={}",
+            options.label, error
+        );
+    }
+    if let Some(error) = &remote_to_client_error {
+        debug!(
+            "TCP relay remote->client 方向结束时有错误，已继续等待 client->remote 收尾：target={} error={}",
+            options.label, error
+        );
+    }
+
     Ok(TcpRelayStats {
-        client_to_remote,
-        remote_to_client,
+        client_to_remote: client_to_remote.bytes,
+        remote_to_client: remote_to_client.bytes,
     })
 }
 
@@ -202,6 +255,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Waker};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
 
     #[tokio::test]
     async fn relay_keeps_response_after_client_half_close() {
@@ -283,5 +340,106 @@ mod tests {
             .unwrap();
         assert_eq!(stats.client_to_remote, 3);
         assert_eq!(stats.remote_to_client, b"complete-body".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn manual_relay_does_not_cancel_response_when_request_shutdown_errors() {
+        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
+        let mut remote = ShutdownErrorRemote::new(b"complete-body");
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_bidirectional(
+                &mut client_relay,
+                &mut remote,
+                64,
+                TcpRelayOptions::tun("test"),
+            )
+            .await
+        });
+
+        client_peer.write_all(b"GET").await.unwrap();
+        client_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        client_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let stats = tokio::time::timeout(std::time::Duration::from_secs(5), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.client_to_remote, 3);
+        assert_eq!(stats.remote_to_client, b"complete-body".len() as u64);
+    }
+
+    struct ShutdownErrorRemote {
+        state: Arc<Mutex<ShutdownErrorRemoteState>>,
+    }
+
+    struct ShutdownErrorRemoteState {
+        body: VecDeque<u8>,
+        body_released: bool,
+        read_waker: Option<Waker>,
+    }
+
+    impl ShutdownErrorRemote {
+        fn new(body: &[u8]) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(ShutdownErrorRemoteState {
+                    body: body.iter().copied().collect(),
+                    body_released: false,
+                    read_waker: None,
+                })),
+            }
+        }
+    }
+
+    impl AsyncRead for ShutdownErrorRemote {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            if !state.body_released {
+                state.read_waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+
+            while buf.remaining() > 0 {
+                let Some(byte) = state.body.pop_front() else {
+                    break;
+                };
+                buf.put_slice(&[byte]);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ShutdownErrorRemote {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            state.body_released = true;
+            if let Some(waker) = state.read_waker.take() {
+                waker.wake();
+            }
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "synthetic shutdown error",
+            )))
+        }
     }
 }

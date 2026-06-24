@@ -282,6 +282,10 @@ where
     // TCP relay 只保留这一套实现：始终使用明确的半关闭状态机。
     // `idle_timeout = None` 只关闭超时控制，不再回退到 copy_bidirectional，
     // 避免不同配置下出现两套 EOF/shutdown 语义。
+    //
+    // 单方向读/写/shutdown 出错时，只停止该方向，不立刻退出整个 relay。
+    // 请求方向的 BrokenPipe 经常只是远端已经不再接收请求体，目标方向仍可能
+    // 有完整响应需要写回 agent；直接 break 会导致视频分片响应被人为截断。
     let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(3600)));
     tokio::pin!(idle);
 
@@ -324,11 +328,11 @@ where
                                     "TCP relay 关闭目标写半边超过 {} 秒，关闭连接",
                                     timeout.as_secs()
                                 );
-                                break;
+                                agent_done = true;
                             }
                             Err(e) => {
                                 debug!("TCP relay 关闭目标写半边失败：{}", e);
-                                break;
+                                agent_done = true;
                             }
                         }
                     }
@@ -346,17 +350,17 @@ where
                             Ok(false) => {
                                 let timeout = idle_timeout.expect("timeout result requires timeout");
                                 debug!("TCP relay 写入目标超过 {} 秒，关闭连接", timeout.as_secs());
-                                break;
+                                agent_done = true;
                             }
                             Err(e) => {
                                 debug!("TCP relay 写入目标失败：{}", e);
-                                break;
+                                agent_done = true;
                             }
                         }
                     }
                     Err(e) => {
                         debug!("TCP relay 读取 agent 数据失败：{}", e);
-                        break;
+                        agent_done = true;
                     }
                 }
             }
@@ -379,11 +383,11 @@ where
                                     "TCP relay 关闭 agent 写半边超过 {} 秒，关闭连接",
                                     timeout.as_secs()
                                 );
-                                break;
+                                target_done = true;
                             }
                             Err(e) => {
                                 debug!("TCP relay 关闭 agent 写半边失败：{}", e);
-                                break;
+                                target_done = true;
                             }
                         }
                     }
@@ -401,17 +405,17 @@ where
                             Ok(false) => {
                                 let timeout = idle_timeout.expect("timeout result requires timeout");
                                 debug!("TCP relay 写回 agent 超过 {} 秒，关闭连接", timeout.as_secs());
-                                break;
+                                target_done = true;
                             }
                             Err(e) => {
                                 debug!("TCP relay 写回 agent 失败：{}", e);
-                                break;
+                                target_done = true;
                             }
                         }
                     }
                     Err(e) => {
                         debug!("TCP relay 读取目标数据失败：{}", e);
-                        break;
+                        target_done = true;
                     }
                 }
             }
@@ -440,6 +444,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -520,5 +528,106 @@ mod tests {
             .unwrap();
         assert_eq!(up_bytes, 3);
         assert_eq!(down_bytes, b"complete-body".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn relay_keeps_response_when_request_shutdown_errors() {
+        let mut target_relay = ShutdownErrorTarget::new(b"complete-body");
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                Some(Duration::from_secs(5)),
+                64,
+            )
+            .await
+        });
+
+        agent_peer.write_all(b"GET").await.unwrap();
+        agent_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        agent_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"complete-body");
+
+        let (up_bytes, down_bytes) = tokio::time::timeout(Duration::from_secs(5), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(up_bytes, 3);
+        assert_eq!(down_bytes, b"complete-body".len() as u64);
+    }
+
+    struct ShutdownErrorTarget {
+        state: Arc<Mutex<ShutdownErrorTargetState>>,
+    }
+
+    struct ShutdownErrorTargetState {
+        body: VecDeque<u8>,
+        body_released: bool,
+        read_waker: Option<Waker>,
+    }
+
+    impl ShutdownErrorTarget {
+        fn new(body: &[u8]) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(ShutdownErrorTargetState {
+                    body: body.iter().copied().collect(),
+                    body_released: false,
+                    read_waker: None,
+                })),
+            }
+        }
+    }
+
+    impl AsyncRead for ShutdownErrorTarget {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            if !state.body_released {
+                state.read_waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+
+            while buf.remaining() > 0 {
+                let Some(byte) = state.body.pop_front() else {
+                    break;
+                };
+                buf.put_slice(&[byte]);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ShutdownErrorTarget {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            let mut state = self.state.lock().unwrap();
+            state.body_released = true;
+            if let Some(waker) = state.read_waker.take() {
+                waker.wake();
+            }
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "synthetic shutdown error",
+            )))
+        }
     }
 }
