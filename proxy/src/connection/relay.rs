@@ -186,7 +186,11 @@ impl ServerConnection {
         let reader = StreamReader::new(stream);
 
         // AgentIo 把“从 agent 读”和“写回 agent”合成一个双向 IO。
-        let agent_io = AgentIo { reader, writer };
+        let agent_io = AgentIo {
+            reader,
+            writer,
+            pending_write_len: None,
+        };
 
         let udp_socket = Arc::new(udp_socket);
         let udp_recv = udp_socket.clone();
@@ -350,7 +354,11 @@ impl ServerConnection {
         let reader = StreamReader::new(stream);
 
         // AgentIo 让 packet-based 的 agent 连接呈现为 AsyncRead/AsyncWrite。
-        let mut agent_io = AgentIo { reader, writer };
+        let mut agent_io = AgentIo {
+            reader,
+            writer,
+            pending_write_len: None,
+        };
 
         let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
         let idle_timeout = if tcp_relay_idle_timeout_secs == 0 {

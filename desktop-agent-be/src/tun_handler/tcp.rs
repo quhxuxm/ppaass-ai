@@ -16,13 +16,15 @@ use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 use tracing::debug;
 
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
+const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -133,11 +135,22 @@ pub(super) async fn handle_tun_tcp(
     }
     // TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始字节流交给
     // copy_bidirectional，中间没有“已读首段再补发”的状态，减少短连接分片卡顿点。
-    let connected = tcp_pool
-        .as_ref()
-        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
-        .await?;
+    let (connected, prefetched) = connect_proxy_stream_with_tun_prefetch(
+        &mut client,
+        tcp_pool.as_ref(),
+        proxy_address,
+        &proxy_label,
+    )
+    .await?;
     let mut proxy_io = connected.into_async_io();
+    if !prefetched.is_empty() {
+        // 这里只做“预读后原样补写”，不解析、不嗅探、不参与直连规则。
+        // TUN TCP 三次握手已经由 netstack 接住；如果等待 proxy 建连期间完全不读本地流，
+        // 浏览器的 TLS/HTTP2 首包会卡在接收窗口里。先缓存少量首包，远端通道建立后
+        // 立即写出，可以降低视频分片连接在建连阶段的抖动。
+        proxy_io.write_all(&prefetched).await?;
+        proxy_io.flush().await?;
+    }
     match relay_tcp_bidirectional(
         &mut client,
         &mut proxy_io,
@@ -163,6 +176,52 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("{reason}，原始目标 {target_label}"),
         None => target_label.to_string(),
+    }
+}
+
+async fn connect_proxy_stream_with_tun_prefetch(
+    client: &mut netstack_smoltcp::TcpStream,
+    tcp_pool: &ConnectionPool,
+    proxy_address: protocol::Address,
+    label: &str,
+) -> Result<(crate::connection_pool::ConnectedStream, Vec<u8>)> {
+    let mut connect =
+        Box::pin(tcp_pool.get_connected_stream(proxy_address, TransportProtocol::Tcp));
+    let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
+
+    loop {
+        if prefetched.len() >= TUN_TCP_PREFETCH_LIMIT {
+            debug!(
+                "TUN TCP 预读达到 {} 字节上限，暂停读取等待 proxy 建连：{}",
+                TUN_TCP_PREFETCH_LIMIT, label
+            );
+            let connected = connect.await?;
+            return Ok((connected, prefetched));
+        }
+
+        let remaining = TUN_TCP_PREFETCH_LIMIT - prefetched.len();
+        let mut buf = vec![0u8; remaining.min(TUN_TCP_PREFETCH_CHUNK)];
+        tokio::select! {
+            connected = &mut connect => {
+                return Ok((connected?, prefetched));
+            }
+            read = client.read(&mut buf) => {
+                let read = read?;
+                if read == 0 {
+                    // 客户端在 proxy 目标通道建好前已经关闭；没有必要继续建立远端连接。
+                    // 如果已经预读到数据，则仍等待 proxy 连接并把这些数据补写出去，
+                    // 后续 copy_bidirectional 会自然观察到客户端 EOF 并传播半关闭。
+                    if prefetched.is_empty() {
+                        return Err(AgentError::Connection(format!(
+                            "TUN TCP 客户端在 proxy 建连前关闭：{label}"
+                        )));
+                    }
+                    let connected = connect.await?;
+                    return Ok((connected, prefetched));
+                }
+                prefetched.extend_from_slice(&buf[..read]);
+            }
+        }
     }
 }
 

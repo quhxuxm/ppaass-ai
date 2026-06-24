@@ -24,7 +24,21 @@ type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
 /// 使用 tokio_util 的 SinkWriter 与 StreamReader 以获得更好性能
 pub struct ProxyStreamIo {
     reader: StreamReader<ResponseStream, Bytes>,
-    writer: SinkWriter<DataPacketSink>,
+    writer: FlushAfterWrite<SinkWriter<DataPacketSink>>,
+}
+
+struct FlushAfterWrite<W> {
+    inner: W,
+    pending_write_len: Option<usize>,
+}
+
+impl<W> FlushAfterWrite<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            pending_write_len: None,
+        }
+    }
 }
 
 impl ProxyStreamIo {
@@ -39,7 +53,7 @@ impl ProxyStreamIo {
 
         Self {
             reader: StreamReader::new(response_stream),
-            writer: SinkWriter::new(data_sink),
+            writer: FlushAfterWrite::new(SinkWriter::new(data_sink)),
         }
     }
 }
@@ -73,5 +87,85 @@ impl AsyncWrite for ProxyStreamIo {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // shutdown 会触发 DataPacketSink 发送 end 包。
         Pin::new(&mut self.writer).poll_shutdown(cx)
+    }
+}
+
+impl<W> AsyncWrite for FlushAfterWrite<W>
+where
+    W: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if let Some(len) = self.pending_write_len {
+            match Pin::new(&mut self.inner).poll_flush(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Ok(len));
+                }
+                Poll::Ready(Err(err)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(err));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        let written = match Pin::new(&mut self.inner).poll_write(cx, buf) {
+            Poll::Ready(Ok(written)) => written,
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            Poll::Pending => return Poll::Pending,
+        };
+        if written == 0 {
+            return Poll::Ready(Ok(0));
+        }
+
+        // SinkWriter::poll_write 只完成 start_send；对 framed proxy 协议而言，
+        // 小 DataPacket 必须尽快 flush 到 agent->proxy TCP 上，否则 HLS 小分片
+        // 请求/响应会等到 copy 缓冲填满或 EOF 才真正下发。
+        self.pending_write_len = Some(written);
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                self.pending_write_len = None;
+                Poll::Ready(Ok(written))
+            }
+            Poll::Ready(Err(err)) => {
+                self.pending_write_len = None;
+                Poll::Ready(Err(err))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.pending_write_len.is_some() {
+            match Pin::new(&mut self.inner).poll_flush(cx) {
+                Poll::Ready(Ok(())) => self.pending_write_len = None,
+                Poll::Ready(Err(err)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(err));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.pending_write_len.is_some() {
+            match Pin::new(&mut self.inner).poll_flush(cx) {
+                Poll::Ready(Ok(())) => self.pending_write_len = None,
+                Poll::Ready(Err(err)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(err));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }

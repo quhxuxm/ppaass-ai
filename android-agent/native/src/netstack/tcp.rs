@@ -8,7 +8,7 @@ use common::spawn_guarded;
 use futures::StreamExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +18,9 @@ use super::ForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
 use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
+
+const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
+const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
 struct AndroidTcpRelayIo<'a, S> {
     inner: &'a mut S,
@@ -209,12 +212,15 @@ async fn handle_tcp(
         debug!("Android TUN TCP proxy -> {}", proxy_label);
         android_log::info(format!("Android TUN TCP PROXY {proxy_label}"));
     }
-    let mut proxy_io = match context
-        .tcp_pool
-        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
-        .await
+    let (mut proxy_io, prefetched) = match connect_proxy_stream_with_tun_prefetch(
+        &mut client,
+        &context,
+        proxy_address,
+        &proxy_label,
+    )
+    .await
     {
-        Ok(proxy_io) => proxy_io,
+        Ok(result) => result,
         Err(e) => {
             android_log::error(format!(
                 "Android TUN TCP PROXY connect failed {proxy_label}: {e}"
@@ -222,6 +228,14 @@ async fn handle_tcp(
             return Err(e);
         }
     };
+    if !prefetched.is_empty() {
+        // 这里只做原样补写，不解析 TLS SNI/HTTP Host，也不参与直连规则。
+        // Android TUN 的三次握手已经由 netstack 接住；等待 proxy 建连时如果完全不读本地流，
+        // 浏览器或视频 App 的首包会被接收窗口卡住。缓存少量字节并在远端通道建立后立即写出，
+        // 可以减少 HLS 小分片连接在建连阶段的抖动。
+        proxy_io.write_all(&prefetched).await?;
+        proxy_io.flush().await?;
+    }
     // Android TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始
     // netstack TCP 流交给 copy_bidirectional，避免“先读后补发”影响视频分片。
     match relay_tun_tcp_bidirectional(&mut client, &mut proxy_io, "proxy").await {
@@ -236,6 +250,52 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("{reason}, original {target_label}"),
         None => target_label.to_string(),
+    }
+}
+
+async fn connect_proxy_stream_with_tun_prefetch(
+    client: &mut netstack_smoltcp::TcpStream,
+    context: &ForwardContext,
+    proxy_address: protocol::Address,
+    label: &str,
+) -> Result<(crate::connection_pool::AndroidProxyStream, Vec<u8>)> {
+    let mut connect = Box::pin(
+        context
+            .tcp_pool
+            .get_connected_stream(proxy_address, TransportProtocol::Tcp),
+    );
+    let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
+
+    loop {
+        if prefetched.len() >= TUN_TCP_PREFETCH_LIMIT {
+            debug!(
+                "Android TUN TCP prefetch reached {} bytes, waiting for proxy connect: {}",
+                TUN_TCP_PREFETCH_LIMIT, label
+            );
+            let proxy_io = connect.await?;
+            return Ok((proxy_io, prefetched));
+        }
+
+        let remaining = TUN_TCP_PREFETCH_LIMIT - prefetched.len();
+        let mut buf = vec![0u8; remaining.min(TUN_TCP_PREFETCH_CHUNK)];
+        tokio::select! {
+            proxy_io = &mut connect => {
+                return Ok((proxy_io?, prefetched));
+            }
+            read = client.read(&mut buf) => {
+                let read = read?;
+                if read == 0 {
+                    if prefetched.is_empty() {
+                        return Err(AndroidAgentError::Connection(format!(
+                            "Android TUN TCP client closed before proxy connect: {label}"
+                        )));
+                    }
+                    let proxy_io = connect.await?;
+                    return Ok((proxy_io, prefetched));
+                }
+                prefetched.extend_from_slice(&buf[..read]);
+            }
+        }
     }
 }
 

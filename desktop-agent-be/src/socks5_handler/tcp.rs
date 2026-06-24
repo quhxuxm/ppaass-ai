@@ -73,20 +73,14 @@ pub(super) async fn handle_tcp_connect(
         }
     } else {
         // === 代理路径 ===
-        // 代理入口采用“本地握手先成功，proxy 建连随后完成”的策略，和 TUN 行为保持一致。
-        // 浏览器播放 HLS/视频时会创建大量短连接；如果 SOCKS5 必须等 proxy 端目标连接
-        // 完成后才回复 success，每个分片都会额外暴露一次远端建连延迟，分片最终大小正常
-        // 但播放器会感到卡顿。若后续 proxy 建连失败，直接关闭本地隧道，让浏览器重试。
-        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let mut client_stream = protocol
-            .reply_success(bind_addr)
-            .await
-            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
-
         // SOCKS5 的 DOMAIN 目标必须原样交给 proxy 端解析。
         // 如果 agent 在本地先解析，再把 IP 发给 proxy，会破坏“从 proxy 出口访问”的
         // DNS/CDN 语义，也会让远端分流规则失去域名上下文。这里刻意只透传
         // Address::Domain，不做任何 agent 侧 DNS fallback。
+        //
+        // SOCKS5 reply success 也必须在 proxy stream 真实建立之后再发送。
+        // 否则浏览器会认为 CONNECT 已成功并开始写 TLS/HTTP2 字节；如果随后远端建连失败，
+        // 本地代理只能关闭一个“已经成功”的隧道，视频分片层面会变成更难诊断的解析/播放卡顿。
         let connected_stream = match pool
             .as_ref()
             .get_connected_stream(address, TransportProtocol::Tcp)
@@ -97,10 +91,18 @@ pub(super) async fn handle_tcp_connect(
                 stream
             }
             Err(e) => {
-                error!("SOCKS5 已回复成功后获取 proxy 流失败: {}", e);
+                error!("SOCKS5 获取 proxy 流失败: {}", e);
+                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
                 return Err(e);
             }
         };
+
+        // proxy stream 建好后再回复成功，之后客户端才会开始发送隧道 payload。
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut client_stream = protocol
+            .reply_success(bind_addr)
+            .await
+            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
         info!("SOCKS5 隧道已建立，开始数据中继");
 

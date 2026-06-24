@@ -131,12 +131,33 @@ async fn handle_connect(
         // === 直连路径: 直接连接目标 ===
         debug!("CONNECT 使用直连连接到 {}", target);
 
-        let target_for_spawn = target.clone();
+        // CONNECT 的 200 只应该表示“隧道已经可用”。
+        // 如果先回复 200 再异步连接目标，浏览器会立刻把 TLS ClientHello 写进本地隧道；
+        // 一旦后续远端连接失败或建立过慢，这个已经成功的 CONNECT 会表现成异常 TCP/TLS
+        // 连接，而不是一次可重试的代理建连失败。视频分片场景下这会让播放器状态机很难判断
+        // 当前分片到底是网络失败、解析失败还是响应中断。
+        let target_stream = match TcpStream::connect(&target).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                error!("HTTP CONNECT 直连到 {} 失败: {}", target, err);
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(boxed(
+                        Full::new(Bytes::from("Failed to connect to target"))
+                            .map_err(|e| match e {}),
+                    ))
+                    .unwrap());
+            }
+        };
+        if let Err(err) = target_stream.set_nodelay(true) {
+            debug!("HTTP CONNECT 直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
+        }
+
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功（直连） {}:{}", host, port);
-                    if let Err(e) = tunnel_direct(upgraded, &target_for_spawn).await {
+                    if let Err(e) = tunnel_direct(upgraded, target_stream, &target).await {
                         error!("直连隧道错误: {}", e);
                     }
                 }
@@ -146,21 +167,39 @@ async fn handle_connect(
             }
         });
 
-        // 先回复 200，随后升级任务接管底层 TCP 流。
+        // 目标连接成功后再回复 200，随后升级任务接管底层 TCP 流。
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(empty())
             .unwrap())
     } else {
         // === 代理路径: 通过代理隧道连接 ===
-        // HTTP CONNECT 入口要尽量像 TUN：先让浏览器完成本地代理握手，再在隧道
-        // 任务里获取 proxy stream。之前先等 proxy 端目标连接成功再返回 200，
-        // 语义上更容易报告 BAD_GATEWAY，但视频分片会产生大量短 CONNECT，这个
-        // 等待会叠加到每个分片的建连路径上，表现为分片完整但播放器缓冲节奏发抖。
-        //
-        // 若 proxy 连接随后失败，隧道任务会直接结束 upgraded 连接；浏览器会按普通
-        // TCP/TLS 失败处理并重试，比每个 CONNECT 都阻塞等待更适合高频媒体请求。
-        let pool_for_tunnel = pool.clone();
+        // 代理路径同样必须先确认远端 proxy/目标通道可用，再向浏览器返回 CONNECT 200。
+        // 浏览器把 200 视为“之后就是透明 TCP 字节流”；如果此时 proxy stream 还没建立，
+        // TLS/HTTP2 的开头字节会先堆在本地 upgraded 连接里，后续失败只能体现为隧道
+        // 被动断开。对媒体分片来说，这类“看似建连成功、随后字节流异常”的失败很容易
+        // 表现成分片大小接近正常但播放器无法解析或缓冲状态卡住。
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
+        {
+            Ok(stream) => {
+                debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                stream
+            }
+            Err(e) => {
+                error!("HTTP CONNECT 获取 proxy 流失败: {}", e);
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(boxed(
+                        Full::new(Bytes::from("Failed to connect to proxy"))
+                            .map_err(|e| match e {}),
+                    ))
+                    .unwrap());
+            }
+        };
+
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
@@ -170,20 +209,6 @@ async fn handle_connect(
                     // 不再由 proxy 所在地域、proxy DNS 缓存和远端分流策略决定。对
                     // CDN/HLS 这类强地域相关流量尤其容易选错节点，因此这里只负责
                     // 透传域名，不做任何 agent 侧 DNS fallback。
-                    let connected_stream = match pool_for_tunnel
-                        .as_ref()
-                        .get_connected_stream(address, TransportProtocol::Tcp)
-                        .await
-                    {
-                        Ok(stream) => {
-                            debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
-                            stream
-                        }
-                        Err(e) => {
-                            error!("HTTP CONNECT 获取 proxy 流失败: {}", e);
-                            return;
-                        }
-                    };
                     if let Err(e) = tunnel(upgraded, connected_stream, target).await {
                         error!("隧道错误: {}", e);
                     }
@@ -242,13 +267,13 @@ async fn tunnel(
 }
 
 /// 直连隧道: 不通过代理直接连接目标
-async fn tunnel_direct(upgraded: Upgraded, target: &str) -> std::result::Result<(), AgentError> {
+async fn tunnel_direct(
+    upgraded: Upgraded,
+    mut target_stream: TcpStream,
+    target: &str,
+) -> std::result::Result<(), AgentError> {
     // 直连 CONNECT 跳过 proxy，直接把 upgraded client 和目标 TCP 流相连。
     let mut client_io = TokioIo::new(upgraded);
-    let mut target_stream = TcpStream::connect(target).await?;
-    if let Err(err) = target_stream.set_nodelay(true) {
-        debug!("HTTP CONNECT 直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
-    }
 
     match relay_tcp_bidirectional(
         &mut client_io,

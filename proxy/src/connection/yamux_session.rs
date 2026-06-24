@@ -64,7 +64,11 @@ impl ServerConnection {
 
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
-        let agent_io = AgentIo { reader, writer };
+        let agent_io = AgentIo {
+            reader,
+            writer,
+            pending_write_len: None,
+        };
         // 到这里，packet-based 的 agent 连接已经被适配成 AsyncRead/AsyncWrite，
         // 可以交给 tokio-yamux 当作服务端 session 来 accept 子流。
         let mut session = Session::new_server(
@@ -168,7 +172,11 @@ impl ServerConnection {
 
         let writer = SinkWriter::new(sink);
         let reader = StreamReader::new(stream);
-        let agent_io = AgentIo { reader, writer };
+        let agent_io = AgentIo {
+            reader,
+            writer,
+            pending_write_len: None,
+        };
         let mut session = Session::new_server(
             agent_io,
             self.proxy_config.yamux.udp_settings().to_tokio_config(),
