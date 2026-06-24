@@ -157,35 +157,33 @@ async fn handle_connect(
             .unwrap())
     } else {
         // === 代理路径: 通过代理隧道连接 ===
-        // 必须先向 proxy 完成目标 Connect，再给客户端 200。
-        // 这样目标不可达时客户端能收到明确的 BAD_GATEWAY，而不是拿到半开的隧道。
-        let connected_stream = match pool
-            .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
-            .await
-        {
-            Ok(stream) => {
-                debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
-                stream
-            }
-            Err(e) => {
-                error!("从连接池获取流失败: {}", e);
-                return Ok(Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .body(boxed(
-                        Full::new(Bytes::from("Failed to connect to proxy"))
-                            .map_err(|e| match e {}),
-                    ))
-                    .unwrap());
-            }
-        };
-
-        // proxy 连接已建立后再升级客户端连接，避免给客户端过早成功响应。
+        // HTTP CONNECT 入口要尽量像 TUN：先让浏览器完成本地代理握手，再在隧道
+        // 任务里获取 proxy stream。之前先等 proxy 端目标连接成功再返回 200，
+        // 语义上更容易报告 BAD_GATEWAY，但视频分片会产生大量短 CONNECT，这个
+        // 等待会叠加到每个分片的建连路径上，表现为分片完整但播放器缓冲节奏发抖。
+        //
+        // 若 proxy 连接随后失败，隧道任务会直接结束 upgraded 连接；浏览器会按普通
+        // TCP/TLS 失败处理并重试，比每个 CONNECT 都阻塞等待更适合高频媒体请求。
         let relay_buffer_size = pool.tcp_relay_buffer_size();
+        let pool_for_tunnel = pool.clone();
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功 {}:{}", host, port);
+                    let connected_stream = match pool_for_tunnel
+                        .as_ref()
+                        .get_connected_stream(address, TransportProtocol::Tcp)
+                        .await
+                    {
+                        Ok(stream) => {
+                            debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                            stream
+                        }
+                        Err(e) => {
+                            error!("HTTP CONNECT 获取 proxy 流失败: {}", e);
+                            return;
+                        }
+                    };
                     if let Err(e) =
                         tunnel(upgraded, connected_stream, target, relay_buffer_size).await
                     {

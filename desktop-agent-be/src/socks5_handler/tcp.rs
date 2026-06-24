@@ -5,16 +5,6 @@
 
 use super::*;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
-use crate::tun_handler::domain_sniff::{extract_http_host, extract_tls_sni};
-
-/// SOCKS5 IP 目标首包嗅探最大长度。这里只用于恢复被本地 DNS 解析掉的域名，
-/// 不追求完整 TLS ClientHello 覆盖率；超出后直接按原始 IP 转发。
-const SOCKS_SNIFF_MAX_BYTES: usize = 4096;
-/// SOCKS5 已经完成握手后客户端通常会立刻发送 TLS ClientHello/HTTP 请求。
-/// 等待过长会直接拖慢非 HTTP/TLS 的 IP 连接，因此保持和 TUN 轻量嗅探一致。
-const SOCKS_SNIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(60);
-/// 已经读到部分首包后，后续补读只给一个很短的空闲窗口，避免拆包时误等满 60ms。
-const SOCKS_SNIFF_INTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(10);
 
 pub(super) async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
@@ -82,59 +72,15 @@ pub(super) async fn handle_tcp_connect(
         }
     } else {
         // === 代理路径 ===
-        // 如果 SOCKS5 客户端传来的是 IP:443/IP:80，通常表示浏览器或系统已经在本地
-        // 做了 DNS 解析。这里做一次轻量首包嗅探，只用于日志和流量标签，不再把
-        // proxy 目标从原始 IP 改成域名：部分视频 CDN 的签名/边缘调度会绑定浏览器
-        // 已解析出的具体 IP，改由 proxy 重新解析域名反而会造成某些分片请求失败。
-        if let Some(port) = socks_sniff_port(&target_addr) {
-            let connected_stream = match pool
-                .as_ref()
-                .get_connected_stream(address.clone(), TransportProtocol::Tcp)
-                .await
-            {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("SOCKS5 连接原始 IP proxy 目标失败: {}", e);
-                    let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
-                    return Err(e);
-                }
-            };
-
-            let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-            let mut client_stream = protocol
-                .reply_success(bind_addr)
-                .await
-                .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
-
-            let sniffed = sniff_first_client_bytes(&mut client_stream, port).await;
-            let mut proxy_label = target_label.clone();
-            if !sniffed.is_empty() {
-                if let Some(domain) = sniff_domain(port, &sniffed) {
-                    debug!(
-                        "SOCKS5 IP 目标首包域名：{} -> {}，代理目标保留原始 IP",
-                        target_label, domain
-                    );
-                    proxy_label = format!("首包域名 {domain}，原始目标 {target_label}");
-                } else {
-                    debug!(
-                        "SOCKS5 IP 目标首包未解析出域名：target={} bytes={}",
-                        target_label,
-                        sniffed.len()
-                    );
-                }
-            }
-
-            info!("SOCKS5 隧道已建立，开始数据中继");
-            return relay_data(
-                &mut client_stream,
-                connected_stream,
-                "SOCKS5 CONNECT",
-                proxy_label,
-                relay_buffer_size,
-                &sniffed,
-            )
-            .await;
-        }
+        // 代理入口采用“本地握手先成功，proxy 建连随后完成”的策略，和 TUN 行为保持一致。
+        // 浏览器播放 HLS/视频时会创建大量短连接；如果 SOCKS5 必须等 proxy 端目标连接
+        // 完成后才回复 success，每个分片都会额外暴露一次远端建连延迟，分片最终大小正常
+        // 但播放器会感到卡顿。若后续 proxy 建连失败，直接关闭本地隧道，让浏览器重试。
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let mut client_stream = protocol
+            .reply_success(bind_addr)
+            .await
+            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
         let connected_stream = match pool
             .as_ref()
@@ -146,19 +92,10 @@ pub(super) async fn handle_tcp_connect(
                 stream
             }
             Err(e) => {
-                error!("从连接池获取流失败: {}", e);
-                let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
+                error!("SOCKS5 已回复成功后获取 proxy 流失败: {}", e);
                 return Err(e);
             }
         };
-
-        // 发送成功回复，使用虚拟绑定地址
-        // 代理路径中真实出口在 proxy 端，agent 本地只返回占位绑定地址。
-        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let mut client_stream = protocol
-            .reply_success(bind_addr)
-            .await
-            .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
         info!("SOCKS5 隧道已建立，开始数据中继");
 
@@ -169,7 +106,6 @@ pub(super) async fn handle_tcp_connect(
             "SOCKS5 CONNECT",
             target_label,
             relay_buffer_size,
-            &[],
         )
         .await
     }
@@ -284,7 +220,6 @@ pub(super) async fn handle_tcp_bind(
                     "SOCKS5 BIND",
                     target_label,
                     relay_buffer_size,
-                    &[],
                 )
                 .await
             }
@@ -306,7 +241,6 @@ async fn relay_data(
     protocol: &str,
     target: String,
     relay_buffer_size: usize,
-    initial_client_bytes: &[u8],
 ) -> Result<()> {
     // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
     // 但 relay 策略不能完全无差别：legacy Framed 写端是 DataPacketSink/SinkWriter，
@@ -315,12 +249,6 @@ async fn relay_data(
     // 继续走标准 copy，避免逐写 flush 把吞吐打碎。
     let proxy_is_framed = connected_stream.is_framed();
     let mut proxy_io = connected_stream.into_async_io();
-    if !initial_client_bytes.is_empty() {
-        // 首包嗅探会消耗客户端已经发出的 TLS ClientHello/HTTP 请求头；连接到最终
-        // proxy 目标后必须先补发这段数据，否则目标侧会看到被截断的握手。
-        proxy_io.write_all(initial_client_bytes).await?;
-        proxy_io.flush().await?;
-    }
 
     match relay_tcp_bidirectional(
         client_stream,
@@ -353,81 +281,4 @@ async fn relay_data(
     }
 
     Ok(())
-}
-
-fn socks_sniff_port(target: &TargetAddr) -> Option<u16> {
-    let port = match target {
-        TargetAddr::Ip(addr) => addr.port(),
-        TargetAddr::Domain(_, _) => return None,
-    };
-
-    // 只对常见 HTTP/TLS 端口嗅探，避免 SSH、数据库等 server-first/非 HTTP 协议
-    // 因 SOCKS5 成功响应后等待首包而增加不必要延迟。
-    matches!(port, 80 | 443 | 8000 | 8080 | 8443 | 853).then_some(port)
-}
-
-async fn sniff_first_client_bytes(client: &mut TcpStream, port: u16) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(SOCKS_SNIFF_MAX_BYTES);
-    let deadline = tokio::time::Instant::now() + SOCKS_SNIFF_TIMEOUT;
-    let mut chunk = [0u8; 1024];
-
-    loop {
-        if buffer.len() >= SOCKS_SNIFF_MAX_BYTES {
-            break;
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let read_timeout = if buffer.is_empty() {
-            remaining
-        } else {
-            remaining.min(SOCKS_SNIFF_INTER_READ_TIMEOUT)
-        };
-        match tokio::time::timeout(read_timeout, client.read(&mut chunk)).await {
-            Ok(Ok(0)) => break,
-            Ok(Ok(n)) => {
-                buffer.extend_from_slice(&chunk[..n]);
-                if sniff_buffer_ready(port, &buffer) {
-                    break;
-                }
-            }
-            Ok(Err(e)) => {
-                debug!("SOCKS5 首包嗅探读取失败：{e}");
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-
-    buffer
-}
-
-fn sniff_buffer_ready(port: u16, buf: &[u8]) -> bool {
-    if sniff_domain(port, buf).is_some() {
-        return true;
-    }
-
-    has_complete_tls_record(buf) || has_complete_http_headers(buf)
-}
-
-fn has_complete_tls_record(buf: &[u8]) -> bool {
-    if buf.len() < 5 || buf[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
-    buf.len() >= 5usize.saturating_add(record_len)
-}
-
-fn has_complete_http_headers(buf: &[u8]) -> bool {
-    std::str::from_utf8(buf)
-        .map(|text| text.contains("\r\n\r\n"))
-        .unwrap_or(false)
-}
-
-fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
-    match port {
-        80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
-        _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
 }
