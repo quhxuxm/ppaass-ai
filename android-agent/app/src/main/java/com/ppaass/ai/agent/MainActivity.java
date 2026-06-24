@@ -100,8 +100,8 @@ public class MainActivity extends Activity {
             new TransportModeOption("legacy", "Standard channel")
     };
     private static final QuicPolicyOption[] QUIC_POLICY_OPTIONS = {
-            new QuicPolicyOption("allow", "Send QUIC by rules"),
-            new QuicPolicyOption("block", "Block")
+            new QuicPolicyOption("allow", "By rules, proxy if unmatched"),
+            new QuicPolicyOption("block", "Block UDP/443")
     };
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
@@ -733,6 +733,7 @@ public class MainActivity extends Activity {
         addDirectModeControl(section);
         addDirectPolicyFacts(section);
         addForwardingMethodRows(section);
+        addDirectRuleUsageGuide(section);
         directRulesConfig = new LinearLayout(this);
         directRulesConfig.setOrientation(LinearLayout.VERTICAL);
         section.addView(directRulesConfig, matchWrap());
@@ -850,6 +851,71 @@ public class MainActivity extends Activity {
         root.addView(row, rowParams);
     }
 
+    private void addDirectRuleUsageGuide(LinearLayout root) {
+        LinearLayout.LayoutParams headingParams = matchWrap();
+        headingParams.setMargins(0, dp(14), 0, dp(6));
+        root.addView(controlLabel("Rule types"), headingParams);
+
+        addDirectRuleUsage(
+                root,
+                "HTTP / SOCKS5 domains",
+                "Use example.com or *.example.com for explicit proxy targets.",
+                new String[]{"HTTP", "SOCKS5"});
+        addDirectRuleUsage(
+                root,
+                "TUN IP / CIDR",
+                "Prefer fixed IPs or networks such as 192.168.0.0/16.",
+                new String[]{"TUN", "IP/CIDR"});
+        addDirectRuleUsage(
+                root,
+                "TUN domain rules",
+                "Enable Proxy DNS first; rules apply after DNS cache matches.",
+                new String[]{"TUN", "Proxy DNS"});
+    }
+
+    private void addDirectRuleUsage(LinearLayout root, String title, String detail, String[] modes) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(9), dp(12), dp(9));
+        card.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+
+        TextView titleView = titleText(title, 13f);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(titleView, matchWrap());
+
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setGravity(Gravity.START);
+        addModeChips(modeRow, modes);
+        LinearLayout.LayoutParams modeParams = matchWrap();
+        modeParams.setMargins(0, dp(6), 0, 0);
+        card.addView(modeRow, modeParams);
+
+        TextView detailView = mutedText(detail, 11f);
+        detailView.setMaxLines(2);
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams detailParams = matchWrap();
+        detailParams.setMargins(0, dp(5), 0, 0);
+        card.addView(detailView, detailParams);
+
+        LinearLayout.LayoutParams cardParams = matchWrap();
+        cardParams.setMargins(0, dp(8), 0, 0);
+        root.addView(card, cardParams);
+    }
+
+    private void addModeChips(LinearLayout root, String[] modes) {
+        for (String mode : modes) {
+            TextView modeView = chip(mode, COLOR_STATUS_STOPPED);
+            modeView.setTextSize(10f);
+            LinearLayout.LayoutParams params = matchWrap();
+            if (root.getChildCount() > 0) {
+                params.setMargins(dp(5), 0, 0, 0);
+            }
+            root.addView(modeView, params);
+        }
+    }
+
     private void addDirectRulePresets(LinearLayout root) {
         LinearLayout.LayoutParams headingParams = matchWrap();
         headingParams.setMargins(0, dp(16), 0, dp(6));
@@ -914,7 +980,7 @@ public class MainActivity extends Activity {
 
         LinearLayout compose = horizontalRow();
         directRuleDraft = new EditText(this);
-        directRuleDraft.setHint("Domain / wildcard / CIDR");
+        directRuleDraft.setHint("example.com / *.example.com / 10.0.0.0/8");
         directRuleDraft.setSingleLine(true);
         directRuleDraft.setImeOptions(EditorInfo.IME_ACTION_DONE);
         directRuleDraft.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -1020,10 +1086,22 @@ public class MainActivity extends Activity {
         }
         directRuleGroupList.removeAllViews();
         int groupCount = 0;
-        groupCount += addDirectRuleGroup("Wildcard", "wildcard");
-        groupCount += addDirectRuleGroup("IP / CIDR", "network");
-        groupCount += addDirectRuleGroup("Domain", "domain");
-        groupCount += addDirectRuleGroup("Other", "other");
+        groupCount += addDirectRuleGroup(
+                "Wildcard",
+                "wildcard",
+                new String[]{"HTTP/SOCKS5", "TUN + DNS cache"});
+        groupCount += addDirectRuleGroup(
+                "IP / CIDR",
+                "network",
+                new String[]{"TUN", "Resolved IP"});
+        groupCount += addDirectRuleGroup(
+                "Domain",
+                "domain",
+                new String[]{"HTTP/SOCKS5", "TUN + DNS cache"});
+        groupCount += addDirectRuleGroup(
+                "Other",
+                "other",
+                new String[]{"By rule value"});
 
         if (directRuleValues.isEmpty()) {
             TextView empty = mutedText("Not configured", 14f);
@@ -1041,7 +1119,7 @@ public class MainActivity extends Activity {
         updateDirectAccessSummary();
     }
 
-    private int addDirectRuleGroup(String label, String groupKey) {
+    private int addDirectRuleGroup(String label, String groupKey, String[] modes) {
         int count = 0;
         for (String rule : directRuleValues) {
             if (groupKey.equals(ruleGroupKey(rule))) {
@@ -1064,6 +1142,16 @@ public class MainActivity extends Activity {
         LinearLayout heading = horizontalRow();
         TextView title = titleText(label, 13f);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setGravity(Gravity.END);
+        addModeChips(modeRow, modes);
+        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1.5f);
+        modeParams.setMargins(dp(8), 0, dp(8), 0);
+        heading.addView(modeRow, modeParams);
         TextView countView = mutedText(String.valueOf(count), 12f);
         countView.setTypeface(Typeface.DEFAULT_BOLD);
         heading.addView(countView, new LinearLayout.LayoutParams(
@@ -1825,6 +1913,14 @@ public class MainActivity extends Activity {
         typeParams.gravity = Gravity.END;
         meta.addView(type, typeParams);
 
+        TextView cache = dnsCacheChip(record);
+        if (cache != null) {
+            LinearLayout.LayoutParams cacheParams = matchWrap();
+            cacheParams.gravity = Gravity.END;
+            cacheParams.setMargins(0, dp(4), 0, 0);
+            meta.addView(cache, cacheParams);
+        }
+
         String statusText = record.optString("status", "UNKNOWN") + " · "
                 + Math.max(1, record.optLong("duration_ms", 0)) + " ms";
         TextView status = mutedText(statusText, 11f);
@@ -1866,6 +1962,20 @@ public class MainActivity extends Activity {
             return "Query timeout";
         }
         return record.optString("upstream", "Agent DNS");
+    }
+
+    private TextView dnsCacheChip(JSONObject record) {
+        String resolver = record.optString("resolver", "agent");
+        if ("agent-cache".equals(resolver)) {
+            return chip("Cache hit", COLOR_STATUS_RUNNING);
+        }
+        if ("system".equals(resolver)) {
+            return chip("System DNS", COLOR_ACTION_STOP);
+        }
+        if ("agent".equals(resolver) || "agent-direct".equals(resolver) || resolver.isEmpty()) {
+            return chip("Cache miss", COLOR_STATUS_STOPPED);
+        }
+        return null;
     }
 
     private boolean ensureTrafficDay(long rxBytes, long txBytes) {
@@ -2140,6 +2250,11 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
+        TextView help = mutedText("Allow sends QUIC by direct rules; unmatched UDP/443 uses proxy UDP relay. Block drops UDP/443 to force TCP/TLS.", 12f);
+        help.setMaxLines(3);
+        LinearLayout.LayoutParams helpParams = matchWrap();
+        helpParams.setMargins(0, dp(6), 0, 0);
+        root.addView(help, helpParams);
         return spinner;
     }
 

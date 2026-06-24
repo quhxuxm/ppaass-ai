@@ -127,6 +127,8 @@ export type DirectRuleGroup = {
   key: string;
   label: string;
   icon: string;
+  /** 当前规则类型在哪些入口或模式下可用，用于直连规则页给用户做配置提示。 */
+  modes: string[];
   items: Array<{ rule: string; index: number }>;
 };
 

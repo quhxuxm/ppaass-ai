@@ -676,11 +676,37 @@ export function useDesktopAgent() {
 }
 
 function buildDirectRuleGroups(rules: string[]) {
+  // 每组规则同时携带“适用模式”文案，UI 可以在已有规则旁直接提示使用场景：
+  // 域名/通配符依赖显式域名入口或 TUN DNS 缓存，IP/CIDR 则适合 TUN 和已解析 IP 目标。
   const groups: DirectRuleGroup[] = [
-    { key: "wildcard", label: "通配符", icon: "pi pi-asterisk", items: [] },
-    { key: "network", label: "IP / CIDR", icon: "pi pi-hashtag", items: [] },
-    { key: "domain", label: "域名", icon: "pi pi-globe", items: [] },
-    { key: "other", label: "其他", icon: "pi pi-ellipsis-h", items: [] }
+    {
+      key: "wildcard",
+      label: "通配符",
+      icon: "pi pi-asterisk",
+      modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
+      items: []
+    },
+    {
+      key: "network",
+      label: "IP / CIDR",
+      icon: "pi pi-hashtag",
+      modes: ["TUN", "已解析 IP 目标"],
+      items: []
+    },
+    {
+      key: "domain",
+      label: "域名",
+      icon: "pi pi-globe",
+      modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
+      items: []
+    },
+    {
+      key: "other",
+      label: "其他",
+      icon: "pi pi-ellipsis-h",
+      modes: ["按规则内容匹配"],
+      items: []
+    }
   ];
   const byKey = new Map(groups.map((group) => [group.key, group]));
   rules.forEach((rule, index) => {

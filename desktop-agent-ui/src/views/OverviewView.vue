@@ -10,6 +10,8 @@ import {
   formatBytes,
   formatRate,
   hourLabel,
+  isAgentDnsCacheRecord,
+  isAgentDnsCacheMissRecord,
   isSystemDnsRecord,
   localDateKey,
   shortPath
@@ -378,6 +380,20 @@ function hourlyBarHeight(bytes: number) {
                 <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
               </div>
               <div class="dns-record-meta">
+                <Tag
+                  v-if="isAgentDnsCacheRecord(record)"
+                  value="缓存命中"
+                  severity="success"
+                  rounded
+                  title="该 DNS 响应来自 Agent 内部 DNS cache，未重新请求上游 DNS"
+                />
+                <Tag
+                  v-else-if="isAgentDnsCacheMissRecord(record)"
+                  value="缓存未命中"
+                  severity="secondary"
+                  rounded
+                  title="该 DNS 请求由 Agent 内部 DNS 处理，但没有命中 Agent DNS cache"
+                />
                 <Tag
                   v-if="isSystemDnsRecord(record)"
                   value="系统解析"

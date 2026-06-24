@@ -1156,7 +1156,7 @@ body.overview-dragging * {
   color: #4338ca;
 }
 
-.rule-scope-item span {
+.rule-scope-item > div > span {
   display: block;
   overflow: hidden;
   color: var(--app-text-strong);
@@ -1171,6 +1171,18 @@ body.overview-dragging * {
   color: var(--app-text-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.rule-scope-modes,
+.rule-group-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.rule-scope-modes {
+  margin-top: 7px;
 }
 
 .preset-list {
@@ -1512,12 +1524,18 @@ body.overview-dragging * {
   min-width: 0;
 }
 
+.rule-group-heading .rule-group-modes {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+
 .rule-group-heading i {
   color: var(--app-primary);
 }
 
-.rule-group-heading span,
-.rule-group-heading strong {
+/* 只约束规则分组标题文字，避免覆盖 PrimeVue Tag 内部 span 的颜色和布局。 */
+.rule-group-heading > div:first-child span,
+.rule-group-heading > strong {
   min-width: 0;
   overflow: hidden;
   color: #475569;

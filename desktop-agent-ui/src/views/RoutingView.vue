@@ -109,27 +109,39 @@ const emit = defineEmits<{
                 </div>
               </div>
             </div>
-            <!-- 直连规则适用范围必须和 agent 后端保持一致：这里不承诺 agent 会解析域名或嗅探 TCP payload。 -->
+            <!-- 直连规则的页面说明以“怎么配置、何时生效”为主，避免把实现细节当成用户操作指南。 -->
             <div class="rule-scope-grid">
               <div class="rule-scope-item">
                 <i class="pi pi-globe"></i>
                 <div>
-                  <span>显式域名</span>
-                  <p>HTTP CONNECT、普通 HTTP Host、SOCKS5 DOMAIN 目标会匹配域名/通配符规则。</p>
+                  <span>代理入口填域名</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="HTTP" severity="info" rounded />
+                    <Tag value="SOCKS5" severity="info" rounded />
+                  </div>
+                  <p>使用 HTTP / SOCKS5 时，可添加 example.com 或 *.example.com，让这些域名直接访问。</p>
                 </div>
               </div>
               <div class="rule-scope-item">
                 <i class="pi pi-hashtag"></i>
                 <div>
-                  <span>TUN 已解析目标</span>
-                  <p>TUN TCP/UDP 看到的是 IP；IP 与 CIDR 规则直接生效，不在 agent 端重新解析域名。</p>
+                  <span>TUN 优先填 IP/CIDR</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="TUN" severity="success" rounded />
+                    <Tag value="IP/CIDR" severity="secondary" rounded />
+                  </div>
+                  <p>TUN 模式下更适合添加固定 IP 或网段，例如 192.168.0.0/16、10.0.0.0/8。</p>
                 </div>
               </div>
               <div class="rule-scope-item">
                 <i class="pi pi-database"></i>
                 <div>
-                  <span>DNS 缓存域名</span>
-                  <p>启用 TUN DNS proxy 时，缓存命中的 IP 可按域名规则直连；不会再嗅探 TLS SNI 或 HTTP Host。</p>
+                  <span>TUN 域名规则</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="TUN" severity="success" rounded />
+                    <Tag value="需 Proxy DNS" severity="warn" rounded />
+                  </div>
+                  <p>需要先开启 Proxy DNS；浏览器或应用完成 DNS 查询后，命中缓存的域名规则才会生效。</p>
                 </div>
               </div>
             </div>
@@ -170,14 +182,14 @@ const emit = defineEmits<{
                 </div>
                 <div class="rule-scope-note">
                   <i class="pi pi-info-circle"></i>
-                  <span>域名规则适用于显式域名或 TUN DNS 缓存命中；IP/CIDR 规则适用于所有入口的已解析目标。</span>
+                  <span>添加前先看入口：HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需要开启 Proxy DNS 并等待 DNS 缓存命中。</span>
                 </div>
                 <div class="rule-compose">
                   <label class="field rule-input-field">
                     <span><i class="pi pi-plus-circle"></i>规则值</span>
                     <InputText
                       :model-value="ruleDraft"
-                      placeholder="域名 / 通配符 / CIDR"
+                      placeholder="example.com / *.example.com / 10.0.0.0/8"
                       :disabled="configLocked"
                       @keydown.enter.prevent="emit('add-draft-rules')"
                       @update:model-value="emit('update:ruleDraft', String($event))"
@@ -199,6 +211,9 @@ const emit = defineEmits<{
                       <div>
                         <i :class="group.icon"></i>
                         <span>{{ group.label }}</span>
+                      </div>
+                      <div class="rule-group-modes">
+                        <Tag v-for="mode in group.modes" :key="`${group.key}-${mode}`" :value="mode" severity="secondary" rounded />
                       </div>
                       <strong>{{ group.items.length }}</strong>
                     </div>
