@@ -46,11 +46,9 @@ tcp_mode = "auto"
 udp_mode = "auto"
 
 [yamux.tcp]
-# TCP Yamux 外层连接数。
-# TUN/HLS 视频会并发打开多个 HTTPS 分片连接；外层连接过少时，
-# 多条子流共享同一个 TCP 拥塞窗口，某条外层链路丢包会拖慢同组分片。
-# 默认 16 条用于降低 TCP-over-TCP 队头阻塞，让 Yamux 更接近常规通道的并行度。
-sessions = 16
+# TCP Yamux 外层连接数。保守默认 5 条；TUN/HLS 场景下盲目增大该值会增加
+# agent<->proxy 侧竞争，反而可能让单个视频分片读得更碎。
+sessions = 5
 max_streams_per_session = 256
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30

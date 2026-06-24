@@ -16,7 +16,7 @@ export function fallbackAgentState(): AgentState {
     pid: null,
     config_path: "config/local/agent.toml",
     binary_path: "target/release/desktop-agent",
-    logs: ["desktop-agent ready", "proxy route guard initialized", "yamux tcp sessions: 16", "tun mode: disabled"]
+    logs: ["desktop-agent ready", "proxy route guard initialized", "yamux tcp sessions: 5", "tun mode: disabled"]
   };
 }
 

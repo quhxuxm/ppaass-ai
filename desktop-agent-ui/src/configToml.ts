@@ -18,9 +18,9 @@ const defaultFieldValues = {
   log_file: "desktop-agent.log",
   tcp_mode: "auto",
   udp_mode: "auto",
-  // TCP Yamux 默认多开外层连接，避免 TUN/HLS 场景下大量 HTTPS 分片子流
-  // 被压到少数 TCP 拥塞窗口里，造成 Yamux 模式比分离 TCP 连接更明显卡顿。
-  tcp_yamux_sessions: 16,
+  // TCP Yamux 保持保守默认值。HLS/TUN 场景下盲目增大外层连接数会增加
+  // agent<->proxy 侧竞争，可能让单个视频分片读得更碎。
+  tcp_yamux_sessions: 5,
   udp_yamux_sessions: 5,
   tcp_yamux_max_streams_per_session: 256,
   udp_yamux_max_streams_per_session: 256,

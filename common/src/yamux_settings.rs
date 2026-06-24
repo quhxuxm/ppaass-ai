@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// TCP Yamux 会把浏览器/TUN 捕获到的多条 TCP 连接复用到少量外层 TCP 上。
-// HLS 视频通常会同时拉取多个 HTTPS 分片；如果外层 session 太少，任一外层
-// TCP 出现拥塞或丢包都会放大成多条子流的队头阻塞。因此 TCP 默认多开一些
-// 外层连接，让子流分散到不同拥塞窗口，行为更接近常规通道连接池。
-pub const DEFAULT_TCP_YAMUX_SESSIONS: usize = 16;
+// TCP Yamux 外层连接保持保守默认值。实测 HLS/TUN 场景下盲目增大外层
+// session 会增加 agent<->proxy 侧的长期连接竞争，反而可能让单个分片读得更碎。
+// 并发度仍通过 UI/TOML 暴露给用户按链路手动调整。
+pub const DEFAULT_TCP_YAMUX_SESSIONS: usize = 5;
 pub const DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION: usize = 256;
 pub const DEFAULT_YAMUX_OPEN_STREAM_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_YAMUX_KEEPALIVE_INTERVAL_SECS: u64 = 30;

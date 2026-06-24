@@ -19,8 +19,8 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("wintun.dll", "wintun.dll"),
 ];
 
-// TCP Yamux 默认给视频/TUN 场景更多外层连接，降低 TCP-over-TCP 队头阻塞。
-const DEFAULT_TCP_YAMUX_SESSIONS: u64 = 16;
+// TCP Yamux 保持保守默认值；外层连接过多会增加 agent<->proxy 侧竞争。
+const DEFAULT_TCP_YAMUX_SESSIONS: u64 = 5;
 // UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
 const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
 

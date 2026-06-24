@@ -28,9 +28,13 @@ use tracing::debug;
 /// 嗅探首段字节的最大长度。TLS ClientHello 最大约 16KB，但常见的 SNI/Host
 /// 通常在前 1-2KB 即出现；选择 4KB 兼顾覆盖率与首字节延迟。
 const SNIFF_MAX_BYTES: usize = 4096;
-/// 等待客户端首段字节的最长时间。某些应用握手前会短暂沉默，
-/// 但超过 300ms 仍未发数据多半是 server-first 协议，直接放弃嗅探走原路径。
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
+/// 等待客户端首段字节的最长时间。视频/HLS 场景会频繁建立短 TCP 连接，
+/// 嗅探等待过长会直接叠加到每个分片请求上，因此桌面端也保持轻量等待。
+const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
+/// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口。
+/// 这样仍能覆盖 TLS record 被拆包的常见情况，又不会因为 ECH/无 SNI 握手
+/// 把 TUN 数据面卡到完整 `SNIFF_TIMEOUT`。
+const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 type ProxyPreconnect = (Address, JoinHandle<Result<ConnectedStream>>);
@@ -114,7 +118,7 @@ pub(super) async fn handle_tun_tcp(
     // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
     //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
     let mut sniffed: Vec<u8> = Vec::new();
-    if direct_target.is_none() && !proxy_dns_request {
+    if direct_target.is_none() && !proxy_dns_request && proxy_reason.is_none() {
         sniffed = sniff_first_bytes(&mut client, target.port()).await;
         if !sniffed.is_empty()
             && let Some(domain) = sniff_domain(target.port(), &sniffed)
@@ -245,7 +249,12 @@ async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) 
         if remaining.is_zero() {
             break;
         }
-        match timeout(remaining, client.read(&mut chunk)).await {
+        let read_timeout = if buffer.is_empty() {
+            remaining
+        } else {
+            remaining.min(SNIFF_INTER_READ_TIMEOUT)
+        };
+        match timeout(read_timeout, client.read(&mut chunk)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => {
                 buffer.extend_from_slice(&chunk[..n]);
