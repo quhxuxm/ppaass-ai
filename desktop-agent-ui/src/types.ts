@@ -34,7 +34,6 @@ export type AgentConfigSummary = {
   tun_ipv4: string;
   tun_mtu: number;
   tun_proxy_dns: boolean;
-  tun_block_quic: boolean;
   tun_quic_policy: string;
   direct_mode: string;
   direct_rules: string[];

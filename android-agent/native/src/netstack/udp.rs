@@ -117,7 +117,7 @@ pub(super) fn spawn_udp_sessions(
                         }
                     }
 
-                    if target.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                    if target.port() == 443 && quic_policy.should_block_udp443() {
                         quic_stats.record_blocked();
                         debug!(
                             "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
@@ -264,10 +264,7 @@ pub(super) async fn handle_tun_udp(
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
-    if !proxy_dns_request
-        && target.port() == 443
-        && quic_policy.should_block_udp443(direct_target.is_some())
-    {
+    if !proxy_dns_request && target.port() == 443 && quic_policy.should_block_udp443() {
         debug!(
             "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
             quic_policy, target_label

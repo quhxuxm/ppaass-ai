@@ -218,9 +218,7 @@ public class PpaassVpnService extends VpnService {
                         prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
                         DefaultConfig.TUN_MTU))
                 .put("proxy_dns", true)
-                // native 优先读取 quic_policy；block_quic 仅保留给旧配置/旧版本兼容。
-                .put("quic_policy", quicPolicy)
-                .put("block_quic", legacyBlockQuic(quicPolicy));
+                .put("quic_policy", quicPolicy);
         JSONObject transportJson = new JSONObject()
                 .put("tcp_mode", normalizeTransportMode(
                         prefs.getString("tcp_mode", DefaultConfig.TCP_MODE),
@@ -440,11 +438,7 @@ public class PpaassVpnService extends VpnService {
         if (stored != null) {
             return normalizeQuicPolicy(stored);
         }
-
-        // 旧 Android UI 只保存 block_quic。true 对应旧语义：只阻断未命中直连规则的 QUIC。
-        return prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC)
-                ? "direct_if_rule_match"
-                : DefaultConfig.QUIC_POLICY;
+        return DefaultConfig.QUIC_POLICY;
     }
 
     private String normalizeQuicPolicy(String value) {
@@ -452,16 +446,10 @@ public class PpaassVpnService extends VpnService {
             return DefaultConfig.QUIC_POLICY;
         }
         String normalized = value.trim().toLowerCase();
-        if ("allow".equals(normalized)
-                || "direct_if_rule_match".equals(normalized)
-                || "block".equals(normalized)) {
+        if ("allow".equals(normalized) || "block".equals(normalized)) {
             return normalized;
         }
         return DefaultConfig.QUIC_POLICY;
-    }
-
-    private boolean legacyBlockQuic(String quicPolicy) {
-        return !"allow".equals(normalizeQuicPolicy(quicPolicy));
     }
 
     private List<String> tokens(String value) {

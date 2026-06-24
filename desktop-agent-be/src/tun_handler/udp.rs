@@ -128,10 +128,7 @@ pub(super) async fn handle_tun_udp(
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
-    if !proxy_dns_request
-        && target.port() == 443
-        && quic_policy.should_block_udp443(direct_target.is_some())
-    {
+    if !proxy_dns_request && target.port() == 443 && quic_policy.should_block_udp443() {
         debug!(
             "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}，等待应用回退 TCP",
             quic_policy, target_label

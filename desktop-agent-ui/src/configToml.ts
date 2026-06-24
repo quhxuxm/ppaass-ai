@@ -37,7 +37,6 @@ const defaultFieldValues = {
   tun_ipv4: "10.10.10.1/24",
   tun_mtu: 1500,
   tun_proxy_dns: false,
-  tun_block_quic: false,
   tun_quic_policy: "allow",
   direct_mode: "proxy_all",
   direct_rules: []
@@ -126,7 +125,6 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     tun_ipv4: { section: "tun", key: "ipv4", kind: "string" },
     tun_mtu: { section: "tun", key: "mtu", kind: "number" },
     tun_proxy_dns: { section: "tun", key: "proxy_dns", kind: "bool" },
-    tun_block_quic: { section: "tun", key: "block_quic", kind: "bool" },
     tun_quic_policy: { section: "tun", key: "quic_policy", kind: "string" },
     direct_mode: { section: "direct_access", key: "mode", kind: "string" },
     direct_rules: { section: "direct_access", key: "rules", kind: "array" },
@@ -141,9 +139,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
 
   if (field === "tun_quic_policy") {
     const policy = normalizeQuicPolicy(String(value ?? ""));
-    const withPolicy = upsertTomlValue(raw, "tun", "quic_policy", formatTomlValue(policy, "string", field));
-    // 同步旧版 `block_quic`，避免旧 agent 读取同一份配置时意外放行代理路径 QUIC。
-    return upsertTomlValue(withPolicy, "tun", "block_quic", policy === "allow" ? "false" : "true");
+    return upsertTomlValue(raw, "tun", "quic_policy", formatTomlValue(policy, "string", field));
   }
 
   return upsertTomlValue(raw, target.section, target.key, formatTomlValue(value, target.kind, field));
@@ -151,10 +147,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
 
 export function summarizeRaw(raw: string): AgentConfigSummary {
   const runtimeThreads = normalizeRuntimeThreads(matchNumber(raw, null, "runtime_threads"));
-  const legacyTunBlockQuic = matchBool(raw, "tun", "block_quic") ?? defaultValueForField<boolean>("tun_block_quic");
-  const tunQuicPolicy = normalizeQuicPolicy(
-    matchString(raw, "tun", "quic_policy") ?? (legacyTunBlockQuic ? "direct_if_rule_match" : "allow")
-  );
+  const tunQuicPolicy = normalizeQuicPolicy(matchString(raw, "tun", "quic_policy") ?? "allow");
   return {
     listen_addr: stringOrDefault(matchString(raw, null, "listen_addr"), "listen_addr"),
     proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
@@ -190,7 +183,6 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     tun_ipv4: stringOrDefault(matchString(raw, "tun", "ipv4"), "tun_ipv4"),
     tun_mtu: matchNumber(raw, "tun", "mtu") ?? defaultValueForField<number>("tun_mtu"),
     tun_proxy_dns: matchBool(raw, "tun", "proxy_dns") ?? defaultValueForField<boolean>("tun_proxy_dns"),
-    tun_block_quic: tunQuicPolicy !== "allow",
     tun_quic_policy: tunQuicPolicy,
     direct_mode: stringOrDefault(matchString(raw, "direct_access", "mode"), "direct_mode"),
     direct_rules: matchStringArray(raw, "rules", "direct_access")
@@ -316,7 +308,7 @@ function minimumNumberForField(field: keyof AgentConfigSummary) {
 }
 
 function normalizeQuicPolicy(value: string) {
-  return ["allow", "direct_if_rule_match", "block"].includes(value) ? value : defaultValueForField<string>("tun_quic_policy");
+  return ["allow", "block"].includes(value) ? value : defaultValueForField<string>("tun_quic_policy");
 }
 
 function matchString(raw: string, section: string | null, key: string) {

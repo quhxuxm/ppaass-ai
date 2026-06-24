@@ -1177,6 +1177,12 @@ body.overview-dragging * {
   font-weight: 700;
 }
 
+.field-help {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .dependent-field {
   margin-bottom: 14px;
 }

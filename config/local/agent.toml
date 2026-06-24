@@ -107,15 +107,12 @@ mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
-# 旧版 QUIC 开关：true 等价于新策略 direct_if_rule_match。
 # 默认不阻断 QUIC：TUN 捕获 UDP/443 后会按 direct_access 决定直连或代理到 proxy，
-# 再由 proxy 端使用真实 UDP/QUIC 访问目标 CDN。只有在排查“QUIC relay 自身抖动”
-# 或需要强制浏览器回退 TCP/TLS 时，才临时启用阻断策略。
-block_quic = false
-# 新版 QUIC 策略：
-#   allow                - UDP/443 按 direct_access 正常直连或代理。
-#   direct_if_rule_match - 只有命中直连规则的 UDP/443 放行，其余代理 QUIC 阻断并等待应用回退 TCP/TLS。
-#   block                - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
+# 再由 proxy 端使用真实 UDP/QUIC 访问目标 CDN。只有需要强制浏览器回退
+# TCP/TLS 时，才临时启用阻断策略。
+# QUIC 策略：
+#   allow - 按照规则直接发送 QUIC 到目标；没有匹配直连规则的通过 proxy 转发 QUIC。
+#   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
 quic_policy = "allow"
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"

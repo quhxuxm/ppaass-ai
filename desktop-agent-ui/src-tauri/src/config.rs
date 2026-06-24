@@ -172,17 +172,11 @@ pub(crate) fn install_bundled_agent_assets(
 }
 
 pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
-    let value = toml::from_str::<Value>(raw)
-        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
-    let tun_block_quic = bool_at(&value, &["tun", "block_quic"]).unwrap_or(false);
+    let value = toml::from_str::<Value>(raw).map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     let tun_quic_policy = normalize_quic_policy(
         string_at(&value, &["tun", "quic_policy"])
             .as_deref()
-            .unwrap_or(if tun_block_quic {
-                "direct_if_rule_match"
-            } else {
-                "allow"
-            }),
+            .unwrap_or("allow"),
     );
     let runtime_threads = int_at(&value, &["runtime_threads"])
         .filter(|value| *value > 0)
@@ -259,7 +253,6 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
-        tun_block_quic: tun_quic_policy != "allow",
         tun_quic_policy,
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
         direct_rules: string_array_at(&value, &["direct_access", "rules"]),
@@ -474,7 +467,7 @@ fn string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 
 fn normalize_quic_policy(value: &str) -> String {
     match value {
-        "allow" | "direct_if_rule_match" | "block" => value.to_string(),
+        "allow" | "block" => value.to_string(),
         _ => "allow".to_string(),
     }
 }
@@ -647,13 +640,12 @@ private_key_path = "keys/user1.pem"
         )
         .unwrap();
 
-        assert!(!summary.tun_block_quic);
         assert_eq!(summary.tun_quic_policy, "allow");
         assert_eq!(summary.tcp_relay_buffer_size_kb, 256);
     }
 
     #[test]
-    fn summarize_config_derives_quic_policy_from_legacy_block_quic() {
+    fn summarize_config_reads_block_policy() {
         let summary = summarize_config(
             r#"
 listen_addr = "0.0.0.0:10080"
@@ -662,33 +654,12 @@ username = "user1"
 private_key_path = "keys/user1.pem"
 
 [tun]
-block_quic = true
+quic_policy = "block"
 "#,
         )
         .unwrap();
 
-        assert!(summary.tun_block_quic);
-        assert_eq!(summary.tun_quic_policy, "direct_if_rule_match");
-    }
-
-    #[test]
-    fn summarize_config_prefers_explicit_quic_policy() {
-        let summary = summarize_config(
-            r#"
-listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
-username = "user1"
-private_key_path = "keys/user1.pem"
-
-[tun]
-block_quic = true
-quic_policy = "allow"
-"#,
-        )
-        .unwrap();
-
-        assert!(!summary.tun_block_quic);
-        assert_eq!(summary.tun_quic_policy, "allow");
+        assert_eq!(summary.tun_quic_policy, "block");
     }
 
     #[test]

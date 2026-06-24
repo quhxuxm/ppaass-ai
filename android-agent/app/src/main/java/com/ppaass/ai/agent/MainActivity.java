@@ -100,8 +100,7 @@ public class MainActivity extends Activity {
             new TransportModeOption("legacy", "Standard channel")
     };
     private static final QuicPolicyOption[] QUIC_POLICY_OPTIONS = {
-            new QuicPolicyOption("allow", "Allow"),
-            new QuicPolicyOption("direct_if_rule_match", "Direct if rule match"),
+            new QuicPolicyOption("allow", "Send QUIC by rules"),
             new QuicPolicyOption("block", "Block")
     };
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -1984,10 +1983,7 @@ public class MainActivity extends Activity {
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
-                // quic_policy 是新 native 使用的细粒度策略；block_quic 继续写入，
-                // 方便用户从旧 APK/旧配置升级或回滚时保持接近原来的语义。
                 .putString("quic_policy", quicPolicyValue)
-                .putBoolean("block_quic", legacyBlockQuic(quicPolicyValue))
                 .putString("runtime_threads", runtimeThreads.getText().toString())
                 .putString("tcp_pool_size", tcpPoolSize.getText().toString())
                 .putString("udp_pool_size", udpPoolSize.getText().toString())
@@ -2249,11 +2245,7 @@ public class MainActivity extends Activity {
         if (stored != null) {
             return normalizeQuicPolicy(stored);
         }
-
-        // 兼容旧偏好：旧开关只表示“阻断未命中直连规则的 UDP/443”，不是全部阻断。
-        return prefs.getBoolean("block_quic", DefaultConfig.BLOCK_QUIC)
-                ? "direct_if_rule_match"
-                : DefaultConfig.QUIC_POLICY;
+        return DefaultConfig.QUIC_POLICY;
     }
 
     private String selectedQuicPolicy() {
@@ -2272,16 +2264,10 @@ public class MainActivity extends Activity {
             return DefaultConfig.QUIC_POLICY;
         }
         String normalized = value.trim().toLowerCase();
-        if ("allow".equals(normalized)
-                || "direct_if_rule_match".equals(normalized)
-                || "block".equals(normalized)) {
+        if ("allow".equals(normalized) || "block".equals(normalized)) {
             return normalized;
         }
         return DefaultConfig.QUIC_POLICY;
-    }
-
-    private boolean legacyBlockQuic(String quicPolicyValue) {
-        return !"allow".equals(normalizeQuicPolicy(quicPolicyValue));
     }
 
     private String selectedDirectAccessMode() {

@@ -7,7 +7,6 @@ final class DefaultConfig {
     static final String TUN_IPV6 = "";
     static final int TUN_MTU = 1500;
     static final String QUIC_POLICY = "allow";
-    static final boolean BLOCK_QUIC = false;
     static final int TCP_POOL_SIZE = 32;
     static final int UDP_POOL_SIZE = 32;
     static final String COMPRESSION_MODE = "none";

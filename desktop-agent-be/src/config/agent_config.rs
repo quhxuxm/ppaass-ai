@@ -124,18 +124,6 @@ pub struct TunConfig {
     #[serde(default)]
     pub proxy_dns: bool,
 
-    /// 旧配置项：是否阻断未命中直连规则的 UDP/443 QUIC 流量。
-    ///
-    /// 新配置建议使用 `quic_policy`：
-    /// - allow：按普通 UDP 转发，未命中直连规则时走 UDP relay。
-    /// - direct_if_rule_match：只允许直连规则命中的 QUIC，其余 UDP/443 丢弃。
-    /// - block：全部 UDP/443 丢弃。
-    ///
-    /// 为兼容历史配置，未显式设置 `quic_policy` 时，`block_quic = true`
-    /// 会映射为 `direct_if_rule_match`。
-    #[serde(default = "default_tun_block_quic")]
-    pub block_quic: bool,
-
     /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
     #[serde(default)]
     pub quic_policy: Option<QuicPolicy>,
@@ -180,7 +168,6 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
-            block_quic: default_tun_block_quic(),
             quic_policy: None,
             wintun_file: None,
             route_state_file: None,
@@ -213,10 +200,6 @@ fn default_tun_ipv4() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
-}
-
-fn default_tun_block_quic() -> bool {
-    false
 }
 
 fn default_macos_tun_helper_enabled() -> bool {
@@ -303,17 +286,8 @@ impl AgentConfig {
 
 impl TunConfig {
     /// 返回最终生效的 QUIC 策略。
-    ///
-    /// 这里特意把旧 `block_quic` 的兼容逻辑放在配置层，转发路径只消费
-    /// `QuicPolicy`，后续新增策略时不用再到多处业务代码里拼 bool 条件。
     pub fn effective_quic_policy(&self) -> QuicPolicy {
-        self.quic_policy.unwrap_or({
-            if self.block_quic {
-                QuicPolicy::DirectIfRuleMatch
-            } else {
-                QuicPolicy::Allow
-            }
-        })
+        self.quic_policy.unwrap_or_default()
     }
 }
 
@@ -364,39 +338,20 @@ private_key_path = "keys/user1.pem"
     fn tun_allows_quic_by_default() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
-        assert!(!config.tun.block_quic);
         assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
     }
 
     #[test]
-    fn legacy_block_quic_maps_to_direct_if_rule_match() {
+    fn explicit_quic_policy_blocks_quic() {
         let config: AgentConfig = toml::from_str(
             &(MINIMAL_AGENT_CONFIG.to_owned()
                 + r#"
 [tun]
-block_quic = true
+quic_policy = "block"
 "#),
         )
         .unwrap();
 
-        assert_eq!(
-            config.tun.effective_quic_policy(),
-            QuicPolicy::DirectIfRuleMatch
-        );
-    }
-
-    #[test]
-    fn explicit_quic_policy_overrides_legacy_block_quic() {
-        let config: AgentConfig = toml::from_str(
-            &(MINIMAL_AGENT_CONFIG.to_owned()
-                + r#"
-[tun]
-block_quic = true
-quic_policy = "allow"
-"#),
-        )
-        .unwrap();
-
-        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
+        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Block);
     }
 }

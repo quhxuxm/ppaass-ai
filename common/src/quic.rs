@@ -2,7 +2,7 @@
 //!
 //! 当前项目不内置完整 QUIC 协议栈，而是把浏览器、系统或 App 发出的
 //! UDP/443 数据报按普通 UDP relay 转发。这里集中定义“遇到 UDP/443 时
-//! 应该放行、只允许直连，还是全部阻断”的策略，避免 desktop/Android
+//! 应该按分流规则转发还是全部阻断”的策略，避免 desktop/Android
 //! 两端各自维护一套容易漂移的判断。
 
 use serde::{Deserialize, Serialize};
@@ -15,20 +15,15 @@ pub enum QuicPolicy {
     /// 默认策略：UDP/443 与普通 UDP 一样按 direct_access 决定直连或代理。
     #[default]
     Allow,
-    /// 兼容旧 `block_quic = true` 的语义：命中直连规则的 QUIC 继续直连，
-    /// 未命中直连规则的 UDP/443 会被丢弃，促使应用回退到 TCP/TLS。
-    #[serde(alias = "block_proxied")]
-    DirectIfRuleMatch,
     /// 强制阻断所有 UDP/443，不区分直连或代理路径。
     Block,
 }
 
 impl QuicPolicy {
-    /// 根据当前目标是否命中直连规则，判断该 UDP/443 datagram 是否应该丢弃。
-    pub fn should_block_udp443(self, direct_match: bool) -> bool {
+    /// 判断该 UDP/443 datagram 是否应该丢弃。
+    pub fn should_block_udp443(self) -> bool {
         match self {
             Self::Allow => false,
-            Self::DirectIfRuleMatch => !direct_match,
             Self::Block => true,
         }
     }
@@ -37,7 +32,6 @@ impl QuicPolicy {
     pub fn description_zh(self) -> &'static str {
         match self {
             Self::Allow => "允许 UDP/443 QUIC 按 direct_access 走直连或 UDP relay",
-            Self::DirectIfRuleMatch => "仅允许命中直连规则的 UDP/443 QUIC，其他 QUIC 将被阻断",
             Self::Block => "阻断全部 UDP/443 QUIC，促使应用回退 TCP/TLS",
         }
     }
@@ -94,21 +88,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quic_policy_blocks_expected_routes() {
-        assert!(!QuicPolicy::Allow.should_block_udp443(false));
-        assert!(!QuicPolicy::DirectIfRuleMatch.should_block_udp443(true));
-        assert!(QuicPolicy::DirectIfRuleMatch.should_block_udp443(false));
-        assert!(QuicPolicy::Block.should_block_udp443(true));
-        assert!(QuicPolicy::Block.should_block_udp443(false));
+    fn quic_policy_only_blocks_when_policy_is_block() {
+        assert!(!QuicPolicy::Allow.should_block_udp443());
+        assert!(QuicPolicy::Block.should_block_udp443());
     }
 
     #[test]
     fn quic_policy_uses_snake_case_config_values() {
-        let policy: QuicPolicy = toml::from_str("value = \"direct_if_rule_match\"")
+        let policy: QuicPolicy = toml::from_str("value = \"block\"")
             .map(|wrapper: PolicyWrapper| wrapper.value)
             .unwrap();
 
-        assert_eq!(policy, QuicPolicy::DirectIfRuleMatch);
+        assert_eq!(policy, QuicPolicy::Block);
     }
 
     #[test]

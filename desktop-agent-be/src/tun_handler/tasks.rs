@@ -213,7 +213,7 @@ pub(super) fn spawn_udp_sessions(
                         }
                     }
 
-                    if target_addr.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                    if target_addr.port() == 443 && quic_policy.should_block_udp443() {
                         quic_stats.record_blocked();
                         debug!(
                             "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}",
