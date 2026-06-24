@@ -92,8 +92,8 @@ public class MainActivity extends Activity {
     private static final int COLOR_STATUS_RUNNING = Color.rgb(22, 163, 74);
     private static final int COLOR_STATUS_STOPPED = Color.rgb(100, 116, 139);
     private static final int DIRECT_RULE_LIST_VISIBLE_RULES = 10;
-    private static final int DIRECT_RULE_LIST_ROW_HEIGHT_DP = 48;
-    private static final int DIRECT_RULE_LIST_CHROME_HEIGHT_DP = 52;
+    private static final int DIRECT_RULE_LIST_ROW_HEIGHT_DP = 36;
+    private static final int DIRECT_RULE_LIST_CHROME_HEIGHT_DP = 44;
     private static final TransportModeOption[] TRANSPORT_MODE_OPTIONS = {
             new TransportModeOption("auto", "Auto"),
             new TransportModeOption("yamux", "Yamux"),
@@ -853,62 +853,78 @@ public class MainActivity extends Activity {
 
     private void addDirectRuleUsageGuide(LinearLayout root) {
         LinearLayout.LayoutParams headingParams = matchWrap();
-        headingParams.setMargins(0, dp(14), 0, dp(6));
+        headingParams.setMargins(0, dp(12), 0, dp(5));
         root.addView(controlLabel("Rule types"), headingParams);
 
-        addDirectRuleUsage(
-                root,
+        LinearLayout guide = new LinearLayout(this);
+        guide.setOrientation(LinearLayout.VERTICAL);
+        guide.setPadding(dp(10), dp(6), dp(10), dp(6));
+        guide.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+
+        addDirectRuleUsageRow(
+                guide,
                 "HTTP / SOCKS5 domains",
                 "Use example.com or *.example.com for explicit proxy targets.",
                 new String[]{"HTTP", "SOCKS5"});
-        addDirectRuleUsage(
-                root,
+        addDirectRuleUsageRow(
+                guide,
                 "TUN IP / CIDR",
                 "Prefer fixed IPs or networks such as 192.168.0.0/16.",
                 new String[]{"TUN", "IP/CIDR"});
-        addDirectRuleUsage(
-                root,
+        addDirectRuleUsageRow(
+                guide,
                 "TUN domain rules",
                 "Enable Proxy DNS first; rules apply after DNS cache matches.",
                 new String[]{"TUN", "Proxy DNS"});
+
+        root.addView(guide, matchWrap());
     }
 
-    private void addDirectRuleUsage(LinearLayout root, String title, String detail, String[] modes) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(9), dp(12), dp(9));
-        card.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+    private void addDirectRuleUsageRow(LinearLayout root, String title, String detail, String[] modes) {
+        LinearLayout row = horizontalRow();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(5), 0, dp(5));
 
-        TextView titleView = titleText(title, 13f);
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+        TextView titleView = titleText(title, 12f);
         titleView.setSingleLine(true);
         titleView.setEllipsize(TextUtils.TruncateAt.END);
-        card.addView(titleView, matchWrap());
+        textColumn.addView(titleView, matchWrap());
+
+        TextView detailView = mutedText(detail, 10.5f);
+        detailView.setSingleLine(true);
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams detailParams = matchWrap();
+        detailParams.setMargins(0, dp(2), 0, 0);
+        textColumn.addView(detailView, detailParams);
+        row.addView(textColumn, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
 
         LinearLayout modeRow = new LinearLayout(this);
         modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setGravity(Gravity.START);
+        modeRow.setGravity(Gravity.END);
         addModeChips(modeRow, modes);
-        LinearLayout.LayoutParams modeParams = matchWrap();
-        modeParams.setMargins(0, dp(6), 0, 0);
-        card.addView(modeRow, modeParams);
+        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        modeParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(modeRow, modeParams);
 
-        TextView detailView = mutedText(detail, 11f);
-        detailView.setMaxLines(2);
-        detailView.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams detailParams = matchWrap();
-        detailParams.setMargins(0, dp(5), 0, 0);
-        card.addView(detailView, detailParams);
-
-        LinearLayout.LayoutParams cardParams = matchWrap();
-        cardParams.setMargins(0, dp(8), 0, 0);
-        root.addView(card, cardParams);
+        root.addView(row, matchWrap());
     }
 
     private void addModeChips(LinearLayout root, String[] modes) {
         for (String mode : modes) {
             TextView modeView = chip(mode, COLOR_STATUS_STOPPED);
             modeView.setTextSize(10f);
-            LinearLayout.LayoutParams params = matchWrap();
+            // mode 标签通常放在横向 LinearLayout 里，不能复用 matchWrap()。
+            // matchWrap() 的宽度是 MATCH_PARENT，会把每个标签撑满整行，导致规则组标题区被挤高。
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
             if (root.getChildCount() > 0) {
                 params.setMargins(dp(5), 0, 0, 0);
             }
@@ -1017,8 +1033,12 @@ public class MainActivity extends Activity {
         MaxHeightScrollView ruleScroll = new MaxHeightScrollView(
                 this,
                 directRuleListMaxHeightPx());
-        ruleScroll.setVerticalScrollBarEnabled(true);
-        ruleScroll.setScrollbarFadingEnabled(false);
+        ruleScroll.setPadding(dp(8), dp(8), dp(8), dp(8));
+        ruleScroll.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        // 规则列表只是配置卡片内部的一段可滚动内容，常显滚动条会比内容本身更抢眼。
+        // 这里隐藏内层滚动条，保留手势滚动能力，避免和页面外层滚动条形成双重视觉干扰。
+        ruleScroll.setVerticalScrollBarEnabled(false);
+        ruleScroll.setScrollbarFadingEnabled(true);
         ruleScroll.setClipToPadding(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             ruleScroll.setNestedScrollingEnabled(true);
@@ -1030,6 +1050,8 @@ public class MainActivity extends Activity {
     }
 
     private int directRuleListMaxHeightPx() {
+        // 这里只限制“最多显示多少条规则”的高度，不给列表设置固定高度。
+        // ScrollView 在 AT_MOST 约束下会按内容自然收缩，只有规则很多时才开始内部滚动。
         return dp(DIRECT_RULE_LIST_CHROME_HEIGHT_DP
                 + DIRECT_RULE_LIST_VISIBLE_RULES * DIRECT_RULE_LIST_ROW_HEIGHT_DP);
     }
@@ -1132,32 +1154,33 @@ public class MainActivity extends Activity {
 
         LinearLayout group = new LinearLayout(this);
         group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(dp(10), dp(9), dp(10), dp(10));
-        group.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        group.setPadding(0, 0, 0, 0);
         LinearLayout.LayoutParams groupParams = matchWrap();
         if (directRuleGroupList.getChildCount() > 0) {
             groupParams.setMargins(0, dp(8), 0, 0);
         }
 
         LinearLayout heading = horizontalRow();
-        TextView title = titleText(label, 13f);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.setPadding(dp(4), 0, dp(4), 0);
+        TextView title = titleText(label, 12f);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        LinearLayout modeRow = new LinearLayout(this);
-        modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setGravity(Gravity.END);
-        addModeChips(modeRow, modes);
-        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1.5f);
-        modeParams.setMargins(dp(8), 0, dp(8), 0);
-        heading.addView(modeRow, modeParams);
-        TextView countView = mutedText(String.valueOf(count), 12f);
+        TextView countView = mutedText(String.valueOf(count), 11f);
         countView.setTypeface(Typeface.DEFAULT_BOLD);
         heading.addView(countView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
-        group.addView(heading, matchWrap());
+        LinearLayout.LayoutParams headingParams = matchWrap();
+        group.addView(heading, headingParams);
+
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setGravity(Gravity.START);
+        // 规则组标题区域宽度有限，模式标签单独占一行，避免 Wildcard 这类长标签被截断。
+        addModeChips(modeRow, modes);
+        LinearLayout.LayoutParams modeParams = matchWrap();
+        modeParams.setMargins(dp(4), dp(4), 0, dp(2));
+        group.addView(modeRow, modeParams);
 
         for (int i = 0; i < directRuleValues.size(); i++) {
             String rule = directRuleValues.get(i);
@@ -1173,17 +1196,18 @@ public class MainActivity extends Activity {
 
     private void addDirectRuleChip(LinearLayout root, String rule, int index) {
         LinearLayout row = horizontalRow();
-        row.setPadding(dp(10), dp(7), dp(7), dp(7));
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(4), dp(5), dp(4));
         row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
 
-        TextView text = titleText(rule, 12f);
+        TextView text = titleText(rule, 11.5f);
         text.setSingleLine(true);
         text.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button remove = new Button(this);
         remove.setText("x");
-        remove.setTextSize(12f);
+        remove.setTextSize(11f);
         remove.setTypeface(Typeface.DEFAULT_BOLD);
         remove.setAllCaps(false);
         remove.setMinHeight(0);
@@ -1193,12 +1217,12 @@ public class MainActivity extends Activity {
         remove.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
         remove.setOnClickListener(view -> removeDirectRule(index));
         trackEditable(remove);
-        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(34), dp(32));
-        removeParams.setMargins(dp(8), 0, 0, 0);
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(28), dp(28));
+        removeParams.setMargins(dp(6), 0, 0, 0);
         row.addView(remove, removeParams);
 
         LinearLayout.LayoutParams rowParams = matchWrap();
-        rowParams.setMargins(0, dp(8), 0, 0);
+        rowParams.setMargins(0, dp(5), 0, 0);
         root.addView(row, rowParams);
     }
 
@@ -2828,6 +2852,9 @@ public class MainActivity extends Activity {
         view.setTextSize(12f);
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setTextColor(Color.WHITE);
+        view.setSingleLine(true);
+        view.setEllipsize(TextUtils.TruncateAt.END);
+        view.setGravity(Gravity.CENTER);
         view.setPadding(dp(10), dp(5), dp(10), dp(5));
         view.setBackground(rounded(color, color));
         return view;
