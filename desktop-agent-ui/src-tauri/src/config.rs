@@ -19,6 +19,11 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("wintun.dll", "wintun.dll"),
 ];
 
+// TCP Yamux 默认给视频/TUN 场景更多外层连接，降低 TCP-over-TCP 队头阻塞。
+const DEFAULT_TCP_YAMUX_SESSIONS: u64 = 16;
+// UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
+const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
+
 static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
@@ -201,8 +206,10 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         effective_runtime_threads: runtime_threads.unwrap_or_else(default_runtime_threads),
         tcp_mode: string_or(&value, &["transport", "tcp_mode"], "auto"),
         udp_mode: string_or(&value, &["transport", "udp_mode"], "auto"),
-        tcp_yamux_sessions: int_at(&value, &["yamux", "tcp", "sessions"]).unwrap_or(5) as usize,
-        udp_yamux_sessions: int_at(&value, &["yamux", "udp", "sessions"]).unwrap_or(5) as usize,
+        tcp_yamux_sessions: int_at(&value, &["yamux", "tcp", "sessions"])
+            .unwrap_or(DEFAULT_TCP_YAMUX_SESSIONS) as usize,
+        udp_yamux_sessions: int_at(&value, &["yamux", "udp", "sessions"])
+            .unwrap_or(DEFAULT_UDP_YAMUX_SESSIONS) as usize,
         tcp_yamux_max_streams_per_session: int_at(
             &value,
             &["yamux", "tcp", "max_streams_per_session"],

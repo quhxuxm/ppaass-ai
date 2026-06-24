@@ -72,7 +72,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
     private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
-    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v2";
+    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v3";
     private static final String PREF_TRAFFIC_DAY = "traffic_day";
     private static final String PREF_TRAFFIC_RX_BASE = "traffic_rx_base";
     private static final String PREF_TRAFFIC_TX_BASE = "traffic_tx_base";
@@ -281,6 +281,14 @@ public class MainActivity extends Activity {
         SharedPreferences.Editor editor = prefs.edit()
                 .putBoolean(PREF_PERFORMANCE_DEFAULTS_MIGRATED, true);
         migrateStringDefault(editor, "compression_mode", "lz4", DefaultConfig.COMPRESSION_MODE);
+        // 旧版 TCP Yamux 默认只有 5 条外层连接。TUN/HLS 视频会并发拉取多个分片，
+        // 继续沿用 5 条时更容易把多个子流压到同一个拥塞窗口里；如果用户没有主动
+        // 调过该值，就随默认值迁移到 16 条。
+        migrateStringDefault(
+                editor,
+                "yamux_tcp_sessions",
+                "5",
+                String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS));
         migrateStringDefault(
                 editor,
                 "yamux_tcp_max_streams_per_session",

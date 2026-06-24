@@ -4,7 +4,7 @@
 //! 创建 tokio-yamux session。每个真实目标连接通过打开子流并写入一个小的
 //! ConnectRequest 控制帧完成。
 
-use futures::{StreamExt, task::noop_waker_ref};
+use futures::StreamExt;
 use protocol::{
     Address, ConnectRequest, TransportProtocol, read_yamux_connect_response,
     write_yamux_connect_request,
@@ -17,10 +17,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_yamux::{
-    session::Session,
-    stream::{StreamHandle, StreamState},
-};
+use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, info};
 
 use crate::YamuxSettings;
@@ -261,83 +258,4 @@ impl AsyncWrite for YamuxClientStream {
     }
 }
 
-impl Drop for YamuxClientStream {
-    fn drop(&mut self) {
-        if self.inner.state() != StreamState::RemoteClosing {
-            return;
-        }
-
-        // tokio-yamux 的 StreamHandle 在 RemoteClosing 状态直接 drop 时会发送 RST。
-        // 对 TCP 隧道来说，RemoteClosing 通常表示 proxy 已经把目标响应方向正常 FIN；
-        // 此时 agent 侧如果因为浏览器/TUN 读半边先结束而释放子流，应补发本地 FIN，
-        // 让 Yamux 子流变成 Closed，避免把一个正常收尾误报成 reset。poll_shutdown
-        // 对 StreamHandle 是同步发送 FIN 到 session 队列，不需要 await。
-        let waker = noop_waker_ref();
-        let mut cx = Context::from_waker(waker);
-        let _ = Pin::new(&mut self.inner).poll_shutdown(&mut cx);
-    }
-}
-
 impl Unpin for YamuxClientStream {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::{Semaphore, oneshot};
-
-    #[tokio::test]
-    async fn drop_after_remote_fin_closes_without_reset() {
-        let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
-        let config = YamuxSettings::default().to_tokio_config();
-
-        let mut client_session = Session::new_client(client_io, config);
-        let mut client_control = client_session.control();
-        let client_driver = tokio::spawn(async move {
-            while let Some(result) = client_session.next().await {
-                let mut inbound = result.unwrap();
-                let _ = inbound.shutdown().await;
-            }
-        });
-
-        let (server_stream_tx, server_stream_rx) = oneshot::channel();
-        let mut server_session = Session::new_server(server_io, config);
-        let server_driver = tokio::spawn(async move {
-            if let Some(result) = server_session.next().await {
-                server_stream_tx.send(result.unwrap()).unwrap();
-            }
-            while let Some(result) = server_session.next().await {
-                let mut inbound = result.unwrap();
-                let _ = inbound.shutdown().await;
-            }
-        });
-
-        let stream = client_control.open_stream().await.unwrap();
-        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
-        let mut client_stream = YamuxClientStream::new(stream, permit);
-        let mut server_stream = server_stream_rx.await.unwrap();
-
-        server_stream.write_all(b"complete-body").await.unwrap();
-        server_stream.shutdown().await.unwrap();
-
-        let mut response = Vec::new();
-        client_stream.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, b"complete-body");
-
-        // 这里 drop 时客户端子流处于 RemoteClosing。没有自定义 Drop 的话，
-        // tokio-yamux 会发 RST，server 侧读取会得到 reset 而不是正常 EOF。
-        drop(client_stream);
-
-        let mut eof_probe = [0u8; 1];
-        let read = tokio::time::timeout(Duration::from_secs(5), server_stream.read(&mut eof_probe))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(read, 0);
-
-        client_driver.abort();
-        server_driver.abort();
-    }
-}

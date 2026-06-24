@@ -22,7 +22,9 @@ final class DefaultConfig {
                     + "172.16.0.0/12\n"
                     + "192.168.0.0/16\n"
                     + "::1";
-    static final int TCP_YAMUX_SESSIONS = 5;
+    // TCP Yamux 默认多开外层连接，避免 TUN/HLS 场景下多个 HTTPS 分片子流
+    // 被压到少数 TCP 拥塞窗口里，降低 Yamux 模式的队头阻塞和分片读停顿。
+    static final int TCP_YAMUX_SESSIONS = 16;
     static final int UDP_YAMUX_SESSIONS = 5;
     static final int TCP_YAMUX_MAX_STREAMS_PER_SESSION = 256;
     static final int UDP_YAMUX_MAX_STREAMS_PER_SESSION = 256;

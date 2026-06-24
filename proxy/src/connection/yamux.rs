@@ -11,8 +11,6 @@ use super::udp_relay_flow::{
     udp_relay_channel_size,
 };
 use super::*;
-use futures::task::noop_waker_ref;
-use tokio_yamux::stream::StreamState;
 
 pub(super) async fn handle_yamux_tcp_stream(
     mut stream: StreamHandle,
@@ -360,35 +358,19 @@ where
     } else {
         Some(Duration::from_secs(idle_timeout_secs))
     };
-    let relay_result = relay_tcp_with_half_close(
+    let (up_bytes, down_bytes) = relay_tcp_with_half_close(
         &mut target_stream,
         &mut agent_stream,
         idle_timeout,
         relay_buffer_size,
     )
-    .await;
-    close_yamux_stream_without_reset_if_remote_closed(&mut agent_stream);
-    let (up_bytes, down_bytes) = relay_result?;
+    .await?;
 
     debug!(
         "Yamux 子流中继已结束：上行 {}，下行 {}，buffer={} bytes",
         up_bytes, down_bytes, relay_buffer_size
     );
     Ok(())
-}
-
-fn close_yamux_stream_without_reset_if_remote_closed(stream: &mut StreamHandle) {
-    if stream.state() != StreamState::RemoteClosing {
-        return;
-    }
-
-    // tokio-yamux 的 StreamHandle 在 RemoteClosing 状态 drop 时会发送 RST。
-    // 对 TCP relay 来说，RemoteClosing 通常只是 agent 已经发来 FIN；如果这里
-    // 因某条错误路径提前返回，补一个本地 FIN 可以让子流正常 Closed，而不是把
-    // 已经传完或正在收尾的分片误标成 reset。
-    let waker = noop_waker_ref();
-    let mut cx = std::task::Context::from_waker(waker);
-    let _ = std::pin::Pin::new(stream).poll_shutdown(&mut cx);
 }
 
 async fn relay_yamux_udp_byte_stream<S>(

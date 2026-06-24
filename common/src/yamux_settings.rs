@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-pub const DEFAULT_YAMUX_SESSIONS: usize = 5;
+// TCP Yamux 会把浏览器/TUN 捕获到的多条 TCP 连接复用到少量外层 TCP 上。
+// HLS 视频通常会同时拉取多个 HTTPS 分片；如果外层 session 太少，任一外层
+// TCP 出现拥塞或丢包都会放大成多条子流的队头阻塞。因此 TCP 默认多开一些
+// 外层连接，让子流分散到不同拥塞窗口，行为更接近常规通道连接池。
+pub const DEFAULT_TCP_YAMUX_SESSIONS: usize = 16;
 pub const DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION: usize = 256;
 pub const DEFAULT_YAMUX_OPEN_STREAM_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_YAMUX_KEEPALIVE_INTERVAL_SECS: u64 = 30;
@@ -112,7 +116,7 @@ pub struct YamuxTransportConfig {
 impl Default for YamuxTransportConfig {
     fn default() -> Self {
         Self {
-            sessions: DEFAULT_YAMUX_SESSIONS,
+            sessions: DEFAULT_TCP_YAMUX_SESSIONS,
             max_streams_per_session: DEFAULT_YAMUX_MAX_STREAMS_PER_SESSION,
             open_stream_timeout_secs: DEFAULT_YAMUX_OPEN_STREAM_TIMEOUT_SECS,
             keepalive_interval_secs: DEFAULT_YAMUX_KEEPALIVE_INTERVAL_SECS,
@@ -231,7 +235,7 @@ impl YamuxSettings {
 }
 
 fn default_yamux_sessions() -> usize {
-    DEFAULT_YAMUX_SESSIONS
+    DEFAULT_TCP_YAMUX_SESSIONS
 }
 
 fn default_yamux_max_streams_per_session() -> usize {
