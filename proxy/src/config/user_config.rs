@@ -11,7 +11,9 @@ pub struct UserConfig {
     /// proxy 用该公钥解开 agent 发来的会话密钥。
     pub public_key_pem: String,
 
-    /// 为空表示不限速；有值时按 Mbps 做粗粒度秒级限制。
+    /// 为空表示不限速；有值时作为 Mbps 级别的软上限观测。
+    /// proxy 会继续记录流量并输出告警，但不在新建连接/子流时硬拒绝，
+    /// 避免 HLS 视频分片这类短时突发流量被误杀。
     #[serde(default)]
     pub bandwidth_limit_mbps: Option<u64>,
 

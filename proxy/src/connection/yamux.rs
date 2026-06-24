@@ -52,13 +52,13 @@ pub(super) async fn handle_yamux_tcp_stream(
     if let Some(username) = &username
         && !bandwidth_monitor.check_limit(username).await
     {
-        send_yamux_connect_error(
-            &mut stream,
-            connect_request.request_id,
-            "Bandwidth limit exceeded".to_string(),
-        )
-        .await?;
-        return Ok(());
+        // Yamux 子流也只把 bandwidth_limit_mbps 当作软上限。
+        // 如果这里硬拒绝，浏览器并发打开的某个 HLS 分片子流会直接失败；
+        // 对用户来说就是视频分片偶发缺失。真正的字节统计仍由 relay 层持续记录。
+        warn!(
+            "用户 {username} 当前秒流量超过 bandwidth_limit_mbps，继续建立 Yamux TCP 子流以避免分片被硬拒绝；request_id={:?}",
+            connect_request.request_id
+        );
     }
 
     if proxy_config.forward_mode {
@@ -170,13 +170,12 @@ pub(super) async fn handle_yamux_udp_stream(
     if let Some(username) = &username
         && !bandwidth_monitor.check_limit(username).await
     {
-        send_yamux_connect_error(
-            &mut stream,
-            connect_request.request_id,
-            "Bandwidth limit exceeded".to_string(),
-        )
-        .await?;
-        return Ok(());
+        // UDP Yamux 子流同样不做硬拒绝；UDP/QUIC/DNS 都可能有短时突发，
+        // 此处拒绝会把“限速观测”放大成可见的请求失败。
+        warn!(
+            "用户 {username} 当前秒流量超过 bandwidth_limit_mbps，继续建立 Yamux UDP 子流以避免请求被硬拒绝；request_id={:?}",
+            connect_request.request_id
+        );
     }
 
     if proxy_config.forward_mode {

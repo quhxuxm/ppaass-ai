@@ -170,7 +170,9 @@ fn default_android_transport_config() -> TransportConfig {
 }
 
 fn default_tcp_pool_size() -> usize {
-    5
+    // 与 Java DefaultConfig 的 TCP_POOL_SIZE 保持一致。
+    // Android TUN 下浏览器/视频 App 也会并发请求多个分片，32 条预热连接能减少缺省配置下的建连等待。
+    32
 }
 
 fn default_udp_pool_size() -> usize {

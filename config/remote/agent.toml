@@ -29,8 +29,8 @@ log_file = "desktop-agent.log"
 # 异步运行时栈的最大大小，单位 MB（默认：4 MB）
 async_runtime_stack_size_mb = 4
 
-# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
-# runtime_threads = 4
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数；视频场景手动配置时建议 8）
+# runtime_threads = 8
 
 # tokio-console 默认在 6669 端口启用
 # 如有需要，可设置自定义端口

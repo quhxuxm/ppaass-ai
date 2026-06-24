@@ -8,7 +8,7 @@ const defaultFieldValues = {
   proxy_addrs: ["127.0.0.1:8080"],
   username: "user1",
   private_key_path: "keys/user1.pem",
-  tcp_pool_size: 10,
+  tcp_pool_size: 50,
   udp_pool_size: 5,
   connect_timeout_secs: 30,
   compression_mode: "none",

@@ -25,7 +25,9 @@ pub struct ProxyConfig {
     #[serde(default = "default_log_file")]
     pub log_file: String,
 
-    /// Tokio 运行时工作线程数（默认 4，适合 512M 小内存 proxy）。
+    /// Tokio 运行时工作线程数（默认 8）。
+    /// 视频分片会同时触发 DNS、目标 TCP connect、协议编解码和 relay 任务，
+    /// 4 线程在小型 VPS 上容易被瞬时并发打满，8 线程更适合作为通用性能默认值。
     #[serde(default = "default_runtime_threads")]
     pub runtime_threads: Option<usize>,
 
@@ -205,7 +207,7 @@ fn default_async_runtime_stack_size_mb() -> usize {
 }
 
 fn default_runtime_threads() -> Option<usize> {
-    Some(4)
+    Some(8)
 }
 
 impl ProxyConfig {

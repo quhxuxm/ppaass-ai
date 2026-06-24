@@ -32,8 +32,9 @@ outbound_interface = "auto"
 # 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
 # dns_upstream_addr = "8.8.8.8:53"
 
-# Tokio 运行时工作线程数（512M 小内存实例建议 4）
-runtime_threads = 4
+# Tokio 运行时工作线程数。
+# 视频分片会同时触发目标连接、协议编解码和 relay 任务；默认 8 更适合持续下载场景。
+runtime_threads = 8
 
 # 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300

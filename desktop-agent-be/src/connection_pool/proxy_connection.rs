@@ -20,6 +20,11 @@ use common::{
 use protocol::{Address, CompressionMode, TransportProtocol};
 use tracing::{debug, info, instrument};
 
+// 桌面端 agent 到 proxy 的 TCP 缓冲。
+// TUN/浏览器视频场景下，agent<->proxy 这段链路会承载所有分片数据；
+// 放大到 1MB 可以减少高 RTT 下 TCP 窗口过小导致的读取停顿，并与 Android 端保持一致。
+const DESKTOP_PROXY_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+
 /// ClientConnection 特征的配置适配器
 #[derive(Debug)]
 struct AgentClientConfig<'a> {
@@ -83,6 +88,12 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
 
     fn bind_interface(&self) -> Option<BindInterface> {
         self.bind_interface.clone()
+    }
+
+    fn tcp_socket_buffer_size(&self) -> Option<usize> {
+        // common 层会在真正 connect 前后按 best-effort 设置 send/recv buffer。
+        // 这里不暴露为 UI 配置项，避免用户把 relay buffer 和 TCP socket buffer 混在一起调。
+        Some(DESKTOP_PROXY_SOCKET_BUFFER_SIZE)
     }
 }
 

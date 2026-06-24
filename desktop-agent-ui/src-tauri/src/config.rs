@@ -187,7 +187,7 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         proxy_addrs: string_array_at(&value, &["proxy_addrs"]),
         username: string_or(&value, &["username"], "user1"),
         private_key_path: string_or(&value, &["private_key_path"], "keys/user1.pem"),
-        tcp_pool_size: int_at(&value, &["tcp_pool_size"]).unwrap_or(10) as usize,
+        tcp_pool_size: int_at(&value, &["tcp_pool_size"]).unwrap_or(50) as usize,
         udp_pool_size: int_at(&value, &["udp_pool_size"]).unwrap_or(5) as usize,
         connect_timeout_secs: int_at(&value, &["connect_timeout_secs"]).unwrap_or(30),
         compression_mode: string_or(&value, &["compression_mode"], "none"),

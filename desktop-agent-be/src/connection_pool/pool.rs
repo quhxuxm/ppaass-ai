@@ -21,7 +21,10 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, instrument, warn};
 
-const MAX_CONCURRENT_POOL_CONNECTS: usize = 10;
+// 预热连接补池的并发上限。
+// 池容量提高后，如果仍只允许 10 条并发建连，HLS 分片突增时补池会跟不上；
+// 20 条能更快恢复空池，同时仍低于默认池容量，避免启动瞬间打满 proxy。
+const MAX_CONCURRENT_POOL_CONNECTS: usize = 20;
 
 mod connect;
 mod prewarm;

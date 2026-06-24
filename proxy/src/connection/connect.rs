@@ -10,20 +10,20 @@ impl ServerConnection {
     pub(super) async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         debug!("连接请求：{:?}", connect_request.address);
 
-        // 检查用户带宽限制。
-        // 这里是在“新建连接/子流”时做粗粒度判断；实际字节数在 relay 层持续记录。
+        // 检查用户带宽软上限。
+        // 这里以前会直接拒绝新连接；浏览器播放 HLS 时多个分片请求会在同一秒内突增，
+        // 硬拒绝会表现成“某些分片请求失败/下载不完整”。现在保留观测和告警，
+        // 但不阻断连接，避免把带宽瞬时峰值误判成必须失败的业务请求。
         if let Some(user_config) = &self.user_config
             && !self
                 .bandwidth_monitor
                 .check_limit(&user_config.username)
                 .await
         {
-            return self
-                .send_connect_error(
-                    connect_request.request_id,
-                    "Bandwidth limit exceeded".to_string(),
-                )
-                .await;
+            warn!(
+                "用户 {} 当前秒流量超过 bandwidth_limit_mbps，继续建立连接以避免媒体分片被硬拒绝；request_id={:?}",
+                user_config.username, connect_request.request_id
+            );
         }
 
         // TcpYamux / UdpYamux / UdpRelay 都是协议内的“虚拟地址”，

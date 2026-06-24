@@ -58,8 +58,11 @@ use tracing::{debug, error, instrument, trace, warn};
 type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
 type FramedReader = SplitStream<Framed<TcpStream, ProxyCodec>>;
 
-const PROXY_FRAMED_INITIAL_CAPACITY: usize = 8 * 1024;
-const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = 64 * 1024;
+// proxy 与 agent 之间的协议帧缓冲只负责吸收短时突发，不替代 relay 的背压。
+// HLS/视频分片常见“目标站点瞬时下发一大段、agent 侧稍后消费”的形态；
+// 过小的 64KB 边界会很快把背压推回 CDN，浏览器侧看起来像读取停顿。
+const PROXY_FRAMED_INITIAL_CAPACITY: usize = 32 * 1024;
+const PROXY_FRAMED_BACKPRESSURE_BOUNDARY: usize = 512 * 1024;
 
 pub struct ServerConnection {
     // 写回 agent 的协议响应流。所有 ConnectResponse/Data 都从这里出去。
@@ -108,8 +111,8 @@ impl ServerConnection {
 }
 
 fn proxy_framed_stream(stream: TcpStream, codec: ProxyCodec) -> Framed<TcpStream, ProxyCodec> {
-    // 协议 framed 缓冲只负责限制代理协议层积压，不再暴露为用户可调的 TCP 中继参数。
-    // 初始容量保持较小，backpressure 边界也只允许少量 DataPacket 在慢 agent 后面积压。
+    // 协议 framed 缓冲仍然是有界的，只把边界放大到能容纳几个媒体 DataPacket 的量级。
+    // 这样能吸收 CDN 下发的短时 burst，又不会像无界队列那样在慢客户端后面积压内存。
     let mut framed = Framed::with_capacity(stream, codec, PROXY_FRAMED_INITIAL_CAPACITY);
     framed.set_backpressure_boundary(PROXY_FRAMED_BACKPRESSURE_BOUNDARY);
     framed

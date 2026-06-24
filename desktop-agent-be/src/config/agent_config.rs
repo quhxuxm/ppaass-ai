@@ -206,7 +206,9 @@ fn default_macos_tun_helper_fallback_to_privilege() -> bool {
 }
 
 fn default_tcp_pool_size() -> usize {
-    10
+    // legacy TCP 池里的连接是一次性消费的预热连接。
+    // 浏览器播放 HLS 时会并发拉多个分片，默认 50 能减少等待新建 agent->proxy 连接的概率。
+    50
 }
 
 fn default_udp_pool_size() -> usize {

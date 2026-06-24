@@ -21,7 +21,9 @@ use crate::android_log;
 use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
-const MAX_CONCURRENT_POOL_CONNECTS: usize = 5;
+// Android 补池并发要高于旧的 5，否则默认 32 条 TCP pool 在突发消耗后恢复太慢。
+// 这里仍保持相对保守，避免移动设备在网络切换时同时发起过多 proxy 连接。
+const MAX_CONCURRENT_POOL_CONNECTS: usize = 10;
 const POOL_MAX_CONNECTION_AGE: Duration = Duration::from_secs(90);
 
 struct PooledConnection {
