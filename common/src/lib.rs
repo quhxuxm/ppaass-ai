@@ -1,5 +1,6 @@
 pub mod client_connection;
 pub mod datagram_stream;
+pub mod dns;
 pub mod error;
 pub mod quic;
 pub mod task_guard;

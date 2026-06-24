@@ -9,7 +9,7 @@ use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
-use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
+use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -154,14 +154,22 @@ pub(super) fn spawn_udp_sessions(
                 _ = shutdown.cancelled() => break,
                 msg = udp_rx.next() => {
                     let Some((data, source_addr, target_addr)) = msg else { break };
-                    if context.proxy_dns && target_addr.port() == 53 {
+                    // 只有端口和 DNS 协议结构都匹配时才进入 DnsProxy。
+                    // 部分应用会把非 DNS UDP 流量发到 53 端口，单靠端口判断会误把它们
+                    // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
+                    let is_dns_proxy_query =
+                        context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
+                    if is_dns_proxy_query {
                         if let Some(dns_proxy) = &dns_proxy {
                             dns_proxy.send(source_addr, target_addr, data);
                         }
                         continue;
                     }
 
-                    let (address, _) = address_for_tun_target(target_addr, context.proxy_dns);
+                    // 未通过 DNS 解析校验的 UDP/53 继续按普通 UDP 处理，不能再启用
+                    // proxy_dns 虚拟地址映射，否则 address_for_tun_target 会再次把它
+                    // 转成 Address::ProxyDns。
+                    let (address, _) = address_for_tun_target(target_addr, false);
                     if context.tun_networks.is_ipv4_broadcast(target_addr.ip()) {
                         debug!("TUN UDP 广播已丢弃 -> {}", target_addr);
                         continue;
@@ -242,7 +250,9 @@ pub(super) fn spawn_udp_sessions(
                     let sessions_c = sessions.clone();
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
-                        proxy_dns: context.proxy_dns,
+                        // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
+                        // proxy_dns 标记，避免会话内部二次映射到 Address::ProxyDns。
+                        proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_pool: context.tcp_pool.clone(),

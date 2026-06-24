@@ -10,7 +10,6 @@ mod device;
 mod direct_domain_cache;
 mod dns;
 mod dns_proxy;
-pub(crate) mod domain_sniff;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 pub(crate) mod helper_service;

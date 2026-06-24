@@ -12,6 +12,6 @@ flowchart TD
     H --> L["handle_tun_tcp"]
     I --> M{"UDP/53 且 proxy_dns?"}
     M -->|"是"| N["DnsProxy -> Address::ProxyDns"]
-    M -->|"否"| O{"direct_access 或 DNS/SNI 命中?"}
+    M -->|"否"| O{"direct_access 或 DNS 缓存命中?"}
     O -->|"是"| P["绑定物理接口直连"]
     O -->|"否"| Q["udp_pool 或共享 UdpRelay"]

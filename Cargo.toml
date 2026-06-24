@@ -54,6 +54,7 @@ mimalloc = "0.1.52"
 futures = "0.3.32"
 hex = "0.4.3"
 pretty-hex = "0.4.2"
+hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
 ratatui = "0.30.2"
 crossterm = "0.29"
 hdrhistogram = "7.5.4"

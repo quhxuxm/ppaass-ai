@@ -213,8 +213,9 @@ impl DirectAccessChecker {
     /// 当前规则集是否可能通过“域名”把一个 TUN IP 目标改判为直连。
     ///
     /// TUN TCP 拿到的目标通常是浏览器/系统已经解析后的 IP。如果配置是 `proxy_all`，
-    /// 或 rules 模式里只有 IP/CIDR 规则，那么首包 SNI/Host 嗅探不会改变路由结果；
-    /// 继续嗅探只会给每条 HTTPS/HLS 短连接叠加首包等待。
+    /// 或 rules 模式里只有 IP/CIDR 规则，那么域名规则不会改变路由结果。
+    /// 当前实现只使用 DNS proxy 记录的 IP -> 域名缓存，不再读取 TCP payload
+    /// 嗅探 SNI/Host，避免给 HTTPS/HLS 短连接叠加首包等待。
     pub fn has_domain_direct_rules(&self) -> bool {
         matches!(self.mode, DirectAccessMode::Rules)
             && self.rules.iter().any(|rule| {

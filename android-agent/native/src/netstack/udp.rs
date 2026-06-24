@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
-use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
+use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::{SinkExt, StreamExt};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -66,14 +66,20 @@ pub(super) fn spawn_udp_sessions(
                 _ = shutdown.cancelled() => break,
                 message = udp_rx.next() => {
                     let Some((data, source, target)) = message else { break };
-                    if context.proxy_dns && target.port() == 53 {
+                    // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
+                    // 非 DNS 的 UDP/53 必须继续按普通 UDP 转发，避免被 DNS ID 改写和缓存逻辑误处理。
+                    let is_dns_proxy_query =
+                        context.proxy_dns && target.port() == 53 && is_dns_query_packet(&data);
+                    if is_dns_proxy_query {
                         if let Some(dns_proxy) = &dns_proxy {
                             dns_proxy.send(source, target, data);
                         }
                         continue;
                     }
 
-                    let (address, _) = address_for_tun_target(target, context.proxy_dns);
+                    // 上面已经消化了真实 DNS 查询；没有通过 DNS 校验的 UDP/53
+                    // 不能再启用 proxy_dns 虚拟地址映射。
+                    let (address, _) = address_for_tun_target(target, false);
                     if context.tun_networks.is_ipv4_broadcast(target.ip()) {
                         debug!("Android TUN UDP broadcast dropped -> {}", target);
                         continue;
@@ -145,7 +151,8 @@ pub(super) fn spawn_udp_sessions(
                     let sessions_c = sessions.clone();
                     let session_context = UdpSessionContext {
                         tun_networks: context.tun_networks,
-                        proxy_dns: context.proxy_dns,
+                        // 普通 UDP 会话内部不再处理 proxy_dns，防止二次映射到 Address::ProxyDns。
+                        proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_pool: context.udp_pool.clone(),

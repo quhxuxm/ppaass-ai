@@ -265,7 +265,7 @@ TUN 模式里的关键细节：
 - 桌面 TUN 使用 `netstack-smoltcp` 把 IP 包还原为 TCP/UDP。
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
-- 如果 DNS 缓存没命中，TCP 路径还会嗅探 TLS SNI 或 HTTP Host。
+- TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
 - 默认允许未命中直连规则的 UDP/443 QUIC 走共享 UDP relay；需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
@@ -478,7 +478,7 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 - Yamux 外层连接本身仍然先经过普通 PPAASS Auth/Connect。
 - `Address::TcpYamux`、`Address::UdpYamux`、`Address::UdpRelay`、`Address::ProxyDns` 都是协议虚拟地址，不是真实互联网目标。
 - TUN 模式要先固定 proxy 控制连接的物理出口，再安装 TUN 路由。
-- `direct_access` 在 TUN 模式下不仅看 IP/CIDR，还可能通过 DNS 缓存、TLS SNI、HTTP Host 还原域名规则。
+- `direct_access` 在 TUN 模式下直接看 IP/CIDR；域名规则只在 DNS proxy 缓存命中时影响已解析 IP，不再通过 TLS SNI/HTTP Host 嗅探补充。
 - Proxy 的 `transport.auto/yamux` 都接受 Yamux；`legacy` 才拒绝 Yamux 外层连接。
 - Agent 的 `transport.auto` 会尝试 Yamux，部分故障可回退 legacy；`yamux` 则更严格。
 - Proxy 的 `compression_mode` 和 Agent 的 `compression_mode` 是各自发送方向的编码选择；实际解码靠消息里的 compression flag。

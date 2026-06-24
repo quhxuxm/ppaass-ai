@@ -15,6 +15,9 @@ pub(super) async fn handle_tcp_connect(
     let target_label = format_target_addr(&target_addr);
 
     // 将目标地址转换为协议 Address，之后直连规则和 proxy Connect 都使用同一表示。
+    // SOCKS5 入口不读取 TCP payload 做 SNI/Host 嗅探：直连判断只基于客户端
+    // 握手里显式给出的 IP/域名。这样浏览器发起 CONNECT 后，视频分片数据不会
+    // 被 agent 先抢读再补发。
     let address = convert_target_addr(&target_addr);
 
     if direct_checker.is_direct(&address) {

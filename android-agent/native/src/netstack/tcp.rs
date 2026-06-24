@@ -8,26 +8,16 @@ use common::spawn_guarded;
 use futures::StreamExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::ForwardContext;
-use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
 use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
-
-const SNIFF_MAX_BYTES: usize = 4096;
-/// Android VPN 中视频 App/浏览器也会产生大量 HTTPS 短连接；嗅探等待需要压低，
-/// 否则每个 HLS 分片请求都会额外叠加首包延迟。
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
-/// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口，避免 TLS record
-/// 被慢速拆包时把 VPN 数据面卡到总超时。
-const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
 
 struct AndroidTcpRelayIo<'a, S> {
     inner: &'a mut S,
@@ -155,12 +145,6 @@ async fn handle_tcp(
     } else {
         target.to_string()
     };
-    // 只有域名直连规则可能改变路由时，才需要首包 SNI/Host 嗅探。
-    // 全代理或仅 IP/CIDR 规则下，嗅探结果只会变成日志标签，继续等待会拖慢
-    // HLS/视频分片这种高频短连接。
-    let should_sniff_domain_for_direct =
-        !proxy_dns_request && context.direct_checker.has_domain_direct_rules();
-
     let mut direct_target = None;
     let mut direct_reason = None;
     let proxy_address = address.clone();
@@ -170,7 +154,8 @@ async fn handle_tcp(
     }
 
     if direct_target.is_none()
-        && should_sniff_domain_for_direct
+        && !proxy_dns_request
+        && context.direct_checker.has_domain_direct_rules()
         && let Some(domain) = context
             .direct_domain_cache
             .matching_domain_for_ip(target.ip(), |domain| {
@@ -198,33 +183,6 @@ async fn handle_tcp(
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
-    let mut sniffed = Vec::new();
-    if direct_target.is_none() && should_sniff_domain_for_direct && proxy_reason.is_none() {
-        sniffed = sniff_first_bytes(&mut client, target.port()).await;
-        if !sniffed.is_empty()
-            && let Some(domain) = sniff_domain(target.port(), &sniffed)
-        {
-            debug!("Android TUN TCP sniffed domain {} <- {}", domain, target);
-            context
-                .direct_domain_cache
-                .record_resolution(&domain, &[target.ip().to_string()]);
-            if context.direct_checker.is_direct_domain(&domain) {
-                debug!(
-                    "Android TUN TCP sniffed direct domain matched: {} ({})",
-                    target, domain
-                );
-                direct_reason = Some(format!("sniffed domain {domain}"));
-                direct_target = Some(target);
-            } else {
-                debug!(
-                    "Android TUN TCP sniffed proxy domain matched for label only: {} ({})，proxy target keeps original IP",
-                    target, domain
-                );
-                proxy_reason = Some(format!("sniffed domain {domain}"));
-            }
-        }
-    }
-
     if let Some(connect_target) = direct_target {
         let target_str = match direct_reason {
             Some(reason) => format!("{connect_target} ({reason}, original {target})"),
@@ -236,13 +194,6 @@ async fn handle_tcp(
             android_log::warn(format!("Android TUN TCP DIRECT failed {target_str}: {e}"));
             AndroidAgentError::Connection(format!("direct connect {target_str} failed: {e}"))
         })?;
-        if !sniffed.is_empty() {
-            if let Err(e) = target_stream.write_all(&sniffed).await {
-                debug!("Android TUN TCP direct initial bytes write failed: {e}");
-            } else if let Err(e) = target_stream.flush().await {
-                debug!("Android TUN TCP direct initial bytes flush failed: {e}");
-            }
-        }
         match relay_tun_tcp_bidirectional(&mut client, &mut target_stream, "direct").await {
             Ok((up, down)) => debug!("Android TUN TCP direct relay ended up={up} down={down}"),
             Err(e) => debug!("Android TUN TCP direct relay ended: {e}"),
@@ -271,89 +222,14 @@ async fn handle_tcp(
             return Err(e);
         }
     };
-    if !sniffed.is_empty() {
-        if let Err(e) = proxy_io.write_all(&sniffed).await {
-            debug!("Android TUN TCP proxy initial bytes write failed: {e}");
-        } else if let Err(e) = proxy_io.flush().await {
-            debug!("Android TUN TCP proxy initial bytes flush failed: {e}");
-        }
-    }
+    // Android TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始
+    // netstack TCP 流交给 copy_bidirectional，避免“先读后补发”影响视频分片。
     match relay_tun_tcp_bidirectional(&mut client, &mut proxy_io, "proxy").await {
         Ok((up, down)) => debug!("Android TUN TCP proxy relay ended up={up} down={down}"),
         Err(e) => debug!("Android TUN TCP proxy relay ended: {e}"),
     }
     let _ = client.shutdown().await;
     Ok(())
-}
-
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
-    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
-    let mut chunk = [0u8; 1024];
-
-    loop {
-        if buffer.len() >= SNIFF_MAX_BYTES {
-            break;
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let read_timeout = if buffer.is_empty() {
-            remaining
-        } else {
-            remaining.min(SNIFF_INTER_READ_TIMEOUT)
-        };
-        match timeout(read_timeout, client.read(&mut chunk)).await {
-            Ok(Ok(0)) => break,
-            Ok(Ok(n)) => {
-                buffer.extend_from_slice(&chunk[..n]);
-                if sniff_buffer_ready(port, &buffer) {
-                    break;
-                }
-            }
-            Ok(Err(e)) => {
-                debug!("Android TUN TCP sniff read failed: {e}");
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-
-    buffer
-}
-
-fn sniff_buffer_ready(port: u16, buf: &[u8]) -> bool {
-    if sniff_domain(port, buf).is_some() {
-        return true;
-    }
-
-    // Android VPN 模式下，浏览器和视频 App 的 HTTPS/HLS 请求经常表现为大量短 TCP
-    // 连接。如果 TLS ClientHello 没有可见 SNI（例如 ECH、特殊握手或非标准客户端），
-    // 继续等满 SNIFF_TIMEOUT 会给每条新连接叠加首包延迟；一旦已经拿到完整 TLS
-    // record 或完整 HTTP 头，就立即放行，把已读字节原样补发给目标或 proxy。
-    has_complete_tls_record(buf) || has_complete_http_headers(buf)
-}
-
-fn has_complete_tls_record(buf: &[u8]) -> bool {
-    if buf.len() < 5 || buf[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
-    buf.len() >= 5usize.saturating_add(record_len)
-}
-
-fn has_complete_http_headers(buf: &[u8]) -> bool {
-    std::str::from_utf8(buf)
-        .map(|text| text.contains("\r\n\r\n"))
-        .unwrap_or(false)
-}
-
-fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
-    match port {
-        80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
-        _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
 }
 
 fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
@@ -425,25 +301,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
     use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
-
-    #[test]
-    fn sniff_buffer_waits_for_complete_tls_record() {
-        let partial_tls = [0x16, 0x03, 0x01, 0x00, 0x04, 0x01, 0x02];
-        let complete_tls = [0x16, 0x03, 0x01, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04];
-
-        assert!(!sniff_buffer_ready(443, &partial_tls));
-        assert!(sniff_buffer_ready(443, &complete_tls));
-    }
-
-    #[test]
-    fn sniff_buffer_stops_on_complete_http_headers() {
-        let partial_http = b"GET / HTTP/1.1\r\nHost: example.com\r\n";
-        let complete_http = b"GET / HTTP/1.1\r\nUser-Agent: test\r\n\r\n";
-
-        assert!(!has_complete_http_headers(partial_http));
-        assert!(has_complete_http_headers(complete_http));
-        assert!(sniff_buffer_ready(443, complete_http));
-    }
 
     #[tokio::test]
     async fn proxy_relay_keeps_response_after_client_half_close() {

@@ -2,41 +2,27 @@
 //!
 //! netstack 把系统 IP 包还原成 `TcpStream` 后进入这里。处理顺序是：
 //! 1. 过滤 TUN 自身网段和 proxy DNS 特例；
-//! 2. 用 IP/CIDR、DNS 缓存、SNI/Host 嗅探判断是否直连；
+//! 2. 用 IP/CIDR 和 DNS proxy 缓存判断是否直连；
 //! 3. 命中直连则连真实目标，否则从 TCP 连接池拿 proxy stream 双向中继。
 
 use super::TunForwardContext;
-use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
-use crate::connection_pool::{ConnectedStream, ConnectionPool};
+use crate::connection_pool::ConnectionPool;
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use common::{BindInterface, bind_socket_to_interface};
-use protocol::{Address, TransportProtocol};
+use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpSocket, TcpStream};
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::debug;
 
-/// 嗅探首段字节的最大长度。TLS ClientHello 最大约 16KB，但常见的 SNI/Host
-/// 通常在前 1-2KB 即出现；选择 4KB 兼顾覆盖率与首字节延迟。
-const SNIFF_MAX_BYTES: usize = 4096;
-/// 等待客户端首段字节的最长时间。视频/HLS 场景会频繁建立短 TCP 连接，
-/// 嗅探等待过长会直接叠加到每个分片请求上，因此桌面端也保持轻量等待。
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(60);
-/// 已经读到部分首包后，后续补读只等待一个很短的空闲窗口。
-/// 这样仍能覆盖 TLS record 被拆包的常见情况，又不会因为 ECH/无 SNI 握手
-/// 把 TUN 数据面卡到完整 `SNIFF_TIMEOUT`。
-const SNIFF_INTER_READ_TIMEOUT: Duration = Duration::from_millis(10);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-type ProxyPreconnect = (Address, JoinHandle<Result<ConnectedStream>>);
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -65,12 +51,6 @@ pub(super) async fn handle_tun_tcp(
     } else {
         target.to_string()
     };
-    // 只有域名规则可能把“已解析成 IP 的 TUN 目标”改判为直连时，才需要首包嗅探。
-    // 在默认全代理或仅 IP/CIDR 规则下，嗅探不会改变 proxy 目标；跳过它可以去掉
-    // HLS/视频分片短连接上的首包等待。
-    let should_sniff_domain_for_direct =
-        !proxy_dns_request && direct_checker.has_domain_direct_rules();
-
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
     let proxy_address = address.clone();
@@ -80,9 +60,12 @@ pub(super) async fn handle_tun_tcp(
     }
 
     // 2. 缓存中已知 IP -> 域名映射且命中域名规则：仍然使用原始 IP 直连。
-    //    这里的域名只来自 proxy DNS 缓存或首包嗅探，不触发 agent 本机 DNS 解析。
+    //    这里的域名只来自 proxy DNS 缓存，不触发 agent 本机 DNS 解析，也不再
+    //    从 TCP payload 读取 TLS SNI/HTTP Host。这样 TUN 数据面不会因为首包
+    //    嗅探和补发逻辑影响视频分片下载。
     if direct_target.is_none()
-        && should_sniff_domain_for_direct
+        && !proxy_dns_request
+        && direct_checker.has_domain_direct_rules()
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
             direct_checker.is_direct_domain(domain)
         })
@@ -105,49 +88,7 @@ pub(super) async fn handle_tun_tcp(
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
-    let mut proxy_preconnect = if direct_target.is_none() {
-        // TUN TCP 嗅探和 proxy stream 获取原本是串行的：先等首包/识别域名，再从
-        // 连接池拿 proxy 流。视频分片会频繁建短 TCP 连接，这两个等待叠加时容易
-        // 形成可见卡顿。这里先按原始 IP 目标预连接；如果后续 sniff 命中直连，
-        // 会取消这个任务。若 sniff 只得到“仍需代理”的域名，则继续保留原始 IP，
-        // 避免视频 CDN 因 proxy 端重新 DNS 落到不同边缘节点而抖动。
-        Some(spawn_proxy_preconnect(
-            tcp_pool.clone(),
-            proxy_address.clone(),
-        ))
-    } else {
-        None
-    };
-
-    // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
-    //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
-    let mut sniffed: Vec<u8> = Vec::new();
-    if direct_target.is_none() && should_sniff_domain_for_direct && proxy_reason.is_none() {
-        sniffed = sniff_first_bytes(&mut client, target.port()).await;
-        if !sniffed.is_empty()
-            && let Some(domain) = sniff_domain(target.port(), &sniffed)
-        {
-            debug!("TUN TCP 嗅探域名 {} <- {}", domain, target);
-            // 嗅探到的 IP -> 域名映射写回缓存，下一次同 IP 的连接可以走快路径。
-            direct_domain_cache.record_resolution(&domain, &[target.ip().to_string()]);
-            if direct_checker.is_direct_domain(&domain) {
-                debug!(
-                    "TUN TCP 嗅探域名规则命中：{} ({})，先使用原始 IP 直连",
-                    target, domain
-                );
-                direct_target = Some(target);
-            } else {
-                debug!(
-                    "TUN TCP 嗅探域名用于代理标签：{} ({})，代理目标保留原始 IP",
-                    target, domain
-                );
-                proxy_reason = Some(format!("嗅探域名 {domain}"));
-            }
-        }
-    }
-
     if let Some(connect_target) = direct_target {
-        abort_proxy_preconnect(proxy_preconnect.take());
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = format!("{} (原始目标 {})", connect_target, target);
         let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
@@ -159,14 +100,6 @@ pub(super) async fn handle_tun_tcp(
             tun_networks,
         })
         .await?;
-        // 把嗅探时已经读出的字节先补发给目标，否则握手会丢首段。
-        if !sniffed.is_empty() {
-            if let Err(e) = target_stream.write_all(&sniffed).await {
-                debug!("TUN TCP 直连补发首段字节失败：{e}");
-            } else if let Err(e) = target_stream.flush().await {
-                debug!("TUN TCP 直连刷新首段字节失败：{e}");
-            }
-        }
         match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
@@ -198,17 +131,13 @@ pub(super) async fn handle_tun_tcp(
     if !proxy_dns_request {
         debug!("TUN TCP 代理目标：{}", proxy_label);
     }
-    let connected =
-        get_proxy_stream(tcp_pool.clone(), proxy_address, proxy_preconnect.take()).await?;
+    // TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始字节流交给
+    // copy_bidirectional，中间没有“已读首段再补发”的状态，减少短连接分片卡顿点。
+    let connected = tcp_pool
+        .as_ref()
+        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
+        .await?;
     let mut proxy_io = connected.into_async_io();
-    // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
-    if !sniffed.is_empty() {
-        if let Err(e) = proxy_io.write_all(&sniffed).await {
-            debug!("TUN TCP 代理补发首段字节失败：{e}");
-        } else if let Err(e) = proxy_io.flush().await {
-            debug!("TUN TCP 代理刷新首段字节失败：{e}");
-        }
-    }
     match relay_tcp_bidirectional(
         &mut client,
         &mut proxy_io,
@@ -230,170 +159,10 @@ pub(super) async fn handle_tun_tcp(
     Ok(())
 }
 
-/// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
-/// 个字节用于域名嗅探。读取到的数据在后续转发时会被原样补发。
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream, port: u16) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
-    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
-    let mut chunk = [0u8; 1024];
-
-    loop {
-        if buffer.len() >= SNIFF_MAX_BYTES {
-            break;
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let read_timeout = if buffer.is_empty() {
-            remaining
-        } else {
-            remaining.min(SNIFF_INTER_READ_TIMEOUT)
-        };
-        match timeout(read_timeout, client.read(&mut chunk)).await {
-            Ok(Ok(0)) => break,
-            Ok(Ok(n)) => {
-                buffer.extend_from_slice(&chunk[..n]);
-                if sniff_buffer_ready(port, &buffer) {
-                    break;
-                }
-            }
-            Ok(Err(e)) => {
-                debug!("TUN TCP 嗅探读取出错：{e}");
-                break;
-            }
-            // 超时后停止嗅探，已经读到的字节仍会被补发，避免阻塞 server-first 协议。
-            Err(_) => break,
-        }
-    }
-
-    buffer
-}
-
-fn sniff_buffer_ready(port: u16, buf: &[u8]) -> bool {
-    if sniff_domain(port, buf).is_some() {
-        return true;
-    }
-
-    // 如果已经拿到完整的 TLS record 或 HTTP 头，即使没有解析出域名也不要继续等
-    // `SNIFF_TIMEOUT`。Cloudflare/ECH 或无 Host 的连接在 TUN 下否则会给每条新 TCP
-    // 连接额外叠加一次首包等待，对 HLS `.ts` 分片这类高频短连接尤其明显。
-    has_complete_tls_record(buf) || has_complete_http_headers(buf)
-}
-
-fn has_complete_tls_record(buf: &[u8]) -> bool {
-    if buf.len() < 5 || buf[0] != 0x16 {
-        return false;
-    }
-    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
-    buf.len() >= 5usize.saturating_add(record_len)
-}
-
-fn has_complete_http_headers(buf: &[u8]) -> bool {
-    std::str::from_utf8(buf)
-        .map(|text| text.contains("\r\n\r\n"))
-        .unwrap_or(false)
-}
-
-fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
-    match port {
-        // HTTP 端口优先匹配明文 Host 头，TLS 反代场景再退到 SNI。
-        80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
-        // 其他端口默认按 TLS（含 443/8443/853 等）解析，失败再尝试 HTTP。
-        _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
-}
-
 fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("{reason}，原始目标 {target_label}"),
         None => target_label.to_string(),
-    }
-}
-
-fn spawn_proxy_preconnect(
-    tcp_pool: Arc<ConnectionPool>,
-    proxy_address: Address,
-) -> ProxyPreconnect {
-    let address_for_task = proxy_address.clone();
-    let task = tokio::spawn(async move {
-        tcp_pool
-            .as_ref()
-            .get_connected_stream(address_for_task, TransportProtocol::Tcp)
-            .await
-    });
-    (proxy_address, task)
-}
-
-fn abort_proxy_preconnect(preconnect: Option<ProxyPreconnect>) {
-    if let Some((_, task)) = preconnect {
-        task.abort();
-    }
-}
-
-async fn get_proxy_stream(
-    tcp_pool: Arc<ConnectionPool>,
-    proxy_address: Address,
-    preconnect: Option<ProxyPreconnect>,
-) -> Result<ConnectedStream> {
-    if let Some((preconnect_address, task)) = preconnect {
-        if same_proxy_address(&preconnect_address, &proxy_address) {
-            debug!("TUN TCP 复用 sniff 期间建立的 proxy stream");
-            return task.await.map_err(|e| {
-                AgentError::Connection(format!("TUN TCP proxy 预连接任务失败：{e}"))
-            })?;
-        }
-
-        // sniff 后如果目标从 IP 改为域名，或者命中其他目标，必须丢弃预连接，
-        // 按最终 proxy_address 重新连接，避免优化改变路由选择。
-        task.abort();
-    }
-
-    tcp_pool
-        .as_ref()
-        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
-        .await
-}
-
-fn same_proxy_address(left: &Address, right: &Address) -> bool {
-    match (left, right) {
-        (
-            Address::Domain {
-                host: left_host,
-                port: left_port,
-            },
-            Address::Domain {
-                host: right_host,
-                port: right_port,
-            },
-        ) => left_port == right_port && left_host.eq_ignore_ascii_case(right_host),
-        (
-            Address::Ipv4 {
-                addr: left_addr,
-                port: left_port,
-            },
-            Address::Ipv4 {
-                addr: right_addr,
-                port: right_port,
-            },
-        ) => left_addr == right_addr && left_port == right_port,
-        (
-            Address::Ipv6 {
-                addr: left_addr,
-                port: left_port,
-            },
-            Address::Ipv6 {
-                addr: right_addr,
-                port: right_port,
-            },
-        ) => left_addr == right_addr && left_port == right_port,
-        (Address::ProxyDns { port: left_port }, Address::ProxyDns { port: right_port }) => {
-            left_port == right_port
-        }
-        (Address::UdpRelay, Address::UdpRelay)
-        | (Address::TcpYamux, Address::TcpYamux)
-        | (Address::UdpYamux, Address::UdpYamux) => true,
-        _ => false,
     }
 }
 
@@ -481,30 +250,5 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
     }
     if let Err(err) = socket.set_tcp_nodelay(true) {
         debug!("TUN TCP 直连 TCP_NODELAY 设置失败 target={target}: {err}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sniff_buffer_waits_for_complete_tls_record() {
-        let partial = [0x16, 0x03, 0x01, 0x00, 0x03, 0x01];
-        let complete = [0x16, 0x03, 0x01, 0x00, 0x03, 0x01, 0x02, 0x03];
-
-        assert!(!has_complete_tls_record(&partial));
-        assert!(has_complete_tls_record(&complete));
-        assert!(sniff_buffer_ready(443, &complete));
-    }
-
-    #[test]
-    fn sniff_buffer_stops_on_complete_http_headers() {
-        let partial = b"GET / HTTP/1.1\r\nHost: example.com\r\n";
-        let complete = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-
-        assert!(!has_complete_http_headers(partial));
-        assert!(has_complete_http_headers(complete));
-        assert!(sniff_buffer_ready(80, complete));
     }
 }

@@ -1,7 +1,6 @@
 mod bridge;
 mod direct_domain_cache;
 mod dns_proxy;
-mod domain_sniff;
 mod network;
 mod supervisor;
 mod tcp;

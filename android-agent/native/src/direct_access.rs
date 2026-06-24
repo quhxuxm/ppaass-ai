@@ -176,7 +176,8 @@ impl DirectAccessChecker {
     /// 是否存在可能把 TUN IP 目标改判为直连的域名规则。
     ///
     /// Android VPN/TUN 入口通常只能看到已解析的 IP。若当前是全代理，或 rules 中
-    /// 只有 IP/CIDR，首包嗅探出的 SNI/Host 不会改变路由，只会拖慢视频分片短连接。
+    /// 只有 IP/CIDR，域名规则不会改变路由。当前实现只使用 DNS proxy 记录的
+    /// IP -> 域名缓存，不再读取 TCP payload 嗅探 SNI/Host，避免拖慢视频分片短连接。
     pub fn has_domain_direct_rules(&self) -> bool {
         matches!(self.mode, DirectAccessMode::Rules)
             && self.rules.iter().any(|rule| {
