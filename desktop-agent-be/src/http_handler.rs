@@ -7,6 +7,7 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
+use crate::proxy_target::get_proxy_tcp_stream_with_local_dns_fallback;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use bytes::Bytes;
@@ -18,7 +19,6 @@ use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::Address;
-use protocol::TransportProtocol;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -170,10 +170,13 @@ async fn handle_connect(
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功 {}:{}", host, port);
-                    let connected_stream = match pool_for_tunnel
-                        .as_ref()
-                        .get_connected_stream(address, TransportProtocol::Tcp)
-                        .await
+                    let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
+                        pool_for_tunnel.as_ref(),
+                        address,
+                        "HTTP CONNECT",
+                        &target,
+                    )
+                    .await
                     {
                         Ok(stream) => {
                             debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
@@ -376,10 +379,14 @@ async fn handle_regular_request(
         Ok(Response::from_parts(parts, body))
     } else {
         // === 代理路径: 通过代理隧道连接 ===
-        let connected_stream = match pool
-            .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
-            .await
+        let target = format!("{host}:{port}");
+        let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
+            pool.as_ref(),
+            address,
+            "HTTP",
+            &target,
+        )
+        .await
         {
             Ok(stream) => stream,
             Err(e) => {

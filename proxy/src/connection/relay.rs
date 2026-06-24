@@ -12,12 +12,6 @@ use super::*;
 /// flush，会在 agent/proxy 承载连接上制造大量小写出和任务唤醒，表现为浏览器播放
 /// 抖动。64KB 能把连续下行合并成更稳定的批次，同时仍保持较低首包延迟。
 const TCP_RELAY_AGENT_FLUSH_BYTES: usize = 64 * 1024;
-/// 小响应块直接 flush 的阈值。
-///
-/// 用户观察到卡顿更容易出现在小视频分片上。小分片/HTTP2 小 DATA frame 本身不需要
-/// 吞吐型批处理；如果也等批量窗口，浏览器会看到“大小正常但节奏发抖”。因此小块
-/// 立即推出，大块才继续合并写出。
-const TCP_RELAY_AGENT_LOW_LATENCY_FLUSH_BYTES: usize = 16 * 1024;
 /// 即使未达到字节阈值，也只等待一个极短窗口。
 ///
 /// 这个窗口保护小响应、HTTP/2 控制帧和视频分片尾部：目标侧短暂停顿时，已有数据会
@@ -456,9 +450,7 @@ where
                                 if let Some(timeout) = idle_timeout {
                                     idle.as_mut().reset(tokio::time::Instant::now() + timeout);
                                 }
-                                if n <= TCP_RELAY_AGENT_LOW_LATENCY_FLUSH_BYTES
-                                    || pending_agent_flush_bytes >= TCP_RELAY_AGENT_FLUSH_BYTES
-                                {
+                                if pending_agent_flush_bytes >= TCP_RELAY_AGENT_FLUSH_BYTES {
                                     match flush_pending_agent_writer(
                                         &mut agent_writer,
                                         &mut pending_agent_flush_bytes,
