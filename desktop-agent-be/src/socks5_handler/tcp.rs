@@ -232,15 +232,22 @@ async fn relay_data(
     relay_buffer_size: usize,
 ) -> Result<()> {
     // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
-    // 具体双向 relay 统一交给 tcp_relay 模块处理，和 TUN/HTTP CONNECT 保持
-    // 相同的 flush 与半关闭语义。
+    // 但 relay 策略不能完全无差别：legacy Framed 写端是 DataPacketSink/SinkWriter，
+    // 如果使用 Tokio copy 路径，写入可能先停在 framed writer 缓冲里，SOCKS5 客户端
+    // 会感知为首包慢、交互顿一下或小请求迟迟不出去。Yamux 子流本身是裸字节流，
+    // 继续走标准 copy，避免逐写 flush 把吞吐打碎。
+    let proxy_is_framed = connected_stream.is_framed();
     let mut proxy_io = connected_stream.into_async_io();
 
     match relay_tcp_bidirectional(
         client_stream,
         &mut proxy_io,
         relay_buffer_size,
-        TcpRelayOptions::standard(&target),
+        if proxy_is_framed {
+            TcpRelayOptions::framed_proxy(&target)
+        } else {
+            TcpRelayOptions::standard(&target)
+        },
     )
     .await
     {

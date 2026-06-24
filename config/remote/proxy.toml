@@ -78,12 +78,13 @@ auth_timeout_secs = 30
 pre_connect_idle_timeout_secs = 120
 
 # TCP relay 空闲超时时间，单位秒；建立 CONNECT 后若双向都无数据活动会关闭。
-# 0 表示不限制（默认：300）
-tcp_relay_idle_timeout_secs = 0
+# SOCKS5/浏览器视频分片如果遇到半死不活的 CDN 连接，0（不限制）会让分片一直挂住；
+# 120 秒可以回收异常长连接，让浏览器有机会重试。
+tcp_relay_idle_timeout_secs = 120
 
 # Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
 # 512M 小内存实例建议保留 idle 回收，避免浏览器长连接长期占用子流和窗口。
-yamux_tcp_relay_idle_timeout_secs = 300
+yamux_tcp_relay_idle_timeout_secs = 120
 
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）

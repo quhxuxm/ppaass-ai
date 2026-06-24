@@ -214,6 +214,12 @@ async fn tunnel(
 ) -> std::result::Result<(), AgentError> {
     // HTTP CONNECT 隧道与 TUN/SOCKS 共用统一 TCP relay，避免代理路径的
     // DataPacket flush/半关闭语义在不同入口出现分叉。
+    //
+    // legacy framed stream 的写端是 SinkWriter<DataPacketSink>。对这类流使用
+    // copy_bidirectional 时，小块 TLS/HTTP2 数据可能停留在 framed writer 缓冲里，
+    // 浏览器体验会表现成 CONNECT 已建立但后续读写偶发顿住；因此 framed 路径
+    // 使用逐写 flush。Yamux 子流是裸字节流，仍保留标准 copy 以维持吞吐。
+    let proxy_is_framed = connected_stream.is_framed();
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 
@@ -221,7 +227,11 @@ async fn tunnel(
         &mut client_io,
         &mut proxy_io,
         relay_buffer_size,
-        TcpRelayOptions::standard(&target),
+        if proxy_is_framed {
+            TcpRelayOptions::framed_proxy(&target)
+        } else {
+            TcpRelayOptions::standard(&target)
+        },
     )
     .await
     {

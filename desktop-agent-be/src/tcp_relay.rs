@@ -97,6 +97,19 @@ impl<'a> TcpRelayOptions<'a> {
             force_manual: true,
         }
     }
+
+    /// HTTP CONNECT / SOCKS5 代理入口连接到 legacy framed proxy stream 时使用。
+    ///
+    /// framed 写端需要逐写 flush，确保 DataPacket 不滞留；但本地客户端是普通
+    /// TCP socket，不是 netstack-smoltcp，因此 EOF 后仍等待标准 shutdown 完成。
+    pub fn framed_proxy(label: &'a str) -> Self {
+        Self {
+            label,
+            client_shutdown: ClientShutdownMode::AwaitClosed,
+            flush_each_write: true,
+            force_manual: true,
+        }
+    }
 }
 
 /// 统一 TCP 隧道 relay。

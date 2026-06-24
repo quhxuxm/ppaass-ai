@@ -70,7 +70,8 @@ upstream_proxy_addrs = ["127.0.0.1:8080"]
 connect_timeout_secs = 30
 
 # Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
-yamux_tcp_relay_idle_timeout_secs = 300
+# 转发链路里卡死的浏览器分片会占住子流；保留 120 秒回收让客户端重试。
+yamux_tcp_relay_idle_timeout_secs = 120
 
 # proxy 端连接保护；512M 小内存实例默认使用保守边界。
 max_connections = 512
