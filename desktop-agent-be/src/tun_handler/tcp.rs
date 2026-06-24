@@ -8,7 +8,6 @@
 use super::TunForwardContext;
 use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
-use super::system_dns::resolve_via_system;
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
@@ -75,15 +74,14 @@ pub(super) async fn handle_tun_tcp(
 
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
-    let mut direct_domain = None;
     let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
 
-    // 2. 缓存中已知 IP -> 域名映射且命中域名规则：先使用原始 IP 直连，
-    //    避免 macOS 待机恢复后系统 DNS 慢解析阻塞直连路径。
+    // 2. 缓存中已知 IP -> 域名映射且命中域名规则：仍然使用原始 IP 直连。
+    //    这里的域名只来自 proxy DNS 缓存或首包嗅探，不触发 agent 本机 DNS 解析。
     if direct_target.is_none()
         && should_sniff_domain_for_direct
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
@@ -94,7 +92,6 @@ pub(super) async fn handle_tun_tcp(
             "TUN TCP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
             target, domain
         );
-        direct_domain = Some(domain);
         direct_target = Some(target);
     }
 
@@ -110,7 +107,7 @@ pub(super) async fn handle_tun_tcp(
     }
 
     let mut proxy_preconnect = if direct_target.is_none() {
-        // TUN TCP 嗅探和 proxy stream 获取原本是串行的：先等首包/解析域名，再从
+        // TUN TCP 嗅探和 proxy stream 获取原本是串行的：先等首包/识别域名，再从
         // 连接池拿 proxy 流。视频分片会频繁建短 TCP 连接，这两个等待叠加时容易
         // 形成可见卡顿。这里先按原始 IP 目标预连接；如果后续 sniff 命中直连，
         // 会取消这个任务。若 sniff 只得到“仍需代理”的域名，则继续保留原始 IP，
@@ -139,7 +136,6 @@ pub(super) async fn handle_tun_tcp(
                     "TUN TCP 嗅探域名规则命中：{} ({})，先使用原始 IP 直连",
                     target, domain
                 );
-                direct_domain = Some(domain);
                 direct_target = Some(target);
             } else {
                 debug!(
@@ -158,8 +154,6 @@ pub(super) async fn handle_tun_tcp(
         let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
             target: connect_target,
             target_str: &target_str,
-            direct_domain: direct_domain.as_deref(),
-            source,
             direct_egress: direct_egress.as_ref(),
             tcp_pool: tcp_pool.as_ref(),
             udp_pool: udp_pool.as_ref(),
@@ -411,30 +405,6 @@ fn same_proxy_address(left: &Address, right: &Address) -> bool {
     }
 }
 
-async fn resolve_direct_target_via_system(
-    transport: &'static str,
-    source: SocketAddr,
-    target: SocketAddr,
-    domain: &str,
-) -> Option<SocketAddr> {
-    match resolve_via_system(transport, source, domain, target.port(), target.ip()).await {
-        Ok(resolved) => {
-            debug!(
-                "TUN {} 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
-                transport, target, domain, resolved
-            );
-            Some(resolved)
-        }
-        Err(e) => {
-            debug!(
-                "TUN {} 域名规则命中但 Agent DNS 解析失败：{} -> {}，错误：{}",
-                transport, target, domain, e
-            );
-            None
-        }
-    }
-}
-
 async fn connect_direct_tcp(
     target: SocketAddr,
     bind_interface: Option<&BindInterface>,
@@ -463,8 +433,6 @@ async fn connect_direct_tcp(
 struct DirectTcpRefreshContext<'a> {
     target: SocketAddr,
     target_str: &'a str,
-    direct_domain: Option<&'a str>,
-    source: SocketAddr,
     direct_egress: &'a super::TunDirectEgress,
     tcp_pool: &'a ConnectionPool,
     udp_pool: &'a crate::connection_pool::ConnectionPool,
@@ -477,8 +445,6 @@ async fn connect_direct_tcp_with_refresh(
     let DirectTcpRefreshContext {
         target,
         target_str,
-        direct_domain,
-        source,
         direct_egress,
         tcp_pool,
         udp_pool,
@@ -498,29 +464,11 @@ async fn connect_direct_tcp_with_refresh(
             match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
                 Ok(stream) => Ok(stream),
                 Err(retry_err) => {
-                    if let Some(domain) = direct_domain
-                        && let Some(resolved) =
-                            resolve_direct_target_via_system("TCP", source, target, domain).await
-                    {
-                        if resolved != target {
-                            debug!(
-                                "TUN TCP 原始 IP 直连失败，尝试系统 DNS 兜底：{} -> {}",
-                                domain, resolved
-                            );
-                            return connect_direct_tcp(resolved, refreshed_bind_interface.as_ref())
-                                .await
-                                .map_err(|resolved_err| {
-                                    AgentError::Connection(format!(
-                                        "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}；系统 DNS 解析 {domain} -> {resolved} 后仍失败={resolved_err}"
-                                    ))
-                                });
-                        }
-                        debug!(
-                            "TUN TCP 系统 DNS 兜底仍指向原始目标：{} -> {}",
-                            domain, resolved
-                        );
-                    }
-
+                    // 这里刻意不做 agent 侧域名解析兜底。
+                    // TUN 流量进来时系统/应用已经完成了解析，agent 看到的是原始目标 IP；
+                    // 如果直连失败后再用 agent 本机 DNS 重新解析域名，会改变客户端实际
+                    // 选择的 CDN/出口语义，也会和“域名由 proxy 端解析”的安全要求冲突。
+                    // 因此直连失败只刷新物理出口重试同一个 IP，不把域名解析拉回 agent。
                     Err(AgentError::Connection(format!(
                         "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}"
                     )))

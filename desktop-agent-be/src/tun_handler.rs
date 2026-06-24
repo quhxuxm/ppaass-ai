@@ -18,7 +18,6 @@ mod netstack;
 mod network;
 mod proxy_routing;
 mod route;
-mod system_dns;
 mod tasks;
 mod tcp;
 mod udp;

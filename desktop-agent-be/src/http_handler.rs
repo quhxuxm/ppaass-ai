@@ -7,7 +7,6 @@
 use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
-use crate::proxy_target::get_proxy_tcp_stream_with_local_dns_fallback;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use bytes::Bytes;
@@ -18,7 +17,7 @@ use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
-use protocol::Address;
+use protocol::{Address, TransportProtocol};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -170,13 +169,15 @@ async fn handle_connect(
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     debug!("HTTP CONNECT 升级成功 {}:{}", host, port);
-                    let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
-                        pool_for_tunnel.as_ref(),
-                        address,
-                        "HTTP CONNECT",
-                        &target,
-                    )
-                    .await
+                    // 代理路径必须把 Domain 原样交给 proxy 端解析。
+                    // agent 端本地解析会改变出口 DNS 语义：目标 IP 由本机网络决定，
+                    // 不再由 proxy 所在地域、proxy DNS 缓存和远端分流策略决定。对
+                    // CDN/HLS 这类强地域相关流量尤其容易选错节点，因此这里只负责
+                    // 透传域名，不做任何 agent 侧 DNS fallback。
+                    let connected_stream = match pool_for_tunnel
+                        .as_ref()
+                        .get_connected_stream(address, TransportProtocol::Tcp)
+                        .await
                     {
                         Ok(stream) => {
                             debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
@@ -379,14 +380,12 @@ async fn handle_regular_request(
         Ok(Response::from_parts(parts, body))
     } else {
         // === 代理路径: 通过代理隧道连接 ===
-        let target = format!("{host}:{port}");
-        let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
-            pool.as_ref(),
-            address,
-            "HTTP",
-            &target,
-        )
-        .await
+        // 普通 HTTP 代理同样不能在 agent 端解析域名。这里把 Domain 目标透传给
+        // proxy，使 DNS、CDN 节点选择和远端策略都发生在真正出口侧。
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
         {
             Ok(stream) => stream,
             Err(e) => {

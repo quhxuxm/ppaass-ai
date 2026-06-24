@@ -4,7 +4,6 @@
 //! 最终转换成一个 `AsyncRead + AsyncWrite` 双向中继。
 
 use super::*;
-use crate::proxy_target::get_proxy_tcp_stream_with_local_dns_fallback;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
 pub(super) async fn handle_tcp_connect(
@@ -83,13 +82,14 @@ pub(super) async fn handle_tcp_connect(
             .await
             .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
-        let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
-            pool.as_ref(),
-            address,
-            "SOCKS5 CONNECT",
-            &target_label,
-        )
-        .await
+        // SOCKS5 的 DOMAIN 目标必须原样交给 proxy 端解析。
+        // 如果 agent 在本地先解析，再把 IP 发给 proxy，会破坏“从 proxy 出口访问”的
+        // DNS/CDN 语义，也会让远端分流规则失去域名上下文。这里刻意只透传
+        // Address::Domain，不做任何 agent 侧 DNS fallback。
+        let connected_stream = match pool
+            .as_ref()
+            .get_connected_stream(address, TransportProtocol::Tcp)
+            .await
         {
             Ok(stream) => {
                 info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
@@ -201,13 +201,11 @@ pub(super) async fn handle_tcp_bind(
                 }
             } else {
                 // === 代理路径 ===
-                let connected_stream = match get_proxy_tcp_stream_with_local_dns_fallback(
-                    pool.as_ref(),
-                    address,
-                    "SOCKS5 BIND",
-                    &target_label,
-                )
-                .await
+                // BIND 代理路径与 CONNECT 保持一致：域名只透传，不在 agent 本地解析。
+                let connected_stream = match pool
+                    .as_ref()
+                    .get_connected_stream(address, TransportProtocol::Tcp)
+                    .await
                 {
                     Ok(stream) => {
                         info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());

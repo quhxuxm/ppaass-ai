@@ -8,7 +8,6 @@ mod direct_access;
 mod error;
 mod http_handler;
 mod privilege;
-mod proxy_target;
 mod socks5_handler;
 mod tcp_relay;
 mod tun_handler;
