@@ -113,10 +113,10 @@ udp_mode = "auto"
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 2048
+stream_window_size_kb = 8192
 
 [yamux.udp]
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 10
-stream_window_size_kb = 2048
+stream_window_size_kb = 8192

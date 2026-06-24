@@ -244,9 +244,9 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         )
         .unwrap_or(10),
         tcp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "tcp", "stream_window_size_kb"])
-            .unwrap_or(2048) as usize,
+            .unwrap_or(8192) as usize,
         udp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "udp", "stream_window_size_kb"])
-            .unwrap_or(2048) as usize,
+            .unwrap_or(8192) as usize,
         tun_enabled: bool_at(&value, &["tun", "enabled"]).unwrap_or(false),
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),

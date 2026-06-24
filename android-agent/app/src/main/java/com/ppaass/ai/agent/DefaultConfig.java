@@ -32,8 +32,8 @@ final class DefaultConfig {
     static final int UDP_YAMUX_KEEPALIVE_INTERVAL_SECS = 30;
     static final int TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS = 10;
     static final int UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS = 10;
-    static final int TCP_YAMUX_STREAM_WINDOW_SIZE_KB = 2048;
-    static final int UDP_YAMUX_STREAM_WINDOW_SIZE_KB = 2048;
+    static final int TCP_YAMUX_STREAM_WINDOW_SIZE_KB = 8192;
+    static final int UDP_YAMUX_STREAM_WINDOW_SIZE_KB = 8192;
     static final int MIN_YAMUX_STREAM_WINDOW_SIZE_KB = 256;
     static final int ASYNC_RUNTIME_STACK_SIZE_MB = 4;
     static final int RUNTIME_THREADS = 4;

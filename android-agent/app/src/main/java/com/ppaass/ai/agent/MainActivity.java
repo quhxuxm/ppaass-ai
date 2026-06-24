@@ -72,7 +72,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
     private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
-    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v1";
+    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v2";
     private static final String PREF_TRAFFIC_DAY = "traffic_day";
     private static final String PREF_TRAFFIC_RX_BASE = "traffic_rx_base";
     private static final String PREF_TRAFFIC_TX_BASE = "traffic_tx_base";
@@ -294,12 +294,12 @@ public class MainActivity extends Activity {
         migrateStringDefault(
                 editor,
                 "yamux_tcp_stream_window_size_kb",
-                "256",
+                new String[]{"256", "2048"},
                 String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB));
         migrateStringDefault(
                 editor,
                 "yamux_udp_stream_window_size_kb",
-                "256",
+                new String[]{"256", "2048"},
                 String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB));
         editor.apply();
     }
@@ -311,6 +311,24 @@ public class MainActivity extends Activity {
             String newDefault) {
         if (!prefs.contains(key) || oldDefault.equalsIgnoreCase(prefs.getString(key, oldDefault))) {
             editor.putString(key, newDefault);
+        }
+    }
+
+    private void migrateStringDefault(
+            SharedPreferences.Editor editor,
+            String key,
+            String[] oldDefaults,
+            String newDefault) {
+        String current = prefs.getString(key, oldDefaults.length > 0 ? oldDefaults[0] : newDefault);
+        if (!prefs.contains(key)) {
+            editor.putString(key, newDefault);
+            return;
+        }
+        for (String oldDefault : oldDefaults) {
+            if (oldDefault.equalsIgnoreCase(current)) {
+                editor.putString(key, newDefault);
+                return;
+            }
         }
     }
 
