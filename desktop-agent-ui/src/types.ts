@@ -5,8 +5,6 @@ export type AgentConfigSummary = {
   proxy_addrs: string[];
   username: string;
   private_key_path: string;
-  tcp_pool_size: number;
-  udp_pool_size: number;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;
@@ -14,8 +12,6 @@ export type AgentConfigSummary = {
   log_file: string;
   runtime_threads?: number | null;
   effective_runtime_threads: number;
-  tcp_mode: string;
-  udp_mode: string;
   tcp_yamux_sessions: number;
   udp_yamux_sessions: number;
   tcp_yamux_max_streams_per_session: number;

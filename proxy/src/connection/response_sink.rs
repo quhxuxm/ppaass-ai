@@ -1,19 +1,16 @@
-use crate::bandwidth::BandwidthMonitor;
 use futures::{Sink, stream::SplitSink};
 use protocol::{DataPacket, ProxyCodec, ProxyResponse};
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{pin::Pin, result::Result};
-use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-type FramedWriter = SplitSink<Framed<TcpStream, ProxyCodec>, ProxyResponse>;
+use super::AgentStream;
+
+type FramedWriter = SplitSink<Framed<AgentStream, ProxyCodec>, ProxyResponse>;
 
 pub struct BytesToProxyResponseSink<'a> {
     pub inner: &'a mut FramedWriter,
     pub stream_id: String,
-    pub username: Option<String>,
-    pub bandwidth_monitor: Arc<BandwidthMonitor>,
     pub end_sent: bool,
 }
 
@@ -28,11 +25,6 @@ impl<'a> Sink<&[u8]> for BytesToProxyResponseSink<'a> {
     fn start_send(mut self: Pin<&mut Self>, item: &[u8]) -> Result<(), Self::Error> {
         // 目标侧读到的裸字节被包装回协议 DataPacket。
         let stream_id = self.stream_id.clone();
-
-        // 下行流量在写回 agent 前计入带宽统计。
-        if let Some(user) = &self.username {
-            self.bandwidth_monitor.record_sent(user, item.len() as u64);
-        }
 
         // 压缩在编解码层处理
         let packet = DataPacket {

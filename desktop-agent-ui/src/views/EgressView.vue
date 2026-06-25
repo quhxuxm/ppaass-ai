@@ -3,10 +3,9 @@ import Card from "primevue/card";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
-import SelectButton from "primevue/selectbutton";
 import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
-import { compressionOptions, transportModeLabel, transportModeOptions } from "../constants";
+import { compressionOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
 defineProps<{
@@ -17,14 +16,6 @@ defineProps<{
 const emit = defineEmits<{
   "set-field": [field: keyof AgentConfigSummary, value: unknown];
 }>();
-
-function usesYamux(mode: string) {
-  return mode === "yamux" || mode === "auto";
-}
-
-function usesDirectPool(mode: string) {
-  return mode === "legacy" || mode === "auto";
-}
 </script>
 
 <template>
@@ -68,7 +59,7 @@ function usesDirectPool(mode: string) {
       <template #title>
         <div class="panel-heading inline">
           <h2>公共通道参数</h2>
-          <Tag :value="`${transportModeLabel(summary.tcp_mode)} / ${transportModeLabel(summary.udp_mode)}`" severity="info" />
+          <Tag value="Yamux only" severity="info" />
         </div>
       </template>
       <template #content>
@@ -101,36 +92,15 @@ function usesDirectPool(mode: string) {
       <template #title>
         <div class="panel-heading inline">
           <h2>TCP</h2>
-          <Tag :value="transportModeLabel(summary.tcp_mode)" severity="info" />
+          <Tag value="独立 TCP Yamux 池" severity="info" />
         </div>
       </template>
       <template #content>
-        <label class="field">
-          <span><i class="pi pi-sliders-h"></i>传输</span>
-          <SelectButton
-            :model-value="summary.tcp_mode"
-            :options="transportModeOptions"
-            option-label="label"
-            option-value="value"
-            :allow-empty="false"
-            :disabled="configLocked"
-            @update:model-value="emit('set-field', 'tcp_mode', $event)"
-          />
-        </label>
-        <label v-if="usesDirectPool(summary.tcp_mode)" class="field dependent-field">
-          <span>
-            <i class="pi pi-clone"></i>
-            连接池
-            <Tag class="mode-effect-tag" value="常规通道、自动时生效" severity="secondary" />
-          </span>
-          <ConfigNumberInput :model-value="summary.tcp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_pool_size', $event)" />
-        </label>
-
-        <section v-if="usesYamux(summary.tcp_mode)" class="policy-section yamux-settings">
+        <section class="policy-section yamux-settings">
           <div class="section-heading">
             <div class="section-title">
               <span>TCP Yamux</span>
-              <Tag class="mode-effect-tag" value="yamux / auto 生效" severity="secondary" />
+              <Tag class="mode-effect-tag" value="作用于 TCP relay 子流" severity="secondary" />
             </div>
             <strong>{{ summary.tcp_yamux_sessions }} sessions</strong>
           </div>
@@ -138,30 +108,36 @@ function usesDirectPool(mode: string) {
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_sessions', $event)" />
+              <small>影响 agent 到 proxy 的 TCP relay raw Yamux session 数。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_max_streams_per_session', $event)" />
+              <small>限制单条 TCP Yamux session 同时承载的目标 TCP 连接数。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_open_stream_timeout_secs', $event)" />
+              <small>影响新 TCP 目标连接申请 Yamux 子流的等待时间。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-heart"></i>Keepalive</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_keepalive_interval_secs', $event)" />
+              <small>影响 TCP Yamux 外层连接的保活探测；0 表示关闭。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-send"></i>写超时</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_connection_write_timeout_secs', $event)" />
+              <small>影响 TCP Yamux 外层连接写入帧的超时判断。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-window-maximize"></i>流控窗口</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_stream_window_size_kb', $event)" />
+              <small>影响每个 TCP Yamux 子流可缓冲的窗口大小。</small>
             </label>
           </div>
         </section>
@@ -172,36 +148,15 @@ function usesDirectPool(mode: string) {
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP</h2>
-          <Tag :value="transportModeLabel(summary.udp_mode)" severity="info" />
+          <Tag value="独立 UDP Yamux 池" severity="info" />
         </div>
       </template>
       <template #content>
-        <label class="field">
-          <span><i class="pi pi-sliders-h"></i>传输</span>
-          <SelectButton
-            :model-value="summary.udp_mode"
-            :options="transportModeOptions"
-            option-label="label"
-            option-value="value"
-            :allow-empty="false"
-            :disabled="configLocked"
-            @update:model-value="emit('set-field', 'udp_mode', $event)"
-          />
-        </label>
-        <label v-if="usesDirectPool(summary.udp_mode)" class="field dependent-field">
-          <span>
-            <i class="pi pi-wave-pulse"></i>
-            连接池
-            <Tag class="mode-effect-tag" value="常规通道、自动时生效" severity="secondary" />
-          </span>
-          <ConfigNumberInput :model-value="summary.udp_pool_size" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_pool_size', $event)" />
-        </label>
-
-        <section v-if="usesYamux(summary.udp_mode)" class="policy-section yamux-settings">
+        <section class="policy-section yamux-settings">
           <div class="section-heading">
             <div class="section-title">
               <span>UDP Yamux</span>
-              <Tag class="mode-effect-tag" value="yamux / auto 生效" severity="secondary" />
+              <Tag class="mode-effect-tag" value="作用于 UDP relay 子流" severity="secondary" />
             </div>
             <strong>{{ summary.udp_yamux_sessions }} sessions</strong>
           </div>
@@ -209,30 +164,36 @@ function usesDirectPool(mode: string) {
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
+              <small>影响 agent 到 proxy 的 UDP relay raw Yamux session 数。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
+              <small>限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
+              <small>影响新 UDP relay 通道申请 Yamux 子流的等待时间。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-heart"></i>Keepalive</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
+              <small>影响 UDP Yamux 外层连接的保活探测；0 表示关闭。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-send"></i>写超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
+              <small>影响 UDP Yamux 外层连接写入帧的超时判断。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-window-maximize"></i>流控窗口</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
+              <small>影响每个 UDP relay Yamux 子流可缓冲的窗口大小。</small>
             </label>
           </div>
         </section>

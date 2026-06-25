@@ -11,9 +11,6 @@ PxzO8/ImXr5KWigaTnkfTVGFzFHrzgTdqPJiLtNRPCmxQAMZpu/U9nxCA5YY2xR5
 ywIDAQAB
 -----END PUBLIC KEY-----
 """
-# bandwidth_limit_mbps 现在仅作为软上限观测，不会硬拒绝连接。
-# 视频/HLS 压测建议不配置，避免短时峰值持续刷告警；需要观察用户峰值时再打开。
-# bandwidth_limit_mbps = 100
 # 不配置 expires_at 表示永不过期；配置时使用 RFC3339 时间。
 # expires_at = "2026-12-31T23:59:59Z"
 
@@ -30,6 +27,3 @@ Xsg2dea7zeV8pRw0uL010Cx208clFEtV3EMdgY2iSpbTW+gOuhgciVdzjR/EAXtH
 lwIDAQAB
 -----END PUBLIC KEY-----
 """
-# bandwidth_limit_mbps 现在仅作为软上限观测，不会硬拒绝连接。
-# 视频/HLS 压测建议不配置，避免短时峰值持续刷告警；需要观察用户峰值时再打开。
-# bandwidth_limit_mbps = 50

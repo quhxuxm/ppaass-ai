@@ -2,7 +2,7 @@
 /// 作为客户端（Agent）连接到下一跳
 use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
-use common::{ClientConnection, ClientConnectionConfig, ClientStream};
+use common::{ClientConnectionConfig, YamuxClientConnection, YamuxClientStream};
 use protocol::{Address, TransportProtocol};
 use std::{fmt::Debug, fs::read_to_string, time::Duration};
 use tracing::debug;
@@ -79,7 +79,8 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
 
 /// 到上游代理的连接
 pub struct UpstreamConnection {
-    stream: ClientStream,
+    yamux_connection: YamuxClientConnection,
+    stream: YamuxClientStream,
 }
 
 impl UpstreamConnection {
@@ -89,22 +90,32 @@ impl UpstreamConnection {
         target_address: Address,
         transport: TransportProtocol,
     ) -> Result<Self> {
-        // proxy 在转发模式下复用 agent 客户端握手逻辑连接下一跳 proxy。
+        // proxy 在转发模式下也作为 raw Yamux 客户端连接下一跳 proxy。
         let config_adapter = ProxyClientConfig::new(config)?;
 
         debug!("正在连接上游代理");
 
-        let client_conn = ClientConnection::connect(&config_adapter, target_address, transport)
+        let yamux_settings = match transport {
+            TransportProtocol::Tcp => config.yamux.tcp_settings(),
+            TransportProtocol::Udp => config.yamux.udp_settings(),
+        };
+        let yamux_connection =
+            YamuxClientConnection::connect_for(&config_adapter, transport, yamux_settings)
+                .await
+                .map_err(|e| ProxyError::Connection(e.to_string()))?;
+        let (stream, _request_id) = yamux_connection
+            .connect_to_target(target_address, transport)
             .await
             .map_err(|e| ProxyError::Connection(e.to_string()))?;
 
         Ok(Self {
-            stream: client_conn.into_stream(),
+            yamux_connection,
+            stream,
         })
     }
 
-    /// 转换为 AsyncRead + AsyncWrite 流
-    pub fn into_stream(self) -> ClientStream {
-        self.stream
+    /// 转换为 Yamux 连接和业务子流；调用方在 relay 结束后关闭外层 session。
+    pub fn into_parts(self) -> (YamuxClientConnection, YamuxClientStream) {
+        (self.yamux_connection, self.stream)
     }
 }

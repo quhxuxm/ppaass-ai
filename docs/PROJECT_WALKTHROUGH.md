@@ -6,18 +6,18 @@
 2. Agent 和 Proxy 之间的认证、加密、连接复用、数据封包分别由谁负责。
 3. 桌面 UI、Android VPN、测试和部署脚本分别接在核心代理系统的哪个位置。
 
-本文所有流程图都保存在 `docs/diagrams/*.mmd`，并已渲染为同目录下的 SVG。Markdown 预览里展示的是 Mermaid 渲染后的图片，旁边保留 Mermaid 源码链接，方便继续修改。
+本文所有流程图都保存在 `docs/diagrams/*.mmd`。部分旧 SVG 渲染产物已经清理，避免展示与当前 raw Yamux 架构不一致的旧图。
 
 ## 1. 项目一句话
 
-PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量，把目标地址和数据通过自定义加密协议发给 Proxy；Proxy 做用户认证、限流、出站连接和数据回传。
+PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量，通过 raw TCP Yamux 外层连接把每个目标连接放进独立子流；子流内仍然使用 PPAASS 的 Auth/Connect/Data 加密协议。Proxy 做用户认证、出站连接和数据回传。
 
 核心 workspace：
 
 ```text
 ppaass-ai/
 ├── desktop-agent-be/    # 桌面 Agent 后端：HTTP/SOCKS5/TUN、本地连接池
-├── proxy/               # 服务端 Proxy：认证、连接目标、relay、限流、上游转发
+├── proxy/               # 服务端 Proxy：raw Yamux accept、认证、连接目标、relay、上游转发
 ├── protocol/            # Agent <-> Proxy 自定义协议、消息、编解码、加密、压缩
 ├── common/              # Agent/Proxy 复用的客户端握手、ClientStream、Yamux、工具
 ├── desktop-agent-ui/    # Tauri 2 + Vue 3 桌面 UI，内嵌 desktop-agent-be 运行
@@ -29,8 +29,6 @@ ppaass-ai/
 ```
 
 ## 2. 总体架构图
-
-![总体架构图](diagrams/01-overall-architecture.svg)
 
 Mermaid 源码：[01-overall-architecture.mmd](diagrams/01-overall-architecture.mmd)
 
@@ -69,10 +67,10 @@ Proxy 是服务端出口。
 它做的事情：
 
 - 读取 `proxy.toml` 和 `users.toml`。
-- 监听 Agent 的 TCP 连接。
-- 每条连接先认证，再等第一条 `ConnectRequest`。
-- 根据目标类型进入 TCP relay、UDP relay、Yamux session 或上游转发。
-- 记录用户带宽，应用连接数和 UDP flow 资源限制。
+- 监听 Agent 的 raw TCP 连接，并把每条 TCP 连接维持为 Yamux server session。
+- 对每个 Yamux 子流执行 PPAASS Auth，然后等待 `ConnectRequest`。
+- 根据目标类型进入 TCP relay、单目标 UDP、共享 UDP relay、Proxy DNS 或上游转发。
+- TCP relay 和 UDP relay 的 Yamux 外层连接池在 Agent 侧分开维护，Proxy accept 侧不按入口 TCP 连接预判类型。
 
 ### 3.3 Protocol
 
@@ -85,13 +83,12 @@ Proxy 是服务端出口。
 - `protocol/src/codec/agent_codec.rs`
 - `protocol/src/codec/proxy_codec.rs`
 - `protocol/src/crypto/*.rs`
-- `protocol/src/yamux.rs`
 
 它定义了：
 
 - `ProxyRequest`: `Auth`、`Connect`、`Data`
 - `ProxyResponse`: `Auth`、`Connect`、`Data`、`Error`
-- `Address`: `Domain`、`Ipv4`、`Ipv6`、`ProxyDns`、`UdpRelay`、`TcpYamux`、`UdpYamux`
+- `Address`: `Domain`、`Ipv4`、`Ipv6`、`ProxyDns`、`UdpRelay`
 - `DataPacket`: `stream_id + data + is_end`
 - `MessageCodec`: 长度前缀、bitcode 序列化、压缩、AES-GCM 加解密
 
@@ -120,7 +117,7 @@ Mermaid 源码：[03-auth-encryption.mmd](diagrams/03-auth-encryption.mmd)
 
 安全观察：当前实现为了满足“Agent 持私钥、Proxy 持公钥”的需求，使用了私钥操作和公钥还原的 RSA 原语。这是签名式思路，不是常见的“公钥加密、私钥解密”KEM 流程。生产安全评审时，这块值得单独审计。
 
-## 6. 连接池：legacy 与 Yamux
+## 6. 连接池：raw Yamux only
 
 Agent 有两个池：
 
@@ -135,22 +132,15 @@ Agent 有两个池：
 - `desktop-agent-be/src/connection_pool/pool/yamux.rs`
 - `common/src/client_connection/yamux.rs`
 
-![连接池：legacy 与 Yamux](diagrams/04-connection-pool.svg)
-
 Mermaid 源码：[04-connection-pool.mmd](diagrams/04-connection-pool.mmd)
 
-legacy 模式：
+当前只有 Yamux 模式：
 
-- 池里保存的是“已经 Auth，但还没 Connect 目标”的连接。
-- 一条连接取出后发送一次 `ConnectRequest`，然后被本次请求消费，不再放回池。
-- `pool_max_connection_age_secs` 用来避免拿到 Proxy 已经按 idle timeout 关闭的旧连接。
-
-Yamux 模式：
-
-- 先用普通 Auth/Connect 建立到 `Address::TcpYamux` 或 `Address::UdpYamux` 的外层连接。
-- 外层连接上跑 `tokio-yamux` session。
-- 每个真实目标连接打开一个子流，子流第一帧是 `ConnectRequest`。
-- 成功后子流就是裸 payload 通道。
+- Agent 到 Proxy 的外层连接是 raw TCP + `tokio-yamux`，外层不再跑旧的 PPAASS 虚拟地址握手。
+- `tcp_pool` 和 `udp_pool` 分别维护自己的 raw Yamux session 池，TCP relay 和 UDP relay 不共享外层连接。
+- 每个真实目标连接先打开一个 Yamux 子流，再在子流内执行 PPAASS Auth。
+- Auth 成功后继续在同一个子流内发送 `ConnectRequest`；数据仍通过加密的 `DataPacket` 帧传输。
+- Proxy accept 到 raw TCP 后只创建 Yamux server session，具体 TCP/UDP 目标类型由子流里的 `ConnectRequest` 决定。
 
 ## 7. HTTP 本地代理路径
 
@@ -183,34 +173,30 @@ SOCKS5 本地侧不做用户认证；用户身份是 Agent 到 Proxy 的 RSA/AES
 
 ## 9. Proxy 连接状态机
 
-![Proxy 连接状态机](diagrams/07-proxy-state-machine.svg)
-
 Mermaid 源码：[07-proxy-state-machine.mmd](diagrams/07-proxy-state-machine.mmd)
 
 关键文件：
 
-- `proxy/src/server.rs`: accept loop、全局连接 permit、认证超时。
-- `proxy/src/connection/auth.rs`: Auth 和 pre-connect idle。
+- `proxy/src/server.rs`: raw TCP accept、Yamux server session、认证超时。
+- `proxy/src/connection/auth.rs`: 每个 Yamux 子流内的 Auth。
 - `proxy/src/connection/connect.rs`: Connect 分流。
-- `proxy/src/connection/relay.rs`: legacy TCP/UDP 中继。
-- `proxy/src/connection/yamux_session.rs`: Yamux 外层 session。
-- `proxy/src/connection/yamux.rs`: Yamux 子流连接目标。
+- `proxy/src/connection/relay.rs`: TCP/单目标 UDP 中继。
 - `proxy/src/connection/udp_relay.rs`: 共享 UDP relay。
 - `proxy/src/connection/upstream.rs`: forward mode 连接上游 PPAASS proxy。
 
-## 10. Legacy DataPacket 中继
+## 10. Yamux 子流内 DataPacket 中继
 
-legacy 模式里，Agent 和 Proxy 之间不是裸 TCP，而是协议帧：
+每个真实目标连接对应一个 Yamux 子流。子流内仍然不是裸 TCP，而是完整的 PPAASS 协议帧：
 
-![Legacy DataPacket 中继](diagrams/08-legacy-datapacket.svg)
+Mermaid 源码：[08-yamux-substream-datapacket.mmd](diagrams/08-yamux-substream-datapacket.mmd)
 
-Mermaid 源码：[08-legacy-datapacket.mmd](diagrams/08-legacy-datapacket.mmd)
+顺序：
 
-适配器：
-
-- Agent 侧 `ProxyStreamIo` 把 `ProxyRequest::Data` / `ProxyResponse::Data` 适配成 `AsyncRead + AsyncWrite`。
-- Proxy 侧 `AgentIo` 和 `BytesToProxyResponseSink` 做反向适配。
-- 上层 HTTP/SOCKS/TUN 只看到普通字节流，所以统一使用 `tokio::io::copy_bidirectional`，让 Tokio 维护半关闭与拷贝缓冲策略。
+- Agent 在 Yamux 子流内发送 `Auth`。
+- Proxy 对该子流认证成功后返回 `AuthResponse`。
+- Agent 在同一子流内发送目标 `ConnectRequest`。
+- 成功后双方继续通过加密的 `DataPacket` 传输 payload 和半关闭信号。
+- 上层 HTTP/SOCKS/TUN 只看到普通字节流，Yamux 外层只负责子流复用和流控。
 
 ## 11. UDP relay
 
@@ -234,12 +220,10 @@ Mermaid 源码：[09-udp-relay.mmd](diagrams/09-udp-relay.mmd)
 - `address`
 - `data`
 
-Proxy 对每个 `flow_id` 维护一个 UDP socket，并用 `ConnectionLimiter` 限制：
+Proxy 对每个 `flow_id` 维护一个 UDP socket。资源控制只保留队列边界和 idle 清理：
 
-- 单连接 flow 数。
-- 全局 UDP relay flow 数。
-- 全局 UDP relay buffered bytes。
 - 每个内部队列大小。
+- 每个 UDP flow 的 idle timeout。
 
 ## 12. TUN 模式
 
@@ -298,10 +282,8 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `proxy_addrs`: 远端 Proxy 地址列表，连接时随机选择。
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
-- `tcp_pool_size` / `udp_pool_size`: legacy 预热连接池大小。
 - `compression_mode`: `none`、`lz4`、`gzip`、`zstd`。
-- `[transport] tcp_mode/udp_mode`: `auto`、`yamux`、`legacy`。
-- `[yamux.tcp]` / `[yamux.udp]`: Agent 端 session 数、每 session 子流数、窗口等。
+- `[yamux.tcp]` / `[yamux.udp]`: Agent 端 TCP relay / UDP relay 的 raw Yamux session 数、每 session 子流数、窗口等。
 - `[tun]`: TUN 设备、DNS、QUIC、helper、状态文件。
 - `[direct_access]`: `proxy_all`、`direct_all`、`rules`。
 
@@ -315,14 +297,12 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `users_path`: 用户配置文件。
 - `compression_mode`: Proxy 响应编码使用的压缩模式。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
-- `[transport]`: Proxy 是否接受 Yamux 外层。
-- `[yamux.tcp]` / `[yamux.udp]`: Proxy 作为 acceptor 的子流上限和窗口。
+- `[yamux.tcp]` / `[yamux.udp]`: Proxy 作为 Yamux acceptor 的子流上限、窗口和超时。Proxy 入口不根据 raw TCP 连接预判 TCP/UDP relay 类型。
 - `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。
-- `auth_timeout_secs`、`pre_connect_idle_timeout_secs`、`tcp_relay_idle_timeout_secs`。
-- `max_connections`、`max_connections_per_user`、`max_idle_connections_per_user`。
-- UDP relay 的 flow 和缓冲限制。
+- `auth_timeout_secs`、`tcp_relay_idle_timeout_secs`。
+- `udp_relay_channel_size`: 共享 UDP relay 每条内部队列大小。
 
 ### 用户配置
 
@@ -336,7 +316,6 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 - `username`: 必须与 `[users.<key>]` 的 key 一致。
 - `public_key_pem`: Proxy 持有用户公钥。
-- `bandwidth_limit_mbps`: 粗粒度秒级总带宽限制。
 - `expires_at`: 可选 RFC3339 或 Unix 秒级时间戳。
 
 ## 15. 桌面 UI
@@ -389,7 +368,7 @@ Android 和桌面 TUN 的相同点：
 
 - 都用 `netstack-smoltcp`。
 - 都复用 `common` 和 `protocol`。
-- 都支持 TCP/UDP pool、Yamux、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。
+- 都支持分离的 TCP/UDP raw Yamux session 池、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。
 
 不同点：
 
@@ -464,8 +443,8 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 6. `proxy/src/server.rs`、`proxy/src/connection/auth.rs`、`proxy/src/connection/connect.rs`：看 Proxy 状态机。
 7. `desktop-agent-be/src/server.rs`：看本地入口如何分 HTTP/SOCKS/TUN。
 8. `desktop-agent-be/src/http_handler.rs` 和 `socks5_handler.rs`：看本地代理细节。
-9. `desktop-agent-be/src/connection_pool/*`：看 legacy 和 Yamux 的性能设计。
-10. `proxy/src/connection/relay.rs`、`yamux_session.rs`、`yamux.rs`、`udp_relay.rs`：看数据搬运。
+9. `desktop-agent-be/src/connection_pool/*`：看 TCP/UDP raw Yamux session 池。
+10. `proxy/src/connection/relay.rs`、`udp_relay.rs`：看数据搬运。
 11. `desktop-agent-be/src/tun_handler/*`：最后再读 TUN，因为它依赖前面所有概念。
 12. `desktop-agent-ui/src-tauri/src/app.rs` 和 `agent.rs`：看 UI 如何嵌入 Agent。
 13. `android-agent/native/src/netstack.rs` 和 `connection_pool.rs`：看 Android 如何复用核心。
@@ -474,19 +453,14 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 ## 20. 常见容易误解的点
 
 - Agent 本地 SOCKS5 默认无认证，不代表系统无用户认证；真正的用户认证发生在 Agent 到 Proxy。
-- legacy 连接池不是“复用同一条目标连接”，而是预热已认证连接，一次请求消费一条。
-- Yamux 外层连接本身仍然先经过普通 PPAASS Auth/Connect。
-- `Address::TcpYamux`、`Address::UdpYamux`、`Address::UdpRelay`、`Address::ProxyDns` 都是协议虚拟地址，不是真实互联网目标。
+- Yamux 外层连接是 raw TCP，不再经过 PPAASS Auth/Connect；PPAASS Auth/Connect 发生在每个 Yamux 子流内。
+- TCP relay 和 UDP relay 的 session 池在 Agent 侧分离；Proxy 接收 raw TCP 时只维护 Yamux session，不预判该连接属于 TCP 还是 UDP。
+- `Address::UdpRelay`、`Address::ProxyDns` 是协议虚拟地址，不是真实互联网目标。
 - TUN 模式要先固定 proxy 控制连接的物理出口，再安装 TUN 路由。
 - `direct_access` 在 TUN 模式下直接看 IP/CIDR；域名规则只在 DNS proxy 缓存命中时影响已解析 IP，不再通过 TLS SNI/HTTP Host 嗅探补充。
-- Proxy 的 `transport.auto/yamux` 都接受 Yamux；`legacy` 才拒绝 Yamux 外层连接。
-- Agent 的 `transport.auto` 会尝试 Yamux，部分故障可回退 legacy；`yamux` 则更严格。
 - Proxy 的 `compression_mode` 和 Agent 的 `compression_mode` 是各自发送方向的编码选择；实际解码靠消息里的 compression flag。
-- 带宽限制是秒级粗粒度总量检查，不是精细 token bucket。
 
 ## 21. 一张压缩版端到端图
-
-![端到端主链路](diagrams/16-end-to-end.svg)
 
 Mermaid 源码：[16-end-to-end.mmd](diagrams/16-end-to-end.mmd)
 

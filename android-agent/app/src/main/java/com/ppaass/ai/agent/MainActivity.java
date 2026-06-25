@@ -30,7 +30,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
-import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -71,8 +70,6 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity {
     private static final int VPN_PERMISSION_REQUEST = 1001;
-    private static final String PREF_MODE_DEFAULTS_MIGRATED = "mode_defaults_migrated_v2";
-    private static final String PREF_PERFORMANCE_DEFAULTS_MIGRATED = "performance_defaults_migrated_v4";
     private static final String PREF_TRAFFIC_DAY = "traffic_day";
     private static final String PREF_TRAFFIC_RX_BASE = "traffic_rx_base";
     private static final String PREF_TRAFFIC_TX_BASE = "traffic_tx_base";
@@ -94,14 +91,9 @@ public class MainActivity extends Activity {
     private static final int DIRECT_RULE_LIST_VISIBLE_RULES = 10;
     private static final int DIRECT_RULE_LIST_ROW_HEIGHT_DP = 36;
     private static final int DIRECT_RULE_LIST_CHROME_HEIGHT_DP = 44;
-    private static final TransportModeOption[] TRANSPORT_MODE_OPTIONS = {
-            new TransportModeOption("auto", "Auto"),
-            new TransportModeOption("yamux", "Yamux"),
-            new TransportModeOption("legacy", "Standard channel")
-    };
     private static final QuicPolicyOption[] QUIC_POLICY_OPTIONS = {
-            new QuicPolicyOption("allow", "By rules, proxy if unmatched"),
-            new QuicPolicyOption("block", "Block UDP/443")
+            new QuicPolicyOption("allow", "按规则处理，未命中走代理"),
+            new QuicPolicyOption("block", "阻断 UDP/443")
     };
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
@@ -113,13 +105,7 @@ public class MainActivity extends Activity {
     private EditText username;
     private EditText privateKey;
     private EditText runtimeThreads;
-    private EditText tcpPoolSize;
-    private EditText udpPoolSize;
     private Spinner compressionMode;
-    private Spinner tcpMode;
-    private Spinner udpMode;
-    private LinearLayout tcpPoolConfig;
-    private LinearLayout udpPoolConfig;
     private LinearLayout tcpYamuxConfig;
     private LinearLayout udpYamuxConfig;
     private String directAccessModeValue;
@@ -198,8 +184,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         configureWindow();
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
-        migrateModeDefaults();
-        migratePerformanceDefaults();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
     }
@@ -250,95 +234,6 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
-    private void migrateModeDefaults() {
-        if (prefs.getBoolean(PREF_MODE_DEFAULTS_MIGRATED, false)) {
-            return;
-        }
-
-        String compression = prefs.getString("compression_mode", "none");
-        String tcp = prefs.getString("tcp_mode", "auto");
-        String udp = prefs.getString("udp_mode", "auto");
-        SharedPreferences.Editor editor = prefs.edit()
-                .putBoolean(PREF_MODE_DEFAULTS_MIGRATED, true);
-
-        if ("none".equalsIgnoreCase(compression)
-                && "auto".equalsIgnoreCase(tcp)
-                && "auto".equalsIgnoreCase(udp)) {
-            editor.putString("compression_mode", DefaultConfig.COMPRESSION_MODE)
-                    .putString("tcp_mode", DefaultConfig.TCP_MODE)
-                    .putString("udp_mode", DefaultConfig.UDP_MODE);
-        }
-
-        editor.apply();
-    }
-
-    private void migratePerformanceDefaults() {
-        if (prefs.getBoolean(PREF_PERFORMANCE_DEFAULTS_MIGRATED, false)) {
-            return;
-        }
-
-        SharedPreferences.Editor editor = prefs.edit()
-                .putBoolean(PREF_PERFORMANCE_DEFAULTS_MIGRATED, true);
-        migrateStringDefault(editor, "compression_mode", "lz4", DefaultConfig.COMPRESSION_MODE);
-        // v3 曾把 TCP Yamux 默认外层连接数调到 16；实测 HLS/TUN 场景下该值
-        // 可能增加 agent<->proxy 侧竞争。如果用户沿用的是当时的默认 16，
-        // 这里迁回保守默认 5；用户主动调成其他值时不覆盖。
-        migrateStringDefault(
-                editor,
-                "yamux_tcp_sessions",
-                "16",
-                String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS));
-        migrateStringDefault(
-                editor,
-                "yamux_tcp_max_streams_per_session",
-                "32",
-                String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION));
-        migrateStringDefault(
-                editor,
-                "yamux_udp_max_streams_per_session",
-                "32",
-                String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION));
-        migrateStringDefault(
-                editor,
-                "yamux_tcp_stream_window_size_kb",
-                new String[]{"256", "2048"},
-                String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB));
-        migrateStringDefault(
-                editor,
-                "yamux_udp_stream_window_size_kb",
-                new String[]{"256", "2048"},
-                String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB));
-        editor.apply();
-    }
-
-    private void migrateStringDefault(
-            SharedPreferences.Editor editor,
-            String key,
-            String oldDefault,
-            String newDefault) {
-        if (!prefs.contains(key) || oldDefault.equalsIgnoreCase(prefs.getString(key, oldDefault))) {
-            editor.putString(key, newDefault);
-        }
-    }
-
-    private void migrateStringDefault(
-            SharedPreferences.Editor editor,
-            String key,
-            String[] oldDefaults,
-            String newDefault) {
-        String current = prefs.getString(key, oldDefaults.length > 0 ? oldDefaults[0] : newDefault);
-        if (!prefs.contains(key)) {
-            editor.putString(key, newDefault);
-            return;
-        }
-        for (String oldDefault : oldDefaults) {
-            if (oldDefault.equalsIgnoreCase(current)) {
-                editor.putString(key, newDefault);
-                return;
-            }
-        }
-    }
-
     private void buildUi() {
         editableControls.clear();
         screenTabButtons.clear();
@@ -378,8 +273,8 @@ public class MainActivity extends Activity {
 
         LinearLayout statusScreen = screenPage(root);
         LinearLayout configScreen = screenPage(root);
-        addScreenTab(screenTabs, "Status", statusScreen);
-        addScreenTab(screenTabs, "Config", configScreen);
+        addScreenTab(screenTabs, "状态", statusScreen);
+        addScreenTab(screenTabs, "配置", configScreen);
 
         buildStatusScreen(statusScreen);
         buildConfigScreen(configScreen);
@@ -410,12 +305,12 @@ public class MainActivity extends Activity {
         TextView title = titleText(getString(R.string.app_name), 24f);
         titleColumn.addView(title, matchWrap());
 
-        TextView subtitle = mutedText("System status", 13f);
+        TextView subtitle = mutedText("系统状态", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, 0);
         titleColumn.addView(subtitle, subtitleParams);
 
-        vpnStatus = chip("Stopped", COLOR_STATUS_STOPPED);
+        vpnStatus = chip("未连接", COLOR_STATUS_STOPPED);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -426,17 +321,17 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f));
 
-        vpnToggle = actionButton("Start", COLOR_ACTION_START);
+        vpnToggle = actionButton("启动", COLOR_ACTION_START);
         vpnToggle.setOnClickListener(view -> toggleVpn());
         LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(dp(112), dp(48));
         headerRow.addView(vpnToggle, toggleParams);
         header.addView(headerRow, matchWrap());
 
         LinearLayout apps = panel(root);
-        sectionTitle(apps, "VPN apps");
+        sectionTitle(apps, "VPN 应用");
 
         selectAppsButton = new Button(this);
-        selectAppsButton.setText("Choose");
+        selectAppsButton.setText("选择");
         selectAppsButton.setAllCaps(false);
         selectAppsButton.setTextSize(14f);
         selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
@@ -468,7 +363,7 @@ public class MainActivity extends Activity {
         buildConnectivityPanel(root);
 
         LinearLayout dashboard = panel(root);
-        sectionTitle(dashboard, "Live dashboard");
+        sectionTitle(dashboard, "实时状态");
         speedGauge = new SpeedGaugeView();
         LinearLayout.LayoutParams gaugeParams = matchWrap();
         gaugeParams.height = dp(210);
@@ -476,25 +371,25 @@ public class MainActivity extends Activity {
         dashboard.addView(speedGauge, gaugeParams);
 
         LinearLayout speedRow = horizontalRow();
-        downloadSpeed = statusTile(speedRow, "Download", "0 B/s");
-        uploadSpeed = statusTile(speedRow, "Upload", "0 B/s");
+        downloadSpeed = statusTile(speedRow, "下载", "0 B/s");
+        uploadSpeed = statusTile(speedRow, "上传", "0 B/s");
         dashboard.addView(speedRow, matchWrap());
 
         LinearLayout dailyPanel = panel(root);
-        sectionTitle(dailyPanel, "Data usage");
+        sectionTitle(dailyPanel, "今日流量");
         trafficChart = new TrafficBarView();
         LinearLayout.LayoutParams chartParams = matchWrap();
         chartParams.height = dp(150);
         chartParams.setMargins(0, dp(8), 0, dp(10));
         dailyPanel.addView(trafficChart, chartParams);
         LinearLayout trafficRow = horizontalRow();
-        trafficDownload = statusTile(trafficRow, "Download", "0 B");
-        trafficUpload = statusTile(trafficRow, "Upload", "0 B");
+        trafficDownload = statusTile(trafficRow, "下载", "0 B");
+        trafficUpload = statusTile(trafficRow, "上传", "0 B");
         dailyPanel.addView(trafficRow, matchWrap());
 
         LinearLayout dnsPanel = panel(root);
-        sectionTitle(dnsPanel, "Agent DNS records");
-        TextView dnsSubtitle = mutedText("Last 80 DNS resolutions handled by Agent", 13f);
+        sectionTitle(dnsPanel, "Agent DNS 记录");
+        TextView dnsSubtitle = mutedText("最近 80 条由 Agent 处理的 DNS 解析", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
@@ -517,21 +412,21 @@ public class MainActivity extends Activity {
 
     private void buildConnectivityPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
-        sectionTitle(panel, "VPN connectivity");
-        TextView subtitle = mutedText("Google / YouTube HTTPS and QUIC over the VPN path", 13f);
+        sectionTitle(panel, "VPN 连通性");
+        TextView subtitle = mutedText("通过 VPN 路径测试 HTTPS 与 QUIC", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
 
         LinearLayout actionRow = horizontalRow();
-        connectivitySummary = mutedText("Start VPN, then run tests", 13f);
+        connectivitySummary = mutedText("启动 VPN 后运行测试", 13f);
         connectivitySummary.setTypeface(Typeface.DEFAULT_BOLD);
         actionRow.addView(connectivitySummary, new LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f));
 
-        connectivityTestButton = actionButton("Test", COLOR_ACCENT);
+        connectivityTestButton = actionButton("测试", COLOR_ACCENT);
         connectivityTestButton.setOnClickListener(view -> runConnectivityTests());
         actionRow.addView(connectivityTestButton, new LinearLayout.LayoutParams(dp(104), dp(42)));
         panel.addView(actionRow, matchWrap());
@@ -541,178 +436,166 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams resultParams = matchWrap();
         resultParams.setMargins(0, dp(10), 0, 0);
         panel.addView(connectivityResultList, resultParams);
-        addConnectivityEmptyRow("No tests run");
+        addConnectivityEmptyRow("尚未运行测试");
     }
 
     private void buildConfigScreen(LinearLayout root) {
-        LinearLayout actions = configSection(root, "Configuration");
-        TextView actionsSubtitle = mutedText("Restore all Agent settings to the built-in defaults", 13f);
+        LinearLayout actions = configSection(root, "配置");
+        TextView actionsSubtitle = mutedText("将所有 Agent 设置恢复为内置默认值", 13f);
         LinearLayout.LayoutParams actionsSubtitleParams = matchWrap();
         actionsSubtitleParams.setMargins(0, 0, 0, dp(10));
         actions.addView(actionsSubtitle, actionsSubtitleParams);
-        restoreDefaultsButton = actionButton("Restore defaults", COLOR_ACCENT);
+        restoreDefaultsButton = actionButton("恢复默认", COLOR_ACCENT);
         restoreDefaultsButton.setOnClickListener(view -> restoreDefaultConfig());
         trackEditable(restoreDefaultsButton);
         actions.addView(restoreDefaultsButton, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
 
-        LinearLayout connection = configSection(root, "Connection");
-        proxyAddrs = field(connection, "Proxy addrs", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
+        LinearLayout connection = configSection(root, "连接");
+        proxyAddrs = field(connection, "Proxy 地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        username = field(connection, "Username", prefString("username", DefaultConfig.USERNAME));
+        username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
-                "Private key PEM",
+                "私钥 PEM",
                 DefaultConfig.normalizePrivateKeyPem(prefString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
                 5,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
-        LinearLayout runtime = configSection(root, "Runtime");
-        quicPolicy = quicPolicySpinner(runtime, "QUIC policy", prefQuicPolicy());
+        LinearLayout runtime = configSection(root, "运行参数");
+        quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
         runtimeThreads = numberControl(
                 runtime,
-                "Runtime threads",
+                "运行线程",
                 prefString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                 1,
                 1);
         compressionMode = spinner(
                 runtime,
-                "Compression mode",
+                "压缩模式",
                 new String[]{"none", "lz4", "gzip", "zstd"},
                 prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
         LinearLayout tcpConfig = configSection(root, "TCP");
-        tcpMode = transportModeSpinner(tcpConfig, "Transport", prefString("tcp_mode", DefaultConfig.TCP_MODE));
-        tcpPoolConfig = configGroup(
-                tcpConfig,
-                "Connection pool",
-                "Applies in Standard channel and Auto");
-        tcpPoolSize = numberControl(
-                tcpPoolConfig,
-                "Pool size",
-                prefString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
-                1,
-                0);
         tcpYamuxConfig = configGroup(
                 tcpConfig,
                 "TCP Yamux",
-                "Applies in Yamux and Auto");
+                "作用于 TCP relay 子流");
         yamuxTcpSessions = numberControl(
                 tcpYamuxConfig,
-                "Outer sessions",
+                "外层连接",
                 prefString(
                         "yamux_tcp_sessions",
                         String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
                 1,
                 1);
+        addFieldHelp(tcpYamuxConfig, "影响 Agent 到 Proxy 的 TCP relay raw Yamux session 数。");
         yamuxTcpMaxStreamsPerSession = numberControl(
                 tcpYamuxConfig,
-                "Max streams/session",
+                "并发子流",
                 prefString(
                         "yamux_tcp_max_streams_per_session",
                         String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
+        addFieldHelp(tcpYamuxConfig, "限制单条 TCP Yamux session 同时承载的目标 TCP 连接数。");
         yamuxTcpOpenStreamTimeoutSecs = numberControl(
                 tcpYamuxConfig,
-                "Open stream timeout",
+                "打开子流超时",
                 prefString(
                         "yamux_tcp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
+        addFieldHelp(tcpYamuxConfig, "影响新 TCP 目标连接申请 Yamux 子流的等待时间。");
         yamuxTcpKeepaliveIntervalSecs = numberControl(
                 tcpYamuxConfig,
-                "Keepalive interval",
+                "Keepalive 间隔",
                 prefString(
                         "yamux_tcp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
+        addFieldHelp(tcpYamuxConfig, "影响 TCP Yamux 外层连接的保活探测；0 表示关闭。");
         yamuxTcpConnectionWriteTimeoutSecs = numberControl(
                 tcpYamuxConfig,
-                "Write timeout",
+                "写超时",
                 prefString(
                         "yamux_tcp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
+        addFieldHelp(tcpYamuxConfig, "影响 TCP Yamux 外层连接写入帧的超时判断。");
         yamuxTcpStreamWindowSizeKb = numberControl(
                 tcpYamuxConfig,
-                "Stream window KB",
+                "流控窗口 KB",
                 prefString(
                         "yamux_tcp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
+        addFieldHelp(tcpYamuxConfig, "影响每个 TCP Yamux 子流可缓冲的窗口大小。");
 
         LinearLayout udpConfig = configSection(root, "UDP");
-        udpMode = transportModeSpinner(udpConfig, "Transport", prefString("udp_mode", DefaultConfig.UDP_MODE));
-        udpPoolConfig = configGroup(
-                udpConfig,
-                "Connection pool",
-                "Applies in Standard channel and Auto");
-        udpPoolSize = numberControl(
-                udpPoolConfig,
-                "Pool size",
-                prefString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
-                1,
-                0);
         udpYamuxConfig = configGroup(
                 udpConfig,
                 "UDP Yamux",
-                "Applies in Yamux and Auto");
+                "作用于 UDP relay 子流");
         yamuxUdpSessions = numberControl(
                 udpYamuxConfig,
-                "Outer sessions",
+                "外层连接",
                 prefString(
                         "yamux_udp_sessions",
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
                 1);
+        addFieldHelp(udpYamuxConfig, "影响 Agent 到 Proxy 的 UDP relay raw Yamux session 数。");
         yamuxUdpMaxStreamsPerSession = numberControl(
                 udpYamuxConfig,
-                "Max streams/session",
+                "并发子流",
                 prefString(
                         "yamux_udp_max_streams_per_session",
                         String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
+        addFieldHelp(udpYamuxConfig, "限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。");
         yamuxUdpOpenStreamTimeoutSecs = numberControl(
                 udpYamuxConfig,
-                "Open stream timeout",
+                "打开子流超时",
                 prefString(
                         "yamux_udp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
+        addFieldHelp(udpYamuxConfig, "影响新 UDP relay 通道申请 Yamux 子流的等待时间。");
         yamuxUdpKeepaliveIntervalSecs = numberControl(
                 udpYamuxConfig,
-                "Keepalive interval",
+                "Keepalive 间隔",
                 prefString(
                         "yamux_udp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
+        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接的保活探测；0 表示关闭。");
         yamuxUdpConnectionWriteTimeoutSecs = numberControl(
                 udpYamuxConfig,
-                "Write timeout",
+                "写超时",
                 prefString(
                         "yamux_udp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
+        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接写入帧的超时判断。");
         yamuxUdpStreamWindowSizeKb = numberControl(
                 udpYamuxConfig,
-                "Stream window KB",
+                "流控窗口 KB",
                 prefString(
                         "yamux_udp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
-
-        updateTransportVisibility();
+        addFieldHelp(udpYamuxConfig, "影响每个 UDP relay Yamux 子流可缓冲的窗口大小。");
 
         buildDirectAccessSection(root);
     }
@@ -724,8 +607,8 @@ public class MainActivity extends Activity {
         directRuleValues.addAll(normalizeDirectRules(parseDirectRuleInput(
                 prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
 
-        LinearLayout section = configSection(root, "Direct access");
-        TextView subtitle = mutedText("Shared direct policy", 13f);
+        LinearLayout section = configSection(root, "直连策略");
+        TextView subtitle = mutedText("HTTP / SOCKS5 与 TUN 共用的直连规则", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, 0, 0, dp(8));
         section.addView(subtitle, subtitleParams);
@@ -744,13 +627,13 @@ public class MainActivity extends Activity {
     }
 
     private void addDirectModeControl(LinearLayout root) {
-        root.addView(controlLabel("Mode"), labelParams());
+        root.addView(controlLabel("模式"), labelParams());
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
         row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-        addDirectModeButton(row, "All proxy", "proxy_all");
-        addDirectModeButton(row, "All direct", "direct_all");
-        addDirectModeButton(row, "By rules", "rules");
+        addDirectModeButton(row, "全走代理", "proxy_all");
+        addDirectModeButton(row, "全量直连", "direct_all");
+        addDirectModeButton(row, "按规则", "rules");
         root.addView(row, matchWrap());
     }
 
@@ -783,10 +666,10 @@ public class MainActivity extends Activity {
         LinearLayout row = horizontalRow();
         LinearLayout.LayoutParams rowParams = matchWrap();
         rowParams.setMargins(0, dp(12), 0, 0);
-        directModeSummary = addPolicyFact(row, "Current mode", directModeLabel(directAccessModeValue));
-        directRuleCountSummary = addPolicyFact(row, "Rule count", directRuleCountLabel());
+        directModeSummary = addPolicyFact(row, "当前模式", directModeLabel(directAccessModeValue));
+        directRuleCountSummary = addPolicyFact(row, "规则数量", directRuleCountLabel());
         directRuleCountFact = directRuleCountSummary == null ? null : (View) directRuleCountSummary.getParent();
-        addPolicyFact(row, "Config section", "direct_access");
+        addPolicyFact(row, "配置段", "direct_access");
         root.addView(row, rowParams);
     }
 
@@ -821,8 +704,8 @@ public class MainActivity extends Activity {
         methods.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams methodsParams = matchWrap();
         methodsParams.setMargins(0, dp(12), 0, 0);
-        addForwardingMethod(methods, "Android VPN", "TUN traffic policy");
-        addForwardingMethod(methods, "Policy routing", "Uses the selected direct access mode");
+        addForwardingMethod(methods, "Android VPN", "TUN 流量策略");
+        addForwardingMethod(methods, "策略路由", "使用当前直连模式");
         root.addView(methods, methodsParams);
     }
 
@@ -854,7 +737,7 @@ public class MainActivity extends Activity {
     private void addDirectRuleUsageGuide(LinearLayout root) {
         LinearLayout.LayoutParams headingParams = matchWrap();
         headingParams.setMargins(0, dp(12), 0, dp(5));
-        root.addView(controlLabel("Rule types"), headingParams);
+        root.addView(controlLabel("规则类型"), headingParams);
 
         LinearLayout guide = new LinearLayout(this);
         guide.setOrientation(LinearLayout.VERTICAL);
@@ -863,19 +746,19 @@ public class MainActivity extends Activity {
 
         addDirectRuleUsageRow(
                 guide,
-                "HTTP / SOCKS5 domains",
-                "Use example.com or *.example.com for explicit proxy targets.",
+                "HTTP / SOCKS5 域名",
+                "使用 example.com 或 *.example.com 匹配显式代理目标。",
                 new String[]{"HTTP", "SOCKS5"});
         addDirectRuleUsageRow(
                 guide,
                 "TUN IP / CIDR",
-                "Prefer fixed IPs or networks such as 192.168.0.0/16.",
+                "优先使用固定 IP 或 192.168.0.0/16 这样的网段。",
                 new String[]{"TUN", "IP/CIDR"});
         addDirectRuleUsageRow(
                 guide,
-                "TUN domain rules",
-                "Enable Proxy DNS first; rules apply after DNS cache matches.",
-                new String[]{"TUN", "Proxy DNS"});
+                "TUN 域名规则",
+                "需要先启用代理 DNS；命中 DNS 缓存后规则才会生效。",
+                new String[]{"TUN", "代理 DNS"});
 
         root.addView(guide, matchWrap());
     }
@@ -935,17 +818,17 @@ public class MainActivity extends Activity {
     private void addDirectRulePresets(LinearLayout root) {
         LinearLayout.LayoutParams headingParams = matchWrap();
         headingParams.setMargins(0, dp(16), 0, dp(6));
-        root.addView(controlLabel("Quick presets"), headingParams);
+        root.addView(controlLabel("快捷预设"), headingParams);
 
         LinearLayout firstRow = horizontalRow();
-        addPresetButton(firstRow, "Local", new String[]{"localhost", "127.0.0.0/8", "::1"});
-        addPresetButton(firstRow, "Private LAN", new String[]{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"});
+        addPresetButton(firstRow, "本机", new String[]{"localhost", "127.0.0.0/8", "::1"});
+        addPresetButton(firstRow, "私网", new String[]{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"});
         root.addView(firstRow, matchWrap());
 
         LinearLayout secondRow = horizontalRow();
         LinearLayout.LayoutParams secondRowParams = matchWrap();
         secondRowParams.setMargins(0, dp(8), 0, 0);
-        addPresetButton(secondRow, "China", new String[]{"*.cn"});
+        addPresetButton(secondRow, "中国", new String[]{"*.cn"});
         addPresetButton(secondRow, "Microsoft", new String[]{"*.microsoft.com", "*.bing.com"});
         root.addView(secondRow, secondRowParams);
 
@@ -986,9 +869,9 @@ public class MainActivity extends Activity {
         LinearLayout heading = horizontalRow();
         LinearLayout.LayoutParams headingParams = matchWrap();
         headingParams.setMargins(0, dp(16), 0, dp(6));
-        TextView title = controlLabel("Rule management");
+        TextView title = controlLabel("规则管理");
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        directRuleGroupSummary = chip("0 groups", COLOR_ACCENT);
+        directRuleGroupSummary = chip("0 组", COLOR_ACCENT);
         heading.addView(directRuleGroupSummary, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1014,7 +897,7 @@ public class MainActivity extends Activity {
         trackEditable(directRuleDraft);
         compose.addView(directRuleDraft, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        Button addButton = actionButton("Add", COLOR_ACCENT);
+        Button addButton = actionButton("添加", COLOR_ACCENT);
         addButton.setOnClickListener(view -> addDraftDirectRules());
         trackEditable(addButton);
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(dp(92), dp(48));
@@ -1022,7 +905,7 @@ public class MainActivity extends Activity {
         compose.addView(addButton, addParams);
         root.addView(compose, matchWrap());
 
-        TextView inventoryLabel = controlLabel("Current rules");
+        TextView inventoryLabel = controlLabel("当前规则");
         LinearLayout.LayoutParams inventoryParams = labelParams();
         inventoryParams.setMargins(0, dp(14), 0, dp(6));
         root.addView(inventoryLabel, inventoryParams);
@@ -1109,24 +992,24 @@ public class MainActivity extends Activity {
         directRuleGroupList.removeAllViews();
         int groupCount = 0;
         groupCount += addDirectRuleGroup(
-                "Wildcard",
+                "通配符",
                 "wildcard",
-                new String[]{"HTTP/SOCKS5", "TUN + DNS cache"});
+                new String[]{"HTTP/SOCKS5", "TUN + DNS 缓存"});
         groupCount += addDirectRuleGroup(
                 "IP / CIDR",
                 "network",
-                new String[]{"TUN", "Resolved IP"});
+                new String[]{"TUN", "已解析 IP"});
         groupCount += addDirectRuleGroup(
-                "Domain",
+                "域名",
                 "domain",
-                new String[]{"HTTP/SOCKS5", "TUN + DNS cache"});
+                new String[]{"HTTP/SOCKS5", "TUN + DNS 缓存"});
         groupCount += addDirectRuleGroup(
-                "Other",
+                "其他",
                 "other",
-                new String[]{"By rule value"});
+                new String[]{"按规则值"});
 
         if (directRuleValues.isEmpty()) {
-            TextView empty = mutedText("Not configured", 14f);
+            TextView empty = mutedText("未配置", 14f);
             empty.setGravity(Gravity.CENTER);
             empty.setTypeface(Typeface.DEFAULT_BOLD);
             empty.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
@@ -1136,7 +1019,7 @@ public class MainActivity extends Activity {
         }
 
         if (directRuleGroupSummary != null) {
-            directRuleGroupSummary.setText(groupCount + (groupCount == 1 ? " group" : " groups"));
+            directRuleGroupSummary.setText(groupCount + " 组");
         }
         updateDirectAccessSummary();
     }
@@ -1264,7 +1147,7 @@ public class MainActivity extends Activity {
 
     private String directRuleCountLabel() {
         int count = directRuleValues.size();
-        return count + (count == 1 ? " rule" : " rules");
+        return count + " 条";
     }
 
     private List<String> parseDirectRuleInput(String value) {
@@ -1320,12 +1203,12 @@ public class MainActivity extends Activity {
     private String directModeLabel(String mode) {
         String normalized = normalizeDirectAccessMode(mode);
         if ("direct_all".equals(normalized)) {
-            return "All direct";
+            return "全量直连";
         }
         if ("rules".equals(normalized)) {
-            return "By rules";
+            return "按规则";
         }
-        return "All proxy";
+        return "全走代理";
     }
 
     private String ruleGroupKey(String rule) {
@@ -1465,11 +1348,11 @@ public class MainActivity extends Activity {
 
         boolean running = isVpnRunning();
         boolean systemManaged = prefs.getBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false);
-        String label = running ? "Stop" : "Start";
+        String label = running ? "停止" : "启动";
         int actionColor = running ? COLOR_ACTION_STOP : COLOR_ACTION_START;
         updateFlipButton(label, actionColor, true);
         if (vpnStatus != null) {
-            vpnStatus.setText(systemManaged ? "Always-on VPN" : running ? "Connected" : "Stopped");
+            vpnStatus.setText(systemManaged ? "始终开启 VPN" : running ? "已连接" : "未连接");
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
             vpnStatus.setBackground(rounded(statusColor, statusColor));
         }
@@ -1589,13 +1472,13 @@ public class MainActivity extends Activity {
             records = new JSONArray(recordsJson);
         } catch (JSONException | RuntimeException e) {
             dnsRecordList.removeAllViews();
-            addDnsEmptyRow("DNS records unavailable");
+            addDnsEmptyRow("DNS 记录不可用");
             return;
         }
 
         dnsRecordList.removeAllViews();
         if (records.length() == 0) {
-            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
+            addDnsEmptyRow(running ? "等待 Agent DNS 请求" : "VPN 已停止");
             return;
         }
 
@@ -1608,7 +1491,7 @@ public class MainActivity extends Activity {
             }
         }
         if (!hasAgentRecords) {
-            addDnsEmptyRow(running ? "Waiting for Agent DNS requests" : "VPN stopped");
+            addDnsEmptyRow(running ? "等待 Agent DNS 请求" : "VPN 已停止");
         }
     }
 
@@ -1622,12 +1505,12 @@ public class MainActivity extends Activity {
         }
         boolean running = isVpnRunning();
         connectivityTestButton.setEnabled(running && !connectivityTestsRunning);
-        connectivityTestButton.setText(connectivityTestsRunning ? "Testing" : "Test");
+        connectivityTestButton.setText(connectivityTestsRunning ? "测试中" : "测试");
         connectivityTestButton.setBackground(rounded(
                 running ? COLOR_ACCENT : COLOR_STATUS_STOPPED,
                 running ? COLOR_ACCENT : COLOR_STATUS_STOPPED));
         if (connectivitySummary != null && !running && !connectivityTestsRunning) {
-            connectivitySummary.setText("Start VPN, then run tests");
+            connectivitySummary.setText("启动 VPN 后运行测试");
         }
     }
 
@@ -1636,7 +1519,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!isVpnRunning()) {
-            Toast.makeText(this, "Start VPN before running tests", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "请先启动 VPN 再运行测试", Toast.LENGTH_SHORT).show();
             updateConnectivityButton();
             return;
         }
@@ -1644,11 +1527,11 @@ public class MainActivity extends Activity {
         connectivityTestsRunning = true;
         updateConnectivityButton();
         if (connectivitySummary != null) {
-            connectivitySummary.setText("Testing Google and YouTube");
+            connectivitySummary.setText("正在测试 Google 和 YouTube");
         }
         if (connectivityResultList != null) {
             connectivityResultList.removeAllViews();
-            addConnectivityEmptyRow("Running HTTPS and QUIC checks");
+            addConnectivityEmptyRow("正在运行 HTTPS 和 QUIC 检查");
         }
 
         new Thread(() -> {
@@ -1721,10 +1604,10 @@ public class MainActivity extends Activity {
             socket.receive(inbound);
             networkOk = isQuicVersionNegotiationResponse(response, inbound.getLength());
             detail = networkOk
-                    ? "QUIC VN " + inbound.getLength() + " B from " + inbound.getAddress().getHostAddress()
-                    : "UDP/443 replied, but not QUIC VN";
+                    ? "收到 QUIC 版本协商包：" + inbound.getLength() + " B，来源 " + inbound.getAddress().getHostAddress()
+                    : "UDP/443 有响应，但不是 QUIC 版本协商包";
         } catch (SocketTimeoutException error) {
-            detail = "UDP/443 timeout";
+            detail = "UDP/443 超时";
         } catch (IOException | RuntimeException error) {
             detail = compactError(error);
         }
@@ -1742,7 +1625,7 @@ public class MainActivity extends Activity {
         if (addresses.length > 0) {
             return addresses[0];
         }
-        throw new IOException("No address for " + host);
+        throw new IOException("没有可用地址：" + host);
     }
 
     private ConnectivityCheckResult finishConnectivityResult(
@@ -1865,7 +1748,7 @@ public class MainActivity extends Activity {
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f));
-        TextView status = chip(result.success ? "PASS" : "FAIL",
+        TextView status = chip(result.success ? "通过" : "失败",
                 result.success ? COLOR_STATUS_RUNNING : COLOR_ACTION_STOP);
         heading.addView(status, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1980,10 +1863,10 @@ public class MainActivity extends Activity {
         }
         String status = record.optString("status", "");
         if ("NOERROR".equals(status)) {
-            return "No answer records";
+            return "无响应记录";
         }
         if ("TIMEOUT".equals(status)) {
-            return "Query timeout";
+            return "查询超时";
         }
         return record.optString("upstream", "Agent DNS");
     }
@@ -1991,13 +1874,13 @@ public class MainActivity extends Activity {
     private TextView dnsCacheChip(JSONObject record) {
         String resolver = record.optString("resolver", "agent");
         if ("agent-cache".equals(resolver)) {
-            return chip("Cache hit", COLOR_STATUS_RUNNING);
+            return chip("缓存命中", COLOR_STATUS_RUNNING);
         }
         if ("system".equals(resolver)) {
-            return chip("System DNS", COLOR_ACTION_STOP);
+            return chip("系统 DNS", COLOR_ACTION_STOP);
         }
         if ("agent".equals(resolver) || "agent-direct".equals(resolver) || resolver.isEmpty()) {
-            return chip("Cache miss", COLOR_STATUS_STOPPED);
+            return chip("缓存未命中", COLOR_STATUS_STOPPED);
         }
         return null;
     }
@@ -2119,11 +2002,7 @@ public class MainActivity extends Activity {
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
                 .putString("quic_policy", quicPolicyValue)
                 .putString("runtime_threads", runtimeThreads.getText().toString())
-                .putString("tcp_pool_size", tcpPoolSize.getText().toString())
-                .putString("udp_pool_size", udpPoolSize.getText().toString())
                 .putString("compression_mode", selectedCompressionMode())
-                .putString("tcp_mode", selectedTcpMode())
-                .putString("udp_mode", selectedUdpMode())
                 .putString("direct_access_mode", selectedDirectAccessMode())
                 .putString("direct_access_rules", serializeDirectAccessRules())
                 .putString("yamux_tcp_sessions", yamuxTcpSessions.getText().toString())
@@ -2163,7 +2042,7 @@ public class MainActivity extends Activity {
 
     private void restoreDefaultConfig() {
         if (isVpnRunning()) {
-            Toast.makeText(this, "Stop VPN before changing config", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "修改配置前请先停止 VPN", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -2172,11 +2051,7 @@ public class MainActivity extends Activity {
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
-        tcpPoolSize.setText(String.valueOf(DefaultConfig.TCP_POOL_SIZE));
-        udpPoolSize.setText(String.valueOf(DefaultConfig.UDP_POOL_SIZE));
         setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
-        setTransportMode(tcpMode, DefaultConfig.TCP_MODE);
-        setTransportMode(udpMode, DefaultConfig.UDP_MODE);
         yamuxTcpSessions.setText(String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS));
         yamuxTcpMaxStreamsPerSession.setText(String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION));
         yamuxTcpOpenStreamTimeoutSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS));
@@ -2196,13 +2071,12 @@ public class MainActivity extends Activity {
             directRuleDraft.setText("");
         }
 
-        updateTransportVisibility();
         updateDirectModeButtons();
         renderDirectRuleList();
         saveConfig();
         prefs.edit().putStringSet("vpn_apps", Collections.emptySet()).apply();
         updateSelectedAppsSummary();
-        Toast.makeText(this, "Default config restored", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show();
     }
 
     private void setSpinnerValue(Spinner spinner, String value) {
@@ -2212,22 +2086,6 @@ public class MainActivity extends Activity {
         for (int i = 0; i < spinner.getAdapter().getCount(); i++) {
             Object item = spinner.getAdapter().getItem(i);
             if (item != null && String.valueOf(item).equalsIgnoreCase(value)) {
-                spinner.setSelection(i);
-                return;
-            }
-        }
-        spinner.setSelection(0);
-    }
-
-    private void setTransportMode(Spinner spinner, String fallback) {
-        if (spinner == null || spinner.getAdapter() == null) {
-            return;
-        }
-        String normalized = normalizeTransportMode(fallback, fallback);
-        for (int i = 0; i < spinner.getAdapter().getCount(); i++) {
-            Object item = spinner.getAdapter().getItem(i);
-            if (item instanceof TransportModeOption
-                    && ((TransportModeOption) item).value.equalsIgnoreCase(normalized)) {
                 spinner.setSelection(i);
                 return;
             }
@@ -2274,49 +2132,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
-        TextView help = mutedText("Allow sends QUIC by direct rules; unmatched UDP/443 uses proxy UDP relay. Block drops UDP/443 to force TCP/TLS.", 12f);
-        help.setMaxLines(3);
-        LinearLayout.LayoutParams helpParams = matchWrap();
-        helpParams.setMargins(0, dp(6), 0, 0);
-        root.addView(help, helpParams);
-        return spinner;
-    }
-
-    private Spinner transportModeSpinner(LinearLayout root, String title, String selected) {
-        root.addView(controlLabel(title), labelParams());
-        Spinner spinner = new Spinner(this);
-        ArrayAdapter<TransportModeOption> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                TRANSPORT_MODE_OPTIONS);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinner.setAdapter(adapter);
-        int selectedIndex = 0;
-        String normalized = normalizeTransportMode(selected, "auto");
-        for (int i = 0; i < TRANSPORT_MODE_OPTIONS.length; i++) {
-            if (TRANSPORT_MODE_OPTIONS[i].value.equalsIgnoreCase(normalized)) {
-                selectedIndex = i;
-                break;
-            }
-        }
-        spinner.setSelection(selectedIndex);
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                updateTransportVisibility();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                updateTransportVisibility();
-            }
-        });
-        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-        spinner.setPadding(dp(12), 0, dp(12), 0);
-        root.addView(spinner, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(48)));
-        trackEditable(spinner);
         return spinner;
     }
 
@@ -2336,36 +2151,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
+        addFieldHelp(root, "允许时按直连规则发送 QUIC，未命中的 UDP/443 使用代理 UDP relay；阻断会丢弃 UDP/443 以强制回落到 TCP/TLS。");
         return spinner;
-    }
-
-    private void updateTransportVisibility() {
-        setVisible(tcpPoolConfig, usesStandardPool(selectedTcpMode()));
-        setVisible(udpPoolConfig, usesStandardPool(selectedUdpMode()));
-        setVisible(tcpYamuxConfig, usesYamux(selectedTcpMode()));
-        setVisible(udpYamuxConfig, usesYamux(selectedUdpMode()));
-    }
-
-    private void setVisible(View view, boolean visible) {
-        if (view != null) {
-            view.setVisibility(visible ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private boolean usesYamux(String mode) {
-        return "yamux".equals(mode) || "auto".equals(mode);
-    }
-
-    private boolean usesStandardPool(String mode) {
-        return "legacy".equals(mode) || "auto".equals(mode);
-    }
-
-    private String selectedTcpMode() {
-        return selectedTransportMode(tcpMode, DefaultConfig.TCP_MODE);
-    }
-
-    private String selectedUdpMode() {
-        return selectedTransportMode(udpMode, DefaultConfig.UDP_MODE);
     }
 
     private String selectedCompressionMode() {
@@ -2411,38 +2198,6 @@ public class MainActivity extends Activity {
 
     private String selectedDirectAccessMode() {
         return normalizeDirectAccessMode(directAccessModeValue);
-    }
-
-    private String selectedTransportMode(Spinner spinner, String fallback) {
-        if (spinner == null || spinner.getSelectedItem() == null) {
-            return fallback;
-        }
-        Object selected = spinner.getSelectedItem();
-        if (selected instanceof TransportModeOption) {
-            return ((TransportModeOption) selected).value;
-        }
-        String value = selected.toString().trim().toLowerCase();
-        if ("standard channel".equals(value)) {
-            return "legacy";
-        }
-        if ("yamux".equals(value) || "legacy".equals(value) || "auto".equals(value)) {
-            return value;
-        }
-        return fallback;
-    }
-
-    private String normalizeTransportMode(String value, String fallback) {
-        if (value == null) {
-            return fallback;
-        }
-        String normalized = value.trim().toLowerCase();
-        if ("auto".equals(normalized) || "yamux".equals(normalized) || "legacy".equals(normalized)) {
-            return normalized;
-        }
-        if ("standard channel".equals(normalized)) {
-            return "legacy";
-        }
-        return fallback;
     }
 
     private String prefString(String key, String fallback) {
@@ -2509,6 +2264,14 @@ public class MainActivity extends Activity {
         trackEditable(edit);
         trackEditable(plus);
         return edit;
+    }
+
+    private void addFieldHelp(LinearLayout root, String text) {
+        TextView help = mutedText(text, 12f);
+        help.setMaxLines(3);
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, dp(4), 0, dp(10));
+        root.addView(help, params);
     }
 
     private Switch switchControl(LinearLayout root, String title, boolean checked) {
@@ -2916,7 +2679,7 @@ public class MainActivity extends Activity {
         dialogContent.setPadding(dp(18), dp(16), dp(18), 0);
 
         LinearLayout titleRow = horizontalRow();
-        TextView dialogTitle = titleText("VPN apps", 20f);
+        TextView dialogTitle = titleText("VPN 应用", 20f);
         titleRow.addView(dialogTitle, new LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -2926,7 +2689,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         dialogContent.addView(titleRow, matchWrap());
 
-        TextView dialogSubtitle = mutedText("Only selected apps use the VPN path", 13f);
+        TextView dialogSubtitle = mutedText("只有选中的应用会使用 VPN 路径", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(4), 0, dp(12));
         dialogContent.addView(dialogSubtitle, subtitleParams);
@@ -2942,7 +2705,7 @@ public class MainActivity extends Activity {
 
         appSelectorDialog = new AlertDialog.Builder(this)
                 .setView(dialogContent)
-                .setPositiveButton("OK", (dialog, which) -> {
+                .setPositiveButton("确定", (dialog, which) -> {
                     Set<String> next = new HashSet<>();
                     for (int i = 0; i < apps.size(); i++) {
                         if (checked[i]) {
@@ -2952,8 +2715,8 @@ public class MainActivity extends Activity {
                     prefs.edit().putStringSet("vpn_apps", next).apply();
                     updateSelectedAppsSummary();
                 })
-                .setNegativeButton("Cancel", null)
-                .setNeutralButton("Clear all", null)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("清空", null)
                 .create();
         appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
         appSelectorDialog.setOnShowListener(dialog -> {
@@ -2979,7 +2742,7 @@ public class MainActivity extends Activity {
                 count++;
             }
         }
-        return count == 0 ? "All apps" : count + " selected";
+        return count == 0 ? "所有应用" : "已选择 " + count + " 个";
     }
 
     private List<AppEntry> loadVpnCapableApps() {
@@ -3047,11 +2810,11 @@ public class MainActivity extends Activity {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("All apps");
+            selectedAppsSummary.setText("所有应用");
             return;
         }
 
-        selectedAppsSummary.setText(selected.size() + " selected");
+        selectedAppsSummary.setText("已选择 " + selected.size() + " 个");
     }
 
     private final class SpeedGaugeView extends View {
@@ -3109,8 +2872,8 @@ public class MainActivity extends Activity {
             textPaint.setTypeface(Typeface.DEFAULT);
             textPaint.setColor(COLOR_MUTED);
             textPaint.setTextSize(dp(12));
-            canvas.drawText(active ? "Realtime speed" : "VPN idle", centerX, centerY + dp(30), textPaint);
-            canvas.drawText("Scale " + formatSpeed(scale), centerX, Math.min(height - dp(10), centerY + dp(54)), textPaint);
+            canvas.drawText(active ? "实时速度" : "VPN 空闲", centerX, centerY + dp(30), textPaint);
+            canvas.drawText("刻度 " + formatSpeed(scale), centerX, Math.min(height - dp(10), centerY + dp(54)), textPaint);
         }
 
         private long gaugeScale(long speed) {
@@ -3160,8 +2923,8 @@ public class MainActivity extends Activity {
             float bottom = height - dp(24);
             float chartHeight = Math.max(dp(48), bottom - top);
 
-            drawLegend(canvas, right - dp(146), dp(10), COLOR_ACCENT, "Down");
-            drawLegend(canvas, right - dp(76), dp(10), COLOR_ACTION_START, "Up");
+            drawLegend(canvas, right - dp(146), dp(10), COLOR_ACCENT, "下载");
+            drawLegend(canvas, right - dp(76), dp(10), COLOR_ACTION_START, "上传");
 
             for (int i = 0; i < 3; i++) {
                 float y = top + chartHeight * i / 2f;
@@ -3282,7 +3045,7 @@ public class MainActivity extends Activity {
                         1f));
 
                 TextView systemBadge = new TextView(MainActivity.this);
-                systemBadge.setText("System");
+                systemBadge.setText("系统");
                 systemBadge.setTextSize(11f);
                 systemBadge.setTextColor(COLOR_MUTED);
                 systemBadge.setTypeface(Typeface.DEFAULT_BOLD);
@@ -3387,21 +3150,6 @@ public class MainActivity extends Activity {
             this.durationMs = durationMs;
             this.rxDelta = rxDelta;
             this.txDelta = txDelta;
-        }
-    }
-
-    private static final class TransportModeOption {
-        final String value;
-        final String label;
-
-        TransportModeOption(String value, String label) {
-            this.value = value;
-            this.label = label;
-        }
-
-        @Override
-        public String toString() {
-            return label;
         }
     }
 

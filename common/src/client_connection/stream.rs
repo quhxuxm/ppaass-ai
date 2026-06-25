@@ -8,18 +8,22 @@ use futures::{Sink, Stream};
 use protocol::{AgentCodec, ProxyRequest, ProxyResponse};
 use std::task::Poll;
 use std::{pin::Pin, task::Context};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
-type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
+type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
+type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
 
 /// 流包装器，在 ProxyRequest/Response 与 AsyncRead/AsyncWrite 之间转换
-pub struct ClientStream {
+pub struct ClientStream<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // 写给 proxy 的请求半边。
-    pub writer: FramedWriter,
+    pub writer: FramedWriter<S>,
     // 从 proxy 读取响应的半边。
-    pub reader: FramedReader,
+    pub reader: FramedReader<S>,
     // shutdown 只能发送一次空 end 包。
     pub end_sent: bool,
     // framed sink 的 start_send 只把 DataPacket 放进编码缓冲；这里记录一次尚未
@@ -31,14 +35,20 @@ pub struct ClientStream {
     pub read_pos: usize,
 }
 
-impl ClientStream {
+impl<S> ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     /// 获取流 ID
     pub fn stream_id(&self) -> &str {
         &self.stream_id
     }
 }
 
-impl tokio::io::AsyncRead for ClientStream {
+impl<S> tokio::io::AsyncRead for ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -91,7 +101,10 @@ impl tokio::io::AsyncRead for ClientStream {
     }
 }
 
-impl tokio::io::AsyncWrite for ClientStream {
+impl<S> tokio::io::AsyncWrite for ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -210,4 +223,4 @@ impl tokio::io::AsyncWrite for ClientStream {
 }
 
 // 实现 Unpin 以允许在需要 Unpin 的上下文中使用
-impl Unpin for ClientStream {}
+impl<S> Unpin for ClientStream<S> where S: AsyncRead + AsyncWrite + Unpin {}

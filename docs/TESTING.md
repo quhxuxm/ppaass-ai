@@ -70,7 +70,8 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/a
 ```
 [2024-01-31T02:00:00Z INFO  desktop_agent] Starting agent server
 [2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7070
-[2024-01-31T02:00:00Z INFO  desktop_agent::connection_pool] Connection pool initialized with 10 connections
+[2024-01-31T02:00:00Z INFO  desktop_agent::connection_pool] tcp_pool raw Yamux session pool prewarmed
+[2024-01-31T02:00:00Z INFO  desktop_agent::connection_pool] udp_pool raw Yamux session pool prewarmed
 ```
 
 ### Terminal 4: Run Integration Tests

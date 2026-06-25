@@ -2,7 +2,7 @@
 //!
 //! 认证后的第一条 `ConnectRequest` 会到这里。它不直接搬数据，而是先根据
 //! `Address` 和 `TransportProtocol` 决定后续生命周期：直连 TCP/UDP、
-//! 共享 UDP relay、Yamux 外层 session，或 forward 到上游 proxy。
+//! 共享 UDP relay，或 forward 到上游 proxy。
 
 use super::*;
 
@@ -10,74 +10,8 @@ impl ServerConnection {
     pub(super) async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         debug!("连接请求：{:?}", connect_request.address);
 
-        // 检查用户带宽软上限。
-        // 这里以前会直接拒绝新连接；浏览器播放 HLS 时多个分片请求会在同一秒内突增，
-        // 硬拒绝会表现成“某些分片请求失败/下载不完整”。现在保留观测和告警，
-        // 但不阻断连接，避免把带宽瞬时峰值误判成必须失败的业务请求。
-        if let Some(user_config) = &self.user_config
-            && !self
-                .bandwidth_monitor
-                .check_limit(&user_config.username)
-                .await
-        {
-            warn!(
-                "用户 {} 当前秒流量超过 bandwidth_limit_mbps，继续建立连接以避免媒体分片被硬拒绝；request_id={:?}",
-                user_config.username, connect_request.request_id
-            );
-        }
-
-        // TcpYamux / UdpYamux / UdpRelay 都是协议内的“虚拟地址”，
-        // 它们不代表真实目标服务器，而是告诉 proxy 建立某种复用/共享通道。
-        if matches!(connect_request.address, Address::TcpYamux) {
-            if self.proxy_config.transport.tcp_mode == TcpTransportMode::Legacy {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "TCP Yamux is disabled by proxy config".to_string(),
-                    )
-                    .await;
-            }
-            if connect_request.transport != TransportProtocol::Tcp {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "TCP Yamux only supports TCP transport".to_string(),
-                    )
-                    .await;
-            }
-            self.send_connect_success(connect_request.request_id.clone(), "TCP Yamux connected")
-                .await?;
-            // Yamux 外层 session 是一条长期复用的控制/数据通道；不要套 pre-connect idle。
-            // 死连接由 Yamux keepalive 发现；TCP 子流空闲策略由 yamux_tcp_relay_idle_timeout_secs 控制。
-            return self
-                .handle_tcp_yamux_connect(connect_request.request_id)
-                .await;
-        }
-
-        if matches!(connect_request.address, Address::UdpYamux) {
-            if self.proxy_config.transport.udp_mode == TcpTransportMode::Legacy {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "UDP Yamux is disabled by proxy config".to_string(),
-                    )
-                    .await;
-            }
-            if connect_request.transport != TransportProtocol::Udp {
-                return self
-                    .send_connect_error(
-                        connect_request.request_id,
-                        "UDP Yamux only supports UDP transport".to_string(),
-                    )
-                    .await;
-            }
-            self.send_connect_success(connect_request.request_id.clone(), "UDP Yamux connected")
-                .await?;
-            return self
-                .handle_udp_yamux_connect(connect_request.request_id)
-                .await;
-        }
-
+        // UdpRelay 是协议内的“虚拟地址”，不代表真实目标服务器，而是告诉 proxy
+        // 在当前加密 PPAASS 子 stream 内建立共享 UDP relay。
         if matches!(connect_request.address, Address::UdpRelay) {
             if connect_request.transport != TransportProtocol::Udp {
                 return self
@@ -132,9 +66,11 @@ impl ServerConnection {
                 )
                 .await?;
 
-                let mut stream = upstream_conn.into_stream();
+                let (yamux_connection, mut stream) = upstream_conn.into_parts();
                 // 上游连接也是一个 AsyncRead/AsyncWrite，复用普通 TCP 中继逻辑。
-                self.relay(connect_request.request_id, &mut stream).await?;
+                let relay_result = self.relay(connect_request.request_id, &mut stream).await;
+                yamux_connection.close().await;
+                relay_result?;
             }
             Err(e) => {
                 error!("连接上游代理失败：{}", e);

@@ -1,13 +1,10 @@
 //! Desktop Agent 配置模型。
 //!
-//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、连接池、
-//! transport/Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
+//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、
+//! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
-use common::{
-    QuicPolicy, TcpTransportMode, TransportConfig, YamuxConfig,
-    tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
-};
+use common::{QuicPolicy, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -23,12 +20,6 @@ pub struct AgentConfig {
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
-    #[serde(default = "default_tcp_pool_size", alias = "pool_size")]
-    pub tcp_pool_size: usize,
-
-    #[serde(default = "default_udp_pool_size")]
-    pub udp_pool_size: usize,
-
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
@@ -37,23 +28,7 @@ pub struct AgentConfig {
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
-    /// 连接池中连接的最大存活时间（秒）。
-    /// 超过此时间的连接会被丢弃并替换为新连接，避免因代理端的空闲超时
-    /// 关闭连接导致请求失败。
-    /// 应设为小于代理端 `pre_connect_idle_timeout_secs` 的值
-    /// （默认 90 秒，代理端默认 120 秒）。
-    #[serde(default = "default_pool_max_connection_age_secs")]
-    pub pool_max_connection_age_secs: u64,
-
-    /// TCP/UDP 传输模式：auto、yamux、legacy。
-    ///
-    /// Desktop 默认 TCP 使用常规通道。Yamux 把多个浏览器 TCP 连接复用到同一条
-    /// 外层 TCP，HLS/视频分片并发下载时容易受到外层队头阻塞影响；需要时仍可
-    /// 在 UI/TOML 中显式选择 yamux 或 auto。UDP 保持 auto，继续优先利用 UDP Yamux。
-    #[serde(default = "default_agent_transport_config")]
-    pub transport: TransportConfig,
-
-    /// Yamux 多路复用配置。TCP 与 UDP 使用各自独立的 Yamux 外层连接池。
+    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层连接池。
     #[serde(default)]
     pub yamux: YamuxConfig,
 
@@ -205,16 +180,6 @@ fn default_macos_tun_helper_fallback_to_privilege() -> bool {
     true
 }
 
-fn default_tcp_pool_size() -> usize {
-    // legacy TCP 池里的连接是一次性消费的预热连接。
-    // 浏览器播放 HLS 时会并发拉多个分片，默认 50 能减少等待新建 agent->proxy 连接的概率。
-    50
-}
-
-fn default_udp_pool_size() -> usize {
-    5
-}
-
 fn default_connect_timeout_secs() -> u64 {
     30
 }
@@ -227,12 +192,6 @@ fn default_compression_mode() -> String {
     "none".to_string()
 }
 
-fn default_pool_max_connection_age_secs() -> u64 {
-    // 默认 90 秒 — 低于代理端默认的 pre_connect_idle_timeout_secs (120 秒)。
-    // 确保池中连接在代理端关闭之前被淘汰，避免使用过期连接导致请求失败。
-    90
-}
-
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -243,13 +202,6 @@ fn default_log_file() -> String {
 
 fn default_async_runtime_stack_size_mb() -> usize {
     4
-}
-
-fn default_agent_transport_config() -> TransportConfig {
-    TransportConfig {
-        tcp_mode: TcpTransportMode::Legacy,
-        udp_mode: TcpTransportMode::Auto,
-    }
 }
 
 impl AgentConfig {
@@ -305,14 +257,6 @@ private_key_path = "keys/user1.pem"
                 .unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::Lz4);
-    }
-
-    #[test]
-    fn desktop_agent_defaults_tcp_to_legacy_transport() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert_eq!(config.transport.tcp_mode, TcpTransportMode::Legacy);
-        assert_eq!(config.transport.udp_mode, TcpTransportMode::Auto);
     }
 
     #[test]

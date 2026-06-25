@@ -124,17 +124,12 @@ impl ServerConnection {
         // UDP 没有天然字节流，这里用 StreamReader/SinkWriter 拼成类流式中继。
         // 这个 legacy UDP 路径面向单个已 connect 的 UDP socket；
         // 多目标 UDP 共享连接走 udp_relay.rs 的 flow_id 机制。
-        let username = self.user_config.as_ref().map(|c| c.username.clone());
-        let monitor_stream = self.bandwidth_monitor.clone();
-        let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
         // 使用自定义 Sink 将 UDP 响应数据重新封装成 proxy DataPacket。
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
-            username: username.clone(),
-            bandwidth_monitor: self.bandwidth_monitor.clone(),
             end_sent: false,
         };
 
@@ -156,9 +151,6 @@ impl ServerConnection {
                 futures::future::ready(continue_stream)
             })
             .filter_map(move |res| {
-                let user = username_stream.as_ref();
-                let monitor = &monitor_stream;
-
                 let result = match res {
                     Ok(ProxyRequest::Data(packet)) => {
                         // 只处理该流的数据包
@@ -167,9 +159,6 @@ impl ServerConnection {
                             stream_id_filter, "从 agent 收到 UDP 数据包：{packet:?}"
                         );
                         if packet.stream_id == stream_id_filter && !packet.data.is_empty() {
-                            if let Some(u) = user {
-                                monitor.record_received(u, packet.data.len() as u64);
-                            }
                             Some(Ok(Bytes::from(packet.data)))
                         } else {
                             None
@@ -202,8 +191,8 @@ impl ServerConnection {
             Duration::from_secs(self.proxy_config.udp_relay_idle_timeout_secs);
         let idle_timeout = tokio::time::sleep(udp_relay_idle_timeout);
         tokio::pin!(idle_timeout);
-        let mut agent_buf = [0u8; 65535];
-        let mut udp_buf = [0u8; 65535];
+        let mut agent_buf = vec![0u8; 65535];
+        let mut udp_buf = vec![0u8; 65535];
 
         loop {
             // 任一方向有数据就重置 idle；两边都长期无数据才关闭 UDP socket。
@@ -291,17 +280,12 @@ impl ServerConnection {
     {
         // TCP 中继把 agent 数据包流和目标 TCP 流转换成双向字节拷贝。
         // legacy 模式下，一条 agent->proxy TCP 连接通常只服务一个 request_id。
-        let username = self.user_config.as_ref().map(|c| c.username.clone());
-        let monitor_stream = self.bandwidth_monitor.clone();
-        let username_stream = username.clone();
         let stream_id_filter = stream_id.clone();
 
         // 使用自定义 Sink 实现，避免 SinkExt::with 与闭包引发 HRTB 问题
         let sink = BytesToProxyResponseSink {
             inner: &mut self.writer,
             stream_id: stream_id.clone(),
-            username: username.clone(),
-            bandwidth_monitor: self.bandwidth_monitor.clone(),
             end_sent: false,
         };
 
@@ -323,17 +307,11 @@ impl ServerConnection {
                 futures::future::ready(continue_stream)
             })
             .filter_map(move |res| {
-                let user = username_stream.as_ref();
-                let monitor = &monitor_stream;
-
                 let result = match res {
                     Ok(ProxyRequest::Data(packet)) => {
                         // 只处理该流的数据包
                         if packet.stream_id == stream_id_filter {
                             if !packet.data.is_empty() {
-                                if let Some(u) = user {
-                                    monitor.record_received(u, packet.data.len() as u64);
-                                }
                                 Some(Ok(Bytes::from(packet.data)))
                             } else {
                                 None

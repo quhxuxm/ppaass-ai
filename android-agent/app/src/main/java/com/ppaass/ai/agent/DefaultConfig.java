@@ -7,11 +7,7 @@ final class DefaultConfig {
     static final String TUN_IPV6 = "";
     static final int TUN_MTU = 1500;
     static final String QUIC_POLICY = "allow";
-    static final int TCP_POOL_SIZE = 32;
-    static final int UDP_POOL_SIZE = 32;
     static final String COMPRESSION_MODE = "none";
-    static final String TCP_MODE = "yamux";
-    static final String UDP_MODE = "yamux";
     static final String DIRECT_ACCESS_MODE = "proxy_all";
     static final String DIRECT_ACCESS_RULES =
             "localhost\n"
@@ -21,8 +17,6 @@ final class DefaultConfig {
                     + "172.16.0.0/12\n"
                     + "192.168.0.0/16\n"
                     + "::1";
-    // TCP Yamux 保持保守默认值。HLS/TUN 场景下盲目增大外层连接数会增加
-    // agent<->proxy 侧竞争，可能让单个视频分片读得更碎。
     static final int TCP_YAMUX_SESSIONS = 5;
     static final int UDP_YAMUX_SESSIONS = 5;
     static final int TCP_YAMUX_MAX_STREAMS_PER_SESSION = 256;

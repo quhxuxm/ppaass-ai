@@ -35,13 +35,9 @@ impl AgentServer {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
-        // TCP/UDP 分别维护到 proxy 的已认证预热连接，避免两类流量互相挤占。
+        // TCP/UDP 分别维护 raw Yamux session 池，避免两类流量互相挤占。
         let tcp_pool = Arc::new(ConnectionPool::new(config.clone()));
-        let udp_pool = Arc::new(ConnectionPool::new_with_size(
-            config.clone(),
-            config.udp_pool_size,
-            "udp_pool",
-        ));
+        let udp_pool = Arc::new(ConnectionPool::new_udp(config.clone()));
 
         Ok(Self {
             config,

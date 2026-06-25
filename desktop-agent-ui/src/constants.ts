@@ -19,21 +19,6 @@ export const directRulePresets = [
 
 export const compressionOptions = ["none", "lz4", "gzip", "zstd"];
 export const logLevelOptions = ["trace", "debug", "info", "warn", "error"];
-export const transportModeLabels: Record<string, string> = {
-  auto: "自动",
-  yamux: "Yamux",
-  legacy: "常规通道"
-};
-
-export const transportModeOptions = [
-  { label: transportModeLabels.auto, value: "auto" },
-  { label: transportModeLabels.yamux, value: "yamux" },
-  { label: transportModeLabels.legacy, value: "legacy" }
-];
-
-export function transportModeLabel(mode: string) {
-  return transportModeLabels[mode] ?? mode;
-}
 
 export const directModeLabels: Record<string, string> = {
   proxy_all: "全走代理",

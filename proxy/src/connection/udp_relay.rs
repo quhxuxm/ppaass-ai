@@ -20,7 +20,6 @@ impl ServerConnection {
         self.send_connect_success(connect_request.request_id.clone(), "UDP relay connected")
             .await?;
 
-        let username = self.user_config.as_ref().map(|c| c.username.clone());
         let channel_size = udp_relay_channel_size(&self.proxy_config);
         // response_tx：各个 flow 任务把目标响应送回主 relay 循环。
         // flow_done_tx：flow 空闲/失败退出后通知主循环清理 flows 表。
@@ -36,7 +35,6 @@ impl ServerConnection {
         let mut flow_set = UdpRelayFlowSet::new(
             self.proxy_config.as_ref(),
             self.egress_state.clone(),
-            self.connection_limiter.clone(),
             UdpRelayFlowChannels {
                 response_tx: response_tx.clone(),
                 flow_done_tx: flow_done_tx.clone(),
@@ -82,10 +80,6 @@ impl ServerConnection {
                     // flow 自己还有 per-flow idle；连接级 idle 只用于整条共享通道无流量时退出。
                     relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
 
-                    if let Some(user) = &username {
-                        self.bandwidth_monitor.record_received(user, packet.data.len() as u64);
-                    }
-
                     // agent 的 DataPacket payload 内部还包了一层 UdpRelayPacket，
                     // 这层携带 flow_id 和真正的 UDP 目标地址。
                     let relay_packet = match UdpRelayPacket::decode(&packet.data) {
@@ -108,8 +102,6 @@ impl ServerConnection {
                         &mut response_rx,
                         response,
                         &stream_id,
-                        username.as_deref(),
-                        self.bandwidth_monitor.as_ref(),
                     ).await?;
                     relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
                 }
@@ -130,39 +122,16 @@ async fn send_udp_relay_response_batch(
     response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
     first_response: QueuedUdpRelayResponse,
     stream_id: &str,
-    username: Option<&str>,
-    bandwidth_monitor: &BandwidthMonitor,
 ) -> Result<()> {
     // 首个响应来自 `recv().await`，一定存在；额外响应用 `try_recv` 非阻塞 drain。
-    // 常见低流量场景不会分配 extra_buffer_permits，只有实际 drain 到更多响应才扩容。
-    let first_buffer_permit = feed_udp_relay_response(
-        writer,
-        first_response,
-        stream_id,
-        username,
-        bandwidth_monitor,
-    )
-    .await?;
-    let mut extra_buffer_permits = Vec::new();
+    feed_udp_relay_response(writer, first_response, stream_id).await?;
     let mut batch_size = 1usize;
 
     for _ in 1..UDP_RELAY_RESPONSE_BATCH_LIMIT {
         match response_rx.try_recv() {
             Ok(response) => {
                 batch_size += 1;
-                // `feed_udp_relay_response` 会把响应排入 Framed sink，但数据可能还在
-                // sink/codec/socket 的内部缓冲里。因此这里收集 permit，等本批 flush
-                // 成功后再释放，保证 buffered bytes 统计覆盖真实写出前的积压。
-                extra_buffer_permits.push(
-                    feed_udp_relay_response(
-                        writer,
-                        response,
-                        stream_id,
-                        username,
-                        bandwidth_monitor,
-                    )
-                    .await?,
-                );
+                feed_udp_relay_response(writer, response, stream_id).await?;
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
@@ -176,10 +145,6 @@ async fn send_udp_relay_response_batch(
     if batch_size > 1 {
         debug!("UDP relay response 批量 flush：batch_size={batch_size}");
     }
-    // 明确 drop 是为了强调 permit 的释放点：只有这一批数据完成 flush 后，才把下行
-    // buffered bytes 从全局预算中扣回去。
-    drop(first_buffer_permit);
-    drop(extra_buffer_permits);
     Ok(())
 }
 
@@ -187,19 +152,11 @@ async fn feed_udp_relay_response(
     writer: &mut FramedWriter,
     response: QueuedUdpRelayResponse,
     stream_id: &str,
-    username: Option<&str>,
-    bandwidth_monitor: &BandwidthMonitor,
-) -> Result<UdpRelayBufferedBytesPermit> {
-    let QueuedUdpRelayResponse {
-        packet,
-        _buffer_permit: buffer_permit,
-    } = response;
+) -> Result<()> {
+    let QueuedUdpRelayResponse { packet } = response;
     // 目标响应重新编码成 UdpRelayPacket，再包回当前 stream_id 的 DataPacket。
     // 使用 `feed` 而不是 `send`，让调用方可以批量排队后统一 flush。
     let encoded = packet.encode().map_err(ProxyError::Protocol)?;
-    if let Some(user) = username {
-        bandwidth_monitor.record_sent(user, encoded.len() as u64);
-    }
     let packet = protocol::DataPacket {
         stream_id: stream_id.to_owned(),
         data: encoded,
@@ -209,5 +166,5 @@ async fn feed_udp_relay_response(
         .feed(ProxyResponse::Data(packet))
         .await
         .map_err(|e| ProxyError::Connection(format!("Failed to queue UDP relay response: {e}")))?;
-    Ok(buffer_permit)
+    Ok(())
 }

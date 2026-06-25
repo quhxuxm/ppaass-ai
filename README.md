@@ -7,9 +7,9 @@ encryption.
 
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
-- **Multi-User Support**: Each user has their own RSA key pair with bandwidth limits
-- **Connection Pooling**: Efficient connection reuse with multiplexing
-- **Bandwidth Management**: Per-user bandwidth limits and monitoring
+- **Multi-User Support**: Each user has their own RSA key pair
+- **Raw Yamux Transport**: Agent-to-proxy TCP and UDP relay traffic use separate Yamux session pools
+- **Encrypted Substreams**: PPAASS Auth/Connect/Data frames remain encrypted inside Yamux substreams
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
@@ -56,7 +56,7 @@ cp config/proxy.toml.example config/proxy.toml
 cargo run --release -p proxy -- --config config/proxy.toml
 ```
 
-3. Add the user's public key and bandwidth limit to `config/users.toml`
+3. Add the user's public key to `config/users.toml`
 
 4. Update `config/agent.toml` with your username and private key path
 
@@ -78,12 +78,18 @@ macOS TUN mode can run the existing `desktop-agent` binary in a privileged helpe
 
 ```toml
 listen_addr = "127.0.0.1:1080"      # Local proxy address
-proxy_addr = "proxy.example.com:8080" # Remote proxy address
+proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
-password = "password123"              # Your password
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-pool_size = 50                      # Connection pool size
 connection_timeout_secs = 30                # Connection timeout
+
+[yamux.tcp]
+sessions = 5                         # TCP relay raw Yamux outer sessions
+max_streams_per_session = 128        # TCP relay substreams per session
+
+[yamux.udp]
+sessions = 5                         # UDP relay raw Yamux outer sessions
+max_streams_per_session = 128        # UDP relay substreams per session
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)
@@ -104,8 +110,8 @@ users_path = "config/users.toml"          # Users configuration file
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **Connection Pooling**: Reuses connections for better performance
-- **Multiplexing**: Multiple streams over single connection
+- **Separate Yamux Pools**: TCP relay and UDP relay maintain independent outer sessions
+- **Multiplexing**: Multiple encrypted PPAASS substreams over each raw Yamux connection
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
 ### Performance Testing
@@ -190,7 +196,7 @@ cargo audit
 ### Performance Issues
 
 1. Increase pool size in agent configuration
-2. Check bandwidth limits
+2. Check Yamux session and stream settings
 3. Review network latency
 
 ### Authentication Failures

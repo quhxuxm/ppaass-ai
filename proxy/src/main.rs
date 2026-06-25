@@ -4,10 +4,8 @@
 //! 校验出站网卡配置、构建 Tokio runtime，然后把真正的网络服务交给 `ProxyServer`。
 //! 具体的认证、CONNECT 分流和数据中继都在 `server` 与 `connection` 模块中。
 
-mod bandwidth;
 mod config;
 mod connection;
-mod connection_limiter;
 mod error;
 mod server;
 mod user_manager;

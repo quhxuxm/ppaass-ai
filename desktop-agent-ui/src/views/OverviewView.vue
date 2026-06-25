@@ -23,7 +23,6 @@ import {
   readOverviewCardOrder,
   saveOverviewCardOrder
 } from "../overviewLayout";
-import { transportModeLabel } from "../constants";
 import type {
   AgentConfigSummary,
   AgentState,
@@ -241,7 +240,7 @@ function hourlyBarHeight(bytes: number) {
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
             <Tag
               v-else-if="card.key === 'egress'"
-              :value="`${transportModeLabel(summary.tcp_mode)} / ${transportModeLabel(summary.udp_mode)}`"
+              value="Yamux only"
               severity="info"
             />
             <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />
@@ -283,13 +282,13 @@ function hourlyBarHeight(bytes: number) {
           </div>
           <div class="metric-tile">
             <i class="pi pi-clone"></i>
-            <span>TCP 池</span>
-            <strong>{{ summary.tcp_pool_size }}</strong>
+            <span>TCP Yamux</span>
+            <strong>{{ summary.tcp_yamux_sessions }}</strong>
           </div>
           <div class="metric-tile">
             <i class="pi pi-wave-pulse"></i>
-            <span>UDP 池</span>
-            <strong>{{ summary.udp_pool_size }}</strong>
+            <span>UDP Yamux</span>
+            <strong>{{ summary.udp_yamux_sessions }}</strong>
           </div>
           <div class="metric-tile">
             <i class="pi pi-box"></i>

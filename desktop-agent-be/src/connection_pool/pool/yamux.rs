@@ -1,7 +1,7 @@
 //! Yamux 连接池。
 //!
-//! 每个 `YamuxClientConnection` 是一条已认证、已 CONNECT 到 `TcpYamux` 或
-//! `UdpYamux` 的外层 session。真实目标连接通过在 session 内打开子流完成。
+//! 每个 `YamuxClientConnection` 是一条 raw TCP 上的外层 Yamux session。真实目标
+//! 连接通过在 session 内打开子流，并在子流内执行 PPAASS 加密协议完成。
 
 use super::*;
 
@@ -29,12 +29,7 @@ impl ConnectionPool {
             {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
-                    // UDP Yamux 子流需要保留数据报边界，因此包装成 DatagramStreamIo。
-                    return if transport == TransportProtocol::Udp {
-                        Ok(ConnectedStream::new_yamux_datagram(stream, request_id))
-                    } else {
-                        Ok(ConnectedStream::new_yamux(stream, request_id))
-                    };
+                    return Ok(ConnectedStream::new_yamux(stream, request_id));
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -85,28 +80,16 @@ impl ConnectionPool {
             let semaphore = semaphore.clone();
             let bind_ip = self.get_proxy_bind_ip();
             let bind_interface = self.get_proxy_bind_interface();
-            let outer_address = self
-                .yamux_outer_address
-                .clone()
-                .ok_or_else(|| AgentError::Connection("Yamux outer address missing".to_string()))?;
-            let transport = self
-                .yamux_transport
-                .ok_or_else(|| AgentError::Connection("Yamux transport missing".to_string()))?;
+            let transport = self.yamux_transport;
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
-                ProxyConnection::new_yamux_connection(
-                    &config,
-                    bind_ip,
-                    bind_interface,
-                    outer_address,
-                    transport,
-                )
-                .await
-                .map(|connection| YamuxSessionHandle {
-                    id: session_id,
-                    connection,
-                })
+                new_yamux_connection(&config, bind_ip, bind_interface, transport)
+                    .await
+                    .map(|connection| YamuxSessionHandle {
+                        id: session_id,
+                        connection,
+                    })
             });
         }
 
@@ -168,8 +151,8 @@ impl ConnectionPool {
 
     pub(super) fn yamux_target_size(&self) -> usize {
         match self.yamux_transport {
-            Some(TransportProtocol::Udp) => self.config.yamux.udp_session_count(),
-            _ => self.config.yamux.tcp_session_count(),
+            TransportProtocol::Udp => self.config.yamux.udp_session_count(),
+            TransportProtocol::Tcp => self.config.yamux.tcp_session_count(),
         }
     }
 }

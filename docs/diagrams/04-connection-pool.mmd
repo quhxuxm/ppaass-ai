@@ -1,22 +1,19 @@
 flowchart TD
-    A["get_connected_stream(address, transport)"] --> B{"transport mode"}
-    B -->|"yamux / auto"| C["尝试 Yamux session"]
-    C --> D{"有可用 session?"}
-    D -->|"否"| E["创建/补充 Yamux 外层连接"]
-    D -->|"是"| F["打开 Yamux 子流"]
-    E --> F
-    F --> G["子流发送 ConnectRequest 控制帧"]
-    G --> H{"ConnectResponse 成功?"}
-    H -->|"是"| I["返回 Yamux AsyncRead/AsyncWrite"]
-    H -->|"目标连接失败"| Z["返回业务错误"]
-    H -->|"session 故障且 auto"| J["回退 legacy"]
-
-    B -->|"legacy"| J
-    J --> K{"池内有预热连接?"}
-    K -->|"是"| L["取出已认证连接"]
-    K -->|"否"| M["同步新建认证连接"]
-    L --> N["发送 ConnectRequest"]
-    M --> N
-    N --> O{"ConnectResponse 成功?"}
-    O -->|"是"| P["返回 Framed/DataPacket 流"]
-    O -->|"否"| Z
+    A["get_connected_stream(address)"] --> B{"目标流量类型"}
+    B -->|"TCP relay"| C["tcp_pool"]
+    B -->|"UDP relay / DNS / shared UDP relay"| D["udp_pool"]
+    C --> E{"有可用 raw Yamux session?"}
+    D --> F{"有可用 raw Yamux session?"}
+    E -->|"否"| G["创建/补充 TCP raw Yamux 外层连接"]
+    F -->|"否"| H["创建/补充 UDP raw Yamux 外层连接"]
+    E -->|"是"| I["打开 Yamux 子流"]
+    F -->|"是"| I
+    G --> I
+    H --> I
+    I --> J["子流内发送 Auth"]
+    J --> K{"AuthResponse 成功?"}
+    K -->|"否"| Z["返回认证错误"]
+    K -->|"是"| L["子流内发送 ConnectRequest"]
+    L --> M{"ConnectResponse 成功?"}
+    M -->|"否"| Y["返回业务错误"]
+    M -->|"是"| N["返回加密 DataPacket 流"]

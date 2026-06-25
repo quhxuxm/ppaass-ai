@@ -219,13 +219,6 @@ public class PpaassVpnService extends VpnService {
                         DefaultConfig.TUN_MTU))
                 .put("proxy_dns", true)
                 .put("quic_policy", quicPolicy);
-        JSONObject transportJson = new JSONObject()
-                .put("tcp_mode", normalizeTransportMode(
-                        prefs.getString("tcp_mode", DefaultConfig.TCP_MODE),
-                        DefaultConfig.TCP_MODE))
-                .put("udp_mode", normalizeTransportMode(
-                        prefs.getString("udp_mode", DefaultConfig.UDP_MODE),
-                        DefaultConfig.UDP_MODE));
         JSONObject yamuxJson = new JSONObject()
                 .put("tcp", buildYamuxTransportJson(prefs, true))
                 .put("udp", buildYamuxTransportJson(prefs, false));
@@ -247,13 +240,6 @@ public class PpaassVpnService extends VpnService {
                 .put("connect_timeout_secs", 30)
                 .put("compression_mode", normalizeCompressionMode(
                         prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE)))
-                .put("tcp_pool_size", parseNonNegativeInt(
-                        prefs.getString("tcp_pool_size", String.valueOf(DefaultConfig.TCP_POOL_SIZE)),
-                        DefaultConfig.TCP_POOL_SIZE))
-                .put("udp_pool_size", parseNonNegativeInt(
-                        prefs.getString("udp_pool_size", String.valueOf(DefaultConfig.UDP_POOL_SIZE)),
-                        DefaultConfig.UDP_POOL_SIZE))
-                .put("transport", transportJson)
                 .put("yamux", yamuxJson)
                 .put("direct_access", directAccessJson)
                 .put("tun", tunJson);
@@ -362,7 +348,7 @@ public class PpaassVpnService extends VpnService {
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
                 .setContentTitle(getString(R.string.app_name))
-                .setContentText("Running")
+                .setContentText("运行中")
                 .setOngoing(true)
                 .build();
     }
@@ -393,17 +379,6 @@ public class PpaassVpnService extends VpnService {
 
     private int parseMinInt(String value, int fallback, int min) {
         return Math.max(min, parseInt(value, fallback));
-    }
-
-    private String normalizeTransportMode(String value, String fallback) {
-        if (value == null) {
-            return fallback;
-        }
-        String normalized = value.trim().toLowerCase();
-        if ("auto".equals(normalized) || "yamux".equals(normalized) || "legacy".equals(normalized)) {
-            return normalized;
-        }
-        return fallback;
     }
 
     private String normalizeCompressionMode(String value) {

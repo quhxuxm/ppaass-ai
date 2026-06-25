@@ -15,33 +15,6 @@ pub const DEFAULT_YAMUX_SERVER_MAX_STREAMS_PER_SESSION: usize = 128;
 pub const DEFAULT_YAMUX_SERVER_CONNECTION_WRITE_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_YAMUX_SERVER_STREAM_WINDOW_SIZE_KB: usize = 8192;
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum TcpTransportMode {
-    #[default]
-    Auto,
-    Yamux,
-    Legacy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportConfig {
-    #[serde(default)]
-    pub tcp_mode: TcpTransportMode,
-
-    #[serde(default)]
-    pub udp_mode: TcpTransportMode,
-}
-
-impl Default for TransportConfig {
-    fn default() -> Self {
-        Self {
-            tcp_mode: TcpTransportMode::Auto,
-            udp_mode: TcpTransportMode::Auto,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct YamuxConfig {
@@ -87,6 +60,24 @@ impl YamuxServerConfig {
 
     pub fn udp_settings(&self) -> YamuxSettings {
         self.udp.settings()
+    }
+
+    pub fn merged_settings(&self) -> YamuxSettings {
+        let tcp = self.tcp.settings();
+        let udp = self.udp.settings();
+        YamuxSettings {
+            max_streams_per_session: tcp.max_streams_per_session.max(udp.max_streams_per_session),
+            open_stream_timeout: tcp.open_stream_timeout.max(udp.open_stream_timeout),
+            keepalive_interval: match (tcp.keepalive_interval, udp.keepalive_interval) {
+                (Some(tcp), Some(udp)) => Some(tcp.min(udp)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            },
+            connection_write_timeout: tcp
+                .connection_write_timeout
+                .max(udp.connection_write_timeout),
+            stream_window_size_kb: tcp.stream_window_size_kb.max(udp.stream_window_size_kb),
+        }
     }
 }
 

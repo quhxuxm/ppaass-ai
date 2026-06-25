@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, QuicPolicy, TcpTransportMode, TransportConfig, YamuxConfig};
+use common::{ClientConnectionConfig, QuicPolicy, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
@@ -27,17 +27,6 @@ pub struct AndroidAgentConfig {
 
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
-
-    #[serde(default = "default_tcp_pool_size")]
-    pub tcp_pool_size: usize,
-
-    #[serde(default = "default_udp_pool_size")]
-    pub udp_pool_size: usize,
-
-    /// Android 默认 TCP 使用常规通道，避免浏览器/视频 App 的多个 TCP 分片连接
-    /// 被 Yamux 塞进同一条外层 TCP 后互相队头阻塞；UDP 仍保持 auto。
-    #[serde(default = "default_android_transport_config")]
-    pub transport: TransportConfig,
 
     #[serde(default)]
     pub yamux: YamuxConfig,
@@ -162,23 +151,6 @@ fn default_runtime_threads() -> usize {
     4
 }
 
-fn default_android_transport_config() -> TransportConfig {
-    TransportConfig {
-        tcp_mode: TcpTransportMode::Legacy,
-        udp_mode: TcpTransportMode::Auto,
-    }
-}
-
-fn default_tcp_pool_size() -> usize {
-    // 与 Java DefaultConfig 的 TCP_POOL_SIZE 保持一致。
-    // Android TUN 下浏览器/视频 App 也会并发请求多个分片，32 条预热连接能减少缺省配置下的建连等待。
-    32
-}
-
-fn default_udp_pool_size() -> usize {
-    5
-}
-
 fn default_tun_ipv4() -> String {
     "10.10.10.2/24".to_string()
 }
@@ -204,17 +176,6 @@ mod tests {
         let config = AndroidTunConfig::default();
 
         assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
-    }
-
-    #[test]
-    fn android_agent_defaults_tcp_to_legacy_transport() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"k"}"#,
-        )
-        .unwrap();
-
-        assert_eq!(config.transport.tcp_mode, TcpTransportMode::Legacy);
-        assert_eq!(config.transport.udp_mode, TcpTransportMode::Auto);
     }
 
     #[test]

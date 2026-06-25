@@ -12,16 +12,18 @@ sequenceDiagram
         Target-->>Agent: 响应
         Agent-->>App: 响应
     else 代理
-        Agent->>Pool: get_connected_stream(target, transport)
-        Pool->>Proxy: Auth if new outer connection
-        Proxy-->>Pool: AuthResponse
-        Pool->>Proxy: ConnectRequest
+        Agent->>Pool: get_connected_stream(target)
+        Pool->>Proxy: raw TCP Yamux outer session if needed
+        Pool->>Proxy: open Yamux substream
+        Pool->>Proxy: Auth in substream
+        Proxy-->>Pool: AuthResponse in substream
+        Pool->>Proxy: ConnectRequest in substream
         Proxy->>Target: connect target
-        Proxy-->>Pool: ConnectResponse
+        Proxy-->>Pool: ConnectResponse in substream
         App->>Agent: payload
-        Agent->>Proxy: DataPacket / Yamux payload
+        Agent->>Proxy: encrypted DataPacket in substream
         Proxy->>Target: payload
         Target-->>Proxy: response
-        Proxy-->>Agent: DataPacket / Yamux payload
+        Proxy-->>Agent: encrypted DataPacket in substream
         Agent-->>App: response
     end
