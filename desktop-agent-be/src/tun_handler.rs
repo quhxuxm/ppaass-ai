@@ -309,12 +309,6 @@ pub async fn run_tun_mode(
         cleanup_stale_dns(config.dns_state_file.as_deref());
     }
 
-    // 路由已就绪后再后台预热代理连接池。否则 VMware、旧 TUN 路由或 split-default
-    // 已存在时，绑定到物理接口的 Yamux 连接可能在启动早期得到 No route to host。
-    // 请求路径在池空时会按需建连，因此不必阻塞 TUN 转发器等待完整预热完成。
-    tcp_pool.spawn_prewarm_once("desktop tun tcp pool prewarm");
-    udp_pool.spawn_prewarm_once("desktop tun udp pool prewarm");
-
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
 

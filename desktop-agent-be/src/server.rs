@@ -76,11 +76,6 @@ impl AgentServer {
                 tun_shutdown,
             ));
             tun_task_running = true;
-        } else {
-            // 纯代理模式可以立即后台预热；请求路径在池空时会按需建连，
-            // 因此不必等完整预热完成后才开始接受本地连接。
-            self.tcp_pool.spawn_prewarm_once("desktop tcp pool prewarm");
-            self.udp_pool.spawn_prewarm_once("desktop udp pool prewarm");
         }
 
         loop {

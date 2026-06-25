@@ -60,7 +60,7 @@ The user management in proxy side should use the proxy users TOML configuration 
   - The version of the crates should be defined in the workspace `Cargo.toml` file.
 - Important logic:
   - The configuration file format should be `TOML`.
-  - The pooled connections from agent to proxy do not need to be reusable, but the pool should prewarm number of connections to improve performance.
+  - The pooled connections from agent to proxy should be created lazily on demand instead of being prewarmed at agent startup.
   - The project should keep the desktop agent backend in `desktop-agent-be` and the server proxy in `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.

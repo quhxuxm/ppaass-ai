@@ -35,10 +35,6 @@ pub async fn run_android_http_proxy(
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_pool = AndroidConnectionPool::new(config, shutdown.clone(), "tcp_pool");
-    let tcp_pool_for_prewarm = tcp_pool.clone();
-    spawn_guarded("android http proxy tcp pool prewarm", async move {
-        tcp_pool_for_prewarm.prewarm().await;
-    });
 
     info!("Android HTTP proxy listening on {bind_addr}");
     android_log::info(format!("Android HTTP proxy listening on {bind_addr}"));

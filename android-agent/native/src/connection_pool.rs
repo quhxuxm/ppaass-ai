@@ -11,7 +11,7 @@ use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::android_log;
 use crate::config::AndroidAgentConfig;
@@ -56,32 +56,6 @@ impl AndroidConnectionPool {
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
         })
-    }
-
-    pub async fn prewarm(self: &Arc<Self>) {
-        if self.shutdown.is_cancelled() {
-            return;
-        }
-        let target_size = self.yamux_target_size();
-        info!(
-            "prewarming Android {} with {} Yamux sessions",
-            self.pool_name, target_size
-        );
-        match self.ensure_yamux_sessions(target_size).await {
-            Ok(success_count) => {
-                info!(
-                    "Android {} Yamux prewarmed {} sessions",
-                    self.pool_name, success_count
-                );
-            }
-            Err(err) => {
-                warn!("failed to prewarm Android {} Yamux: {err}", self.pool_name);
-                android_log::warn(format!(
-                    "Android {} Yamux prewarm failed: {err}",
-                    self.pool_name
-                ));
-            }
-        }
     }
 
     pub async fn get_connected_stream(

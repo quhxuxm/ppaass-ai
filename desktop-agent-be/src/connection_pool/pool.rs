@@ -12,14 +12,13 @@ use common::{BindInterface, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, Yamux
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 const MAX_CONCURRENT_POOL_CONNECTS: usize = 20;
 
 mod connect;
-mod prewarm;
 mod yamux;
 
 #[derive(Clone)]
@@ -32,7 +31,6 @@ pub struct ConnectionPool {
     config: Arc<AgentConfig>,
     pool_name: &'static str,
     yamux_transport: TransportProtocol,
-    prewarm_started: AtomicBool,
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
@@ -59,7 +57,6 @@ impl ConnectionPool {
             config,
             pool_name,
             yamux_transport,
-            prewarm_started: AtomicBool::new(false),
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),

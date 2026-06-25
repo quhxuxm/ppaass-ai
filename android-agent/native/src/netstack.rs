@@ -10,7 +10,6 @@ mod udp_relay;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::spawn_guarded;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -75,14 +74,6 @@ pub async fn run_android_agent(
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_pool = AndroidConnectionPool::new(config.clone(), shutdown.clone(), "tcp_pool");
     let udp_pool = AndroidConnectionPool::new(config.clone(), shutdown.clone(), "udp_pool");
-    let tcp_pool_for_prewarm = tcp_pool.clone();
-    spawn_guarded("android tcp pool prewarm", async move {
-        tcp_pool_for_prewarm.prewarm().await;
-    });
-    let udp_pool_for_prewarm = udp_pool.clone();
-    spawn_guarded("android udp pool prewarm", async move {
-        udp_pool_for_prewarm.prewarm().await;
-    });
     let context = ForwardContext {
         tcp_pool,
         udp_pool,

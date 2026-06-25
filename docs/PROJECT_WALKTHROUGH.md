@@ -128,7 +128,6 @@ Agent 有两个池：
 
 - `desktop-agent-be/src/connection_pool/pool.rs`
 - `desktop-agent-be/src/connection_pool/proxy_connection.rs`
-- `desktop-agent-be/src/connection_pool/pool/prewarm.rs`
 - `desktop-agent-be/src/connection_pool/pool/yamux.rs`
 - `common/src/client_connection/yamux.rs`
 
@@ -138,6 +137,7 @@ Mermaid 源码：[04-connection-pool.mmd](diagrams/04-connection-pool.mmd)
 
 - Agent 到 Proxy 的外层连接是 raw TCP + `tokio-yamux`，外层不再跑旧的 PPAASS 虚拟地址握手。
 - `tcp_pool` 和 `udp_pool` 分别维护自己的 raw Yamux session 池，TCP relay 和 UDP relay 不共享外层连接。
+- Agent 启动时不再预热 Yamux session；请求路径在池为空或 session 不足时按需补齐。
 - 每个真实目标连接先打开一个 Yamux 子流，再在子流内执行 PPAASS Auth。
 - Auth 成功后继续在同一个子流内发送 `ConnectRequest`；数据仍通过加密的 `DataPacket` 帧传输。
 - Proxy accept 到 raw TCP 后只创建 Yamux server session，具体 TCP/UDP 目标类型由子流里的 `ConnectRequest` 决定。
