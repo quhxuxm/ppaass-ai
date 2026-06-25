@@ -10,6 +10,8 @@ final class NativeAgent {
 
     static native long start(int tunFd, String configJson, PpaassVpnService vpnService);
 
+    static native long startHttpProxy(String configJson, int listenPort);
+
     static native boolean isRunning(long handle);
 
     static native void stop(long handle);

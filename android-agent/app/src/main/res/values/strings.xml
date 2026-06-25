@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">PPAASS VPN</string>
     <string name="vpn_channel_name">PPAASS VPN</string>
+    <string name="http_proxy_channel_name">PPAASS HTTP Proxy</string>
 </resources>

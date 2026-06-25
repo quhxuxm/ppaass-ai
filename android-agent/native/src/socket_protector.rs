@@ -55,10 +55,8 @@ pub fn protect_fd(fd: std::os::fd::RawFd) -> io::Result<()> {
         .lock()
         .map_err(|_| io::Error::other("Android socket protector mutex was poisoned"))?;
     let Some(protector) = protector.as_ref() else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "Android socket protector is not installed",
-        ));
+        // HTTP proxy mode can run without VpnService; in that case there is no socket to exclude.
+        return Ok(());
     };
 
     let protected = protector

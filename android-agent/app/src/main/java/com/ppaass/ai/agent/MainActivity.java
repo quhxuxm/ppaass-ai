@@ -51,6 +51,7 @@ import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.security.SecureRandom;
@@ -59,6 +60,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -102,6 +104,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private EditText proxyAddrs;
+    private EditText httpProxyPort;
     private EditText username;
     private EditText privateKey;
     private EditText runtimeThreads;
@@ -137,6 +140,9 @@ public class MainActivity extends Activity {
     private AlertDialog appSelectorDialog;
     private Button vpnToggle;
     private TextView vpnStatus;
+    private Button httpProxyToggle;
+    private TextView httpProxyStatus;
+    private TextView httpProxyEndpoint;
     private TextView downloadSpeed;
     private TextView uploadSpeed;
     private TextView trafficDownload;
@@ -171,9 +177,11 @@ public class MainActivity extends Activity {
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
-                        || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)) {
+                        || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)
+                        || PpaassHttpProxyService.PREF_RUNNING.equals(key)) {
                     runOnUiThread(() -> {
                         updateVpnToggle();
+                        updateHttpProxyToggle();
                         updateStatusMetrics();
                     });
                 }
@@ -192,6 +200,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateVpnToggle();
+        updateHttpProxyToggle();
         startStatusRefresh();
     }
 
@@ -281,6 +290,7 @@ public class MainActivity extends Activity {
 
         selectScreen(0);
         updateVpnToggle();
+        updateHttpProxyToggle();
         updateStatusMetrics();
 
         setContentView(scroll);
@@ -360,6 +370,7 @@ public class MainActivity extends Activity {
         appsRowParams.setMargins(0, dp(4), 0, 0);
         apps.addView(appsRow, appsRowParams);
 
+        buildHttpProxyPanel(root);
         buildConnectivityPanel(root);
 
         LinearLayout dashboard = panel(root);
@@ -408,6 +419,48 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams dnsScrollParams = matchWrap();
         dnsScrollParams.height = dp(300);
         dnsPanel.addView(dnsScroll, dnsScrollParams);
+    }
+
+    private void buildHttpProxyPanel(LinearLayout root) {
+        LinearLayout panel = panel(root);
+        sectionTitle(panel, "HTTP Proxy");
+        TextView subtitle = mutedText("同一 Wi-Fi 客户端可将 HTTP 代理指向 Android", 13f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(2), 0, dp(10));
+        panel.addView(subtitle, subtitleParams);
+
+        LinearLayout topRow = horizontalRow();
+        LinearLayout endpointColumn = new LinearLayout(this);
+        endpointColumn.setOrientation(LinearLayout.VERTICAL);
+        httpProxyEndpoint = titleText(httpProxyEndpointLabel(), 16f);
+        httpProxyEndpoint.setSingleLine(false);
+        httpProxyEndpoint.setMaxLines(3);
+        httpProxyEndpoint.setEllipsize(TextUtils.TruncateAt.END);
+        endpointColumn.addView(httpProxyEndpoint, matchWrap());
+
+        TextView hint = mutedText("外部设备需与 Android 在同一个 Wi-Fi", 12f);
+        LinearLayout.LayoutParams hintParams = matchWrap();
+        hintParams.setMargins(0, dp(3), 0, 0);
+        endpointColumn.addView(hint, hintParams);
+        topRow.addView(endpointColumn, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+
+        httpProxyStatus = chip("未启动", COLOR_STATUS_STOPPED);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusParams.setMargins(dp(10), 0, 0, 0);
+        topRow.addView(httpProxyStatus, statusParams);
+        panel.addView(topRow, matchWrap());
+
+        httpProxyToggle = actionButton("启动", COLOR_ACTION_START);
+        httpProxyToggle.setOnClickListener(view -> toggleHttpProxy());
+        LinearLayout.LayoutParams buttonParams = matchWrap();
+        buttonParams.height = dp(48);
+        buttonParams.setMargins(0, dp(12), 0, 0);
+        panel.addView(httpProxyToggle, buttonParams);
     }
 
     private void buildConnectivityPanel(LinearLayout root) {
@@ -462,6 +515,15 @@ public class MainActivity extends Activity {
                 DefaultConfig.normalizePrivateKeyPem(prefString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
                 5,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+
+        LinearLayout httpProxy = configSection(root, "HTTP Proxy");
+        httpProxyPort = numberControl(
+                httpProxy,
+                "监听端口",
+                prefString("http_proxy_port", String.valueOf(DefaultConfig.HTTP_PROXY_PORT)),
+                1,
+                1);
+        addFieldHelp(httpProxy, "监听 0.0.0.0，供同一 Wi-Fi 的外部客户端使用。");
 
         LinearLayout runtime = configSection(root, "运行参数");
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
@@ -705,6 +767,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams methodsParams = matchWrap();
         methodsParams.setMargins(0, dp(12), 0, 0);
         addForwardingMethod(methods, "Android VPN", "TUN 流量策略");
+        addForwardingMethod(methods, "Android HTTP Proxy", "显式代理流量");
         addForwardingMethod(methods, "策略路由", "使用当前直连模式");
         root.addView(methods, methodsParams);
     }
@@ -1323,12 +1386,51 @@ public class MainActivity extends Activity {
         updateVpnToggle();
     }
 
+    private void toggleHttpProxy() {
+        if (isHttpProxyRunning()) {
+            stopHttpProxyService();
+            return;
+        }
+
+        saveConfig();
+        startHttpProxyService();
+    }
+
+    private void startHttpProxyService() {
+        Intent intent = new Intent(this, PpaassHttpProxyService.class);
+        intent.setAction(PpaassHttpProxyService.ACTION_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+        updateHttpProxyToggle();
+    }
+
+    private void stopHttpProxyService() {
+        Intent intent = new Intent(this, PpaassHttpProxyService.class);
+        intent.setAction(PpaassHttpProxyService.ACTION_STOP);
+        startService(intent);
+        updateHttpProxyToggle();
+    }
+
     private boolean isVpnRunning() {
         boolean running = prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false);
         if (running && !PpaassVpnService.isRunningInProcess()) {
             prefs.edit()
                     .putBoolean(PpaassVpnService.PREF_RUNNING, false)
                     .putBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false)
+                    .apply();
+            return false;
+        }
+        return running;
+    }
+
+    private boolean isHttpProxyRunning() {
+        boolean running = prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false);
+        if (running && !PpaassHttpProxyService.isRunningInProcess()) {
+            prefs.edit()
+                    .putBoolean(PpaassHttpProxyService.PREF_RUNNING, false)
                     .apply();
             return false;
         }
@@ -1356,8 +1458,28 @@ public class MainActivity extends Activity {
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
             vpnStatus.setBackground(rounded(statusColor, statusColor));
         }
-        updateConfigEditability(!running);
+        updateConfigEditability(!running && !isHttpProxyRunning());
         updateConnectivityButton();
+    }
+
+    private void updateHttpProxyToggle() {
+        if (httpProxyToggle == null) {
+            return;
+        }
+
+        boolean running = isHttpProxyRunning();
+        int actionColor = running ? COLOR_ACTION_STOP : COLOR_ACTION_START;
+        httpProxyToggle.setText(running ? "停止" : "启动");
+        httpProxyToggle.setTextColor(Color.WHITE);
+        httpProxyToggle.setBackground(rounded(actionColor, actionColor));
+        httpProxyToggle.setEnabled(true);
+        if (httpProxyStatus != null) {
+            httpProxyStatus.setText(running ? "已启动" : "未启动");
+            int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
+            httpProxyStatus.setBackground(rounded(statusColor, statusColor));
+        }
+        updateHttpProxyEndpoint();
+        updateConfigEditability(!isVpnRunning() && !running);
     }
 
     private void updateFlipButton(String label, int color, boolean enabled) {
@@ -1443,6 +1565,7 @@ public class MainActivity extends Activity {
                     hourlyUploadBytes,
                     Calendar.getInstance().get(Calendar.HOUR_OF_DAY));
         }
+        updateHttpProxyEndpoint();
         updateDnsRecords();
     }
 
@@ -1452,6 +1575,76 @@ public class MainActivity extends Activity {
 
     private long currentVpnUploadBytes() {
         return Math.max(0, NativeAgent.vpnUploadBytes());
+    }
+
+    private void updateHttpProxyEndpoint() {
+        if (httpProxyEndpoint != null) {
+            httpProxyEndpoint.setText(httpProxyEndpointLabel());
+        }
+    }
+
+    private String httpProxyEndpointLabel() {
+        String port = String.valueOf(httpProxyListenPort());
+        List<String> addresses = localIpv4Addresses();
+        if (addresses.isEmpty()) {
+            return "0.0.0.0:" + port;
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (String address : addresses) {
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(address).append(':').append(port);
+        }
+        return builder.toString();
+    }
+
+    private int httpProxyListenPort() {
+        String value;
+        if (httpProxyPort != null) {
+            value = httpProxyPort.getText().toString();
+        } else {
+            value = prefs.getString(
+                    "http_proxy_port",
+                    String.valueOf(DefaultConfig.HTTP_PROXY_PORT));
+        }
+
+        try {
+            int parsed = Integer.parseInt(value == null ? "" : value.trim());
+            if (parsed >= 1 && parsed <= 65535) {
+                return parsed;
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return DefaultConfig.HTTP_PROXY_PORT;
+    }
+
+    private List<String> localIpv4Addresses() {
+        List<String> addresses = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp()
+                        || networkInterface.isLoopback()
+                        || networkInterface.isVirtual()) {
+                    continue;
+                }
+                Enumeration<InetAddress> inetAddresses = networkInterface.getInetAddresses();
+                while (inetAddresses.hasMoreElements()) {
+                    InetAddress address = inetAddresses.nextElement();
+                    if (address instanceof Inet4Address
+                            && !address.isLoopbackAddress()
+                            && !address.isLinkLocalAddress()) {
+                        addresses.add(address.getHostAddress());
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        Collections.sort(addresses);
+        return addresses;
     }
 
     private void updateDnsRecords() {
@@ -1997,6 +2190,7 @@ public class MainActivity extends Activity {
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
+                .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
@@ -2041,12 +2235,13 @@ public class MainActivity extends Activity {
     }
 
     private void restoreDefaultConfig() {
-        if (isVpnRunning()) {
-            Toast.makeText(this, "修改配置前请先停止 VPN", Toast.LENGTH_SHORT).show();
+        if (isVpnRunning() || isHttpProxyRunning()) {
+            Toast.makeText(this, "修改配置前请先停止 VPN 和 HTTP Proxy", Toast.LENGTH_SHORT).show();
             return;
         }
 
         proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
+        httpProxyPort.setText(String.valueOf(DefaultConfig.HTTP_PROXY_PORT));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
