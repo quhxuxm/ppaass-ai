@@ -52,6 +52,16 @@ final class AgentConfigJson {
                 .put("tun", tunJson);
     }
 
+    static JSONObject buildHttpProxy(Context context) throws JSONException {
+        SharedPreferences prefs = context.getSharedPreferences("ppaass_agent", Context.MODE_PRIVATE);
+        return build(context)
+                .put("runtime_threads", parsePositiveInt(
+                        prefs.getString(
+                                "http_proxy_threads",
+                                String.valueOf(DefaultConfig.HTTP_PROXY_THREADS)),
+                        DefaultConfig.HTTP_PROXY_THREADS));
+    }
+
     private static JSONObject buildYamuxTransportJson(SharedPreferences prefs, boolean tcp) throws JSONException {
         String prefix = tcp ? "yamux_tcp_" : "yamux_udp_";
         int defaultSessions = tcp

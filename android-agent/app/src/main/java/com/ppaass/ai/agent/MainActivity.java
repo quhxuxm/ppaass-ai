@@ -105,6 +105,7 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private EditText proxyAddrs;
     private EditText httpProxyPort;
+    private EditText httpProxyThreads;
     private EditText username;
     private EditText privateKey;
     private EditText runtimeThreads;
@@ -524,15 +525,23 @@ public class MainActivity extends Activity {
                 1,
                 1);
         addFieldHelp(httpProxy, "监听 0.0.0.0，供同一 Wi-Fi 的外部客户端使用。");
+        httpProxyThreads = numberControl(
+                httpProxy,
+                "代理线程",
+                prefString("http_proxy_threads", String.valueOf(DefaultConfig.HTTP_PROXY_THREADS)),
+                1,
+                1);
+        addFieldHelp(httpProxy, "HTTP Proxy 专属运行线程数，修改后重启 HTTP Proxy 生效。");
 
         LinearLayout runtime = configSection(root, "运行参数");
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
         runtimeThreads = numberControl(
                 runtime,
-                "运行线程",
+                "VPN 线程",
                 prefString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                 1,
                 1);
+        addFieldHelp(runtime, "只影响 Android VPN Agent；HTTP Proxy 使用上方代理线程。");
         compressionMode = spinner(
                 runtime,
                 "压缩模式",
@@ -2191,6 +2200,7 @@ public class MainActivity extends Activity {
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
+                .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
@@ -2242,6 +2252,7 @@ public class MainActivity extends Activity {
 
         proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
         httpProxyPort.setText(String.valueOf(DefaultConfig.HTTP_PROXY_PORT));
+        httpProxyThreads.setText(String.valueOf(DefaultConfig.HTTP_PROXY_THREADS));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);

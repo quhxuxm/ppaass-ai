@@ -62,6 +62,7 @@ Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
 - username，默认是 `user1`
 - RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
+- HTTP Proxy 监听端口和专属运行线程数。线程数只影响 Android HTTP Proxy 的 native Tokio runtime，VPN Agent 仍使用通用运行线程配置。
 - direct access mode 和 rules。规则支持精确域名、`*.example.com` 通配符、精确 IP 和 CIDR 网段；默认模式为 `proxy_all`，因此升级后不会自动旁路既有流量。
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
 

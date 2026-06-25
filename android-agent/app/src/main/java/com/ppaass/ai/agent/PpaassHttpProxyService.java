@@ -83,7 +83,7 @@ public class PpaassHttpProxyService extends Service {
         startForeground(NOTIFICATION_ID, notification());
 
         try {
-            JSONObject config = AgentConfigJson.build(this);
+            JSONObject config = AgentConfigJson.buildHttpProxy(this);
             long handle = NativeAgent.startHttpProxy(config.toString(), listenPort);
             if (handle == 0) {
                 throw new IllegalStateException("Native HTTP proxy returned an empty handle");
