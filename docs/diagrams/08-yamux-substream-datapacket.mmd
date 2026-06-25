@@ -5,7 +5,7 @@ sequenceDiagram
     participant P as Proxy
     participant T as Target
 
-    A->>Y: open substream on TCP/UDP pool session
+    A->>Y: open substream on TCP/UDP Yamux session
     A->>Y: Auth
     Y->>P: Auth
     P-->>Y: AuthResponse success

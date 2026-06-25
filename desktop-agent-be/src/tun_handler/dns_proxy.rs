@@ -1,14 +1,14 @@
 //! TUN DNS 代理。
 //!
 //! 当 TUN 捕获到 UDP/53 且启用 proxy_dns 时，DNS 请求会走这里：
-//! agent 通过 UDP 连接池连接 proxy 的 `Address::ProxyDns` 虚拟目标，让 proxy 端使用
+//! agent 通过 UDP Yamux session manager 连接 proxy 的 `Address::ProxyDns` 虚拟目标，让 proxy 端使用
 //! 它所在网络的 DNS 上游解析。同时本模块记录响应中的域名/IP 映射，供 direct_access
 //! 在后续 TCP/UDP IP 连接上还原域名规则。
 
 use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
-use crate::connection_pool::ConnectionPool;
 use crate::telemetry::{self, DnsResolutionRecord};
+use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
@@ -156,7 +156,7 @@ fn dns_cache_key(query: &str, record_type: &str) -> DnsCacheKey {
 
 impl DnsProxy {
     pub(super) fn spawn(
-        pool: Arc<ConnectionPool>,
+        sessions: Arc<YamuxSessionManager>,
         netstack_tx: UdpWriter,
         direct_domain_cache: Arc<DirectDomainCache>,
         shutdown: CancellationToken,
@@ -164,7 +164,7 @@ impl DnsProxy {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
         spawn_guarded(
             "desktop tun dns proxy",
-            run_dns_proxy(pool, netstack_tx, direct_domain_cache, rx, shutdown),
+            run_dns_proxy(sessions, netstack_tx, direct_domain_cache, rx, shutdown),
         );
         Arc::new(Self { tx })
     }
@@ -183,7 +183,7 @@ impl DnsProxy {
 }
 
 async fn run_dns_proxy(
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     netstack_tx: UdpWriter,
     direct_domain_cache: Arc<DirectDomainCache>,
     mut rx: mpsc::Receiver<DnsProxyRequest>,
@@ -221,7 +221,7 @@ async fn run_dns_proxy(
             continue;
         }
 
-        let connected = connect_dns_stream(&pool).await;
+        let connected = connect_dns_stream(&sessions).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
                 reconnect_delay = Duration::from_millis(200);
@@ -345,10 +345,10 @@ async fn run_dns_proxy(
 }
 
 async fn connect_dns_stream(
-    pool: &ConnectionPool,
+    sessions: &YamuxSessionManager,
 ) -> crate::error::Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let connected = pool
-        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+    let connected = sessions
+        .connect_to_target(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
         .await?;
     Ok(connected.into_async_io())
 }

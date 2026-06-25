@@ -1,6 +1,5 @@
 mod android_log;
 mod config;
-mod connection_pool;
 mod direct_access;
 mod error;
 mod fd_device;
@@ -9,6 +8,7 @@ mod jni_api;
 mod netstack;
 mod socket_protector;
 mod traffic_stats;
+mod yamux_session;
 
 pub use config::{AndroidAgentConfig, AndroidTunConfig};
 pub use direct_access::{DirectAccessConfig, DirectAccessMode};

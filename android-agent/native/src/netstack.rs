@@ -14,10 +14,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::AndroidAgentConfig;
-use crate::connection_pool::AndroidConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::fd_device::{AndroidTunDevice, RawFd};
+use crate::yamux_session::AndroidYamuxSessionManager;
 
 use direct_domain_cache::DirectDomainCache;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
@@ -25,8 +25,8 @@ use supervisor::spawn_netstack_supervisor;
 
 #[derive(Clone)]
 struct ForwardContext {
-    tcp_pool: Arc<AndroidConnectionPool>,
-    udp_pool: Arc<AndroidConnectionPool>,
+    tcp_sessions: Arc<AndroidYamuxSessionManager>,
+    udp_sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
     direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
@@ -72,11 +72,13 @@ pub async fn run_android_agent(
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_pool = AndroidConnectionPool::new(config.clone(), shutdown.clone(), "tcp_pool");
-    let udp_pool = AndroidConnectionPool::new(config.clone(), shutdown.clone(), "udp_pool");
+    let tcp_sessions =
+        AndroidYamuxSessionManager::new(config.clone(), shutdown.clone(), "tcp_yamux_sessions");
+    let udp_sessions =
+        AndroidYamuxSessionManager::new(config.clone(), shutdown.clone(), "udp_yamux_sessions");
     let context = ForwardContext {
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         direct_checker,
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,

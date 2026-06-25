@@ -98,13 +98,20 @@ impl SocksUdpRelayState {
 }
 
 impl SocksUdpRelay {
-    pub(super) fn spawn(pool: Arc<ConnectionPool>, udp_socket: Arc<UdpSocket>) -> Arc<Self> {
+    pub(super) fn spawn(
+        sessions: Arc<YamuxSessionManager>,
+        udp_socket: Arc<UdpSocket>,
+    ) -> Arc<Self> {
         let mut shards = Vec::with_capacity(SOCKS_UDP_RELAY_SHARD_COUNT);
         for shard_index in 0..SOCKS_UDP_RELAY_SHARD_COUNT {
             let (tx, rx) = tokio::sync::mpsc::channel(SOCKS_UDP_RELAY_CHANNEL_SIZE);
             shards.push(tx);
             debug!("启动 SOCKS5 UDP 共享 relay shard {shard_index}");
-            tokio::spawn(run_socks_udp_relay(pool.clone(), udp_socket.clone(), rx));
+            tokio::spawn(run_socks_udp_relay(
+                sessions.clone(),
+                udp_socket.clone(),
+                rx,
+            ));
         }
         Arc::new(Self { shards })
     }
@@ -137,7 +144,7 @@ fn socks_udp_relay_shard_index(client: SocketAddr, target: &Address, shard_count
 }
 
 async fn run_socks_udp_relay(
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     udp_socket: Arc<UdpSocket>,
     mut rx: tokio::sync::mpsc::Receiver<SocksUdpRelayRequest>,
 ) {
@@ -156,7 +163,7 @@ async fn run_socks_udp_relay(
             }
         };
 
-        let connected = connect_socks_udp_relay_stream(&pool).await;
+        let connected = connect_socks_udp_relay_stream(&sessions).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
                 reconnect_delay = Duration::from_millis(200);
@@ -250,10 +257,10 @@ async fn run_socks_udp_relay(
 }
 
 async fn connect_socks_udp_relay_stream(
-    pool: &ConnectionPool,
+    sessions: &YamuxSessionManager,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let connected = pool
-        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+    let connected = sessions
+        .connect_to_target(Address::UdpRelay, TransportProtocol::Udp)
         .await?;
     Ok(connected.into_async_io())
 }

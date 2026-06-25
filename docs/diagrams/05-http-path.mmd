@@ -6,7 +6,7 @@ flowchart TD
     D --> F{"direct_access?"}
     E --> F
     F -->|"直连"| G["TcpStream::connect 目标"]
-    F -->|"代理"| H["tcp_pool.get_connected_stream TCP"]
+    F -->|"代理"| H["tcp_sessions.connect_to_target TCP"]
     D --> I["CONNECT 成功后升级裸 TCP"]
     H --> I
     G --> J["copy_bidirectional"]

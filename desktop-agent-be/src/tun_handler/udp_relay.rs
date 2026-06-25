@@ -5,8 +5,8 @@
 //! 能减少频繁建连，同时避免所有 flow 都挤在单条 relay stream 上。
 
 use super::udp::UdpWriter;
-use crate::connection_pool::ConnectionPool;
 use crate::telemetry;
+use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
@@ -193,7 +193,7 @@ impl UdpRelayState {
 
 impl UdpRelay {
     pub(super) fn spawn(
-        pool: Arc<ConnectionPool>,
+        sessions: Arc<YamuxSessionManager>,
         netstack_tx: UdpWriter,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
@@ -206,7 +206,7 @@ impl UdpRelay {
             spawn_guarded(
                 "desktop tun udp relay",
                 run_udp_relay(
-                    pool.clone(),
+                    sessions.clone(),
                     netstack_tx.clone(),
                     rx,
                     shutdown.clone(),
@@ -251,7 +251,7 @@ fn udp_relay_shard_index(client: SocketAddr, target: SocketAddr, shard_count: us
 }
 
 async fn run_udp_relay(
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     netstack_tx: UdpWriter,
     mut rx: mpsc::Receiver<UdpRelayRequest>,
     shutdown: CancellationToken,
@@ -276,7 +276,7 @@ async fn run_udp_relay(
             }
         };
 
-        let connected = connect_udp_relay_stream(&pool).await;
+        let connected = connect_udp_relay_stream(&sessions).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
                 reconnect_delay = Duration::from_millis(200);
@@ -386,10 +386,10 @@ async fn run_udp_relay(
 }
 
 async fn connect_udp_relay_stream(
-    pool: &ConnectionPool,
+    sessions: &YamuxSessionManager,
 ) -> crate::error::Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let connected = pool
-        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+    let connected = sessions
+        .connect_to_target(Address::UdpRelay, TransportProtocol::Udp)
         .await?;
     Ok(connected.into_async_io())
 }

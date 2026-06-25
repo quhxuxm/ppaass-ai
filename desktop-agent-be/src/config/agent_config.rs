@@ -28,7 +28,7 @@ pub struct AgentConfig {
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
-    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层连接池。
+    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层 session。
     #[serde(default)]
     pub yamux: YamuxConfig,
 
@@ -61,7 +61,7 @@ pub struct AgentConfig {
 ///
 /// 当 `enabled = true` 时，agent 创建 TUN 设备，在其上构建小型
 /// 用户空间 TCP/IP 协议栈（通过 netstack-smoltcp），并将接受的
-/// TCP 流通过主连接池转发到代理；UDP 流通过单独的 UDP 连接池转发。
+/// TCP 流通过 TCP Yamux session manager 转发到代理；UDP 流通过单独的 UDP Yamux session manager 转发。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
     /// 启用 TUN 模式

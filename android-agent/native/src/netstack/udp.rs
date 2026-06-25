@@ -20,9 +20,9 @@ use super::network::{
 };
 use super::udp_relay::UdpRelay;
 use crate::android_log;
-use crate::connection_pool::AndroidConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::Result;
+use crate::yamux_session::AndroidYamuxSessionManager;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -38,7 +38,7 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
-    pub(super) udp_pool: Arc<AndroidConnectionPool>,
+    pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) shutdown: CancellationToken,
@@ -155,7 +155,7 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
-                        udp_pool: context.udp_pool.clone(),
+                        udp_sessions: context.udp_sessions.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         shutdown: shutdown.clone(),
@@ -209,7 +209,7 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         quic_policy,
         netstack_tx,
-        udp_pool,
+        udp_sessions,
         direct_checker,
         direct_domain_cache,
         shutdown,
@@ -306,8 +306,8 @@ pub(super) async fn handle_tun_udp(
         debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
         android_log::info(format!("Android TUN UDP PROXY {proxy_label}"));
     }
-    let proxy_io = match udp_pool
-        .get_connected_stream(proxy_address, TransportProtocol::Udp)
+    let proxy_io = match udp_sessions
+        .connect_to_target(proxy_address, TransportProtocol::Udp)
         .await
     {
         Ok(proxy_io) => proxy_io,

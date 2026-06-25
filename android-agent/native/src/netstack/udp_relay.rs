@@ -373,8 +373,8 @@ async fn connect_udp_relay_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     context
-        .udp_pool
-        .get_connected_stream(Address::UdpRelay, TransportProtocol::Udp)
+        .udp_sessions
+        .connect_to_target(Address::UdpRelay, TransportProtocol::Udp)
         .await
 }
 

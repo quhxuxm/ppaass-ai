@@ -1,16 +1,16 @@
-//! Yamux 连接池。
+//! Yamux session 管理。
 //!
 //! 每个 `YamuxClientConnection` 是一条 raw TCP 上的外层 Yamux session。真实目标
 //! 连接通过在 session 内打开子流，并在子流内执行 PPAASS 加密协议完成。
 
 use super::*;
 
-impl ConnectionPool {
-    pub(super) async fn get_yamux_connected_stream(
+impl YamuxSessionManager {
+    pub(super) async fn open_target_stream(
         &self,
         address: Address,
         transport: TransportProtocol,
-    ) -> Result<ConnectedStream> {
+    ) -> Result<YamuxTargetStream> {
         let target_size = self.yamux_target_size();
         let mut attempts = 0usize;
 
@@ -29,7 +29,7 @@ impl ConnectionPool {
             {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
-                    return Ok(ConnectedStream::new_yamux(stream, request_id));
+                    return Ok(YamuxTargetStream::new_yamux(stream, request_id));
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -69,11 +69,11 @@ impl ConnectionPool {
 
         let to_create = target_size - current_size;
         debug!(
-            "正在补充 {} Yamux 连接池：创建 {} 条连接（当前：{}）",
-            self.pool_name, to_create, current_size
+            "正在补充 {}：创建 {} 条 Yamux session（当前：{}）",
+            self.manager_name, to_create, current_size
         );
 
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSION_CONNECTS));
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..to_create {
             let config = self.config.clone();
@@ -108,7 +108,7 @@ impl ConnectionPool {
                     success_count += 1;
                 }
                 Ok(Err(e)) => {
-                    debug!("{} Yamux 代理连接创建失败：{}", self.pool_name, e);
+                    debug!("{} Yamux session 创建失败：{}", self.manager_name, e);
                     failure_count += 1;
                     last_error = Some(e);
                 }
@@ -120,14 +120,14 @@ impl ConnectionPool {
         if success_count == 0 && self.yamux_sessions.lock().await.is_empty() {
             let err = last_error
                 .unwrap_or_else(|| AgentError::Connection("创建 Yamux 代理连接失败".to_string()));
-            warn!("{} Yamux 连接池补充失败：{}", self.pool_name, err);
+            warn!("{} 补充 Yamux session 失败：{}", self.manager_name, err);
             return Err(err);
         }
 
         if failure_count > 0 {
             debug!(
-                "{} Yamux 连接池补充部分失败：成功 {} 条，失败 {} 条",
-                self.pool_name, success_count, failure_count
+                "{} 补充 Yamux session 部分失败：成功 {} 条，失败 {} 条",
+                self.manager_name, success_count, failure_count
             );
         }
 

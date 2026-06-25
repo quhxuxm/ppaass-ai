@@ -1,11 +1,11 @@
-//! agent 到 proxy 的 raw Yamux session 池。
+//! agent 到 proxy 的 raw Yamux session 管理器。
 //!
-//! TCP 和 UDP 语义分别使用独立 `ConnectionPool` 实例。池中每个 session 都是一条
+//! TCP 和 UDP 语义分别使用独立 `YamuxSessionManager` 实例。每个 session 都是一条
 //! raw TCP 上的 Yamux 外层连接；每个目标连接会打开一个子 stream，并在子 stream
 //! 内执行完整的 PPAASS Auth/Connect/Data 加密协议。
 
-use super::connected_stream::ConnectedStream;
 use super::proxy_connection::new_yamux_connection;
+use super::target_stream::YamuxTargetStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use common::{BindInterface, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection};
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, warn};
 
-const MAX_CONCURRENT_POOL_CONNECTS: usize = 20;
+const MAX_CONCURRENT_SESSION_CONNECTS: usize = 20;
 
 mod connect;
 mod yamux;
@@ -27,9 +27,9 @@ struct YamuxSessionHandle {
     connection: YamuxClientConnection,
 }
 
-pub struct ConnectionPool {
+pub struct YamuxSessionManager {
     config: Arc<AgentConfig>,
-    pool_name: &'static str,
+    manager_name: &'static str,
     yamux_transport: TransportProtocol,
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
@@ -39,23 +39,23 @@ pub struct ConnectionPool {
     yamux_next_session_id: AtomicUsize,
 }
 
-impl ConnectionPool {
+impl YamuxSessionManager {
     pub fn new(config: Arc<AgentConfig>) -> Self {
-        Self::new_for_transport(config, TransportProtocol::Tcp, "tcp_pool")
+        Self::new_for_transport(config, TransportProtocol::Tcp, "tcp_yamux_sessions")
     }
 
     pub fn new_udp(config: Arc<AgentConfig>) -> Self {
-        Self::new_for_transport(config, TransportProtocol::Udp, "udp_pool")
+        Self::new_for_transport(config, TransportProtocol::Udp, "udp_yamux_sessions")
     }
 
     fn new_for_transport(
         config: Arc<AgentConfig>,
         yamux_transport: TransportProtocol,
-        pool_name: &'static str,
+        manager_name: &'static str,
     ) -> Self {
         Self {
             config,
-            pool_name,
+            manager_name,
             yamux_transport,
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),

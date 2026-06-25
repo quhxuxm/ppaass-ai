@@ -3,14 +3,14 @@
 //! netstack 把系统 IP 包还原成 `TcpStream` 后进入这里。处理顺序是：
 //! 1. 过滤 TUN 自身网段和 proxy DNS 特例；
 //! 2. 用 IP/CIDR 和 DNS proxy 缓存判断是否直连；
-//! 3. 命中直连则连真实目标，否则从 TCP 连接池拿 proxy stream 双向中继。
+//! 3. 命中直连则连真实目标，否则从 TCP Yamux session manager 打开目标流并双向中继。
 
 use super::TunForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
-use crate::connection_pool::ConnectionPool;
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
+use crate::yamux_session::YamuxSessionManager;
 use common::{BindInterface, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
@@ -33,8 +33,8 @@ pub(super) async fn handle_tun_tcp(
     context: TunForwardContext,
 ) -> Result<()> {
     let TunForwardContext {
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         direct_checker,
         direct_domain_cache,
         tun_networks,
@@ -97,8 +97,8 @@ pub(super) async fn handle_tun_tcp(
             target: connect_target,
             target_str: &target_str,
             direct_egress: direct_egress.as_ref(),
-            tcp_pool: tcp_pool.as_ref(),
-            udp_pool: udp_pool.as_ref(),
+            tcp_sessions: tcp_sessions.as_ref(),
+            udp_sessions: udp_sessions.as_ref(),
             tun_networks,
         })
         .await?;
@@ -123,7 +123,7 @@ pub(super) async fn handle_tun_tcp(
         return Ok(());
     }
 
-    // 默认路径通过连接池获取已认证 proxy 流，再做双向拷贝。
+    // 默认路径通过 Yamux session manager 获取已认证 proxy 流，再做双向拷贝。
     if proxy_dns_request {
         debug!("TUN TCP DNS -> 代理 -> {}", target_label);
     } else {
@@ -137,7 +137,7 @@ pub(super) async fn handle_tun_tcp(
     // copy_bidirectional，中间没有“已读首段再补发”的状态，减少短连接分片卡顿点。
     let (connected, prefetched) = connect_proxy_stream_with_tun_prefetch(
         &mut client,
-        tcp_pool.as_ref(),
+        tcp_sessions.as_ref(),
         proxy_address,
         &proxy_label,
     )
@@ -181,12 +181,12 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
 
 async fn connect_proxy_stream_with_tun_prefetch(
     client: &mut netstack_smoltcp::TcpStream,
-    tcp_pool: &ConnectionPool,
+    tcp_sessions: &YamuxSessionManager,
     proxy_address: protocol::Address,
     label: &str,
-) -> Result<(crate::connection_pool::ConnectedStream, Vec<u8>)> {
+) -> Result<(crate::yamux_session::YamuxTargetStream, Vec<u8>)> {
     let mut connect =
-        Box::pin(tcp_pool.get_connected_stream(proxy_address, TransportProtocol::Tcp));
+        Box::pin(tcp_sessions.connect_to_target(proxy_address, TransportProtocol::Tcp));
     let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
 
     loop {
@@ -254,8 +254,8 @@ struct DirectTcpRefreshContext<'a> {
     target: SocketAddr,
     target_str: &'a str,
     direct_egress: &'a super::TunDirectEgress,
-    tcp_pool: &'a ConnectionPool,
-    udp_pool: &'a crate::connection_pool::ConnectionPool,
+    tcp_sessions: &'a YamuxSessionManager,
+    udp_sessions: &'a crate::yamux_session::YamuxSessionManager,
     tun_networks: super::network::TunNetworks,
 }
 
@@ -266,8 +266,8 @@ async fn connect_direct_tcp_with_refresh(
         target,
         target_str,
         direct_egress,
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         tun_networks,
     } = context;
     let initial_bind_interface = direct_egress.bind_interface();
@@ -279,7 +279,7 @@ async fn connect_direct_tcp_with_refresh(
                 target_str, initial_bind_interface, first_err
             );
             let refreshed_bind_interface = direct_egress
-                .refresh_after_direct_failure(target.ip(), tcp_pool, udp_pool, tun_networks)
+                .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
                 .await;
             match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
                 Ok(stream) => Ok(stream),

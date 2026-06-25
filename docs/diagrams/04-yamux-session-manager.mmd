@@ -1,7 +1,7 @@
 flowchart TD
-    A["get_connected_stream(address)"] --> B{"目标流量类型"}
-    B -->|"TCP relay"| C["tcp_pool"]
-    B -->|"UDP relay / DNS / shared UDP relay"| D["udp_pool"]
+    A["connect_to_target(address)"] --> B{"目标流量类型"}
+    B -->|"TCP relay"| C["tcp_sessions"]
+    B -->|"UDP relay / DNS / shared UDP relay"| D["udp_sessions"]
     C --> E{"有可用 raw Yamux session?"}
     D --> F{"有可用 raw Yamux session?"}
     E -->|"否"| G["创建/补充 TCP raw Yamux 外层连接"]

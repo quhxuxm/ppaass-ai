@@ -367,8 +367,8 @@ async fn connect_dns_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     context
-        .udp_pool
-        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+        .udp_sessions
+        .connect_to_target(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
         .await
 }
 

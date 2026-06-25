@@ -138,14 +138,18 @@ pub(super) fn spawn_udp_sessions(
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
             DnsProxy::spawn(
-                context.udp_pool.clone(),
+                context.udp_sessions.clone(),
                 udp_tx.clone(),
                 context.direct_domain_cache.clone(),
                 shutdown.clone(),
             )
         });
         // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
-        let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
+        let udp_relay = UdpRelay::spawn(
+            context.udp_sessions.clone(),
+            udp_tx.clone(),
+            shutdown.clone(),
+        );
         let quic_stats = Arc::new(QuicUdpStats::default());
         spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
@@ -255,8 +259,8 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
-                        tcp_pool: context.tcp_pool.clone(),
-                        udp_pool: context.udp_pool.clone(),
+                        tcp_sessions: context.tcp_sessions.clone(),
+                        udp_sessions: context.udp_sessions.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         direct_egress: context.direct_egress.clone(),

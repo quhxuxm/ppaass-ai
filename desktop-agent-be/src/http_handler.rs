@@ -1,14 +1,14 @@
 //! 本地 HTTP 代理入口。
 //!
 //! HTTP CONNECT 会升级成裸 TCP 隧道，普通 HTTP 请求则通过 hyper client 转发。
-//! 两条路径都会先由 `DirectAccessChecker` 判定是否直连；否则通过 `ConnectionPool`
+//! 两条路径都会先由 `DirectAccessChecker` 判定是否直连；否则通过 `YamuxSessionManager`
 //! 取得 agent->proxy 的目标流。
 
-use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
+use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
@@ -63,22 +63,22 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
     (host, port)
 }
 
-#[instrument(skip(stream, pool, direct_checker))]
+#[instrument(skip(stream, sessions, direct_checker))]
 pub async fn handle_http_connection(
     stream: TcpStream,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     debug!("处理 HTTP 连接: {stream:?}");
     let io = TokioIo::new(stream);
-    let pool_clone = pool.clone();
+    let sessions_clone = sessions.clone();
     let checker_clone = direct_checker.clone();
 
-    // 每个 HTTP 请求都共享连接池和直连规则，service_fn 只做轻量克隆。
+    // 每个 HTTP 请求都共享 Yamux session 管理器和直连规则，service_fn 只做轻量克隆。
     let service = service_fn(move |req| {
-        let pool = pool_clone.clone();
+        let sessions = sessions_clone.clone();
         let checker = checker_clone.clone();
-        async move { handle_http_request(req, pool, checker).await }
+        async move { handle_http_request(req, sessions, checker).await }
     });
 
     let conn = http1::Builder::new()
@@ -95,23 +95,23 @@ pub async fn handle_http_connection(
 
 async fn handle_http_request(
     req: Request<Incoming>,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     debug!("HTTP 请求: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
         // CONNECT 需要升级为原始双向字节流，常用于 HTTPS。
-        handle_connect(req, pool, direct_checker).await
+        handle_connect(req, sessions, direct_checker).await
     } else {
         // 普通 HTTP 请求走 hyper client handshake 转发。
-        handle_regular_request(req, pool, direct_checker).await
+        handle_regular_request(req, sessions, direct_checker).await
     }
 }
 
 async fn handle_connect(
     mut req: Request<Incoming>,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri().clone();
@@ -179,13 +179,16 @@ async fn handle_connect(
         // TLS/HTTP2 的开头字节会先堆在本地 upgraded 连接里，后续失败只能体现为隧道
         // 被动断开。对媒体分片来说，这类“看似建连成功、随后字节流异常”的失败很容易
         // 表现成分片大小接近正常但播放器无法解析或缓冲状态卡住。
-        let connected_stream = match pool
+        let connected_stream = match sessions
             .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
+            .connect_to_target(address, TransportProtocol::Tcp)
             .await
         {
             Ok(stream) => {
-                debug!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                debug!(
+                    "通过 Yamux session manager 获取目标流, stream_id: {}",
+                    stream.stream_id()
+                );
                 stream
             }
             Err(e) => {
@@ -229,11 +232,11 @@ async fn handle_connect(
 
 async fn tunnel(
     upgraded: Upgraded,
-    connected_stream: ConnectedStream,
+    connected_stream: YamuxTargetStream,
     target: String,
 ) -> std::result::Result<(), AgentError> {
     // HTTP CONNECT、SOCKS、TUN 的 TCP 字节流统一走 copy_bidirectional。
-    // legacy DataPacket 和 Yamux 都先通过 ConnectedStream 转成 AsyncRead/AsyncWrite，
+    // legacy DataPacket 和 Yamux 都先通过 YamuxTargetStream 转成 AsyncRead/AsyncWrite，
     // 调用点不再按 framed/Yamux 分支切换不同 relay 语义。
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
@@ -304,7 +307,7 @@ async fn tunnel_direct(
 
 async fn handle_regular_request(
     mut req: Request<Incoming>,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri();
@@ -385,14 +388,14 @@ async fn handle_regular_request(
         // === 代理路径: 通过代理隧道连接 ===
         // 普通 HTTP 代理同样不能在 agent 端解析域名。这里把 Domain 目标透传给
         // proxy，使 DNS、CDN 节点选择和远端策略都发生在真正出口侧。
-        let connected_stream = match pool
+        let connected_stream = match sessions
             .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
+            .connect_to_target(address, TransportProtocol::Tcp)
             .await
         {
             Ok(stream) => stream,
             Err(e) => {
-                error!("从连接池获取流失败: {}", e);
+                error!("通过 Yamux session manager 获取目标流失败: {}", e);
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(boxed(

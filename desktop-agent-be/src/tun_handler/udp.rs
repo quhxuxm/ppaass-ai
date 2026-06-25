@@ -7,10 +7,10 @@
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
-use crate::connection_pool::ConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
+use crate::yamux_session::YamuxSessionManager;
 use common::{BindInterface, QuicPolicy, bind_socket_to_interface};
 use futures::SinkExt;
 use protocol::TransportProtocol;
@@ -33,8 +33,8 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
-    pub(super) tcp_pool: Arc<ConnectionPool>,
-    pub(super) udp_pool: Arc<ConnectionPool>,
+    pub(super) tcp_sessions: Arc<YamuxSessionManager>,
+    pub(super) udp_sessions: Arc<YamuxSessionManager>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) direct_egress: Arc<super::TunDirectEgress>,
@@ -48,8 +48,8 @@ struct DirectUdpRelayContext {
     rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
     direct_egress: Arc<super::TunDirectEgress>,
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
     tun_networks: TunNetworks,
 }
 
@@ -65,8 +65,8 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         quic_policy,
         netstack_tx,
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         direct_checker,
         direct_domain_cache,
         direct_egress,
@@ -149,24 +149,24 @@ pub(super) async fn handle_tun_udp(
             rx,
             netstack_tx,
             direct_egress,
-            tcp_pool,
-            udp_pool,
+            tcp_sessions,
+            udp_sessions,
             tun_networks,
         })
         .await?;
         return Ok(());
     }
 
-    // 代理 UDP 路径通过连接池建立一个 UDP 语义的 proxy stream。
+    // 代理 UDP 路径通过 Yamux session manager 建立一个 UDP 语义的 proxy stream。
     let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
     if proxy_dns_request {
         debug!("TUN UDP DNS -> 代理 -> {}", target_label);
     } else {
         debug!("TUN UDP -> 代理 -> {}", proxy_label);
     }
-    let connected = udp_pool
+    let connected = udp_sessions
         .as_ref()
-        .get_connected_stream(proxy_address, TransportProtocol::Udp)
+        .connect_to_target(proxy_address, TransportProtocol::Udp)
         .await?;
     let proxy_io = connected.into_async_io();
     let (mut reader, mut writer) = tokio::io::split(proxy_io);
@@ -244,8 +244,8 @@ async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
         mut rx,
         netstack_tx,
         direct_egress,
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         tun_networks,
     } = context;
 
@@ -254,8 +254,8 @@ async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
         connect_target,
         &target_label,
         direct_egress.as_ref(),
-        tcp_pool.as_ref(),
-        udp_pool.as_ref(),
+        tcp_sessions.as_ref(),
+        udp_sessions.as_ref(),
         tun_networks,
     )
     .await?;
@@ -317,8 +317,8 @@ async fn connect_direct_udp_with_refresh(
     target: SocketAddr,
     target_label: &str,
     direct_egress: &super::TunDirectEgress,
-    tcp_pool: &ConnectionPool,
-    udp_pool: &ConnectionPool,
+    tcp_sessions: &YamuxSessionManager,
+    udp_sessions: &YamuxSessionManager,
     tun_networks: TunNetworks,
 ) -> Result<UdpSocket> {
     let initial_bind_interface = direct_egress.bind_interface();
@@ -330,7 +330,7 @@ async fn connect_direct_udp_with_refresh(
                 target_label, initial_bind_interface, first_err
             );
             let refreshed_bind_interface = direct_egress
-                .refresh_after_direct_failure(target.ip(), tcp_pool, udp_pool, tun_networks)
+                .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
                 .await;
             connect_direct_udp(target, refreshed_bind_interface.as_ref())
                 .await

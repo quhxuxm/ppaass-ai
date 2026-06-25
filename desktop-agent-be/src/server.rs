@@ -1,16 +1,16 @@
 //! Desktop Agent 本地服务层。
 //!
 //! 这一层负责监听本地端口，自动识别 SOCKS5/HTTP 客户端，并在需要时并行启动
-//! TUN 模式。真正的目标连接不会在这里建立，而是交给 `ConnectionPool` 获取
+//! TUN 模式。真正的目标连接不会在这里建立，而是交给 `YamuxSessionManager` 获取
 //! 已认证的 agent->proxy 流，或由 `DirectAccessChecker` 决定直连。
 
 use crate::config::AgentConfig;
-use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use crate::tun_handler::run_tun_mode;
+use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -21,10 +21,10 @@ use tracing::{debug, error, info, instrument};
 pub struct AgentServer {
     // 全局只读配置；连接处理任务通过 Arc 克隆读取。
     config: Arc<AgentConfig>,
-    // TCP 语义的 proxy 连接池，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
-    tcp_pool: Arc<ConnectionPool>,
-    // UDP 语义的 proxy 连接池，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
-    udp_pool: Arc<ConnectionPool>,
+    // TCP 语义的 proxy Yamux session 管理器，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
+    tcp_sessions: Arc<YamuxSessionManager>,
+    // UDP 语义的 proxy Yamux session 管理器，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
+    udp_sessions: Arc<YamuxSessionManager>,
     // 直连规则：命中后绕过 proxy，直接使用本机网络出口连接目标。
     direct_access_checker: Arc<DirectAccessChecker>,
 }
@@ -35,14 +35,14 @@ impl AgentServer {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
-        // TCP/UDP 分别维护 raw Yamux session 池，避免两类流量互相挤占。
-        let tcp_pool = Arc::new(ConnectionPool::new(config.clone()));
-        let udp_pool = Arc::new(ConnectionPool::new_udp(config.clone()));
+        // TCP/UDP 分别维护 raw Yamux session，避免两类流量互相挤占。
+        let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
+        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config.clone()));
 
         Ok(Self {
             config,
-            tcp_pool,
-            udp_pool,
+            tcp_sessions,
+            udp_sessions,
             direct_access_checker,
         })
     }
@@ -63,15 +63,15 @@ impl AgentServer {
             );
             let tun_cfg = self.config.tun.clone();
             let proxy_addrs = self.config.proxy_addrs.clone();
-            let tcp_pool = self.tcp_pool.clone();
-            let udp_pool = self.udp_pool.clone();
+            let tcp_sessions = self.tcp_sessions.clone();
+            let udp_sessions = self.udp_sessions.clone();
             let direct_access_checker = self.direct_access_checker.clone();
             let tun_shutdown = shutdown.clone();
             tun_tasks.spawn(run_tun_mode(
                 tun_cfg,
                 proxy_addrs,
-                tcp_pool,
-                udp_pool,
+                tcp_sessions,
+                udp_sessions,
                 direct_access_checker,
                 tun_shutdown,
             ));
@@ -110,13 +110,13 @@ impl AgentServer {
                             if let Err(err) = stream.set_nodelay(true) {
                                 debug!("设置本地入口 TCP_NODELAY 失败，继续使用默认行为：{err}");
                             }
-                            // 每个客户端连接独立处理，复用对应协议的连接池和直连规则。
-                            let tcp_pool = self.tcp_pool.clone();
-                            let udp_pool = self.udp_pool.clone();
+                            // 每个客户端连接独立处理，复用对应协议的 Yamux session 管理器和直连规则。
+                            let tcp_sessions = self.tcp_sessions.clone();
+                            let udp_sessions = self.udp_sessions.clone();
                             let direct_checker = self.direct_access_checker.clone();
                             spawn_guarded("desktop inbound connection", async move {
                                 if let Err(e) =
-                                    handle_connection(stream, tcp_pool, udp_pool, direct_checker).await
+                                    handle_connection(stream, tcp_sessions, udp_sessions, direct_checker).await
                                 {
                                     error!("处理连接时出错：{}", e);
                                 }
@@ -142,11 +142,11 @@ impl AgentServer {
     }
 }
 
-#[instrument(skip(stream, tcp_pool, udp_pool, direct_checker))]
+#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker))]
 async fn handle_connection(
     stream: TcpStream,
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     // 通过窥探第一个字节来检测协议类型。
@@ -157,10 +157,10 @@ async fn handle_connection(
     // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。
     match buffer[0] {
         // SOCKS5 版本号为 0x05
-        0x05 => handle_socks5_connection(stream, tcp_pool, udp_pool, direct_checker).await,
+        0x05 => handle_socks5_connection(stream, tcp_sessions, udp_sessions, direct_checker).await,
         // HTTP 方法首字母（G、P、C 等）
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
-            handle_http_connection(stream, tcp_pool, direct_checker).await
+            handle_http_connection(stream, tcp_sessions, direct_checker).await
         }
         _ => {
             error!("未知协议，首字节：0x{:02x}", buffer[0]);

@@ -3,7 +3,7 @@
 //! 当 TUN 模式启用时，agent 会打开一个 TUN 设备，并使用
 //! [`netstack-smoltcp`](https://crates.io/crates/netstack-smoltcp) 在其上构建
 //! 用户空间 TCP/IP 协议栈。协议栈接受的 TCP/UDP 流会通过各自的
-//! [`ConnectionPool`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
+//! [`YamuxSessionManager`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
 //! 匹配 `direct_access` 规则的目标将直连，不经过代理。
 
 mod device;
@@ -23,7 +23,6 @@ mod udp;
 mod udp_relay;
 
 use crate::config::TunConfig;
-use crate::connection_pool::ConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::{AgentError, Result};
 use crate::privilege::ensure_tun_privileges_or_relaunch;
@@ -33,6 +32,7 @@ use crate::tun_helper_client::{
     refresh_macos_scoped_default_bypass as refresh_macos_scoped_default_bypass_via_helper,
     start_tun as start_tun_via_helper,
 };
+use crate::yamux_session::YamuxSessionManager;
 use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
@@ -65,9 +65,9 @@ const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 struct TunForwardContext {
-    // TCP/UDP 两类 proxy 连接池分开，避免 UDP 高并发挤占 TCP 预热连接。
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
+    // TCP/UDP 两类 proxy Yamux session 管理器分开，避免 UDP 高并发挤占 TCP session。
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
     // TUN TCP/UDP 都会复用同一套直连规则。
     direct_checker: Arc<DirectAccessChecker>,
     // DNS proxy 会记录域名解析结果，TCP/UDP 后续可用 IP -> 域名映射命中直连规则。
@@ -114,8 +114,8 @@ impl TunDirectEgress {
     async fn refresh_after_direct_failure(
         &self,
         target_ip: IpAddr,
-        tcp_pool: &ConnectionPool,
-        udp_pool: &ConnectionPool,
+        tcp_sessions: &YamuxSessionManager,
+        udp_sessions: &YamuxSessionManager,
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
         // 直连失败后刷新物理出口，但用冷却时间避免大量连接同时触发路由探测。
@@ -129,7 +129,12 @@ impl TunDirectEgress {
         }
 
         let refreshed = self
-            .refresh_after_direct_failure_locked(target_ip, tcp_pool, udp_pool, tun_networks)
+            .refresh_after_direct_failure_locked(
+                target_ip,
+                tcp_sessions,
+                udp_sessions,
+                tun_networks,
+            )
             .await;
         self.mark_refreshed();
         refreshed
@@ -138,8 +143,8 @@ impl TunDirectEgress {
     async fn refresh_after_direct_failure_locked(
         &self,
         target_ip: IpAddr,
-        tcp_pool: &ConnectionPool,
-        udp_pool: &ConnectionPool,
+        tcp_sessions: &YamuxSessionManager,
+        udp_sessions: &YamuxSessionManager,
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
         let Some(route) = detect_proxy_route(self.proxy_addrs.as_slice()).await else {
@@ -160,10 +165,10 @@ impl TunDirectEgress {
         self.refresh_macos_scoped_default_bypass();
         let bind_interface = route.bind_interface.clone();
         self.update_bind_interface(bind_interface.clone());
-        tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
-        tcp_pool.set_proxy_bind_interface(bind_interface.clone());
-        udp_pool.set_proxy_bind_ip(Some(route.local_ip));
-        udp_pool.set_proxy_bind_interface(bind_interface.clone());
+        tcp_sessions.set_proxy_bind_ip(Some(route.local_ip));
+        tcp_sessions.set_proxy_bind_interface(bind_interface.clone());
+        udp_sessions.set_proxy_bind_ip(Some(route.local_ip));
+        udp_sessions.set_proxy_bind_interface(bind_interface.clone());
         info!(
             "已刷新 direct access 物理出口：ip={} interface={:?}",
             route.local_ip, bind_interface
@@ -227,12 +232,12 @@ impl TunDirectEgress {
 }
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(tcp_pool, udp_pool, direct_access_checker, shutdown))]
+#[instrument(skip(tcp_sessions, udp_sessions, direct_access_checker, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
     proxy_addrs: Vec<String>,
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
     direct_access_checker: Arc<DirectAccessChecker>,
     shutdown: CancellationToken,
 ) -> Result<()> {
@@ -254,8 +259,14 @@ pub async fn run_tun_mode(
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
     // 这个顺序非常关键：先固定控制连接出口，再安装 TUN/split-default 路由。
-    let proxy_bind_interface =
-        configure_proxy_routing(&config, &proxy_addrs, &tcp_pool, &udp_pool, &shutdown).await;
+    let proxy_bind_interface = configure_proxy_routing(
+        &config,
+        &proxy_addrs,
+        &tcp_sessions,
+        &udp_sessions,
+        &shutdown,
+    )
+    .await;
 
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let CreatedTunDevice {
@@ -285,8 +296,8 @@ pub async fn run_tun_mode(
         helper_managed_network.then(|| config.macos_helper_socket.clone()),
     ));
     let forward_context = TunForwardContext {
-        tcp_pool: tcp_pool.clone(),
-        udp_pool: udp_pool.clone(),
+        tcp_sessions: tcp_sessions.clone(),
+        udp_sessions: udp_sessions.clone(),
         direct_checker: direct_access_checker.clone(),
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,
@@ -313,10 +324,10 @@ pub async fn run_tun_mode(
     info!("收到 TUN 模式关闭请求");
 
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
-    tcp_pool.set_proxy_bind_ip(None);
-    tcp_pool.set_proxy_bind_interface(None);
-    udp_pool.set_proxy_bind_ip(None);
-    udp_pool.set_proxy_bind_interface(None);
+    tcp_sessions.set_proxy_bind_ip(None);
+    tcp_sessions.set_proxy_bind_interface(None);
+    udp_sessions.set_proxy_bind_ip(None);
+    udp_sessions.set_proxy_bind_interface(None);
     drop(route_guard);
     #[cfg(target_os = "macos")]
     drop(system_guard);

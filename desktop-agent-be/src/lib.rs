@@ -3,7 +3,6 @@ pub mod server;
 pub mod telemetry;
 
 mod cli;
-mod connection_pool;
 mod direct_access;
 mod error;
 mod http_handler;
@@ -12,6 +11,7 @@ mod socks5_handler;
 mod tcp_relay;
 mod tun_handler;
 mod tun_helper_client;
+mod yamux_session;
 
 use crate::config::AgentConfig;
 use crate::server::AgentServer;

@@ -6,14 +6,14 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-pub enum ConnectedStream {
+pub enum YamuxTargetStream {
     Yamux {
         stream: YamuxClientStream,
         stream_id: String,
     },
 }
 
-impl ConnectedStream {
+impl YamuxTargetStream {
     pub fn new_yamux(stream: YamuxClientStream, stream_id: String) -> Self {
         Self::Yamux { stream, stream_id }
     }
@@ -24,18 +24,18 @@ impl ConnectedStream {
         }
     }
 
-    pub fn into_async_io(self) -> ConnectedStreamIo {
+    pub fn into_async_io(self) -> YamuxTargetIo {
         match self {
-            Self::Yamux { stream, .. } => ConnectedStreamIo::Yamux(stream),
+            Self::Yamux { stream, .. } => YamuxTargetIo::Yamux(stream),
         }
     }
 }
 
-pub enum ConnectedStreamIo {
+pub enum YamuxTargetIo {
     Yamux(YamuxClientStream),
 }
 
-impl AsyncRead for ConnectedStreamIo {
+impl AsyncRead for YamuxTargetIo {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -47,7 +47,7 @@ impl AsyncRead for ConnectedStreamIo {
     }
 }
 
-impl AsyncWrite for ConnectedStreamIo {
+impl AsyncWrite for YamuxTargetIo {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -71,4 +71,4 @@ impl AsyncWrite for ConnectedStreamIo {
     }
 }
 
-impl Unpin for ConnectedStreamIo {}
+impl Unpin for YamuxTargetIo {}

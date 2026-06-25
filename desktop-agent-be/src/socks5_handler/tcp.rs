@@ -9,7 +9,7 @@ use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 pub(super) async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
@@ -81,13 +81,16 @@ pub(super) async fn handle_tcp_connect(
         // SOCKS5 reply success 也必须在 proxy stream 真实建立之后再发送。
         // 否则浏览器会认为 CONNECT 已成功并开始写 TLS/HTTP2 字节；如果随后远端建连失败，
         // 本地代理只能关闭一个“已经成功”的隧道，视频分片层面会变成更难诊断的解析/播放卡顿。
-        let connected_stream = match pool
+        let connected_stream = match sessions
             .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
+            .connect_to_target(address, TransportProtocol::Tcp)
             .await
         {
             Ok(stream) => {
-                info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                info!(
+                    "通过 Yamux session manager 获取目标流, stream_id: {}",
+                    stream.stream_id()
+                );
                 stream
             }
             Err(e) => {
@@ -120,7 +123,7 @@ pub(super) async fn handle_tcp_connect(
 pub(super) async fn handle_tcp_bind(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
@@ -202,17 +205,20 @@ pub(super) async fn handle_tcp_bind(
             } else {
                 // === 代理路径 ===
                 // BIND 代理路径与 CONNECT 保持一致：域名只透传，不在 agent 本地解析。
-                let connected_stream = match pool
+                let connected_stream = match sessions
                     .as_ref()
-                    .get_connected_stream(address, TransportProtocol::Tcp)
+                    .connect_to_target(address, TransportProtocol::Tcp)
                     .await
                 {
                     Ok(stream) => {
-                        info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                        info!(
+                            "通过 Yamux session manager 获取目标流, stream_id: {}",
+                            stream.stream_id()
+                        );
                         stream
                     }
                     Err(e) => {
-                        error!("从连接池获取流失败: {}", e);
+                        error!("通过 Yamux session manager 获取目标流失败: {}", e);
                         return Err(e);
                     }
                 };
@@ -241,11 +247,11 @@ pub(super) async fn handle_tcp_bind(
 
 async fn relay_data(
     client_stream: &mut TcpStream,
-    connected_stream: ConnectedStream,
+    connected_stream: YamuxTargetStream,
     protocol: &str,
     target: String,
 ) -> Result<()> {
-    // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
+    // YamuxTargetStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
     // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为 framed/Yamux
     // 分叉不同 flush 或半关闭策略，避免同一视频分片在不同入口表现不一致。
     let mut proxy_io = connected_stream.into_async_io();

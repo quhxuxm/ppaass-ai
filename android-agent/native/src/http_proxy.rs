@@ -19,9 +19,9 @@ use tracing::{debug, error, info};
 
 use crate::android_log;
 use crate::config::{ANDROID_SOCKET_BUFFER_SIZE, AndroidAgentConfig};
-use crate::connection_pool::{AndroidConnectionPool, AndroidProxyStream};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AndroidAgentError, Result};
+use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
 
 pub async fn run_android_http_proxy(
     config: AndroidAgentConfig,
@@ -34,7 +34,8 @@ pub async fn run_android_http_proxy(
     let listener = TcpListener::bind(bind_addr).await?;
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_pool = AndroidConnectionPool::new(config, shutdown.clone(), "tcp_pool");
+    let tcp_sessions =
+        AndroidYamuxSessionManager::new(config, shutdown.clone(), "tcp_yamux_sessions");
 
     info!("Android HTTP proxy listening on {bind_addr}");
     android_log::info(format!("Android HTTP proxy listening on {bind_addr}"));
@@ -47,10 +48,10 @@ pub async fn run_android_http_proxy(
                 if let Err(err) = stream.set_nodelay(true) {
                     debug!("Android HTTP proxy failed to set TCP_NODELAY for {peer_addr}: {err}");
                 }
-                let pool = tcp_pool.clone();
+                let sessions = tcp_sessions.clone();
                 let checker = direct_checker.clone();
                 spawn_guarded("android http proxy client", async move {
-                    if let Err(err) = handle_http_connection(stream, pool, checker).await {
+                    if let Err(err) = handle_http_connection(stream, sessions, checker).await {
                         debug!("Android HTTP proxy client {peer_addr} ended: {err}");
                     }
                 });
@@ -97,16 +98,16 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
 
 async fn handle_http_connection(
     stream: TcpStream,
-    pool: Arc<AndroidConnectionPool>,
+    sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let io = TokioIo::new(stream);
-    let pool_clone = pool.clone();
+    let sessions_clone = sessions.clone();
     let checker_clone = direct_checker.clone();
     let service = service_fn(move |req| {
-        let pool = pool_clone.clone();
+        let sessions = sessions_clone.clone();
         let checker = checker_clone.clone();
-        async move { handle_http_request(req, pool, checker).await }
+        async move { handle_http_request(req, sessions, checker).await }
     });
 
     let conn = http1::Builder::new()
@@ -125,21 +126,21 @@ async fn handle_http_connection(
 
 async fn handle_http_request(
     req: Request<Incoming>,
-    pool: Arc<AndroidConnectionPool>,
+    sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<AgentBody>, hyper::Error> {
     debug!("Android HTTP proxy request: {} {}", req.method(), req.uri());
 
     if req.method() == Method::CONNECT {
-        handle_connect(req, pool, direct_checker).await
+        handle_connect(req, sessions, direct_checker).await
     } else {
-        handle_regular_request(req, pool, direct_checker).await
+        handle_regular_request(req, sessions, direct_checker).await
     }
 }
 
 async fn handle_connect(
     mut req: Request<Incoming>,
-    pool: Arc<AndroidConnectionPool>,
+    sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<AgentBody>, hyper::Error> {
     let uri = req.uri().clone();
@@ -188,9 +189,9 @@ async fn handle_connect(
             .unwrap());
     }
 
-    let connected_stream = match pool
+    let connected_stream = match sessions
         .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
+        .connect_to_target(address, TransportProtocol::Tcp)
         .await
     {
         Ok(stream) => stream,
@@ -222,7 +223,7 @@ async fn handle_connect(
 
 async fn handle_regular_request(
     mut req: Request<Incoming>,
-    pool: Arc<AndroidConnectionPool>,
+    sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> std::result::Result<Response<AgentBody>, hyper::Error> {
     let uri = req.uri().clone();
@@ -266,9 +267,9 @@ async fn handle_regular_request(
         return Ok(Response::from_parts(parts, boxed(body)));
     }
 
-    let connected_stream = match pool
+    let connected_stream = match sessions
         .as_ref()
-        .get_connected_stream(address, TransportProtocol::Tcp)
+        .connect_to_target(address, TransportProtocol::Tcp)
         .await
     {
         Ok(stream) => stream,
@@ -296,7 +297,7 @@ async fn handle_regular_request(
 
 async fn tunnel(
     upgraded: Upgraded,
-    mut connected_stream: AndroidProxyStream,
+    mut connected_stream: AndroidYamuxTargetStream,
     target: String,
 ) -> Result<()> {
     let mut client_io = TokioIo::new(upgraded);

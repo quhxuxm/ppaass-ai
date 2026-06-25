@@ -6,7 +6,6 @@
 
 mod cli;
 mod config;
-mod connection_pool;
 mod direct_access;
 mod error;
 mod http_handler;
@@ -17,6 +16,7 @@ mod tcp_relay;
 mod telemetry;
 mod tun_handler;
 mod tun_helper_client;
+mod yamux_session;
 
 use crate::cli::CliArgs;
 use crate::config::AgentConfig;

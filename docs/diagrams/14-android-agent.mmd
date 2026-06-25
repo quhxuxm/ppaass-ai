@@ -7,5 +7,5 @@ flowchart TD
     JNI --> Protector["VpnService.protect socket fd"]
     JNI --> Rust["android-agent/native Rust"]
     Rust --> Netstack["netstack-smoltcp"]
-    Netstack --> Pool["Android TCP/UDP pool"]
-    Pool --> Proxy["PPAASS Proxy"]
+    Netstack --> Sessions["Android TCP/UDP YamuxSessionManager"]
+    Sessions --> Proxy["PPAASS Proxy"]

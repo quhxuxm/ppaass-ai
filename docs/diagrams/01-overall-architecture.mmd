@@ -15,11 +15,11 @@ flowchart LR
     DirectCheck -->|"是"| LocalTarget["本机直连目标"]
     AndroidDirect -->|"是"| AndroidDirectSocket["受 protect 的直连 socket"]
 
-    DirectCheck -->|"否"| Pool["Agent TCP/UDP ConnectionPool"]
-    AndroidDirect -->|"否"| AndroidPool["Android TCP/UDP Pool"]
+    DirectCheck -->|"否"| AgentSessions["Agent TCP/UDP YamuxSessionManager"]
+    AndroidDirect -->|"否"| AndroidSessions["Android TCP/UDP YamuxSessionManager"]
 
-    Pool -->|"raw TCP Yamux sessions"| Proxy["Proxy Server"]
-    AndroidPool -->|"raw TCP Yamux sessions"| Proxy
+    AgentSessions -->|"raw TCP Yamux sessions"| Proxy["Proxy Server"]
+    AndroidSessions -->|"raw TCP Yamux sessions"| Proxy
 
     Proxy --> YamuxAccept["Yamux accept: 维护 raw TCP session"]
     YamuxAccept --> Auth["子流内 Auth/Connect/Data"]

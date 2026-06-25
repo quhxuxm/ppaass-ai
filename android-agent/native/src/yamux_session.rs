@@ -17,7 +17,7 @@ use crate::android_log;
 use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
-const MAX_CONCURRENT_POOL_CONNECTS: usize = 10;
+const MAX_CONCURRENT_SESSION_CONNECTS: usize = 10;
 
 #[derive(Clone)]
 struct AndroidYamuxSession {
@@ -25,10 +25,10 @@ struct AndroidYamuxSession {
     connection: YamuxClientConnection,
 }
 
-pub struct AndroidConnectionPool {
+pub struct AndroidYamuxSessionManager {
     config: Arc<AndroidAgentConfig>,
     shutdown: CancellationToken,
-    pool_name: &'static str,
+    manager_name: &'static str,
     yamux_transport: TransportProtocol,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
     yamux_refill_lock: Mutex<()>,
@@ -36,20 +36,20 @@ pub struct AndroidConnectionPool {
     yamux_next_session_id: AtomicUsize,
 }
 
-impl AndroidConnectionPool {
+impl AndroidYamuxSessionManager {
     pub fn new(
         config: Arc<AndroidAgentConfig>,
         shutdown: CancellationToken,
-        pool_name: &'static str,
+        manager_name: &'static str,
     ) -> Arc<Self> {
-        let yamux_transport = match pool_name {
-            "udp_pool" => TransportProtocol::Udp,
+        let yamux_transport = match manager_name {
+            "udp_yamux_sessions" => TransportProtocol::Udp,
             _ => TransportProtocol::Tcp,
         };
         Arc::new(Self {
             config,
             shutdown,
-            pool_name,
+            manager_name,
             yamux_transport,
             yamux_sessions: Mutex::new(Vec::new()),
             yamux_refill_lock: Mutex::new(()),
@@ -58,25 +58,25 @@ impl AndroidConnectionPool {
         })
     }
 
-    pub async fn get_connected_stream(
+    pub async fn connect_to_target(
         &self,
         address: Address,
         transport: TransportProtocol,
-    ) -> Result<AndroidProxyStream> {
+    ) -> Result<AndroidYamuxTargetStream> {
         if transport != self.yamux_transport {
             return Err(AndroidAgentError::Connection(format!(
                 "Android {} only supports {:?} Yamux streams",
-                self.pool_name, self.yamux_transport
+                self.manager_name, self.yamux_transport
             )));
         }
-        self.get_yamux_connected_stream(address, transport).await
+        self.open_target_stream(address, transport).await
     }
 
-    async fn get_yamux_connected_stream(
+    async fn open_target_stream(
         &self,
         address: Address,
         transport: TransportProtocol,
-    ) -> Result<AndroidProxyStream> {
+    ) -> Result<AndroidYamuxTargetStream> {
         let target_size = self.yamux_target_size();
         let mut attempts = 0usize;
 
@@ -91,7 +91,7 @@ impl AndroidConnectionPool {
                 .connect_to_target(address.clone(), transport)
                 .await
             {
-                Ok((stream, _stream_id)) => return Ok(AndroidProxyStream::Yamux(stream)),
+                Ok((stream, _stream_id)) => return Ok(AndroidYamuxTargetStream::Yamux(stream)),
                 Err(err) => {
                     let message = err.to_string();
                     if is_yamux_actual_target_connect_error(&message) {
@@ -99,11 +99,11 @@ impl AndroidConnectionPool {
                     }
                     warn!(
                         "Android {} Yamux session {} unusable; retrying: {message}",
-                        self.pool_name, session.id
+                        self.manager_name, session.id
                     );
                     android_log::warn(format!(
                         "Android {} Yamux session unusable: {message}",
-                        self.pool_name
+                        self.manager_name
                     ));
                     session.connection.close().await;
                     self.remove_yamux_session(session.id).await;
@@ -133,11 +133,11 @@ impl AndroidConnectionPool {
 
         let to_create = target_size - current_size;
         debug!(
-            "refilling Android {} Yamux: creating {} sessions (current={})",
-            self.pool_name, to_create, current_size
+            "refilling Android {}: creating {} Yamux sessions (current={})",
+            self.manager_name, to_create, current_size
         );
 
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_POOL_CONNECTS));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSION_CONNECTS));
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..to_create {
             let config = self.config.clone();
@@ -177,13 +177,16 @@ impl AndroidConnectionPool {
                 Ok(Err(err)) => {
                     debug!(
                         "failed to create Android {} Yamux session: {err}",
-                        self.pool_name
+                        self.manager_name
                     );
                     failure_count += 1;
                     last_error = Some(err);
                 }
                 Err(err) if err.is_cancelled() => {}
-                Err(err) => warn!("Android {} Yamux refill join error: {err}", self.pool_name),
+                Err(err) => warn!(
+                    "Android {} Yamux refill join error: {err}",
+                    self.manager_name
+                ),
             }
         }
 
@@ -191,10 +194,13 @@ impl AndroidConnectionPool {
             let err = last_error.unwrap_or_else(|| {
                 AndroidAgentError::Connection("failed to create Android Yamux session".into())
             });
-            warn!("failed to refill Android {} Yamux: {err}", self.pool_name);
+            warn!(
+                "failed to refill Android {} Yamux: {err}",
+                self.manager_name
+            );
             android_log::warn(format!(
                 "Android {} Yamux refill failed: {err}",
-                self.pool_name
+                self.manager_name
             ));
             return Err(err);
         }
@@ -202,7 +208,7 @@ impl AndroidConnectionPool {
         if failure_count > 0 {
             debug!(
                 "partially refilled Android {} Yamux: {} succeeded, {} failed",
-                self.pool_name, success_count, failure_count
+                self.manager_name, success_count, failure_count
             );
         }
 
@@ -231,11 +237,11 @@ impl AndroidConnectionPool {
     }
 }
 
-pub enum AndroidProxyStream {
+pub enum AndroidYamuxTargetStream {
     Yamux(YamuxClientStream),
 }
 
-impl AsyncRead for AndroidProxyStream {
+impl AsyncRead for AndroidYamuxTargetStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -247,7 +253,7 @@ impl AsyncRead for AndroidProxyStream {
     }
 }
 
-impl AsyncWrite for AndroidProxyStream {
+impl AsyncWrite for AndroidYamuxTargetStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -271,7 +277,7 @@ impl AsyncWrite for AndroidProxyStream {
     }
 }
 
-impl Unpin for AndroidProxyStream {}
+impl Unpin for AndroidYamuxTargetStream {}
 
 fn is_yamux_actual_target_connect_error(message: &str) -> bool {
     message.starts_with("连接失败:")

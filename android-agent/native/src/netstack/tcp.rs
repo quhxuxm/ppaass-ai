@@ -258,11 +258,11 @@ async fn connect_proxy_stream_with_tun_prefetch(
     context: &ForwardContext,
     proxy_address: protocol::Address,
     label: &str,
-) -> Result<(crate::connection_pool::AndroidProxyStream, Vec<u8>)> {
+) -> Result<(crate::yamux_session::AndroidYamuxTargetStream, Vec<u8>)> {
     let mut connect = Box::pin(
         context
-            .tcp_pool
-            .get_connected_stream(proxy_address, TransportProtocol::Tcp),
+            .tcp_sessions
+            .connect_to_target(proxy_address, TransportProtocol::Tcp),
     );
     let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
 
