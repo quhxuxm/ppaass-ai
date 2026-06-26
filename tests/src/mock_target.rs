@@ -1,14 +1,18 @@
 use anyhow::Result;
 use bytes::Bytes;
 use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use futures::stream;
+use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
+use hyper::body::Frame;
 use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::{error, info, trace};
@@ -147,6 +151,10 @@ async fn handle_http_request(
             // 返回用于吞吐测试的大响应，并支持 Range 分片下载。
             handle_large_response(&req)?
         }
+        "/fluctuating-large" => {
+            // 按小块和短暂停顿流式返回，用于模拟目标网络波动。
+            handle_fluctuating_large_response(&req)?
+        }
         "/json" => {
             let json_data = r#"{"status":"success","message":"Mock target response"}"#;
             Response::builder()
@@ -198,6 +206,43 @@ fn handle_large_response(
         .header(ACCEPT_RANGES, "bytes")
         .header(CONTENT_LENGTH, body.len().to_string())
         .body(full_body(body))?)
+}
+
+fn handle_fluctuating_large_response(
+    req: &Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
+    let size = large_response_size(req.uri().query());
+    let range = match parse_range_header(
+        req.headers()
+            .get(RANGE)
+            .and_then(|value| value.to_str().ok()),
+        size,
+    ) {
+        Ok(range) => range,
+        Err(()) => {
+            return Ok(Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(ACCEPT_RANGES, "bytes")
+                .header(CONTENT_RANGE, format!("bytes */{size}"))
+                .body(full_body("Range Not Satisfiable"))?);
+        }
+    };
+
+    let (status, start, end) = if let Some((start, end)) = range {
+        (StatusCode::PARTIAL_CONTENT, start, end)
+    } else {
+        (StatusCode::OK, 0, size - 1)
+    };
+    let body_len = end - start + 1;
+    let mut builder = Response::builder()
+        .status(status)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CONTENT_LENGTH, body_len.to_string());
+    if status == StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
+    }
+
+    Ok(builder.body(fluctuating_large_body(start, body_len))?)
 }
 
 fn large_response_size(query: Option<&str>) -> u64 {
@@ -256,6 +301,41 @@ fn large_file_body(start: u64, len: u64) -> Vec<u8> {
     (0..len)
         .map(|offset| large_file_byte_at(start + offset))
         .collect()
+}
+
+fn fluctuating_large_body(start: u64, len: u64) -> BoxBody<Bytes, hyper::Error> {
+    const PATTERN: [usize; 8] = [1, 7, 257, 1024, 4093, 8192, 17, 2048];
+    const PAUSES_MS: [u64; 6] = [0, 2, 8, 1, 15, 3];
+
+    let body_stream = stream::unfold(
+        (0_u64, 0_usize, false),
+        move |(written, pattern_idx, inserted_lull)| async move {
+            if written >= len {
+                return None;
+            }
+
+            let mut inserted_lull = inserted_lull;
+            if !inserted_lull && written >= len / 2 {
+                tokio::time::sleep(Duration::from_millis(180)).await;
+                inserted_lull = true;
+            }
+
+            let chunk_len = PATTERN[pattern_idx % PATTERN.len()].min((len - written) as usize);
+            let chunk = large_file_body(start + written, chunk_len as u64);
+            let next_pattern_idx = pattern_idx + 1;
+            let pause = PAUSES_MS[next_pattern_idx % PAUSES_MS.len()];
+            if pause > 0 {
+                tokio::time::sleep(Duration::from_millis(pause)).await;
+            }
+
+            Some((
+                Ok::<_, Infallible>(Frame::data(Bytes::from(chunk))),
+                (written + chunk_len as u64, next_pattern_idx, inserted_lull),
+            ))
+        },
+    );
+
+    BoxBody::new(StreamBody::new(body_stream).map_err(|err| match err {}))
 }
 
 pub(crate) fn large_file_byte_at(offset: u64) -> u8 {
