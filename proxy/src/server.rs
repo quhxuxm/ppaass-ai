@@ -8,7 +8,10 @@ use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
-use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
+use common::{
+    DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_yamux_tcp_stream,
+    spawn_guarded,
+};
 use futures::StreamExt;
 use protocol::CompressionMode;
 use std::sync::Arc;
@@ -105,6 +108,9 @@ impl ProxyServer {
 async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Result<()> {
     if let Err(err) = stream.set_nodelay(true) {
         warn!("设置入站代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+    }
+    if let Err(err) = configure_yamux_tcp_stream(&stream) {
+        debug!("设置入站 Yamux TCP keepalive 失败：{err}");
     }
 
     let settings = context
