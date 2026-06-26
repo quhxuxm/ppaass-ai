@@ -1,0 +1,32 @@
+{
+  "test_duration_secs": 1,
+  "agent_addr": "127.0.0.1:11080",
+  "target_url": "http://127.0.0.1:9090/large?size=134217728",
+  "file_size_bytes": 134217728,
+  "chunk_size_bytes": 1048576,
+  "concurrency": 32,
+  "rounds": 2,
+  "total_chunks": 256,
+  "successful_chunks": 256,
+  "failed_chunks": 0,
+  "success_rate_percent": 100.0,
+  "chunks_per_second": 252.32902275359714,
+  "throughput_mbps": 2116.689258903007,
+  "chunk_metrics": {
+    "total_chunks": 256,
+    "successful": 256,
+    "failed": 0,
+    "avg_latency_ms": 119.904125,
+    "min_latency_ms": 49.344,
+    "max_latency_ms": 244.351,
+    "p50_latency_ms": 118.463,
+    "p95_latency_ms": 178.175,
+    "p99_latency_ms": 238.335,
+    "total_bytes_downloaded": 268435456
+  },
+  "system_metrics": {
+    "cpu_usage_percent": 84.028275,
+    "memory_usage_mb": 13084,
+    "peak_memory_mb": 13007
+  }
+}

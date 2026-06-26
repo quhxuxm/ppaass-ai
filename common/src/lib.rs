@@ -3,6 +3,7 @@ pub mod dns;
 pub mod error;
 pub mod quic;
 pub mod task_guard;
+pub mod tcp_listener;
 pub mod tun_control;
 pub mod yamux_settings;
 
@@ -15,6 +16,7 @@ pub use client_connection::{
 pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
 pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
+pub use tcp_listener::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
 pub use yamux_settings::{
     YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig, YamuxSettings, YamuxTransportConfig,
 };

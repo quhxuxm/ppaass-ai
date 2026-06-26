@@ -1,6 +1,7 @@
-use crate::mock_client::{MockHttpClient, MockSocks5Client};
+use crate::mock_client::{MockHttpClient, MockSocks5Client, connect_to_agent_with_retry};
 use anyhow::{Context, Result};
 use hdrhistogram::Histogram;
+use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
@@ -142,6 +143,39 @@ pub struct QuicProbeMetrics {
     pub p95_rtt_ms: f64,
     pub p99_rtt_ms: f64,
     pub total_bytes_transferred: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeDownloadTestResults {
+    pub test_duration_secs: u64,
+    pub agent_addr: String,
+    pub target_url: String,
+    pub file_size_bytes: u64,
+    pub chunk_size_bytes: u64,
+    pub concurrency: usize,
+    pub rounds: usize,
+    pub total_chunks: usize,
+    pub successful_chunks: usize,
+    pub failed_chunks: usize,
+    pub success_rate_percent: f64,
+    pub chunks_per_second: f64,
+    pub throughput_mbps: f64,
+    pub chunk_metrics: LargeDownloadChunkMetrics,
+    pub system_metrics: SystemMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeDownloadChunkMetrics {
+    pub total_chunks: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub avg_latency_ms: f64,
+    pub min_latency_ms: f64,
+    pub max_latency_ms: f64,
+    pub p50_latency_ms: f64,
+    pub p95_latency_ms: f64,
+    pub p99_latency_ms: f64,
+    pub total_bytes_downloaded: u64,
 }
 
 pub async fn run_performance_tests(
@@ -532,6 +566,240 @@ pub async fn run_tcp_performance_tests(
     info!("吞吐量：{:.2} Mbps", throughput_mbps);
 
     Ok(results)
+}
+
+pub async fn run_large_download_tests(
+    agent_addr: &str,
+    file_size_bytes: u64,
+    chunk_size_bytes: u64,
+    concurrency: usize,
+    rounds: usize,
+) -> Result<LargeDownloadTestResults> {
+    anyhow::ensure!(file_size_bytes > 0, "file size must be greater than 0");
+    anyhow::ensure!(chunk_size_bytes > 0, "chunk size must be greater than 0");
+    anyhow::ensure!(concurrency > 0, "concurrency must be greater than 0");
+    anyhow::ensure!(rounds > 0, "rounds must be greater than 0");
+
+    let target_url = format!("http://127.0.0.1:9090/large?size={file_size_bytes}");
+    info!("=== 开始 HTTP Range 分片大文件下载测试 ===");
+    info!(
+        "Agent：{}，URL：{}，file={} bytes，chunk={} bytes，并发分片：{}，轮次：{}",
+        agent_addr, target_url, file_size_bytes, chunk_size_bytes, concurrency, rounds
+    );
+
+    let chunks_per_round = file_size_bytes.div_ceil(chunk_size_bytes);
+    let total_chunks = chunks_per_round
+        .checked_mul(rounds as u64)
+        .context("large download chunk count overflow")?;
+    anyhow::ensure!(
+        total_chunks <= usize::MAX as u64,
+        "large download chunk count is too large"
+    );
+
+    let mut chunks = Vec::with_capacity(total_chunks as usize);
+    for _round in 0..rounds {
+        for chunk_idx in 0..chunks_per_round {
+            let start = chunk_idx * chunk_size_bytes;
+            let end = (start + chunk_size_bytes - 1).min(file_size_bytes - 1);
+            chunks.push(LargeDownloadChunk { start, end });
+        }
+    }
+
+    let start_time = Instant::now();
+    let histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
+    let success = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(0));
+    let next_chunk = Arc::new(AtomicUsize::new(0));
+    let chunks = Arc::new(chunks);
+
+    let mut system = System::new_all();
+    system.refresh_all();
+    let initial_memory = system.used_memory();
+    let peak_memory = Arc::new(AtomicU64::new(initial_memory));
+
+    let mut handles = Vec::with_capacity(concurrency.min(chunks.len()));
+    for worker_id in 0..concurrency.min(chunks.len()) {
+        handles.push(tokio::spawn(large_download_worker(
+            worker_id,
+            agent_addr.to_string(),
+            target_url.clone(),
+            file_size_bytes,
+            chunks.clone(),
+            next_chunk.clone(),
+            histogram.clone(),
+            success.clone(),
+            failed.clone(),
+            total_bytes.clone(),
+        )));
+    }
+
+    let peak_mem = peak_memory.clone();
+    let monitor_handle = tokio::spawn(async move {
+        let mut sys = System::new_all();
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            sys.refresh_all();
+            peak_mem.fetch_max(sys.used_memory(), Ordering::Relaxed);
+        }
+    });
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+    monitor_handle.abort();
+    let _ = monitor_handle.await;
+
+    let actual_duration = start_time.elapsed();
+    let hist = histogram.lock().await;
+    let succ = success.load(Ordering::Relaxed);
+    let fail = failed.load(Ordering::Relaxed);
+    let total = succ + fail;
+    let downloaded = total_bytes.load(Ordering::Relaxed);
+    let success_rate_percent = if total > 0 {
+        (succ as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let chunks_per_second = total as f64 / actual_duration.as_secs_f64();
+    let throughput_mbps = (downloaded as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+
+    system.refresh_all();
+    let results = LargeDownloadTestResults {
+        test_duration_secs: actual_duration.as_secs(),
+        agent_addr: agent_addr.to_string(),
+        target_url,
+        file_size_bytes,
+        chunk_size_bytes,
+        concurrency,
+        rounds,
+        total_chunks: total,
+        successful_chunks: succ,
+        failed_chunks: fail,
+        success_rate_percent,
+        chunks_per_second,
+        throughput_mbps,
+        chunk_metrics: calculate_large_download_metrics(&hist, succ, fail, downloaded),
+        system_metrics: SystemMetrics {
+            cpu_usage_percent: system.global_cpu_usage(),
+            memory_usage_mb: system.used_memory() / 1024 / 1024,
+            peak_memory_mb: peak_memory.load(Ordering::Relaxed) / 1024 / 1024,
+        },
+    };
+
+    info!("=== HTTP Range 分片大文件下载测试完成 ===");
+    info!("总分片：{}，成功：{}，失败：{}", total, succ, fail);
+    info!("成功率：{:.2}%", success_rate_percent);
+    info!("Chunks/sec：{:.2}", chunks_per_second);
+    info!("吞吐量：{:.2} Mbps", throughput_mbps);
+
+    Ok(results)
+}
+
+#[derive(Clone, Copy)]
+struct LargeDownloadChunk {
+    start: u64,
+    end: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn large_download_worker(
+    worker_id: usize,
+    agent_addr: String,
+    target_url: String,
+    file_size_bytes: u64,
+    chunks: Arc<Vec<LargeDownloadChunk>>,
+    next_chunk: Arc<AtomicUsize>,
+    histogram: Arc<Mutex<Histogram<u64>>>,
+    success: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total_bytes: Arc<AtomicU64>,
+) {
+    let client = MockHttpClient::new(agent_addr);
+    let mut latencies_us = Vec::with_capacity(128);
+
+    loop {
+        let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
+        let Some(chunk) = chunks.get(idx).copied() else {
+            break;
+        };
+
+        match download_large_range_chunk(&client, &target_url, file_size_bytes, chunk).await {
+            Ok((duration, bytes)) => {
+                latencies_us.push(duration.as_micros() as u64);
+                success.fetch_add(1, Ordering::Relaxed);
+                total_bytes.fetch_add(bytes, Ordering::Relaxed);
+
+                if latencies_us.len() >= 128 {
+                    let mut hist = histogram.lock().await;
+                    for latency in latencies_us.drain(..) {
+                        let _ = hist.record(latency);
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "Large download worker {worker_id} 分片 {}-{} 失败：{err}",
+                    chunk.start, chunk.end
+                );
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    if !latencies_us.is_empty() {
+        let mut hist = histogram.lock().await;
+        for latency in latencies_us {
+            let _ = hist.record(latency);
+        }
+    }
+}
+
+async fn download_large_range_chunk(
+    client: &MockHttpClient,
+    target_url: &str,
+    file_size_bytes: u64,
+    chunk: LargeDownloadChunk,
+) -> Result<(Duration, u64)> {
+    let expected_len = chunk.end - chunk.start + 1;
+    let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
+    let headers = [("Range", range_header)];
+
+    let (duration, status, response_headers, body) =
+        client.get_bytes_with_headers(target_url, &headers).await?;
+
+    anyhow::ensure!(
+        status == StatusCode::PARTIAL_CONTENT,
+        "unexpected status {status}"
+    );
+    let expected_content_range = format!("bytes {}-{}/{}", chunk.start, chunk.end, file_size_bytes);
+    let actual_content_range = response_headers
+        .get(hyper::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    anyhow::ensure!(
+        actual_content_range == expected_content_range,
+        "unexpected content-range: {actual_content_range}"
+    );
+    anyhow::ensure!(
+        body.len() as u64 == expected_len,
+        "unexpected body length: got {}, expected {}",
+        body.len(),
+        expected_len
+    );
+
+    if let Some((offset, byte)) = body.iter().enumerate().find(|(offset, byte)| {
+        **byte != crate::mock_target::large_file_byte_at(chunk.start + *offset as u64)
+    }) {
+        anyhow::bail!(
+            "body mismatch at absolute offset {}: got {}, expected {}",
+            chunk.start + offset as u64,
+            byte,
+            crate::mock_target::large_file_byte_at(chunk.start + offset as u64)
+        );
+    }
+
+    Ok((duration, body.len() as u64))
 }
 
 pub async fn run_quic_probe_tests(
@@ -1032,9 +1300,11 @@ async fn create_socks_tcp_stream(
     target_host: &str,
     target_port: u16,
 ) -> Result<TcpStream> {
-    let mut stream = TcpStream::connect(agent_addr)
-        .await
-        .context("Failed to connect to agent for TCP performance test")?;
+    let mut stream = connect_to_agent_with_retry(
+        agent_addr,
+        "Failed to connect to agent for TCP performance test",
+    )
+    .await?;
     async_socks5::connect(&mut stream, (target_host.to_string(), target_port), None)
         .await
         .context("Failed to connect via SOCKS5 for TCP performance test")?;
@@ -1139,9 +1409,11 @@ async fn udp_worker(
 async fn create_socks_udp_datagram(
     agent_addr: &str,
 ) -> Result<async_socks5::SocksDatagram<TcpStream>> {
-    let stream = TcpStream::connect(agent_addr)
-        .await
-        .context("Failed to connect to agent for UDP performance test")?;
+    let stream = connect_to_agent_with_retry(
+        agent_addr,
+        "Failed to connect to agent for UDP performance test",
+    )
+    .await?;
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .context("Failed to bind local UDP socket for UDP performance test")?;
@@ -1411,6 +1683,43 @@ fn calculate_tcp_metrics(
         p95_rtt_ms: histogram.value_at_quantile(0.95) as f64 / 1000.0,
         p99_rtt_ms: histogram.value_at_quantile(0.99) as f64 / 1000.0,
         total_bytes_transferred,
+    }
+}
+
+fn calculate_large_download_metrics(
+    histogram: &Histogram<u64>,
+    successful: usize,
+    failed: usize,
+    total_bytes_downloaded: u64,
+) -> LargeDownloadChunkMetrics {
+    let total = successful + failed;
+
+    if histogram.is_empty() {
+        return LargeDownloadChunkMetrics {
+            total_chunks: total,
+            successful,
+            failed,
+            avg_latency_ms: 0.0,
+            min_latency_ms: 0.0,
+            max_latency_ms: 0.0,
+            p50_latency_ms: 0.0,
+            p95_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+            total_bytes_downloaded,
+        };
+    }
+
+    LargeDownloadChunkMetrics {
+        total_chunks: total,
+        successful,
+        failed,
+        avg_latency_ms: histogram.mean() / 1000.0,
+        min_latency_ms: histogram.min() as f64 / 1000.0,
+        max_latency_ms: histogram.max() as f64 / 1000.0,
+        p50_latency_ms: histogram.value_at_quantile(0.5) as f64 / 1000.0,
+        p95_latency_ms: histogram.value_at_quantile(0.95) as f64 / 1000.0,
+        p99_latency_ms: histogram.value_at_quantile(0.99) as f64 / 1000.0,
+        total_bytes_downloaded,
     }
 }
 

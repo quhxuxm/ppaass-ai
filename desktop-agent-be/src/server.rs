@@ -11,9 +11,9 @@ use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use crate::tun_handler::run_tun_mode;
 use crate::yamux_session::YamuxSessionManager;
-use common::spawn_guarded;
+use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument};
@@ -51,7 +51,10 @@ impl AgentServer {
     pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
         // 本地 HTTP/SOCKS 入口始终启动。TUN 打开时作为额外入口并行运行，
         // 这样手动配置浏览器代理和系统 TUN 两种模式不会互相挤掉。
-        let listener = TcpListener::bind(&self.config.listen_addr).await?;
+        let listener = bind_tcp_listener_with_backlog(
+            self.config.listen_addr.as_str(),
+            DEFAULT_TCP_LISTEN_BACKLOG,
+        )?;
         info!("Agent 服务器正在监听 {}", self.config.listen_addr);
 
         let mut tun_tasks = JoinSet::new();

@@ -118,6 +118,36 @@ enum Commands {
         #[arg(short, long, default_value = "tcp-performance-report.html")]
         output: String,
     },
+    /// 运行 HTTP Range 分片大文件下载测试
+    LargeDownload {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// 虚拟大文件大小（MB）
+        #[arg(long, default_value = "64")]
+        file_size_mb: u64,
+
+        /// 每个 Range 分片大小（KB）
+        #[arg(long, default_value = "1024")]
+        chunk_size_kb: u64,
+
+        /// 并发 Range 请求数
+        #[arg(short, long, default_value = "16")]
+        concurrency: usize,
+
+        /// 完整文件下载轮次
+        #[arg(long, default_value = "1")]
+        rounds: usize,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "large-download-report.html")]
+        output: String,
+    },
     /// 运行 QUIC Version Negotiation 连通性探针（SOCKS5 UDP -> UDP/443）
     QuicProbe {
         /// 代理服务器地址
@@ -303,6 +333,37 @@ async fn main() -> Result<()> {
 
             report::generate_tcp_reports(&results, &output)?;
             tracing::info!("TCP 性能报告已生成：{}", output);
+        }
+        Commands::LargeDownload {
+            proxy_addr,
+            agent_addr,
+            file_size_mb,
+            chunk_size_kb,
+            concurrency,
+            rounds,
+            output,
+        } => {
+            tracing::info!("正在运行 HTTP Range 分片大文件下载测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "file={} MB，chunk={} KB，并发分片：{}，轮次：{}",
+                file_size_mb,
+                chunk_size_kb,
+                concurrency,
+                rounds
+            );
+
+            let results = performance_tests::run_large_download_tests(
+                &agent_addr,
+                file_size_mb.saturating_mul(1024 * 1024),
+                chunk_size_kb.saturating_mul(1024),
+                concurrency,
+                rounds,
+            )
+            .await?;
+
+            report::generate_large_download_reports(&results, &output)?;
+            tracing::info!("HTTP Range 分片大文件下载报告已生成：{}", output);
         }
         Commands::QuicProbe {
             proxy_addr,

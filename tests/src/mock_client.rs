@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
-use hyper::Request;
+use hyper::header::{HeaderName, HeaderValue};
+use hyper::{HeaderMap, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,12 +21,27 @@ impl MockHttpClient {
 
     /// 通过代理发送 HTTP GET 请求
     pub async fn get(&self, url: &str) -> Result<(Duration, String)> {
+        let (duration, status, _headers, body_bytes) =
+            self.get_bytes_with_headers(url, &[]).await?;
+        let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+        debug!("HTTP GET {} - 状态：{} - 耗时：{:?}", url, status, duration);
+
+        Ok((duration, body))
+    }
+
+    /// 通过代理发送 HTTP GET 请求，并返回原始响应字节与响应头
+    pub async fn get_bytes_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, String)],
+    ) -> Result<(Duration, StatusCode, HeaderMap, Bytes)> {
         let start = Instant::now();
 
-        // 连接到 agent
-        let stream = TcpStream::connect(&self.agent_addr)
-            .await
-            .context("Failed to connect to agent")?;
+        // 连接到 agent。高并发本地压测会瞬间打满 macOS 默认 128 listen backlog；
+        // 对 transient connect 拒绝做短重试，数据通路错误仍在后续握手/读写阶段暴露。
+        let stream =
+            connect_to_agent_with_retry(&self.agent_addr, "Failed to connect to agent").await?;
 
         let io = TokioIo::new(stream);
 
@@ -41,8 +57,15 @@ impl MockHttpClient {
         });
 
         // 构建并发送请求
-        let req = Request::builder()
-            .uri(url)
+        let mut builder = Request::builder().uri(url);
+        for (name, value) in headers {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .with_context(|| format!("Invalid request header name: {name}"))?;
+            let value = HeaderValue::from_str(value)
+                .with_context(|| format!("Invalid request header value for {name}"))?;
+            builder = builder.header(name, value);
+        }
+        let req = builder
             .body(Empty::<Bytes>::new())
             .context("Failed to build request")?;
 
@@ -52,14 +75,20 @@ impl MockHttpClient {
             .context("Failed to send request")?;
 
         let status = res.status();
+        let headers = res.headers().clone();
         let body_bytes = res.collect().await?.to_bytes();
-        let body = String::from_utf8_lossy(&body_bytes).to_string();
 
         let duration = start.elapsed();
 
-        debug!("HTTP GET {} - 状态：{} - 耗时：{:?}", url, status, duration);
+        debug!(
+            "HTTP GET {} - 状态：{} - {} 字节 - 耗时：{:?}",
+            url,
+            status,
+            body_bytes.len(),
+            duration
+        );
 
-        Ok((duration, body))
+        Ok((duration, status, headers, body_bytes))
     }
 
     /// 通过代理发送 HTTP POST 请求
@@ -67,9 +96,8 @@ impl MockHttpClient {
         let start = Instant::now();
 
         // POST 请求创建新连接（因 body 类型不匹配，无法复用）
-        let stream = TcpStream::connect(&self.agent_addr)
-            .await
-            .context("Failed to connect to agent")?;
+        let stream =
+            connect_to_agent_with_retry(&self.agent_addr, "Failed to connect to agent").await?;
 
         let io = TokioIo::new(stream);
 
@@ -134,9 +162,8 @@ impl MockSocks5Client {
         let proxy_addr = &self.agent_addr;
 
         // 1. 连接到代理
-        let mut stream = TcpStream::connect(proxy_addr)
-            .await
-            .context("Failed to connect to proxy")?;
+        let mut stream =
+            connect_to_agent_with_retry(proxy_addr, "Failed to connect to proxy").await?;
 
         // 2. 执行 SOCKS5 握手（CONNECT）
         let _ = async_socks5::connect(&mut stream, (target_host.to_string(), target_port), None)
@@ -187,9 +214,8 @@ impl MockSocks5Client {
         // 使用 async-socks5 crate 执行 UDP 关联
 
         // 1. 与 SOCKS5 服务器（代理）建立 TCP 连接
-        let stream = TcpStream::connect(&self.agent_addr)
-            .await
-            .context("Failed to connect to agent")?;
+        let stream =
+            connect_to_agent_with_retry(&self.agent_addr, "Failed to connect to agent").await?;
 
         // 2. 绑定本地 UDP 套接字
         let socket = UdpSocket::bind("0.0.0.0:0")
@@ -244,6 +270,27 @@ impl MockSocks5Client {
         );
 
         Ok((duration, buf))
+    }
+}
+
+pub async fn connect_to_agent_with_retry(
+    addr: &str,
+    context_msg: &'static str,
+) -> Result<TcpStream> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut delay = Duration::from_millis(5);
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(err) => {
+                if Instant::now() + delay >= deadline {
+                    return Err(err).context(context_msg);
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_millis(50));
+            }
+        }
     }
 }
 

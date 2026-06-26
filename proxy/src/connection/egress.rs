@@ -18,6 +18,7 @@ use source::{BoundSource, interface_bind_addrs};
 use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
@@ -25,6 +26,9 @@ use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 // 视频分片下载通常是目标站点到 proxy 的大流量下行，默认系统缓冲在高 RTT 或蜂窝网络下
 // 容易过早限制 TCP 窗口；1MB 与 Android agent 侧保持一致，能给 HLS burst 留出余量。
 const PROXY_EGRESS_TCP_BUFFER_SIZE: usize = 1024 * 1024;
+const PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE: Duration = Duration::from_secs(18);
+const PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
+const PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY: Duration = Duration::from_millis(250);
 
 pub struct EgressState {
     // None 表示完全交给系统默认路由；Some 表示需要做接口/源地址绑定。
@@ -55,7 +59,7 @@ impl EgressState {
     pub async fn connect_tcp(&self, target_addr: &str) -> io::Result<EgressTcpStream> {
         // 未指定出站设备时走系统默认路由，不做额外绑定。
         if self.interface.is_none() {
-            let stream = TcpStream::connect(target_addr).await?;
+            let stream = connect_tcp_default_with_retry(target_addr).await?;
             tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
             return Ok(EgressTcpStream::new(stream, None));
         }
@@ -91,7 +95,7 @@ async fn connect_tcp_with_interface(
     egress_state: &EgressState,
 ) -> io::Result<EgressTcpStream> {
     if egress_state.interface.is_none() {
-        let stream = TcpStream::connect(target_addr).await?;
+        let stream = connect_tcp_default_with_retry(target_addr).await?;
         tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
         return Ok(EgressTcpStream::new(stream, None));
     }
@@ -186,6 +190,29 @@ async fn connect_udp_with_interface(
             io::Error::new(io::ErrorKind::NotFound, "未解析到目标地址")
         }
     }))
+}
+
+async fn connect_tcp_default_with_retry(target_addr: &str) -> io::Result<TcpStream> {
+    let started = Instant::now();
+    let mut delay = PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY;
+
+    loop {
+        match TcpStream::connect(target_addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(err)
+                if is_transient_addr_not_available(&err)
+                    && started.elapsed() + delay < PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE =>
+            {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn is_transient_addr_not_available(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::AddrNotAvailable || err.raw_os_error() == Some(49)
 }
 
 fn normalize_interface(interface: Option<&str>) -> Option<&str> {

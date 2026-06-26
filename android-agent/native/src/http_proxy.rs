@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use common::spawn_guarded;
+use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -13,7 +13,7 @@ use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
@@ -31,7 +31,7 @@ pub async fn run_android_http_proxy(
     config.validate()?;
 
     let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, listen_port));
-    let listener = TcpListener::bind(bind_addr).await?;
+    let listener = bind_tcp_listener_with_backlog(bind_addr, DEFAULT_TCP_LISTEN_BACKLOG)?;
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_sessions =

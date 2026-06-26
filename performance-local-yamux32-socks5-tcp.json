@@ -1,0 +1,31 @@
+{
+  "test_duration_secs": 20,
+  "agent_addr": "127.0.0.1:11080",
+  "target_host": "127.0.0.1",
+  "target_port": 9091,
+  "concurrency": 100,
+  "payload_size": 65536,
+  "total_chunks": 48159,
+  "successful_chunks": 48159,
+  "failed_chunks": 0,
+  "failure_rate_percent": 0.0,
+  "chunks_per_second": 2385.3816409488495,
+  "throughput_mbps": 2501.253939539581,
+  "tcp_metrics": {
+    "total_chunks": 48159,
+    "successful": 48159,
+    "failed": 0,
+    "avg_rtt_ms": 40.93105911667601,
+    "min_rtt_ms": 3.33,
+    "max_rtt_ms": 131.455,
+    "p50_rtt_ms": 39.967,
+    "p95_rtt_ms": 64.191,
+    "p99_rtt_ms": 76.607,
+    "total_bytes_transferred": 6312296448
+  },
+  "system_metrics": {
+    "cpu_usage_percent": 86.645676,
+    "memory_usage_mb": 13140,
+    "peak_memory_mb": 13170
+  }
+}

@@ -8,12 +8,12 @@ use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
-use common::spawn_guarded;
+use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use futures::StreamExt;
 use protocol::CompressionMode;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -58,7 +58,10 @@ impl ProxyServer {
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         // 启动代理服务器
-        let listener = TcpListener::bind(&self.config.listen_addr).await?;
+        let listener = bind_tcp_listener_with_backlog(
+            self.config.listen_addr.as_str(),
+            DEFAULT_TCP_LISTEN_BACKLOG,
+        )?;
         info!("代理服务器正在监听 {}", self.config.listen_addr);
 
         loop {
