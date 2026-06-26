@@ -37,7 +37,7 @@ sessions = 5
 max_streams_per_session = 32
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 60
+connection_write_timeout_secs = 300
 stream_window_size_kb = 8192
 
 [yamux.udp]
@@ -47,5 +47,5 @@ sessions = 5
 max_streams_per_session = 32
 open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 60
+connection_write_timeout_secs = 300
 stream_window_size_kb = 8192

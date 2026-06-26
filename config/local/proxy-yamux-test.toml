@@ -11,20 +11,20 @@ replay_attack_tolerance = 300
 async_runtime_stack_size_mb = 2
 connect_timeout_secs = 20
 auth_timeout_secs = 20
-tcp_relay_idle_timeout_secs = 120
-yamux_tcp_relay_idle_timeout_secs = 120
-yamux_session_idle_timeout_secs = 120
+tcp_relay_idle_timeout_secs = 300
+yamux_tcp_relay_idle_timeout_secs = 0
+yamux_session_idle_timeout_secs = 300
 udp_relay_idle_timeout_secs = 60
 udp_relay_channel_size = 64
 
 [yamux.tcp]
 max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 60
+connection_write_timeout_secs = 300
 stream_window_size_kb = 8192
 
 [yamux.udp]
 max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 60
+connection_write_timeout_secs = 300
 stream_window_size_kb = 8192

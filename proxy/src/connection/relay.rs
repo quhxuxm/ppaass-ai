@@ -330,7 +330,7 @@ impl ServerConnection {
             pending_write_len: None,
         };
 
-        let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
+        let tcp_relay_idle_timeout_secs = self.proxy_config.yamux_tcp_relay_idle_timeout_secs;
         let idle_timeout = if tcp_relay_idle_timeout_secs == 0 {
             None
         } else {

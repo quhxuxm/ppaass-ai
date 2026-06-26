@@ -80,7 +80,8 @@ pub struct ProxyConfig {
     pub tcp_relay_idle_timeout_secs: u64,
 
     /// Yamux TCP 子流空闲超时时间（秒）。
-    /// 0 表示不限制；默认 300 秒，与普通 TCP relay 保持一致，避免异常子流长期占用资源。
+    /// 0 表示不限制。HTTPS/HTTP2 CONNECT 中 proxy 看不到单个响应的 Content-Length，
+    /// 提前按空闲关闭会截断慢速视频分片；默认不限制，等真实 TCP/Yamux EOF 收尾。
     #[serde(default = "default_yamux_tcp_relay_idle_timeout_secs")]
     pub yamux_tcp_relay_idle_timeout_secs: u64,
 
@@ -128,7 +129,7 @@ fn default_tcp_relay_idle_timeout_secs() -> u64 {
 }
 
 fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
-    300
+    0
 }
 
 fn default_yamux_session_idle_timeout_secs() -> u64 {
@@ -175,7 +176,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yamux_tcp_relay_idle_timeout_defaults_to_small_memory_friendly_limit() {
+    fn yamux_tcp_relay_idle_timeout_defaults_to_no_forced_cutoff() {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
@@ -185,7 +186,7 @@ tcp_relay_idle_timeout_secs = 300
         .unwrap();
 
         assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
-        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 300);
+        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 0);
         assert_eq!(config.yamux_session_idle_timeout_secs, 300);
     }
 
