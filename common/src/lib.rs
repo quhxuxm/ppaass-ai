@@ -21,6 +21,13 @@ pub use yamux_settings::{
     YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig, YamuxSettings, YamuxTransportConfig,
 };
 
+/// TCP relay copy buffer for HTTP CONNECT, SOCKS, and TUN data paths.
+///
+/// Tokio's default bidirectional copy buffer is 8KB. HLS/video segment downloads
+/// move megabytes through each tunnel, so a 64KB buffer lowers wakeups and small
+/// writes without creating large per-connection memory spikes on small proxies.
+pub const TCP_RELAY_COPY_BUFFER_SIZE: usize = 64 * 1024;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;

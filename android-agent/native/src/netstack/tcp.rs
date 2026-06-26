@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use common::spawn_guarded;
+use common::{TCP_RELAY_COPY_BUFFER_SIZE, spawn_guarded};
 use futures::StreamExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
@@ -98,7 +98,13 @@ where
     // Yamux proxy 都统一适配成 AsyncRead/AsyncWrite 后交给 Tokio copy_bidirectional。
     let mut client_io = AndroidTcpRelayIo::new(client, label);
     let mut remote_io = AndroidTcpRelayIo::new(remote, label);
-    tokio::io::copy_bidirectional(&mut client_io, &mut remote_io).await
+    tokio::io::copy_bidirectional_with_sizes(
+        &mut client_io,
+        &mut remote_io,
+        TCP_RELAY_COPY_BUFFER_SIZE,
+        TCP_RELAY_COPY_BUFFER_SIZE,
+    )
+    .await
 }
 
 fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {

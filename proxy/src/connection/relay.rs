@@ -83,20 +83,13 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let result = Pin::new(&mut *this.inner).poll_flush(cx);
-        if let Poll::Ready(Ok(())) = &result {
-            this.mark_activity();
-        }
-        result
+        Pin::new(&mut *this.inner).poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         match Pin::new(&mut *this.inner).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => {
-                this.mark_activity();
-                Poll::Ready(Ok(()))
-            }
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(error)) if can_ignore_tcp_shutdown_error(&error) => {
                 // copy_bidirectional 的半关闭语义是正确的，但真实网络里 shutdown
                 // 可能遇到对端已关闭写半边的 BrokenPipe/Reset。这里把这类错误视为
@@ -105,7 +98,6 @@ where
                     "TCP relay 忽略 {label} shutdown 错误：{error}",
                     label = this.label
                 );
-                this.mark_activity();
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
@@ -387,8 +379,12 @@ where
         down_total.clone(),
     );
 
-    // 使用 Tokio 默认 buffer，避免 proxy/agent 两端再暴露 relay buffer 调参。
-    let relay = tokio::io::copy_bidirectional(&mut agent_copy_io, &mut target_copy_io);
+    let relay = tokio::io::copy_bidirectional_with_sizes(
+        &mut agent_copy_io,
+        &mut target_copy_io,
+        common::TCP_RELAY_COPY_BUFFER_SIZE,
+        common::TCP_RELAY_COPY_BUFFER_SIZE,
+    );
     tokio::pin!(relay);
 
     if let Some(timeout) = idle_timeout {
@@ -581,6 +577,21 @@ mod tests {
             .unwrap();
         assert_eq!(up_bytes, 3);
         assert_eq!(down_bytes, b"complete-body".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn relay_activity_does_not_reset_on_flush_without_bytes() {
+        let (activity_tx, mut activity_rx) = tokio::sync::watch::channel(());
+        activity_rx.borrow_and_update();
+        let read_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut sink = tokio::io::sink();
+        let mut relay_io =
+            RelayCopyIo::new(&mut sink, "flush-only", activity_tx, read_bytes.clone());
+
+        relay_io.flush().await.unwrap();
+
+        assert!(!activity_rx.has_changed().unwrap());
+        assert_eq!(read_bytes.load(Ordering::Acquire), 0);
     }
 
     struct ShutdownErrorTarget {

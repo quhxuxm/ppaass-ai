@@ -11,6 +11,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use common::TCP_RELAY_COPY_BUFFER_SIZE;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::debug;
 
@@ -114,11 +115,15 @@ where
     // 所有 TCP 入口都走同一个 copy_bidirectional。不要在这里按
     // TUN/HTTP/SOCKS/framed proxy 分叉，否则后续排查卡顿时会再次出现“某个入口
     // 修好了、另一个入口还保留旧半关闭语义”的问题。
-    // 使用 Tokio 默认 8KB buffer，避免 relay buffer 变成另一个调参变量。
     let mut client_io = RelayCopyIo::new(client, options.label);
     let mut remote_io = RelayCopyIo::new(remote, options.label);
-    let (client_to_remote, remote_to_client) =
-        tokio::io::copy_bidirectional(&mut client_io, &mut remote_io).await?;
+    let (client_to_remote, remote_to_client) = tokio::io::copy_bidirectional_with_sizes(
+        &mut client_io,
+        &mut remote_io,
+        TCP_RELAY_COPY_BUFFER_SIZE,
+        TCP_RELAY_COPY_BUFFER_SIZE,
+    )
+    .await?;
 
     Ok(TcpRelayStats {
         client_to_remote,
