@@ -12,6 +12,7 @@ use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
+use hyper::header::HeaderValue;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
@@ -343,6 +344,10 @@ async fn handle_regular_request(
     if let Ok(new_uri) = Uri::from_str(path) {
         *req.uri_mut() = new_uri;
     }
+    // 每个普通 HTTP proxy 请求都会创建一条独立的目标连接/Yamux 子流。
+    // 显式关闭上游 keep-alive，避免 per-request 子流被误当成可复用连接。
+    req.headers_mut()
+        .insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
 
     if direct_checker.is_direct(&address) {
         // === 直连路径: 直接连接目标 ===
@@ -372,14 +377,32 @@ async fn handle_regular_request(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(target_stream)).await?;
 
+        let (sender_guard_tx, sender_guard_rx) = tokio::sync::oneshot::channel();
+
         // hyper connection future 驱动读写状态机，必须放到后台持续运行。
+        // sender 需要至少活到 response body 被驱动完成；否则慢速响应在远端链路上
+        // 可能被提前收尾，表现成 Content-Length 和实际 body 不一致。
         tokio::spawn(async move {
-            if let Err(err) = conn.await {
-                error!("直连连接失败: {:?}", err);
+            tokio::pin!(conn);
+            let mut sender_guard = None;
+            tokio::select! {
+                guard = sender_guard_rx => {
+                    sender_guard = guard.ok();
+                    if let Err(err) = (&mut conn).await {
+                        error!("直连连接失败: {:?}", err);
+                    }
+                }
+                result = &mut conn => {
+                    if let Err(err) = result {
+                        error!("直连连接失败: {:?}", err);
+                    }
+                }
             }
+            drop(sender_guard);
         });
 
         let response = sender.send_request(req).await?;
+        let _ = sender_guard_tx.send(sender);
         let (parts, body) = response.into_parts();
         let body = boxed(body);
 
@@ -413,15 +436,32 @@ async fn handle_regular_request(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(proxy_io)).await?;
 
+        let (sender_guard_tx, sender_guard_rx) = tokio::sync::oneshot::channel();
+
         // 代理路径也需要后台驱动 hyper client connection。
+        // 和直连路径一样保留 sender，直到 response body 对应的连接自然结束。
         tokio::spawn(async move {
-            if let Err(err) = conn.await {
-                error!("连接失败: {:?}", err);
+            tokio::pin!(conn);
+            let mut sender_guard = None;
+            tokio::select! {
+                guard = sender_guard_rx => {
+                    sender_guard = guard.ok();
+                    if let Err(err) = (&mut conn).await {
+                        error!("连接失败: {:?}", err);
+                    }
+                }
+                result = &mut conn => {
+                    if let Err(err) = result {
+                        error!("连接失败: {:?}", err);
+                    }
+                }
             }
+            drop(sender_guard);
         });
 
         // 发送请求
         let response = sender.send_request(req).await?;
+        let _ = sender_guard_tx.send(sender);
 
         // 将响应体转换为 BoxBody 类型
         let (parts, body) = response.into_parts();

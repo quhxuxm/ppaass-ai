@@ -1,9 +1,12 @@
 use crate::mock_client::{MockHttpClient, MockSocks5Client};
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use http_body_util::{BodyExt, Empty};
 use hyper::HeaderMap;
+use hyper::Request;
 use hyper::StatusCode;
 use hyper::header::{HeaderName, HeaderValue};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,6 +17,20 @@ const BLOCKED_TARGET_HOST: &str = "203.0.113.1";
 const BLOCKED_TARGET_PORT: u16 = 81;
 const BLOCKED_TARGET_TIMEOUT: Duration = Duration::from_millis(350);
 const FLUCTUATING_TARGET_TIMEOUT: Duration = Duration::from_secs(20);
+const BROWSER_LIKE_TIMEOUT: Duration = Duration::from_secs(25);
+
+#[derive(Clone, Copy)]
+enum RangeProtocol {
+    Http,
+    Connect,
+    Socks5,
+}
+
+#[derive(Clone, Copy)]
+enum RangeEndpoint {
+    Large,
+    Fluctuating,
+}
 
 pub struct IntegrationTestResults {
     pub total_tests: usize,
@@ -61,6 +78,24 @@ pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
 
     // 测试目标网络波动时仍能读完整 Content-Length 指定的分片 body
     results.add_test(test_fluctuating_target_does_not_truncate_range_downloads(agent_addr).await);
+
+    // 测试浏览器式长连接复用不会截断同一连接上的连续分片
+    results.add_test(test_browser_like_reused_connections_do_not_truncate_ranges(agent_addr).await);
+
+    // 测试并发大/小分片都严格满足 Content-Length
+    results.add_test(test_concurrent_segment_sizes_match_content_length(agent_addr).await);
+
+    // 测试 HTTP/2 多路复用隧道不会截断并发分片
+    results.add_test(test_http2_multiplexed_tunnels_do_not_truncate_ranges(agent_addr).await);
+
+    // 测试浏览器取消/seek 后不会污染后续正常分片
+    results.add_test(test_client_cancellations_do_not_poison_range_downloads(agent_addr).await);
+
+    // 测试 client 慢读/backpressure 下仍然读完整 Content-Length
+    results.add_test(test_slow_clients_do_not_truncate_range_downloads(agent_addr).await);
+
+    // 测试长连接、取消、慢读和失败目标混跑后 session 仍可继续服务分片
+    results.add_test(test_connection_churn_does_not_exhaust_yamux_sessions(agent_addr).await);
 
     // 测试 HTTP JSON 响应
     results.add_test(test_http_json(agent_addr).await);
@@ -294,7 +329,7 @@ async fn test_blocked_target_connects_do_not_truncate_range_downloads(
     TestResult {
         name,
         passed: result.is_ok(),
-        error: result.err().map(|err| err.to_string()),
+        error: result.err().map(format_anyhow_error),
         duration_ms: start.elapsed().as_millis(),
     }
 }
@@ -308,9 +343,99 @@ async fn test_fluctuating_target_does_not_truncate_range_downloads(agent_addr: &
     TestResult {
         name,
         passed: result.is_ok(),
-        error: result.err().map(|err| err.to_string()),
+        error: result.err().map(format_anyhow_error),
         duration_ms: start.elapsed().as_millis(),
     }
+}
+
+async fn test_browser_like_reused_connections_do_not_truncate_ranges(
+    agent_addr: &str,
+) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "浏览器式长连接复用不截断分片".to_string();
+
+    let result = run_browser_like_reused_connection_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+async fn test_http2_multiplexed_tunnels_do_not_truncate_ranges(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "HTTP/2 多路复用隧道不截断分片".to_string();
+
+    let result = run_http2_multiplexed_tunnel_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+async fn test_concurrent_segment_sizes_match_content_length(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "并发大小分片长度一致".to_string();
+
+    let result = run_concurrent_segment_size_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+async fn test_client_cancellations_do_not_poison_range_downloads(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "客户端取消不污染后续分片".to_string();
+
+    let result = run_client_cancellation_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+async fn test_slow_clients_do_not_truncate_range_downloads(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "慢读客户端不截断分片下载".to_string();
+
+    let result = run_slow_client_backpressure_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+async fn test_connection_churn_does_not_exhaust_yamux_sessions(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "连接 churn 不耗尽 Yamux session".to_string();
+
+    let result = run_connection_churn_regression(agent_addr).await;
+
+    TestResult {
+        name,
+        passed: result.is_ok(),
+        error: result.err().map(format_anyhow_error),
+        duration_ms: start.elapsed().as_millis(),
+    }
+}
+
+fn format_anyhow_error(err: anyhow::Error) -> String {
+    format!("{err:#}")
 }
 
 async fn run_blocked_target_connect_range_regression(agent_addr: &str) -> Result<()> {
@@ -438,6 +563,258 @@ async fn run_fluctuating_target_range_regression(agent_addr: &str) -> Result<()>
     Ok(())
 }
 
+async fn run_browser_like_reused_connection_regression(agent_addr: &str) -> Result<()> {
+    tokio::time::timeout(BROWSER_LIKE_TIMEOUT, async {
+        verify_http_repeated_range_sequence(agent_addr, 6, 5 * 1024 * 1024, 40 * 1024)
+            .await
+            .context("HTTP repeated range sequence failed")?;
+        verify_connect_keepalive_range_sequence(agent_addr, 6, 5 * 1024 * 1024, 40 * 1024)
+            .await
+            .context("CONNECT keep-alive range sequence failed")?;
+        Ok(())
+    })
+    .await
+    .context("browser-like reused connection regression timed out")?
+}
+
+async fn run_http2_multiplexed_tunnel_regression(agent_addr: &str) -> Result<()> {
+    tokio::time::timeout(BROWSER_LIKE_TIMEOUT, async {
+        let mut connect_stream = TcpStream::connect(agent_addr)
+            .await
+            .context("failed to connect to agent for H2 CONNECT test")?;
+        write_connect_request(&mut connect_stream, "127.0.0.1:9093").await?;
+        read_connect_ok_response(&mut connect_stream).await?;
+        verify_h2_multiplexed_range_sequence(
+            connect_stream,
+            "H2 over CONNECT",
+            8,
+            6 * 1024 * 1024,
+            48 * 1024,
+        )
+        .await?;
+
+        let mut socks_stream = TcpStream::connect(agent_addr)
+            .await
+            .context("failed to connect to agent for H2 SOCKS5 test")?;
+        async_socks5::connect(&mut socks_stream, ("127.0.0.1".to_string(), 9093), None)
+            .await
+            .context("failed to connect through SOCKS5 for H2 test")?;
+        verify_h2_multiplexed_range_sequence(
+            socks_stream,
+            "H2 over SOCKS5",
+            8,
+            6 * 1024 * 1024,
+            48 * 1024,
+        )
+        .await
+    })
+    .await
+    .context("HTTP/2 multiplexed tunnel regression timed out")?
+}
+
+async fn run_client_cancellation_regression(agent_addr: &str) -> Result<()> {
+    let file_size = 6 * 1024 * 1024_u64;
+    let chunk_size = 256 * 1024_u64;
+    let mut cancel_handles = Vec::new();
+
+    for idx in 0..18_u64 {
+        let agent_addr = agent_addr.to_string();
+        cancel_handles.push(tokio::spawn(async move {
+            let start = idx * chunk_size;
+            let end = start + chunk_size - 1;
+            match idx % 3 {
+                0 => cancel_http_range_after_partial_body(&agent_addr, file_size, start, end).await,
+                1 => {
+                    cancel_connect_range_after_partial_body(&agent_addr, file_size, start, end)
+                        .await
+                }
+                _ => {
+                    cancel_socks5_range_after_partial_body(&agent_addr, file_size, start, end).await
+                }
+            }
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in cancel_handles {
+        match handle.await.context("cancellation task panicked")? {
+            Ok(()) => {}
+            Err(err) => errors.push(err.to_string()),
+        }
+    }
+    anyhow::ensure!(errors.is_empty(), "取消请求失败：{}", errors.join("; "));
+
+    verify_mixed_protocol_range_downloads(agent_addr, file_size, 32 * 1024, 12)
+        .await
+        .context("post-cancellation range verification failed")
+}
+
+async fn run_slow_client_backpressure_regression(agent_addr: &str) -> Result<()> {
+    let file_size = 7 * 1024 * 1024_u64;
+    let chunk_size = 96 * 1024_u64;
+    let mut handles = Vec::new();
+
+    for idx in 0..9_u64 {
+        let agent_addr = agent_addr.to_string();
+        handles.push(tokio::spawn(async move {
+            let start = idx * chunk_size + (idx % 7);
+            let end = start + chunk_size - 1;
+            match idx % 3 {
+                0 => slow_read_http_range(&agent_addr, file_size, start, end).await,
+                1 => slow_read_connect_range(&agent_addr, file_size, start, end).await,
+                _ => slow_read_socks5_range(&agent_addr, file_size, start, end).await,
+            }
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        match tokio::time::timeout(BROWSER_LIKE_TIMEOUT, handle)
+            .await
+            .context("slow client task timed out")?
+            .context("slow client task panicked")?
+        {
+            Ok(()) => {}
+            Err(err) => errors.push(err.to_string()),
+        }
+    }
+
+    anyhow::ensure!(errors.is_empty(), "慢读请求失败：{}", errors.join("; "));
+
+    verify_mixed_protocol_range_downloads(agent_addr, file_size, 32 * 1024, 9)
+        .await
+        .context("post-slow-client range verification failed")
+}
+
+async fn run_connection_churn_regression(agent_addr: &str) -> Result<()> {
+    tokio::time::timeout(BROWSER_LIKE_TIMEOUT, async {
+        let churn_file_size = 8 * 1024 * 1024_u64;
+
+        let mut handles = Vec::new();
+        for idx in 0..24_u64 {
+            let agent_addr = agent_addr.to_string();
+            handles.push(tokio::spawn(async move {
+                let chunk_size = 64 * 1024_u64;
+                let start = idx * chunk_size + (idx % 11);
+                let end = start + chunk_size - 1;
+
+                match idx % 6 {
+                    0 => slow_read_http_range(&agent_addr, churn_file_size, start, end).await,
+                    1 => slow_read_connect_range(&agent_addr, churn_file_size, start, end).await,
+                    2 => slow_read_socks5_range(&agent_addr, churn_file_size, start, end).await,
+                    3 => {
+                        cancel_http_range_after_partial_body(
+                            &agent_addr,
+                            churn_file_size,
+                            start,
+                            end,
+                        )
+                        .await
+                    }
+                    4 => {
+                        cancel_connect_range_after_partial_body(
+                            &agent_addr,
+                            churn_file_size,
+                            start,
+                            end,
+                        )
+                        .await
+                    }
+                    _ => {
+                        run_blocked_target_connect_attempt(agent_addr, idx as usize).await;
+                        Ok(())
+                    }
+                }
+            }));
+        }
+
+        let mut errors = Vec::new();
+        for handle in handles {
+            match handle.await.context("connection churn task panicked")? {
+                Ok(()) => {}
+                Err(err) => errors.push(err.to_string()),
+            }
+        }
+        anyhow::ensure!(
+            errors.is_empty(),
+            "连接 churn 子任务失败：{}",
+            errors.join("; ")
+        );
+
+        verify_mixed_protocol_range_downloads(agent_addr, churn_file_size, 24 * 1024, 15)
+            .await
+            .context("post-churn range verification failed")
+    })
+    .await
+    .context("connection churn regression timed out")?
+}
+
+async fn verify_mixed_protocol_range_downloads(
+    agent_addr: &str,
+    file_size: u64,
+    chunk_size: u64,
+    chunk_count: u64,
+) -> Result<()> {
+    let mut handles = Vec::with_capacity(chunk_count as usize);
+    for idx in 0..chunk_count {
+        let agent_addr = agent_addr.to_string();
+        handles.push(tokio::spawn(async move {
+            let start = idx * chunk_size + (idx % 13);
+            let end = start + chunk_size - 1;
+            match idx % 3 {
+                0 => {
+                    verify_fluctuating_http_range_chunk(
+                        &agent_addr,
+                        "127.0.0.1:9090",
+                        file_size,
+                        start,
+                        end,
+                    )
+                    .await
+                }
+                1 => {
+                    verify_fluctuating_connect_range_chunk(
+                        &agent_addr,
+                        "127.0.0.1:9090",
+                        file_size,
+                        start,
+                        end,
+                    )
+                    .await
+                }
+                _ => {
+                    verify_fluctuating_socks5_range_chunk(
+                        &agent_addr,
+                        "127.0.0.1:9090",
+                        file_size,
+                        start,
+                        end,
+                    )
+                    .await
+                }
+            }
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle
+            .await
+            .context("mixed protocol verification task panicked")?
+        {
+            Ok(()) => {}
+            Err(err) => errors.push(err.to_string()),
+        }
+    }
+
+    anyhow::ensure!(
+        errors.is_empty(),
+        "混合协议分片校验失败：{}",
+        errors.join("; ")
+    );
+    Ok(())
+}
+
 async fn verify_fluctuating_http_range_chunk(
     agent_addr: &str,
     target_authority: &str,
@@ -543,6 +920,448 @@ async fn verify_fluctuating_socks5_range_chunk(
     )
 }
 
+async fn verify_socks5_large_range_chunk(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for SOCKS5 large range")?;
+
+    async_socks5::connect(&mut stream, ("127.0.0.1".to_string(), 9090), None)
+        .await
+        .context("failed to connect through SOCKS5 for large range")?;
+
+    let request = format!(
+        "GET /large?size={file_size} HTTP/1.1\r\nHost: 127.0.0.1:9090\r\nRange: bytes={range_start}-{range_end}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .context("failed to write SOCKS5 large range request")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush SOCKS5 large range request")?;
+
+    let (status, headers, body) = read_raw_http_response(&mut stream).await?;
+
+    verify_large_range_response(
+        "SOCKS5 Large Range",
+        file_size,
+        range_start,
+        range_end,
+        status,
+        &headers,
+        &body,
+    )
+}
+
+async fn verify_http_repeated_range_sequence(
+    agent_addr: &str,
+    count: u64,
+    file_size: u64,
+    chunk_size: u64,
+) -> Result<()> {
+    for idx in 0..count {
+        let range_start = idx * chunk_size + (idx % 17);
+        let range_end = range_start + chunk_size - 1;
+        verify_fluctuating_http_range_chunk(
+            agent_addr,
+            "127.0.0.1:9090",
+            file_size,
+            range_start,
+            range_end,
+        )
+        .await
+        .with_context(|| format!("HTTP repeated range request {idx} failed"))?;
+    }
+    Ok(())
+}
+
+async fn verify_connect_keepalive_range_sequence(
+    agent_addr: &str,
+    count: u64,
+    file_size: u64,
+    chunk_size: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for CONNECT keep-alive sequence")?;
+    write_connect_request(&mut stream, "127.0.0.1:9090").await?;
+    read_connect_ok_response(&mut stream).await?;
+
+    for idx in 0..count {
+        let range_start = idx * chunk_size + (idx % 19);
+        let range_end = range_start + chunk_size - 1;
+        let close = idx + 1 == count;
+        write_tunneled_range_request(&mut stream, file_size, range_start, range_end, close)
+            .await
+            .with_context(|| format!("CONNECT keep-alive request {idx} write failed"))?;
+        let (status, headers, body) = read_raw_http_response(&mut stream)
+            .await
+            .with_context(|| {
+                format!(
+                    "CONNECT keep-alive response {idx} read failed for range {range_start}-{range_end}"
+                )
+            })?;
+
+        verify_large_range_response(
+            "CONNECT keep-alive Range",
+            file_size,
+            range_start,
+            range_end,
+            status,
+            &headers,
+            &body,
+        )?;
+    }
+
+    Ok(())
+}
+
+async fn run_concurrent_segment_size_regression(agent_addr: &str) -> Result<()> {
+    tokio::time::timeout(BROWSER_LIKE_TIMEOUT, async {
+        let file_size = 32 * 1024 * 1024_u64;
+        let cases = [
+            (RangeProtocol::Http, RangeEndpoint::Fluctuating, 13, 512),
+            (
+                RangeProtocol::Connect,
+                RangeEndpoint::Fluctuating,
+                4099,
+                1024,
+            ),
+            (
+                RangeProtocol::Socks5,
+                RangeEndpoint::Fluctuating,
+                16387,
+                4096,
+            ),
+            (RangeProtocol::Http, RangeEndpoint::Fluctuating, 32771, 8192),
+            (
+                RangeProtocol::Http,
+                RangeEndpoint::Large,
+                1024 * 1024 + 17,
+                512 * 1024,
+            ),
+            (
+                RangeProtocol::Connect,
+                RangeEndpoint::Large,
+                3 * 1024 * 1024 + 33,
+                1024 * 1024,
+            ),
+            (
+                RangeProtocol::Socks5,
+                RangeEndpoint::Large,
+                6 * 1024 * 1024 + 65,
+                2 * 1024 * 1024,
+            ),
+        ];
+
+        let mut handles = Vec::with_capacity(cases.len());
+        for (idx, (protocol, endpoint, range_start, len)) in cases.into_iter().enumerate() {
+            let agent_addr = agent_addr.to_string();
+            handles.push(tokio::spawn(async move {
+                let range_end = range_start + len - 1;
+                verify_segment_size_case(
+                    &agent_addr,
+                    protocol,
+                    endpoint,
+                    file_size,
+                    range_start,
+                    range_end,
+                )
+                .await
+                .with_context(|| {
+                    format!("segment size case {idx} failed for range {range_start}-{range_end}")
+                })
+            }));
+        }
+
+        let mut errors = Vec::new();
+        for handle in handles {
+            match handle.await.context("segment size task panicked")? {
+                Ok(()) => {}
+                Err(err) => errors.push(err.to_string()),
+            }
+        }
+
+        anyhow::ensure!(
+            errors.is_empty(),
+            "并发大/小分片长度校验失败：{}",
+            errors.join("; ")
+        );
+        Ok(())
+    })
+    .await
+    .context("concurrent segment size regression timed out")?
+}
+
+async fn verify_h2_multiplexed_range_sequence(
+    stream: TcpStream,
+    label: &'static str,
+    count: u64,
+    file_size: u64,
+    chunk_size: u64,
+) -> Result<()> {
+    let io = TokioIo::new(stream);
+    let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+        .await
+        .context("HTTP/2 client handshake failed")?;
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let mut handles = Vec::with_capacity(count as usize);
+    for idx in 0..count {
+        let mut sender = sender.clone();
+        handles.push(tokio::spawn(async move {
+            let range_start = idx * chunk_size + (idx % 23);
+            let range_end = range_start + chunk_size - 1;
+            let request = Request::builder()
+                .uri(format!("/fluctuating-large?size={file_size}"))
+                .header(hyper::header::HOST, "127.0.0.1:9093")
+                .header(
+                    hyper::header::RANGE,
+                    format!("bytes={range_start}-{range_end}"),
+                )
+                .body(Empty::<Bytes>::new())
+                .context("failed to build HTTP/2 range request")?;
+            let response = sender
+                .send_request(request)
+                .await
+                .with_context(|| format!("{label} request {idx} failed"))?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response
+                .collect()
+                .await
+                .with_context(|| format!("{label} response {idx} collect failed"))?
+                .to_bytes();
+
+            verify_large_range_response(
+                label,
+                file_size,
+                range_start,
+                range_end,
+                status,
+                &headers,
+                &body,
+            )
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle.await.context("HTTP/2 range task panicked")? {
+            Ok(()) => {}
+            Err(err) => errors.push(err.to_string()),
+        }
+    }
+
+    drop(sender);
+    let _ = tokio::time::timeout(Duration::from_secs(2), conn_task).await;
+
+    anyhow::ensure!(
+        errors.is_empty(),
+        "{label} 分片校验失败：{}",
+        errors.join("; ")
+    );
+    Ok(())
+}
+
+async fn verify_segment_size_case(
+    agent_addr: &str,
+    protocol: RangeProtocol,
+    endpoint: RangeEndpoint,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    match (protocol, endpoint) {
+        (RangeProtocol::Http, RangeEndpoint::Fluctuating) => {
+            verify_fluctuating_http_range_chunk(
+                agent_addr,
+                "127.0.0.1:9090",
+                file_size,
+                range_start,
+                range_end,
+            )
+            .await
+        }
+        (RangeProtocol::Connect, RangeEndpoint::Fluctuating) => {
+            verify_fluctuating_connect_range_chunk(
+                agent_addr,
+                "127.0.0.1:9090",
+                file_size,
+                range_start,
+                range_end,
+            )
+            .await
+        }
+        (RangeProtocol::Socks5, RangeEndpoint::Fluctuating) => {
+            verify_fluctuating_socks5_range_chunk(
+                agent_addr,
+                "127.0.0.1:9090",
+                file_size,
+                range_start,
+                range_end,
+            )
+            .await
+        }
+        (RangeProtocol::Http, RangeEndpoint::Large) => {
+            verify_http_range_chunk(agent_addr, file_size, range_start, range_end).await
+        }
+        (RangeProtocol::Connect, RangeEndpoint::Large) => {
+            verify_connect_range_chunk(agent_addr, file_size, range_start, range_end).await
+        }
+        (RangeProtocol::Socks5, RangeEndpoint::Large) => {
+            verify_socks5_large_range_chunk(agent_addr, file_size, range_start, range_end).await
+        }
+    }
+}
+
+async fn slow_read_http_range(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for slow HTTP range")?;
+    write_http_proxy_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    let (status, headers, body) = read_raw_http_response_slow(&mut stream).await?;
+
+    verify_large_range_response(
+        "Slow HTTP Range",
+        file_size,
+        range_start,
+        range_end,
+        status,
+        &headers,
+        &body,
+    )
+}
+
+async fn slow_read_connect_range(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for slow CONNECT range")?;
+    write_connect_request(&mut stream, "127.0.0.1:9090").await?;
+    read_connect_ok_response(&mut stream).await?;
+    write_tunneled_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    let (status, headers, body) = read_raw_http_response_slow(&mut stream).await?;
+
+    verify_large_range_response(
+        "Slow CONNECT Range",
+        file_size,
+        range_start,
+        range_end,
+        status,
+        &headers,
+        &body,
+    )
+}
+
+async fn slow_read_socks5_range(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for slow SOCKS5 range")?;
+    async_socks5::connect(&mut stream, ("127.0.0.1".to_string(), 9090), None)
+        .await
+        .context("failed to connect through SOCKS5 for slow range")?;
+    write_tunneled_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    let (status, headers, body) = read_raw_http_response_slow(&mut stream).await?;
+
+    verify_large_range_response(
+        "Slow SOCKS5 Range",
+        file_size,
+        range_start,
+        range_end,
+        status,
+        &headers,
+        &body,
+    )
+}
+
+async fn cancel_http_range_after_partial_body(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for cancelled HTTP range")?;
+    write_http_proxy_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    read_partial_response_then_drop(
+        &mut stream,
+        "Cancelled HTTP Range",
+        file_size,
+        range_start,
+        range_end,
+    )
+    .await
+}
+
+async fn cancel_connect_range_after_partial_body(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for cancelled CONNECT range")?;
+    write_connect_request(&mut stream, "127.0.0.1:9090").await?;
+    read_connect_ok_response(&mut stream).await?;
+    write_tunneled_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    read_partial_response_then_drop(
+        &mut stream,
+        "Cancelled CONNECT Range",
+        file_size,
+        range_start,
+        range_end,
+    )
+    .await
+}
+
+async fn cancel_socks5_range_after_partial_body(
+    agent_addr: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let mut stream = TcpStream::connect(agent_addr)
+        .await
+        .context("failed to connect to agent for cancelled SOCKS5 range")?;
+    async_socks5::connect(&mut stream, ("127.0.0.1".to_string(), 9090), None)
+        .await
+        .context("failed to connect through SOCKS5 for cancelled range")?;
+    write_tunneled_range_request(&mut stream, file_size, range_start, range_end, true).await?;
+    read_partial_response_then_drop(
+        &mut stream,
+        "Cancelled SOCKS5 Range",
+        file_size,
+        range_start,
+        range_end,
+    )
+    .await
+}
+
 async fn verify_http_range_chunk(
     agent_addr: &str,
     file_size: u64,
@@ -633,6 +1452,122 @@ async fn run_blocked_target_connect_attempt(agent_addr: String, worker_id: usize
     }
 }
 
+async fn write_connect_request(stream: &mut TcpStream, authority: &str) -> Result<()> {
+    let request = format!(
+        "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: keep-alive\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .context("failed to write CONNECT request")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush CONNECT request")
+}
+
+async fn read_connect_ok_response(stream: &mut TcpStream) -> Result<()> {
+    let (head, _leftover) = read_http_head_bytes(stream).await?;
+    let head = String::from_utf8(head).context("CONNECT response is not UTF-8")?;
+    let status_line = head.lines().next().unwrap_or_default();
+    anyhow::ensure!(
+        status_line.contains(" 200 "),
+        "CONNECT failed: {status_line}"
+    );
+    Ok(())
+}
+
+async fn write_http_proxy_range_request(
+    stream: &mut TcpStream,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+    close: bool,
+) -> Result<()> {
+    let connection = if close { "close" } else { "keep-alive" };
+    let request = format!(
+        "GET http://127.0.0.1:9090/fluctuating-large?size={file_size} HTTP/1.1\r\nHost: 127.0.0.1:9090\r\nRange: bytes={range_start}-{range_end}\r\nConnection: {connection}\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .context("failed to write HTTP proxy range request")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush HTTP proxy range request")
+}
+
+async fn write_tunneled_range_request(
+    stream: &mut TcpStream,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+    close: bool,
+) -> Result<()> {
+    let connection = if close { "close" } else { "keep-alive" };
+    let request = format!(
+        "GET /fluctuating-large?size={file_size} HTTP/1.1\r\nHost: 127.0.0.1:9090\r\nRange: bytes={range_start}-{range_end}\r\nConnection: {connection}\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .context("failed to write tunneled range request")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush tunneled range request")
+}
+
+async fn read_partial_response_then_drop(
+    stream: &mut TcpStream,
+    label: &str,
+    file_size: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<()> {
+    let (head_bytes, leftover) = read_http_head_bytes(stream).await?;
+    let (status, headers) = parse_raw_http_response_head(head_bytes)?;
+    let expected_len = range_end - range_start + 1;
+    let content_length = response_content_length(&headers)? as u64;
+
+    anyhow::ensure!(
+        status == StatusCode::PARTIAL_CONTENT,
+        "{label} unexpected status before cancellation: {status}"
+    );
+    anyhow::ensure!(
+        content_length == expected_len,
+        "{label} content-length mismatch before cancellation: header {content_length}, expected {expected_len}"
+    );
+    let expected_content_range = format!("bytes {range_start}-{range_end}/{file_size}");
+    let actual_content_range = headers
+        .get(hyper::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    anyhow::ensure!(
+        actual_content_range == expected_content_range,
+        "{label} unexpected content-range before cancellation: {actual_content_range}"
+    );
+
+    let mut partial_len = leftover.len().min(expected_len as usize);
+    let target_partial_len = 8 * 1024_usize;
+    let mut buf = [0_u8; 1024];
+    while partial_len < target_partial_len.min(expected_len as usize) {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .context("failed to read partial response body")?;
+        anyhow::ensure!(n != 0, "{label} ended before cancellation point");
+        partial_len += n;
+    }
+
+    anyhow::ensure!(
+        partial_len < expected_len as usize,
+        "{label} completed before cancellation point"
+    );
+    Ok(())
+}
+
 async fn read_http_head_bytes(stream: &mut TcpStream) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut bytes = Vec::with_capacity(1024);
     let mut buf = [0_u8; 1024];
@@ -663,6 +1598,64 @@ fn find_http_head_end(bytes: &[u8]) -> Option<usize> {
 
 async fn read_raw_http_response(stream: &mut TcpStream) -> Result<(StatusCode, HeaderMap, Bytes)> {
     let (head_bytes, leftover) = read_http_head_bytes(stream).await?;
+    let (status, headers) = parse_raw_http_response_head(head_bytes)?;
+    let content_length = response_content_length(&headers)?;
+
+    let mut body = leftover;
+    let mut buf = [0_u8; 8192];
+    if body.len() < content_length {
+        while body.len() < content_length {
+            let remaining = content_length - body.len();
+            let read_len = remaining.min(buf.len());
+            let n = stream
+                .read(&mut buf[..read_len])
+                .await
+                .context("failed to read raw response body")?;
+            anyhow::ensure!(
+                n != 0,
+                "raw response body ended early: got {} bytes, expected content-length {}",
+                body.len(),
+                content_length
+            );
+            body.extend_from_slice(&buf[..n]);
+        }
+    }
+    body.truncate(content_length);
+
+    Ok((status, headers, Bytes::from(body)))
+}
+
+async fn read_raw_http_response_slow(
+    stream: &mut TcpStream,
+) -> Result<(StatusCode, HeaderMap, Bytes)> {
+    let (head_bytes, leftover) = read_http_head_bytes(stream).await?;
+    let (status, headers) = parse_raw_http_response_head(head_bytes)?;
+    let content_length = response_content_length(&headers)?;
+
+    let mut body = leftover;
+    let mut buf = [0_u8; 513];
+    while body.len() < content_length {
+        let remaining = content_length - body.len();
+        let read_len = remaining.min(buf.len());
+        let n = stream
+            .read(&mut buf[..read_len])
+            .await
+            .context("failed to slow-read raw response body")?;
+        anyhow::ensure!(
+            n != 0,
+            "raw response body ended early during slow read: got {} bytes, expected content-length {}",
+            body.len(),
+            content_length
+        );
+        body.extend_from_slice(&buf[..n]);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    body.truncate(content_length);
+
+    Ok((status, headers, Bytes::from(body)))
+}
+
+fn parse_raw_http_response_head(head_bytes: Vec<u8>) -> Result<(StatusCode, HeaderMap)> {
     let head = String::from_utf8(head_bytes).context("HTTP response head is not UTF-8")?;
     let mut lines = head.lines();
     let status_line = lines.next().context("missing HTTP response status line")?;
@@ -689,25 +1682,15 @@ async fn read_raw_http_response(stream: &mut TcpStream) -> Result<(StatusCode, H
         headers.append(name, value);
     }
 
-    let content_length = headers
+    Ok((status, headers))
+}
+
+fn response_content_length(headers: &HeaderMap) -> Result<usize> {
+    headers
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok())
-        .context("missing or invalid raw response content-length")?;
-
-    let mut body = leftover;
-    if body.len() < content_length {
-        let remaining = content_length - body.len();
-        let mut tail = vec![0_u8; remaining];
-        stream
-            .read_exact(&mut tail)
-            .await
-            .context("failed to read raw response body")?;
-        body.extend_from_slice(&tail);
-    }
-    body.truncate(content_length);
-
-    Ok((status, headers, Bytes::from(body)))
+        .context("missing or invalid raw response content-length")
 }
 
 fn verify_large_range_response(

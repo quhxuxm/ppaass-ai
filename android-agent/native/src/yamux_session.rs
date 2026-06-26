@@ -390,7 +390,9 @@ impl AsyncWrite for AndroidYamuxTargetStream {
 impl Unpin for AndroidYamuxTargetStream {}
 
 fn is_yamux_actual_target_connect_error(message: &str) -> bool {
-    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+    message.starts_with("连接失败:")
+        || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        || message == "连接目标响应超时"
 }
 
 fn is_yamux_session_capacity_error(message: &str) -> bool {
@@ -406,6 +408,7 @@ mod tests {
         assert!(is_yamux_actual_target_connect_error(
             YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
         ));
+        assert!(is_yamux_actual_target_connect_error("连接目标响应超时"));
         assert!(!is_yamux_actual_target_connect_error(
             YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE
         ));

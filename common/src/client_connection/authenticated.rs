@@ -23,6 +23,7 @@ use tracing::{debug, info, warn};
 use super::config::{BindInterface, ClientConnectionConfig};
 use super::socket_bind::bind_socket_to_interface;
 use super::stream::ClientStream;
+use super::yamux::YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE;
 
 type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
 type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
@@ -164,7 +165,7 @@ where
             Err(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "连接目标响应超时",
+                    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
                 ));
             }
         };

@@ -5,10 +5,10 @@ use futures::stream;
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::Frame;
 use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
-use hyper::server::conn::http1;
+use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -50,6 +50,42 @@ impl MockHttpServer {
                 }
                 Err(e) => {
                     error!("接受连接失败：{}", e);
+                }
+            }
+        }
+    }
+}
+
+/// 模拟 HTTP/2 cleartext 目标服务器，用于测试 CONNECT/SOCKS5 隧道内多路复用。
+pub struct MockH2Server {
+    port: u16,
+}
+
+impl MockH2Server {
+    pub fn new(port: u16) -> Self {
+        Self { port }
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
+        let listener = bind_tcp_listener_with_backlog(addr, DEFAULT_TCP_LISTEN_BACKLOG)?;
+        info!("模拟 HTTP/2 服务器正在监听 {}", addr);
+
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    tokio::spawn(async move {
+                        let io = TokioIo::new(stream);
+                        if let Err(e) = http2::Builder::new(TokioExecutor::new())
+                            .serve_connection(io, service_fn(handle_http_request))
+                            .await
+                        {
+                            error!("服务 HTTP/2 连接时出错：{}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("接受 HTTP/2 连接失败：{}", e);
                 }
             }
         }
@@ -365,14 +401,24 @@ async fn handle_tcp_echo(mut stream: TcpStream) -> Result<()> {
 }
 
 /// 运行模拟服务器
-pub async fn run_mock_servers(http_port: u16, tcp_port: u16, udp_port: u16) -> Result<()> {
+pub async fn run_mock_servers(
+    http_port: u16,
+    h2_port: u16,
+    tcp_port: u16,
+    udp_port: u16,
+) -> Result<()> {
     let http_server = MockHttpServer::new(http_port);
+    let h2_server = MockH2Server::new(h2_port);
     let tcp_server = MockTcpServer::new(tcp_port);
     let udp_server = MockUdpServer::new(udp_port);
 
     tokio::select! {
         res = http_server.run() => {
             error!("HTTP 服务器已停止：{:?}", res);
+            res
+        }
+        res = h2_server.run() => {
+            error!("HTTP/2 服务器已停止：{:?}", res);
             res
         }
         res = tcp_server.run() => {

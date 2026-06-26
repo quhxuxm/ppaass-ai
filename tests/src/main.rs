@@ -222,6 +222,10 @@ enum Commands {
         #[arg(long, default_value = "9090")]
         http_port: u16,
 
+        /// HTTP/2 cleartext 服务器端口
+        #[arg(long, default_value = "9093")]
+        h2_port: u16,
+
         /// TCP 回显服务器端口
         #[arg(long, default_value = "9091")]
         tcp_port: u16,
@@ -439,16 +443,18 @@ async fn main() -> Result<()> {
         }
         Commands::MockTarget {
             http_port,
+            h2_port,
             tcp_port,
             udp_port,
         } => {
             tracing::info!(
-                "正在端口上启动模拟目标服务器：HTTP={}，TCP={}，UDP={}",
+                "正在端口上启动模拟目标服务器：HTTP={}，H2={}，TCP={}，UDP={}",
                 http_port,
+                h2_port,
                 tcp_port,
                 udp_port
             );
-            mock_target::run_mock_servers(http_port, tcp_port, udp_port).await?;
+            mock_target::run_mock_servers(http_port, h2_port, tcp_port, udp_port).await?;
         }
     }
 
