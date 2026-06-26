@@ -12,7 +12,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, info};
 
@@ -26,6 +26,8 @@ use super::stream::ClientStream;
 pub const YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE: &str = "Yamux open stream timeout";
 pub const YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE: &str =
     "Yamux target connect response timeout";
+pub const YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE: &str =
+    "Yamux session stream capacity exhausted";
 const MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION: usize = 16;
 
 #[derive(Clone)]
@@ -153,6 +155,63 @@ impl YamuxClientConnection {
         address: Address,
         transport: TransportProtocol,
     ) -> std::io::Result<(YamuxClientStream, String)> {
+        self.validate_target(&address, transport)?;
+
+        // stream_permit 覆盖业务子流整个生命周期；YamuxClientStream Drop 后释放。
+        let permit = self
+            .stream_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
+
+        self.connect_to_target_with_permits(address, transport, permit, None)
+            .await
+    }
+
+    pub async fn try_connect_to_target(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> std::io::Result<(YamuxClientStream, String)> {
+        self.validate_target(&address, transport)?;
+
+        let permit = match self.stream_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+                ));
+            }
+            Err(TryAcquireError::Closed) => {
+                return Err(std::io::Error::other("Yamux session has been closed"));
+            }
+        };
+
+        let open_permit = match self.open_stream_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+                ));
+            }
+            Err(TryAcquireError::Closed) => {
+                return Err(std::io::Error::other("Yamux session has been closed"));
+            }
+        };
+
+        self.connect_to_target_with_permits(address, transport, permit, Some(open_permit))
+            .await
+    }
+
+    pub fn has_immediate_stream_capacity(&self) -> bool {
+        self.stream_permits.available_permits() > 0
+            && self.open_stream_permits.available_permits() > 0
+    }
+
+    fn validate_target(&self, address: &Address, transport: TransportProtocol) -> io::Result<()> {
         if transport != self.transport {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -166,20 +225,26 @@ impl YamuxClientConnection {
             ));
         }
 
-        // stream_permit 覆盖业务子流整个生命周期；YamuxClientStream Drop 后释放。
-        let permit = self
-            .stream_permits
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
+        Ok(())
+    }
+
+    async fn connect_to_target_with_permits(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+        permit: OwnedSemaphorePermit,
+        open_permit: Option<OwnedSemaphorePermit>,
+    ) -> std::io::Result<(YamuxClientStream, String)> {
         // open_stream 本身也限流，避免短时间大量并发 open 卡住 session control。
-        let open_permit = self
-            .open_stream_permits
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
+        let open_permit = match open_permit {
+            Some(permit) => permit,
+            None => self
+                .open_stream_permits
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| std::io::Error::other("Yamux session has been closed"))?,
+        };
         let mut control = self.control.clone();
         let stream = tokio::time::timeout(self.settings.open_stream_timeout, control.open_stream())
             .await

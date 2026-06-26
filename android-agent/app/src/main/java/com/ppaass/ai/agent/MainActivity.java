@@ -561,7 +561,7 @@ public class MainActivity extends Activity {
                         String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
                 1,
                 1);
-        addFieldHelp(tcpYamuxConfig, "影响 Agent 到 Proxy 的 TCP relay raw Yamux session 数。");
+        addFieldHelp(tcpYamuxConfig, "限制 TCP relay raw Yamux 外层连接上限；实际连接数按需增长。");
         yamuxTcpMaxStreamsPerSession = numberControl(
                 tcpYamuxConfig,
                 "并发子流",
@@ -621,7 +621,7 @@ public class MainActivity extends Activity {
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "影响 Agent 到 Proxy 的 UDP relay raw Yamux session 数。");
+        addFieldHelp(udpYamuxConfig, "限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。");
         yamuxUdpMaxStreamsPerSession = numberControl(
                 udpYamuxConfig,
                 "并发子流",

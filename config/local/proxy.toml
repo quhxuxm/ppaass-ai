@@ -77,6 +77,9 @@ tcp_relay_idle_timeout_secs = 120
 # 同样保留回收，避免异常子流长期占用窗口和 session 资源。
 yamux_tcp_relay_idle_timeout_secs = 120
 
+# Yamux 外层 session 空闲超时时间，单位秒；无活跃子流时超过该时间会释放 raw TCP 连接。
+yamux_session_idle_timeout_secs = 120
+
 # UDP relay 空闲超时时间，单位秒；UDP relay 会话与 flow 在该时间内
 # 没有任何收发活动将被关闭（默认：60）
 udp_relay_idle_timeout_secs = 60

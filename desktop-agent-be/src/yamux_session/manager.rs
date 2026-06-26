@@ -8,7 +8,10 @@ use super::proxy_connection::new_yamux_connection;
 use super::target_stream::YamuxTargetStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{BindInterface, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection};
+use common::{
+    BindInterface, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection,
+};
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -91,4 +94,23 @@ impl YamuxSessionManager {
 
 fn is_yamux_target_connect_error(message: &str) -> bool {
     message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+}
+
+fn is_yamux_session_capacity_error(message: &str) -> bool {
+    message == YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yamux_capacity_errors_are_not_target_connect_errors() {
+        assert!(!is_yamux_target_connect_error(
+            YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
+        ));
+        assert!(is_yamux_session_capacity_error(
+            YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
+        ));
+    }
 }

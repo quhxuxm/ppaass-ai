@@ -137,7 +137,7 @@ Mermaid 源码：[04-yamux-session-manager.mmd](diagrams/04-yamux-session-manage
 
 - Agent 到 Proxy 的外层连接是 raw TCP + `tokio-yamux`，外层不再跑旧的 PPAASS 虚拟地址握手。
 - `tcp_sessions` 和 `udp_sessions` 分别管理自己的 raw Yamux session，TCP relay 和 UDP relay 不共享外层连接。
-- Agent 启动时不预热 Yamux session；请求路径在没有可用 session 或 session 数不足时按需补齐。
+- Agent 启动时不预热 Yamux session；`sessions` 表示最大外层连接数，请求路径只在现有 session 没有可立即打开子流的容量时按需补 1 条。
 - 每个真实目标连接先打开一个 Yamux 子流，再在子流内执行 PPAASS Auth。
 - Auth 成功后继续在同一个子流内发送 `ConnectRequest`；数据仍通过加密的 `DataPacket` 帧传输。
 - Proxy accept 到 raw TCP 后只创建 Yamux server session，具体 TCP/UDP 目标类型由子流里的 `ConnectRequest` 决定。
@@ -283,7 +283,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
 - `compression_mode`: `none`、`lz4`、`gzip`、`zstd`。
-- `[yamux.tcp]` / `[yamux.udp]`: Agent 端 TCP relay / UDP relay 的 raw Yamux session 数、每 session 子流数、窗口等。
+- `[yamux.tcp]` / `[yamux.udp]`: Agent 端 TCP relay / UDP relay 的 raw Yamux 最大 session 数、每 session 子流数、窗口等。
 - `[tun]`: TUN 设备、DNS、QUIC、helper、状态文件。
 - `[direct_access]`: `proxy_all`、`direct_all`、`rules`。
 
@@ -301,7 +301,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。
-- `auth_timeout_secs`、`tcp_relay_idle_timeout_secs`。
+- `auth_timeout_secs`、`tcp_relay_idle_timeout_secs`、`yamux_session_idle_timeout_secs`。
 - `udp_relay_channel_size`: 共享 UDP relay 每条内部队列大小。
 
 ### 用户配置

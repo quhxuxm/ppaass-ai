@@ -53,7 +53,7 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o app/src/main/jniLibs build --
 
 Android App 层使用纯 Java。数据包栈和 proxy 协议桥接仍然在 `android-agent/native` 的 Rust 代码中。
 
-Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；并发建连上限可在 Android 界面配置，默认值来自 `DefaultConfig`。
+Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；界面里的 session 数是最大外层连接数，实际连接会在现有 session 没有可立即打开子流的容量时按需增长，默认值来自 `DefaultConfig`。
 
 ## 运行配置
 

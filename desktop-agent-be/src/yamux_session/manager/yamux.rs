@@ -11,28 +11,55 @@ impl YamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<YamuxTargetStream> {
-        let target_size = self.yamux_target_size();
+        let max_sessions = self.yamux_target_size();
         let mut attempts = 0usize;
 
         loop {
-            self.ensure_yamux_sessions(target_size).await?;
-            // 简单轮询选择 session，避免所有新子流压到同一条外层连接。
-            let session = self
-                .next_yamux_session()
-                .await
-                .ok_or_else(|| AgentError::Connection("没有可用的 Yamux 代理连接".to_string()))?;
+            self.ensure_yamux_sessions(1.min(max_sessions)).await?;
 
-            match session
-                .connection
-                .connect_to_target(address.clone(), transport)
-                .await
-            {
+            let session = match self.next_yamux_session_with_capacity().await {
+                Some(session) => session,
+                None => {
+                    if self.ensure_additional_yamux_session(max_sessions).await? > 0 {
+                        continue;
+                    }
+                    self.next_yamux_session().await.ok_or_else(|| {
+                        AgentError::Connection("没有可用的 Yamux 代理连接".to_string())
+                    })?
+                }
+            };
+
+            let connect = if session.connection.has_immediate_stream_capacity() {
+                session
+                    .connection
+                    .try_connect_to_target(address.clone(), transport)
+                    .await
+            } else {
+                session
+                    .connection
+                    .connect_to_target(address.clone(), transport)
+                    .await
+            };
+
+            match connect {
                 Ok((stream, request_id)) => {
                     debug!("已通过 Yamux 子流连接目标：{:?}", address);
                     return Ok(YamuxTargetStream::new_yamux(stream, request_id));
                 }
                 Err(err) => {
                     let message = err.to_string();
+                    if is_yamux_session_capacity_error(&message) {
+                        if self.ensure_additional_yamux_session(max_sessions).await? > 0 {
+                            continue;
+                        }
+                        attempts += 1;
+                        if attempts >= max_sessions.max(3) {
+                            return Err(AgentError::Connection(message));
+                        }
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+
                     if is_yamux_target_connect_error(&message) {
                         return Err(AgentError::Connection(message));
                     }
@@ -43,7 +70,7 @@ impl YamuxSessionManager {
                     );
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
-                    if attempts >= target_size.max(3) {
+                    if attempts >= max_sessions.max(3) {
                         return Err(AgentError::Connection(message));
                     }
                 }
@@ -134,6 +161,37 @@ impl YamuxSessionManager {
         Ok(success_count)
     }
 
+    async fn ensure_additional_yamux_session(&self, max_sessions: usize) -> Result<usize> {
+        if max_sessions == 0 {
+            return Ok(0);
+        }
+
+        let current_size = self.yamux_sessions.lock().await.len();
+        if current_size >= max_sessions {
+            return Ok(0);
+        }
+
+        self.ensure_yamux_sessions((current_size + 1).min(max_sessions))
+            .await
+    }
+
+    async fn next_yamux_session_with_capacity(&self) -> Option<YamuxSessionHandle> {
+        let sessions = self.yamux_sessions.lock().await;
+        if sessions.is_empty() {
+            return None;
+        }
+
+        let start = self.yamux_next_index.fetch_add(1, Ordering::AcqRel) % sessions.len();
+        for offset in 0..sessions.len() {
+            let index = (start + offset) % sessions.len();
+            if sessions[index].connection.has_immediate_stream_capacity() {
+                return Some(sessions[index].clone());
+            }
+        }
+
+        None
+    }
+
     async fn next_yamux_session(&self) -> Option<YamuxSessionHandle> {
         let sessions = self.yamux_sessions.lock().await;
         if sessions.is_empty() {
@@ -145,8 +203,17 @@ impl YamuxSessionManager {
     }
 
     async fn remove_yamux_session(&self, session_id: usize) {
-        let mut sessions = self.yamux_sessions.lock().await;
-        sessions.retain(|session| session.id != session_id);
+        let removed = {
+            let mut sessions = self.yamux_sessions.lock().await;
+            sessions
+                .iter()
+                .position(|session| session.id == session_id)
+                .map(|index| sessions.remove(index))
+        };
+
+        if let Some(session) = removed {
+            session.connection.close().await;
+        }
     }
 
     pub(super) fn yamux_target_size(&self) -> usize {

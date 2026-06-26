@@ -102,13 +102,13 @@ const emit = defineEmits<{
               <span>TCP Yamux</span>
               <Tag class="mode-effect-tag" value="作用于 TCP relay 子流" severity="secondary" />
             </div>
-            <strong>{{ summary.tcp_yamux_sessions }} sessions</strong>
+            <strong>{{ summary.tcp_yamux_sessions }} max sessions</strong>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
               <ConfigNumberInput :model-value="summary.tcp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_sessions', $event)" />
-              <small>影响 agent 到 proxy 的 TCP relay raw Yamux session 数。</small>
+              <small>限制 TCP relay raw Yamux 外层连接上限；实际连接数按需增长。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>
@@ -158,13 +158,13 @@ const emit = defineEmits<{
               <span>UDP Yamux</span>
               <Tag class="mode-effect-tag" value="作用于 UDP relay 子流" severity="secondary" />
             </div>
-            <strong>{{ summary.udp_yamux_sessions }} sessions</strong>
+            <strong>{{ summary.udp_yamux_sessions }} max sessions</strong>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><i class="pi pi-share-alt"></i>外层连接</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
-              <small>影响 agent 到 proxy 的 UDP relay raw Yamux session 数。</small>
+              <small>限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。</small>
             </label>
             <label class="field">
               <span><i class="pi pi-sitemap"></i>并发子流</span>

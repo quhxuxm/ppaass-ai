@@ -43,6 +43,11 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub yamux: YamuxServerConfig,
 
+    /// Yamux 外层 session 空闲超时时间（秒）。
+    /// 当一条 raw Yamux TCP 连接没有任何活跃子流时，超过该时间后主动关闭；0 表示不限制。
+    #[serde(default = "default_yamux_session_idle_timeout_secs")]
+    pub yamux_session_idle_timeout_secs: u64,
+
     #[serde(default)]
     pub forward_mode: bool,
 
@@ -126,6 +131,10 @@ fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
     300
 }
 
+fn default_yamux_session_idle_timeout_secs() -> u64 {
+    300
+}
+
 fn default_auth_timeout_secs() -> u64 {
     30
 }
@@ -177,6 +186,7 @@ tcp_relay_idle_timeout_secs = 300
 
         assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
         assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 300);
+        assert_eq!(config.yamux_session_idle_timeout_secs, 300);
     }
 
     #[test]

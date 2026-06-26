@@ -12,9 +12,12 @@ use common::spawn_guarded;
 use futures::StreamExt;
 use protocol::CompressionMode;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, info, instrument, warn};
+
+const YAMUX_SESSION_TASK_PRUNE_INTERVAL_SECS: u64 = 5;
 
 pub struct ProxyServer {
     // 运行期共享配置；每个连接只读它，所以放进 Arc 后廉价 clone。
@@ -108,8 +111,36 @@ async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Res
         .to_tokio_config();
     let mut session = Session::new_server(stream, settings);
     let mut stream_tasks = Vec::new();
+    let session_idle_timeout = yamux_session_idle_timeout(&context.proxy_config);
 
-    while let Some(result) = session.next().await {
+    loop {
+        prune_finished_stream_tasks(&mut stream_tasks);
+        let idle_enabled = stream_tasks.is_empty() && session_idle_timeout.is_some();
+        let idle_sleep = tokio::time::sleep(session_idle_timeout.unwrap_or(Duration::from_secs(1)));
+        let prune_sleep =
+            tokio::time::sleep(Duration::from_secs(YAMUX_SESSION_TASK_PRUNE_INTERVAL_SECS));
+        tokio::pin!(idle_sleep);
+        tokio::pin!(prune_sleep);
+
+        let next_stream = tokio::select! {
+            result = session.next() => result,
+            _ = &mut idle_sleep, if idle_enabled => {
+                let timeout = session_idle_timeout.expect("idle timeout is enabled");
+                debug!(
+                    "Yamux session 空闲超过 {} 秒且无活跃子 stream，主动关闭",
+                    timeout.as_secs()
+                );
+                break;
+            }
+            _ = &mut prune_sleep, if !stream_tasks.is_empty() => {
+                continue;
+            }
+        };
+
+        let Some(result) = next_stream else {
+            break;
+        };
+
         match result {
             Ok(stream) => {
                 prune_finished_stream_tasks(&mut stream_tasks);
@@ -130,6 +161,14 @@ async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Res
 
     abort_stream_tasks(stream_tasks).await;
     Ok(())
+}
+
+fn yamux_session_idle_timeout(config: &ProxyConfig) -> Option<Duration> {
+    if config.yamux_session_idle_timeout_secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(config.yamux_session_idle_timeout_secs))
+    }
 }
 
 async fn handle_yamux_substream(context: ConnectionContext, stream: StreamHandle) -> Result<()> {

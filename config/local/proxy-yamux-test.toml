@@ -13,6 +13,7 @@ connect_timeout_secs = 20
 auth_timeout_secs = 20
 tcp_relay_idle_timeout_secs = 120
 yamux_tcp_relay_idle_timeout_secs = 120
+yamux_session_idle_timeout_secs = 120
 udp_relay_idle_timeout_secs = 60
 udp_relay_channel_size = 64
 

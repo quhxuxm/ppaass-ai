@@ -70,6 +70,9 @@ connect_timeout_secs = 30
 # 转发链路里卡死的浏览器分片会占住子流；保留 120 秒回收让客户端重试。
 yamux_tcp_relay_idle_timeout_secs = 120
 
+# Yamux 外层 session 空闲超时时间，单位秒；无活跃子流时超过该时间会释放 raw TCP 连接。
+yamux_session_idle_timeout_secs = 120
+
 # UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
 udp_relay_channel_size = 64
 

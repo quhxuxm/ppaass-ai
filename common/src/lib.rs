@@ -8,8 +8,9 @@ pub mod yamux_settings;
 
 pub use client_connection::{
     AuthenticatedConnection, BindInterface, ClientConnectionConfig, ClientStream,
-    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
-    YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
+    bind_socket_to_interface,
 };
 pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};

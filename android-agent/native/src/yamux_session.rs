@@ -6,7 +6,9 @@ use std::task::{Context, Poll};
 
 #[cfg(test)]
 use common::{YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE};
-use common::{YamuxClientConnection, YamuxClientStream};
+use common::{
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YamuxClientConnection, YamuxClientStream,
+};
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Mutex;
@@ -77,23 +79,53 @@ impl AndroidYamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<AndroidYamuxTargetStream> {
-        let target_size = self.yamux_target_size();
+        let max_sessions = self.yamux_target_size();
         let mut attempts = 0usize;
 
         loop {
-            self.ensure_yamux_sessions(target_size).await?;
-            let session = self.next_yamux_session().await.ok_or_else(|| {
-                AndroidAgentError::Connection("no available Android Yamux proxy session".into())
-            })?;
+            self.ensure_yamux_sessions(1.min(max_sessions)).await?;
+            let session = match self.next_yamux_session_with_capacity().await {
+                Some(session) => session,
+                None => {
+                    if self.ensure_additional_yamux_session(max_sessions).await? > 0 {
+                        continue;
+                    }
+                    self.next_yamux_session().await.ok_or_else(|| {
+                        AndroidAgentError::Connection(
+                            "no available Android Yamux proxy session".into(),
+                        )
+                    })?
+                }
+            };
 
-            match session
-                .connection
-                .connect_to_target(address.clone(), transport)
-                .await
-            {
+            let connect = if session.connection.has_immediate_stream_capacity() {
+                session
+                    .connection
+                    .try_connect_to_target(address.clone(), transport)
+                    .await
+            } else {
+                session
+                    .connection
+                    .connect_to_target(address.clone(), transport)
+                    .await
+            };
+
+            match connect {
                 Ok((stream, _stream_id)) => return Ok(AndroidYamuxTargetStream::Yamux(stream)),
                 Err(err) => {
                     let message = err.to_string();
+                    if is_yamux_session_capacity_error(&message) {
+                        if self.ensure_additional_yamux_session(max_sessions).await? > 0 {
+                            continue;
+                        }
+                        attempts += 1;
+                        if attempts >= max_sessions.max(3) {
+                            return Err(AndroidAgentError::Connection(message));
+                        }
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+
                     if is_yamux_actual_target_connect_error(&message) {
                         return Err(AndroidAgentError::Connection(message));
                     }
@@ -105,10 +137,9 @@ impl AndroidYamuxSessionManager {
                         "Android {} Yamux session unusable: {message}",
                         self.manager_name
                     ));
-                    session.connection.close().await;
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
-                    if attempts >= target_size.max(3) {
+                    if attempts >= max_sessions.max(3) {
                         return Err(AndroidAgentError::Connection(message));
                     }
                 }
@@ -215,6 +246,37 @@ impl AndroidYamuxSessionManager {
         Ok(success_count)
     }
 
+    async fn ensure_additional_yamux_session(&self, max_sessions: usize) -> Result<usize> {
+        if self.shutdown.is_cancelled() || max_sessions == 0 {
+            return Ok(0);
+        }
+
+        let current_size = self.yamux_sessions.lock().await.len();
+        if current_size >= max_sessions {
+            return Ok(0);
+        }
+
+        self.ensure_yamux_sessions((current_size + 1).min(max_sessions))
+            .await
+    }
+
+    async fn next_yamux_session_with_capacity(&self) -> Option<AndroidYamuxSession> {
+        let sessions = self.yamux_sessions.lock().await;
+        if sessions.is_empty() {
+            return None;
+        }
+
+        let start = self.yamux_next_index.fetch_add(1, Ordering::AcqRel) % sessions.len();
+        for offset in 0..sessions.len() {
+            let index = (start + offset) % sessions.len();
+            if sessions[index].connection.has_immediate_stream_capacity() {
+                return Some(sessions[index].clone());
+            }
+        }
+
+        None
+    }
+
     async fn next_yamux_session(&self) -> Option<AndroidYamuxSession> {
         let sessions = self.yamux_sessions.lock().await;
         if sessions.is_empty() {
@@ -225,8 +287,17 @@ impl AndroidYamuxSessionManager {
     }
 
     async fn remove_yamux_session(&self, session_id: usize) {
-        let mut sessions = self.yamux_sessions.lock().await;
-        sessions.retain(|session| session.id != session_id);
+        let removed = {
+            let mut sessions = self.yamux_sessions.lock().await;
+            sessions
+                .iter()
+                .position(|session| session.id == session_id)
+                .map(|index| sessions.remove(index))
+        };
+
+        if let Some(session) = removed {
+            session.connection.close().await;
+        }
     }
 
     fn yamux_target_size(&self) -> usize {
@@ -283,6 +354,10 @@ fn is_yamux_actual_target_connect_error(message: &str) -> bool {
     message.starts_with("连接失败:")
 }
 
+fn is_yamux_session_capacity_error(message: &str) -> bool {
+    message == YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +369,9 @@ mod tests {
         ));
         assert!(!is_yamux_actual_target_connect_error(
             YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE
+        ));
+        assert!(!is_yamux_actual_target_connect_error(
+            YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
         ));
     }
 

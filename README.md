@@ -84,11 +84,11 @@ private_key_path = "keys/user1.pem"  # Path to your RSA private key
 connection_timeout_secs = 30                # Connection timeout
 
 [yamux.tcp]
-sessions = 5                         # TCP relay raw Yamux outer sessions
+sessions = 5                         # Max TCP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # TCP relay substreams per session
 
 [yamux.udp]
-sessions = 5                         # UDP relay raw Yamux outer sessions
+sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # UDP relay substreams per session
 ```
 
