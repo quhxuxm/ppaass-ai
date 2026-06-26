@@ -247,8 +247,8 @@ async fn abort_stream_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
         return;
     }
 
-    debug!(
-        "Yamux session 结束，正在关闭 {} 个未完成子 stream 任务",
+    warn!(
+        "Yamux session 结束时仍有 {} 个活跃子 stream，正在关闭；这些请求的上层 HTTP body 可能被截断",
         tasks.len()
     );
     for task in &tasks {

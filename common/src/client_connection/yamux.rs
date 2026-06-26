@@ -8,6 +8,7 @@ use protocol::{Address, CompressionMode, TransportProtocol};
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -39,6 +40,7 @@ pub struct YamuxClientConnection {
     open_stream_permits: Arc<Semaphore>,
     // 控制同一外层 session 中存活的业务子流数量。
     stream_permits: Arc<Semaphore>,
+    closed: Arc<AtomicBool>,
     transport: TransportProtocol,
     auth_config: Arc<YamuxSubstreamAuthConfig>,
 }
@@ -121,6 +123,8 @@ impl YamuxClientConnection {
                 .clamp(1, MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION),
         ));
         let stream_permits = Arc::new(Semaphore::new(settings.max_streams_per_session));
+        let closed = Arc::new(AtomicBool::new(false));
+        let session_closed = closed.clone();
 
         spawn_guarded("yamux client session", async move {
             // agent 侧只主动打开子流；如果收到入站子流，说明对端行为不符合当前协议约定。
@@ -136,6 +140,8 @@ impl YamuxClientConnection {
                     }
                 }
             }
+            session_closed.store(true, Ordering::Release);
+            debug!("Yamux 客户端会话轮询已退出 transport={transport:?}");
         });
 
         info!("已建立 {:?} raw Yamux 外层连接", transport);
@@ -145,6 +151,7 @@ impl YamuxClientConnection {
             connect_response_timeout,
             open_stream_permits,
             stream_permits,
+            closed,
             transport,
             auth_config,
         })
@@ -207,11 +214,19 @@ impl YamuxClientConnection {
     }
 
     pub fn has_immediate_stream_capacity(&self) -> bool {
-        self.stream_permits.available_permits() > 0
+        !self.is_closed()
+            && self.stream_permits.available_permits() > 0
             && self.open_stream_permits.available_permits() > 0
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     fn validate_target(&self, address: &Address, transport: TransportProtocol) -> io::Result<()> {
+        if self.is_closed() {
+            return Err(std::io::Error::other("Yamux session has been closed"));
+        }
         if transport != self.transport {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -245,16 +260,23 @@ impl YamuxClientConnection {
                 .await
                 .map_err(|_| std::io::Error::other("Yamux session has been closed"))?,
         };
+        if self.is_closed() {
+            return Err(std::io::Error::other("Yamux session has been closed"));
+        }
         let mut control = self.control.clone();
         let stream = tokio::time::timeout(self.settings.open_stream_timeout, control.open_stream())
             .await
             .map_err(|_| {
+                self.closed.store(true, Ordering::Release);
                 std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
                 )
             })?
-            .map_err(|err| std::io::Error::other(err.to_string()))?;
+            .map_err(|err| {
+                self.closed.store(true, Ordering::Release);
+                std::io::Error::other(err.to_string())
+            })?;
         drop(open_permit);
 
         let (client_stream, request_id) = tokio::time::timeout(self.connect_response_timeout, async {
@@ -276,6 +298,7 @@ impl YamuxClientConnection {
     }
 
     pub async fn close(&self) {
+        self.closed.store(true, Ordering::Release);
         let mut control = self.control.clone();
         control.close().await;
     }

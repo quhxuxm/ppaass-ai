@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 #[cfg(test)]
-use common::{YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE};
+use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
 use common::{
-    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YamuxClientConnection, YamuxClientStream,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -83,6 +84,7 @@ impl AndroidYamuxSessionManager {
         let mut attempts = 0usize;
 
         loop {
+            self.prune_closed_yamux_sessions().await;
             self.ensure_yamux_sessions(1.min(max_sessions)).await?;
             let session = match self.next_yamux_session_with_capacity().await {
                 Some(session) => session,
@@ -151,6 +153,8 @@ impl AndroidYamuxSessionManager {
         if self.shutdown.is_cancelled() || target_size == 0 {
             return Ok(0);
         }
+
+        self.prune_closed_yamux_sessions().await;
 
         if self.yamux_sessions.lock().await.len() >= target_size {
             return Ok(0);
@@ -251,6 +255,8 @@ impl AndroidYamuxSessionManager {
             return Ok(0);
         }
 
+        self.prune_closed_yamux_sessions().await;
+
         let current_size = self.yamux_sessions.lock().await.len();
         if current_size >= max_sessions {
             return Ok(0);
@@ -283,7 +289,14 @@ impl AndroidYamuxSessionManager {
             return None;
         }
         let index = self.yamux_next_index.fetch_add(1, Ordering::AcqRel) % sessions.len();
-        Some(sessions[index].clone())
+        for offset in 0..sessions.len() {
+            let index = (index + offset) % sessions.len();
+            if !sessions[index].connection.is_closed() {
+                return Some(sessions[index].clone());
+            }
+        }
+
+        None
     }
 
     async fn remove_yamux_session(&self, session_id: usize) {
@@ -298,6 +311,32 @@ impl AndroidYamuxSessionManager {
         if let Some(session) = removed {
             session.connection.close().await;
         }
+    }
+
+    async fn prune_closed_yamux_sessions(&self) -> usize {
+        let removed = {
+            let mut sessions = self.yamux_sessions.lock().await;
+            let mut removed = Vec::new();
+            let mut index = 0usize;
+            while index < sessions.len() {
+                if sessions[index].connection.is_closed() {
+                    removed.push(sessions.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            removed
+        };
+
+        for session in &removed {
+            debug!(
+                "pruning closed Android {} Yamux session {}",
+                self.manager_name, session.id
+            );
+            session.connection.close().await;
+        }
+
+        removed.len()
     }
 
     fn yamux_target_size(&self) -> usize {
@@ -351,7 +390,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
 impl Unpin for AndroidYamuxTargetStream {}
 
 fn is_yamux_actual_target_connect_error(message: &str) -> bool {
-    message.starts_with("连接失败:")
+    message.starts_with("连接失败:") || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
 }
 
 fn is_yamux_session_capacity_error(message: &str) -> bool {
@@ -363,8 +402,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yamux_session_errors_are_not_target_connect_errors() {
-        assert!(!is_yamux_actual_target_connect_error(
+    fn yamux_session_errors_do_not_close_session_for_target_timeouts() {
+        assert!(is_yamux_actual_target_connect_error(
             YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
         ));
         assert!(!is_yamux_actual_target_connect_error(

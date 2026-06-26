@@ -113,4 +113,11 @@ mod tests {
             YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
         ));
     }
+
+    #[test]
+    fn yamux_response_timeouts_do_not_close_session() {
+        assert!(is_yamux_target_connect_error(
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
+        ));
+    }
 }
