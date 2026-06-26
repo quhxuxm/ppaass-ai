@@ -1218,39 +1218,6 @@ body.overview-dragging * {
   min-width: 0;
 }
 
-.transport-facts {
-  margin-top: 2px;
-}
-
-.transport-fact {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid #dbe3ed;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.transport-fact span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.transport-fact strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--app-text-strong);
-  font-size: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .field {
   display: grid;
   gap: 7px;
@@ -1345,6 +1312,18 @@ body.overview-dragging * {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.yamux-settings .field-pair {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  align-items: start;
+}
+
+.tcp-transport-note p {
+  margin: 0;
+  color: #52647a;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .segmented-row {

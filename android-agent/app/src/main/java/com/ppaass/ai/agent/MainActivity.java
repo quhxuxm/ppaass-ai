@@ -502,6 +502,7 @@ public class MainActivity extends Activity {
         LinearLayout connection = configSection(root, "连接");
         proxyAddrs = field(connection, "Proxy 地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        addFieldHelp(connection, "TCP / UDP 共用远端出口。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
@@ -544,9 +545,9 @@ public class MainActivity extends Activity {
         LinearLayout tcpConfig = configSection(root, "TCP");
         LinearLayout tcpRelay = configGroup(
                 tcpConfig,
-                "TCP Relay",
-                "Direct framed TCP");
-        addFieldHelp(tcpRelay, "HTTP / SOCKS5 / TUN 的 TCP 目标连接使用独立 framed TCP，不再使用 Yamux session。");
+                "TCP 转发",
+                "普通 TCP 连接");
+        addFieldHelp(tcpRelay, "TCP 目标连接使用独立的普通 TCP 连接承载。");
 
         LinearLayout udpConfig = configSection(root, "UDP");
         udpYamuxConfig = configGroup(

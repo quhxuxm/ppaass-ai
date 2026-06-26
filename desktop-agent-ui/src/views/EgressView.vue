@@ -59,7 +59,7 @@ const emit = defineEmits<{
       <template #title>
         <div class="panel-heading inline">
           <h2>公共通道参数</h2>
-          <Tag value="TCP direct / UDP Yamux" severity="info" />
+          <Tag value="TCP / UDP 共用" severity="info" />
         </div>
       </template>
       <template #content>
@@ -88,37 +88,27 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card class="panel span-6">
+    <Card class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>TCP</h2>
-          <Tag value="Direct framed TCP" severity="success" />
+          <Tag value="普通 TCP 连接" severity="success" />
         </div>
       </template>
       <template #content>
-        <section class="policy-section transport-status">
+        <section class="policy-section tcp-transport-note">
           <div class="section-heading">
             <div class="section-title">
-              <span>TCP Relay</span>
+              <span>TCP 转发</span>
               <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN" severity="secondary" />
             </div>
-            <strong>Framed TCP</strong>
           </div>
-          <div class="field-pair transport-facts">
-            <div class="transport-fact">
-              <span><i class="pi pi-share-alt"></i>代理连接</span>
-              <strong>每目标独立</strong>
-            </div>
-            <div class="transport-fact">
-              <span><i class="pi pi-box"></i>协议 framing</span>
-              <strong>tokio codec</strong>
-            </div>
-          </div>
+          <p>TCP 目标连接使用独立的普通 TCP 连接承载。</p>
         </section>
       </template>
     </Card>
 
-    <Card class="panel span-6">
+    <Card class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP</h2>

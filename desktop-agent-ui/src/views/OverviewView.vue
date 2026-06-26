@@ -240,7 +240,7 @@ function hourlyBarHeight(bytes: number) {
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
             <Tag
               v-else-if="card.key === 'egress'"
-              value="TCP direct / UDP Yamux"
+              value="TCP / UDP"
               severity="info"
             />
             <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />
@@ -279,11 +279,6 @@ function hourlyBarHeight(bytes: number) {
             <i class="pi pi-server"></i>
             <span>公共出口</span>
             <strong>{{ summary.proxy_addrs.length }}</strong>
-          </div>
-          <div class="metric-tile">
-            <i class="pi pi-clone"></i>
-            <span>TCP Relay</span>
-            <strong>Framed</strong>
           </div>
           <div class="metric-tile">
             <i class="pi pi-wave-pulse"></i>
