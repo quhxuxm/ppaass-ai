@@ -14,6 +14,8 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{info, warn};
 
+const LARGE_DOWNLOAD_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceTestResults {
     pub test_duration_secs: u64,
@@ -797,13 +799,53 @@ async fn download_large_range_chunk(
     let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
     let headers = [("Range", range_header)];
 
-    let (duration, status, response_headers, body) = if connect_tunnel {
-        client
-            .connect_tunnel_get_bytes_with_headers(target_authority, target_path, &headers)
-            .await?
-    } else {
-        client.get_bytes_with_headers(target_url, &headers).await?
+    let request = async {
+        if connect_tunnel {
+            client
+                .connect_tunnel_get_bytes_with_headers(target_authority, target_path, &headers)
+                .await
+        } else {
+            client.get_bytes_with_headers(target_url, &headers).await
+        }
     };
+    let (duration, status, response_headers, body) =
+        tokio::time::timeout(LARGE_DOWNLOAD_CHUNK_TIMEOUT, request)
+            .await
+            .with_context(|| {
+                format!(
+                    "chunk request timeout after {:?}: range {}-{}",
+                    LARGE_DOWNLOAD_CHUNK_TIMEOUT, chunk.start, chunk.end
+                )
+            })??;
+
+    let actual_body_len = body.len() as u64;
+    let content_length = response_headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .with_context(|| {
+            format!(
+                "missing or invalid content-length for range {}-{}",
+                chunk.start, chunk.end
+            )
+        })?;
+
+    anyhow::ensure!(
+        content_length == expected_len,
+        "content-length mismatch for range {}-{}: header {}, expected {}",
+        chunk.start,
+        chunk.end,
+        content_length,
+        expected_len
+    );
+    anyhow::ensure!(
+        content_length == actual_body_len,
+        "content-length/body mismatch for range {}-{}: header {}, body {}",
+        chunk.start,
+        chunk.end,
+        content_length,
+        actual_body_len
+    );
 
     anyhow::ensure!(
         status == StatusCode::PARTIAL_CONTENT,
@@ -819,9 +861,9 @@ async fn download_large_range_chunk(
         "unexpected content-range: {actual_content_range}"
     );
     anyhow::ensure!(
-        body.len() as u64 == expected_len,
+        actual_body_len == expected_len,
         "unexpected body length: got {}, expected {}",
-        body.len(),
+        actual_body_len,
         expected_len
     );
 
@@ -836,7 +878,7 @@ async fn download_large_range_chunk(
         );
     }
 
-    Ok((duration, body.len() as u64))
+    Ok((duration, actual_body_len))
 }
 
 pub async fn run_quic_probe_tests(
