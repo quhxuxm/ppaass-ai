@@ -7,6 +7,7 @@ mod http_proxy;
 mod jni_api;
 mod netstack;
 mod socket_protector;
+mod tcp_relay;
 mod traffic_stats;
 mod yamux_session;
 

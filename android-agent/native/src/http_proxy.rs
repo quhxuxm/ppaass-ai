@@ -3,10 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use common::{
-    DEFAULT_TCP_LISTEN_BACKLOG, TCP_RELAY_COPY_BUFFER_SIZE, bind_tcp_listener_with_backlog,
-    spawn_guarded,
-};
+use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -24,6 +21,7 @@ use crate::android_log;
 use crate::config::{ANDROID_SOCKET_BUFFER_SIZE, AndroidAgentConfig};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AndroidAgentError, Result};
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
 
 pub async fn run_android_http_proxy(
@@ -304,16 +302,16 @@ async fn tunnel(
     target: String,
 ) -> Result<()> {
     let mut client_io = TokioIo::new(upgraded);
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         &mut client_io,
         &mut connected_stream,
-        TCP_RELAY_COPY_BUFFER_SIZE,
-        TCP_RELAY_COPY_BUFFER_SIZE,
+        TcpRelayOptions::http_proxy(&target),
     )
     .await
     {
-        Ok((client_to_proxy, proxy_to_client)) => debug!(
-            "Android HTTP CONNECT proxy tunnel closed {target}: up={client_to_proxy} down={proxy_to_client}"
+        Ok(stats) => debug!(
+            "Android HTTP CONNECT proxy tunnel closed {target}: up={} down={}",
+            stats.client_to_remote, stats.remote_to_client
         ),
         Err(err) => debug!("Android HTTP CONNECT proxy tunnel ended {target}: {err}"),
     }
@@ -326,16 +324,16 @@ async fn tunnel_direct(
     target: &str,
 ) -> Result<()> {
     let mut client_io = TokioIo::new(upgraded);
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         &mut client_io,
         &mut target_stream,
-        TCP_RELAY_COPY_BUFFER_SIZE,
-        TCP_RELAY_COPY_BUFFER_SIZE,
+        TcpRelayOptions::http_proxy(target),
     )
     .await
     {
-        Ok((client_to_target, target_to_client)) => debug!(
-            "Android HTTP CONNECT direct tunnel closed {target}: up={client_to_target} down={target_to_client}"
+        Ok(stats) => debug!(
+            "Android HTTP CONNECT direct tunnel closed {target}: up={} down={}",
+            stats.client_to_remote, stats.remote_to_client
         ),
         Err(err) => debug!("Android HTTP CONNECT direct tunnel ended {target}: {err}"),
     }

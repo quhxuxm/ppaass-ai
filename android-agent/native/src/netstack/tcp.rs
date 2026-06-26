@@ -1,14 +1,11 @@
-use std::io;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
-use common::{TCP_RELAY_COPY_BUFFER_SIZE, spawn_guarded};
+use common::spawn_guarded;
 use futures::StreamExt;
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -18,101 +15,10 @@ use super::ForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
 use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
-
-struct AndroidTcpRelayIo<'a, S> {
-    inner: &'a mut S,
-    label: &'a str,
-}
-
-impl<'a, S> AndroidTcpRelayIo<'a, S> {
-    fn new(inner: &'a mut S, label: &'a str) -> Self {
-        Self { inner, label }
-    }
-}
-
-impl<S> AsyncRead for AndroidTcpRelayIo<'_, S>
-where
-    S: AsyncRead + Unpin,
-{
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        Pin::new(&mut *this.inner).poll_read(cx, buf)
-    }
-}
-
-impl<S> AsyncWrite for AndroidTcpRelayIo<'_, S>
-where
-    S: AsyncWrite + Unpin,
-{
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        Pin::new(&mut *this.inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        Pin::new(&mut *this.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match Pin::new(&mut *this.inner).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(error)) if can_ignore_tcp_shutdown_error(&error) => {
-                // Android TUN 里的请求方向经常比响应方向先结束。BrokenPipe/Reset
-                // 多数只是对端已经先关写半边，不能因为这个取消响应方向剩余数据；
-                // 否则浏览器看到的 HLS 分片就可能“读了一半停住”。
-                debug!(
-                    "Android TUN TCP relay 忽略 {} shutdown 错误：{}",
-                    this.label, error
-                );
-                Poll::Ready(Ok(()))
-            }
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-async fn relay_tun_tcp_bidirectional<C, R>(
-    client: &mut C,
-    remote: &mut R,
-    label: &str,
-) -> io::Result<(u64, u64)>
-where
-    C: AsyncRead + AsyncWrite + Unpin,
-    R: AsyncRead + AsyncWrite + Unpin,
-{
-    // Android 端不再维护单独 buffer 或手写 flush 状态机；直连、legacy proxy、
-    // Yamux proxy 都统一适配成 AsyncRead/AsyncWrite 后交给 Tokio copy_bidirectional。
-    let mut client_io = AndroidTcpRelayIo::new(client, label);
-    let mut remote_io = AndroidTcpRelayIo::new(remote, label);
-    tokio::io::copy_bidirectional_with_sizes(
-        &mut client_io,
-        &mut remote_io,
-        TCP_RELAY_COPY_BUFFER_SIZE,
-        TCP_RELAY_COPY_BUFFER_SIZE,
-    )
-    .await
-}
-
-fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::NotConnected
-    )
-}
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -203,8 +109,17 @@ async fn handle_tcp(
             android_log::warn(format!("Android TUN TCP DIRECT failed {target_str}: {e}"));
             AndroidAgentError::Connection(format!("direct connect {target_str} failed: {e}"))
         })?;
-        match relay_tun_tcp_bidirectional(&mut client, &mut target_stream, "direct").await {
-            Ok((up, down)) => debug!("Android TUN TCP direct relay ended up={up} down={down}"),
+        match relay_tcp_bidirectional(
+            &mut client,
+            &mut target_stream,
+            TcpRelayOptions::tun("direct"),
+        )
+        .await
+        {
+            Ok(stats) => debug!(
+                "Android TUN TCP direct relay ended up={} down={}",
+                stats.client_to_remote, stats.remote_to_client
+            ),
             Err(e) => debug!("Android TUN TCP direct relay ended: {e}"),
         }
         let _ = client.shutdown().await;
@@ -244,8 +159,11 @@ async fn handle_tcp(
     }
     // Android TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始
     // netstack TCP 流交给 copy_bidirectional，避免“先读后补发”影响视频分片。
-    match relay_tun_tcp_bidirectional(&mut client, &mut proxy_io, "proxy").await {
-        Ok((up, down)) => debug!("Android TUN TCP proxy relay ended up={up} down={down}"),
+    match relay_tcp_bidirectional(&mut client, &mut proxy_io, TcpRelayOptions::tun("proxy")).await {
+        Ok(stats) => debug!(
+            "Android TUN TCP proxy relay ended up={} down={}",
+            stats.client_to_remote, stats.remote_to_client
+        ),
         Err(e) => debug!("Android TUN TCP proxy relay ended: {e}"),
     }
     let _ = client.shutdown().await;
@@ -356,149 +274,5 @@ fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
     {
         let _ = socket;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-    use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll, Waker};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadBuf};
-
-    #[tokio::test]
-    async fn proxy_relay_keeps_response_after_client_half_close() {
-        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
-        let (mut proxy_relay, mut proxy_peer) = tokio::io::duplex(1024);
-
-        let relay = tokio::spawn(async move {
-            relay_tun_tcp_bidirectional(&mut client_relay, &mut proxy_relay, "test").await
-        });
-
-        // 模拟 Android VPN 里的请求方向先结束。relay 只能关闭 proxy 写半边，
-        // 不能因此丢掉 proxy 随后返回的响应体。
-        client_peer.write_all(b"GET").await.unwrap();
-        client_peer.shutdown().await.unwrap();
-
-        let mut request = [0u8; 3];
-        proxy_peer.read_exact(&mut request).await.unwrap();
-        assert_eq!(&request, b"GET");
-
-        let mut eof_probe = [0u8; 1];
-        assert_eq!(proxy_peer.read(&mut eof_probe).await.unwrap(), 0);
-
-        proxy_peer.write_all(b"complete-body").await.unwrap();
-        proxy_peer.shutdown().await.unwrap();
-
-        let mut response = Vec::new();
-        client_peer.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, b"complete-body");
-
-        let (client_to_proxy, proxy_to_client) =
-            tokio::time::timeout(Duration::from_secs(5), relay)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        assert_eq!(client_to_proxy, 3);
-        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
-    }
-
-    #[tokio::test]
-    async fn proxy_relay_keeps_response_when_request_shutdown_errors() {
-        let (mut client_relay, mut client_peer) = tokio::io::duplex(1024);
-        let mut proxy = ShutdownErrorProxy::new(b"complete-body");
-
-        let relay = tokio::spawn(async move {
-            relay_tun_tcp_bidirectional(&mut client_relay, &mut proxy, "test").await
-        });
-
-        client_peer.write_all(b"GET").await.unwrap();
-        client_peer.shutdown().await.unwrap();
-
-        let mut response = Vec::new();
-        client_peer.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, b"complete-body");
-
-        let (client_to_proxy, proxy_to_client) =
-            tokio::time::timeout(Duration::from_secs(5), relay)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        assert_eq!(client_to_proxy, 3);
-        assert_eq!(proxy_to_client, b"complete-body".len() as u64);
-    }
-
-    struct ShutdownErrorProxy {
-        state: Arc<Mutex<ShutdownErrorProxyState>>,
-    }
-
-    struct ShutdownErrorProxyState {
-        body: VecDeque<u8>,
-        body_released: bool,
-        read_waker: Option<Waker>,
-    }
-
-    impl ShutdownErrorProxy {
-        fn new(body: &[u8]) -> Self {
-            Self {
-                state: Arc::new(Mutex::new(ShutdownErrorProxyState {
-                    body: body.iter().copied().collect(),
-                    body_released: false,
-                    read_waker: None,
-                })),
-            }
-        }
-    }
-
-    impl AsyncRead for ShutdownErrorProxy {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            let mut state = self.state.lock().unwrap();
-            if !state.body_released {
-                state.read_waker = Some(cx.waker().clone());
-                return Poll::Pending;
-            }
-
-            while buf.remaining() > 0 {
-                let Some(byte) = state.body.pop_front() else {
-                    break;
-                };
-                buf.put_slice(&[byte]);
-            }
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    impl AsyncWrite for ShutdownErrorProxy {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
-            Poll::Ready(Ok(buf.len()))
-        }
-
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            let mut state = self.state.lock().unwrap();
-            state.body_released = true;
-            if let Some(waker) = state.read_waker.take() {
-                waker.wake();
-            }
-            Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "synthetic shutdown error",
-            )))
-        }
     }
 }
