@@ -144,6 +144,10 @@ enum Commands {
         #[arg(long, default_value = "1")]
         rounds: usize,
 
+        /// 先通过 HTTP CONNECT 建立隧道，再在隧道内执行 Range 分片下载
+        #[arg(long)]
+        connect_tunnel: bool,
+
         /// 输出报告文件路径
         #[arg(short, long, default_value = "large-download-report.html")]
         output: String,
@@ -341,16 +345,18 @@ async fn main() -> Result<()> {
             chunk_size_kb,
             concurrency,
             rounds,
+            connect_tunnel,
             output,
         } => {
             tracing::info!("正在运行 HTTP Range 分片大文件下载测试");
             tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
             tracing::info!(
-                "file={} MB，chunk={} KB，并发分片：{}，轮次：{}",
+                "file={} MB，chunk={} KB，并发分片：{}，轮次：{}，CONNECT tunnel={}",
                 file_size_mb,
                 chunk_size_kb,
                 concurrency,
-                rounds
+                rounds,
+                connect_tunnel
             );
 
             let results = performance_tests::run_large_download_tests(
@@ -359,6 +365,7 @@ async fn main() -> Result<()> {
                 chunk_size_kb.saturating_mul(1024),
                 concurrency,
                 rounds,
+                connect_tunnel,
             )
             .await?;
 

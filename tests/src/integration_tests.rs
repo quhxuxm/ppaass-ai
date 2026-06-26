@@ -40,6 +40,9 @@ pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
     // 测试 HTTP Range 分片下载
     results.add_test(test_http_large_range_response(agent_addr).await);
 
+    // 测试 HTTP CONNECT 隧道内的 Range 分片下载
+    results.add_test(test_http_connect_large_range_response(agent_addr).await);
+
     // 测试 HTTP JSON 响应
     results.add_test(test_http_json(agent_addr).await);
 
@@ -200,6 +203,54 @@ async fn test_http_large_range_response(agent_addr: &str) -> TestResult {
                 error: if !passed {
                     Some(format!(
                         "Range 响应不符合预期：status={status}, len={}, content-range={:?}",
+                        body.len(),
+                        headers.get(hyper::header::CONTENT_RANGE)
+                    ))
+                } else {
+                    None
+                },
+                duration_ms: start.elapsed().as_millis(),
+            }
+        }
+        Err(e) => TestResult {
+            name,
+            passed: false,
+            error: Some(e.to_string()),
+            duration_ms: start.elapsed().as_millis(),
+        },
+    }
+}
+
+async fn test_http_connect_large_range_response(agent_addr: &str) -> TestResult {
+    let start = std::time::Instant::now();
+    let name = "HTTP CONNECT Range 分片下载".to_string();
+    let client = MockHttpClient::new(agent_addr.to_string());
+
+    let range_start = 512 * 1024 + 33;
+    let range_end = range_start + 8191;
+    let headers = [("Range", format!("bytes={range_start}-{range_end}"))];
+
+    match client
+        .connect_tunnel_get_bytes_with_headers("127.0.0.1:9090", "/large?size=3145728", &headers)
+        .await
+    {
+        Ok((_, status, headers, body)) => {
+            let content_range_ok = headers
+                .get(hyper::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                == Some(format!("bytes {range_start}-{range_end}/3145728").as_str());
+            let body_ok = body.len() == 8192
+                && body.iter().enumerate().all(|(idx, byte)| {
+                    *byte == crate::mock_target::large_file_byte_at(range_start + idx as u64)
+                });
+            let passed = status == StatusCode::PARTIAL_CONTENT && content_range_ok && body_ok;
+
+            TestResult {
+                name,
+                passed,
+                error: if !passed {
+                    Some(format!(
+                        "CONNECT Range 响应不符合预期：status={status}, len={}, content-range={:?}",
                         body.len(),
                         headers.get(hyper::header::CONTENT_RANGE)
                     ))

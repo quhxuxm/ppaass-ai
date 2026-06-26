@@ -41,7 +41,7 @@ open_stream_timeout_secs = 10
 # TCP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
 keepalive_interval_secs = 30
 # TCP Yamux 底层连接写超时。
-connection_write_timeout_secs = 10
+connection_write_timeout_secs = 60
 # 每个 TCP Yamux 子流的流控窗口大小；HLS/大分片下载建议不低于 8MB。
 stream_window_size_kb = 8192
 
@@ -57,7 +57,7 @@ open_stream_timeout_secs = 10
 # UDP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
 keepalive_interval_secs = 30
 # UDP Yamux 底层连接写超时。
-connection_write_timeout_secs = 10
+connection_write_timeout_secs = 60
 # 每个 UDP Yamux 子流的流控窗口大小。
 stream_window_size_kb = 8192
 

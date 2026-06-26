@@ -574,17 +574,30 @@ pub async fn run_large_download_tests(
     chunk_size_bytes: u64,
     concurrency: usize,
     rounds: usize,
+    connect_tunnel: bool,
 ) -> Result<LargeDownloadTestResults> {
     anyhow::ensure!(file_size_bytes > 0, "file size must be greater than 0");
     anyhow::ensure!(chunk_size_bytes > 0, "chunk size must be greater than 0");
     anyhow::ensure!(concurrency > 0, "concurrency must be greater than 0");
     anyhow::ensure!(rounds > 0, "rounds must be greater than 0");
 
-    let target_url = format!("http://127.0.0.1:9090/large?size={file_size_bytes}");
+    let target_authority = "127.0.0.1:9090";
+    let target_path = format!("/large?size={file_size_bytes}");
+    let target_url = if connect_tunnel {
+        format!("CONNECT {target_authority}{target_path}")
+    } else {
+        format!("http://{target_authority}{target_path}")
+    };
     info!("=== 开始 HTTP Range 分片大文件下载测试 ===");
     info!(
-        "Agent：{}，URL：{}，file={} bytes，chunk={} bytes，并发分片：{}，轮次：{}",
-        agent_addr, target_url, file_size_bytes, chunk_size_bytes, concurrency, rounds
+        "Agent：{}，URL：{}，file={} bytes，chunk={} bytes，并发分片：{}，轮次：{}，CONNECT tunnel={}",
+        agent_addr,
+        target_url,
+        file_size_bytes,
+        chunk_size_bytes,
+        concurrency,
+        rounds,
+        connect_tunnel
     );
 
     let chunks_per_round = file_size_bytes.div_ceil(chunk_size_bytes);
@@ -624,6 +637,9 @@ pub async fn run_large_download_tests(
             worker_id,
             agent_addr.to_string(),
             target_url.clone(),
+            target_authority.to_string(),
+            target_path.clone(),
+            connect_tunnel,
             file_size_bytes,
             chunks.clone(),
             next_chunk.clone(),
@@ -707,6 +723,9 @@ async fn large_download_worker(
     worker_id: usize,
     agent_addr: String,
     target_url: String,
+    target_authority: String,
+    target_path: String,
+    connect_tunnel: bool,
     file_size_bytes: u64,
     chunks: Arc<Vec<LargeDownloadChunk>>,
     next_chunk: Arc<AtomicUsize>,
@@ -724,7 +743,17 @@ async fn large_download_worker(
             break;
         };
 
-        match download_large_range_chunk(&client, &target_url, file_size_bytes, chunk).await {
+        match download_large_range_chunk(
+            &client,
+            &target_url,
+            &target_authority,
+            &target_path,
+            connect_tunnel,
+            file_size_bytes,
+            chunk,
+        )
+        .await
+        {
             Ok((duration, bytes)) => {
                 latencies_us.push(duration.as_micros() as u64);
                 success.fetch_add(1, Ordering::Relaxed);
@@ -758,6 +787,9 @@ async fn large_download_worker(
 async fn download_large_range_chunk(
     client: &MockHttpClient,
     target_url: &str,
+    target_authority: &str,
+    target_path: &str,
+    connect_tunnel: bool,
     file_size_bytes: u64,
     chunk: LargeDownloadChunk,
 ) -> Result<(Duration, u64)> {
@@ -765,8 +797,13 @@ async fn download_large_range_chunk(
     let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
     let headers = [("Range", range_header)];
 
-    let (duration, status, response_headers, body) =
-        client.get_bytes_with_headers(target_url, &headers).await?;
+    let (duration, status, response_headers, body) = if connect_tunnel {
+        client
+            .connect_tunnel_get_bytes_with_headers(target_authority, target_path, &headers)
+            .await?
+    } else {
+        client.get_bytes_with_headers(target_url, &headers).await?
+    };
 
     anyhow::ensure!(
         status == StatusCode::PARTIAL_CONTENT,

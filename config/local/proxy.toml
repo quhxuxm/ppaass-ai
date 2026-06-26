@@ -92,12 +92,12 @@ udp_relay_channel_size = 64
 # 这里影响 TCP relay 子流的 server-side Yamux acceptor 参数。
 max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
+connection_write_timeout_secs = 60
 stream_window_size_kb = 8192
 
 [yamux.udp]
 # 这里影响 UDP relay 子流的 server-side Yamux acceptor 参数。
 max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
+connection_write_timeout_secs = 60
 stream_window_size_kb = 8192
