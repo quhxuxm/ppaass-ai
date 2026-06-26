@@ -13,17 +13,11 @@ const defaultFieldValues = {
   log_level: "info",
   log_dir: "",
   log_file: "desktop-agent.log",
-  tcp_yamux_sessions: 5,
   udp_yamux_sessions: 5,
-  tcp_yamux_max_streams_per_session: 32,
   udp_yamux_max_streams_per_session: 32,
-  tcp_yamux_open_stream_timeout_secs: 10,
   udp_yamux_open_stream_timeout_secs: 10,
-  tcp_yamux_keepalive_interval_secs: 30,
   udp_yamux_keepalive_interval_secs: 30,
-  tcp_yamux_connection_write_timeout_secs: 10,
   udp_yamux_connection_write_timeout_secs: 10,
-  tcp_yamux_stream_window_size_kb: 8192,
   udp_yamux_stream_window_size_kb: 8192,
   tun_enabled: false,
   tun_name: "ppaass-tun",
@@ -51,17 +45,11 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
   if (
     [
       "connect_timeout_secs",
-      "tcp_yamux_sessions",
       "udp_yamux_sessions",
-      "tcp_yamux_max_streams_per_session",
       "udp_yamux_max_streams_per_session",
-      "tcp_yamux_open_stream_timeout_secs",
       "udp_yamux_open_stream_timeout_secs",
-      "tcp_yamux_keepalive_interval_secs",
       "udp_yamux_keepalive_interval_secs",
-      "tcp_yamux_connection_write_timeout_secs",
       "udp_yamux_connection_write_timeout_secs",
-      "tcp_yamux_stream_window_size_kb",
       "udp_yamux_stream_window_size_kb",
       "tun_mtu",
       "runtime_threads"
@@ -93,17 +81,11 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     compression_mode: { section: null, key: "compression_mode", kind: "string" },
     log_level: { section: null, key: "log_level", kind: "string" },
     runtime_threads: { section: null, key: "runtime_threads", kind: "number" },
-    tcp_yamux_sessions: { section: "yamux.tcp", key: "sessions", kind: "number" },
     udp_yamux_sessions: { section: "yamux.udp", key: "sessions", kind: "number" },
-    tcp_yamux_max_streams_per_session: { section: "yamux.tcp", key: "max_streams_per_session", kind: "number" },
     udp_yamux_max_streams_per_session: { section: "yamux.udp", key: "max_streams_per_session", kind: "number" },
-    tcp_yamux_open_stream_timeout_secs: { section: "yamux.tcp", key: "open_stream_timeout_secs", kind: "number" },
     udp_yamux_open_stream_timeout_secs: { section: "yamux.udp", key: "open_stream_timeout_secs", kind: "number" },
-    tcp_yamux_keepalive_interval_secs: { section: "yamux.tcp", key: "keepalive_interval_secs", kind: "number" },
     udp_yamux_keepalive_interval_secs: { section: "yamux.udp", key: "keepalive_interval_secs", kind: "number" },
-    tcp_yamux_connection_write_timeout_secs: { section: "yamux.tcp", key: "connection_write_timeout_secs", kind: "number" },
     udp_yamux_connection_write_timeout_secs: { section: "yamux.udp", key: "connection_write_timeout_secs", kind: "number" },
-    tcp_yamux_stream_window_size_kb: { section: "yamux.tcp", key: "stream_window_size_kb", kind: "number" },
     udp_yamux_stream_window_size_kb: { section: "yamux.udp", key: "stream_window_size_kb", kind: "number" },
     tun_enabled: { section: "tun", key: "enabled", kind: "bool" },
     tun_name: { section: "tun", key: "name", kind: "string" },
@@ -145,17 +127,11 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     log_file: stringOrDefault(matchString(raw, null, "log_file"), "log_file"),
     runtime_threads: runtimeThreads,
     effective_runtime_threads: runtimeThreads ?? defaultRuntimeThreads(),
-    tcp_yamux_sessions: matchNumber(raw, "yamux.tcp", "sessions") ?? defaultValueForField<number>("tcp_yamux_sessions"),
     udp_yamux_sessions: matchNumber(raw, "yamux.udp", "sessions") ?? defaultValueForField<number>("udp_yamux_sessions"),
-    tcp_yamux_max_streams_per_session: matchNumber(raw, "yamux.tcp", "max_streams_per_session") ?? defaultValueForField<number>("tcp_yamux_max_streams_per_session"),
     udp_yamux_max_streams_per_session: matchNumber(raw, "yamux.udp", "max_streams_per_session") ?? defaultValueForField<number>("udp_yamux_max_streams_per_session"),
-    tcp_yamux_open_stream_timeout_secs: matchNumber(raw, "yamux.tcp", "open_stream_timeout_secs") ?? defaultValueForField<number>("tcp_yamux_open_stream_timeout_secs"),
     udp_yamux_open_stream_timeout_secs: matchNumber(raw, "yamux.udp", "open_stream_timeout_secs") ?? defaultValueForField<number>("udp_yamux_open_stream_timeout_secs"),
-    tcp_yamux_keepalive_interval_secs: matchNumber(raw, "yamux.tcp", "keepalive_interval_secs") ?? defaultValueForField<number>("tcp_yamux_keepalive_interval_secs"),
     udp_yamux_keepalive_interval_secs: matchNumber(raw, "yamux.udp", "keepalive_interval_secs") ?? defaultValueForField<number>("udp_yamux_keepalive_interval_secs"),
-    tcp_yamux_connection_write_timeout_secs: matchNumber(raw, "yamux.tcp", "connection_write_timeout_secs") ?? defaultValueForField<number>("tcp_yamux_connection_write_timeout_secs"),
     udp_yamux_connection_write_timeout_secs: matchNumber(raw, "yamux.udp", "connection_write_timeout_secs") ?? defaultValueForField<number>("udp_yamux_connection_write_timeout_secs"),
-    tcp_yamux_stream_window_size_kb: matchNumber(raw, "yamux.tcp", "stream_window_size_kb") ?? defaultValueForField<number>("tcp_yamux_stream_window_size_kb"),
     udp_yamux_stream_window_size_kb: matchNumber(raw, "yamux.udp", "stream_window_size_kb") ?? defaultValueForField<number>("udp_yamux_stream_window_size_kb"),
     tun_enabled: matchBool(raw, "tun", "enabled") ?? defaultValueForField<boolean>("tun_enabled"),
     tun_name: stringOrDefault(matchString(raw, "tun", "name"), "tun_name"),
@@ -269,18 +245,14 @@ function arrayOrDefault(value: string[], field: keyof AgentConfigSummary) {
 
 function minimumNumberForField(field: keyof AgentConfigSummary) {
   if (
-    field === "tcp_yamux_sessions" ||
     field === "udp_yamux_sessions" ||
-    field === "tcp_yamux_max_streams_per_session" ||
     field === "udp_yamux_max_streams_per_session" ||
-    field === "tcp_yamux_open_stream_timeout_secs" ||
     field === "udp_yamux_open_stream_timeout_secs" ||
-    field === "tcp_yamux_connection_write_timeout_secs" ||
     field === "udp_yamux_connection_write_timeout_secs"
   ) {
     return 1;
   }
-  if (field === "tcp_yamux_stream_window_size_kb" || field === "udp_yamux_stream_window_size_kb") {
+  if (field === "udp_yamux_stream_window_size_kb") {
     return 256;
   }
   return 0;

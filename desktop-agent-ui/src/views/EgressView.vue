@@ -59,7 +59,7 @@ const emit = defineEmits<{
       <template #title>
         <div class="panel-heading inline">
           <h2>公共通道参数</h2>
-          <Tag value="Yamux only" severity="info" />
+          <Tag value="TCP direct / UDP Yamux" severity="info" />
         </div>
       </template>
       <template #content>
@@ -92,53 +92,27 @@ const emit = defineEmits<{
       <template #title>
         <div class="panel-heading inline">
           <h2>TCP</h2>
-          <Tag value="独立 TCP Yamux 池" severity="info" />
+          <Tag value="Direct framed TCP" severity="success" />
         </div>
       </template>
       <template #content>
-        <section class="policy-section yamux-settings">
+        <section class="policy-section transport-status">
           <div class="section-heading">
             <div class="section-title">
-              <span>TCP Yamux</span>
-              <Tag class="mode-effect-tag" value="作用于 TCP relay 子流" severity="secondary" />
+              <span>TCP Relay</span>
+              <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN" severity="secondary" />
             </div>
-            <strong>{{ summary.tcp_yamux_sessions }} max sessions</strong>
+            <strong>Framed TCP</strong>
           </div>
-          <div class="field-pair">
-            <label class="field">
-              <span><i class="pi pi-share-alt"></i>外层连接</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_sessions', $event)" />
-              <small>限制 TCP relay raw Yamux 外层连接上限；实际连接数按需增长。</small>
-            </label>
-            <label class="field">
-              <span><i class="pi pi-sitemap"></i>并发子流</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_max_streams_per_session', $event)" />
-              <small>限制单条 TCP Yamux session 同时承载的目标 TCP 连接数。</small>
-            </label>
-          </div>
-          <div class="field-pair">
-            <label class="field">
-              <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_open_stream_timeout_secs', $event)" />
-              <small>影响新 TCP 目标连接申请 Yamux 子流的等待时间。</small>
-            </label>
-            <label class="field">
-              <span><i class="pi pi-heart"></i>Keepalive</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_keepalive_interval_secs', $event)" />
-              <small>影响 TCP Yamux 外层连接的保活探测；0 表示关闭。</small>
-            </label>
-          </div>
-          <div class="field-pair">
-            <label class="field">
-              <span><i class="pi pi-send"></i>写超时</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_connection_write_timeout_secs', $event)" />
-              <small>影响 TCP Yamux 外层连接写入帧的超时判断。</small>
-            </label>
-            <label class="field">
-              <span><i class="pi pi-window-maximize"></i>流控窗口</span>
-              <ConfigNumberInput :model-value="summary.tcp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'tcp_yamux_stream_window_size_kb', $event)" />
-              <small>影响每个 TCP Yamux 子流可缓冲的窗口大小。</small>
-            </label>
+          <div class="field-pair transport-facts">
+            <div class="transport-fact">
+              <span><i class="pi pi-share-alt"></i>代理连接</span>
+              <strong>每目标独立</strong>
+            </div>
+            <div class="transport-fact">
+              <span><i class="pi pi-box"></i>协议 framing</span>
+              <strong>tokio codec</strong>
+            </div>
           </div>
         </section>
       </template>

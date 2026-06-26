@@ -19,17 +19,11 @@ final class DefaultConfig {
                     + "172.16.0.0/12\n"
                     + "192.168.0.0/16\n"
                     + "::1";
-    static final int TCP_YAMUX_SESSIONS = 5;
     static final int UDP_YAMUX_SESSIONS = 5;
-    static final int TCP_YAMUX_MAX_STREAMS_PER_SESSION = 256;
     static final int UDP_YAMUX_MAX_STREAMS_PER_SESSION = 256;
-    static final int TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS = 10;
     static final int UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS = 10;
-    static final int TCP_YAMUX_KEEPALIVE_INTERVAL_SECS = 30;
     static final int UDP_YAMUX_KEEPALIVE_INTERVAL_SECS = 30;
-    static final int TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS = 10;
     static final int UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS = 10;
-    static final int TCP_YAMUX_STREAM_WINDOW_SIZE_KB = 8192;
     static final int UDP_YAMUX_STREAM_WINDOW_SIZE_KB = 8192;
     static final int MIN_YAMUX_STREAM_WINDOW_SIZE_KB = 256;
     static final int ASYNC_RUNTIME_STACK_SIZE_MB = 4;

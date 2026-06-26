@@ -18,13 +18,11 @@ pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
 pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
 pub use tcp_keepalive::{
-    YAMUX_TCP_KEEPALIVE_INTERVAL, YAMUX_TCP_KEEPALIVE_RETRIES, YAMUX_TCP_KEEPALIVE_TIME,
-    YAMUX_TCP_USER_TIMEOUT, configure_yamux_tcp_socket, configure_yamux_tcp_stream,
+    PROXY_TCP_KEEPALIVE_INTERVAL, PROXY_TCP_KEEPALIVE_RETRIES, PROXY_TCP_KEEPALIVE_TIME,
+    PROXY_TCP_USER_TIMEOUT, configure_proxy_tcp_socket, configure_proxy_tcp_stream,
 };
 pub use tcp_listener::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
-pub use yamux_settings::{
-    YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig, YamuxSettings, YamuxTransportConfig,
-};
+pub use yamux_settings::{YamuxConfig, YamuxServerConfig, YamuxSettings, YamuxTransportConfig};
 
 /// TCP relay copy buffer for HTTP CONNECT, SOCKS, and TUN data paths.
 ///

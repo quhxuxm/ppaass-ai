@@ -1,4 +1,4 @@
-# Local raw-Yamux smoke-test proxy.
+# Local direct-TCP / UDP-Yamux smoke-test proxy.
 
 listen_addr = "0.0.0.0:18080"
 users_path = "config/local/users.toml"
@@ -11,19 +11,13 @@ replay_attack_tolerance = 300
 async_runtime_stack_size_mb = 2
 connect_timeout_secs = 20
 auth_timeout_secs = 20
-tcp_relay_idle_timeout_secs = 300
-yamux_tcp_relay_idle_timeout_secs = 0
+tcp_relay_idle_timeout_secs = 60
+tcp_relay_half_close_idle_timeout_secs = 30
 yamux_session_idle_timeout_secs = 300
 udp_relay_idle_timeout_secs = 60
 udp_relay_channel_size = 64
 
-[yamux.tcp]
-max_streams_per_session = 128
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 300
-stream_window_size_kb = 8192
-
-[yamux.udp]
+[yamux]
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 300

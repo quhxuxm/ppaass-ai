@@ -7,11 +7,12 @@ use std::task::{Context, Poll};
 #[cfg(test)]
 use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
 use common::{
-    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
-    YamuxClientConnection, YamuxClientStream,
+    AuthenticatedConnection, ClientStream, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -40,15 +41,33 @@ pub struct AndroidYamuxSessionManager {
 }
 
 impl AndroidYamuxSessionManager {
-    pub fn new(
+    pub fn new_tcp_direct(
+        config: Arc<AndroidAgentConfig>,
+        shutdown: CancellationToken,
+    ) -> Arc<Self> {
+        Self::new_for_transport(
+            config,
+            shutdown,
+            "tcp_direct_connections",
+            TransportProtocol::Tcp,
+        )
+    }
+
+    pub fn new_udp(config: Arc<AndroidAgentConfig>, shutdown: CancellationToken) -> Arc<Self> {
+        Self::new_for_transport(
+            config,
+            shutdown,
+            "udp_yamux_sessions",
+            TransportProtocol::Udp,
+        )
+    }
+
+    fn new_for_transport(
         config: Arc<AndroidAgentConfig>,
         shutdown: CancellationToken,
         manager_name: &'static str,
+        yamux_transport: TransportProtocol,
     ) -> Arc<Self> {
-        let yamux_transport = match manager_name {
-            "udp_yamux_sessions" => TransportProtocol::Udp,
-            _ => TransportProtocol::Tcp,
-        };
         Arc::new(Self {
             config,
             shutdown,
@@ -66,13 +85,28 @@ impl AndroidYamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<AndroidYamuxTargetStream> {
+        if transport == TransportProtocol::Tcp && self.yamux_transport == TransportProtocol::Tcp {
+            return self.open_direct_tcp_stream(address).await;
+        }
+
         if transport != self.yamux_transport {
             return Err(AndroidAgentError::Connection(format!(
-                "Android {} only supports {:?} Yamux streams",
+                "Android {} only supports {:?} proxy streams",
                 self.manager_name, self.yamux_transport
             )));
         }
         self.open_target_stream(address, transport).await
+    }
+
+    async fn open_direct_tcp_stream(&self, address: Address) -> Result<AndroidYamuxTargetStream> {
+        let connection = AuthenticatedConnection::connect(self.config.as_ref())
+            .await
+            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+        let (stream, _stream_id) = connection
+            .connect_to_target(address, TransportProtocol::Tcp)
+            .await
+            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+        Ok(AndroidYamuxTargetStream::Direct(stream))
     }
 
     async fn open_target_stream(
@@ -178,10 +212,7 @@ impl AndroidYamuxSessionManager {
             let config = self.config.clone();
             let semaphore = semaphore.clone();
             let transport = self.yamux_transport;
-            let yamux_settings = match transport {
-                TransportProtocol::Udp => config.yamux.udp_settings(),
-                TransportProtocol::Tcp => config.yamux.tcp_settings(),
-            };
+            let yamux_settings = config.yamux.udp_settings();
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
@@ -342,12 +373,13 @@ impl AndroidYamuxSessionManager {
     fn yamux_target_size(&self) -> usize {
         match self.yamux_transport {
             TransportProtocol::Udp => self.config.yamux.udp_session_count(),
-            TransportProtocol::Tcp => self.config.yamux.tcp_session_count(),
+            TransportProtocol::Tcp => 0,
         }
     }
 }
 
 pub enum AndroidYamuxTargetStream {
+    Direct(ClientStream<TcpStream>),
     Yamux(YamuxClientStream),
 }
 
@@ -358,6 +390,7 @@ impl AsyncRead for AndroidYamuxTargetStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
+            Self::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
@@ -370,18 +403,21 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
+            Self::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
+            Self::Direct(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
+            Self::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }

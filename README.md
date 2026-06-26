@@ -83,10 +83,6 @@ username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
 connection_timeout_secs = 30                # Connection timeout
 
-[yamux.tcp]
-sessions = 5                         # Max TCP relay raw Yamux outer sessions, grown on demand
-max_streams_per_session = 128        # TCP relay substreams per session
-
 [yamux.udp]
 sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # UDP relay substreams per session
@@ -110,8 +106,8 @@ users_path = "config/users.toml"          # Users configuration file
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **Separate Yamux Pools**: TCP relay and UDP relay maintain independent outer sessions
-- **Multiplexing**: Multiple encrypted PPAASS substreams over each raw Yamux connection
+- **Direct TCP Relay**: TCP targets use independent framed TCP connections to avoid Yamux head-of-line blocking
+- **UDP Multiplexing**: UDP relay keeps encrypted PPAASS substreams over raw Yamux connections
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
 ### Performance Testing

@@ -1,8 +1,7 @@
-//! agent 到 proxy 的 raw Yamux session 管理器。
+//! agent 到 proxy 的 proxy 目标连接管理器。
 //!
-//! TCP 和 UDP 语义分别使用独立 `YamuxSessionManager` 实例。每个 session 都是一条
-//! raw TCP 上的 Yamux 外层连接；每个目标连接会打开一个子 stream，并在子 stream
-//! 内执行完整的 PPAASS Auth/Connect/Data 加密协议。
+//! TCP 语义使用独立 framed TCP 连接；UDP 语义继续使用 raw TCP 上的 Yamux 外层
+//! 连接池，并在子 stream 内执行完整的 PPAASS Auth/Connect/Data 加密协议。
 
 use super::proxy_connection::new_yamux_connection;
 use super::target_stream::YamuxTargetStream;
@@ -44,7 +43,7 @@ pub struct YamuxSessionManager {
 
 impl YamuxSessionManager {
     pub fn new(config: Arc<AgentConfig>) -> Self {
-        Self::new_for_transport(config, TransportProtocol::Tcp, "tcp_yamux_sessions")
+        Self::new_for_transport(config, TransportProtocol::Tcp, "tcp_direct_connections")
     }
 
     pub fn new_udp(config: Arc<AgentConfig>) -> Self {

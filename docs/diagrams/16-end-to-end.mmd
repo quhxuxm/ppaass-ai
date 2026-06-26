@@ -13,11 +13,10 @@ sequenceDiagram
         Agent-->>App: 响应
     else 代理
         Agent->>Sessions: connect_to_target(target)
-        Sessions->>Proxy: raw TCP Yamux outer session if needed
-        Sessions->>Proxy: open Yamux substream
-        Sessions->>Proxy: Auth in substream
-        Proxy-->>Sessions: AuthResponse in substream
-        Sessions->>Proxy: ConnectRequest in substream
+        Sessions->>Proxy: TCP framed connection or UDP Yamux substream
+        Sessions->>Proxy: Auth
+        Proxy-->>Sessions: AuthResponse
+        Sessions->>Proxy: ConnectRequest
         Proxy->>Target: connect target
         Proxy-->>Sessions: ConnectResponse in substream
         App->>Agent: payload

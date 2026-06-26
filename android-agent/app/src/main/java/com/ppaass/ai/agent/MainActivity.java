@@ -110,7 +110,6 @@ public class MainActivity extends Activity {
     private EditText privateKey;
     private EditText runtimeThreads;
     private Spinner compressionMode;
-    private LinearLayout tcpYamuxConfig;
     private LinearLayout udpYamuxConfig;
     private String directAccessModeValue;
     private EditText directRuleDraft;
@@ -122,12 +121,6 @@ public class MainActivity extends Activity {
     private View directRuleCountFact;
     private final List<Button> directModeButtons = new ArrayList<>();
     private final List<String> directRuleValues = new ArrayList<>();
-    private EditText yamuxTcpSessions;
-    private EditText yamuxTcpMaxStreamsPerSession;
-    private EditText yamuxTcpOpenStreamTimeoutSecs;
-    private EditText yamuxTcpKeepaliveIntervalSecs;
-    private EditText yamuxTcpConnectionWriteTimeoutSecs;
-    private EditText yamuxTcpStreamWindowSizeKb;
     private EditText yamuxUdpSessions;
     private EditText yamuxUdpMaxStreamsPerSession;
     private EditText yamuxUdpOpenStreamTimeoutSecs;
@@ -549,64 +542,11 @@ public class MainActivity extends Activity {
                 prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
         LinearLayout tcpConfig = configSection(root, "TCP");
-        tcpYamuxConfig = configGroup(
+        LinearLayout tcpRelay = configGroup(
                 tcpConfig,
-                "TCP Yamux",
-                "作用于 TCP relay 子流");
-        yamuxTcpSessions = numberControl(
-                tcpYamuxConfig,
-                "外层连接",
-                prefString(
-                        "yamux_tcp_sessions",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS)),
-                1,
-                1);
-        addFieldHelp(tcpYamuxConfig, "限制 TCP relay raw Yamux 外层连接上限；实际连接数按需增长。");
-        yamuxTcpMaxStreamsPerSession = numberControl(
-                tcpYamuxConfig,
-                "并发子流",
-                prefString(
-                        "yamux_tcp_max_streams_per_session",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION)),
-                1,
-                1);
-        addFieldHelp(tcpYamuxConfig, "限制单条 TCP Yamux session 同时承载的目标 TCP 连接数。");
-        yamuxTcpOpenStreamTimeoutSecs = numberControl(
-                tcpYamuxConfig,
-                "打开子流超时",
-                prefString(
-                        "yamux_tcp_open_stream_timeout_secs",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
-                1,
-                1);
-        addFieldHelp(tcpYamuxConfig, "影响新 TCP 目标连接申请 Yamux 子流的等待时间。");
-        yamuxTcpKeepaliveIntervalSecs = numberControl(
-                tcpYamuxConfig,
-                "Keepalive 间隔",
-                prefString(
-                        "yamux_tcp_keepalive_interval_secs",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
-                5,
-                0);
-        addFieldHelp(tcpYamuxConfig, "影响 TCP Yamux 外层连接的保活探测；0 表示关闭。");
-        yamuxTcpConnectionWriteTimeoutSecs = numberControl(
-                tcpYamuxConfig,
-                "写超时",
-                prefString(
-                        "yamux_tcp_connection_write_timeout_secs",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
-                1,
-                1);
-        addFieldHelp(tcpYamuxConfig, "影响 TCP Yamux 外层连接写入帧的超时判断。");
-        yamuxTcpStreamWindowSizeKb = numberControl(
-                tcpYamuxConfig,
-                "流控窗口 KB",
-                prefString(
-                        "yamux_tcp_stream_window_size_kb",
-                        String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB)),
-                256,
-                DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
-        addFieldHelp(tcpYamuxConfig, "影响每个 TCP Yamux 子流可缓冲的窗口大小。");
+                "TCP Relay",
+                "Direct framed TCP");
+        addFieldHelp(tcpRelay, "HTTP / SOCKS5 / TUN 的 TCP 目标连接使用独立 framed TCP，不再使用 Yamux session。");
 
         LinearLayout udpConfig = configSection(root, "UDP");
         udpYamuxConfig = configGroup(
@@ -2209,22 +2149,6 @@ public class MainActivity extends Activity {
                 .putString("compression_mode", selectedCompressionMode())
                 .putString("direct_access_mode", selectedDirectAccessMode())
                 .putString("direct_access_rules", serializeDirectAccessRules())
-                .putString("yamux_tcp_sessions", yamuxTcpSessions.getText().toString())
-                .putString(
-                        "yamux_tcp_max_streams_per_session",
-                        yamuxTcpMaxStreamsPerSession.getText().toString())
-                .putString(
-                        "yamux_tcp_open_stream_timeout_secs",
-                        yamuxTcpOpenStreamTimeoutSecs.getText().toString())
-                .putString(
-                        "yamux_tcp_keepalive_interval_secs",
-                        yamuxTcpKeepaliveIntervalSecs.getText().toString())
-                .putString(
-                        "yamux_tcp_connection_write_timeout_secs",
-                        yamuxTcpConnectionWriteTimeoutSecs.getText().toString())
-                .putString(
-                        "yamux_tcp_stream_window_size_kb",
-                        yamuxTcpStreamWindowSizeKb.getText().toString())
                 .putString("yamux_udp_sessions", yamuxUdpSessions.getText().toString())
                 .putString(
                         "yamux_udp_max_streams_per_session",
@@ -2258,12 +2182,6 @@ public class MainActivity extends Activity {
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
         setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
-        yamuxTcpSessions.setText(String.valueOf(DefaultConfig.TCP_YAMUX_SESSIONS));
-        yamuxTcpMaxStreamsPerSession.setText(String.valueOf(DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION));
-        yamuxTcpOpenStreamTimeoutSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS));
-        yamuxTcpKeepaliveIntervalSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS));
-        yamuxTcpConnectionWriteTimeoutSecs.setText(String.valueOf(DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS));
-        yamuxTcpStreamWindowSizeKb.setText(String.valueOf(DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB));
         yamuxUdpSessions.setText(String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS));
         yamuxUdpMaxStreamsPerSession.setText(String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION));
         yamuxUdpOpenStreamTimeoutSecs.setText(String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS));

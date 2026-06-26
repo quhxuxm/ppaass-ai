@@ -1,4 +1,4 @@
-# Local raw-Yamux smoke-test desktop agent.
+# Local direct-TCP / UDP-Yamux smoke-test desktop agent.
 
 listen_addr = "127.0.0.1:11080"
 proxy_addrs = ["127.0.0.1:18080"]
@@ -11,14 +11,6 @@ log_dir = "logs"
 log_file = "agent-yamux-test.log"
 async_runtime_stack_size_mb = 4
 runtime_threads = 4
-
-[yamux.tcp]
-sessions = 2
-max_streams_per_session = 32
-open_stream_timeout_secs = 10
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 300
-stream_window_size_kb = 8192
 
 [yamux.udp]
 sessions = 2

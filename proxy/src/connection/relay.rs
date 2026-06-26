@@ -16,6 +16,7 @@ struct RelayCopyIo<'a, S> {
     label: &'static str,
     activity_tx: watch::Sender<()>,
     read_bytes: Arc<AtomicU64>,
+    read_eof: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<'a, S> RelayCopyIo<'a, S> {
@@ -24,12 +25,14 @@ impl<'a, S> RelayCopyIo<'a, S> {
         label: &'static str,
         activity_tx: watch::Sender<()>,
         read_bytes: Arc<AtomicU64>,
+        read_eof: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             inner,
             label,
             activity_tx,
             read_bytes,
+            read_eof,
         }
     }
 
@@ -55,6 +58,10 @@ where
             let read = buf.filled().len().saturating_sub(filled_before);
             if read > 0 {
                 this.read_bytes.fetch_add(read as u64, Ordering::AcqRel);
+                this.mark_activity();
+            } else {
+                this.read_eof
+                    .store(true, std::sync::atomic::Ordering::Release);
                 this.mark_activity();
             }
         }
@@ -330,15 +337,13 @@ impl ServerConnection {
             pending_write_len: None,
         };
 
-        let tcp_relay_idle_timeout_secs = self.proxy_config.yamux_tcp_relay_idle_timeout_secs;
-        let idle_timeout = if tcp_relay_idle_timeout_secs == 0 {
-            None
-        } else {
-            Some(Duration::from_secs(tcp_relay_idle_timeout_secs))
-        };
+        let tcp_relay_idle_timeout_secs = self.proxy_config.tcp_relay_idle_timeout_secs;
+        let half_close_idle_timeout_secs = self.proxy_config.tcp_relay_half_close_idle_timeout_secs;
+        let timeouts =
+            TcpRelayTimeouts::new(tcp_relay_idle_timeout_secs, half_close_idle_timeout_secs);
 
         let (up_bytes, down_bytes) =
-            relay_tcp_with_half_close(target_stream, &mut agent_io, idle_timeout).await?;
+            relay_tcp_with_half_close(target_stream, &mut agent_io, timeouts).await?;
 
         debug!("中继已结束：上行 {}，下行 {}", up_bytes, down_bytes);
 
@@ -349,7 +354,7 @@ impl ServerConnection {
 pub(super) async fn relay_tcp_with_half_close<T, A>(
     target_stream: &mut T,
     agent_io: &mut A,
-    idle_timeout: Option<Duration>,
+    timeouts: TcpRelayTimeouts,
 ) -> io::Result<(u64, u64)>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -365,18 +370,22 @@ where
     // agent->target 上行字节、target->agent 下行字节。
     let up_total = Arc::new(AtomicU64::new(0));
     let down_total = Arc::new(AtomicU64::new(0));
+    let agent_eof = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let target_eof = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (activity_tx, mut activity_rx) = watch::channel(());
     let mut agent_copy_io = RelayCopyIo::new(
         agent_io,
         "agent->target",
         activity_tx.clone(),
         up_total.clone(),
+        agent_eof.clone(),
     );
     let mut target_copy_io = RelayCopyIo::new(
         target_stream,
         "target->agent",
         activity_tx,
         down_total.clone(),
+        target_eof.clone(),
     );
 
     let relay = tokio::io::copy_bidirectional_with_sizes(
@@ -387,14 +396,19 @@ where
     );
     tokio::pin!(relay);
 
-    if let Some(timeout) = idle_timeout {
-        loop {
+    loop {
+        let half_closed = agent_eof.load(Ordering::Acquire) || target_eof.load(Ordering::Acquire);
+        if let Some(timeout) = timeouts.current(half_closed) {
             let idle = tokio::time::sleep(timeout);
             tokio::pin!(idle);
             tokio::select! {
                 result = &mut relay => return result,
                 _ = &mut idle => {
-                    debug!("TCP 中继空闲超过 {} 秒，关闭连接", timeout.as_secs());
+                    if half_closed {
+                        debug!("TCP 中继半关闭后空闲超过 {} 秒，关闭连接", timeout.as_secs());
+                    } else {
+                        debug!("TCP 中继空闲超过 {} 秒，关闭连接", timeout.as_secs());
+                    }
                     return Ok((
                         up_total.load(Ordering::Acquire),
                         down_total.load(Ordering::Acquire),
@@ -408,9 +422,60 @@ where
                     }
                 }
             }
+        } else {
+            tokio::select! {
+                result = &mut relay => return result,
+                changed = activity_rx.changed() => {
+                    if changed.is_err() {
+                        continue;
+                    }
+                }
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TcpRelayTimeouts {
+    idle: Option<Duration>,
+    half_close_idle: Option<Duration>,
+}
+
+impl TcpRelayTimeouts {
+    fn new(idle_secs: u64, half_close_idle_secs: u64) -> Self {
+        Self {
+            idle: duration_from_secs(idle_secs),
+            half_close_idle: duration_from_secs(half_close_idle_secs),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_durations(idle: Option<Duration>, half_close_idle: Option<Duration>) -> Self {
+        Self {
+            idle,
+            half_close_idle,
+        }
+    }
+
+    fn current(self, half_closed: bool) -> Option<Duration> {
+        if !half_closed {
+            return self.idle;
+        }
+
+        match (self.idle, self.half_close_idle) {
+            (Some(idle), Some(half_close_idle)) => Some(idle.min(half_close_idle)),
+            (Some(idle), None) => Some(idle),
+            (None, Some(half_close_idle)) => Some(half_close_idle),
+            (None, None) => None,
+        }
+    }
+}
+
+fn duration_from_secs(secs: u64) -> Option<Duration> {
+    if secs == 0 {
+        None
     } else {
-        relay.await
+        Some(Duration::from_secs(secs))
     }
 }
 
@@ -439,7 +504,10 @@ mod tests {
             relay_tcp_with_half_close(
                 &mut target_relay,
                 &mut agent_relay,
-                Some(Duration::from_secs(5)),
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_secs(5)),
+                    Some(Duration::from_secs(5)),
+                ),
             )
             .await
         });
@@ -478,7 +546,12 @@ mod tests {
         let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
 
         let relay = tokio::spawn(async move {
-            relay_tcp_with_half_close(&mut target_relay, &mut agent_relay, None).await
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                TcpRelayTimeouts::from_durations(None, None),
+            )
+            .await
         });
 
         // timeout=0 的配置现在只表示“不启用超时”，不能再切回旧的
@@ -518,7 +591,10 @@ mod tests {
             relay_tcp_with_half_close(
                 &mut target_relay,
                 &mut agent_relay,
-                Some(Duration::from_secs(5)),
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_secs(5)),
+                    Some(Duration::from_secs(5)),
+                ),
             )
             .await
         });
@@ -548,7 +624,10 @@ mod tests {
             relay_tcp_with_half_close(
                 &mut target_relay,
                 &mut agent_relay,
-                Some(Duration::from_millis(100)),
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_millis(100)),
+                    Some(Duration::from_millis(100)),
+                ),
             )
             .await
         });
@@ -580,13 +659,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relay_recycles_idle_persistent_target_after_agent_half_close() {
+        let (mut target_relay, mut target_peer) = tokio::io::duplex(1024);
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_secs(30)),
+                    Some(Duration::from_millis(80)),
+                ),
+            )
+            .await
+        });
+
+        agent_peer.write_all(b"GET").await.unwrap();
+        agent_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        target_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(target_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        let (up_bytes, down_bytes) = tokio::time::timeout(Duration::from_secs(2), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(up_bytes, 3);
+        assert_eq!(down_bytes, 0);
+
+        let mut closed_probe = [0u8; 1];
+        assert_eq!(target_peer.read(&mut closed_probe).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_half_close_idle_keeps_active_slow_response() {
+        let (mut target_relay, mut target_peer) = tokio::io::duplex(1024);
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_secs(30)),
+                    Some(Duration::from_millis(120)),
+                ),
+            )
+            .await
+        });
+
+        agent_peer.write_all(b"GET").await.unwrap();
+        agent_peer.shutdown().await.unwrap();
+
+        let mut request = [0u8; 3];
+        target_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"GET");
+
+        let mut eof_probe = [0u8; 1];
+        assert_eq!(target_peer.read(&mut eof_probe).await.unwrap(), 0);
+
+        target_peer.write_all(b"part-1").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        target_peer.write_all(b"part-2").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        target_peer.write_all(b"part-3").await.unwrap();
+        target_peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        agent_peer.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"part-1part-2part-3");
+
+        let (up_bytes, down_bytes) = tokio::time::timeout(Duration::from_secs(2), relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(up_bytes, 3);
+        assert_eq!(down_bytes, b"part-1part-2part-3".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn relay_does_not_apply_half_close_timeout_before_eof() {
+        let (mut target_relay, mut target_peer) = tokio::io::duplex(1024);
+        let (mut agent_relay, mut agent_peer) = tokio::io::duplex(1024);
+
+        let relay = tokio::spawn(async move {
+            relay_tcp_with_half_close(
+                &mut target_relay,
+                &mut agent_relay,
+                TcpRelayTimeouts::from_durations(
+                    Some(Duration::from_millis(300)),
+                    Some(Duration::from_millis(50)),
+                ),
+            )
+            .await
+        });
+        tokio::pin!(relay);
+
+        agent_peer.write_all(b"PING").await.unwrap();
+        let mut request = [0u8; 4];
+        target_peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"PING");
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(120), &mut relay)
+                .await
+                .is_err()
+        );
+
+        drop(agent_peer);
+        drop(target_peer);
+        let result = tokio::time::timeout(Duration::from_secs(2), &mut relay)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, 4);
+    }
+
+    #[tokio::test]
     async fn relay_activity_does_not_reset_on_flush_without_bytes() {
         let (activity_tx, mut activity_rx) = tokio::sync::watch::channel(());
         activity_rx.borrow_and_update();
         let read_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let mut sink = tokio::io::sink();
-        let mut relay_io =
-            RelayCopyIo::new(&mut sink, "flush-only", activity_tx, read_bytes.clone());
+        let mut relay_io = RelayCopyIo::new(
+            &mut sink,
+            "flush-only",
+            activity_tx,
+            read_bytes.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
 
         relay_io.flush().await.unwrap();
 

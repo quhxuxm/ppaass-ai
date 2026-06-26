@@ -1,21 +1,23 @@
 //! proxy 入站服务层。
 //!
-//! 这一层只关心 agent 到 proxy 的 raw TCP Yamux 外层连接：监听、维护 Yamux session，
-//! 然后把每个子 stream 作为独立的加密 PPAASS 连接交给 `ServerConnection` 处理认证、
-//! CONNECT 和 relay。
+//! 这一层只关心 agent 到 proxy 的入站 TCP 连接：直接 framed TCP 连接会作为一条
+//! 独立的加密 PPAASS 连接处理；Yamux 外层连接会拆出子 stream 后交给同一套
+//! `ServerConnection` 认证、CONNECT 和 relay。
 
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use common::{
-    DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_yamux_tcp_stream,
+    DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_proxy_tcp_stream,
     spawn_guarded,
 };
 use futures::StreamExt;
 use protocol::CompressionMode;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, info, instrument, warn};
@@ -82,9 +84,9 @@ impl ProxyServer {
                                 egress_state: self.egress_state.clone(),
                                 compression_mode: self.config.get_compression_mode(),
                             };
-                            spawn_guarded("proxy yamux session", async move {
+                            spawn_guarded("proxy inbound connection", async move {
                                 if let Err(e) = handle_connection(context, stream).await {
-                                    error!("处理 Yamux session 时出错：{}", e);
+                                    error!("处理 proxy 入站连接时出错：{}", e);
                                 }
                             });
                         }
@@ -109,15 +111,29 @@ async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Res
     if let Err(err) = stream.set_nodelay(true) {
         warn!("设置入站代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
     }
-    if let Err(err) = configure_yamux_tcp_stream(&stream) {
-        debug!("设置入站 Yamux TCP keepalive 失败：{err}");
+    if let Err(err) = configure_proxy_tcp_stream(&stream) {
+        debug!("设置入站代理 TCP keepalive 失败：{err}");
     }
 
-    let settings = context
-        .proxy_config
-        .yamux
-        .merged_settings()
-        .to_tokio_config();
+    let header = match peek_connection_header(
+        &stream,
+        Duration::from_secs(context.proxy_config.auth_timeout_secs.max(1)),
+    )
+    .await
+    {
+        Ok(Some(header)) => header,
+        Ok(None) => return Ok(()),
+        Err(err) => {
+            debug!("读取入站连接首包失败：{err}");
+            return Ok(());
+        }
+    };
+
+    if !looks_like_yamux_header(&header) {
+        return handle_direct_connection(context, stream).await;
+    }
+
+    let settings = context.proxy_config.yamux.settings().to_tokio_config();
     let mut session = Session::new_server(stream, settings);
     let mut stream_tasks = Vec::new();
     let session_idle_timeout = yamux_session_idle_timeout(&context.proxy_config);
@@ -172,6 +188,40 @@ async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Res
     Ok(())
 }
 
+async fn peek_connection_header(
+    stream: &TcpStream,
+    timeout: Duration,
+) -> io::Result<Option<[u8; 4]>> {
+    tokio::time::timeout(timeout, async {
+        let mut header = [0u8; 4];
+        loop {
+            match stream.peek(&mut header).await {
+                Ok(0) => return Ok(None),
+                Ok(n) if n >= header.len() => return Ok(Some(header)),
+                Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "入站连接首包超时")))
+}
+
+fn looks_like_yamux_header(header: &[u8; 4]) -> bool {
+    let version = header[0];
+    let frame_type = header[1];
+    let flags = u16::from_be_bytes([header[2], header[3]]);
+
+    version == 0 && frame_type <= 3 && (flags & !0x000f) == 0
+}
+
+async fn handle_direct_connection(context: ConnectionContext, stream: TcpStream) -> Result<()> {
+    handle_protocol_stream(context, stream, "direct TCP connection").await
+}
+
 fn yamux_session_idle_timeout(config: &ProxyConfig) -> Option<Duration> {
     if config.yamux_session_idle_timeout_secs == 0 {
         None
@@ -181,6 +231,17 @@ fn yamux_session_idle_timeout(config: &ProxyConfig) -> Option<Duration> {
 }
 
 async fn handle_yamux_substream(context: ConnectionContext, stream: StreamHandle) -> Result<()> {
+    handle_protocol_stream(context, stream, "Yamux sub stream").await
+}
+
+async fn handle_protocol_stream<S>(
+    context: ConnectionContext,
+    stream: S,
+    stream_label: &'static str,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
     let ConnectionContext {
         proxy_config,
         user_manager,
@@ -192,14 +253,14 @@ async fn handle_yamux_substream(context: ConnectionContext, stream: StreamHandle
     let mut connection =
         ServerConnection::new(stream, compression_mode, proxy_config.clone(), egress_state);
 
-    // 将认证超时应用到每个 Yamux 子 stream 的认证阶段，防止异常客户端打开子流后悬挂。
+    // 将认证超时应用到每条 framed 连接/每个 Yamux 子 stream 的认证阶段，防止异常客户端悬挂。
     let auth_timeout = std::time::Duration::from_secs(proxy_config.auth_timeout_secs);
     let username = match tokio::time::timeout(auth_timeout, async {
         // 先窥探认证请求以获取用户名
         let username = match connection.peek_auth_username().await {
             Ok(username) => username,
             Err(e) => {
-                error!("从认证请求获取用户名失败：{}", e);
+                error!("从 {stream_label} 认证请求获取用户名失败：{}", e);
                 return Err(e);
             }
         };
@@ -234,7 +295,7 @@ async fn handle_yamux_substream(context: ConnectionContext, stream: StreamHandle
         Ok(Err(e)) => return Err(e),
         Err(_) => {
             warn!(
-                "Yamux 子 stream 在认证阶段超时（{} 秒），正在关闭",
+                "{stream_label} 在认证阶段超时（{} 秒），正在关闭",
                 proxy_config.auth_timeout_secs
             );
             return Ok(());
@@ -266,5 +327,31 @@ async fn abort_stream_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
             Err(err) if err.is_cancelled() => {}
             Err(err) => debug!("Yamux 子 stream 任务回收时返回错误：{err}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_yamux_header;
+
+    #[test]
+    fn recognizes_yamux_data_syn_header() {
+        assert!(looks_like_yamux_header(&[0, 0, 0, 1]));
+    }
+
+    #[test]
+    fn recognizes_yamux_ping_header() {
+        assert!(looks_like_yamux_header(&[0, 2, 0, 1]));
+    }
+
+    #[test]
+    fn rejects_direct_protocol_length_prefix() {
+        assert!(!looks_like_yamux_header(&[0, 0, 1, 44]));
+        assert!(!looks_like_yamux_header(&[0, 0, 4, 0]));
+    }
+
+    #[test]
+    fn rejects_invalid_yamux_flags() {
+        assert!(!looks_like_yamux_header(&[0, 0, 0x10, 0]));
     }
 }

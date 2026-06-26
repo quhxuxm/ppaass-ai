@@ -10,7 +10,7 @@
 
 ## 1. 项目一句话
 
-PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量，通过 raw TCP Yamux 外层连接把每个目标连接放进独立子流；子流内仍然使用 PPAASS 的 Auth/Connect/Data 加密协议。Proxy 做用户认证、出站连接和数据回传。
+PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量；TCP 目标通过独立 framed TCP 连接到 proxy，UDP relay 继续通过 raw TCP Yamux 外层连接承载子流。两种路径内都使用 PPAASS 的 Auth/Connect/Data 加密协议。Proxy 做用户认证、出站连接和数据回传。
 
 核心 workspace：
 
@@ -283,7 +283,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
 - `compression_mode`: `none`、`lz4`、`gzip`、`zstd`。
-- `[yamux.tcp]` / `[yamux.udp]`: Agent 端 TCP relay / UDP relay 的 raw Yamux 最大 session 数、每 session 子流数、窗口等。
+- `[yamux.udp]`: Agent 端 UDP relay 的 raw Yamux 最大 session 数、每 session 子流数、窗口等。TCP relay 不再使用 Yamux session。
 - `[tun]`: TUN 设备、DNS、QUIC、helper、状态文件。
 - `[direct_access]`: `proxy_all`、`direct_all`、`rules`。
 
@@ -297,7 +297,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `users_path`: 用户配置文件。
 - `compression_mode`: Proxy 响应编码使用的压缩模式。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
-- `[yamux.tcp]` / `[yamux.udp]`: Proxy 作为 Yamux acceptor 的子流上限、窗口和超时。Proxy 入口不根据 raw TCP 连接预判 TCP/UDP relay 类型。
+- `[yamux]`: Proxy 作为 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接直接进入 PPAASS 协议处理。
 - `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。

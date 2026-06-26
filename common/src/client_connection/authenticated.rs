@@ -20,7 +20,7 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
 
-use crate::configure_yamux_tcp_socket;
+use crate::configure_proxy_tcp_socket;
 
 use super::config::{BindInterface, ClientConnectionConfig};
 use super::socket_bind::bind_socket_to_interface;
@@ -202,6 +202,16 @@ where
     }
 }
 
+impl AuthenticatedConnection<TcpStream> {
+    pub async fn connect<C>(config: &C) -> Result<Self, std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
+        let stream = connect_tcp_stream(config).await?;
+        Self::authenticate_stream(stream, config).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
@@ -277,7 +287,7 @@ where
             continue;
         }
         tune_proxy_socket(config, &socket, *dst);
-        tune_yamux_socket(&socket, *dst);
+        tune_proxy_keepalive(&socket, *dst);
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
             warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -353,7 +363,7 @@ where
             continue;
         }
         tune_proxy_socket(config, &socket, dst);
-        tune_yamux_socket(&socket, dst);
+        tune_proxy_keepalive(&socket, dst);
         if let Err(e) = socket.set_nonblocking(true) {
             warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -399,8 +409,8 @@ where
     }
 }
 
-fn tune_yamux_socket(socket: &Socket, dst: SocketAddr) {
-    if let Err(err) = configure_yamux_tcp_socket(socket) {
-        debug!("设置代理 Yamux TCP keepalive 失败 (dst={}): {err}", dst);
+fn tune_proxy_keepalive(socket: &Socket, dst: SocketAddr) {
+    if let Err(err) = configure_proxy_tcp_socket(socket) {
+        debug!("设置代理 TCP keepalive 失败 (dst={}): {err}", dst);
     }
 }

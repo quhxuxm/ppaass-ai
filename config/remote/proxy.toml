@@ -70,13 +70,12 @@ async_runtime_stack_size_mb = 2
 auth_timeout_secs = 30
 
 # TCP relay 空闲超时时间，单位秒；建立 CONNECT 后若双向都无数据活动会关闭。
-# SOCKS5/浏览器视频分片如果遇到半死不活的 CDN 连接，0（不限制）会让分片一直挂住；
-# 300 秒可以容忍慢速视频分片并回收异常长连接，让浏览器有机会重试。
-tcp_relay_idle_timeout_secs = 300
+# 活跃下载会持续刷新计时；60 秒用于回收浏览器/模拟器残留的空闲持久连接。
+tcp_relay_idle_timeout_secs = 60
 
-# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。HTTPS/HTTP2 CONNECT 内部响应不可见，避免按空闲截断慢速视频分片。
-# 512M 小内存实例建议保留 idle 回收，避免浏览器长连接长期占用子流和窗口。
-yamux_tcp_relay_idle_timeout_secs = 0
+# TCP relay 进入半关闭后的空闲回收时间，单位秒；agent/browser 已经关闭请求方向后，
+# 若目标侧也没有继续返回数据，则更快释放持久连接。
+tcp_relay_half_close_idle_timeout_secs = 30
 
 # Yamux 外层 session 空闲超时时间，单位秒；无活跃子流时超过该时间会释放 raw TCP 连接。
 yamux_session_idle_timeout_secs = 300
@@ -88,15 +87,8 @@ udp_relay_idle_timeout_secs = 60
 # UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
 udp_relay_channel_size = 64
 
-[yamux.tcp]
-# proxy 端对所有 raw TCP 入站连接直接维护 Yamux session，不判断 TCP/UDP relay 类型。
-max_streams_per_session = 128
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 300
-stream_window_size_kb = 8192
-
-[yamux.udp]
-# 这里影响 UDP relay 子流的 server-side Yamux acceptor 参数。
+[yamux]
+# proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。
 max_streams_per_session = 128
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 300

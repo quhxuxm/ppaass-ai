@@ -257,7 +257,7 @@ impl YamuxSessionManager {
     pub(super) fn yamux_target_size(&self) -> usize {
         match self.yamux_transport {
             TransportProtocol::Udp => self.config.yamux.udp_session_count(),
-            TransportProtocol::Tcp => self.config.yamux.tcp_session_count(),
+            TransportProtocol::Tcp => 0,
         }
     }
 }

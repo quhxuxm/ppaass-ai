@@ -4,8 +4,10 @@ use std::{fs::read_to_string, net::IpAddr, net::SocketAddr, time::Duration};
 
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
-use common::{BindInterface, ClientConnectionConfig, YamuxClientConnection};
-use protocol::{CompressionMode, TransportProtocol};
+use common::{
+    AuthenticatedConnection, BindInterface, ClientConnectionConfig, YamuxClientConnection,
+};
+use protocol::{Address, CompressionMode, TransportProtocol};
 use tracing::instrument;
 
 // 桌面端 agent 到 proxy 的 TCP 缓冲。
@@ -80,11 +82,25 @@ pub(super) async fn new_yamux_connection(
     transport: TransportProtocol,
 ) -> Result<YamuxClientConnection> {
     let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
-    let yamux_settings = match transport {
-        TransportProtocol::Udp => config.yamux.udp_settings(),
-        TransportProtocol::Tcp => config.yamux.tcp_settings(),
-    };
+    let yamux_settings = config.yamux.udp_settings();
     YamuxClientConnection::connect_for(&config_adapter, transport, yamux_settings)
+        .await
+        .map_err(|e| AgentError::Connection(e.to_string()))
+}
+
+#[instrument(skip(config))]
+pub(super) async fn new_direct_tcp_target_stream(
+    config: &AgentConfig,
+    bind_ip: Option<IpAddr>,
+    bind_interface: Option<BindInterface>,
+    address: Address,
+) -> Result<(common::ClientStream, String)> {
+    let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
+    let connection = AuthenticatedConnection::connect(&config_adapter)
+        .await
+        .map_err(|e| AgentError::Connection(e.to_string()))?;
+    connection
+        .connect_to_target(address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
 }

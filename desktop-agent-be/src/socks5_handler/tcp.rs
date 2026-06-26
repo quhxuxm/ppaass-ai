@@ -88,7 +88,7 @@ pub(super) async fn handle_tcp_connect(
         {
             Ok(stream) => {
                 info!(
-                    "通过 Yamux session manager 获取目标流, stream_id: {}",
+                    "通过 proxy session manager 获取目标流, stream_id: {}",
                     stream.stream_id()
                 );
                 stream
@@ -212,13 +212,13 @@ pub(super) async fn handle_tcp_bind(
                 {
                     Ok(stream) => {
                         info!(
-                            "通过 Yamux session manager 获取目标流, stream_id: {}",
+                            "通过 proxy session manager 获取目标流, stream_id: {}",
                             stream.stream_id()
                         );
                         stream
                     }
                     Err(e) => {
-                        error!("通过 Yamux session manager 获取目标流失败: {}", e);
+                        error!("通过 proxy session manager 获取目标流失败: {}", e);
                         return Err(e);
                     }
                 };
@@ -251,8 +251,8 @@ async fn relay_data(
     protocol: &str,
     target: String,
 ) -> Result<()> {
-    // YamuxTargetStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
-    // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为 framed/Yamux
+    // YamuxTargetStream 隐藏 direct framed TCP/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
+    // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为底层传输
     // 分叉不同 flush 或半关闭策略，避免同一视频分片在不同入口表现不一致。
     let mut proxy_io = connected_stream.into_async_io();
 

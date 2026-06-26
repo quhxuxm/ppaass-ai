@@ -66,10 +66,12 @@ impl ServerConnection {
                 )
                 .await?;
 
-                let (yamux_connection, mut stream) = upstream_conn.into_parts();
+                let mut upstream_conn = upstream_conn;
                 // 上游连接也是一个 AsyncRead/AsyncWrite，复用普通 TCP 中继逻辑。
-                let relay_result = self.relay(connect_request.request_id, &mut stream).await;
-                yamux_connection.close().await;
+                let relay_result = self
+                    .relay(connect_request.request_id, &mut upstream_conn)
+                    .await;
+                upstream_conn.close().await;
                 relay_result?;
             }
             Err(e) => {

@@ -1,8 +1,8 @@
 //! 本地 HTTP 代理入口。
 //!
 //! HTTP CONNECT 会升级成裸 TCP 隧道，普通 HTTP 请求则通过 hyper client 转发。
-//! 两条路径都会先由 `DirectAccessChecker` 判定是否直连；否则通过 `YamuxSessionManager`
-//! 取得 agent->proxy 的目标流。
+//! 两条路径都会先由 `DirectAccessChecker` 判定是否直连；否则通过 proxy session
+//! manager 取得 agent->proxy 的目标流。
 
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
@@ -75,7 +75,7 @@ pub async fn handle_http_connection(
     let sessions_clone = sessions.clone();
     let checker_clone = direct_checker.clone();
 
-    // 每个 HTTP 请求都共享 Yamux session 管理器和直连规则，service_fn 只做轻量克隆。
+    // 每个 HTTP 请求都共享 proxy session 管理器和直连规则，service_fn 只做轻量克隆。
     let service = service_fn(move |req| {
         let sessions = sessions_clone.clone();
         let checker = checker_clone.clone();
@@ -187,7 +187,7 @@ async fn handle_connect(
         {
             Ok(stream) => {
                 debug!(
-                    "通过 Yamux session manager 获取目标流, stream_id: {}",
+                    "通过 proxy session manager 获取目标流, stream_id: {}",
                     stream.stream_id()
                 );
                 stream
@@ -237,8 +237,8 @@ async fn tunnel(
     target: String,
 ) -> std::result::Result<(), AgentError> {
     // HTTP CONNECT、SOCKS、TUN 的 TCP 字节流统一走 copy_bidirectional。
-    // legacy DataPacket 和 Yamux 都先通过 YamuxTargetStream 转成 AsyncRead/AsyncWrite，
-    // 调用点不再按 framed/Yamux 分支切换不同 relay 语义。
+    // direct framed TCP 和 Yamux 都先通过 YamuxTargetStream 转成 AsyncRead/AsyncWrite，
+    // 调用点不再按底层传输分支切换不同 relay 语义。
     let mut client_io = TokioIo::new(upgraded);
     let mut proxy_io = connected_stream.into_async_io();
 
@@ -344,7 +344,7 @@ async fn handle_regular_request(
     if let Ok(new_uri) = Uri::from_str(path) {
         *req.uri_mut() = new_uri;
     }
-    // 每个普通 HTTP proxy 请求都会创建一条独立的目标连接/Yamux 子流。
+    // 每个普通 HTTP proxy 请求都会创建一条独立的目标连接。
     // 显式关闭上游 keep-alive，避免 per-request 子流被误当成可复用连接。
     req.headers_mut()
         .insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
@@ -418,7 +418,7 @@ async fn handle_regular_request(
         {
             Ok(stream) => stream,
             Err(e) => {
-                error!("通过 Yamux session manager 获取目标流失败: {}", e);
+                error!("通过 proxy session manager 获取目标流失败: {}", e);
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
                     .body(boxed(

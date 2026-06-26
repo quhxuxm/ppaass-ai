@@ -1,10 +1,17 @@
-/// 到上游代理的连接
-/// 作为客户端（Agent）连接到下一跳
+/// 到上游代理的连接。
+/// 作为客户端连接到下一跳：TCP 使用 direct framed TCP，UDP 继续使用 Yamux。
 use crate::config::ProxyConfig;
 use crate::error::{ProxyError, Result};
-use common::{ClientConnectionConfig, YamuxClientConnection, YamuxClientStream};
+use common::{
+    AuthenticatedConnection, ClientConnectionConfig, ClientStream, YamuxClientConnection,
+    YamuxClientStream,
+};
 use protocol::{Address, TransportProtocol};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{fmt::Debug, fs::read_to_string, time::Duration};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 use tracing::debug;
 
 /// ClientConnection 特征的配置适配器
@@ -79,8 +86,15 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
 
 /// 到上游代理的连接
 pub struct UpstreamConnection {
-    yamux_connection: YamuxClientConnection,
-    stream: YamuxClientStream,
+    kind: UpstreamConnectionKind,
+}
+
+enum UpstreamConnectionKind {
+    Direct(ClientStream<TcpStream>),
+    Yamux {
+        connection: YamuxClientConnection,
+        stream: YamuxClientStream,
+    },
 }
 
 impl UpstreamConnection {
@@ -90,17 +104,27 @@ impl UpstreamConnection {
         target_address: Address,
         transport: TransportProtocol,
     ) -> Result<Self> {
-        // proxy 在转发模式下也作为 raw Yamux 客户端连接下一跳 proxy。
+        // proxy 在转发模式下也作为客户端连接下一跳 proxy。
         let config_adapter = ProxyClientConfig::new(config)?;
 
         debug!("正在连接上游代理");
 
-        let yamux_settings = match transport {
-            TransportProtocol::Tcp => config.yamux.tcp_settings(),
-            TransportProtocol::Udp => config.yamux.udp_settings(),
-        };
+        if transport == TransportProtocol::Tcp {
+            let connection = AuthenticatedConnection::connect(&config_adapter)
+                .await
+                .map_err(|e| ProxyError::Connection(e.to_string()))?;
+            let (stream, _request_id) = connection
+                .connect_to_target(target_address, transport)
+                .await
+                .map_err(|e| ProxyError::Connection(e.to_string()))?;
+
+            return Ok(Self {
+                kind: UpstreamConnectionKind::Direct(stream),
+            });
+        }
+
         let yamux_connection =
-            YamuxClientConnection::connect_for(&config_adapter, transport, yamux_settings)
+            YamuxClientConnection::connect_for(&config_adapter, transport, config.yamux.settings())
                 .await
                 .map_err(|e| ProxyError::Connection(e.to_string()))?;
         let (stream, _request_id) = yamux_connection
@@ -109,13 +133,58 @@ impl UpstreamConnection {
             .map_err(|e| ProxyError::Connection(e.to_string()))?;
 
         Ok(Self {
-            yamux_connection,
-            stream,
+            kind: UpstreamConnectionKind::Yamux {
+                connection: yamux_connection,
+                stream,
+            },
         })
     }
 
-    /// 转换为 Yamux 连接和业务子流；调用方在 relay 结束后关闭外层 session。
-    pub fn into_parts(self) -> (YamuxClientConnection, YamuxClientStream) {
-        (self.yamux_connection, self.stream)
+    pub async fn close(self) {
+        if let UpstreamConnectionKind::Yamux { connection, .. } = self.kind {
+            connection.close().await;
+        }
     }
 }
+
+impl AsyncRead for UpstreamConnection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut self.kind {
+            UpstreamConnectionKind::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
+            UpstreamConnectionKind::Yamux { stream, .. } => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for UpstreamConnection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut self.kind {
+            UpstreamConnectionKind::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
+            UpstreamConnectionKind::Yamux { stream, .. } => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut self.kind {
+            UpstreamConnectionKind::Direct(stream) => Pin::new(stream).poll_flush(cx),
+            UpstreamConnectionKind::Yamux { stream, .. } => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut self.kind {
+            UpstreamConnectionKind::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
+            UpstreamConnectionKind::Yamux { stream, .. } => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+impl Unpin for UpstreamConnection {}

@@ -55,13 +55,12 @@ pub async fn run_android_agent(
     let quic_policy = config.tun.effective_quic_policy();
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp_yamux_sessions={}, udp_yamux_sessions={}",
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp=direct-framed, udp_yamux_sessions={}",
         config.tun.ipv4,
         config.tun.ipv6,
         mtu,
         proxy_dns,
         quic_policy,
-        config.yamux.tcp_session_count(),
         config.yamux.udp_session_count()
     );
     info!(
@@ -72,10 +71,8 @@ pub async fn run_android_agent(
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_sessions =
-        AndroidYamuxSessionManager::new(config.clone(), shutdown.clone(), "tcp_yamux_sessions");
-    let udp_sessions =
-        AndroidYamuxSessionManager::new(config.clone(), shutdown.clone(), "udp_yamux_sessions");
+    let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config.clone(), shutdown.clone());
+    let udp_sessions = AndroidYamuxSessionManager::new_udp(config.clone(), shutdown.clone());
     let context = ForwardContext {
         tcp_sessions,
         udp_sessions,

@@ -35,8 +35,7 @@ pub async fn run_android_http_proxy(
     let listener = bind_tcp_listener_with_backlog(bind_addr, DEFAULT_TCP_LISTEN_BACKLOG)?;
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_sessions =
-        AndroidYamuxSessionManager::new(config, shutdown.clone(), "tcp_yamux_sessions");
+    let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config, shutdown.clone());
 
     info!("Android HTTP proxy listening on {bind_addr}");
     android_log::info(format!("Android HTTP proxy listening on {bind_addr}"));

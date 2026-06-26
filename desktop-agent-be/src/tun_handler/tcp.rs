@@ -3,7 +3,7 @@
 //! netstack 把系统 IP 包还原成 `TcpStream` 后进入这里。处理顺序是：
 //! 1. 过滤 TUN 自身网段和 proxy DNS 特例；
 //! 2. 用 IP/CIDR 和 DNS proxy 缓存判断是否直连；
-//! 3. 命中直连则连真实目标，否则从 TCP Yamux session manager 打开目标流并双向中继。
+//! 3. 命中直连则连真实目标，否则从 proxy session manager 打开目标流并双向中继。
 
 use super::TunForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
@@ -123,7 +123,7 @@ pub(super) async fn handle_tun_tcp(
         return Ok(());
     }
 
-    // 默认路径通过 Yamux session manager 获取已认证 proxy 流，再做双向拷贝。
+    // 默认路径通过 proxy session manager 获取已认证 proxy 流，再做双向拷贝。
     if proxy_dns_request {
         debug!("TUN TCP DNS -> 代理 -> {}", target_label);
     } else {

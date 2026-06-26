@@ -79,11 +79,11 @@ pub struct ProxyConfig {
     #[serde(default = "default_tcp_relay_idle_timeout_secs")]
     pub tcp_relay_idle_timeout_secs: u64,
 
-    /// Yamux TCP 子流空闲超时时间（秒）。
-    /// 0 表示不限制。HTTPS/HTTP2 CONNECT 中 proxy 看不到单个响应的 Content-Length，
-    /// 提前按空闲关闭会截断慢速视频分片；默认不限制，等真实 TCP/Yamux EOF 收尾。
-    #[serde(default = "default_yamux_tcp_relay_idle_timeout_secs")]
-    pub yamux_tcp_relay_idle_timeout_secs: u64,
+    /// TCP relay 进入半关闭后的空闲回收时间（秒）。
+    /// 浏览器/agent 请求方向已结束后，HTTPS/HTTP2 目标连接可能长时间不发 EOF；
+    /// 这个值用于在响应方向也无活动时更快回收连接，0 表示回退到普通 TCP idle。
+    #[serde(default = "default_tcp_relay_half_close_idle_timeout_secs")]
+    pub tcp_relay_half_close_idle_timeout_secs: u64,
 
     /// 认证超时时间（秒）- 未在该时间内完成认证握手的连接将被关闭。
     /// 这可以防止 agent 通过 TCP 建连后从未发送认证请求造成僵尸连接
@@ -125,11 +125,11 @@ fn default_connect_timeout_secs() -> u64 {
 }
 
 fn default_tcp_relay_idle_timeout_secs() -> u64 {
-    300
+    60
 }
 
-fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
-    0
+fn default_tcp_relay_half_close_idle_timeout_secs() -> u64 {
+    30
 }
 
 fn default_yamux_session_idle_timeout_secs() -> u64 {
@@ -176,17 +176,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yamux_tcp_relay_idle_timeout_defaults_to_no_forced_cutoff() {
+    fn tcp_relay_idle_timeout_defaults_to_recycle_stalled_streams() {
         let config: ProxyConfig = toml::from_str(
             r#"
-listen_addr = "127.0.0.1:0"
-tcp_relay_idle_timeout_secs = 300
-"#,
+	listen_addr = "127.0.0.1:0"
+	tcp_relay_idle_timeout_secs = 60
+	"#,
         )
         .unwrap();
 
-        assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
-        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 0);
+        assert_eq!(config.tcp_relay_idle_timeout_secs, 60);
+        assert_eq!(config.tcp_relay_half_close_idle_timeout_secs, 30);
         assert_eq!(config.yamux_session_idle_timeout_secs, 300);
     }
 

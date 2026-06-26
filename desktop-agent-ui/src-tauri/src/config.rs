@@ -19,8 +19,6 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("wintun.dll", "wintun.dll"),
 ];
 
-// TCP Yamux 保持保守默认值；外层连接过多会增加 agent<->proxy 侧竞争。
-const DEFAULT_TCP_YAMUX_SESSIONS: u64 = 5;
 // UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
 const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
 
@@ -194,52 +192,28 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         log_file: string_or(&value, &["log_file"], "desktop-agent.log"),
         runtime_threads,
         effective_runtime_threads: runtime_threads.unwrap_or_else(default_runtime_threads),
-        tcp_yamux_sessions: int_at(&value, &["yamux", "tcp", "sessions"])
-            .unwrap_or(DEFAULT_TCP_YAMUX_SESSIONS) as usize,
         udp_yamux_sessions: int_at(&value, &["yamux", "udp", "sessions"])
             .unwrap_or(DEFAULT_UDP_YAMUX_SESSIONS) as usize,
-        tcp_yamux_max_streams_per_session: int_at(
-            &value,
-            &["yamux", "tcp", "max_streams_per_session"],
-        )
-        .unwrap_or(256) as usize,
         udp_yamux_max_streams_per_session: int_at(
             &value,
             &["yamux", "udp", "max_streams_per_session"],
         )
         .unwrap_or(256) as usize,
-        tcp_yamux_open_stream_timeout_secs: int_at(
-            &value,
-            &["yamux", "tcp", "open_stream_timeout_secs"],
-        )
-        .unwrap_or(10),
         udp_yamux_open_stream_timeout_secs: int_at(
             &value,
             &["yamux", "udp", "open_stream_timeout_secs"],
         )
         .unwrap_or(10),
-        tcp_yamux_keepalive_interval_secs: int_at(
-            &value,
-            &["yamux", "tcp", "keepalive_interval_secs"],
-        )
-        .unwrap_or(30),
         udp_yamux_keepalive_interval_secs: int_at(
             &value,
             &["yamux", "udp", "keepalive_interval_secs"],
         )
         .unwrap_or(30),
-        tcp_yamux_connection_write_timeout_secs: int_at(
-            &value,
-            &["yamux", "tcp", "connection_write_timeout_secs"],
-        )
-        .unwrap_or(10),
         udp_yamux_connection_write_timeout_secs: int_at(
             &value,
             &["yamux", "udp", "connection_write_timeout_secs"],
         )
         .unwrap_or(10),
-        tcp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "tcp", "stream_window_size_kb"])
-            .unwrap_or(8192) as usize,
         udp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "udp", "stream_window_size_kb"])
             .unwrap_or(8192) as usize,
         tun_enabled: bool_at(&value, &["tun", "enabled"]).unwrap_or(false),
@@ -579,21 +553,13 @@ mod tests {
     }
 
     #[test]
-    fn summarize_config_preserves_yamux_transport_settings() {
+    fn summarize_config_preserves_udp_yamux_settings() {
         let summary = summarize_config(
             r#"
 listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-
-[yamux.tcp]
-sessions = 2
-max_streams_per_session = 64
-open_stream_timeout_secs = 7
-keepalive_interval_secs = 11
-connection_write_timeout_secs = 13
-stream_window_size_kb = 768
 
 [yamux.udp]
 sessions = 3
@@ -606,17 +572,11 @@ stream_window_size_kb = 1024
         )
         .unwrap();
 
-        assert_eq!(summary.tcp_yamux_sessions, 2);
         assert_eq!(summary.udp_yamux_sessions, 3);
-        assert_eq!(summary.tcp_yamux_max_streams_per_session, 64);
         assert_eq!(summary.udp_yamux_max_streams_per_session, 32);
-        assert_eq!(summary.tcp_yamux_open_stream_timeout_secs, 7);
         assert_eq!(summary.udp_yamux_open_stream_timeout_secs, 5);
-        assert_eq!(summary.tcp_yamux_keepalive_interval_secs, 11);
         assert_eq!(summary.udp_yamux_keepalive_interval_secs, 0);
-        assert_eq!(summary.tcp_yamux_connection_write_timeout_secs, 13);
         assert_eq!(summary.udp_yamux_connection_write_timeout_secs, 9);
-        assert_eq!(summary.tcp_yamux_stream_window_size_kb, 768);
         assert_eq!(summary.udp_yamux_stream_window_size_kb, 1024);
     }
 

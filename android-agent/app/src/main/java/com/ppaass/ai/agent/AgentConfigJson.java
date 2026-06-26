@@ -27,8 +27,7 @@ final class AgentConfigJson {
                 .put("proxy_dns", true)
                 .put("quic_policy", quicPolicy);
         JSONObject yamuxJson = new JSONObject()
-                .put("tcp", buildYamuxTransportJson(prefs, true))
-                .put("udp", buildYamuxTransportJson(prefs, false));
+                .put("udp", buildUdpYamuxTransportJson(prefs));
         JSONObject directAccessJson = new JSONObject()
                 .put("mode", normalizeDirectAccessMode(
                         prefs.getString("direct_access_mode", DefaultConfig.DIRECT_ACCESS_MODE)))
@@ -62,26 +61,14 @@ final class AgentConfigJson {
                         DefaultConfig.HTTP_PROXY_THREADS));
     }
 
-    private static JSONObject buildYamuxTransportJson(SharedPreferences prefs, boolean tcp) throws JSONException {
-        String prefix = tcp ? "yamux_tcp_" : "yamux_udp_";
-        int defaultSessions = tcp
-                ? DefaultConfig.TCP_YAMUX_SESSIONS
-                : DefaultConfig.UDP_YAMUX_SESSIONS;
-        int defaultMaxStreams = tcp
-                ? DefaultConfig.TCP_YAMUX_MAX_STREAMS_PER_SESSION
-                : DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION;
-        int defaultOpenTimeout = tcp
-                ? DefaultConfig.TCP_YAMUX_OPEN_STREAM_TIMEOUT_SECS
-                : DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS;
-        int defaultKeepalive = tcp
-                ? DefaultConfig.TCP_YAMUX_KEEPALIVE_INTERVAL_SECS
-                : DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS;
-        int defaultWriteTimeout = tcp
-                ? DefaultConfig.TCP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS
-                : DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS;
-        int defaultWindowSize = tcp
-                ? DefaultConfig.TCP_YAMUX_STREAM_WINDOW_SIZE_KB
-                : DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB;
+    private static JSONObject buildUdpYamuxTransportJson(SharedPreferences prefs) throws JSONException {
+        String prefix = "yamux_udp_";
+        int defaultSessions = DefaultConfig.UDP_YAMUX_SESSIONS;
+        int defaultMaxStreams = DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION;
+        int defaultOpenTimeout = DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS;
+        int defaultKeepalive = DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS;
+        int defaultWriteTimeout = DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS;
+        int defaultWindowSize = DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB;
 
         return new JSONObject()
                 .put("sessions", parsePositiveInt(
