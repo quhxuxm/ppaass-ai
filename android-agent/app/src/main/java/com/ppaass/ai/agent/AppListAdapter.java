@@ -23,8 +23,8 @@ final class AppListAdapter extends BaseAdapter {
     private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
     private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
     private static final int COLOR_BORDER = Color.rgb(226, 232, 240);
-    private static final int COLOR_ACCENT_DARK = Color.rgb(29, 78, 216);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(219, 234, 254);
+    private static final int COLOR_ACCENT_DARK = Color.rgb(18, 128, 119);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(207, 244, 237);
 
     private final Context context;
     private final List<AppEntry> apps;

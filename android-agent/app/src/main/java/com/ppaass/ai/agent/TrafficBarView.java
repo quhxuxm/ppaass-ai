@@ -12,8 +12,8 @@ final class TrafficBarView extends View {
     private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
     private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
     private static final int COLOR_BORDER = Color.rgb(226, 232, 240);
-    private static final int COLOR_ACCENT = Color.rgb(37, 99, 235);
-    private static final int COLOR_ACTION_START = Color.rgb(15, 118, 110);
+    private static final int COLOR_ACCENT = Color.rgb(93, 166, 162);
+    private static final int COLOR_UPLOAD = Color.rgb(202, 139, 42);
 
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -53,7 +53,7 @@ final class TrafficBarView extends View {
         float chartHeight = Math.max(dp(48), bottom - top);
 
         drawLegend(canvas, right - dp(146), dp(10), COLOR_ACCENT, "下载");
-        drawLegend(canvas, right - dp(76), dp(10), COLOR_ACTION_START, "上传");
+        drawLegend(canvas, right - dp(76), dp(10), COLOR_UPLOAD, "上传");
 
         for (int i = 0; i < 3; i++) {
             float y = top + chartHeight * i / 2f;
@@ -70,10 +70,10 @@ final class TrafficBarView extends View {
             float x = left + i * (groupWidth + gap);
             drawTrafficBar(canvas, downloadValues[i], max, x, bottom, chartHeight,
                     barWidth,
-                    highlighted ? COLOR_ACCENT : Color.rgb(147, 197, 253));
+                    highlighted ? COLOR_ACCENT : Color.rgb(202, 238, 232));
             drawTrafficBar(canvas, uploadValues[i], max, x + barWidth + barGap, bottom, chartHeight,
                     barWidth,
-                    highlighted ? COLOR_ACTION_START : Color.rgb(94, 234, 212));
+                    highlighted ? COLOR_UPLOAD : Color.rgb(248, 226, 184));
         }
 
         canvas.drawText("00", left + barWidth / 2f, height - dp(6), textPaint);

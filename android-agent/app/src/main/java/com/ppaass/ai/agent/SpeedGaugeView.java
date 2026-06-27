@@ -13,7 +13,7 @@ final class SpeedGaugeView extends View {
     private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
     private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
     private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
-    private static final int COLOR_ACCENT = Color.rgb(37, 99, 235);
+    private static final int COLOR_ACCENT = Color.rgb(45, 170, 158);
 
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
