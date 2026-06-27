@@ -125,6 +125,11 @@ protected final List<Button> screenTabButtons = new ArrayList<>();
 protected final List<View> screenPages = new ArrayList<>();
 protected final List<Button> configTabButtons = new ArrayList<>();
 protected final List<View> configTabPages = new ArrayList<>();
+protected int selectedScreenIndex;
+protected float screenSwipeStartX;
+protected float screenSwipeStartY;
+protected boolean screenSwipeTracking;
+protected VelocityTracker screenSwipeVelocityTracker;
 protected final Handler statusHandler = new Handler(Looper.getMainLooper());
 protected final Runnable statusRefresh = new Runnable() {
         @Override

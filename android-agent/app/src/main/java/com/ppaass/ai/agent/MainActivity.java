@@ -80,6 +80,12 @@ public class MainActivity extends MainActivityScreens {
         }
     }
 
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        handleScreenSwipeEvent(event);
+        return super.dispatchTouchEvent(event);
+    }
+
     @SuppressWarnings("deprecation")
     private void configureWindow() {
         getWindow().setStatusBarColor(COLOR_BACKGROUND);

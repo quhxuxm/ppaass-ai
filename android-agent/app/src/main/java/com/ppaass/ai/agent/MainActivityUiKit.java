@@ -244,16 +244,100 @@ protected void addScreenTab(LinearLayout tabBar, String title, View page) {
     }
 
 protected void selectScreen(int selectedIndex) {
+        if (screenPages.isEmpty()) {
+            selectedScreenIndex = 0;
+            return;
+        }
+        int boundedIndex = Math.max(0, Math.min(selectedIndex, screenPages.size() - 1));
+        selectedScreenIndex = boundedIndex;
         for (int i = 0; i < screenPages.size(); i++) {
-            screenPages.get(i).setVisibility(i == selectedIndex ? View.VISIBLE : View.GONE);
+            screenPages.get(i).setVisibility(i == boundedIndex ? View.VISIBLE : View.GONE);
         }
         for (int i = 0; i < screenTabButtons.size(); i++) {
             Button button = screenTabButtons.get(i);
-            boolean selected = i == selectedIndex;
+            boolean selected = i == boundedIndex;
             button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
             button.setBackground(rounded(
                     selected ? COLOR_SURFACE : COLOR_CONTROL,
                     selected ? COLOR_SURFACE : COLOR_CONTROL));
+        }
+    }
+
+protected void handleScreenSwipeEvent(MotionEvent event) {
+        if (screenPages.size() < 2) {
+            resetScreenSwipe();
+            return;
+        }
+
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            resetScreenSwipe();
+            screenSwipeTracking = true;
+            screenSwipeStartX = event.getRawX();
+            screenSwipeStartY = event.getRawY();
+            screenSwipeVelocityTracker = VelocityTracker.obtain();
+            screenSwipeVelocityTracker.addMovement(event);
+            return;
+        }
+
+        if (!screenSwipeTracking) {
+            return;
+        }
+
+        if (screenSwipeVelocityTracker != null) {
+            screenSwipeVelocityTracker.addMovement(event);
+        }
+
+        if (action == MotionEvent.ACTION_MOVE) {
+            float dx = event.getRawX() - screenSwipeStartX;
+            float dy = event.getRawY() - screenSwipeStartY;
+            int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+            if (Math.abs(dy) > touchSlop && Math.abs(dy) > Math.abs(dx)) {
+                resetScreenSwipe();
+            }
+            return;
+        }
+
+        if (action == MotionEvent.ACTION_UP) {
+            maybeSelectScreenFromSwipe(
+                    event.getRawX() - screenSwipeStartX,
+                    event.getRawY() - screenSwipeStartY);
+            resetScreenSwipe();
+            return;
+        }
+
+        if (action == MotionEvent.ACTION_CANCEL) {
+            resetScreenSwipe();
+        }
+    }
+
+private void maybeSelectScreenFromSwipe(float dx, float dy) {
+        float absDx = Math.abs(dx);
+        float absDy = Math.abs(dy);
+        if (absDx <= absDy * 1.35f) {
+            return;
+        }
+
+        float velocityX = 0f;
+        if (screenSwipeVelocityTracker != null) {
+            screenSwipeVelocityTracker.computeCurrentVelocity(1000);
+            velocityX = screenSwipeVelocityTracker.getXVelocity();
+        }
+
+        boolean distanceSwipe = absDx >= dp(72);
+        boolean flingSwipe = absDx >= dp(36) && Math.abs(velocityX) >= dp(420);
+        if (!distanceSwipe && !flingSwipe) {
+            return;
+        }
+
+        selectScreen(selectedScreenIndex + (dx < 0 ? 1 : -1));
+    }
+
+private void resetScreenSwipe() {
+        screenSwipeTracking = false;
+        if (screenSwipeVelocityTracker != null) {
+            screenSwipeVelocityTracker.recycle();
+            screenSwipeVelocityTracker = null;
         }
     }
 
