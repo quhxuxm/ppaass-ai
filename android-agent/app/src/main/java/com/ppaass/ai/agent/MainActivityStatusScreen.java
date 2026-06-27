@@ -152,12 +152,12 @@ protected void buildStatusScreen(LinearLayout root) {
 protected void buildHttpProxyPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
         sectionTitle(panel, "HTTP Proxy");
-        TextView subtitle = mutedText("Wi-Fi 设备或 USB 网络共享的电脑可将代理指向 Android", 13f);
+        TextView subtitle = mutedText("Wi-Fi、热点或 USB 网络共享的电脑可将代理指向 Android", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
 
-        TextView wifiTitle = controlLabel("Wi-Fi 地址");
+        TextView wifiTitle = controlLabel("Wi-Fi / 热点地址");
         panel.addView(wifiTitle, labelParams());
 
         LinearLayout endpointBox = new LinearLayout(this);
@@ -183,7 +183,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         panel.addView(endpointBox, matchWrap());
         updateHttpProxyEndpoint();
 
-        TextView hint = mutedText("同一 Wi-Fi 下的设备使用上方地址", 12f);
+        TextView hint = mutedText("同一 Wi-Fi 或手机热点下的设备使用上方地址", 12f);
         LinearLayout.LayoutParams hintParams = matchWrap();
         hintParams.setMargins(0, dp(6), 0, 0);
         panel.addView(hint, hintParams);

@@ -24,7 +24,7 @@ import java.util.*;
 // HTTP Proxy 入口地址集中在这里，避免状态页和运行时逻辑互相拖长。
 abstract class MainActivityHttpProxyAccess extends MainActivityDnsPanel {
 
-protected void updateHttpProxyEndpoint() {
+    protected void updateHttpProxyEndpoint() {
         updateHttpProxyUsbAccess();
         if (httpProxyEndpointList == null) {
             return;
@@ -32,21 +32,29 @@ protected void updateHttpProxyEndpoint() {
         httpProxyEndpointList.removeAllViews();
         String port = String.valueOf(httpProxyListenPort());
         WifiAddresses wifiAddresses = currentWifiIpv4Addresses();
-        if (!wifiAddresses.connected) {
-            addHttpProxyEndpointLine(httpProxyEndpointList, "当前不在 Wi-Fi 下", true);
-            return;
+        List<String> addresses = new ArrayList<>(wifiAddresses.addresses);
+        for (String hotspotAddress : currentWifiHotspotIpv4Addresses()) {
+            if (!addresses.contains(hotspotAddress)) {
+                addresses.add(hotspotAddress);
+            }
         }
-        if (wifiAddresses.addresses.isEmpty()) {
+        Collections.sort(addresses);
+
+        if (addresses.isEmpty() && wifiAddresses.connected) {
             addHttpProxyEndpointLine(httpProxyEndpointList, "当前 Wi-Fi 未获取到可访问 IPv4 地址", true);
             return;
         }
+        if (addresses.isEmpty()) {
+            addHttpProxyEndpointLine(httpProxyEndpointList, "当前不在 Wi-Fi 下，且未检测到热点地址", true);
+            return;
+        }
 
-        for (String address : wifiAddresses.addresses) {
+        for (String address : addresses) {
             addHttpProxyEndpointLine(httpProxyEndpointList, address + ":" + port, false);
         }
     }
 
-protected void updateHttpProxyUsbAccess() {
+    protected void updateHttpProxyUsbAccess() {
         if (httpProxyUsbEndpointList == null) {
             return;
         }
@@ -75,7 +83,7 @@ protected void updateHttpProxyUsbAccess() {
         updateHttpProxyUsbHint("电脑浏览器代理填上方地址，无需额外工具");
     }
 
-protected void handleHttpProxyUsbAction() {
+    protected void handleHttpProxyUsbAction() {
         List<String> addresses = currentUsbTetherIpv4Addresses();
         if (addresses.isEmpty()) {
             openUsbTetherSettings();
@@ -84,7 +92,7 @@ protected void handleHttpProxyUsbAction() {
         copyHttpProxyUsbEndpoint(addresses.get(0) + ":" + httpProxyListenPort());
     }
 
-protected void copyHttpProxyUsbEndpoint(String endpoint) {
+    protected void copyHttpProxyUsbEndpoint(String endpoint) {
         android.content.ClipboardManager clipboard =
                 (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard == null) {
@@ -97,7 +105,7 @@ protected void copyHttpProxyUsbEndpoint(String endpoint) {
         Toast.makeText(this, "已复制 USB 代理地址", Toast.LENGTH_SHORT).show();
     }
 
-protected void openUsbTetherSettings() {
+    protected void openUsbTetherSettings() {
         Intent intent = new Intent("android.settings.TETHER_SETTINGS");
         try {
             startActivity(intent);
@@ -106,20 +114,20 @@ protected void openUsbTetherSettings() {
         }
     }
 
-protected void updateHttpProxyUsbHint(String text) {
+    protected void updateHttpProxyUsbHint(String text) {
         if (httpProxyUsbHint != null) {
             httpProxyUsbHint.setText(text);
         }
     }
 
-protected void updateHttpProxyUsbAction(String text) {
+    protected void updateHttpProxyUsbAction(String text) {
         if (httpProxyUsbActionButton != null) {
             httpProxyUsbActionButton.setText(text);
             httpProxyUsbActionButton.setEnabled(true);
         }
     }
 
-protected boolean isUsbCableConnected() {
+    protected boolean isUsbCableConnected() {
         Intent status = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (status == null) {
             return false;
@@ -128,7 +136,7 @@ protected boolean isUsbCableConnected() {
         return (plugged & BatteryManager.BATTERY_PLUGGED_USB) != 0;
     }
 
-protected List<String> currentUsbTetherIpv4Addresses() {
+    protected List<String> currentUsbTetherIpv4Addresses() {
         List<String> addresses = new ArrayList<>();
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
@@ -146,7 +154,7 @@ protected List<String> currentUsbTetherIpv4Addresses() {
         return addresses;
     }
 
-protected boolean hasConfiguredUsbTetherAddress() {
+    protected boolean hasConfiguredUsbTetherAddress() {
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces != null && interfaces.hasMoreElements()) {
@@ -169,7 +177,7 @@ protected boolean hasConfiguredUsbTetherAddress() {
         return false;
     }
 
-protected void collectUsbTetherAddresses(NetworkInterface networkInterface, List<String> addresses) {
+    protected void collectUsbTetherAddresses(NetworkInterface networkInterface, List<String> addresses) {
         Enumeration<InetAddress> inetAddresses = networkInterface.getInetAddresses();
         while (inetAddresses.hasMoreElements()) {
             InetAddress address = inetAddresses.nextElement();
@@ -183,7 +191,7 @@ protected void collectUsbTetherAddresses(NetworkInterface networkInterface, List
         }
     }
 
-protected boolean isUsbTetherInterface(String interfaceName) {
+    protected boolean isUsbTetherInterface(String interfaceName) {
         if (interfaceName == null) {
             return false;
         }
@@ -194,7 +202,7 @@ protected boolean isUsbTetherInterface(String interfaceName) {
                 || name.startsWith("ecm");
     }
 
-protected boolean isDisplayableUsbTetherAddress(Inet4Address address) {
+    protected boolean isDisplayableUsbTetherAddress(Inet4Address address) {
         if (address.isAnyLocalAddress()
                 || address.isLoopbackAddress()
                 || address.isLinkLocalAddress()
@@ -205,7 +213,52 @@ protected boolean isDisplayableUsbTetherAddress(Inet4Address address) {
         return !isAgentTunAddress(hostAddress) && !isAndroidEmulatorNatAddress(hostAddress);
     }
 
-protected void addHttpProxyEndpointLine(LinearLayout target, String text, boolean message) {
+    protected List<String> currentWifiHotspotIpv4Addresses() {
+        List<String> addresses = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp()
+                        || !isWifiHotspotInterface(networkInterface.getName())) {
+                    continue;
+                }
+                collectWifiHotspotAddresses(networkInterface, addresses);
+            }
+        } catch (SocketException ignored) {
+            addresses.clear();
+        }
+        return addresses;
+    }
+
+    protected void collectWifiHotspotAddresses(NetworkInterface networkInterface, List<String> addresses) {
+        Enumeration<InetAddress> inetAddresses = networkInterface.getInetAddresses();
+        while (inetAddresses.hasMoreElements()) {
+            InetAddress address = inetAddresses.nextElement();
+            if (address instanceof Inet4Address
+                    && isDisplayableWifiAddress((Inet4Address) address)) {
+                String hostAddress = address.getHostAddress();
+                if (!addresses.contains(hostAddress)) {
+                    addresses.add(hostAddress);
+                }
+            }
+        }
+    }
+
+    protected boolean isWifiHotspotInterface(String interfaceName) {
+        if (interfaceName == null) {
+            return false;
+        }
+        String name = interfaceName.toLowerCase(Locale.US);
+        return name.startsWith("ap")
+                || name.startsWith("br")
+                || name.startsWith("swlan")
+                || name.startsWith("softap")
+                || name.startsWith("wifi")
+                || name.startsWith("wlan");
+    }
+
+    protected void addHttpProxyEndpointLine(LinearLayout target, String text, boolean message) {
         if (target == null) {
             return;
         }
@@ -224,7 +277,7 @@ protected void addHttpProxyEndpointLine(LinearLayout target, String text, boolea
         target.addView(view, matchWrap());
     }
 
-protected void addHttpProxyEndpointDivider(LinearLayout target) {
+    protected void addHttpProxyEndpointDivider(LinearLayout target) {
         View divider = new View(this);
         divider.setBackgroundColor(COLOR_BORDER);
         LinearLayout.LayoutParams params = matchWrap();
@@ -277,7 +330,7 @@ protected void addHttpProxyEndpointDivider(LinearLayout target) {
         return new WifiAddresses(connected, addresses);
     }
 
-protected boolean isDisplayableWifiAddress(Inet4Address address) {
+    protected boolean isDisplayableWifiAddress(Inet4Address address) {
         if (address.isAnyLocalAddress()
                 || address.isLoopbackAddress()
                 || address.isLinkLocalAddress()
@@ -288,7 +341,7 @@ protected boolean isDisplayableWifiAddress(Inet4Address address) {
         return !isAgentTunAddress(hostAddress) && !isAndroidEmulatorNatAddress(hostAddress);
     }
 
-protected boolean isAgentTunAddress(String hostAddress) {
+    protected boolean isAgentTunAddress(String hostAddress) {
         String tunAddress = DefaultConfig.TUN_IPV4;
         int slash = tunAddress.indexOf('/');
         if (slash >= 0) {
@@ -301,7 +354,7 @@ protected boolean isAgentTunAddress(String hostAddress) {
         return lastDot > 0 && hostAddress.startsWith(tunAddress.substring(0, lastDot + 1));
     }
 
-protected boolean isAndroidEmulatorNatAddress(String hostAddress) {
+    protected boolean isAndroidEmulatorNatAddress(String hostAddress) {
         if (!hostAddress.startsWith("10.0.2.")) {
             return false;
         }
