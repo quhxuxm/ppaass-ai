@@ -17,6 +17,11 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
@@ -51,7 +56,6 @@ import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.NetworkInterface;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.security.SecureRandom;
@@ -60,7 +64,6 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
-import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -135,6 +138,7 @@ public class MainActivity extends Activity {
     private Button vpnToggle;
     private TextView vpnStatus;
     private Button httpProxyToggle;
+    private Button httpProxyClientsButton;
     private TextView httpProxyStatus;
     private TextView httpProxyEndpoint;
     private TextView downloadSpeed;
@@ -153,6 +157,7 @@ public class MainActivity extends Activity {
     private long lastRxBytes = -1;
     private long lastTxBytes = -1;
     private long lastTrafficSampleMs;
+    private long lastHttpProxyRestoreAttemptMs;
     private String lastDnsRecordsStateKey = "";
     private boolean connectivityTestsRunning;
     private final List<View> editableControls = new ArrayList<>();
@@ -193,6 +198,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
         updateHttpProxyToggle();
         startStatusRefresh();
@@ -369,7 +375,7 @@ public class MainActivity extends Activity {
 
         LinearLayout dashboard = panel(root);
         sectionTitle(dashboard, "实时状态");
-        speedGauge = new SpeedGaugeView();
+        speedGauge = new SpeedGaugeView(this);
         LinearLayout.LayoutParams gaugeParams = matchWrap();
         gaugeParams.height = dp(210);
         gaugeParams.setMargins(0, dp(6), 0, dp(12));
@@ -382,7 +388,7 @@ public class MainActivity extends Activity {
 
         LinearLayout dailyPanel = panel(root);
         sectionTitle(dailyPanel, "今日流量");
-        trafficChart = new TrafficBarView();
+        trafficChart = new TrafficBarView(this);
         LinearLayout.LayoutParams chartParams = matchWrap();
         chartParams.height = dp(150);
         chartParams.setMargins(0, dp(8), 0, dp(10));
@@ -449,12 +455,26 @@ public class MainActivity extends Activity {
         topRow.addView(httpProxyStatus, statusParams);
         panel.addView(topRow, matchWrap());
 
+        LinearLayout buttonRow = horizontalRow();
         httpProxyToggle = actionButton("启动", COLOR_ACTION_START);
         httpProxyToggle.setOnClickListener(view -> toggleHttpProxy());
-        LinearLayout.LayoutParams buttonParams = matchWrap();
-        buttonParams.height = dp(48);
-        buttonParams.setMargins(0, dp(12), 0, 0);
-        panel.addView(httpProxyToggle, buttonParams);
+        buttonRow.addView(httpProxyToggle, new LinearLayout.LayoutParams(
+                0,
+                dp(48),
+                1f));
+
+        httpProxyClientsButton = actionButton("客户端", COLOR_ACCENT);
+        httpProxyClientsButton.setOnClickListener(view -> showHttpProxyClientsDialog());
+        LinearLayout.LayoutParams clientsButtonParams = new LinearLayout.LayoutParams(
+                0,
+                dp(48),
+                1f);
+        clientsButtonParams.setMargins(dp(8), 0, 0, 0);
+        buttonRow.addView(httpProxyClientsButton, clientsButtonParams);
+
+        LinearLayout.LayoutParams buttonRowParams = matchWrap();
+        buttonRowParams.setMargins(0, dp(12), 0, 0);
+        panel.addView(buttonRow, buttonRowParams);
     }
 
     private void buildConnectivityPanel(LinearLayout root) {
@@ -1347,6 +1367,14 @@ public class MainActivity extends Activity {
     }
 
     private void startHttpProxyService() {
+        prefs.edit()
+                .putBoolean(PpaassHttpProxyService.PREF_ENABLED, true)
+                .apply();
+        sendHttpProxyStartIntent();
+        updateHttpProxyToggle();
+    }
+
+    private void sendHttpProxyStartIntent() {
         Intent intent = new Intent(this, PpaassHttpProxyService.class);
         intent.setAction(PpaassHttpProxyService.ACTION_START);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1354,14 +1382,20 @@ public class MainActivity extends Activity {
         } else {
             startService(intent);
         }
-        updateHttpProxyToggle();
     }
 
     private void stopHttpProxyService() {
+        prefs.edit()
+                .putBoolean(PpaassHttpProxyService.PREF_ENABLED, false)
+                .apply();
         Intent intent = new Intent(this, PpaassHttpProxyService.class);
         intent.setAction(PpaassHttpProxyService.ACTION_STOP);
         startService(intent);
         updateHttpProxyToggle();
+    }
+
+    private void showHttpProxyClientsDialog() {
+        new HttpProxyClientDialog(this, prefs).show();
     }
 
     private boolean isVpnRunning() {
@@ -1377,14 +1411,37 @@ public class MainActivity extends Activity {
     }
 
     private boolean isHttpProxyRunning() {
+        boolean enabled = prefs.getBoolean(PpaassHttpProxyService.PREF_ENABLED, false);
         boolean running = prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false);
         if (running && !PpaassHttpProxyService.isRunningInProcess()) {
+            if (enabled) {
+                restoreHttpProxyServiceIfEnabled();
+                return true;
+            }
             prefs.edit()
                     .putBoolean(PpaassHttpProxyService.PREF_RUNNING, false)
                     .apply();
             return false;
         }
+        if (!running && enabled && !PpaassHttpProxyService.isRunningInProcess()) {
+            restoreHttpProxyServiceIfEnabled();
+            return true;
+        }
         return running;
+    }
+
+    private void restoreHttpProxyServiceIfEnabled() {
+        if (!prefs.getBoolean(PpaassHttpProxyService.PREF_ENABLED, false)
+                || PpaassHttpProxyService.isRunningInProcess()) {
+            return;
+        }
+
+        long nowMs = SystemClock.elapsedRealtime();
+        if (nowMs - lastHttpProxyRestoreAttemptMs < 5_000L) {
+            return;
+        }
+        lastHttpProxyRestoreAttemptMs = nowMs;
+        sendHttpProxyStartIntent();
     }
 
     private void startStatusRefresh() {
@@ -1535,13 +1592,16 @@ public class MainActivity extends Activity {
 
     private String httpProxyEndpointLabel() {
         String port = String.valueOf(httpProxyListenPort());
-        List<String> addresses = localIpv4Addresses();
-        if (addresses.isEmpty()) {
-            return "0.0.0.0:" + port;
+        WifiAddresses wifiAddresses = currentWifiIpv4Addresses();
+        if (!wifiAddresses.connected) {
+            return "当前不在 Wi-Fi 下";
+        }
+        if (wifiAddresses.addresses.isEmpty()) {
+            return "当前 Wi-Fi 未获取到 IPv4 地址";
         }
 
         StringBuilder builder = new StringBuilder();
-        for (String address : addresses) {
+        for (String address : wifiAddresses.addresses) {
             if (builder.length() > 0) {
                 builder.append('\n');
             }
@@ -1570,31 +1630,52 @@ public class MainActivity extends Activity {
         return DefaultConfig.HTTP_PROXY_PORT;
     }
 
-    private List<String> localIpv4Addresses() {
+    @SuppressWarnings("deprecation")
+    private WifiAddresses currentWifiIpv4Addresses() {
         List<String> addresses = new ArrayList<>();
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            while (interfaces != null && interfaces.hasMoreElements()) {
-                NetworkInterface networkInterface = interfaces.nextElement();
-                if (!networkInterface.isUp()
-                        || networkInterface.isLoopback()
-                        || networkInterface.isVirtual()) {
-                    continue;
-                }
-                Enumeration<InetAddress> inetAddresses = networkInterface.getInetAddresses();
-                while (inetAddresses.hasMoreElements()) {
-                    InetAddress address = inetAddresses.nextElement();
-                    if (address instanceof Inet4Address
-                            && !address.isLoopbackAddress()
-                            && !address.isLinkLocalAddress()) {
-                        addresses.add(address.getHostAddress());
-                    }
+        boolean connected = false;
+        ConnectivityManager connectivityManager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) {
+            return new WifiAddresses(false, addresses);
+        }
+
+        Network[] networks = connectivityManager.getAllNetworks();
+        for (Network network : networks) {
+            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+            if (capabilities == null
+                    || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                continue;
+            }
+
+            connected = true;
+            LinkProperties properties = connectivityManager.getLinkProperties(network);
+            if (properties == null) {
+                continue;
+            }
+
+            for (LinkAddress linkAddress : properties.getLinkAddresses()) {
+                InetAddress address = linkAddress.getAddress();
+                if (address instanceof Inet4Address
+                        && !address.isLoopbackAddress()
+                        && !address.isLinkLocalAddress()) {
+                    addresses.add(address.getHostAddress());
                 }
             }
-        } catch (Exception ignored) {
         }
         Collections.sort(addresses);
-        return addresses;
+        return new WifiAddresses(connected, addresses);
+    }
+
+    private static final class WifiAddresses {
+        final boolean connected;
+        final List<String> addresses;
+
+        WifiAddresses(boolean connected, List<String> addresses) {
+            this.connected = connected;
+            this.addresses = addresses;
+        }
     }
 
     private void updateDnsRecords() {
@@ -2783,7 +2864,7 @@ public class MainActivity extends Activity {
             checked[i] = selected.contains(app.packageName);
         }
 
-        AppListAdapter adapter = new AppListAdapter(apps, checked);
+        AppListAdapter adapter = new AppListAdapter(this, apps, checked);
         ListView list = new ListView(this);
         list.setAdapter(adapter);
         list.setFastScrollEnabled(true);
@@ -2942,385 +3023,4 @@ public class MainActivity extends Activity {
         selectedAppsSummary.setText("已选择 " + selected.size() + " 个");
     }
 
-    private final class SpeedGaugeView extends View {
-        private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF arcBounds = new RectF();
-        private long rxBytesPerSecond;
-        private long txBytesPerSecond;
-        private boolean active;
-
-        SpeedGaugeView() {
-            super(MainActivity.this);
-            trackPaint.setStyle(Paint.Style.STROKE);
-            trackPaint.setStrokeCap(Paint.Cap.ROUND);
-            trackPaint.setColor(COLOR_CONTROL);
-            progressPaint.setStyle(Paint.Style.STROKE);
-            progressPaint.setStrokeCap(Paint.Cap.ROUND);
-            progressPaint.setColor(COLOR_ACCENT);
-            textPaint.setTextAlign(Paint.Align.CENTER);
-        }
-
-        void setSpeeds(long rxBytesPerSecond, long txBytesPerSecond, boolean active) {
-            this.rxBytesPerSecond = Math.max(0, rxBytesPerSecond);
-            this.txBytesPerSecond = Math.max(0, txBytesPerSecond);
-            this.active = active;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            int width = getWidth();
-            int height = getHeight();
-            float stroke = dp(16);
-            float radius = Math.min(width * 0.38f, height * 0.50f);
-            float centerX = width / 2f;
-            float centerY = dp(28) + radius;
-            arcBounds.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
-
-            trackPaint.setStrokeWidth(stroke);
-            progressPaint.setStrokeWidth(stroke);
-            canvas.drawArc(arcBounds, 150f, 240f, false, trackPaint);
-
-            long totalSpeed = rxBytesPerSecond + txBytesPerSecond;
-            long scale = gaugeScale(totalSpeed);
-            float sweep = active ? Math.min(240f, totalSpeed * 240f / scale) : 0f;
-            canvas.drawArc(arcBounds, 150f, sweep, false, progressPaint);
-
-            textPaint.setTypeface(Typeface.DEFAULT_BOLD);
-            textPaint.setColor(COLOR_TEXT);
-            textPaint.setTextSize(dp(28));
-            canvas.drawText(formatSpeed(totalSpeed), centerX, centerY + dp(4), textPaint);
-
-            textPaint.setTypeface(Typeface.DEFAULT);
-            textPaint.setColor(COLOR_MUTED);
-            textPaint.setTextSize(dp(12));
-            canvas.drawText(active ? "实时速度" : "VPN 空闲", centerX, centerY + dp(30), textPaint);
-            canvas.drawText("刻度 " + formatSpeed(scale), centerX, Math.min(height - dp(10), centerY + dp(54)), textPaint);
-        }
-
-        private long gaugeScale(long speed) {
-            long scale = 64L * 1024L;
-            while (speed > scale && scale < 1024L * 1024L * 1024L) {
-                scale *= 2L;
-            }
-            return scale;
-        }
-    }
-
-    private final class TrafficBarView extends View {
-        private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF barBounds = new RectF();
-        private final long[] downloadValues = new long[24];
-        private final long[] uploadValues = new long[24];
-        private int currentHour;
-
-        TrafficBarView() {
-            super(MainActivity.this);
-            gridPaint.setColor(COLOR_BORDER);
-            gridPaint.setStrokeWidth(dp(1));
-            textPaint.setColor(COLOR_MUTED);
-            textPaint.setTextSize(dp(10));
-            textPaint.setTextAlign(Paint.Align.CENTER);
-        }
-
-        void setHourlyData(long[] hourlyDownloadValues, long[] hourlyUploadValues, int currentHour) {
-            for (int i = 0; i < downloadValues.length; i++) {
-                downloadValues[i] = i < hourlyDownloadValues.length ? Math.max(0, hourlyDownloadValues[i]) : 0;
-                uploadValues[i] = i < hourlyUploadValues.length ? Math.max(0, hourlyUploadValues[i]) : 0;
-            }
-            this.currentHour = currentHour;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            int width = getWidth();
-            int height = getHeight();
-            float left = dp(6);
-            float right = width - dp(6);
-            float top = dp(28);
-            float bottom = height - dp(24);
-            float chartHeight = Math.max(dp(48), bottom - top);
-
-            drawLegend(canvas, right - dp(146), dp(10), COLOR_ACCENT, "下载");
-            drawLegend(canvas, right - dp(76), dp(10), COLOR_ACTION_START, "上传");
-
-            for (int i = 0; i < 3; i++) {
-                float y = top + chartHeight * i / 2f;
-                canvas.drawLine(left, y, right, y, gridPaint);
-            }
-
-            long max = 0;
-            for (int i = 0; i < downloadValues.length; i++) {
-                max = Math.max(max, downloadValues[i]);
-                max = Math.max(max, uploadValues[i]);
-            }
-
-            float gap = dp(3);
-            float groupWidth = Math.max(dp(5), (right - left - gap * 23) / 24f);
-            float barGap = dp(1);
-            float barWidth = Math.max(dp(2), (groupWidth - barGap) / 2f);
-            for (int i = 0; i < downloadValues.length; i++) {
-                boolean highlighted = i == currentHour;
-                float x = left + i * (groupWidth + gap);
-                drawTrafficBar(canvas, downloadValues[i], max, x, bottom, chartHeight,
-                        barWidth,
-                        highlighted ? COLOR_ACCENT : Color.rgb(147, 197, 253));
-                drawTrafficBar(canvas, uploadValues[i], max, x + barWidth + barGap, bottom, chartHeight,
-                        barWidth,
-                        highlighted ? COLOR_ACTION_START : Color.rgb(94, 234, 212));
-            }
-
-            canvas.drawText("00", left + barWidth / 2f, height - dp(6), textPaint);
-            canvas.drawText("12", left + 12 * (groupWidth + gap) + groupWidth / 2f, height - dp(6), textPaint);
-            canvas.drawText("23", right - groupWidth / 2f, height - dp(6), textPaint);
-        }
-
-        private void drawTrafficBar(
-                Canvas canvas,
-                long value,
-                long max,
-                float x,
-                float bottom,
-                float chartHeight,
-                float barWidth,
-                int color) {
-            boolean hasValue = value > 0;
-            float ratio = max == 0 ? 0f : value / (float) max;
-            float barHeight = hasValue ? Math.max(dp(4), chartHeight * ratio) : dp(3);
-            float y = bottom - barHeight;
-            barPaint.setColor(hasValue ? color : COLOR_CONTROL);
-            barBounds.set(x, y, x + barWidth, bottom);
-            canvas.drawRoundRect(barBounds, dp(3), dp(3), barPaint);
-        }
-
-        private void drawLegend(Canvas canvas, float x, float y, int color, String label) {
-            barPaint.setColor(color);
-            barBounds.set(x, y, x + dp(10), y + dp(10));
-            canvas.drawRoundRect(barBounds, dp(3), dp(3), barPaint);
-            textPaint.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText(label, x + dp(14), y + dp(10), textPaint);
-            textPaint.setTextAlign(Paint.Align.CENTER);
-        }
-    }
-
-    private final class AppListAdapter extends BaseAdapter {
-        private final List<AppEntry> apps;
-        private final boolean[] checked;
-
-        AppListAdapter(List<AppEntry> apps, boolean[] checked) {
-            this.apps = apps;
-            this.checked = checked;
-        }
-
-        @Override
-        public int getCount() {
-            return apps.size();
-        }
-
-        @Override
-        public AppEntry getItem(int position) {
-            return apps.get(position);
-        }
-
-        @Override
-        public long getItemId(int position) {
-            return position;
-        }
-
-        @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
-            AppRow row;
-            if (convertView == null) {
-                LinearLayout outer = new LinearLayout(MainActivity.this);
-                outer.setOrientation(LinearLayout.VERTICAL);
-                outer.setPadding(0, 0, 0, dp(4));
-
-                LinearLayout container = new LinearLayout(MainActivity.this);
-                container.setOrientation(LinearLayout.HORIZONTAL);
-                container.setGravity(Gravity.CENTER_VERTICAL);
-                container.setMinimumHeight(dp(68));
-                container.setPadding(dp(12), dp(10), dp(12), dp(10));
-
-                ImageView icon = new ImageView(MainActivity.this);
-                icon.setPadding(dp(4), dp(4), dp(4), dp(4));
-                icon.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
-                LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(44), dp(44));
-                iconParams.setMargins(0, 0, dp(12), 0);
-                container.addView(icon, iconParams);
-
-                LinearLayout textColumn = new LinearLayout(MainActivity.this);
-                textColumn.setOrientation(LinearLayout.VERTICAL);
-
-                LinearLayout labelRow = horizontalRow();
-                TextView label = new TextView(MainActivity.this);
-                label.setSingleLine(true);
-                label.setEllipsize(TextUtils.TruncateAt.END);
-                label.setTextSize(15f);
-                label.setTypeface(Typeface.DEFAULT_BOLD);
-                labelRow.addView(label, new LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f));
-
-                TextView systemBadge = new TextView(MainActivity.this);
-                systemBadge.setText("系统");
-                systemBadge.setTextSize(11f);
-                systemBadge.setTextColor(COLOR_MUTED);
-                systemBadge.setTypeface(Typeface.DEFAULT_BOLD);
-                systemBadge.setPadding(dp(8), dp(2), dp(8), dp(2));
-                systemBadge.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-                LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT);
-                badgeParams.setMargins(dp(8), 0, 0, 0);
-                labelRow.addView(systemBadge, badgeParams);
-                textColumn.addView(labelRow, matchWrap());
-
-                TextView packageName = new TextView(MainActivity.this);
-                packageName.setSingleLine(true);
-                packageName.setEllipsize(TextUtils.TruncateAt.END);
-                packageName.setTextSize(12f);
-                packageName.setTextColor(COLOR_MUTED);
-                textColumn.addView(packageName, matchWrap());
-
-                LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f);
-                container.addView(textColumn, textParams);
-
-                CheckBox checkBox = new CheckBox(MainActivity.this);
-                checkBox.setClickable(false);
-                checkBox.setFocusable(false);
-                container.addView(checkBox, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
-
-                outer.addView(container, matchWrap());
-
-                row = new AppRow(container, icon, label, packageName, systemBadge, checkBox);
-                outer.setTag(row);
-                convertView = outer;
-            } else {
-                row = (AppRow) convertView.getTag();
-            }
-
-            AppEntry app = getItem(position);
-            boolean selected = checked[position];
-            row.icon.setImageDrawable(app.icon);
-            row.item.setBackground(rounded(
-                    selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
-                    selected ? COLOR_ACCENT_SOFT : COLOR_BORDER));
-            row.label.setText(app.label);
-            row.label.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_TEXT);
-            row.packageName.setText(app.packageName);
-            row.systemBadge.setVisibility(app.systemApp ? View.VISIBLE : View.GONE);
-            row.checkBox.setChecked(selected);
-            return convertView;
-        }
-    }
-
-    private static final class AppRow {
-        final View item;
-        final ImageView icon;
-        final TextView label;
-        final TextView packageName;
-        final TextView systemBadge;
-        final CheckBox checkBox;
-
-        AppRow(
-                View item,
-                ImageView icon,
-                TextView label,
-                TextView packageName,
-                TextView systemBadge,
-                CheckBox checkBox) {
-            this.item = item;
-            this.icon = icon;
-            this.label = label;
-            this.packageName = packageName;
-            this.systemBadge = systemBadge;
-            this.checkBox = checkBox;
-        }
-    }
-
-    private static final class ConnectivityCheckResult {
-        final String target;
-        final String protocol;
-        final boolean success;
-        final String detail;
-        final long durationMs;
-        final long rxDelta;
-        final long txDelta;
-
-        ConnectivityCheckResult(
-                String target,
-                String protocol,
-                boolean success,
-                String detail,
-                long durationMs,
-                long rxDelta,
-                long txDelta) {
-            this.target = target;
-            this.protocol = protocol;
-            this.success = success;
-            this.detail = detail;
-            this.durationMs = durationMs;
-            this.rxDelta = rxDelta;
-            this.txDelta = txDelta;
-        }
-    }
-
-    private static final class QuicPolicyOption {
-        final String value;
-        final String label;
-
-        QuicPolicyOption(String value, String label) {
-            this.value = value;
-            this.label = label;
-        }
-
-        @Override
-        public String toString() {
-            return label;
-        }
-    }
-
-    private static final class MaxHeightScrollView extends ScrollView {
-        private final int maxHeightPx;
-
-        MaxHeightScrollView(Context context, int maxHeightPx) {
-            super(context);
-            this.maxHeightPx = maxHeightPx;
-        }
-
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            int cappedHeightSpec = View.MeasureSpec.makeMeasureSpec(
-                    maxHeightPx,
-                    View.MeasureSpec.AT_MOST);
-            super.onMeasure(widthMeasureSpec, cappedHeightSpec);
-        }
-    }
-
-    private static final class AppEntry {
-        final String label;
-        final String packageName;
-        final boolean systemApp;
-        final Drawable icon;
-
-        AppEntry(String label, String packageName, boolean systemApp, Drawable icon) {
-            this.label = label;
-            this.packageName = packageName;
-            this.systemApp = systemApp;
-            this.icon = icon;
-        }
-    }
 }

@@ -7,6 +7,9 @@ use tokio_util::sync::CancellationToken;
 use crate::config::AndroidAgentConfig;
 use crate::fd_device::RawFd;
 use crate::http_proxy::run_android_http_proxy;
+use crate::http_proxy_clients::{
+    block_http_proxy_client, http_proxy_clients_json, unblock_http_proxy_client,
+};
 use crate::netstack::run_android_agent;
 use crate::socket_protector;
 use crate::traffic_stats;
@@ -248,6 +251,43 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_dnsResolutionRecords
     env.with_env(|env| -> jni::errors::Result<jstring> {
         let json = traffic_stats::dns_resolution_records_json();
         Ok(env.new_string(json)?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_httpProxyClientsJson<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        Ok(env.new_string(http_proxy_clients_json())?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_blockHttpProxyClient<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    ip: JString<'local>,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let ip = ip.try_to_string(env)?;
+        Ok(block_http_proxy_client(&ip))
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_unblockHttpProxyClient<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    ip: JString<'local>,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let ip = ip.try_to_string(env)?;
+        Ok(unblock_http_proxy_client(&ip))
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }

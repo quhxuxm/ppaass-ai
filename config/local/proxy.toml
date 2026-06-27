@@ -34,13 +34,13 @@ outbound_interface = "auto"
 
 # Tokio 运行时工作线程数。
 # 视频分片会同时触发目标连接、协议编解码和 relay 任务；默认 8 更适合持续下载场景。
-runtime_threads = 8
+runtime_threads = 32
 
 # 防重放攻击的容忍时间，单位秒
 replay_attack_tolerance = 300
 
 # 异步运行时栈的最大大小，单位 MB（默认：2 MB）
-async_runtime_stack_size_mb = 2
+async_runtime_stack_size_mb = 4
 
 # 转发模式配置
 # --------------------------
@@ -84,7 +84,7 @@ yamux_session_idle_timeout_secs = 300
 udp_relay_idle_timeout_secs = 60
 
 # UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
-udp_relay_channel_size = 64
+udp_relay_channel_size = 128
 
 [yamux]
 # proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。

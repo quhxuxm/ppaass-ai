@@ -21,4 +21,10 @@ final class NativeAgent {
     static native long vpnUploadBytes();
 
     static native String dnsResolutionRecordsJson();
+
+    static native String httpProxyClientsJson();
+
+    static native boolean blockHttpProxyClient(String ip);
+
+    static native boolean unblockHttpProxyClient(String ip);
 }
