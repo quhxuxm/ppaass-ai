@@ -152,7 +152,7 @@ protected void buildStatusScreen(LinearLayout root) {
 protected void buildHttpProxyPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
         sectionTitle(panel, "HTTP Proxy");
-        TextView subtitle = mutedText("Wi-Fi、热点或 USB 网络共享的电脑可将代理指向 Android", 13f);
+        TextView subtitle = mutedText("Wi-Fi、热点、USB 或蓝牙网络共享的电脑可将代理指向 Android", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
@@ -228,6 +228,47 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         usbActionParams.setMargins(0, dp(6), 0, 0);
         panel.addView(usbActionRow, usbActionParams);
         updateHttpProxyUsbAccess();
+
+        TextView bluetoothTitle = controlLabel("蓝牙电脑访问");
+        panel.addView(bluetoothTitle, labelParams());
+
+        LinearLayout bluetoothBox = new LinearLayout(this);
+        bluetoothBox.setOrientation(LinearLayout.VERTICAL);
+        bluetoothBox.setPadding(dp(12), dp(10), dp(12), dp(10));
+        bluetoothBox.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        httpProxyBluetoothEndpointList = new LinearLayout(this);
+        httpProxyBluetoothEndpointList.setOrientation(LinearLayout.VERTICAL);
+        MaxHeightScrollView bluetoothScroll = new MaxHeightScrollView(this, dp(112));
+        bluetoothScroll.setVerticalScrollBarEnabled(true);
+        bluetoothScroll.setScrollbarFadingEnabled(true);
+        bluetoothScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
+        bluetoothScroll.setOnTouchListener((view, event) -> {
+            view.getParent().requestDisallowInterceptTouchEvent(true);
+            if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                view.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
+        bluetoothScroll.addView(httpProxyBluetoothEndpointList, matchWrap());
+        bluetoothBox.addView(bluetoothScroll, matchWrap());
+        panel.addView(bluetoothBox, matchWrap());
+
+        LinearLayout bluetoothActionRow = horizontalRow();
+        httpProxyBluetoothHint = mutedText("", 12f);
+        bluetoothActionRow.addView(httpProxyBluetoothHint, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        httpProxyBluetoothActionButton = secondaryButton("打开设置");
+        httpProxyBluetoothActionButton.setOnClickListener(view -> handleHttpProxyBluetoothAction());
+        LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(104), dp(38));
+        bluetoothCopyParams.setMargins(dp(8), 0, 0, 0);
+        bluetoothActionRow.addView(httpProxyBluetoothActionButton, bluetoothCopyParams);
+        LinearLayout.LayoutParams bluetoothActionParams = matchWrap();
+        bluetoothActionParams.setMargins(0, dp(6), 0, 0);
+        panel.addView(bluetoothActionRow, bluetoothActionParams);
+        updateHttpProxyBluetoothAccess();
 
         LinearLayout buttonRow = horizontalRow();
         httpProxyToggle = actionButton("启动", COLOR_ACTION_START);
