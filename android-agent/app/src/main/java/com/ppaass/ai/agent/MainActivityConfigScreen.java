@@ -56,7 +56,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 prefString("http_proxy_port", String.valueOf(DefaultConfig.HTTP_PROXY_PORT)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "监听 0.0.0.0，供同一 Wi-Fi 的外部客户端使用。");
+        addFieldHelp(httpProxy, "监听 0.0.0.0，Wi-Fi 设备可直接访问，USB 电脑可通过系统 USB 网络共享访问。");
         httpProxyThreads = numberControl(
                 httpProxy,
                 "代理线程",
