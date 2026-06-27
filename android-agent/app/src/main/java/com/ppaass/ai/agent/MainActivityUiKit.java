@@ -159,7 +159,9 @@ protected LinearLayout panel(LinearLayout root) {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(18), dp(16), dp(18), dp(18));
         panel.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
-        panel.setElevation(dp(1));
+        panel.setStateListAnimator(null);
+        panel.setElevation(0f);
+        panel.setTranslationZ(0f);
         LinearLayout.LayoutParams params = matchWrap();
         params.setMargins(0, root.getChildCount() == 0 ? 0 : dp(14), 0, 0);
         root.addView(panel, params);
