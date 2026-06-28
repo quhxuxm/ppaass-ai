@@ -27,6 +27,12 @@ use crate::socks5_proxy::handle_socks5_connection;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyProtocol {
+    Socks5,
+    Http,
+}
+
 pub async fn run_android_http_proxy(
     config: AndroidAgentConfig,
     listen_port: u16,
@@ -59,9 +65,8 @@ pub async fn run_android_http_proxy(
                 }
                 let sessions = tcp_sessions.clone();
                 let checker = direct_checker.clone();
-                let client = register_http_proxy_client(peer_addr);
                 spawn_guarded("android explicit proxy client", async move {
-                    if let Err(err) = handle_proxy_connection(stream, sessions, checker, client).await {
+                    if let Err(err) = handle_proxy_connection(stream, peer_addr, sessions, checker).await {
                         debug!("Android explicit proxy client {peer_addr} ended: {err}");
                     }
                 });
@@ -76,21 +81,39 @@ pub async fn run_android_http_proxy(
 
 async fn handle_proxy_connection(
     stream: TcpStream,
+    peer_addr: SocketAddr,
     sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
-    client: HttpProxyClientLease,
 ) -> Result<()> {
     let mut buffer = [0u8; 1];
-    stream.peek(&mut buffer).await?;
-    match buffer[0] {
-        0x05 => handle_socks5_connection(stream, sessions, direct_checker, client).await,
-        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
+    if stream.peek(&mut buffer).await? == 0 {
+        debug!("Android explicit proxy client {peer_addr} closed before protocol detection");
+        return Ok(());
+    }
+    match detect_proxy_protocol(buffer[0]) {
+        Some(ProxyProtocol::Socks5) => {
+            let client = register_http_proxy_client(peer_addr);
+            handle_socks5_connection(stream, sessions, direct_checker, client).await
+        }
+        Some(ProxyProtocol::Http) => {
+            let client = register_http_proxy_client(peer_addr);
             handle_http_connection(stream, sessions, direct_checker, client).await
         }
-        value => {
-            debug!("Android explicit proxy unknown protocol first byte: 0x{value:02x}");
+        None => {
+            debug!(
+                "Android explicit proxy unknown protocol first byte from {peer_addr}: 0x{:02x}",
+                buffer[0]
+            );
             Ok(())
         }
+    }
+}
+
+fn detect_proxy_protocol(first_byte: u8) -> Option<ProxyProtocol> {
+    match first_byte {
+        0x05 => Some(ProxyProtocol::Socks5),
+        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => Some(ProxyProtocol::Http),
+        _ => None,
     }
 }
 
@@ -439,6 +462,16 @@ mod tests {
 
     use crate::config::{AndroidAgentConfig, AndroidTunConfig};
     use crate::direct_access::{DirectAccessConfig, DirectAccessMode};
+
+    #[test]
+    fn proxy_protocol_detection_rejects_non_proxy_probe_bytes() {
+        assert_eq!(detect_proxy_protocol(0x05), Some(ProxyProtocol::Socks5));
+        assert_eq!(detect_proxy_protocol(b'G'), Some(ProxyProtocol::Http));
+        assert_eq!(detect_proxy_protocol(b'C'), Some(ProxyProtocol::Http));
+        assert_eq!(detect_proxy_protocol(0), None);
+        assert_eq!(detect_proxy_protocol(b'\n'), None);
+        assert_eq!(detect_proxy_protocol(b'X'), None);
+    }
 
     #[tokio::test]
     async fn socks5_proxy_connects_to_direct_tcp_target() {

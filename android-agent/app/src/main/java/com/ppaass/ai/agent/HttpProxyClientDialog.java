@@ -138,36 +138,33 @@ final class HttpProxyClientDialog {
         try {
             JSONObject state = new JSONObject(NativeAgent.httpProxyClientsJson());
             JSONArray active = state.optJSONArray("active");
-            JSONArray recent = state.optJSONArray("recent");
             Set<String> blocked = blockedClientsFromState(state.optJSONArray("blocked"));
             updateHeader(
                     active == null ? 0 : active.length(),
-                    recent == null ? 0 : recent.length(),
                     blocked.size());
             if (showingBlocked) {
                 addBlockedRows(blocked);
             } else {
-                addConnectionRows(active, recent);
+                addConnectionRows(active);
             }
         } catch (JSONException error) {
             addEmptyRow("客户端列表读取失败");
         }
     }
 
-    private void updateHeader(int activeCount, int recentCount, int blockedCount) {
+    private void updateHeader(int activeCount, int blockedCount) {
         if (summary != null) {
-            summary.setText(activeCount + " 个活动 · " + recentCount + " 个最近 · " + blockedCount + " 个已禁止");
+            summary.setText(activeCount + " 个活动 · " + blockedCount + " 个已禁止");
         }
-        activeTab.setText("连接 " + (activeCount + recentCount));
+        activeTab.setText("活动 " + activeCount);
         blockedTab.setText("已禁止 " + blockedCount);
         styleTab(activeTab, !showingBlocked);
         styleTab(blockedTab, showingBlocked);
     }
 
-    private void addConnectionRows(JSONArray active, JSONArray recent) throws JSONException {
+    private void addConnectionRows(JSONArray active) throws JSONException {
         int activeCount = active == null ? 0 : active.length();
-        int recentCount = recent == null ? 0 : recent.length();
-        if (activeCount == 0 && recentCount == 0) {
+        if (activeCount == 0) {
             addEmptyRow("暂无活动客户端");
             return;
         }
@@ -178,26 +175,6 @@ final class HttpProxyClientDialog {
             }
             String ip = client.optString("ip", "");
             String detail = client.optInt("connections", 0) + " 个连接";
-            String peers = compactPeers(client.optJSONArray("peers"));
-            if (!peers.isEmpty()) {
-                detail += " · " + peers;
-            }
-            addClientRow(ip, detail, false, R.drawable.ic_block_24, COLOR_ACTION_STOP, view -> {
-                blockClient(ip);
-                render();
-            });
-        }
-        for (int i = 0; i < recentCount; i++) {
-            JSONObject client = recent.optJSONObject(i);
-            if (client == null) {
-                continue;
-            }
-            String ip = client.optString("ip", "");
-            String detail = "最近连接";
-            int total = client.optInt("total_connections", 0);
-            if (total > 0) {
-                detail += " · 累计 " + total + " 次";
-            }
             String peers = compactPeers(client.optJSONArray("peers"));
             if (!peers.isEmpty()) {
                 detail += " · " + peers;
