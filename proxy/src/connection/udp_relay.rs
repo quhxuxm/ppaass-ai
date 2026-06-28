@@ -97,12 +97,16 @@ impl ServerConnection {
                     // 下行响应可能在同一 tick 内已经积压多个。这里一次取出一小批一起 feed，
                     // 最后统一 flush，减少高包率场景下 `send().await`/flush 对 relay 主循环
                     // 的唤醒压力。批量大小由公共常量控制，避免 drain 过多导致上行读取延迟。
-                    send_udp_relay_response_batch(
+                    if let Err(err) = send_udp_relay_response_batch_with_timeout(
                         &mut self.writer,
                         &mut response_rx,
                         response,
                         &stream_id,
-                    ).await?;
+                        relay_idle_timeout,
+                    ).await {
+                        warn!("UDP 共享中继写回 agent 失败，关闭该连接：{err}");
+                        return Err(err);
+                    }
                     relay_idle.as_mut().reset(tokio::time::Instant::now() + relay_idle_timeout);
                 }
                 done = flow_done_rx.recv() => {
@@ -114,6 +118,27 @@ impl ServerConnection {
 
         debug!("UDP 共享中继已结束");
         Ok(())
+    }
+}
+
+async fn send_udp_relay_response_batch_with_timeout(
+    writer: &mut FramedWriter,
+    response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
+    first_response: QueuedUdpRelayResponse,
+    stream_id: &str,
+    write_timeout: Duration,
+) -> Result<()> {
+    match tokio::time::timeout(
+        write_timeout,
+        send_udp_relay_response_batch(writer, response_rx, first_response, stream_id),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(ProxyError::Connection(format!(
+            "Timed out writing UDP relay responses after {} seconds",
+            write_timeout.as_secs()
+        ))),
     }
 }
 
@@ -167,4 +192,74 @@ async fn feed_udp_relay_response(
         .await
         .map_err(|e| ProxyError::Connection(format!("Failed to queue UDP relay response: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    struct PendingAgentStream;
+
+    impl AsyncRead for PendingAgentStream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for PendingAgentStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_relay_response_write_times_out_when_agent_stalls() {
+        let framed = proxy_framed_stream(PendingAgentStream, ProxyCodec::new(None));
+        let (mut writer, _reader) = framed.split();
+        let (_response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
+        let response = QueuedUdpRelayResponse {
+            packet: UdpRelayPacket {
+                flow_id: 7,
+                address: Address::Ipv4 {
+                    addr: [127, 0, 0, 1],
+                    port: 443,
+                },
+                data: b"pong".to_vec(),
+            },
+        };
+
+        let err = send_udp_relay_response_batch_with_timeout(
+            &mut writer,
+            &mut response_rx,
+            response,
+            "udp-relay-test",
+            Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Timed out writing UDP relay responses")
+        );
+    }
 }
