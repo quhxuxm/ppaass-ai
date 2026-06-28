@@ -28,6 +28,8 @@ protected void buildUi() {
         editableControls.clear();
         screenTabButtons.clear();
         screenPages.clear();
+        screenPageHost = null;
+        screenSwitchAnimating = false;
         configTabButtons.clear();
         configTabPages.clear();
         directModeButtons.clear();
@@ -61,8 +63,9 @@ protected void buildUi() {
         LinearLayout screenTabs = screenTabBar();
         root.addView(screenTabs, matchWrap());
 
-        LinearLayout statusScreen = screenPage(root);
-        LinearLayout configScreen = screenPage(root);
+        FrameLayout pages = screenPageHost(root);
+        LinearLayout statusScreen = screenPage(pages);
+        LinearLayout configScreen = screenPage(pages);
         addScreenTab(screenTabs, "状态", statusScreen);
         addScreenTab(screenTabs, "配置", configScreen);
 

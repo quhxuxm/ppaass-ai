@@ -352,13 +352,26 @@ protected LinearLayout screenTabBar() {
         return row;
     }
 
-protected LinearLayout screenPage(LinearLayout root) {
+protected FrameLayout screenPageHost(LinearLayout root) {
+        FrameLayout host = new FrameLayout(this);
+        host.setClipChildren(false);
+        host.setClipToPadding(false);
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, dp(14), 0, 0);
+        root.addView(host, params);
+        screenPageHost = host;
+        return host;
+    }
+
+protected LinearLayout screenPage(FrameLayout host) {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setVisibility(View.GONE);
-        LinearLayout.LayoutParams params = matchWrap();
-        params.setMargins(0, dp(14), 0, 0);
-        root.addView(page, params);
+        page.setAlpha(0f);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        host.addView(page, params);
         screenPages.add(page);
         return page;
     }
@@ -395,21 +408,102 @@ protected void selectScreen(int selectedIndex) {
             return;
         }
         int boundedIndex = Math.max(0, Math.min(selectedIndex, screenPages.size() - 1));
-        selectedScreenIndex = boundedIndex;
-        for (int i = 0; i < screenPages.size(); i++) {
-            screenPages.get(i).setVisibility(i == boundedIndex ? View.VISIBLE : View.GONE);
+        int previousIndex = Math.max(0, Math.min(selectedScreenIndex, screenPages.size() - 1));
+        View previousPage = screenPages.get(previousIndex);
+        boolean firstSelection = previousPage.getVisibility() != View.VISIBLE
+                || screenPageHost == null
+                || screenPageHost.getWidth() == 0;
+
+        if (boundedIndex == previousIndex && !firstSelection) {
+            updateScreenTabs(boundedIndex);
+            return;
         }
+
+        selectedScreenIndex = boundedIndex;
+        updateScreenTabs(boundedIndex);
+        if (firstSelection) {
+            showScreenWithoutAnimation(boundedIndex);
+            return;
+        }
+        animateScreenSwitch(previousIndex, boundedIndex);
+    }
+
+private void updateScreenTabs(int selectedIndex) {
         for (int i = 0; i < screenTabButtons.size(); i++) {
             Button button = screenTabButtons.get(i);
-            boolean selected = i == boundedIndex;
+            boolean selected = i == selectedIndex;
             button.setTextColor(selected ? COLOR_ACTION_INFO : COLOR_MUTED);
             button.setBackground(selected
                     ? rounded(COLOR_ACTION_INFO_SOFT, COLOR_ACTION_INFO_SOFT)
                     : rounded(COLOR_CONTROL, COLOR_CONTROL));
-            if (selected) {
-                button.setTextColor(COLOR_ACTION_INFO);
-            }
         }
+    }
+
+private void showScreenWithoutAnimation(int selectedIndex) {
+        cancelScreenAnimations();
+        for (int i = 0; i < screenPages.size(); i++) {
+            View page = screenPages.get(i);
+            boolean selected = i == selectedIndex;
+            page.setVisibility(selected ? View.VISIBLE : View.GONE);
+            page.setAlpha(selected ? 1f : 0f);
+            page.setTranslationX(0f);
+        }
+    }
+
+private void animateScreenSwitch(int fromIndex, int toIndex) {
+        cancelScreenAnimations();
+
+        View fromPage = screenPages.get(fromIndex);
+        View toPage = screenPages.get(toIndex);
+        int direction = toIndex > fromIndex ? 1 : -1;
+        int width = Math.max(
+                screenPageHost == null ? 0 : screenPageHost.getWidth(),
+                getResources().getDisplayMetrics().widthPixels);
+        float incomingOffset = width * 0.22f * direction;
+        float outgoingOffset = width * -0.16f * direction;
+        long duration = 240L;
+
+        screenSwitchAnimating = true;
+        toPage.setVisibility(View.VISIBLE);
+        toPage.setAlpha(0f);
+        toPage.setTranslationX(incomingOffset);
+        fromPage.setVisibility(View.VISIBLE);
+        fromPage.setAlpha(1f);
+        fromPage.setTranslationX(0f);
+
+        android.view.animation.Interpolator interpolator =
+                new android.view.animation.DecelerateInterpolator(1.6f);
+        fromPage.animate()
+                .translationX(outgoingOffset)
+                .alpha(0f)
+                .setDuration(duration)
+                .setInterpolator(interpolator)
+                .start();
+        toPage.animate()
+                .translationX(0f)
+                .alpha(1f)
+                .setDuration(duration)
+                .setInterpolator(interpolator)
+                .withEndAction(() -> finishScreenSwitch(toIndex))
+                .start();
+    }
+
+private void finishScreenSwitch(int selectedIndex) {
+        for (int i = 0; i < screenPages.size(); i++) {
+            View page = screenPages.get(i);
+            boolean selected = i == selectedIndex;
+            page.setVisibility(selected ? View.VISIBLE : View.GONE);
+            page.setAlpha(selected ? 1f : 0f);
+            page.setTranslationX(0f);
+        }
+        screenSwitchAnimating = false;
+    }
+
+private void cancelScreenAnimations() {
+        for (View page : screenPages) {
+            page.animate().cancel();
+        }
+        screenSwitchAnimating = false;
     }
 
 protected void handleScreenSwipeEvent(MotionEvent event) {
