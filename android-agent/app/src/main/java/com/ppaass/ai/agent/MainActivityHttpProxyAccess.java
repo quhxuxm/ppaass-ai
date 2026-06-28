@@ -66,22 +66,28 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
             boolean configured = hasConfiguredUsbTetherAddress();
             addHttpProxyEndpointLine(
                     httpProxyUsbEndpointList,
-                    configured ? "电脑未识别 USB 网络共享" : "未检测到 USB 网络共享地址",
+                    configured ? "USB 网络共享地址暂未被电脑识别" : "等待 USB 网络共享地址",
                     true);
-            updateHttpProxyUsbAction("打开设置");
+            addHttpProxyEndpointLine(
+                    httpProxyUsbEndpointList,
+                    "备用 ADB 转发  127.0.0.1:" + port,
+                    false);
+            updateHttpProxyUsbAction("复制命令");
             updateHttpProxyUsbHint(configured
-                    ? "系统已开启共享，但电脑侧未建立 USB 网络"
-                    : isUsbCableConnected()
-                    ? "在系统里开启 USB 网络共享后会显示地址"
-                    : "用 USB 连接电脑，并开启系统 USB 网络共享");
+                    ? "优先使用系统 USB 网络共享；电脑侧未识别时，可备用复制 adb forward 命令"
+                    : "主要方式是打开系统 USB 网络共享；ADB forward 仅作为备用调试方式");
             return;
         }
 
         for (String address : addresses) {
             addHttpProxyEndpointLine(httpProxyUsbEndpointList, explicitProxyEndpoint(address, port), false);
         }
+        addHttpProxyEndpointLine(
+                httpProxyUsbEndpointList,
+                "备用 ADB 转发  127.0.0.1:" + port,
+                false);
         updateHttpProxyUsbAction("复制地址");
-        updateHttpProxyUsbHint("电脑 HTTP 与 SOCKS5 代理都填上方同一个地址");
+        updateHttpProxyUsbHint("优先使用上方 USB 网络共享地址；ADB forward 可作为备用方式");
     }
 
     protected void updateHttpProxyBluetoothAccess() {
@@ -114,7 +120,7 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
     protected void handleHttpProxyUsbAction() {
         List<String> addresses = currentUsbTetherIpv4Addresses();
         if (addresses.isEmpty()) {
-            openUsbTetherSettings();
+            copyUsbDebugForwardCommand();
             return;
         }
         copyHttpProxyUsbEndpoint(addresses.get(0) + ":" + httpProxyListenPort());
@@ -135,6 +141,19 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
 
     protected void copyHttpProxyBluetoothEndpoint(String endpoint) {
         copyHttpProxyEndpoint(endpoint, "蓝牙");
+    }
+
+    protected void copyUsbDebugForwardCommand() {
+        android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            Toast.makeText(this, "无法访问剪贴板", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(
+                "PPAASS USB 调试转发命令",
+                adbForwardCommand()));
+        Toast.makeText(this, "已复制 USB 调试转发命令", Toast.LENGTH_SHORT).show();
     }
 
     protected void copyHttpProxyEndpoint(String endpoint, String channelLabel) {
@@ -218,7 +237,12 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
     }
 
     protected String explicitProxyEndpoint(String address, String port) {
-        return "HTTP / SOCKS5   " + address + ":" + port;
+        return address + ":" + port;
+    }
+
+    protected String adbForwardCommand() {
+        int port = httpProxyListenPort();
+        return "adb forward tcp:" + port + " tcp:" + port;
     }
 
     protected void addHttpProxyEndpointDivider(LinearLayout target) {

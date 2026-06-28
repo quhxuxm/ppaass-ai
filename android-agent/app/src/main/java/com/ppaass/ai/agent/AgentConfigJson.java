@@ -44,6 +44,11 @@ final class AgentConfigJson {
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                         DefaultConfig.RUNTIME_THREADS))
                 .put("connect_timeout_secs", 30)
+                .put("http_proxy_max_concurrent_connects", parsePositiveInt(
+                        prefs.getString(
+                                "http_proxy_max_concurrent_connects",
+                                String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS)),
+                        DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS))
                 .put("compression_mode", normalizeCompressionMode(
                         prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE)))
                 .put("yamux", yamuxJson)

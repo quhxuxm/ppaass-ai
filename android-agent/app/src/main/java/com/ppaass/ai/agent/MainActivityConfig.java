@@ -72,6 +72,9 @@ protected void saveConfig() {
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
+                .putString(
+                        "http_proxy_max_concurrent_connects",
+                        httpProxyMaxConcurrentConnects.getText().toString())
                 .putString("tun_ipv4", DefaultConfig.TUN_IPV4)
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
@@ -108,6 +111,8 @@ protected void restoreDefaultConfig() {
         proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
         httpProxyPort.setText(String.valueOf(DefaultConfig.HTTP_PROXY_PORT));
         httpProxyThreads.setText(String.valueOf(DefaultConfig.HTTP_PROXY_THREADS));
+        httpProxyMaxConcurrentConnects.setText(
+                String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);

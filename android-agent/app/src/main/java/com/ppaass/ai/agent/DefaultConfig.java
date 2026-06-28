@@ -8,6 +8,7 @@ final class DefaultConfig {
     static final int TUN_MTU = 1500;
     static final int HTTP_PROXY_PORT = 18080;
     static final int HTTP_PROXY_THREADS = 4;
+    static final int HTTP_PROXY_MAX_CONCURRENT_CONNECTS = 16;
     static final String QUIC_POLICY = "allow";
     static final String COMPRESSION_MODE = "none";
     static final String DIRECT_ACCESS_MODE = "proxy_all";

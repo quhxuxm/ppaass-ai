@@ -25,6 +25,9 @@ pub struct AndroidAgentConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
+    #[serde(default = "default_http_proxy_max_concurrent_connects")]
+    pub http_proxy_max_concurrent_connects: usize,
+
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
@@ -137,6 +140,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_http_proxy_max_concurrent_connects() -> usize {
+    16
 }
 
 fn default_compression_mode() -> String {

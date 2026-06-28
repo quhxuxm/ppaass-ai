@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 #[cfg(test)]
 use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
@@ -13,7 +14,7 @@ use common::{
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -22,6 +23,9 @@ use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
 const MAX_CONCURRENT_SESSION_CONNECTS: usize = 10;
+const MAX_CONFIGURED_DIRECT_TCP_CONNECTS: usize = 256;
+const MIN_DIRECT_TCP_STREAM_TIMEOUT_SECS: u64 = 5;
+const MAX_DIRECT_TCP_STREAM_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Clone)]
 struct AndroidYamuxSession {
@@ -36,6 +40,7 @@ pub struct AndroidYamuxSessionManager {
     yamux_transport: TransportProtocol,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
     yamux_refill_lock: Mutex<()>,
+    direct_tcp_connects: Semaphore,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
 }
@@ -68,6 +73,9 @@ impl AndroidYamuxSessionManager {
         manager_name: &'static str,
         yamux_transport: TransportProtocol,
     ) -> Arc<Self> {
+        let direct_tcp_connect_limit = config
+            .http_proxy_max_concurrent_connects
+            .clamp(1, MAX_CONFIGURED_DIRECT_TCP_CONNECTS);
         Arc::new(Self {
             config,
             shutdown,
@@ -75,6 +83,7 @@ impl AndroidYamuxSessionManager {
             yamux_transport,
             yamux_sessions: Mutex::new(Vec::new()),
             yamux_refill_lock: Mutex::new(()),
+            direct_tcp_connects: Semaphore::new(direct_tcp_connect_limit),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
         })
@@ -99,14 +108,46 @@ impl AndroidYamuxSessionManager {
     }
 
     async fn open_direct_tcp_stream(&self, address: Address) -> Result<AndroidYamuxTargetStream> {
-        let connection = AuthenticatedConnection::connect(self.config.as_ref())
-            .await
-            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
-        let (stream, _stream_id) = connection
-            .connect_to_target(address, TransportProtocol::Tcp)
-            .await
-            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
-        Ok(AndroidYamuxTargetStream::Direct(stream))
+        let target = target_label(&address);
+        let timeout_duration = self.direct_tcp_stream_timeout();
+        let connect = async {
+            let _permit = self.direct_tcp_connects.acquire().await.map_err(|_| {
+                AndroidAgentError::Connection("Android TCP connect limiter closed".into())
+            })?;
+            let connection = AuthenticatedConnection::connect(self.config.as_ref())
+                .await
+                .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+            let (stream, _stream_id) = connection
+                .connect_to_target(address, TransportProtocol::Tcp)
+                .await
+                .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+            Ok(AndroidYamuxTargetStream::Direct(stream))
+        };
+
+        match tokio::time::timeout(timeout_duration, connect).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    "Android TCP proxy stream timed out target={} after {:?}",
+                    target, timeout_duration
+                );
+                android_log::warn(format!(
+                    "Android TCP proxy stream timed out {target} after {}s",
+                    timeout_duration.as_secs()
+                ));
+                Err(AndroidAgentError::Connection(format!(
+                    "Android TCP proxy stream timed out after {} seconds",
+                    timeout_duration.as_secs()
+                )))
+            }
+        }
+    }
+
+    fn direct_tcp_stream_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.connect_timeout_secs.clamp(
+            MIN_DIRECT_TCP_STREAM_TIMEOUT_SECS,
+            MAX_DIRECT_TCP_STREAM_TIMEOUT_SECS,
+        ))
     }
 
     async fn open_target_stream(
@@ -433,6 +474,29 @@ fn is_yamux_actual_target_connect_error(message: &str) -> bool {
 
 fn is_yamux_session_capacity_error(message: &str) -> bool {
     message == YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
+}
+
+fn target_label(address: &Address) -> String {
+    match address {
+        Address::Domain { host, port } => format!("{host}:{port}"),
+        Address::Ipv4 { addr, port } => {
+            format!("{}.{}.{}.{}:{port}", addr[0], addr[1], addr[2], addr[3])
+        }
+        Address::Ipv6 { addr, port } => format!(
+            "[{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}]:{}",
+            u16::from_be_bytes([addr[0], addr[1]]),
+            u16::from_be_bytes([addr[2], addr[3]]),
+            u16::from_be_bytes([addr[4], addr[5]]),
+            u16::from_be_bytes([addr[6], addr[7]]),
+            u16::from_be_bytes([addr[8], addr[9]]),
+            u16::from_be_bytes([addr[10], addr[11]]),
+            u16::from_be_bytes([addr[12], addr[13]]),
+            u16::from_be_bytes([addr[14], addr[15]]),
+            port
+        ),
+        Address::ProxyDns { port } => format!("proxy-dns:{port}"),
+        Address::UdpRelay => "udp-relay".to_string(),
+    }
 }
 
 #[cfg(test)]

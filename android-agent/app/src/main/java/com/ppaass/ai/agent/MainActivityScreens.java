@@ -43,14 +43,7 @@ protected void buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setClipToPadding(false);
         scroll.setFillViewport(true);
-        GradientDrawable background = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{
-                        Color.WHITE,
-                        Color.rgb(252, 254, 253),
-                        Color.WHITE
-                });
-        scroll.setBackground(background);
+        scroll.setBackground(appBackground());
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);

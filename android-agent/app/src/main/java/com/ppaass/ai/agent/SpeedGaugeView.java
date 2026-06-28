@@ -12,13 +12,13 @@ import android.view.View;
 
 // 状态页的速度仪表盘，只负责绘制，不参与业务状态计算。
 final class SpeedGaugeView extends View {
-    private static final int COLOR_TRACK = Color.rgb(228, 224, 216);
+    private static final int COLOR_TRACK = Color.rgb(225, 229, 239);
     private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
     private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
     private static final int COLOR_DOWNLOAD_A = Color.rgb(242, 193, 0);
     private static final int COLOR_DOWNLOAD_B = Color.rgb(229, 22, 112);
-    private static final int COLOR_UPLOAD_A = Color.rgb(0, 185, 133);
-    private static final int COLOR_UPLOAD_B = Color.rgb(21, 94, 232);
+    private static final int COLOR_UPLOAD_A = Color.rgb(21, 94, 232);
+    private static final int COLOR_UPLOAD_B = Color.rgb(217, 91, 135);
 
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -54,12 +54,21 @@ final class SpeedGaugeView extends View {
         int width = getWidth();
         int height = getHeight();
         long scale = gaugeScale(Math.max(rxBytesPerSecond, txBytesPerSecond));
-        float centerY = height * 0.46f;
-        float radius = Math.min(width * 0.22f, height * 0.38f);
+        float outerPadding = dp(18);
+        float centerGap = dp(22);
+        float availableWidth = Math.max(0f, width - outerPadding * 2f - centerGap);
+        if (availableWidth <= dp(96)) {
+            return;
+        }
+        float gaugeSlotWidth = availableWidth / 2f;
+        float centerY = height * 0.42f;
+        float radius = Math.min(gaugeSlotWidth * 0.38f, height * 0.30f);
+        float leftCenterX = outerPadding + gaugeSlotWidth / 2f;
+        float rightCenterX = outerPadding + gaugeSlotWidth + centerGap + gaugeSlotWidth / 2f;
 
         drawGauge(
                 canvas,
-                width * 0.29f,
+                leftCenterX,
                 centerY,
                 radius,
                 rxBytesPerSecond,
@@ -69,7 +78,7 @@ final class SpeedGaugeView extends View {
                 COLOR_DOWNLOAD_B);
         drawGauge(
                 canvas,
-                width * 0.71f,
+                rightCenterX,
                 centerY,
                 radius,
                 txBytesPerSecond,
@@ -98,7 +107,7 @@ final class SpeedGaugeView extends View {
             String label,
             int startColor,
             int endColor) {
-        float stroke = dp(14);
+        float stroke = Math.min(dp(14), Math.max(dp(9), radius * 0.22f));
         arcBounds.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
         trackPaint.setStrokeWidth(stroke);
         progressPaint.setStrokeWidth(stroke);
@@ -126,7 +135,7 @@ final class SpeedGaugeView extends View {
         textPaint.setTextSize(dp(12));
         canvas.drawText(unitLabel(speed), centerX, centerY + dp(22), textPaint);
 
-        float chipWidth = dp(78);
+        float chipWidth = Math.min(dp(78), Math.max(dp(56), radius * 1.55f));
         chipBounds.set(
                 centerX - chipWidth / 2f,
                 centerY + radius * 0.52f,

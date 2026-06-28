@@ -56,7 +56,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 prefString("http_proxy_port", String.valueOf(DefaultConfig.HTTP_PROXY_PORT)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "同一个端口同时接受 HTTP 代理与 SOCKS5 代理，类似桌面端 listen_addr。");
+        addFieldHelp(httpProxy, "同一个端口同时接受 HTTP 代理与 SOCKS5 代理连接，类似桌面端 listen_addr。");
         httpProxyThreads = numberControl(
                 httpProxy,
                 "代理线程",
@@ -64,6 +64,15 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 1);
         addFieldHelp(httpProxy, "显式代理专属运行线程数，修改后重启 HTTP / SOCKS5 代理生效。");
+        httpProxyMaxConcurrentConnects = numberControl(
+                httpProxy,
+                "并发建连",
+                prefString(
+                        "http_proxy_max_concurrent_connects",
+                        String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS)),
+                1,
+                1);
+        addFieldHelp(httpProxy, "限制 HTTP / SOCKS5 同时向远端 proxy 建立目标连接的数量，浏览器并发较高时可适当调大。");
 
         LinearLayout runtime = configSection(root, "运行参数");
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());

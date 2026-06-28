@@ -3,22 +3,19 @@ package com.ppaass.ai.agent;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.view.View;
 
 // 状态页的 24 小时流量柱状图，外部只需要喂入聚合后的小时数据。
 final class TrafficBarView extends View {
-    private static final int COLOR_CONTROL_A = Color.rgb(239, 245, 255);
-    private static final int COLOR_CONTROL_B = Color.rgb(255, 242, 248);
+    private static final int COLOR_CONTROL_A = Color.rgb(244, 247, 252);
     private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
-    private static final int COLOR_BORDER = Color.rgb(225, 223, 218);
+    private static final int COLOR_BORDER = Color.rgb(225, 229, 239);
     private static final int COLOR_DOWNLOAD_A = Color.rgb(242, 193, 0);
     private static final int COLOR_DOWNLOAD_B = Color.rgb(229, 22, 112);
-    private static final int COLOR_UPLOAD_A = Color.rgb(0, 185, 133);
-    private static final int COLOR_UPLOAD_B = Color.rgb(21, 94, 232);
+    private static final int COLOR_UPLOAD_A = Color.rgb(21, 94, 232);
+    private static final int COLOR_UPLOAD_B = Color.rgb(217, 91, 135);
     private static final int[] COLOR_BAR_PALETTE = {
             COLOR_DOWNLOAD_B,
             COLOR_DOWNLOAD_A,
@@ -109,17 +106,10 @@ final class TrafficBarView extends View {
             int color,
             boolean highlighted) {
         if (total <= 0) {
-            barPaint.setShader(new LinearGradient(
-                    x,
-                    y,
-                    x,
-                    y + totalHeight,
-                    COLOR_CONTROL_A,
-                    COLOR_CONTROL_B,
-                    Shader.TileMode.CLAMP));
+            barPaint.setShader(null);
+            barPaint.setColor(COLOR_CONTROL_A);
             barBounds.set(x, y, x + width, y + totalHeight);
             canvas.drawRoundRect(barBounds, dp(4), dp(4), barPaint);
-            barPaint.setShader(null);
             return;
         }
 

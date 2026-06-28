@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
@@ -29,22 +31,31 @@ import java.util.Set;
 
 final class HttpProxyClientDialog {
     private static final int COLOR_SURFACE = Color.WHITE;
-    private static final int COLOR_CONTROL = Color.rgb(249, 247, 241);
+    private static final int COLOR_CONTROL = Color.rgb(248, 250, 255);
     private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
     private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
-    private static final int COLOR_BORDER = Color.rgb(225, 223, 218);
-    private static final int COLOR_ACCENT = Color.rgb(0, 169, 120);
+    private static final int COLOR_BORDER = Color.rgb(225, 229, 239);
+    private static final int COLOR_ACCENT = Color.rgb(229, 22, 112);
     private static final int COLOR_ACCENT_DARK = Color.rgb(21, 94, 232);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(188, 243, 221);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(234, 241, 255);
     private static final int COLOR_ACTION_STOP = Color.rgb(181, 17, 88);
     private static final int COLOR_ACTION_STOP_SOFT = Color.rgb(255, 217, 235);
 
     private final Context context;
     private final SharedPreferences prefs;
+    private final Handler refreshHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoRefresh = new Runnable() {
+        @Override
+        public void run() {
+            render();
+            refreshHandler.postDelayed(this, 1000);
+        }
+    };
     private LinearLayout list;
     private TextView summary;
     private Button activeTab;
     private Button blockedTab;
+    private AlertDialog dialog;
     private boolean showingBlocked;
 
     HttpProxyClientDialog(Context context, SharedPreferences prefs) {
@@ -112,9 +123,10 @@ final class HttpProxyClientDialog {
         listShell.addView(scroll, matchWrap());
         root.addView(listShell, matchWrap());
 
-        AlertDialog dialog = new AlertDialog.Builder(context).setView(root).create();
+        dialog = new AlertDialog.Builder(context).setView(root).create();
         close.setOnClickListener(view -> dialog.dismiss());
-        dialog.setOnShowListener(view -> render());
+        dialog.setOnShowListener(view -> startAutoRefresh());
+        dialog.setOnDismissListener(view -> stopAutoRefresh());
         dialog.show();
     }
 
@@ -126,40 +138,66 @@ final class HttpProxyClientDialog {
         try {
             JSONObject state = new JSONObject(NativeAgent.httpProxyClientsJson());
             JSONArray active = state.optJSONArray("active");
+            JSONArray recent = state.optJSONArray("recent");
             Set<String> blocked = blockedClientsFromState(state.optJSONArray("blocked"));
-            updateHeader(active == null ? 0 : active.length(), blocked.size());
+            updateHeader(
+                    active == null ? 0 : active.length(),
+                    recent == null ? 0 : recent.length(),
+                    blocked.size());
             if (showingBlocked) {
                 addBlockedRows(blocked);
             } else {
-                addActiveRows(active);
+                addConnectionRows(active, recent);
             }
         } catch (JSONException error) {
             addEmptyRow("客户端列表读取失败");
         }
     }
 
-    private void updateHeader(int activeCount, int blockedCount) {
+    private void updateHeader(int activeCount, int recentCount, int blockedCount) {
         if (summary != null) {
-            summary.setText(activeCount + " 个活动 · " + blockedCount + " 个已禁止");
+            summary.setText(activeCount + " 个活动 · " + recentCount + " 个最近 · " + blockedCount + " 个已禁止");
         }
-        activeTab.setText("活动 " + activeCount);
+        activeTab.setText("连接 " + (activeCount + recentCount));
         blockedTab.setText("已禁止 " + blockedCount);
         styleTab(activeTab, !showingBlocked);
         styleTab(blockedTab, showingBlocked);
     }
 
-    private void addActiveRows(JSONArray active) throws JSONException {
-        if (active == null || active.length() == 0) {
+    private void addConnectionRows(JSONArray active, JSONArray recent) throws JSONException {
+        int activeCount = active == null ? 0 : active.length();
+        int recentCount = recent == null ? 0 : recent.length();
+        if (activeCount == 0 && recentCount == 0) {
             addEmptyRow("暂无活动客户端");
             return;
         }
-        for (int i = 0; i < active.length(); i++) {
+        for (int i = 0; i < activeCount; i++) {
             JSONObject client = active.optJSONObject(i);
             if (client == null) {
                 continue;
             }
             String ip = client.optString("ip", "");
             String detail = client.optInt("connections", 0) + " 个连接";
+            String peers = compactPeers(client.optJSONArray("peers"));
+            if (!peers.isEmpty()) {
+                detail += " · " + peers;
+            }
+            addClientRow(ip, detail, false, R.drawable.ic_block_24, COLOR_ACTION_STOP, view -> {
+                blockClient(ip);
+                render();
+            });
+        }
+        for (int i = 0; i < recentCount; i++) {
+            JSONObject client = recent.optJSONObject(i);
+            if (client == null) {
+                continue;
+            }
+            String ip = client.optString("ip", "");
+            String detail = "最近连接";
+            int total = client.optInt("total_connections", 0);
+            if (total > 0) {
+                detail += " · 累计 " + total + " 次";
+            }
             String peers = compactPeers(client.optJSONArray("peers"));
             if (!peers.isEmpty()) {
                 detail += " · " + peers;
@@ -349,12 +387,21 @@ final class HttpProxyClientDialog {
     }
 
     private GradientDrawable iconPlateBackground(int color) {
-        GradientDrawable drawable = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(245, 255, 255, 255), alphaColor(color, 44)});
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(Color.WHITE);
         drawable.setCornerRadius(dp(10));
         drawable.setStroke(dp(1), alphaColor(color, 74));
         return drawable;
+    }
+
+    private void startAutoRefresh() {
+        stopAutoRefresh();
+        render();
+        refreshHandler.postDelayed(autoRefresh, 1000);
+    }
+
+    private void stopAutoRefresh() {
+        refreshHandler.removeCallbacks(autoRefresh);
     }
 
     private int alphaColor(int color, int alpha) {

@@ -19,12 +19,12 @@ import java.util.List;
 // VPN 应用选择列表只负责渲染，选中状态仍由 Activity 统一保存。
 final class AppListAdapter extends BaseAdapter {
     private static final int COLOR_SURFACE = Color.WHITE;
-    private static final int COLOR_CONTROL = Color.rgb(249, 247, 241);
+    private static final int COLOR_CONTROL = Color.rgb(248, 250, 255);
     private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
     private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
-    private static final int COLOR_BORDER = Color.rgb(225, 223, 218);
+    private static final int COLOR_BORDER = Color.rgb(225, 229, 239);
     private static final int COLOR_ACCENT_DARK = Color.rgb(21, 94, 232);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(210, 224, 255);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(234, 241, 255);
     private static final int COLOR_ACTION_START = Color.rgb(229, 22, 112);
 
     private final Context context;
@@ -168,9 +168,8 @@ final class AppListAdapter extends BaseAdapter {
     }
 
     private GradientDrawable iconPlate(int color) {
-        GradientDrawable drawable = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(246, 255, 255, 255), alphaColor(color, 42)});
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(Color.WHITE);
         drawable.setCornerRadius(dp(12));
         drawable.setStroke(dp(1), alphaColor(color, 70));
         return drawable;

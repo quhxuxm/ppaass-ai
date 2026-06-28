@@ -24,6 +24,13 @@ import java.util.*;
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
 abstract class MainActivityUiKit extends MainActivityState {
 
+private static final int[] CARD_ACCENTS = {
+        COLOR_ACCENT,
+        COLOR_ACTION_START,
+        COLOR_ACTION_INFO,
+        COLOR_ACCENT
+};
+
 protected Button secondaryButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -63,12 +70,69 @@ protected int alphaColor(int color, int alpha) {
         return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color));
     }
 
+protected Drawable appBackground() {
+        return new Drawable() {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+            @Override
+            public void draw(Canvas canvas) {
+                Rect bounds = getBounds();
+                int width = Math.max(1, bounds.width());
+                int height = Math.max(1, bounds.height());
+
+                paint.setShader(new LinearGradient(
+                        0,
+                        0,
+                        width,
+                        height,
+                        Color.rgb(248, 244, 250),
+                        COLOR_BACKGROUND,
+                        Shader.TileMode.CLAMP));
+                canvas.drawRect(bounds, paint);
+
+                drawWash(canvas, width * 0.14f, height * 0.03f, width * 0.42f, COLOR_ACCENT, 30);
+                drawWash(canvas, width * 0.74f, 0f, width * 0.38f, COLOR_ACTION_START, 34);
+                drawWash(canvas, width * 0.90f, height * 0.82f, width * 0.34f, COLOR_ACTION_INFO, 18);
+                paint.setShader(null);
+            }
+
+            private void drawWash(Canvas canvas, float cx, float cy, float radius, int color, int alpha) {
+                paint.setShader(new RadialGradient(
+                        cx,
+                        cy,
+                        radius,
+                        alphaColor(color, alpha),
+                        Color.TRANSPARENT,
+                        Shader.TileMode.CLAMP));
+                canvas.drawCircle(cx, cy, radius, paint);
+            }
+
+            @Override
+            public void setAlpha(int alpha) {
+                paint.setAlpha(alpha);
+            }
+
+            @Override
+            public void setColorFilter(android.graphics.ColorFilter colorFilter) {
+                paint.setColorFilter(colorFilter);
+            }
+
+            @Override
+            public int getOpacity() {
+                return PixelFormat.TRANSLUCENT;
+            }
+        };
+    }
+
+protected int cardAccent(int index) {
+        return CARD_ACCENTS[Math.floorMod(index, CARD_ACCENTS.length)];
+    }
+
 protected GradientDrawable iconPlateBackground(int color) {
-        GradientDrawable drawable = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(245, 255, 255, 255), alphaColor(color, 46)});
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(Color.WHITE);
         drawable.setCornerRadius(dp(10));
-        drawable.setStroke(dp(1), alphaColor(color, 76));
+        drawable.setStroke(dp(1), alphaColor(color, 72));
         return drawable;
     }
 
@@ -174,12 +238,12 @@ protected void applyActionButtonStyle(Button button, int color) {
         button.setTextColor(actionButtonText(color));
         if (color == COLOR_ACTION_START) {
             button.setTextColor(COLOR_TEXT);
-            button.setBackground(rounded(COLOR_ACTION_WARN_SOFT, COLOR_ACTION_WARN));
+            button.setBackground(rounded(COLOR_ACTION_START_SOFT, COLOR_ACTION_START));
             return;
         }
         if (color == COLOR_ACCENT) {
-            button.setTextColor(COLOR_ACCENT_DARK);
-            button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+            button.setTextColor(COLOR_ACCENT);
+            button.setBackground(rounded(COLOR_ACTION_WARN_SOFT, COLOR_ACTION_WARN));
             return;
         }
         if (color == COLOR_ACTION_INFO) {
@@ -205,6 +269,9 @@ protected int actionButtonFill(int color) {
         if (color == COLOR_ACTION_WARN) {
             return COLOR_ACTION_WARN_SOFT;
         }
+        if (color == COLOR_ACTION_START) {
+            return COLOR_ACTION_START_SOFT;
+        }
         if (color == COLOR_STATUS_STOPPED) {
             return COLOR_STATUS_STOPPED_SOFT;
         }
@@ -221,6 +288,9 @@ protected int actionButtonText(int color) {
         if (color == COLOR_ACTION_WARN) {
             return COLOR_ACTION_WARN;
         }
+        if (color == COLOR_ACTION_START) {
+            return COLOR_TEXT;
+        }
         if (color == COLOR_STATUS_STOPPED) {
             return COLOR_MUTED;
         }
@@ -231,15 +301,12 @@ protected LinearLayout panel(LinearLayout root) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(18), dp(16), dp(18), dp(18));
-        panel.setBackground(softGradient(
-                Color.argb(232, 255, 255, 255),
-                Color.argb(206, 255, 248, 234),
-                Color.argb(170, 255, 255, 255)));
+        panel.setBackground(rounded(COLOR_SURFACE, alphaColor(cardAccent(root.getChildCount()), 86)));
         panel.setStateListAnimator(null);
-        panel.setElevation(0f);
-        panel.setTranslationZ(0f);
+        panel.setElevation(dp(4));
+        panel.setTranslationZ(dp(2));
         LinearLayout.LayoutParams params = matchWrap();
-        params.setMargins(0, root.getChildCount() == 0 ? 0 : dp(14), 0, 0);
+        params.setMargins(0, root.getChildCount() == 0 ? 0 : dp(16), 0, 0);
         root.addView(panel, params);
         return panel;
     }
@@ -278,10 +345,10 @@ protected LinearLayout configGroup(LinearLayout root, String title, String appli
 protected LinearLayout screenTabBar() {
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
-        row.setBackground(softGradient(
-                Color.argb(205, 255, 255, 255),
-                Color.argb(180, 232, 246, 250),
-                Color.argb(150, 255, 255, 255)));
+        row.setBackground(rounded(COLOR_SURFACE, alphaColor(COLOR_ACTION_INFO, 42)));
+        row.setStateListAnimator(null);
+        row.setElevation(dp(3));
+        row.setTranslationZ(dp(1));
         return row;
     }
 
@@ -543,9 +610,9 @@ protected int chipFill(int color) {
             return COLOR_ACTION_START_SOFT;
         }
         if (color == COLOR_STATUS_RUNNING) {
-            return COLOR_ACCENT_SOFT;
+            return Color.rgb(222, 247, 238);
         }
-        return COLOR_ACCENT_SOFT;
+        return COLOR_ACTION_WARN_SOFT;
     }
 
     protected int chipText(int color) {
@@ -565,9 +632,9 @@ protected int chipFill(int color) {
             return COLOR_ACTION_START;
         }
         if (color == COLOR_STATUS_RUNNING) {
-            return COLOR_ACCENT_DARK;
+            return COLOR_STATUS_RUNNING;
         }
-        return COLOR_ACCENT_DARK;
+        return COLOR_ACCENT;
     }
 
 }

@@ -153,7 +153,7 @@ protected void buildStatusScreen(LinearLayout root) {
 protected void buildHttpProxyPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
         sectionTitle(panel, "HTTP / SOCKS5 代理");
-        TextView subtitle = mutedText("HTTP 与 SOCKS5 共享同一个地址和端口，协议由客户端自动握手区分", 13f);
+        TextView subtitle = mutedText("同一端口同时接受 HTTP 与 SOCKS5 连接，协议由客户端自动握手区分", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
@@ -184,7 +184,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         panel.addView(endpointBox, matchWrap());
         updateHttpProxyEndpoint();
 
-        TextView hint = mutedText("同一 Wi-Fi 或手机热点下，HTTP 与 SOCKS5 都填上方同一个地址", 12f);
+        TextView hint = mutedText("同一 Wi-Fi 或手机热点下，HTTP 与 SOCKS5 可同时使用上方同一个地址", 12f);
         LinearLayout.LayoutParams hintParams = matchWrap();
         hintParams.setMargins(0, dp(6), 0, 0);
         panel.addView(hint, hintParams);
@@ -214,20 +214,28 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         usbBox.addView(usbScroll, matchWrap());
         panel.addView(usbBox, matchWrap());
 
-        LinearLayout usbActionRow = horizontalRow();
+        LinearLayout usbActionBlock = new LinearLayout(this);
+        usbActionBlock.setOrientation(LinearLayout.VERTICAL);
         httpProxyUsbHint = mutedText("", 12f);
-        usbActionRow.addView(httpProxyUsbHint, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f));
-        httpProxyUsbActionButton = secondaryButton("打开设置");
+        usbActionBlock.addView(httpProxyUsbHint, matchWrap());
+
+        LinearLayout usbButtonRow = horizontalRow();
+        usbButtonRow.setGravity(Gravity.END);
+        httpProxyUsbSettingsButton = secondaryButton("打开设置");
+        httpProxyUsbSettingsButton.setOnClickListener(view -> openUsbTetherSettings());
+        LinearLayout.LayoutParams usbSettingsParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        usbButtonRow.addView(httpProxyUsbSettingsButton, usbSettingsParams);
+        httpProxyUsbActionButton = secondaryButton("复制命令");
         httpProxyUsbActionButton.setOnClickListener(view -> handleHttpProxyUsbAction());
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(104), dp(38));
-        copyParams.setMargins(dp(8), 0, 0, 0);
-        usbActionRow.addView(httpProxyUsbActionButton, copyParams);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        copyParams.setMargins(dp(6), 0, 0, 0);
+        usbButtonRow.addView(httpProxyUsbActionButton, copyParams);
+        LinearLayout.LayoutParams usbButtonParams = matchWrap();
+        usbButtonParams.setMargins(0, dp(6), 0, 0);
+        usbActionBlock.addView(usbButtonRow, usbButtonParams);
         LinearLayout.LayoutParams usbActionParams = matchWrap();
         usbActionParams.setMargins(0, dp(6), 0, 0);
-        panel.addView(usbActionRow, usbActionParams);
+        panel.addView(usbActionBlock, usbActionParams);
         updateHttpProxyUsbAccess();
 
         TextView bluetoothTitle = controlLabel("蓝牙电脑访问");

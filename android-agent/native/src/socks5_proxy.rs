@@ -11,6 +11,7 @@ use protocol::{Address, TransportProtocol};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
+use crate::android_log;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AndroidAgentError, Result};
 use crate::http_proxy_clients::HttpProxyClientLease;
@@ -55,13 +56,17 @@ async fn handle_tcp_connect(
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
     let address = convert_target_addr(&target_addr);
+    let use_direct = direct_checker.is_direct(&address);
 
-    if direct_checker.is_direct(&address) {
+    if use_direct {
         let target = address_to_string(&address);
         let mut target_stream = match connect_direct_tcp(&target).await {
             Ok(stream) => stream,
             Err(err) => {
                 error!("Android SOCKS5 direct connect failed {target}: {err}");
+                android_log::warn(format!(
+                    "Android SOCKS5 direct connect failed {target}: {err}"
+                ));
                 let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
                 return Err(AndroidAgentError::Connection(format!(
                     "SOCKS5 direct connect failed: {err}"
@@ -102,6 +107,9 @@ async fn handle_tcp_connect(
         Ok(stream) => stream,
         Err(err) => {
             error!("Android SOCKS5 proxy stream failed {target_label}: {err}");
+            android_log::warn(format!(
+                "Android SOCKS5 proxy stream failed {target_label}: {err}"
+            ));
             let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
             return Err(err);
         }
@@ -138,7 +146,12 @@ async fn relay_socks5_proxy(
                 "Android SOCKS5 proxy tunnel closed {target}: up={} down={}",
                 stats.client_to_remote, stats.remote_to_client
             ),
-            Err(err) => debug!("Android SOCKS5 proxy tunnel ended {target}: {err}"),
+            Err(err) => {
+                debug!("Android SOCKS5 proxy tunnel ended {target}: {err}");
+                android_log::warn(format!(
+                    "Android SOCKS5 proxy tunnel ended {target}: {err}"
+                ));
+            }
         },
         _ = cancel.cancelled() => {
             debug!("Android SOCKS5 proxy tunnel cancelled {target}");
