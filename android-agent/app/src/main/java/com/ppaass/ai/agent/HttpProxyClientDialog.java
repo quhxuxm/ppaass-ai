@@ -29,15 +29,15 @@ import java.util.Set;
 
 final class HttpProxyClientDialog {
     private static final int COLOR_SURFACE = Color.WHITE;
-    private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
-    private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
-    private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
-    private static final int COLOR_BORDER = Color.rgb(226, 232, 240);
-    private static final int COLOR_ACCENT = Color.rgb(45, 170, 158);
-    private static final int COLOR_ACCENT_DARK = Color.rgb(18, 128, 119);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(207, 244, 237);
-    private static final int COLOR_ACTION_STOP = Color.rgb(214, 104, 86);
-    private static final int COLOR_ACTION_STOP_SOFT = Color.rgb(255, 225, 218);
+    private static final int COLOR_CONTROL = Color.rgb(249, 247, 241);
+    private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
+    private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
+    private static final int COLOR_BORDER = Color.rgb(225, 223, 218);
+    private static final int COLOR_ACCENT = Color.rgb(0, 169, 120);
+    private static final int COLOR_ACCENT_DARK = Color.rgb(21, 94, 232);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(188, 243, 221);
+    private static final int COLOR_ACTION_STOP = Color.rgb(181, 17, 88);
+    private static final int COLOR_ACTION_STOP_SOFT = Color.rgb(255, 217, 235);
 
     private final Context context;
     private final SharedPreferences prefs;
@@ -60,7 +60,7 @@ final class HttpProxyClientDialog {
         LinearLayout header = horizontalRow();
         LinearLayout titleColumn = new LinearLayout(context);
         titleColumn.setOrientation(LinearLayout.VERTICAL);
-        titleColumn.addView(titleText("HTTP Proxy 客户端", 20f), matchWrap());
+        titleColumn.addView(titleText("HTTP / SOCKS5 客户端", 20f), matchWrap());
         summary = mutedText("正在读取客户端", 12f);
         titleColumn.addView(summary, matchWrap());
         header.addView(titleColumn, new LinearLayout.LayoutParams(
@@ -343,10 +343,22 @@ final class HttpProxyClientDialog {
         button.setPadding(dp(8), dp(8), dp(8), dp(8));
         button.setMinimumHeight(0);
         button.setMinimumWidth(0);
-        int fill = color == COLOR_MUTED ? COLOR_CONTROL : (stopAction ? COLOR_ACTION_STOP_SOFT : COLOR_ACCENT_SOFT);
-        button.setBackground(rounded(fill, fill));
+        button.setBackground(iconPlateBackground(tint));
         flattenButton(button);
         return button;
+    }
+
+    private GradientDrawable iconPlateBackground(int color) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.argb(245, 255, 255, 255), alphaColor(color, 44)});
+        drawable.setCornerRadius(dp(10));
+        drawable.setStroke(dp(1), alphaColor(color, 74));
+        return drawable;
+    }
+
+    private int alphaColor(int color, int alpha) {
+        return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color));
     }
 
     private void flattenButton(View view) {

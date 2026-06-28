@@ -74,23 +74,23 @@ export function useDesktopAgent() {
   );
   const tunDiagnosticsLabel = computed(() => {
     if (!state.diagnostics) {
-      return "Pending";
+      return "待测试";
     }
     if (!state.diagnostics.tun_enabled) {
-      return "Disabled";
+      return "未启用";
     }
     if (!state.diagnostics.tun_ready) {
-      return "Not Ready";
+      return "未就绪";
     }
     if (!tunDiagnosticResults.value.length) {
-      return "No tests";
+      return "无测试";
     }
     const passed = tunDiagnosticResults.value.filter((item) => item.success).length;
     return `${passed}/${tunDiagnosticResults.value.length}`;
   });
   const directModeLabel = computed(() => directModeLabels[summary.value.direct_mode] ?? summary.value.direct_mode);
   const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "未启用"));
-  const proxyEntryStateLabel = computed(() => "随 Agent 启动");
+  const proxyEntryStateLabel = computed(() => "随代理启动");
   const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
   const recentDnsRecords = computed(() =>
     normalizeDnsRecords(state.dnsRecords)
@@ -98,7 +98,7 @@ export function useDesktopAgent() {
       .sort((left, right) => dnsRecordTimestamp(right) - dnsRecordTimestamp(left))
       .slice(0, 80)
   );
-  const dnsCardLabel = computed(() => (summary.value.tun_proxy_dns ? `${recentDnsRecords.value.length} 条` : "System"));
+  const dnsCardLabel = computed(() => (summary.value.tun_proxy_dns ? `${recentDnsRecords.value.length} 条` : "系统"));
   const directRuleGroups = computed(() => buildDirectRuleGroups(summary.value.direct_rules));
 
   let trafficTimer: number | undefined;
@@ -185,7 +185,7 @@ export function useDesktopAgent() {
     if (notify && previousEnabled !== enabled) {
       showToast(
         "success",
-        `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，正在重启 Agent" : ""}`
+        `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，正在重启代理" : ""}`
       );
       void refreshAgentState();
     }
@@ -282,7 +282,7 @@ export function useDesktopAgent() {
       await refreshAgentState();
       showToast(
         state.agent.running ? "success" : "error",
-        state.agent.running ? "Agent 已启动" : latestAgentLog() ?? "Agent 启动失败"
+        state.agent.running ? "代理已启动" : latestAgentLog() ?? "代理启动失败"
       );
     } catch (error) {
       await refreshAgentState();
@@ -300,7 +300,7 @@ export function useDesktopAgent() {
         {},
         () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
       );
-      showToast(state.agent.running ? "error" : "success", state.agent.running ? "Agent 仍在运行" : "Agent 已停止");
+      showToast(state.agent.running ? "error" : "success", state.agent.running ? "代理仍在运行" : "代理已停止");
     } catch (error) {
       showToast("error", getErrorMessage(error));
     } finally {
@@ -622,7 +622,7 @@ export function useDesktopAgent() {
       return true;
     }
     if (notify) {
-      showToast("error", "Agent 运行中，停止后再修改配置");
+      showToast("error", "代理运行中，停止后再修改配置");
     }
     return false;
   }

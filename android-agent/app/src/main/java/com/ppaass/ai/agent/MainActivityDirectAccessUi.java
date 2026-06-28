@@ -130,7 +130,7 @@ protected void addForwardingMethodRows(LinearLayout root) {
         LinearLayout.LayoutParams methodsParams = matchWrap();
         methodsParams.setMargins(0, dp(12), 0, 0);
         addForwardingMethod(methods, "Android VPN", "TUN 流量策略");
-        addForwardingMethod(methods, "Android HTTP Proxy", "显式代理流量");
+        addForwardingMethod(methods, "Android HTTP / SOCKS5 代理", "同端口显式代理流量");
         addForwardingMethod(methods, "策略路由", "使用当前直连模式");
         root.addView(methods, methodsParams);
     }

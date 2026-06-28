@@ -139,9 +139,9 @@ const emit = defineEmits<{
                   <span>TUN 域名规则</span>
                   <div class="rule-scope-modes">
                     <Tag value="TUN" severity="success" rounded />
-                    <Tag value="需 Proxy DNS" severity="warn" rounded />
+                    <Tag value="需代理 DNS" severity="warn" rounded />
                   </div>
-                  <p>需要先开启 Proxy DNS；浏览器或应用完成 DNS 查询后，命中缓存的域名规则才会生效。</p>
+                  <p>需要先开启代理 DNS；浏览器或应用完成 DNS 查询后，命中缓存的域名规则才会生效。</p>
                 </div>
               </div>
             </div>
@@ -182,7 +182,7 @@ const emit = defineEmits<{
                 </div>
                 <div class="rule-scope-note">
                   <i class="pi pi-info-circle"></i>
-                  <span>添加前先看入口：HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需要开启 Proxy DNS 并等待 DNS 缓存命中。</span>
+                  <span>添加前先看入口：HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需要开启代理 DNS 并等待 DNS 缓存命中。</span>
                 </div>
                 <div class="rule-compose">
                   <label class="field rule-input-field">

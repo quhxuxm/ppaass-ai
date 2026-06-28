@@ -3,14 +3,14 @@ import type { OverviewCardDefinition, OverviewCardKey, OverviewCardView } from "
 const overviewLayoutKey = "ppaass-agent-ui:overview-card-order:v1";
 
 export const overviewCardDefinitions: OverviewCardDefinition[] = [
-  { key: "status", baseSpan: 6 },
-  { key: "proxy", baseSpan: 6 },
-  { key: "egress", baseSpan: 6 },
-  { key: "speed", baseSpan: 6 },
-  { key: "traffic", baseSpan: 6 },
-  { key: "dns", baseSpan: 6 },
-  { key: "tun", baseSpan: 6 },
-  { key: "policy", baseSpan: 6 }
+  { key: "status", baseSpan: 5 },
+  { key: "proxy", baseSpan: 7 },
+  { key: "speed", baseSpan: 5 },
+  { key: "traffic", baseSpan: 7 },
+  { key: "dns", baseSpan: 12 },
+  { key: "tun", baseSpan: 4 },
+  { key: "policy", baseSpan: 4 },
+  { key: "egress", baseSpan: 4 }
 ];
 
 export const defaultOverviewCardOrder = overviewCardDefinitions.map((card) => card.key);

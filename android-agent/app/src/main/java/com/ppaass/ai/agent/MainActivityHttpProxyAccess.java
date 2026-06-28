@@ -21,7 +21,7 @@ import java.security.*;
 import java.text.*;
 import java.util.*;
 
-// HTTP Proxy 入口地址集中在这里，避免状态页和运行时逻辑互相拖长。
+// HTTP / SOCKS5 代理入口地址集中在这里，避免状态页和运行时逻辑互相拖长。
 abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressDiscovery {
 
     protected void updateHttpProxyEndpoint() {
@@ -51,7 +51,7 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         }
 
         for (String address : addresses) {
-            addHttpProxyEndpointLine(httpProxyEndpointList, address + ":" + port, false);
+            addHttpProxyEndpointLine(httpProxyEndpointList, explicitProxyEndpoint(address, port), false);
         }
     }
 
@@ -78,10 +78,10 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         }
 
         for (String address : addresses) {
-            addHttpProxyEndpointLine(httpProxyUsbEndpointList, address + ":" + port, false);
+            addHttpProxyEndpointLine(httpProxyUsbEndpointList, explicitProxyEndpoint(address, port), false);
         }
         updateHttpProxyUsbAction("复制地址");
-        updateHttpProxyUsbHint("电脑浏览器代理填上方地址，无需额外工具");
+        updateHttpProxyUsbHint("电脑 HTTP 与 SOCKS5 代理都填上方同一个地址");
     }
 
     protected void updateHttpProxyBluetoothAccess() {
@@ -105,10 +105,10 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         }
 
         for (String address : addresses) {
-            addHttpProxyEndpointLine(httpProxyBluetoothEndpointList, address + ":" + port, false);
+            addHttpProxyEndpointLine(httpProxyBluetoothEndpointList, explicitProxyEndpoint(address, port), false);
         }
         updateHttpProxyBluetoothAction("复制地址");
-        updateHttpProxyBluetoothHint("电脑浏览器代理填上方地址，无需同一 Wi-Fi");
+        updateHttpProxyBluetoothHint("电脑 HTTP 与 SOCKS5 代理都填上方同一个地址");
     }
 
     protected void handleHttpProxyUsbAction() {
@@ -145,9 +145,9 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
             return;
         }
         clipboard.setPrimaryClip(ClipData.newPlainText(
-                "PPAASS HTTP Proxy " + channelLabel + " Endpoint",
+                "PPAASS HTTP / SOCKS5 代理 " + channelLabel + "入口",
                 endpoint));
-        Toast.makeText(this, "已复制" + channelLabel + "代理地址", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已复制" + channelLabel + "显式代理地址", Toast.LENGTH_SHORT).show();
     }
 
     protected void openUsbTetherSettings() {
@@ -215,6 +215,10 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         view.setIncludeFontPadding(false);
         view.setPadding(0, dp(2), 0, dp(2));
         target.addView(view, matchWrap());
+    }
+
+    protected String explicitProxyEndpoint(String address, String port) {
+        return "HTTP / SOCKS5   " + address + ":" + port;
     }
 
     protected void addHttpProxyEndpointDivider(LinearLayout target) {

@@ -101,7 +101,7 @@ protected void saveConfig() {
 
 protected void restoreDefaultConfig() {
         if (isVpnRunning() || isHttpProxyRunning()) {
-            Toast.makeText(this, "修改配置前请先停止 VPN 和 HTTP Proxy", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "修改配置前请先停止 VPN 和 HTTP / SOCKS5 代理", Toast.LENGTH_SHORT).show();
             return;
         }
 

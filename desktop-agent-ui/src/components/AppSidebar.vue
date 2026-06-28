@@ -27,7 +27,7 @@ const emit = defineEmits<{
       <div class="brand-mark">P</div>
       <div class="brand-copy">
         <div class="brand-title">PPAASS</div>
-        <div class="brand-subtitle">Desktop Agent</div>
+        <div class="brand-subtitle">桌面代理</div>
       </div>
       <Button
         class="sidebar-toggle"

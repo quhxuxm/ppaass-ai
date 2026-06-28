@@ -78,7 +78,7 @@ function overviewCardTitle(key: OverviewCardKey) {
     egress: "公共远端出口",
     speed: "实时网速",
     traffic: "今日流量",
-    dns: "Agent DNS",
+    dns: "代理 DNS",
     tun: "TUN",
     policy: "共享策略"
   };
@@ -87,7 +87,7 @@ function overviewCardTitle(key: OverviewCardKey) {
 
 function overviewCardSubtitle(key: OverviewCardKey) {
   if (key === "status") {
-    return props.agent.binary_path ? shortPath(props.agent.binary_path) : "desktop-agent";
+    return props.agent.binary_path ? shortPath(props.agent.binary_path) : "桌面代理";
   }
   return "";
 }
@@ -202,9 +202,9 @@ function moveOverviewCard(source: OverviewCardKey, target: OverviewCardKey, plac
 
 function hourlyBarHeight(bytes: number) {
   if (bytes <= 0) {
-    return "2px";
+    return "3px";
   }
-  return `${Math.max(4, (bytes / hourlyTrafficMax.value) * 100)}%`;
+  return `${Math.max(5, (bytes / hourlyTrafficMax.value) * 100)}%`;
 }
 </script>
 
@@ -234,7 +234,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="overview-card-actions">
             <Badge
               v-if="card.key === 'status'"
-              :value="agent.running ? 'Active' : 'Idle'"
+              :value="agent.running ? '运行中' : '空闲'"
               :severity="agent.running ? 'success' : 'secondary'"
             />
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
@@ -243,12 +243,12 @@ function hourlyBarHeight(bytes: number) {
               value="TCP / UDP"
               severity="info"
             />
-            <Tag v-else-if="card.key === 'speed'" value="System" severity="info" />
+            <Tag v-else-if="card.key === 'speed'" value="系统" severity="info" />
             <span v-else-if="card.key === 'traffic'">{{ traffic.baseline?.date ?? localDateKey() }}</span>
             <Tag v-else-if="card.key === 'dns'" :value="dnsCardLabel" :severity="summary.tun_proxy_dns ? 'info' : 'secondary'" />
             <Tag
               v-else-if="card.key === 'tun'"
-              :value="summary.tun_enabled ? 'Enabled' : 'Disabled'"
+              :value="summary.tun_enabled ? '已启用' : '未启用'"
               :severity="summary.tun_enabled ? 'success' : 'secondary'"
             />
             <Tag v-else-if="card.key === 'policy'" :value="directModeLabel" severity="info" />
@@ -317,8 +317,8 @@ function hourlyBarHeight(bytes: number) {
               :model-value="downloadGaugeValue"
               :size="132"
               readonly
-              value-color="#2563eb"
-              range-color="#dbeafe"
+              value-color="#f00673"
+              range-color="#ffbdd9"
               text-color="#1e293b"
             />
             <span>下载</span>
@@ -329,8 +329,8 @@ function hourlyBarHeight(bytes: number) {
               :model-value="uploadGaugeValue"
               :size="132"
               readonly
-              value-color="#14b8a6"
-              range-color="#ccfbf1"
+              value-color="#0b63ff"
+              range-color="#c7d8ff"
               text-color="#1e293b"
             />
             <span>上传</span>
@@ -346,26 +346,25 @@ function hourlyBarHeight(bytes: number) {
           <div class="hourly-bars">
             <div v-for="bucket in traffic.hourly_buckets" :key="bucket.hour" class="hourly-column">
               <div class="hourly-stack" :title="`${bucket.hour}:00 下载 ${formatBytes(bucket.download_bytes)} / 上传 ${formatBytes(bucket.upload_bytes)}`">
-                <div class="hourly-segment upload" :style="{ height: hourlyBarHeight(bucket.upload_bytes) }"></div>
-                <div class="hourly-segment download" :style="{ height: hourlyBarHeight(bucket.download_bytes) }"></div>
+                <div class="hourly-segment total" :style="{ height: hourlyBarHeight(bucket.download_bytes + bucket.upload_bytes) }"></div>
               </div>
               <span>{{ hourLabel(bucket.hour) }}</span>
             </div>
           </div>
 
           <div class="hourly-legend">
-            <span><i class="legend-dot download"></i>下载</span>
-            <span><i class="legend-dot upload"></i>上传</span>
+            <span><i class="legend-dot total"></i>每小时合计</span>
+            <span><i class="legend-dot idle"></i>空闲小时</span>
           </div>
         </div>
         <div v-else-if="card.key === 'dns'" class="dns-records">
           <div v-if="!summary.tun_proxy_dns" class="dns-empty">
             <i class="pi pi-info-circle"></i>
-            <span>Agent DNS 代理未启用</span>
+            <span>代理 DNS 未启用</span>
           </div>
           <div v-else-if="!recentDnsRecords.length" class="dns-empty">
             <i class="pi pi-globe"></i>
-            <span>等待经过 Agent 的 DNS 请求</span>
+            <span>等待经过代理的 DNS 请求</span>
           </div>
           <div v-else class="dns-record-list">
             <div v-for="record in recentDnsRecords" :key="`${record.timestamp_ms}-${record.client}-${record.query}`" class="dns-record-row">
@@ -379,21 +378,21 @@ function hourlyBarHeight(bytes: number) {
                   value="缓存命中"
                   severity="success"
                   rounded
-                  title="该 DNS 响应来自 Agent 内部 DNS cache，未重新请求上游 DNS"
+                  title="该 DNS 响应来自代理内部 DNS cache，未重新请求上游 DNS"
                 />
                 <Tag
                   v-else-if="isAgentDnsCacheMissRecord(record)"
                   value="缓存未命中"
                   severity="secondary"
                   rounded
-                  title="该 DNS 请求由 Agent 内部 DNS 处理，但没有命中 Agent DNS cache"
+                  title="该 DNS 请求由代理内部 DNS 处理，但没有命中代理 DNS cache"
                 />
                 <Tag
                   v-if="isSystemDnsRecord(record)"
                   value="系统解析"
                   severity="warn"
                   rounded
-                  title="该请求绕过了 Agent 内部 DNS，由 Agent 机器本机系统解析"
+                  title="该请求绕过了代理内部 DNS，由代理所在机器的系统解析"
                 />
                 <Tag :value="record.record_type" severity="secondary" rounded />
                 <span :class="['dns-status', record.status === 'NOERROR' ? 'ok' : 'warn']">{{ record.status }}</span>
@@ -406,7 +405,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="kv-row"><span>设备</span><strong>{{ summary.tun_name }}</strong></div>
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
           <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
-          <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "Proxy" : "System" }}</strong></div>
+          <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "代理解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">
           <div class="kv-row"><span>配置段</span><strong>direct_access</strong></div>

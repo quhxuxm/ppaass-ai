@@ -31,7 +31,8 @@ protected void buildStatusScreen(LinearLayout root) {
 
         ImageView appIcon = new ImageView(this);
         appIcon.setImageResource(R.drawable.ic_vpn);
-        appIcon.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        appIcon.setColorFilter(COLOR_ACTION_INFO);
+        appIcon.setBackground(iconPlateBackground(COLOR_ACTION_INFO));
         appIcon.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         iconParams.setMargins(0, 0, dp(12), 0);
@@ -127,8 +128,8 @@ protected void buildStatusScreen(LinearLayout root) {
         dailyPanel.addView(trafficRow, matchWrap());
 
         LinearLayout dnsPanel = panel(root);
-        sectionTitle(dnsPanel, "Agent DNS 记录");
-        TextView dnsSubtitle = mutedText("最近 80 条由 Agent 处理的 DNS 解析", 13f);
+        sectionTitle(dnsPanel, "代理 DNS 记录");
+        TextView dnsSubtitle = mutedText("最近 80 条由代理处理的 DNS 解析", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
@@ -151,13 +152,13 @@ protected void buildStatusScreen(LinearLayout root) {
 
 protected void buildHttpProxyPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
-        sectionTitle(panel, "HTTP Proxy");
-        TextView subtitle = mutedText("Wi-Fi、热点、USB 或蓝牙网络共享的电脑可将代理指向 Android", 13f);
+        sectionTitle(panel, "HTTP / SOCKS5 代理");
+        TextView subtitle = mutedText("HTTP 与 SOCKS5 共享同一个地址和端口，协议由客户端自动握手区分", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
 
-        TextView wifiTitle = controlLabel("Wi-Fi / 热点地址");
+        TextView wifiTitle = controlLabel("Wi-Fi / 热点共享入口");
         panel.addView(wifiTitle, labelParams());
 
         LinearLayout endpointBox = new LinearLayout(this);
@@ -183,7 +184,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         panel.addView(endpointBox, matchWrap());
         updateHttpProxyEndpoint();
 
-        TextView hint = mutedText("同一 Wi-Fi 或手机热点下的设备使用上方地址", 12f);
+        TextView hint = mutedText("同一 Wi-Fi 或手机热点下，HTTP 与 SOCKS5 都填上方同一个地址", 12f);
         LinearLayout.LayoutParams hintParams = matchWrap();
         hintParams.setMargins(0, dp(6), 0, 0);
         panel.addView(hint, hintParams);

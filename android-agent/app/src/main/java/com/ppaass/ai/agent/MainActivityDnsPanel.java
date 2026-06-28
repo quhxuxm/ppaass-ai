@@ -48,7 +48,7 @@ protected void updateDnsRecords() {
 
         dnsRecordList.removeAllViews();
         if (records.length() == 0) {
-            addDnsEmptyRow(running ? "等待 Agent DNS 请求" : "VPN 已停止");
+            addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
             return;
         }
 
@@ -61,7 +61,7 @@ protected void updateDnsRecords() {
             }
         }
         if (!hasAgentRecords) {
-            addDnsEmptyRow(running ? "等待 Agent DNS 请求" : "VPN 已停止");
+            addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
         }
     }
 
@@ -160,7 +160,7 @@ protected String dnsAnswerLabel(JSONObject record) {
         if ("TIMEOUT".equals(status)) {
             return "查询超时";
         }
-        return record.optString("upstream", "Agent DNS");
+        return record.optString("upstream", "代理 DNS");
     }
 
 protected TextView dnsCacheChip(JSONObject record) {

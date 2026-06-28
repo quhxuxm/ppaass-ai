@@ -15,7 +15,7 @@ export function fallbackAgentState(): AgentState {
     managed: false,
     pid: null,
     config_path: "config/local/agent.toml",
-    binary_path: "target/release/desktop-agent",
+    binary_path: null,
     logs: ["desktop-agent ready", "proxy route guard initialized", "udp yamux pool ready", "tun mode: disabled"]
   };
 }

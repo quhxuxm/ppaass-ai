@@ -28,6 +28,7 @@ const emit = defineEmits<{
             <p>{{ summary.tun_enabled ? `${summary.tun_name} · TUN` : summary.listen_addr }}</p>
           </div>
           <Button
+            class="diagnostic-run-button"
             :label="diagnosticsRunning ? '测试中' : '运行测试'"
             :icon="diagnosticsRunning ? 'pi pi-spin pi-spinner' : 'pi pi-play'"
             :disabled="diagnosticsRunning"
@@ -45,12 +46,12 @@ const emit = defineEmits<{
                 diagnostics
                   ? diagnostics.tun_enabled
                     ? diagnostics.agent_reachable
-                      ? "Proxy On"
-                      : "Paused"
+                      ? "代理已通"
+                      : "已暂停"
                     : diagnostics.agent_reachable
-                      ? "Reachable"
-                      : "Offline"
-                  : "Pending"
+                      ? "可访问"
+                      : "离线"
+                  : "待测试"
               }}
             </strong>
           </div>

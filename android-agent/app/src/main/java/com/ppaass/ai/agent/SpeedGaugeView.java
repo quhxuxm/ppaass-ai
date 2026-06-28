@@ -3,22 +3,29 @@ package com.ppaass.ai.agent;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.view.View;
 
 // 状态页的速度仪表盘，只负责绘制，不参与业务状态计算。
 final class SpeedGaugeView extends View {
-    private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
-    private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
-    private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
-    private static final int COLOR_ACCENT = Color.rgb(45, 170, 158);
+    private static final int COLOR_TRACK = Color.rgb(228, 224, 216);
+    private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
+    private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
+    private static final int COLOR_DOWNLOAD_A = Color.rgb(242, 193, 0);
+    private static final int COLOR_DOWNLOAD_B = Color.rgb(229, 22, 112);
+    private static final int COLOR_UPLOAD_A = Color.rgb(0, 185, 133);
+    private static final int COLOR_UPLOAD_B = Color.rgb(21, 94, 232);
 
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint chipPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF arcBounds = new RectF();
+    private final RectF chipBounds = new RectF();
     private long rxBytesPerSecond;
     private long txBytesPerSecond;
     private boolean active;
@@ -27,11 +34,11 @@ final class SpeedGaugeView extends View {
         super(context);
         trackPaint.setStyle(Paint.Style.STROKE);
         trackPaint.setStrokeCap(Paint.Cap.ROUND);
-        trackPaint.setColor(COLOR_CONTROL);
+        trackPaint.setColor(COLOR_TRACK);
         progressPaint.setStyle(Paint.Style.STROKE);
         progressPaint.setStrokeCap(Paint.Cap.ROUND);
-        progressPaint.setColor(COLOR_ACCENT);
         textPaint.setTextAlign(Paint.Align.CENTER);
+        chipPaint.setStyle(Paint.Style.FILL);
     }
 
     void setSpeeds(long rxBytesPerSecond, long txBytesPerSecond, boolean active) {
@@ -46,31 +53,100 @@ final class SpeedGaugeView extends View {
         super.onDraw(canvas);
         int width = getWidth();
         int height = getHeight();
-        float stroke = dp(16);
-        float radius = Math.min(width * 0.38f, height * 0.50f);
-        float centerX = width / 2f;
-        float centerY = dp(28) + radius;
-        arcBounds.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+        long scale = gaugeScale(Math.max(rxBytesPerSecond, txBytesPerSecond));
+        float centerY = height * 0.46f;
+        float radius = Math.min(width * 0.22f, height * 0.38f);
 
-        trackPaint.setStrokeWidth(stroke);
-        progressPaint.setStrokeWidth(stroke);
-        canvas.drawArc(arcBounds, 150f, 240f, false, trackPaint);
-
-        long totalSpeed = rxBytesPerSecond + txBytesPerSecond;
-        long scale = gaugeScale(totalSpeed);
-        float sweep = active ? Math.min(240f, totalSpeed * 240f / scale) : 0f;
-        canvas.drawArc(arcBounds, 150f, sweep, false, progressPaint);
-
-        textPaint.setTypeface(Typeface.DEFAULT_BOLD);
-        textPaint.setColor(COLOR_TEXT);
-        textPaint.setTextSize(dp(28));
-        canvas.drawText(formatSpeed(totalSpeed), centerX, centerY + dp(4), textPaint);
+        drawGauge(
+                canvas,
+                width * 0.29f,
+                centerY,
+                radius,
+                rxBytesPerSecond,
+                scale,
+                "下载",
+                COLOR_DOWNLOAD_A,
+                COLOR_DOWNLOAD_B);
+        drawGauge(
+                canvas,
+                width * 0.71f,
+                centerY,
+                radius,
+                txBytesPerSecond,
+                scale,
+                "上传",
+                COLOR_UPLOAD_A,
+                COLOR_UPLOAD_B);
 
         textPaint.setTypeface(Typeface.DEFAULT);
         textPaint.setColor(COLOR_MUTED);
+        textPaint.setTextSize(dp(11));
+        canvas.drawText(
+                active ? "双通道实时速率 · 刻度 " + formatSpeed(scale) : "VPN 空闲 · 等待流量",
+                width / 2f,
+                height - dp(12),
+                textPaint);
+    }
+
+    private void drawGauge(
+            Canvas canvas,
+            float centerX,
+            float centerY,
+            float radius,
+            long speed,
+            long scale,
+            String label,
+            int startColor,
+            int endColor) {
+        float stroke = dp(14);
+        arcBounds.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+        trackPaint.setStrokeWidth(stroke);
+        progressPaint.setStrokeWidth(stroke);
+        progressPaint.setShader(new LinearGradient(
+                centerX - radius,
+                centerY,
+                centerX + radius,
+                centerY,
+                startColor,
+                endColor,
+                Shader.TileMode.CLAMP));
+
+        canvas.drawArc(arcBounds, 145f, 250f, false, trackPaint);
+        float sweep = active ? Math.min(250f, speed * 250f / Math.max(1, scale)) : 0f;
+        canvas.drawArc(arcBounds, 145f, sweep, false, progressPaint);
+        progressPaint.setShader(null);
+
+        textPaint.setTypeface(Typeface.DEFAULT_BOLD);
+        textPaint.setColor(startColor);
+        textPaint.setTextSize(dp(24));
+        canvas.drawText(formatNumber(speed), centerX, centerY + dp(3), textPaint);
+
+        textPaint.setTypeface(Typeface.DEFAULT);
+        textPaint.setColor(COLOR_TEXT);
         textPaint.setTextSize(dp(12));
-        canvas.drawText(active ? "实时速度" : "VPN 空闲", centerX, centerY + dp(30), textPaint);
-        canvas.drawText("刻度 " + formatSpeed(scale), centerX, Math.min(height - dp(10), centerY + dp(54)), textPaint);
+        canvas.drawText(unitLabel(speed), centerX, centerY + dp(22), textPaint);
+
+        float chipWidth = dp(78);
+        chipBounds.set(
+                centerX - chipWidth / 2f,
+                centerY + radius * 0.52f,
+                centerX + chipWidth / 2f,
+                centerY + radius * 0.52f + dp(24));
+        chipPaint.setShader(new LinearGradient(
+                chipBounds.left,
+                chipBounds.top,
+                chipBounds.right,
+                chipBounds.bottom,
+                Color.argb(64, startColor >> 16 & 0xff, startColor >> 8 & 0xff, startColor & 0xff),
+                Color.argb(78, endColor >> 16 & 0xff, endColor >> 8 & 0xff, endColor & 0xff),
+                Shader.TileMode.CLAMP));
+        canvas.drawRoundRect(chipBounds, dp(12), dp(12), chipPaint);
+        chipPaint.setShader(null);
+
+        textPaint.setTypeface(Typeface.DEFAULT_BOLD);
+        textPaint.setColor(COLOR_TEXT);
+        textPaint.setTextSize(dp(11));
+        canvas.drawText(label, centerX, chipBounds.top + dp(16), textPaint);
     }
 
     private long gaugeScale(long speed) {
@@ -83,6 +159,27 @@ final class SpeedGaugeView extends View {
 
     private String formatSpeed(long bytesPerSecond) {
         return formatBytes(bytesPerSecond) + "/s";
+    }
+
+    private String formatNumber(long bytesPerSecond) {
+        double value = bytesPerSecond;
+        int unit = 0;
+        while (value >= 1024 && unit < 4) {
+            value /= 1024;
+            unit++;
+        }
+        return unit == 0 ? String.format("%.0f", value) : String.format("%.1f", value);
+    }
+
+    private String unitLabel(long bytesPerSecond) {
+        double value = bytesPerSecond;
+        String[] units = {"B/s", "KB/s", "MB/s", "GB/s", "TB/s"};
+        int unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return units[unit];
     }
 
     private String formatBytes(long bytes) {

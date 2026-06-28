@@ -22,7 +22,7 @@ const emit = defineEmits<{
 <template>
   <header class="topbar">
     <div>
-      <h1>Desktop Agent</h1>
+      <h1>桌面代理</h1>
       <p>{{ subtitle }}</p>
     </div>
     <div class="toolbar">

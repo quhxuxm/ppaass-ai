@@ -41,6 +41,59 @@ protected Button secondaryButton(String text) {
         return button;
     }
 
+protected GradientDrawable gradient(int start, int end) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{start, end});
+        drawable.setCornerRadius(dp(16));
+        drawable.setStroke(dp(1), Color.argb(150, 255, 255, 255));
+        return drawable;
+    }
+
+protected GradientDrawable softGradient(int start, int end, int stroke) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{start, end});
+        drawable.setCornerRadius(dp(16));
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+protected int alphaColor(int color, int alpha) {
+        return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color));
+    }
+
+protected GradientDrawable iconPlateBackground(int color) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.argb(245, 255, 255, 255), alphaColor(color, 46)});
+        drawable.setCornerRadius(dp(10));
+        drawable.setStroke(dp(1), alphaColor(color, 76));
+        return drawable;
+    }
+
+protected ImageView iconPlate(int icon, int color) {
+        ImageView view = new ImageView(this);
+        view.setImageResource(icon);
+        view.setColorFilter(color);
+        view.setBackground(iconPlateBackground(color));
+        view.setPadding(dp(6), dp(6), dp(6), dp(6));
+        return view;
+    }
+
+protected int sectionIconColor(String text) {
+        if (text.contains("流量") || text.contains("代理")) {
+            return COLOR_ACTION_WARN;
+        }
+        if (text.contains("DNS") || text.contains("应用")) {
+            return COLOR_ACCENT;
+        }
+        if (text.contains("连通")) {
+            return COLOR_ACTION_START;
+        }
+        return COLOR_ACTION_INFO;
+    }
+
 protected void applySystemBarPadding(
             View view,
             int baseLeft,
@@ -119,6 +172,26 @@ protected Button actionButton(String text, int color) {
 protected void applyActionButtonStyle(Button button, int color) {
         int fill = actionButtonFill(color);
         button.setTextColor(actionButtonText(color));
+        if (color == COLOR_ACTION_START) {
+            button.setTextColor(COLOR_TEXT);
+            button.setBackground(rounded(COLOR_ACTION_WARN_SOFT, COLOR_ACTION_WARN));
+            return;
+        }
+        if (color == COLOR_ACCENT) {
+            button.setTextColor(COLOR_ACCENT_DARK);
+            button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+            return;
+        }
+        if (color == COLOR_ACTION_INFO) {
+            button.setTextColor(COLOR_ACTION_INFO);
+            button.setBackground(rounded(COLOR_ACTION_INFO_SOFT, COLOR_ACTION_INFO));
+            return;
+        }
+        if (color == COLOR_ACTION_STOP) {
+            button.setTextColor(COLOR_ACTION_STOP);
+            button.setBackground(rounded(COLOR_ACTION_STOP_SOFT, COLOR_ACTION_STOP));
+            return;
+        }
         button.setBackground(rounded(fill, fill));
     }
 
@@ -158,7 +231,10 @@ protected LinearLayout panel(LinearLayout root) {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(18), dp(16), dp(18), dp(18));
-        panel.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        panel.setBackground(softGradient(
+                Color.argb(232, 255, 255, 255),
+                Color.argb(206, 255, 248, 234),
+                Color.argb(170, 255, 255, 255)));
         panel.setStateListAnimator(null);
         panel.setElevation(0f);
         panel.setTranslationZ(0f);
@@ -202,7 +278,10 @@ protected LinearLayout configGroup(LinearLayout root, String title, String appli
 protected LinearLayout screenTabBar() {
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
-        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        row.setBackground(softGradient(
+                Color.argb(205, 255, 255, 255),
+                Color.argb(180, 232, 246, 250),
+                Color.argb(150, 255, 255, 255)));
         return row;
     }
 
@@ -256,10 +335,13 @@ protected void selectScreen(int selectedIndex) {
         for (int i = 0; i < screenTabButtons.size(); i++) {
             Button button = screenTabButtons.get(i);
             boolean selected = i == boundedIndex;
-            button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
-            button.setBackground(rounded(
-                    selected ? COLOR_SURFACE : COLOR_CONTROL,
-                    selected ? COLOR_SURFACE : COLOR_CONTROL));
+            button.setTextColor(selected ? COLOR_ACTION_INFO : COLOR_MUTED);
+            button.setBackground(selected
+                    ? rounded(COLOR_ACTION_INFO_SOFT, COLOR_ACTION_INFO_SOFT)
+                    : rounded(COLOR_CONTROL, COLOR_CONTROL));
+            if (selected) {
+                button.setTextColor(COLOR_ACTION_INFO);
+            }
         }
     }
 
@@ -382,11 +464,10 @@ protected void sectionTitle(LinearLayout root, String text) {
         LinearLayout row = horizontalRow();
         row.setPadding(0, 0, 0, dp(6));
 
-        View accent = new View(this);
-        accent.setBackground(rounded(COLOR_ACCENT, COLOR_ACCENT));
-        LinearLayout.LayoutParams accentParams = new LinearLayout.LayoutParams(dp(4), dp(18));
-        accentParams.setMargins(0, 0, dp(8), 0);
-        row.addView(accent, accentParams);
+        ImageView icon = iconPlate(R.drawable.ic_section_24, sectionIconColor(text));
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(28), dp(28));
+        iconParams.setMargins(0, 0, dp(8), 0);
+        row.addView(icon, iconParams);
 
         TextView view = titleText(text, 15f);
         row.addView(view, new LinearLayout.LayoutParams(
@@ -458,13 +539,16 @@ protected int chipFill(int color) {
         if (color == COLOR_STATUS_STOPPED) {
             return COLOR_STATUS_STOPPED_SOFT;
         }
-        if (color == COLOR_ACTION_START || color == COLOR_STATUS_RUNNING) {
+        if (color == COLOR_ACTION_START) {
             return COLOR_ACTION_START_SOFT;
+        }
+        if (color == COLOR_STATUS_RUNNING) {
+            return COLOR_ACCENT_SOFT;
         }
         return COLOR_ACCENT_SOFT;
     }
 
-protected int chipText(int color) {
+    protected int chipText(int color) {
         if (color == COLOR_ACTION_STOP) {
             return COLOR_ACTION_STOP;
         }
@@ -477,8 +561,11 @@ protected int chipText(int color) {
         if (color == COLOR_STATUS_STOPPED) {
             return COLOR_MUTED;
         }
-        if (color == COLOR_ACTION_START || color == COLOR_STATUS_RUNNING) {
-            return Color.rgb(75, 140, 111);
+        if (color == COLOR_ACTION_START) {
+            return COLOR_ACTION_START;
+        }
+        if (color == COLOR_STATUS_RUNNING) {
+            return COLOR_ACCENT_DARK;
         }
         return COLOR_ACCENT_DARK;
     }

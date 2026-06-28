@@ -43,7 +43,7 @@ public class PpaassHttpProxyService extends Service {
                 return;
             }
             if (!NativeAgent.isRunning(nativeHandle)) {
-                Log.w(TAG, "Native HTTP proxy exited; restarting");
+                Log.w(TAG, "Native HTTP / SOCKS5 proxy exited; restarting");
                 restartNativeProxy();
                 return;
             }
@@ -71,7 +71,7 @@ public class PpaassHttpProxyService extends Service {
             return START_NOT_STICKY;
         }
 
-        // enabled 表示“用户希望 HTTP Proxy 长驻”；running 只表示当前 native 实例是否活着。
+        // enabled 表示“用户希望显式代理长驻”；running 只表示当前 native 实例是否活着。
         if (intent == null && !isEnabled()) {
             stopSelf();
             return START_NOT_STICKY;
@@ -119,14 +119,14 @@ public class PpaassHttpProxyService extends Service {
             JSONObject config = AgentConfigJson.buildHttpProxy(this);
             long handle = NativeAgent.startHttpProxy(config.toString(), listenPort);
             if (handle == 0) {
-                throw new IllegalStateException("Native HTTP proxy returned an empty handle");
+                throw new IllegalStateException("Native HTTP / SOCKS5 proxy returned an empty handle");
             }
             nativeHandle = handle;
             runningInProcess = true;
             startNativeHealthChecks();
             setRunning(true);
         } catch (RuntimeException | JSONException error) {
-            Log.e(TAG, "Failed to start PPAASS HTTP proxy", error);
+            Log.e(TAG, "Failed to start PPAASS HTTP / SOCKS5 proxy", error);
             setEnabled(false);
             stopProxy();
         }
@@ -237,8 +237,8 @@ public class PpaassHttpProxyService extends Service {
 
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
-                .setContentTitle("PPAASS HTTP Proxy")
-                .setContentText("监听 0.0.0.0:" + listenPort)
+                .setContentTitle("PPAASS HTTP / SOCKS5 代理")
+                .setContentText("HTTP 与 SOCKS5 监听 0.0.0.0:" + listenPort)
                 .setOngoing(true)
                 .build();
     }

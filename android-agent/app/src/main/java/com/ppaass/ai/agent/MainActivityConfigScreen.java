@@ -26,7 +26,7 @@ abstract class MainActivityConfigScreen extends MainActivityStatusScreen {
 
 protected void buildConfigScreen(LinearLayout root) {
         LinearLayout actions = configSection(root, "配置");
-        TextView actionsSubtitle = mutedText("将所有 Agent 设置恢复为内置默认值", 13f);
+        TextView actionsSubtitle = mutedText("将所有代理设置恢复为内置默认值", 13f);
         LinearLayout.LayoutParams actionsSubtitleParams = matchWrap();
         actionsSubtitleParams.setMargins(0, 0, 0, dp(10));
         actions.addView(actionsSubtitle, actionsSubtitleParams);
@@ -38,7 +38,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 dp(48)));
 
         LinearLayout connection = configSection(root, "连接");
-        proxyAddrs = field(connection, "Proxy 地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
+        proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         addFieldHelp(connection, "TCP / UDP 共用远端出口。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
@@ -49,21 +49,21 @@ protected void buildConfigScreen(LinearLayout root) {
                 5,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
-        LinearLayout httpProxy = configSection(root, "HTTP Proxy");
+        LinearLayout httpProxy = configSection(root, "HTTP / SOCKS5 代理");
         httpProxyPort = numberControl(
                 httpProxy,
-                "监听端口",
+                "共享监听端口",
                 prefString("http_proxy_port", String.valueOf(DefaultConfig.HTTP_PROXY_PORT)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "监听 0.0.0.0，Wi-Fi 设备可直接访问，USB 电脑可通过系统 USB 网络共享访问。");
+        addFieldHelp(httpProxy, "同一个端口同时接受 HTTP 代理与 SOCKS5 代理，类似桌面端 listen_addr。");
         httpProxyThreads = numberControl(
                 httpProxy,
                 "代理线程",
                 prefString("http_proxy_threads", String.valueOf(DefaultConfig.HTTP_PROXY_THREADS)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "HTTP Proxy 专属运行线程数，修改后重启 HTTP Proxy 生效。");
+        addFieldHelp(httpProxy, "显式代理专属运行线程数，修改后重启 HTTP / SOCKS5 代理生效。");
 
         LinearLayout runtime = configSection(root, "运行参数");
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
@@ -73,7 +73,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 prefString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                 1,
                 1);
-        addFieldHelp(runtime, "只影响 Android VPN Agent；HTTP Proxy 使用上方代理线程。");
+        addFieldHelp(runtime, "只影响 Android VPN 代理；HTTP / SOCKS5 代理使用上方代理线程。");
         compressionMode = spinner(
                 runtime,
                 "压缩模式",

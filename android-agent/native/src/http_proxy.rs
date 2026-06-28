@@ -23,6 +23,7 @@ use crate::http_proxy_clients::{
     HttpProxyClientLease, is_http_proxy_client_blocked, register_http_proxy_client,
 };
 use crate::http_proxy_io::connect_direct_tcp;
+use crate::socks5_proxy::handle_socks5_connection;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
 
@@ -39,8 +40,10 @@ pub async fn run_android_http_proxy(
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config, shutdown.clone());
 
-    info!("Android HTTP proxy listening on {bind_addr}");
-    android_log::info(format!("Android HTTP proxy listening on {bind_addr}"));
+    info!("Android HTTP / SOCKS5 proxy listening on {bind_addr}");
+    android_log::info(format!(
+        "Android HTTP / SOCKS5 proxy listening on {bind_addr}"
+    ));
 
     loop {
         tokio::select! {
@@ -57,18 +60,38 @@ pub async fn run_android_http_proxy(
                 let sessions = tcp_sessions.clone();
                 let checker = direct_checker.clone();
                 let client = register_http_proxy_client(peer_addr);
-                spawn_guarded("android http proxy client", async move {
-                    if let Err(err) = handle_http_connection(stream, sessions, checker, client).await {
-                        debug!("Android HTTP proxy client {peer_addr} ended: {err}");
+                spawn_guarded("android explicit proxy client", async move {
+                    if let Err(err) = handle_proxy_connection(stream, sessions, checker, client).await {
+                        debug!("Android explicit proxy client {peer_addr} ended: {err}");
                     }
                 });
             }
         }
     }
 
-    info!("Android HTTP proxy stopped");
-    android_log::info("Android HTTP proxy stopped");
+    info!("Android HTTP / SOCKS5 proxy stopped");
+    android_log::info("Android HTTP / SOCKS5 proxy stopped");
     Ok(())
+}
+
+async fn handle_proxy_connection(
+    stream: TcpStream,
+    sessions: Arc<AndroidYamuxSessionManager>,
+    direct_checker: Arc<DirectAccessChecker>,
+    client: HttpProxyClientLease,
+) -> Result<()> {
+    let mut buffer = [0u8; 1];
+    stream.peek(&mut buffer).await?;
+    match buffer[0] {
+        0x05 => handle_socks5_connection(stream, sessions, direct_checker, client).await,
+        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
+            handle_http_connection(stream, sessions, direct_checker, client).await
+        }
+        value => {
+            debug!("Android explicit proxy unknown protocol first byte: 0x{value:02x}");
+            Ok(())
+        }
+    }
 }
 
 fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {

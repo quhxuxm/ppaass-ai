@@ -19,12 +19,13 @@ import java.util.List;
 // VPN 应用选择列表只负责渲染，选中状态仍由 Activity 统一保存。
 final class AppListAdapter extends BaseAdapter {
     private static final int COLOR_SURFACE = Color.WHITE;
-    private static final int COLOR_CONTROL = Color.rgb(241, 245, 249);
-    private static final int COLOR_TEXT = Color.rgb(17, 24, 39);
-    private static final int COLOR_MUTED = Color.rgb(100, 116, 139);
-    private static final int COLOR_BORDER = Color.rgb(226, 232, 240);
-    private static final int COLOR_ACCENT_DARK = Color.rgb(18, 128, 119);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(207, 244, 237);
+    private static final int COLOR_CONTROL = Color.rgb(249, 247, 241);
+    private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
+    private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
+    private static final int COLOR_BORDER = Color.rgb(225, 223, 218);
+    private static final int COLOR_ACCENT_DARK = Color.rgb(21, 94, 232);
+    private static final int COLOR_ACCENT_SOFT = Color.rgb(210, 224, 255);
+    private static final int COLOR_ACTION_START = Color.rgb(229, 22, 112);
 
     private final Context context;
     private final List<AppEntry> apps;
@@ -111,6 +112,7 @@ final class AppListAdapter extends BaseAdapter {
 
     private void bindRow(AppRow row, AppEntry app, boolean selected) {
         row.icon.setImageDrawable(app.icon);
+        row.icon.setBackground(iconPlate(selected ? COLOR_ACCENT_DARK : COLOR_ACTION_START));
         row.item.setBackground(rounded(
                 selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
                 selected ? COLOR_ACCENT_SOFT : COLOR_BORDER));
@@ -163,6 +165,19 @@ final class AppListAdapter extends BaseAdapter {
         drawable.setCornerRadius(dp(12));
         drawable.setStroke(dp(1), stroke);
         return drawable;
+    }
+
+    private GradientDrawable iconPlate(int color) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.argb(246, 255, 255, 255), alphaColor(color, 42)});
+        drawable.setCornerRadius(dp(12));
+        drawable.setStroke(dp(1), alphaColor(color, 70));
+        return drawable;
+    }
+
+    private int alphaColor(int color, int alpha) {
+        return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color));
     }
 
     private LinearLayout.LayoutParams matchWrap() {

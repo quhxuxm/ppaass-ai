@@ -92,7 +92,7 @@ const emit = defineEmits<{
           <template #content>
             <div class="toggle-list">
               <div class="switch-row">
-                <span>Proxy DNS</span>
+              <span>代理 DNS</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
             </div>
@@ -106,7 +106,7 @@ const emit = defineEmits<{
                 :disabled="configLocked"
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
-              <small class="field-help">没有匹配直连规则的 QUIC 会通过 proxy 转发。</small>
+              <small class="field-help">没有匹配直连规则的 QUIC 会通过代理转发。</small>
             </label>
           </template>
         </Card>
