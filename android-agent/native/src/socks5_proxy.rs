@@ -32,7 +32,8 @@ pub async fn handle_socks5_connection(
         .await
         .map_err(socks_error)?;
     let authenticated = Socks5ServerProtocol::finish_auth(auth_state);
-    let (protocol, command, target_addr) = authenticated.read_command().await.map_err(socks_error)?;
+    let (protocol, command, target_addr) =
+        authenticated.read_command().await.map_err(socks_error)?;
 
     match command {
         Socks5Command::TCPConnect => {
@@ -69,7 +70,10 @@ async fn handle_tcp_connect(
         };
 
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let mut client_stream = protocol.reply_success(bind_addr).await.map_err(socks_error)?;
+        let mut client_stream = protocol
+            .reply_success(bind_addr)
+            .await
+            .map_err(socks_error)?;
         let cancel = client.cancel_token();
         tokio::select! {
             result = relay_tcp_bidirectional(
@@ -104,8 +108,17 @@ async fn handle_tcp_connect(
     };
 
     let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let mut client_stream = protocol.reply_success(bind_addr).await.map_err(socks_error)?;
-    relay_socks5_proxy(&mut client_stream, &mut connected_stream, &target_label, client).await
+    let mut client_stream = protocol
+        .reply_success(bind_addr)
+        .await
+        .map_err(socks_error)?;
+    relay_socks5_proxy(
+        &mut client_stream,
+        &mut connected_stream,
+        &target_label,
+        client,
+    )
+    .await
 }
 
 async fn relay_socks5_proxy(

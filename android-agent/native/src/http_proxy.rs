@@ -410,3 +410,107 @@ async fn tunnel_direct(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    use common::YamuxConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{sleep, timeout};
+
+    use crate::config::{AndroidAgentConfig, AndroidTunConfig};
+    use crate::direct_access::{DirectAccessConfig, DirectAccessMode};
+
+    #[tokio::test]
+    async fn socks5_proxy_connects_to_direct_tcp_target() {
+        let echo_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo_listener.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            let (mut stream, _) = echo_listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).await.unwrap();
+            stream.write_all(&buf[..n]).await.unwrap();
+        });
+
+        let port_probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = port_probe.local_addr().unwrap().port();
+        drop(port_probe);
+
+        let shutdown = CancellationToken::new();
+        let config = AndroidAgentConfig {
+            proxy_addrs: vec!["127.0.0.1:9".to_string()],
+            username: "test".to_string(),
+            private_key_pem: "test".to_string(),
+            async_runtime_stack_size_mb: 4,
+            runtime_threads: 1,
+            connect_timeout_secs: 1,
+            compression_mode: "none".to_string(),
+            yamux: YamuxConfig::default(),
+            direct_access: DirectAccessConfig {
+                mode: DirectAccessMode::DirectAll,
+                rules: Vec::new(),
+            },
+            tun: AndroidTunConfig::default(),
+        };
+
+        let proxy_shutdown = shutdown.clone();
+        let proxy_task = tokio::spawn(async move {
+            run_android_http_proxy(config, proxy_port, proxy_shutdown).await
+        });
+
+        let mut client = None;
+        for _ in 0..20 {
+            match TcpStream::connect(("127.0.0.1", proxy_port)).await {
+                Ok(stream) => {
+                    client = Some(stream);
+                    break;
+                }
+                Err(_) => sleep(Duration::from_millis(50)).await,
+            }
+        }
+        let mut client = client.expect("SOCKS5 proxy listener should accept connections");
+
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut auth_reply = [0u8; 2];
+        client.read_exact(&mut auth_reply).await.unwrap();
+        assert_eq!(auth_reply, [0x05, 0x00]);
+
+        let echo_port = echo_addr.port();
+        client
+            .write_all(&[
+                0x05,
+                0x01,
+                0x00,
+                0x01,
+                127,
+                0,
+                0,
+                1,
+                (echo_port >> 8) as u8,
+                echo_port as u8,
+            ])
+            .await
+            .unwrap();
+        let mut connect_reply = [0u8; 10];
+        client.read_exact(&mut connect_reply).await.unwrap();
+        assert_eq!(&connect_reply[..2], &[0x05, 0x00]);
+
+        let payload = b"ppaass-socks5-smoke";
+        client.write_all(payload).await.unwrap();
+        let mut echoed = vec![0u8; payload.len()];
+        client.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(echoed, payload);
+
+        drop(client);
+        shutdown.cancel();
+        timeout(Duration::from_secs(2), proxy_task)
+            .await
+            .expect("proxy task should stop")
+            .unwrap()
+            .unwrap();
+        echo_task.await.unwrap();
+    }
+}
