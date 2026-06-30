@@ -1,4 +1,10 @@
 use super::*;
+use std::process::Stdio;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const MACOS_PF_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+const MACOS_PF_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) struct MacosPfDnsGuard {
     token: Option<String>,
@@ -150,7 +156,9 @@ pub(super) fn macos_default_dns_interfaces(
 
 #[cfg(target_os = "macos")]
 fn macos_pf_enable() -> std::io::Result<Option<String>> {
-    let output = Command::new("/sbin/pfctl").arg("-E").output()?;
+    let mut command = Command::new("/sbin/pfctl");
+    command.arg("-E");
+    let output = run_macos_pf_command(command)?;
     if !output.status.success() {
         return Err(std::io::Error::other(command_output_message(&output)));
     }
@@ -173,10 +181,9 @@ fn parse_pf_token(output: &std::process::Output) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn macos_pf_flush_anchor() {
-    let _ = Command::new("/sbin/pfctl")
-        .args(["-a", PF_DNS_ANCHOR, "-F", "all"])
-        .output()
-        .map_err(|e| debug!("清理 macOS PF DNS anchor 失败：{e}"));
+    let mut command = Command::new("/sbin/pfctl");
+    command.args(["-a", PF_DNS_ANCHOR, "-F", "all"]);
+    let _ = run_macos_pf_command(command).map_err(|e| debug!("清理 macOS PF DNS anchor 失败：{e}"));
 }
 
 #[cfg(target_os = "macos")]
@@ -184,10 +191,38 @@ fn macos_pf_release_token(token: Option<&str>) {
     let Some(token) = token else {
         return;
     };
-    let _ = Command::new("/sbin/pfctl")
-        .args(["-X", token])
-        .output()
-        .map_err(|e| debug!("释放 macOS PF enable token 失败：{e}"));
+    let mut command = Command::new("/sbin/pfctl");
+    command.args(["-X", token]);
+    let _ =
+        run_macos_pf_command(command).map_err(|e| debug!("释放 macOS PF enable token 失败：{e}"));
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_pf_command(mut command: Command) -> std::io::Result<std::process::Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(_) => return child.wait_with_output(),
+            None if started.elapsed() >= MACOS_PF_COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "pfctl command timed out after {} seconds",
+                        MACOS_PF_COMMAND_TIMEOUT.as_secs()
+                    ),
+                ));
+            }
+            None => thread::sleep(MACOS_PF_COMMAND_POLL_INTERVAL),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

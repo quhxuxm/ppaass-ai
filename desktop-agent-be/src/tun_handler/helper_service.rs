@@ -21,8 +21,11 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use tun_rs::DeviceBuilder;
+
+const HELPER_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[allow(dead_code)]
 struct TunSystemLease {
@@ -67,6 +70,9 @@ pub(crate) fn run(
     for incoming in listener.incoming() {
         match incoming {
             Ok(mut stream) => {
+                if let Err(err) = configure_client_timeouts(&stream) {
+                    warn!("设置 helper 客户端 IO 超时失败：{err}");
+                }
                 if let Err(err) = authorize_peer(&stream, allowed_uid) {
                     warn!("拒绝 helper 客户端：{err}");
                     let _ = send_response(
@@ -107,6 +113,12 @@ pub(crate) fn run(
         }
     }
 
+    Ok(())
+}
+
+fn configure_client_timeouts(stream: &UnixStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(HELPER_CLIENT_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(HELPER_CLIENT_IO_TIMEOUT))?;
     Ok(())
 }
 

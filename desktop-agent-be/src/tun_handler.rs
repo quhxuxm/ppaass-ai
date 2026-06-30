@@ -267,6 +267,10 @@ pub async fn run_tun_mode(
         &shutdown,
     )
     .await;
+    if shutdown.is_cancelled() {
+        info!("TUN 模式启动过程中收到关闭请求，跳过 TUN 设备创建");
+        return Ok(());
+    }
 
     // TUN 设备创建完成后才能拿到真实设备名和 if_index。
     let CreatedTunDevice {

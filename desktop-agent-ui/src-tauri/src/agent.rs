@@ -28,6 +28,9 @@ use crate::windows_service::{
 #[cfg(windows)]
 use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
 
+const AGENT_STOP_TIMEOUT: Duration = Duration::from_secs(6);
+const AGENT_STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 pub(crate) fn get_agent_state_inner(runtime: &AgentRuntime) -> Result<AgentState, String> {
     #[cfg(windows)]
     if windows_service_matches_current_exe().unwrap_or(false) {
@@ -107,18 +110,51 @@ pub(crate) fn stop_agent_inner_command(runtime: &AgentRuntime) -> Result<AgentSt
 }
 
 pub(crate) fn stop_embedded_agent(runtime: &AgentRuntime) -> Result<(), String> {
-    let mut guard = runtime
-        .agent
-        .lock()
-        .map_err(|_| "进程状态锁已损坏".to_string())?;
+    let started = Instant::now();
+    loop {
+        let agent_to_join = {
+            let mut guard = runtime
+                .agent
+                .lock()
+                .map_err(|_| "进程状态锁已损坏".to_string())?;
 
-    if let Some(mut agent) = guard.take() {
-        agent.shutdown.cancel();
-        if let Some(join) = agent.join.take() {
-            let _ = join.join();
+            let Some(agent) = guard.as_ref() else {
+                return Ok(());
+            };
+            agent.shutdown.cancel();
+
+            if agent.join.is_none() {
+                let _ = guard.take();
+                return Ok(());
+            }
+
+            if agent.join.as_ref().is_some_and(JoinHandle::is_finished) {
+                guard.take()
+            } else {
+                None
+            }
+        };
+
+        if let Some(mut agent) = agent_to_join {
+            if let Some(join) = agent.join.take() {
+                let _ = join.join();
+            }
+            return Ok(());
         }
+
+        if started.elapsed() >= AGENT_STOP_TIMEOUT {
+            runtime.logs.push(format!(
+                "Agent 停止超时：已等待 {} 秒，后台任务仍未退出",
+                AGENT_STOP_TIMEOUT.as_secs()
+            ));
+            return Err(format!(
+                "Agent 停止超时（超过 {} 秒），后台任务仍在退出中",
+                AGENT_STOP_TIMEOUT.as_secs()
+            ));
+        }
+
+        thread::sleep(AGENT_STOP_POLL_INTERVAL);
     }
-    Ok(())
 }
 
 pub(crate) fn agent_state(runtime: &AgentRuntime) -> Result<AgentState, String> {

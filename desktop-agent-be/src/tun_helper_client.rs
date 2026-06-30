@@ -12,7 +12,11 @@ mod unix {
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tun_rs::AsyncDevice;
+
+    const HELPER_START_TIMEOUT: Duration = Duration::from_secs(15);
+    const HELPER_CONTROL_TIMEOUT: Duration = Duration::from_secs(4);
 
     pub(crate) struct HelperTunDevice {
         pub(crate) device: AsyncDevice,
@@ -57,12 +61,7 @@ mod unix {
             )?),
         });
 
-        let mut stream = UnixStream::connect(&config.macos_helper_socket).map_err(|e| {
-            AgentError::Connection(format!(
-                "连接 TUN helper 失败：socket={} error={e}",
-                config.macos_helper_socket
-            ))
-        })?;
+        let mut stream = connect_helper(&config.macos_helper_socket, HELPER_START_TIMEOUT)?;
         write_frame(&mut stream, &request)?;
         let fd = recv_fd_marker(&stream)?;
         let response: TunHelperResponse = read_frame(&mut stream)?;
@@ -98,11 +97,7 @@ mod unix {
     }
 
     pub(crate) fn refresh_macos_scoped_default_bypass(socket_path: &str) -> Result<()> {
-        let mut stream = UnixStream::connect(socket_path).map_err(|e| {
-            AgentError::Connection(format!(
-                "连接 TUN helper 刷新 macOS scoped default 失败：{e}"
-            ))
-        })?;
+        let mut stream = connect_helper(socket_path, HELPER_CONTROL_TIMEOUT)?;
         write_frame(
             &mut stream,
             &TunHelperRequest::RefreshMacosScopedDefaultBypass,
@@ -119,8 +114,7 @@ mod unix {
     }
 
     fn stop_tun(socket_path: &str, lease_id: &str) -> Result<()> {
-        let mut stream = UnixStream::connect(socket_path)
-            .map_err(|e| AgentError::Connection(format!("连接 TUN helper 清理 lease 失败：{e}")))?;
+        let mut stream = connect_helper(socket_path, HELPER_CONTROL_TIMEOUT)?;
         write_frame(
             &mut stream,
             &TunHelperRequest::StopTun {
@@ -136,6 +130,25 @@ mod unix {
                 "TUN helper 清理 lease 返回了意外响应：{other:?}"
             ))),
         }
+    }
+
+    fn connect_helper(socket_path: &str, timeout: Duration) -> Result<UnixStream> {
+        let stream = UnixStream::connect(socket_path).map_err(|e| {
+            AgentError::Connection(format!(
+                "连接 TUN helper 失败：socket={socket_path} error={e}"
+            ))
+        })?;
+        stream.set_read_timeout(Some(timeout)).map_err(|e| {
+            AgentError::Connection(format!(
+                "设置 TUN helper 读超时失败：socket={socket_path} error={e}"
+            ))
+        })?;
+        stream.set_write_timeout(Some(timeout)).map_err(|e| {
+            AgentError::Connection(format!(
+                "设置 TUN helper 写超时失败：socket={socket_path} error={e}"
+            ))
+        })?;
+        Ok(stream)
     }
 
     fn resolve_state_file(configured: Option<&str>, default_name: &str) -> Result<String> {

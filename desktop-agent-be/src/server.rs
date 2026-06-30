@@ -13,10 +13,13 @@ use crate::tun_handler::run_tun_mode;
 use crate::yamux_session::YamuxSessionManager;
 use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
+
+const TUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub struct AgentServer {
     // 全局只读配置；连接处理任务通过 Arc 克隆读取。
@@ -133,11 +136,21 @@ impl AgentServer {
             }
         }
 
-        if tun_task_running && let Some(result) = tun_tasks.join_next().await {
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => error!("TUN 模式转发器停止时返回错误：{}", e),
-                Err(e) => error!("TUN 模式任务停止时异常：{}", e),
+        if tun_task_running {
+            match tokio::time::timeout(TUN_SHUTDOWN_TIMEOUT, tun_tasks.join_next()).await {
+                Ok(Some(result)) => match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("TUN 模式转发器停止时返回错误：{}", e),
+                    Err(e) => error!("TUN 模式任务停止时异常：{}", e),
+                },
+                Ok(None) => {}
+                Err(_) => {
+                    warn!(
+                        "TUN 模式任务停止超时（超过 {} 秒），正在中止后台任务",
+                        TUN_SHUTDOWN_TIMEOUT.as_secs()
+                    );
+                    tun_tasks.abort_all();
+                }
             }
         }
 

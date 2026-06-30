@@ -1,4 +1,15 @@
 use super::*;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use std::process::Stdio;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use std::thread;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use std::time::{Duration, Instant};
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ROUTE_CLEANUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ROUTE_CLEANUP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
     if !should_delete_recorded_route(record) {
@@ -343,15 +354,40 @@ fn delete_route_with_platform_tool(_record: &RouteRecord) -> bool {
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn run_route_cleanup_command(mut command: Command) -> bool {
     debug!("运行路由清理命令：{:?}", command);
-    match command.status() {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            debug!("路由清理命令退出状态：{status}");
-            false
-        }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(e) => {
             debug!("运行路由清理命令失败：{e}");
-            false
+            return false;
+        }
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return true,
+            Ok(Some(status)) => {
+                debug!("路由清理命令退出状态：{status}");
+                return false;
+            }
+            Ok(None) if started.elapsed() >= ROUTE_CLEANUP_COMMAND_TIMEOUT => {
+                warn!(
+                    "路由清理命令超时（超过 {} 秒），正在终止子进程",
+                    ROUTE_CLEANUP_COMMAND_TIMEOUT.as_secs()
+                );
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Ok(None) => thread::sleep(ROUTE_CLEANUP_COMMAND_POLL_INTERVAL),
+            Err(e) => {
+                debug!("等待路由清理命令失败：{e}");
+                return false;
+            }
         }
     }
 }

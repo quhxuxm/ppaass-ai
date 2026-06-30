@@ -302,6 +302,7 @@ export function useDesktopAgent() {
       );
       showToast(state.agent.running ? "error" : "success", state.agent.running ? "代理仍在运行" : "代理已停止");
     } catch (error) {
+      await refreshAgentState();
       showToast("error", getErrorMessage(error));
     } finally {
       state.busy = false;
