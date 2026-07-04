@@ -1,19 +1,23 @@
 stateDiagram-v2
     [*] --> TcpAccepted
-    TcpAccepted --> YamuxSession: raw TCP 建立 Yamux server session
+    TcpAccepted --> HeaderPeek: peek 首 4 字节
+    HeaderPeek --> DirectFramed: 非 Yamux header
+    HeaderPeek --> YamuxSession: Yamux header
+    DirectFramed --> AuthReading: direct framed PPAASS
     YamuxSession --> SubstreamAccepted: accept 子流
-    SubstreamAccepted --> AuthReading: 读取子流第一帧
+    SubstreamAccepted --> AuthReading: 子流内读取第一帧
     AuthReading --> AuthFailed: 非 Auth / 用户不存在 / 时间戳过期 / 用户过期
-    AuthFailed --> SubstreamClosed
+    AuthFailed --> StreamClosed
     AuthReading --> AuthOk: Auth 成功
     AuthOk --> ConnectDispatch: 收到 ConnectRequest
     ConnectDispatch --> TcpRelay: Domain/IPv4/IPv6 + TCP
     ConnectDispatch --> UdpRelaySingle: Domain/IPv4/IPv6/ProxyDns + UDP
     ConnectDispatch --> SharedUdpRelay: Address UdpRelay
     ConnectDispatch --> UpstreamProxy: forward_mode=true
-    TcpRelay --> SubstreamClosed
-    UdpRelaySingle --> SubstreamClosed
-    SharedUdpRelay --> SubstreamClosed
-    UpstreamProxy --> SubstreamClosed
-    SubstreamClosed --> YamuxSession: 等待下一个子流
+    TcpRelay --> StreamClosed
+    UdpRelaySingle --> StreamClosed
+    SharedUdpRelay --> StreamClosed
+    UpstreamProxy --> StreamClosed
+    StreamClosed --> YamuxSession: Yamux 子流结束，等待下一个子流
+    StreamClosed --> Closed: direct framed 连接结束
     YamuxSession --> Closed: 外层 TCP/Yamux 关闭

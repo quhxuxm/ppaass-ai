@@ -1,4 +1,5 @@
 flowchart LR
     Agent["Agent"] --> ProxyA["Proxy A: forward_mode=true"]
-    ProxyA -->|"复用 common ClientConnection"| ProxyB["上游 Proxy B"]
-    ProxyB --> Target["真实目标"]
+    ProxyA -->|"TCP direct framed / UDP Yamux"| ProxyB["上游 Proxy B"]
+    ProxyB -->|"Auth/Connect/Data"| ProxyBState["上游连接状态机"]
+    ProxyBState --> Target["真实目标"]

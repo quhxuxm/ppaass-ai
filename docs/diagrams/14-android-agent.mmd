@@ -7,5 +7,9 @@ flowchart TD
     JNI --> Protector["VpnService.protect socket fd"]
     JNI --> Rust["android-agent/native Rust"]
     Rust --> Netstack["netstack-smoltcp"]
-    Netstack --> Sessions["Android TCP/UDP YamuxSessionManager"]
-    Sessions --> Proxy["PPAASS Proxy"]
+    Netstack --> Direct{"direct_access 命中?"}
+    Direct -->|"是"| ProtectedSocket["protect 后的直连 socket"]
+    Direct -->|"否 TCP"| TcpProxy["direct framed PPAASS TCP"]
+    Direct -->|"否 UDP"| UdpProxy["raw Yamux UDP relay"]
+    TcpProxy --> Proxy["PPAASS Proxy"]
+    UdpProxy --> Proxy

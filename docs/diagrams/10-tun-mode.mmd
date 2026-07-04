@@ -5,12 +5,16 @@ flowchart TD
     D --> E["创建 TUN 设备"]
     E --> F["启动 netstack supervisor"]
     F --> G["TUN <-> netstack packet bridge"]
-    G --> H["TCP listener"]
-    G --> I["UDP sessions"]
+    F --> H["TCP listener"]
+    F --> I["UDP sessions"]
     E --> J["安装 split-default 路由和 proxy 旁路路由"]
-    H --> L["handle_tun_tcp"]
-    I --> M{"UDP/53 且 proxy_dns?"}
-    M -->|"是"| N["DnsProxy -> Address::ProxyDns"]
-    M -->|"否"| O{"direct_access 或 DNS 缓存命中?"}
-    O -->|"是"| P["绑定物理接口直连"]
-    O -->|"否"| Q["udp_sessions 或共享 UdpRelay"]
+    H --> K["handle_tun_tcp"]
+    K --> L{"direct_access 或 DNS 缓存命中?"}
+    L -->|"是"| M["绑定物理接口直连 TCP"]
+    L -->|"否"| N["tcp_sessions direct framed TCP"]
+
+    I --> O{"UDP/53 且 proxy_dns 且确认为 DNS 包?"}
+    O -->|"是"| P["DnsProxy -> Address::ProxyDns"]
+    O -->|"否"| Q{"direct_access 或 DNS 缓存命中?"}
+    Q -->|"是"| R["绑定物理接口直连 UDP"]
+    Q -->|"否"| S["udp_sessions / 共享 Address::UdpRelay"]

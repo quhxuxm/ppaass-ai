@@ -15,15 +15,21 @@ flowchart LR
     DirectCheck -->|"是"| LocalTarget["本机直连目标"]
     AndroidDirect -->|"是"| AndroidDirectSocket["受 protect 的直连 socket"]
 
-    DirectCheck -->|"否"| AgentSessions["Agent TCP direct / UDP Yamux manager"]
-    AndroidDirect -->|"否"| AndroidSessions["Android TCP direct / UDP Yamux manager"]
+    DirectCheck -->|"否"| AgentStreams["Agent 目标流管理"]
+    AndroidDirect -->|"否"| AndroidStreams["Android 目标流管理"]
 
-    AgentSessions -->|"TCP framed or UDP Yamux"| Proxy["Proxy Server"]
-    AndroidSessions -->|"TCP framed or UDP Yamux"| Proxy
+    AgentStreams -->|"TCP: direct framed PPAASS"| ProxyInbound["Proxy 入站 TCP"]
+    AgentStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
+    AndroidStreams -->|"TCP: direct framed PPAASS"| ProxyInbound
+    AndroidStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
 
-    Proxy --> YamuxAccept["TCP framed accept / UDP Yamux accept"]
-    YamuxAccept --> Auth["Auth/Connect/Data"]
+    ProxyInbound --> Peek{"首包像 Yamux?"}
+    Peek -->|"否"| DirectFramed["direct framed PPAASS 连接"]
+    Peek -->|"是"| YamuxAccept["raw Yamux session"]
+    YamuxAccept --> Substream["accept 子流"]
+    DirectFramed --> Auth["Auth/Connect/Data"]
+    Substream --> Auth
     Auth --> ConnectDispatch["Connect 分流"]
     ConnectDispatch -->|"普通 TCP/UDP"| Target["目标服务器"]
-    ConnectDispatch -->|"UdpRelay"| UdpRelay["共享 UDP relay"]
+    ConnectDispatch -->|"Address::UdpRelay"| UdpRelay["共享 UDP relay"]
     ConnectDispatch -->|"forward_mode"| Upstream["上游 PPAASS Proxy"]

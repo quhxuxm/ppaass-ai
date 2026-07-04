@@ -8,8 +8,8 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **Raw Yamux Transport**: Agent-to-proxy TCP and UDP relay traffic use separate Yamux session pools
-- **Encrypted Substreams**: PPAASS Auth/Connect/Data frames remain encrypted inside Yamux substreams
+- **Split Agent-to-Proxy Transport**: TCP targets use independent framed PPAASS TCP connections, while UDP relay uses raw Yamux session pools
+- **Encrypted PPAASS Frames**: Auth/Connect/Data frames remain encrypted on both direct framed TCP connections and UDP Yamux substreams
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
