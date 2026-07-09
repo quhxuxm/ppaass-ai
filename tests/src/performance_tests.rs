@@ -1,6 +1,7 @@
-use crate::mock_client::{MockHttpClient, MockSocks5Client};
+use crate::mock_client::{MockHttpClient, MockSocks5Client, connect_to_agent_with_retry};
 use anyhow::{Context, Result};
 use hdrhistogram::Histogram;
+use hyper::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
@@ -8,9 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use sysinfo::System;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{info, warn};
+
+const LARGE_DOWNLOAD_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceTestResults {
@@ -78,6 +82,38 @@ pub struct UdpDatagramMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpPerformanceTestResults {
+    pub test_duration_secs: u64,
+    pub agent_addr: String,
+    pub target_host: String,
+    pub target_port: u16,
+    pub concurrency: usize,
+    pub payload_size: usize,
+    pub total_chunks: usize,
+    pub successful_chunks: usize,
+    pub failed_chunks: usize,
+    pub failure_rate_percent: f64,
+    pub chunks_per_second: f64,
+    pub throughput_mbps: f64,
+    pub tcp_metrics: TcpTransferMetrics,
+    pub system_metrics: SystemMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpTransferMetrics {
+    pub total_chunks: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub avg_rtt_ms: f64,
+    pub min_rtt_ms: f64,
+    pub max_rtt_ms: f64,
+    pub p50_rtt_ms: f64,
+    pub p95_rtt_ms: f64,
+    pub p99_rtt_ms: f64,
+    pub total_bytes_transferred: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuicProbeTestResults {
     pub test_mode: String,
     pub test_duration_secs: u64,
@@ -109,6 +145,39 @@ pub struct QuicProbeMetrics {
     pub p95_rtt_ms: f64,
     pub p99_rtt_ms: f64,
     pub total_bytes_transferred: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeDownloadTestResults {
+    pub test_duration_secs: u64,
+    pub agent_addr: String,
+    pub target_url: String,
+    pub file_size_bytes: u64,
+    pub chunk_size_bytes: u64,
+    pub concurrency: usize,
+    pub rounds: usize,
+    pub total_chunks: usize,
+    pub successful_chunks: usize,
+    pub failed_chunks: usize,
+    pub success_rate_percent: f64,
+    pub chunks_per_second: f64,
+    pub throughput_mbps: f64,
+    pub chunk_metrics: LargeDownloadChunkMetrics,
+    pub system_metrics: SystemMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeDownloadChunkMetrics {
+    pub total_chunks: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub avg_latency_ms: f64,
+    pub min_latency_ms: f64,
+    pub max_latency_ms: f64,
+    pub p50_latency_ms: f64,
+    pub p95_latency_ms: f64,
+    pub p99_latency_ms: f64,
+    pub total_bytes_downloaded: u64,
 }
 
 pub async fn run_performance_tests(
@@ -382,6 +451,434 @@ pub async fn run_udp_performance_tests(
     info!("吞吐量：{:.2} Mbps", throughput_mbps);
 
     Ok(results)
+}
+
+pub async fn run_tcp_performance_tests(
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+    concurrency: usize,
+    duration_secs: u64,
+    payload_size: usize,
+) -> Result<TcpPerformanceTestResults> {
+    let target_host = target_host.trim();
+    anyhow::ensure!(!target_host.is_empty(), "TCP target host must not be empty");
+
+    info!("=== 开始 TCP 专项性能测试 ===");
+    info!(
+        "Agent：{}，目标：{}:{}，并发连接：{}，payload={} bytes，持续时间：{} 秒",
+        agent_addr, target_host, target_port, concurrency, payload_size, duration_secs
+    );
+
+    let payload_size = payload_size.max(1);
+    let start_time = Instant::now();
+    let end_time = start_time + Duration::from_secs(duration_secs);
+
+    // TCP RTT 同样使用微秒记录，避免本机/局域网测试时被毫秒精度吞掉差异。
+    let tcp_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
+    let success = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(0));
+
+    let mut system = System::new_all();
+    system.refresh_all();
+    let initial_memory = system.used_memory();
+    let peak_memory = Arc::new(AtomicU64::new(initial_memory));
+
+    let mut handles = Vec::with_capacity(concurrency);
+    for worker_id in 0..concurrency {
+        handles.push(tokio::spawn(tcp_worker(
+            worker_id,
+            agent_addr.to_string(),
+            target_host.to_string(),
+            target_port,
+            payload_size,
+            end_time,
+            tcp_histogram.clone(),
+            success.clone(),
+            failed.clone(),
+            total_bytes.clone(),
+        )));
+    }
+
+    let peak_mem = peak_memory.clone();
+    let monitor_handle = tokio::spawn(async move {
+        let mut sys = System::new_all();
+        while Instant::now() < end_time {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            sys.refresh_all();
+            peak_mem.fetch_max(sys.used_memory(), Ordering::Relaxed);
+        }
+    });
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+    let _ = monitor_handle.await;
+
+    let actual_duration = start_time.elapsed();
+    let tcp_hist = tcp_histogram.lock().await;
+    let tcp_succ = success.load(Ordering::Relaxed);
+    let tcp_fail = failed.load(Ordering::Relaxed);
+    let total_transferred = total_bytes.load(Ordering::Relaxed);
+    let peak_mem_val = peak_memory.load(Ordering::Relaxed);
+
+    let tcp_metrics = calculate_tcp_metrics(&tcp_hist, tcp_succ, tcp_fail, total_transferred);
+    let total_chunks = tcp_succ + tcp_fail;
+    let failure_rate_percent = if total_chunks > 0 {
+        (tcp_fail as f64 / total_chunks as f64) * 100.0
+    } else {
+        0.0
+    };
+    let chunks_per_second = total_chunks as f64 / actual_duration.as_secs_f64();
+    let throughput_mbps =
+        (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+
+    system.refresh_all();
+    let cpu_usage = system.global_cpu_usage();
+    let memory_usage_mb = system.used_memory() / 1024 / 1024;
+    let peak_memory_mb = peak_mem_val / 1024 / 1024;
+
+    let results = TcpPerformanceTestResults {
+        test_duration_secs: actual_duration.as_secs(),
+        agent_addr: agent_addr.to_string(),
+        target_host: target_host.to_string(),
+        target_port,
+        concurrency,
+        payload_size,
+        total_chunks,
+        successful_chunks: tcp_succ,
+        failed_chunks: tcp_fail,
+        failure_rate_percent,
+        chunks_per_second,
+        throughput_mbps,
+        tcp_metrics,
+        system_metrics: SystemMetrics {
+            cpu_usage_percent: cpu_usage,
+            memory_usage_mb,
+            peak_memory_mb,
+        },
+    };
+
+    info!("=== TCP 专项性能测试完成 ===");
+    info!("总 TCP chunks：{}", total_chunks);
+    info!("成功：{}，失败：{}", tcp_succ, tcp_fail);
+    info!("失败率：{:.2}%", failure_rate_percent);
+    info!("Chunks/sec：{:.2}", chunks_per_second);
+    info!("吞吐量：{:.2} Mbps", throughput_mbps);
+
+    Ok(results)
+}
+
+pub async fn run_large_download_tests(
+    agent_addr: &str,
+    file_size_bytes: u64,
+    chunk_size_bytes: u64,
+    concurrency: usize,
+    rounds: usize,
+    connect_tunnel: bool,
+) -> Result<LargeDownloadTestResults> {
+    anyhow::ensure!(file_size_bytes > 0, "file size must be greater than 0");
+    anyhow::ensure!(chunk_size_bytes > 0, "chunk size must be greater than 0");
+    anyhow::ensure!(concurrency > 0, "concurrency must be greater than 0");
+    anyhow::ensure!(rounds > 0, "rounds must be greater than 0");
+
+    let target_authority = "127.0.0.1:9090";
+    let target_path = format!("/large?size={file_size_bytes}");
+    let target_url = if connect_tunnel {
+        format!("CONNECT {target_authority}{target_path}")
+    } else {
+        format!("http://{target_authority}{target_path}")
+    };
+    info!("=== 开始 HTTP Range 分片大文件下载测试 ===");
+    info!(
+        "Agent：{}，URL：{}，file={} bytes，chunk={} bytes，并发分片：{}，轮次：{}，CONNECT tunnel={}",
+        agent_addr,
+        target_url,
+        file_size_bytes,
+        chunk_size_bytes,
+        concurrency,
+        rounds,
+        connect_tunnel
+    );
+
+    let chunks_per_round = file_size_bytes.div_ceil(chunk_size_bytes);
+    let total_chunks = chunks_per_round
+        .checked_mul(rounds as u64)
+        .context("large download chunk count overflow")?;
+    anyhow::ensure!(
+        total_chunks <= usize::MAX as u64,
+        "large download chunk count is too large"
+    );
+
+    let mut chunks = Vec::with_capacity(total_chunks as usize);
+    for _round in 0..rounds {
+        for chunk_idx in 0..chunks_per_round {
+            let start = chunk_idx * chunk_size_bytes;
+            let end = (start + chunk_size_bytes - 1).min(file_size_bytes - 1);
+            chunks.push(LargeDownloadChunk { start, end });
+        }
+    }
+
+    let start_time = Instant::now();
+    let histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
+    let success = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(0));
+    let next_chunk = Arc::new(AtomicUsize::new(0));
+    let chunks = Arc::new(chunks);
+
+    let mut system = System::new_all();
+    system.refresh_all();
+    let initial_memory = system.used_memory();
+    let peak_memory = Arc::new(AtomicU64::new(initial_memory));
+
+    let mut handles = Vec::with_capacity(concurrency.min(chunks.len()));
+    for worker_id in 0..concurrency.min(chunks.len()) {
+        handles.push(tokio::spawn(large_download_worker(
+            worker_id,
+            agent_addr.to_string(),
+            target_url.clone(),
+            target_authority.to_string(),
+            target_path.clone(),
+            connect_tunnel,
+            file_size_bytes,
+            chunks.clone(),
+            next_chunk.clone(),
+            histogram.clone(),
+            success.clone(),
+            failed.clone(),
+            total_bytes.clone(),
+        )));
+    }
+
+    let peak_mem = peak_memory.clone();
+    let monitor_handle = tokio::spawn(async move {
+        let mut sys = System::new_all();
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            sys.refresh_all();
+            peak_mem.fetch_max(sys.used_memory(), Ordering::Relaxed);
+        }
+    });
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+    monitor_handle.abort();
+    let _ = monitor_handle.await;
+
+    let actual_duration = start_time.elapsed();
+    let hist = histogram.lock().await;
+    let succ = success.load(Ordering::Relaxed);
+    let fail = failed.load(Ordering::Relaxed);
+    let total = succ + fail;
+    let downloaded = total_bytes.load(Ordering::Relaxed);
+    let success_rate_percent = if total > 0 {
+        (succ as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let chunks_per_second = total as f64 / actual_duration.as_secs_f64();
+    let throughput_mbps = (downloaded as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+
+    system.refresh_all();
+    let results = LargeDownloadTestResults {
+        test_duration_secs: actual_duration.as_secs(),
+        agent_addr: agent_addr.to_string(),
+        target_url,
+        file_size_bytes,
+        chunk_size_bytes,
+        concurrency,
+        rounds,
+        total_chunks: total,
+        successful_chunks: succ,
+        failed_chunks: fail,
+        success_rate_percent,
+        chunks_per_second,
+        throughput_mbps,
+        chunk_metrics: calculate_large_download_metrics(&hist, succ, fail, downloaded),
+        system_metrics: SystemMetrics {
+            cpu_usage_percent: system.global_cpu_usage(),
+            memory_usage_mb: system.used_memory() / 1024 / 1024,
+            peak_memory_mb: peak_memory.load(Ordering::Relaxed) / 1024 / 1024,
+        },
+    };
+
+    info!("=== HTTP Range 分片大文件下载测试完成 ===");
+    info!("总分片：{}，成功：{}，失败：{}", total, succ, fail);
+    info!("成功率：{:.2}%", success_rate_percent);
+    info!("Chunks/sec：{:.2}", chunks_per_second);
+    info!("吞吐量：{:.2} Mbps", throughput_mbps);
+
+    Ok(results)
+}
+
+#[derive(Clone, Copy)]
+struct LargeDownloadChunk {
+    start: u64,
+    end: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn large_download_worker(
+    worker_id: usize,
+    agent_addr: String,
+    target_url: String,
+    target_authority: String,
+    target_path: String,
+    connect_tunnel: bool,
+    file_size_bytes: u64,
+    chunks: Arc<Vec<LargeDownloadChunk>>,
+    next_chunk: Arc<AtomicUsize>,
+    histogram: Arc<Mutex<Histogram<u64>>>,
+    success: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total_bytes: Arc<AtomicU64>,
+) {
+    let client = MockHttpClient::new(agent_addr);
+    let mut latencies_us = Vec::with_capacity(128);
+
+    loop {
+        let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
+        let Some(chunk) = chunks.get(idx).copied() else {
+            break;
+        };
+
+        match download_large_range_chunk(
+            &client,
+            &target_url,
+            &target_authority,
+            &target_path,
+            connect_tunnel,
+            file_size_bytes,
+            chunk,
+        )
+        .await
+        {
+            Ok((duration, bytes)) => {
+                latencies_us.push(duration.as_micros() as u64);
+                success.fetch_add(1, Ordering::Relaxed);
+                total_bytes.fetch_add(bytes, Ordering::Relaxed);
+
+                if latencies_us.len() >= 128 {
+                    let mut hist = histogram.lock().await;
+                    for latency in latencies_us.drain(..) {
+                        let _ = hist.record(latency);
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "Large download worker {worker_id} 分片 {}-{} 失败：{err}",
+                    chunk.start, chunk.end
+                );
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    if !latencies_us.is_empty() {
+        let mut hist = histogram.lock().await;
+        for latency in latencies_us {
+            let _ = hist.record(latency);
+        }
+    }
+}
+
+async fn download_large_range_chunk(
+    client: &MockHttpClient,
+    target_url: &str,
+    target_authority: &str,
+    target_path: &str,
+    connect_tunnel: bool,
+    file_size_bytes: u64,
+    chunk: LargeDownloadChunk,
+) -> Result<(Duration, u64)> {
+    let expected_len = chunk.end - chunk.start + 1;
+    let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
+    let headers = [("Range", range_header)];
+
+    let request = async {
+        if connect_tunnel {
+            client
+                .connect_tunnel_get_bytes_with_headers(target_authority, target_path, &headers)
+                .await
+        } else {
+            client.get_bytes_with_headers(target_url, &headers).await
+        }
+    };
+    let (duration, status, response_headers, body) =
+        tokio::time::timeout(LARGE_DOWNLOAD_CHUNK_TIMEOUT, request)
+            .await
+            .with_context(|| {
+                format!(
+                    "chunk request timeout after {:?}: range {}-{}",
+                    LARGE_DOWNLOAD_CHUNK_TIMEOUT, chunk.start, chunk.end
+                )
+            })??;
+
+    let actual_body_len = body.len() as u64;
+    let content_length = response_headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .with_context(|| {
+            format!(
+                "missing or invalid content-length for range {}-{}",
+                chunk.start, chunk.end
+            )
+        })?;
+
+    anyhow::ensure!(
+        content_length == expected_len,
+        "content-length mismatch for range {}-{}: header {}, expected {}",
+        chunk.start,
+        chunk.end,
+        content_length,
+        expected_len
+    );
+    anyhow::ensure!(
+        content_length == actual_body_len,
+        "content-length/body mismatch for range {}-{}: header {}, body {}",
+        chunk.start,
+        chunk.end,
+        content_length,
+        actual_body_len
+    );
+
+    anyhow::ensure!(
+        status == StatusCode::PARTIAL_CONTENT,
+        "unexpected status {status}"
+    );
+    let expected_content_range = format!("bytes {}-{}/{}", chunk.start, chunk.end, file_size_bytes);
+    let actual_content_range = response_headers
+        .get(hyper::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    anyhow::ensure!(
+        actual_content_range == expected_content_range,
+        "unexpected content-range: {actual_content_range}"
+    );
+    anyhow::ensure!(
+        actual_body_len == expected_len,
+        "unexpected body length: got {}, expected {}",
+        actual_body_len,
+        expected_len
+    );
+
+    if let Some((offset, byte)) = body.iter().enumerate().find(|(offset, byte)| {
+        **byte != crate::mock_target::large_file_byte_at(chunk.start + *offset as u64)
+    }) {
+        anyhow::bail!(
+            "body mismatch at absolute offset {}: got {}, expected {}",
+            chunk.start + offset as u64,
+            byte,
+            crate::mock_target::large_file_byte_at(chunk.start + offset as u64)
+        );
+    }
+
+    Ok((duration, actual_body_len))
 }
 
 pub async fn run_quic_probe_tests(
@@ -775,6 +1272,131 @@ fn format_quic_version(version: u32) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn tcp_worker(
+    worker_id: usize,
+    agent_addr: String,
+    target_host: String,
+    target_port: u16,
+    payload_size: usize,
+    end_time: Instant,
+    histogram: Arc<Mutex<Histogram<u64>>>,
+    success: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total_bytes: Arc<AtomicU64>,
+) {
+    let mut consecutive_failures = 0usize;
+    let mut latencies_us = Vec::with_capacity(256);
+    let mut sequence = 0u64;
+
+    while Instant::now() < end_time {
+        let mut stream = match create_socks_tcp_stream(&agent_addr, &target_host, target_port).await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!("TCP worker {worker_id} 建立 SOCKS5 CONNECT 失败：{e}");
+                failed.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+
+        while Instant::now() < end_time {
+            let payload = tcp_payload(worker_id, sequence, payload_size);
+            let mut response = vec![0u8; payload.len()];
+            sequence = sequence.wrapping_add(1);
+            let start = Instant::now();
+
+            if let Err(e) = stream.write_all(&payload).await {
+                warn!("TCP worker {worker_id} 发送失败：{e}");
+                failed.fetch_add(1, Ordering::Relaxed);
+                consecutive_failures += 1;
+                break;
+            }
+
+            if let Err(e) = stream.flush().await {
+                warn!("TCP worker {worker_id} flush 失败：{e}");
+                failed.fetch_add(1, Ordering::Relaxed);
+                consecutive_failures += 1;
+                break;
+            }
+
+            match tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut response))
+                .await
+            {
+                Ok(Ok(_)) if response == payload => {
+                    latencies_us.push(start.elapsed().as_micros() as u64);
+                    success.fetch_add(1, Ordering::Relaxed);
+                    total_bytes.fetch_add((payload.len() * 2) as u64, Ordering::Relaxed);
+                    consecutive_failures = 0;
+
+                    if latencies_us.len() >= 256 {
+                        let mut hist = histogram.lock().await;
+                        for latency in latencies_us.drain(..) {
+                            let _ = hist.record(latency);
+                        }
+                    }
+                }
+                Ok(Ok(_)) => {
+                    warn!(
+                        "TCP worker {worker_id} 回显不匹配：sent={} received={}",
+                        payload.len(),
+                        response.len()
+                    );
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    consecutive_failures += 1;
+                }
+                Ok(Err(e)) => {
+                    warn!("TCP worker {worker_id} 接收失败：{e}");
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    consecutive_failures += 1;
+                    break;
+                }
+                Err(_) => {
+                    warn!("TCP worker {worker_id} 接收超时");
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    consecutive_failures += 1;
+                    break;
+                }
+            }
+
+            if consecutive_failures > 0 {
+                let delay_ms = std::cmp::min(200, consecutive_failures * 20) as u64;
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+        }
+    }
+
+    if !latencies_us.is_empty() {
+        let mut hist = histogram.lock().await;
+        for latency in latencies_us {
+            let _ = hist.record(latency);
+        }
+    }
+}
+
+async fn create_socks_tcp_stream(
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream> {
+    let mut stream = connect_to_agent_with_retry(
+        agent_addr,
+        "Failed to connect to agent for TCP performance test",
+    )
+    .await?;
+    async_socks5::connect(&mut stream, (target_host.to_string(), target_port), None)
+        .await
+        .context("Failed to connect via SOCKS5 for TCP performance test")?;
+    Ok(stream)
+}
+
+fn tcp_payload(worker_id: usize, sequence: u64, payload_size: usize) -> Vec<u8> {
+    // TCP 压测只关心端到端字节完整性，payload 复用 UDP 的确定性模式；
+    // worker/sequence 前缀能帮助定位并发场景下的回显错配。
+    udp_payload(worker_id, sequence, payload_size)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn udp_worker(
     worker_id: usize,
     agent_addr: String,
@@ -866,9 +1488,11 @@ async fn udp_worker(
 async fn create_socks_udp_datagram(
     agent_addr: &str,
 ) -> Result<async_socks5::SocksDatagram<TcpStream>> {
-    let stream = TcpStream::connect(agent_addr)
-        .await
-        .context("Failed to connect to agent for UDP performance test")?;
+    let stream = connect_to_agent_with_retry(
+        agent_addr,
+        "Failed to connect to agent for UDP performance test",
+    )
+    .await?;
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .context("Failed to bind local UDP socket for UDP performance test")?;
@@ -1104,6 +1728,80 @@ fn calculate_udp_metrics(
     }
 }
 
+fn calculate_tcp_metrics(
+    histogram: &Histogram<u64>,
+    successful: usize,
+    failed: usize,
+    total_bytes_transferred: u64,
+) -> TcpTransferMetrics {
+    let total = successful + failed;
+
+    if histogram.is_empty() {
+        return TcpTransferMetrics {
+            total_chunks: total,
+            successful,
+            failed,
+            avg_rtt_ms: 0.0,
+            min_rtt_ms: 0.0,
+            max_rtt_ms: 0.0,
+            p50_rtt_ms: 0.0,
+            p95_rtt_ms: 0.0,
+            p99_rtt_ms: 0.0,
+            total_bytes_transferred,
+        };
+    }
+
+    TcpTransferMetrics {
+        total_chunks: total,
+        successful,
+        failed,
+        avg_rtt_ms: histogram.mean() / 1000.0,
+        min_rtt_ms: histogram.min() as f64 / 1000.0,
+        max_rtt_ms: histogram.max() as f64 / 1000.0,
+        p50_rtt_ms: histogram.value_at_quantile(0.5) as f64 / 1000.0,
+        p95_rtt_ms: histogram.value_at_quantile(0.95) as f64 / 1000.0,
+        p99_rtt_ms: histogram.value_at_quantile(0.99) as f64 / 1000.0,
+        total_bytes_transferred,
+    }
+}
+
+fn calculate_large_download_metrics(
+    histogram: &Histogram<u64>,
+    successful: usize,
+    failed: usize,
+    total_bytes_downloaded: u64,
+) -> LargeDownloadChunkMetrics {
+    let total = successful + failed;
+
+    if histogram.is_empty() {
+        return LargeDownloadChunkMetrics {
+            total_chunks: total,
+            successful,
+            failed,
+            avg_latency_ms: 0.0,
+            min_latency_ms: 0.0,
+            max_latency_ms: 0.0,
+            p50_latency_ms: 0.0,
+            p95_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+            total_bytes_downloaded,
+        };
+    }
+
+    LargeDownloadChunkMetrics {
+        total_chunks: total,
+        successful,
+        failed,
+        avg_latency_ms: histogram.mean() / 1000.0,
+        min_latency_ms: histogram.min() as f64 / 1000.0,
+        max_latency_ms: histogram.max() as f64 / 1000.0,
+        p50_latency_ms: histogram.value_at_quantile(0.5) as f64 / 1000.0,
+        p95_latency_ms: histogram.value_at_quantile(0.95) as f64 / 1000.0,
+        p99_latency_ms: histogram.value_at_quantile(0.99) as f64 / 1000.0,
+        total_bytes_downloaded,
+    }
+}
+
 fn calculate_quic_metrics(
     histogram: &Histogram<u64>,
     successful: usize,
@@ -1172,6 +1870,21 @@ mod tests {
         assert_eq!(metrics.failed, 1);
         assert!(metrics.avg_rtt_ms > 0.0);
         assert_eq!(metrics.total_bytes_transferred, 4096);
+    }
+
+    #[test]
+    fn test_tcp_metrics_calculation_uses_microseconds() {
+        let mut hist = Histogram::<u64>::new(3).unwrap();
+        hist.record(1000).unwrap();
+        hist.record(2000).unwrap();
+        hist.record(3000).unwrap();
+
+        let metrics = calculate_tcp_metrics(&hist, 3, 2, 128 * 1024);
+        assert_eq!(metrics.total_chunks, 5);
+        assert_eq!(metrics.successful, 3);
+        assert_eq!(metrics.failed, 2);
+        assert!(metrics.avg_rtt_ms >= 1.0);
+        assert_eq!(metrics.total_bytes_transferred, 128 * 1024);
     }
 
     #[test]

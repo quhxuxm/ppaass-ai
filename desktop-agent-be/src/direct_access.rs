@@ -210,6 +210,22 @@ impl DirectAccessChecker {
         }
     }
 
+    /// 当前规则集是否可能通过“域名”把一个 TUN IP 目标改判为直连。
+    ///
+    /// TUN TCP 拿到的目标通常是浏览器/系统已经解析后的 IP。如果配置是 `proxy_all`，
+    /// 或 rules 模式里只有 IP/CIDR 规则，那么域名规则不会改变路由结果。
+    /// 当前实现只使用 DNS proxy 记录的 IP -> 域名缓存，不再读取 TCP payload
+    /// 嗅探 SNI/Host，避免给 HTTPS/HLS 短连接叠加首包等待。
+    pub fn has_domain_direct_rules(&self) -> bool {
+        matches!(self.mode, DirectAccessMode::Rules)
+            && self.rules.iter().any(|rule| {
+                matches!(
+                    rule,
+                    ParsedRule::ExactDomain(_) | ParsedRule::WildcardDomain(_)
+                )
+            })
+    }
+
     /// 检查地址是否匹配任何已配置的规则
     fn matches_any_rule(&self, address: &Address) -> bool {
         match address {
@@ -239,10 +255,7 @@ impl DirectAccessChecker {
                 let ip = IpAddr::V6(Ipv6Addr::from(*addr));
                 self.rules.iter().any(|rule| Self::match_ip(rule, &ip))
             }
-            Address::ProxyDns { .. }
-            | Address::TcpYamux
-            | Address::UdpYamux
-            | Address::UdpRelay => false,
+            Address::ProxyDns { .. } | Address::UdpRelay => false,
         }
     }
 
@@ -300,8 +313,6 @@ pub fn address_to_string(address: &Address) -> String {
             format!("[{}]:{}", ipv6, port)
         }
         Address::ProxyDns { port } => format!("proxy-dns:{port}"),
-        Address::TcpYamux => "tcp-yamux".to_string(),
-        Address::UdpYamux => "udp-yamux".to_string(),
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }

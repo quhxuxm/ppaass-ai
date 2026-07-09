@@ -28,7 +28,6 @@ public_key_pem = """
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtm6UwXI/ZmUrWPF9gkXs
 -----END PUBLIC KEY-----
 """
-bandwidth_limit_mbps = 100
 "#;
         let file = create_temp_file(content);
         let config = UsersConfig::load(file.path()).unwrap();
@@ -38,7 +37,6 @@ bandwidth_limit_mbps = 100
 
         let user = config.users.get("user1").unwrap();
         assert_eq!(user.username, "user1");
-        assert_eq!(user.bandwidth_limit_mbps, Some(100));
         assert!(user.public_key_pem.contains("BEGIN PUBLIC KEY"));
     }
 
@@ -48,12 +46,10 @@ bandwidth_limit_mbps = 100
 [users.user1]
 username = "user1"
 public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY1\n-----END PUBLIC KEY-----"
-bandwidth_limit_mbps = 100
 
 [users.user2]
 username = "user2"
 public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY2\n-----END PUBLIC KEY-----"
-bandwidth_limit_mbps = 50
 "#;
         let file = create_temp_file(content);
         let config = UsersConfig::load(file.path()).unwrap();
@@ -62,25 +58,8 @@ bandwidth_limit_mbps = 50
         assert!(config.users.contains_key("user1"));
         assert!(config.users.contains_key("user2"));
 
-        let user1 = config.users.get("user1").unwrap();
-        assert_eq!(user1.bandwidth_limit_mbps, Some(100));
-
-        let user2 = config.users.get("user2").unwrap();
-        assert_eq!(user2.bandwidth_limit_mbps, Some(50));
-    }
-
-    #[test]
-    fn parse_users_config_with_optional_bandwidth_limit() {
-        let content = r#"
-[users.user1]
-username = "user1"
-public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
-"#;
-        let file = create_temp_file(content);
-        let config = UsersConfig::load(file.path()).unwrap();
-
-        let user = config.users.get("user1").unwrap();
-        assert_eq!(user.bandwidth_limit_mbps, None);
+        assert_eq!(config.users.get("user1").unwrap().username, "user1");
+        assert_eq!(config.users.get("user2").unwrap().username, "user2");
     }
 
     #[test]
@@ -104,32 +83,6 @@ public_key_pem = "-----BEGIN PUBLIC KEY-----\nKEY\n-----END PUBLIC KEY-----"
         let file = create_temp_file(content);
         let result = UsersConfig::load(file.path());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_proxy_config_pre_connect_idle_timeout() {
-        let config: ProxyConfig = toml::from_str(
-            r#"
-listen_addr = "127.0.0.1:0"
-pre_connect_idle_timeout_secs = 7
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(config.pre_connect_idle_timeout_secs, 7);
-    }
-
-    #[test]
-    fn parse_proxy_config_legacy_idle_timeout_alias() {
-        let config: ProxyConfig = toml::from_str(
-            r#"
-listen_addr = "127.0.0.1:0"
-idle_connection_timeout_secs = 9
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(config.pre_connect_idle_timeout_secs, 9);
     }
 
     #[test]

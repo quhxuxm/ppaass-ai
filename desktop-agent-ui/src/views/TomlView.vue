@@ -53,7 +53,10 @@ function syncTomlHighlightScroll(event: Event) {
           :model-value="raw"
           :readonly="configLocked"
           spellcheck="false"
-          wrap="soft"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          wrap="off"
           @scroll="syncTomlHighlightScroll"
           @update:model-value="emit('update:raw', String($event))"
         />

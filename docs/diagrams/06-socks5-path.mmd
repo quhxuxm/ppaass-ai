@@ -3,12 +3,18 @@ flowchart TD
     B --> C["读取 command 和 target"]
     C -->|"TCP CONNECT"| D{"direct_access?"}
     D -->|"是"| E["直连目标 TCP"]
-    D -->|"否"| F["tcp_pool 连接 Proxy 目标"]
-    E --> G["copy_bidirectional"]
+    D -->|"否"| F["tcp_sessions 连接 Proxy 目标"]
+    E --> G["reply_success"]
     F --> G
-    C -->|"TCP BIND"| H["监听端口等待远端连接"]
-    C -->|"UDP ASSOCIATE"| I["建立 UDP 控制会话"]
-    I --> J["UDP 包与目标地址转换"]
-    J --> K{"direct_access?"}
-    K -->|"是"| L["本地 UDP 直连"]
-    K -->|"否"| M["udp_pool / UdpRelay"]
+    G --> H["copy_bidirectional"]
+    C -->|"TCP BIND"| I["监听端口等待远端连接"]
+    I --> J{"direct_access?"}
+    J -->|"是"| K["直连目标 TCP"]
+    J -->|"否"| L["tcp_sessions 连接 Proxy 目标"]
+    K --> H
+    L --> H
+    C -->|"UDP ASSOCIATE"| M["建立 UDP 控制会话"]
+    M --> N["UDP 包与目标地址转换"]
+    N --> O{"direct_access?"}
+    O -->|"是"| P["本地 UDP 直连"]
+    O -->|"否"| Q["udp_sessions / Address::UdpRelay"]

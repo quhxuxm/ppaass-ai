@@ -1,0 +1,37 @@
+{
+  "test_duration_secs": 30,
+  "total_requests": 8298,
+  "successful_requests": 8248,
+  "failed_requests": 50,
+  "requests_per_second": 273.79286300482215,
+  "throughput_mbps": 444.8504829483931,
+  "http_metrics": {
+    "total_requests": 4926,
+    "successful": 4896,
+    "failed": 30,
+    "avg_latency_ms": 308.8267973856209,
+    "min_latency_ms": 12.0,
+    "max_latency_ms": 18015.0,
+    "p50_latency_ms": 141.0,
+    "p95_latency_ms": 310.0,
+    "p99_latency_ms": 7783.0,
+    "total_bytes_transferred": 0
+  },
+  "socks5_metrics": {
+    "total_requests": 3372,
+    "successful": 3352,
+    "failed": 20,
+    "avg_latency_ms": 291.47225536992835,
+    "min_latency_ms": 30.0,
+    "max_latency_ms": 17967.0,
+    "p50_latency_ms": 147.0,
+    "p95_latency_ms": 245.0,
+    "p99_latency_ms": 7779.0,
+    "total_bytes_transferred": 0
+  },
+  "system_metrics": {
+    "cpu_usage_percent": 39.02316,
+    "memory_usage_mb": 13302,
+    "peak_memory_mb": 13303
+  }
+}

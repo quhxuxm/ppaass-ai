@@ -79,7 +79,7 @@ If you deploy the binaries and configs alongside the scripts, use:
 
 ### Step 2: Add a User in `users.toml`
 
-Add the user's public key and optional bandwidth limit to the proxy users file:
+Add the user's public key to the proxy users file:
 
 ```toml
 [users.myuser]
@@ -89,7 +89,6 @@ public_key_pem = """
 ...
 -----END PUBLIC KEY-----
 """
-bandwidth_limit_mbps = 100
 # Optional. If omitted, the user never expires.
 expires_at = "2026-12-31T23:59:59Z"
 ```
@@ -102,11 +101,18 @@ expires_at = "2026-12-31T23:59:59Z"
 
 ```toml
 listen_addr = "127.0.0.1:1080"
-proxy_addr = "your.proxy.server:8080"  # Change to your proxy address
+proxy_addrs = ["your.proxy.server:8080"]  # Change to your proxy address
 username = "myuser"
 private_key_path = "keys/myuser.pem"
-pool_size = 10
 connection_timeout_secs = 30
+
+[yamux.tcp]
+sessions = 5
+max_streams_per_session = 128
+
+[yamux.udp]
+sessions = 5
+max_streams_per_session = 128
 ```
 
 3. Start the agent:
@@ -202,12 +208,9 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 ### Performance Issues
 
-1. **Increase pool size:**
-    - Edit `pool_size` in `config/agent.toml`
-    - Recommended: 10-50 depending on load
-
-2. **Check bandwidth limits:**
-    - Review user bandwidth limits in `users.toml`
+1. **Tune Yamux session counts:**
+    - Edit `[yamux.tcp].sessions` and `[yamux.udp].sessions` in `config/agent.toml`
+    - TCP relay and UDP relay use separate raw Yamux session pools
 
 ## Security Notes
 
@@ -218,7 +221,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 ### Multiple Users
 
-You can add multiple users with different bandwidth limits by adding multiple `[users.<name>]` sections to `users.toml`.
+You can add multiple users by adding multiple `[users.<name>]` sections to `users.toml`.
 
 ## Support
 

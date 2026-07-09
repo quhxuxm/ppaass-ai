@@ -6,6 +6,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::AndroidAgentConfig;
 use crate::fd_device::RawFd;
+use crate::http_proxy::run_android_http_proxy;
+use crate::http_proxy_clients::{
+    block_http_proxy_client, http_proxy_clients_json, unblock_http_proxy_client,
+};
 use crate::netstack::run_android_agent;
 use crate::socket_protector;
 use crate::traffic_stats;
@@ -13,6 +17,7 @@ use crate::traffic_stats;
 struct AgentHandle {
     shutdown: CancellationToken,
     thread: Option<std::thread::JoinHandle<()>>,
+    clear_socket_protector_on_stop: bool,
 }
 
 #[unsafe(no_mangle)]
@@ -97,6 +102,94 @@ fn start_agent<'local>(
     Box::into_raw(Box::new(AgentHandle {
         shutdown,
         thread: Some(thread),
+        clear_socket_protector_on_stop: true,
+    })) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_startHttpProxy<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    config_json: JString<'local>,
+    listen_port: jint,
+) -> jlong {
+    env.with_env(|env| -> jni::errors::Result<jlong> {
+        Ok(start_http_proxy(env, config_json, listen_port))
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+fn start_http_proxy<'local>(
+    env: &mut Env<'local>,
+    config_json: JString<'local>,
+    listen_port: jint,
+) -> jlong {
+    if listen_port <= 0 || listen_port > u16::MAX as jint {
+        throw(
+            env,
+            format!("invalid HTTP proxy listen port: {listen_port}"),
+        );
+        return 0;
+    }
+
+    let json: String = match config_json.try_to_string(env) {
+        Ok(value) => value,
+        Err(err) => {
+            throw(env, format!("failed to read HTTP proxy config JSON: {err}"));
+            return 0;
+        }
+    };
+
+    let config: AndroidAgentConfig = match serde_json::from_str(&json) {
+        Ok(config) => config,
+        Err(err) => {
+            throw(env, format!("invalid HTTP proxy config JSON: {err}"));
+            return 0;
+        }
+    };
+
+    let async_runtime_stack_size = config.async_runtime_stack_size_mb.max(1) * 1024 * 1024;
+    let runtime_threads = config.runtime_threads.max(1);
+    let shutdown = CancellationToken::new();
+    let task_shutdown = shutdown.clone();
+    let port = listen_port as u16;
+    let thread = match std::thread::Builder::new()
+        .name("ppaass-android-http-proxy".to_string())
+        .stack_size(async_runtime_stack_size)
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("ppaass-android-http-proxy-worker")
+                .thread_stack_size(async_runtime_stack_size)
+                .worker_threads(runtime_threads)
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    eprintln!("failed to create HTTP proxy Tokio runtime: {err}");
+                    return;
+                }
+            };
+
+            if let Err(err) = runtime.block_on(run_android_http_proxy(config, port, task_shutdown))
+            {
+                eprintln!("Android HTTP proxy stopped with error: {err}");
+            }
+        }) {
+        Ok(thread) => thread,
+        Err(err) => {
+            throw(
+                env,
+                format!("failed to spawn native HTTP proxy thread: {err}"),
+            );
+            return 0;
+        }
+    };
+
+    Box::into_raw(Box::new(AgentHandle {
+        shutdown,
+        thread: Some(thread),
+        clear_socket_protector_on_stop: false,
     })) as jlong
 }
 
@@ -129,7 +222,9 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_stop<'local>(
     if let Some(thread) = handle.thread.take() {
         let _ = thread.join();
     }
-    socket_protector::clear();
+    if handle.clear_socket_protector_on_stop {
+        socket_protector::clear();
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -156,6 +251,43 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_dnsResolutionRecords
     env.with_env(|env| -> jni::errors::Result<jstring> {
         let json = traffic_stats::dns_resolution_records_json();
         Ok(env.new_string(json)?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_httpProxyClientsJson<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        Ok(env.new_string(http_proxy_clients_json())?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_blockHttpProxyClient<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    ip: JString<'local>,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let ip = ip.try_to_string(env)?;
+        Ok(block_http_proxy_client(&ip))
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_unblockHttpProxyClient<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    ip: JString<'local>,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let ip = ip.try_to_string(env)?;
+        Ok(unblock_http_proxy_client(&ip))
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }

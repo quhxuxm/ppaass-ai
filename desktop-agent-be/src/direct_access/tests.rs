@@ -108,6 +108,27 @@ fn test_exact_ip_match() {
 }
 
 #[test]
+fn test_has_domain_direct_rules_only_when_rules_can_match_domain() {
+    let proxy_all = DirectAccessChecker::new(&DirectAccessConfig {
+        mode: DirectAccessMode::ProxyAll,
+        rules: vec!["example.com".to_string()],
+    });
+    assert!(!proxy_all.has_domain_direct_rules());
+
+    let ip_only_rules = DirectAccessChecker::new(&DirectAccessConfig {
+        mode: DirectAccessMode::Rules,
+        rules: vec!["10.0.0.0/8".to_string(), "127.0.0.1".to_string()],
+    });
+    assert!(!ip_only_rules.has_domain_direct_rules());
+
+    let domain_rules = DirectAccessChecker::new(&DirectAccessConfig {
+        mode: DirectAccessMode::Rules,
+        rules: vec!["*.example.com".to_string()],
+    });
+    assert!(domain_rules.has_domain_direct_rules());
+}
+
+#[test]
 fn test_cidr_v4_match() {
     let config = DirectAccessConfig {
         mode: DirectAccessMode::Rules,

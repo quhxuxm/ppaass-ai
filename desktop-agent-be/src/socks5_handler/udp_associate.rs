@@ -9,7 +9,7 @@ use super::*;
 pub(super) async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     _target_addr: TargetAddr,
-    udp_pool: Arc<ConnectionPool>,
+    udp_sessions: Arc<YamuxSessionManager>,
     control_local_ip: Option<IpAddr>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
@@ -35,7 +35,7 @@ pub(super) async fn handle_udp_associate(
         .map_err(|e: SocksServerError| AgentError::Socks5(e.to_string()))?;
 
     let udp_socket = Arc::new(udp_socket);
-    let udp_pool = udp_pool.clone();
+    let udp_sessions = udp_sessions.clone();
 
     // 客户端向 `bind_addr` 发送 UDP 数据包
 
@@ -47,7 +47,7 @@ pub(super) async fn handle_udp_associate(
         debug!("UDP 关联 TCP 控制通道已关闭");
     };
 
-    let udp_handler = process_udp_traffic(udp_socket, udp_pool, direct_checker);
+    let udp_handler = process_udp_traffic(udp_socket, udp_sessions, direct_checker);
 
     tokio::select! {
         _ = keep_alive => {
@@ -97,13 +97,13 @@ pub(super) fn resolve_udp_associate_reply_addr(
 
 async fn process_udp_traffic(
     udp_socket: Arc<UdpSocket>,
-    udp_pool: Arc<ConnectionPool>,
+    udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<String, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
-    let udp_relay = SocksUdpRelay::spawn(udp_pool.clone(), udp_socket.clone());
+    let udp_relay = SocksUdpRelay::spawn(udp_sessions.clone(), udp_socket.clone());
 
     loop {
         // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。
@@ -313,16 +313,6 @@ pub(super) fn create_udp_packet(addr: &Address, data: &[u8]) -> Result<Vec<u8>> 
         Address::ProxyDns { .. } => {
             return Err(AgentError::Socks5(
                 "SOCKS5 UDP 不支持 proxy DNS 虚拟地址".to_string(),
-            ));
-        }
-        Address::TcpYamux => {
-            return Err(AgentError::Socks5(
-                "SOCKS5 UDP 不支持 TCP Yamux 虚拟地址".to_string(),
-            ));
-        }
-        Address::UdpYamux => {
-            return Err(AgentError::Socks5(
-                "SOCKS5 UDP 不支持 UDP Yamux 虚拟地址".to_string(),
             ));
         }
         Address::UdpRelay => {

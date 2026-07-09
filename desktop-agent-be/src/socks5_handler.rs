@@ -4,11 +4,10 @@
 //! 本模块只负责 SOCKS5 握手、命令分发，以及把 fast-socks5 的目标地址
 //! 转成项目内部的 `protocol::Address`。
 
-use crate::connection_pool::{ConnectedStream, ConnectionPool};
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
-use common::DEFAULT_STREAM_RELAY_BUFFER_SIZE;
+use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 use dashmap::DashMap;
 use fast_socks5::server::{
     NoAuthentication, Socks5ServerProtocol, SocksServerError,
@@ -36,11 +35,11 @@ mod udp_relay;
 use tcp::{handle_tcp_bind, handle_tcp_connect};
 use udp_associate::handle_udp_associate;
 
-#[instrument(skip(stream, tcp_pool, udp_pool, direct_checker))]
+#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker))]
 pub async fn handle_socks5_connection(
     stream: TcpStream,
-    tcp_pool: Arc<ConnectionPool>,
-    udp_pool: Arc<ConnectionPool>,
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("处理 SOCKS5 连接");
@@ -70,18 +69,18 @@ pub async fn handle_socks5_connection(
     match command {
         // CONNECT 是最常见路径：客户端要求 agent 主动连接目标。
         Socks5Command::TCPConnect => {
-            handle_tcp_connect(protocol, target_addr, tcp_pool, direct_checker).await
+            handle_tcp_connect(protocol, target_addr, tcp_sessions, direct_checker).await
         }
         // BIND 让 agent 监听一个端口等待远端主动连入。
         Socks5Command::TCPBind => {
-            handle_tcp_bind(protocol, target_addr, tcp_pool, direct_checker).await
+            handle_tcp_bind(protocol, target_addr, tcp_sessions, direct_checker).await
         }
         // UDP ASSOCIATE 通过 TCP 控制连接维持 UDP 会话生命周期。
         Socks5Command::UDPAssociate => {
             handle_udp_associate(
                 protocol,
                 target_addr,
-                udp_pool,
+                udp_sessions,
                 control_local_ip,
                 direct_checker,
             )

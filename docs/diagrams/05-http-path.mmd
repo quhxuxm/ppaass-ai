@@ -3,13 +3,19 @@ flowchart TD
     B --> C{"请求方法"}
     C -->|"CONNECT"| D["解析 host:port 默认 443"]
     C -->|"普通 HTTP"| E["从 Host/URI 解析 host:port 默认 80"]
-    D --> F{"direct_access?"}
-    E --> F
-    F -->|"直连"| G["TcpStream::connect 目标"]
-    F -->|"代理"| H["tcp_pool.get_connected_stream TCP"]
-    D --> I["CONNECT 成功后升级裸 TCP"]
+    D --> F{"direct_access 命中?"}
+    F -->|"是"| G["TcpStream::connect 目标"]
+    F -->|"否"| H["tcp_sessions.connect_to_target TCP"]
+    G --> I["目标流建立成功后返回 200"]
     H --> I
-    G --> J["copy_bidirectional"]
-    I --> J
-    E --> K["hyper client handshake"]
-    K --> L["发送普通 HTTP request"]
+    I --> J["upgrade 为裸 TCP"]
+    J --> K["copy_bidirectional"]
+
+    E --> L["修正 absolute-form URI 为 origin-form"]
+    L --> M{"direct_access 命中?"}
+    M -->|"是"| N["TcpStream::connect 目标"]
+    M -->|"否"| O["tcp_sessions.connect_to_target TCP"]
+    N --> P["hyper client handshake"]
+    O --> P
+    P --> Q["发送普通 HTTP request"]
+    Q --> R["返回目标响应 body"]

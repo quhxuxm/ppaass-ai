@@ -1,34 +1,34 @@
 //! Yamux 客户端外层连接。
 //!
-//! 这里先用 legacy Auth/Connect 建立到 proxy 的虚拟 Yamux 目标，然后在这条外层流上
-//! 创建 tokio-yamux session。每个真实目标连接通过打开子流并写入一个小的
-//! ConnectRequest 控制帧完成。
+//! 外层 raw TCP 只承载 tokio-yamux session。每个真实目标连接通过打开子流，
+//! 然后在子流内执行完整的 PPAASS Auth/Connect/Data 协议完成。
 
 use futures::StreamExt;
-use protocol::{
-    Address, ConnectRequest, TransportProtocol, read_yamux_connect_response,
-    write_yamux_connect_request,
-};
+use protocol::{Address, CompressionMode, TransportProtocol};
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, info};
 
 use crate::YamuxSettings;
 use crate::spawn_guarded;
 
-use super::authenticated::AuthenticatedConnection;
+use super::authenticated::{AuthenticatedConnection, connect_tcp_stream};
 use super::config::ClientConnectionConfig;
+use super::stream::ClientStream;
 
 pub const YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE: &str = "Yamux open stream timeout";
 pub const YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE: &str =
     "Yamux target connect response timeout";
+pub const YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE: &str =
+    "Yamux session stream capacity exhausted";
 const MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION: usize = 16;
 
 #[derive(Clone)]
@@ -40,7 +40,39 @@ pub struct YamuxClientConnection {
     open_stream_permits: Arc<Semaphore>,
     // 控制同一外层 session 中存活的业务子流数量。
     stream_permits: Arc<Semaphore>,
+    closed: Arc<AtomicBool>,
     transport: TransportProtocol,
+    auth_config: Arc<YamuxSubstreamAuthConfig>,
+}
+
+#[derive(Debug)]
+struct YamuxSubstreamAuthConfig {
+    username: String,
+    private_key_pem: String,
+    timeout: Duration,
+    compression_mode: CompressionMode,
+}
+
+impl ClientConnectionConfig for YamuxSubstreamAuthConfig {
+    fn remote_addr(&self) -> String {
+        String::new()
+    }
+
+    fn username(&self) -> String {
+        self.username.clone()
+    }
+
+    fn private_key_pem(&self) -> Result<String, String> {
+        Ok(self.private_key_pem.clone())
+    }
+
+    fn timeout_duration(&self) -> Duration {
+        self.timeout
+    }
+
+    fn compression_mode(&self) -> CompressionMode {
+        self.compression_mode
+    }
 }
 
 impl YamuxClientConnection {
@@ -58,42 +90,31 @@ impl YamuxClientConnection {
     where
         C: ClientConnectionConfig,
     {
-        Self::connect_for(config, Address::TcpYamux, TransportProtocol::Tcp, settings).await
+        Self::connect_for(config, TransportProtocol::Tcp, settings).await
     }
 
     pub async fn connect_for<C>(
         config: &C,
-        outer_address: Address,
         transport: TransportProtocol,
         settings: YamuxSettings,
     ) -> std::io::Result<Self>
     where
         C: ClientConnectionConfig,
     {
-        if !matches!(outer_address, Address::TcpYamux | Address::UdpYamux) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Yamux outer target must be a Yamux virtual address",
-            ));
-        }
-        if matches!(outer_address, Address::TcpYamux) && transport != TransportProtocol::Tcp
-            || matches!(outer_address, Address::UdpYamux) && transport != TransportProtocol::Udp
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Yamux outer target does not match transport",
-            ));
-        }
-
         let connect_response_timeout = config
             .timeout_duration()
             .max(settings.open_stream_timeout)
             .saturating_add(Duration::from_secs(5));
-        // 外层 session 先是一条普通已认证连接，再 CONNECT 到 TcpYamux/UdpYamux 虚拟地址。
-        let auth_conn = AuthenticatedConnection::authenticate_only(config).await?;
-        let (outer_stream, outer_stream_id) = auth_conn
-            .connect_to_target(outer_address.clone(), transport)
-            .await?;
+        let auth_config = Arc::new(YamuxSubstreamAuthConfig {
+            username: config.username(),
+            private_key_pem: config
+                .private_key_pem()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            timeout: config.timeout_duration(),
+            compression_mode: config.compression_mode(),
+        });
+        // 外层 session 是 raw TCP + Yamux；PPAASS 加密协议只在每个子 stream 内执行。
+        let outer_stream = connect_tcp_stream(config).await?;
         let mut session = Session::new_client(outer_stream, settings.to_tokio_config());
         let control = session.control();
         let open_stream_permits = Arc::new(Semaphore::new(
@@ -102,6 +123,8 @@ impl YamuxClientConnection {
                 .clamp(1, MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION),
         ));
         let stream_permits = Arc::new(Semaphore::new(settings.max_streams_per_session));
+        let closed = Arc::new(AtomicBool::new(false));
+        let session_closed = closed.clone();
 
         spawn_guarded("yamux client session", async move {
             // agent 侧只主动打开子流；如果收到入站子流，说明对端行为不符合当前协议约定。
@@ -112,21 +135,25 @@ impl YamuxClientConnection {
                         let _ = inbound_stream.shutdown().await;
                     }
                     Err(err) => {
-                        debug!("Yamux 客户端会话已结束 outer_stream_id={outer_stream_id}: {err}");
+                        debug!("Yamux 客户端会话已结束 transport={transport:?}: {err}");
                         break;
                     }
                 }
             }
+            session_closed.store(true, Ordering::Release);
+            debug!("Yamux 客户端会话轮询已退出 transport={transport:?}");
         });
 
-        info!("已建立 {:?} Yamux 外层连接：{:?}", transport, outer_address);
+        info!("已建立 {:?} raw Yamux 外层连接", transport);
         Ok(Self {
             control,
             settings,
             connect_response_timeout,
             open_stream_permits,
             stream_permits,
+            closed,
             transport,
+            auth_config,
         })
     }
 
@@ -135,27 +162,7 @@ impl YamuxClientConnection {
         address: Address,
         transport: TransportProtocol,
     ) -> std::io::Result<(YamuxClientStream, String)> {
-        if transport != self.transport {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Yamux client connection transport mismatch",
-            ));
-        }
-        if matches!(address, Address::TcpYamux | Address::UdpYamux)
-            || (self.transport == TransportProtocol::Tcp && matches!(address, Address::UdpRelay))
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Yamux substream target is not valid for this session",
-            ));
-        }
-
-        let request_id = crate::generate_id();
-        let request = ConnectRequest {
-            request_id: request_id.clone(),
-            address: address.clone(),
-            transport,
-        };
+        self.validate_target(&address, transport)?;
 
         // stream_permit 覆盖业务子流整个生命周期；YamuxClientStream Drop 后释放。
         let permit = self
@@ -164,33 +171,120 @@ impl YamuxClientConnection {
             .acquire_owned()
             .await
             .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
-        // open_stream 本身也限流，避免短时间大量并发 open 卡住 session control。
-        let open_permit = self
-            .open_stream_permits
-            .clone()
-            .acquire_owned()
+
+        self.connect_to_target_with_permits(address, transport, permit, None)
             .await
-            .map_err(|_| std::io::Error::other("Yamux session has been closed"))?;
-        let mut control = self.control.clone();
-        let mut stream =
-            tokio::time::timeout(self.settings.open_stream_timeout, control.open_stream())
+    }
+
+    pub async fn try_connect_to_target(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> std::io::Result<(YamuxClientStream, String)> {
+        self.validate_target(&address, transport)?;
+
+        let permit = match self.stream_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+                ));
+            }
+            Err(TryAcquireError::Closed) => {
+                return Err(std::io::Error::other("Yamux session has been closed"));
+            }
+        };
+
+        let open_permit = match self.open_stream_permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+                ));
+            }
+            Err(TryAcquireError::Closed) => {
+                return Err(std::io::Error::other("Yamux session has been closed"));
+            }
+        };
+
+        self.connect_to_target_with_permits(address, transport, permit, Some(open_permit))
+            .await
+    }
+
+    pub fn has_immediate_stream_capacity(&self) -> bool {
+        !self.is_closed()
+            && self.stream_permits.available_permits() > 0
+            && self.open_stream_permits.available_permits() > 0
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    fn validate_target(&self, address: &Address, transport: TransportProtocol) -> io::Result<()> {
+        if self.is_closed() {
+            return Err(std::io::Error::other("Yamux session has been closed"));
+        }
+        if transport != self.transport {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Yamux client connection transport mismatch",
+            ));
+        }
+        if self.transport == TransportProtocol::Tcp && matches!(address, Address::UdpRelay) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Yamux substream target is not valid for this session",
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn connect_to_target_with_permits(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+        permit: OwnedSemaphorePermit,
+        open_permit: Option<OwnedSemaphorePermit>,
+    ) -> std::io::Result<(YamuxClientStream, String)> {
+        // open_stream 本身也限流，避免短时间大量并发 open 卡住 session control。
+        let open_permit = match open_permit {
+            Some(permit) => permit,
+            None => self
+                .open_stream_permits
+                .clone()
+                .acquire_owned()
                 .await
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
-                    )
-                })?
-                .map_err(|err| std::io::Error::other(err.to_string()))?;
+                .map_err(|_| std::io::Error::other("Yamux session has been closed"))?,
+        };
+        if self.is_closed() {
+            return Err(std::io::Error::other("Yamux session has been closed"));
+        }
+        let mut control = self.control.clone();
+        let stream = tokio::time::timeout(self.settings.open_stream_timeout, control.open_stream())
+            .await
+            .map_err(|_| {
+                self.closed.store(true, Ordering::Release);
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
+                )
+            })?
+            .map_err(|err| {
+                self.closed.store(true, Ordering::Release);
+                std::io::Error::other(err.to_string())
+            })?;
         drop(open_permit);
 
-        let response = tokio::time::timeout(self.connect_response_timeout, async {
-            // 子流第一帧是控制信息；收到 success 后，该子流才开始承载裸 payload。
-            debug!("通过 Yamux 子流发送连接请求：{request:?}");
-            write_yamux_connect_request(&mut stream, &request).await?;
-            let response = read_yamux_connect_response(&mut stream).await?;
-            debug!("Yamux 子流收到连接响应：{response:?}");
-            Ok::<_, std::io::Error>(response)
+        let (client_stream, request_id) = tokio::time::timeout(self.connect_response_timeout, async {
+            debug!("通过 Yamux 子流执行 PPAASS 认证并连接目标：address={address:?}, transport={transport:?}");
+            let auth_conn =
+                AuthenticatedConnection::authenticate_stream(stream, self.auth_config.as_ref())
+                    .await?;
+            auth_conn.connect_to_target(address, transport).await
         })
         .await
         .map_err(|_| {
@@ -200,29 +294,23 @@ impl YamuxClientConnection {
             )
         })??;
 
-        if !response.success {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                format!("连接失败: {}", response.message),
-            ));
-        }
-
-        Ok((YamuxClientStream::new(stream, permit), request_id))
+        Ok((YamuxClientStream::new(client_stream, permit), request_id))
     }
 
     pub async fn close(&self) {
+        self.closed.store(true, Ordering::Release);
         let mut control = self.control.clone();
         control.close().await;
     }
 }
 
 pub struct YamuxClientStream {
-    inner: StreamHandle,
+    inner: ClientStream<StreamHandle>,
     _permit: OwnedSemaphorePermit,
 }
 
 impl YamuxClientStream {
-    fn new(inner: StreamHandle, permit: OwnedSemaphorePermit) -> Self {
+    fn new(inner: ClientStream<StreamHandle>, permit: OwnedSemaphorePermit) -> Self {
         Self {
             inner,
             _permit: permit,

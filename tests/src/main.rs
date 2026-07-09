@@ -84,6 +84,74 @@ enum Commands {
         #[arg(short, long, default_value = "udp-performance-report.html")]
         output: String,
     },
+    /// 运行 TCP 专项性能测试（SOCKS5 CONNECT -> TCP echo）
+    TcpPerformance {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// TCP echo 目标主机
+        #[arg(long, default_value = "127.0.0.1")]
+        target_host: String,
+
+        /// TCP echo 目标端口
+        #[arg(long, default_value = "9091")]
+        target_port: u16,
+
+        /// 并发 TCP 连接数
+        #[arg(short, long, default_value = "100")]
+        concurrency: usize,
+
+        /// 测试持续时间（秒）
+        #[arg(short, long, default_value = "60")]
+        duration: u64,
+
+        /// 每次写入的 TCP payload 字节数
+        #[arg(long, default_value = "65536")]
+        payload_size: usize,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "tcp-performance-report.html")]
+        output: String,
+    },
+    /// 运行 HTTP Range 分片大文件下载测试
+    LargeDownload {
+        /// 代理服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent 服务器地址
+        #[arg(short, long, default_value = "127.0.0.1:7070")]
+        agent_addr: String,
+
+        /// 虚拟大文件大小（MB）
+        #[arg(long, default_value = "64")]
+        file_size_mb: u64,
+
+        /// 每个 Range 分片大小（KB）
+        #[arg(long, default_value = "1024")]
+        chunk_size_kb: u64,
+
+        /// 并发 Range 请求数
+        #[arg(short, long, default_value = "16")]
+        concurrency: usize,
+
+        /// 完整文件下载轮次
+        #[arg(long, default_value = "1")]
+        rounds: usize,
+
+        /// 先通过 HTTP CONNECT 建立隧道，再在隧道内执行 Range 分片下载
+        #[arg(long)]
+        connect_tunnel: bool,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "large-download-report.html")]
+        output: String,
+    },
     /// 运行 QUIC Version Negotiation 连通性探针（SOCKS5 UDP -> UDP/443）
     QuicProbe {
         /// 代理服务器地址
@@ -153,6 +221,10 @@ enum Commands {
         /// HTTP 服务器端口
         #[arg(long, default_value = "9090")]
         http_port: u16,
+
+        /// HTTP/2 cleartext 服务器端口
+        #[arg(long, default_value = "9093")]
+        h2_port: u16,
 
         /// TCP 回显服务器端口
         #[arg(long, default_value = "9091")]
@@ -236,6 +308,74 @@ async fn main() -> Result<()> {
             report::generate_udp_reports(&results, &output)?;
             tracing::info!("UDP 性能报告已生成：{}", output);
         }
+        Commands::TcpPerformance {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            concurrency,
+            duration,
+            payload_size,
+            output,
+        } => {
+            tracing::info!("正在运行 TCP 专项性能测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "目标：{}:{}，并发连接：{}，payload={} bytes，持续时间：{} 秒",
+                target_host,
+                target_port,
+                concurrency,
+                payload_size,
+                duration
+            );
+
+            let results = performance_tests::run_tcp_performance_tests(
+                &agent_addr,
+                &target_host,
+                target_port,
+                concurrency,
+                duration,
+                payload_size,
+            )
+            .await?;
+
+            report::generate_tcp_reports(&results, &output)?;
+            tracing::info!("TCP 性能报告已生成：{}", output);
+        }
+        Commands::LargeDownload {
+            proxy_addr,
+            agent_addr,
+            file_size_mb,
+            chunk_size_kb,
+            concurrency,
+            rounds,
+            connect_tunnel,
+            output,
+        } => {
+            tracing::info!("正在运行 HTTP Range 分片大文件下载测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "file={} MB，chunk={} KB，并发分片：{}，轮次：{}，CONNECT tunnel={}",
+                file_size_mb,
+                chunk_size_kb,
+                concurrency,
+                rounds,
+                connect_tunnel
+            );
+
+            let results = performance_tests::run_large_download_tests(
+                &agent_addr,
+                file_size_mb.saturating_mul(1024 * 1024),
+                chunk_size_kb.saturating_mul(1024),
+                concurrency,
+                rounds,
+                connect_tunnel,
+            )
+            .await?;
+
+            report::generate_large_download_reports(&results, &output)?;
+            tracing::info!("HTTP Range 分片大文件下载报告已生成：{}", output);
+        }
         Commands::QuicProbe {
             proxy_addr,
             agent_addr,
@@ -303,16 +443,18 @@ async fn main() -> Result<()> {
         }
         Commands::MockTarget {
             http_port,
+            h2_port,
             tcp_port,
             udp_port,
         } => {
             tracing::info!(
-                "正在端口上启动模拟目标服务器：HTTP={}，TCP={}，UDP={}",
+                "正在端口上启动模拟目标服务器：HTTP={}，H2={}，TCP={}，UDP={}",
                 http_port,
+                h2_port,
                 tcp_port,
                 udp_port
             );
-            mock_target::run_mock_servers(http_port, tcp_port, udp_port).await?;
+            mock_target::run_mock_servers(http_port, h2_port, tcp_port, udp_port).await?;
         }
     }
 

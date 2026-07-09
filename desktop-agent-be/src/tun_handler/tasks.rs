@@ -9,9 +9,8 @@ use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun
 use super::tcp::handle_tun_tcp;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
-use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
+use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::{SinkExt, StreamExt};
-use protocol::Address;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -139,14 +138,18 @@ pub(super) fn spawn_udp_sessions(
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
             DnsProxy::spawn(
-                context.udp_pool.clone(),
+                context.udp_sessions.clone(),
                 udp_tx.clone(),
                 context.direct_domain_cache.clone(),
                 shutdown.clone(),
             )
         });
         // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
-        let udp_relay = UdpRelay::spawn(context.udp_pool.clone(), udp_tx.clone(), shutdown.clone());
+        let udp_relay = UdpRelay::spawn(
+            context.udp_sessions.clone(),
+            udp_tx.clone(),
+            shutdown.clone(),
+        );
         let quic_stats = Arc::new(QuicUdpStats::default());
         spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
@@ -155,14 +158,22 @@ pub(super) fn spawn_udp_sessions(
                 _ = shutdown.cancelled() => break,
                 msg = udp_rx.next() => {
                     let Some((data, source_addr, target_addr)) = msg else { break };
-                    if context.proxy_dns && target_addr.port() == 53 {
+                    // 只有端口和 DNS 协议结构都匹配时才进入 DnsProxy。
+                    // 部分应用会把非 DNS UDP 流量发到 53 端口，单靠端口判断会误把它们
+                    // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
+                    let is_dns_proxy_query =
+                        context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
+                    if is_dns_proxy_query {
                         if let Some(dns_proxy) = &dns_proxy {
                             dns_proxy.send(source_addr, target_addr, data);
                         }
                         continue;
                     }
 
-                    let (address, _) = address_for_tun_target(target_addr, context.proxy_dns);
+                    // 未通过 DNS 解析校验的 UDP/53 继续按普通 UDP 处理，不能再启用
+                    // proxy_dns 虚拟地址映射，否则 address_for_tun_target 会再次把它
+                    // 转成 Address::ProxyDns。
+                    let (address, _) = address_for_tun_target(target_addr, false);
                     if context.tun_networks.is_ipv4_broadcast(target_addr.ip()) {
                         debug!("TUN UDP 广播已丢弃 -> {}", target_addr);
                         continue;
@@ -197,25 +208,24 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
-                    let mut proxy_address = address.clone();
+                    let proxy_address = address.clone();
                     if !direct_match {
-                        if context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target_addr.ip(), |domain| {
+                        // UDP/QUIC 只有在域名规则可能改判为直连时才查缓存。
+                        // 非直连代理目标始终保留原始 IP，避免 proxy 端重新 DNS 到
+                        // 不同 CDN 边缘节点后出现播放抖动。
+                        if context.direct_checker.has_domain_direct_rules()
+                            && context
+                                .direct_domain_cache
+                                .matching_domain_for_ip(target_addr.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
                             .is_some()
                         {
                             direct_match = true;
-                        } else if let Some(domain) = context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target_addr.ip(), |_| true)
-                        {
-                            proxy_address = domain_address(&domain, target_addr.port());
                         }
                     }
 
-                    if target_addr.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                    if target_addr.port() == 443 && quic_policy.should_block_udp443() {
                         quic_stats.record_blocked();
                         debug!(
                             "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}",
@@ -244,11 +254,13 @@ pub(super) fn spawn_udp_sessions(
                     let sessions_c = sessions.clone();
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
-                        proxy_dns: context.proxy_dns,
+                        // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
+                        // proxy_dns 标记，避免会话内部二次映射到 Address::ProxyDns。
+                        proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
-                        tcp_pool: context.tcp_pool.clone(),
-                        udp_pool: context.udp_pool.clone(),
+                        tcp_sessions: context.tcp_sessions.clone(),
+                        udp_sessions: context.udp_sessions.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         direct_egress: context.direct_egress.clone(),
@@ -297,11 +309,4 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
             }
         }
     });
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
-    }
 }

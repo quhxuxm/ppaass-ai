@@ -8,7 +8,8 @@ listen_addr = "0.0.0.0:9090"
 users_path = "config/local/users.toml"
 
 # 日志级别：trace、debug、info、warn、error
-log_level = "debug"
+# forward 链路会额外经过一跳 proxy，debug 日志在视频下载时开销很明显，默认用 info。
+log_level = "info"
 
 # 文件日志目录（相比控制台输出性能更好）
 # log_dir = "logs"
@@ -32,8 +33,9 @@ compression_mode = "lz4"
 # 不设置时读取系统默认 DNS（Windows 使用系统网卡 DNS，Unix 使用 /etc/resolv.conf）
 # dns_upstream_addr = "8.8.8.8:53"
 
-# Tokio 运行时工作线程数（512M 小内存实例建议 4）
-runtime_threads = 4
+# Tokio 运行时工作线程数。
+# 转发链路同时处理下游 agent 和上游 proxy，默认 8 能减少 relay 任务排队。
+runtime_threads = 8
 
 
 # 防重放攻击的容忍时间，单位秒
@@ -64,30 +66,15 @@ upstream_proxy_addrs = ["127.0.0.1:8080"]
 # 上游代理连接超时时间，单位秒（默认：30 秒）
 connect_timeout_secs = 30
 
-# Yamux TCP 子流空闲超时时间，单位秒；0 表示不限制。
-yamux_tcp_relay_idle_timeout_secs = 300
+# Yamux 外层 session 空闲超时时间，单位秒；无活跃子流时超过该时间会释放 raw TCP 连接。
+yamux_session_idle_timeout_secs = 300
 
-# proxy 端连接保护；512M 小内存实例默认使用保守边界。
-max_connections = 512
-max_connections_per_user = 128
-max_idle_connections_per_user = 32
-max_udp_relay_flows_per_connection = 128
-max_udp_relay_flows = 256
+# UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
 udp_relay_channel_size = 64
-max_udp_relay_buffered_bytes = 16777216
 
-[transport]
-tcp_mode = "auto"
-udp_mode = "auto"
-
-[yamux.tcp]
+[yamux]
+# proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。
 max_streams_per_session = 128
 keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 512
-
-[yamux.udp]
-max_streams_per_session = 128
-keepalive_interval_secs = 30
-connection_write_timeout_secs = 10
-stream_window_size_kb = 512
+connection_write_timeout_secs = 300
+stream_window_size_kb = 8192

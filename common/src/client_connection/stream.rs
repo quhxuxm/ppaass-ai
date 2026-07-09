@@ -8,34 +8,47 @@ use futures::{Sink, Stream};
 use protocol::{AgentCodec, ProxyRequest, ProxyResponse};
 use std::task::Poll;
 use std::{pin::Pin, task::Context};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
-type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
+type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
+type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
 
 /// 流包装器，在 ProxyRequest/Response 与 AsyncRead/AsyncWrite 之间转换
-pub struct ClientStream {
+pub struct ClientStream<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // 写给 proxy 的请求半边。
-    pub writer: FramedWriter,
+    pub writer: FramedWriter<S>,
     // 从 proxy 读取响应的半边。
-    pub reader: FramedReader,
+    pub reader: FramedReader<S>,
     // shutdown 只能发送一次空 end 包。
     pub end_sent: bool,
+    // framed sink 的 start_send 只把 DataPacket 放进编码缓冲；这里记录一次尚未
+    // flush 完成的写入，避免 copy_bidirectional 认为小包已经真正发到 proxy。
+    pub pending_write_len: Option<usize>,
     // 与 ConnectRequest.request_id 相同，用于区分目标流。
     pub stream_id: String,
     pub read_buf: Vec<u8>,
     pub read_pos: usize,
 }
 
-impl ClientStream {
+impl<S> ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     /// 获取流 ID
     pub fn stream_id(&self) -> &str {
         &self.stream_id
     }
 }
 
-impl tokio::io::AsyncRead for ClientStream {
+impl<S> tokio::io::AsyncRead for ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -88,12 +101,29 @@ impl tokio::io::AsyncRead for ClientStream {
     }
 }
 
-impl tokio::io::AsyncWrite for ClientStream {
+impl<S> tokio::io::AsyncWrite for ClientStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
+        if let Some(len) = self.pending_write_len {
+            match Pin::new(&mut self.writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Ok(len));
+                }
+                Poll::Ready(Err(e)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(std::io::Error::other(e)));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
@@ -106,7 +136,23 @@ impl tokio::io::AsyncWrite for ClientStream {
                     is_end: false,
                 };
                 match Pin::new(&mut self.writer).start_send(ProxyRequest::Data(packet)) {
-                    Ok(()) => Poll::Ready(Ok(buf.len())),
+                    Ok(()) => {
+                        // DataPacket 代表隧道里的一个裸字节块。对真实 TcpStream 来说
+                        // flush 基本是 no-op；但这里底层是 framed sink，不 flush 会让
+                        // 小请求/小响应滞留到 copy 缓冲填满或 EOF，浏览器就可能重试小分片。
+                        self.pending_write_len = Some(buf.len());
+                        match Pin::new(&mut self.writer).poll_flush(cx) {
+                            Poll::Ready(Ok(())) => {
+                                self.pending_write_len = None;
+                                Poll::Ready(Ok(buf.len()))
+                            }
+                            Poll::Ready(Err(e)) => {
+                                self.pending_write_len = None;
+                                Poll::Ready(Err(std::io::Error::other(e)))
+                            }
+                            Poll::Pending => Poll::Pending,
+                        }
+                    }
                     Err(e) => Poll::Ready(Err(std::io::Error::other(e))),
                 }
             }
@@ -116,6 +162,17 @@ impl tokio::io::AsyncWrite for ClientStream {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if self.pending_write_len.is_some() {
+            match Pin::new(&mut self.writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => self.pending_write_len = None,
+                Poll::Ready(Err(e)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(std::io::Error::other(e)));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         match Pin::new(&mut self.writer).poll_flush(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),
@@ -124,6 +181,17 @@ impl tokio::io::AsyncWrite for ClientStream {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if self.pending_write_len.is_some() {
+            match Pin::new(&mut self.writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => self.pending_write_len = None,
+                Poll::Ready(Err(e)) => {
+                    self.pending_write_len = None;
+                    return Poll::Ready(Err(std::io::Error::other(e)));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         if !self.end_sent {
             // 发送流结束数据包
             let end_packet = protocol::DataPacket {
@@ -155,4 +223,4 @@ impl tokio::io::AsyncWrite for ClientStream {
 }
 
 // 实现 Unpin 以允许在需要 Unpin 的上下文中使用
-impl Unpin for ClientStream {}
+impl<S> Unpin for ClientStream<S> where S: AsyncRead + AsyncWrite + Unpin {}

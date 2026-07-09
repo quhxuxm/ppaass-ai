@@ -19,6 +19,9 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
     ("wintun.dll", "wintun.dll"),
 ];
 
+// UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
+const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
+
 static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
@@ -167,8 +170,12 @@ pub(crate) fn install_bundled_agent_assets(
 }
 
 pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
-    let value = toml::from_str::<Value>(raw)
-        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    let value = toml::from_str::<Value>(raw).map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    let tun_quic_policy = normalize_quic_policy(
+        string_at(&value, &["tun", "quic_policy"])
+            .as_deref()
+            .unwrap_or("allow"),
+    );
     let runtime_threads = int_at(&value, &["runtime_threads"])
         .filter(|value| *value > 0)
         .map(|value| value as usize);
@@ -178,8 +185,6 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         proxy_addrs: string_array_at(&value, &["proxy_addrs"]),
         username: string_or(&value, &["username"], "user1"),
         private_key_path: string_or(&value, &["private_key_path"], "keys/user1.pem"),
-        tcp_pool_size: int_at(&value, &["tcp_pool_size"]).unwrap_or(10) as usize,
-        udp_pool_size: int_at(&value, &["udp_pool_size"]).unwrap_or(5) as usize,
         connect_timeout_secs: int_at(&value, &["connect_timeout_secs"]).unwrap_or(30),
         compression_mode: string_or(&value, &["compression_mode"], "none"),
         log_level: string_or(&value, &["log_level"], "info"),
@@ -187,60 +192,36 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         log_file: string_or(&value, &["log_file"], "desktop-agent.log"),
         runtime_threads,
         effective_runtime_threads: runtime_threads.unwrap_or_else(default_runtime_threads),
-        tcp_mode: string_or(&value, &["transport", "tcp_mode"], "auto"),
-        udp_mode: string_or(&value, &["transport", "udp_mode"], "auto"),
-        tcp_yamux_sessions: int_at(&value, &["yamux", "tcp", "sessions"]).unwrap_or(5) as usize,
-        udp_yamux_sessions: int_at(&value, &["yamux", "udp", "sessions"]).unwrap_or(5) as usize,
-        tcp_yamux_max_streams_per_session: int_at(
-            &value,
-            &["yamux", "tcp", "max_streams_per_session"],
-        )
-        .unwrap_or(256) as usize,
+        udp_yamux_sessions: int_at(&value, &["yamux", "udp", "sessions"])
+            .unwrap_or(DEFAULT_UDP_YAMUX_SESSIONS) as usize,
         udp_yamux_max_streams_per_session: int_at(
             &value,
             &["yamux", "udp", "max_streams_per_session"],
         )
         .unwrap_or(256) as usize,
-        tcp_yamux_open_stream_timeout_secs: int_at(
-            &value,
-            &["yamux", "tcp", "open_stream_timeout_secs"],
-        )
-        .unwrap_or(10),
         udp_yamux_open_stream_timeout_secs: int_at(
             &value,
             &["yamux", "udp", "open_stream_timeout_secs"],
         )
         .unwrap_or(10),
-        tcp_yamux_keepalive_interval_secs: int_at(
-            &value,
-            &["yamux", "tcp", "keepalive_interval_secs"],
-        )
-        .unwrap_or(30),
         udp_yamux_keepalive_interval_secs: int_at(
             &value,
             &["yamux", "udp", "keepalive_interval_secs"],
         )
         .unwrap_or(30),
-        tcp_yamux_connection_write_timeout_secs: int_at(
-            &value,
-            &["yamux", "tcp", "connection_write_timeout_secs"],
-        )
-        .unwrap_or(10),
         udp_yamux_connection_write_timeout_secs: int_at(
             &value,
             &["yamux", "udp", "connection_write_timeout_secs"],
         )
         .unwrap_or(10),
-        tcp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "tcp", "stream_window_size_kb"])
-            .unwrap_or(2048) as usize,
         udp_yamux_stream_window_size_kb: int_at(&value, &["yamux", "udp", "stream_window_size_kb"])
-            .unwrap_or(2048) as usize,
+            .unwrap_or(8192) as usize,
         tun_enabled: bool_at(&value, &["tun", "enabled"]).unwrap_or(false),
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
-        tun_block_quic: bool_at(&value, &["tun", "block_quic"]).unwrap_or(false),
+        tun_quic_policy,
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
         direct_rules: string_array_at(&value, &["direct_access", "rules"]),
     })
@@ -452,6 +433,13 @@ fn string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
         .collect()
 }
 
+fn normalize_quic_policy(value: &str) -> String {
+    match value {
+        "allow" | "block" => value.to_string(),
+        _ => "allow".to_string(),
+    }
+}
+
 fn array_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a [Value]> {
     let items = value_at(value, path)?.as_array()?;
     Some(items.as_slice())
@@ -565,21 +553,13 @@ mod tests {
     }
 
     #[test]
-    fn summarize_config_preserves_yamux_transport_settings() {
+    fn summarize_config_preserves_udp_yamux_settings() {
         let summary = summarize_config(
             r#"
 listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-
-[yamux.tcp]
-sessions = 2
-max_streams_per_session = 64
-open_stream_timeout_secs = 7
-keepalive_interval_secs = 11
-connection_write_timeout_secs = 13
-stream_window_size_kb = 768
 
 [yamux.udp]
 sessions = 3
@@ -592,17 +572,11 @@ stream_window_size_kb = 1024
         )
         .unwrap();
 
-        assert_eq!(summary.tcp_yamux_sessions, 2);
         assert_eq!(summary.udp_yamux_sessions, 3);
-        assert_eq!(summary.tcp_yamux_max_streams_per_session, 64);
         assert_eq!(summary.udp_yamux_max_streams_per_session, 32);
-        assert_eq!(summary.tcp_yamux_open_stream_timeout_secs, 7);
         assert_eq!(summary.udp_yamux_open_stream_timeout_secs, 5);
-        assert_eq!(summary.tcp_yamux_keepalive_interval_secs, 11);
         assert_eq!(summary.udp_yamux_keepalive_interval_secs, 0);
-        assert_eq!(summary.tcp_yamux_connection_write_timeout_secs, 13);
         assert_eq!(summary.udp_yamux_connection_write_timeout_secs, 9);
-        assert_eq!(summary.tcp_yamux_stream_window_size_kb, 768);
         assert_eq!(summary.udp_yamux_stream_window_size_kb, 1024);
     }
 
@@ -618,7 +592,25 @@ private_key_path = "keys/user1.pem"
         )
         .unwrap();
 
-        assert!(!summary.tun_block_quic);
+        assert_eq!(summary.tun_quic_policy, "allow");
+    }
+
+    #[test]
+    fn summarize_config_reads_block_policy() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+
+[tun]
+quic_policy = "block"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(summary.tun_quic_policy, "block");
     }
 
     #[test]

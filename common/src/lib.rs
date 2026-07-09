@@ -1,26 +1,35 @@
 pub mod client_connection;
-pub mod datagram_stream;
+pub mod dns;
 pub mod error;
 pub mod quic;
 pub mod task_guard;
+pub mod tcp_keepalive;
+pub mod tcp_listener;
 pub mod tun_control;
 pub mod yamux_settings;
 
-pub const DEFAULT_STREAM_RELAY_BUFFER_SIZE: usize = 64 * 1024;
-
 pub use client_connection::{
-    AuthenticatedConnection, BindInterface, ClientConnection, ClientConnectionConfig, ClientStream,
-    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
-    YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
+    AuthenticatedConnection, BindInterface, ClientConnectionConfig, ClientStream,
+    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
+    bind_socket_to_interface,
 };
-pub use datagram_stream::DatagramStreamIo;
 pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
 pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
-pub use yamux_settings::{
-    TcpTransportMode, TransportConfig, YamuxConfig, YamuxServerConfig, YamuxServerTransportConfig,
-    YamuxSettings, YamuxTransportConfig,
+pub use tcp_keepalive::{
+    PROXY_TCP_KEEPALIVE_INTERVAL, PROXY_TCP_KEEPALIVE_RETRIES, PROXY_TCP_KEEPALIVE_TIME,
+    PROXY_TCP_USER_TIMEOUT, configure_proxy_tcp_socket, configure_proxy_tcp_stream,
 };
+pub use tcp_listener::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
+pub use yamux_settings::{YamuxConfig, YamuxServerConfig, YamuxSettings, YamuxTransportConfig};
+
+/// TCP relay copy buffer for HTTP CONNECT, SOCKS, and TUN data paths.
+///
+/// Tokio's default bidirectional copy buffer is 8KB. HLS/video segment downloads
+/// move megabytes through each tunnel, so a 64KB buffer lowers wakeups and small
+/// writes without creating large per-connection memory spikes on small proxies.
+pub const TCP_RELAY_COPY_BUFFER_SIZE: usize = 64 * 1024;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::WorkerGuard;

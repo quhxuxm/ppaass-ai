@@ -1,15 +1,22 @@
 mod android_log;
 mod config;
-mod connection_pool;
 mod direct_access;
 mod error;
 mod fd_device;
+mod http_proxy;
+mod http_proxy_body;
+mod http_proxy_clients;
+mod http_proxy_io;
 mod jni_api;
 mod netstack;
 mod socket_protector;
+mod socks5_proxy;
+mod tcp_relay;
 mod traffic_stats;
+mod yamux_session;
 
 pub use config::{AndroidAgentConfig, AndroidTunConfig};
 pub use direct_access::{DirectAccessConfig, DirectAccessMode};
 pub use error::{AndroidAgentError, Result};
+pub use http_proxy::run_android_http_proxy;
 pub use netstack::run_android_agent;

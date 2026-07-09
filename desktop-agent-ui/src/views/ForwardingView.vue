@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import Card from "primevue/card";
 import InputText from "primevue/inputtext";
+import Select from "primevue/select";
 import Tag from "primevue/tag";
 import ToggleSwitch from "primevue/toggleswitch";
+import { quicPolicyOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
 defineProps<{
@@ -90,14 +92,22 @@ const emit = defineEmits<{
           <template #content>
             <div class="toggle-list">
               <div class="switch-row">
-                <span>Proxy DNS</span>
+              <span>代理 DNS</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
-              <div class="switch-row">
-                <span>阻断 QUIC</span>
-                <ToggleSwitch :model-value="summary.tun_block_quic" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_block_quic', $event)" />
-              </div>
             </div>
+            <label class="field">
+              <span><i class="pi pi-bolt"></i>QUIC 策略</span>
+              <Select
+                :model-value="summary.tun_quic_policy"
+                :options="quicPolicyOptions"
+                option-label="label"
+                option-value="value"
+                :disabled="configLocked"
+                @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
+              />
+              <small class="field-help">没有匹配直连规则的 QUIC 会通过代理转发。</small>
+            </label>
           </template>
         </Card>
       </div>

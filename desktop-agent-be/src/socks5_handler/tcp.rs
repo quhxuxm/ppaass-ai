@@ -4,16 +4,20 @@
 //! 最终转换成一个 `AsyncRead + AsyncWrite` 双向中继。
 
 use super::*;
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
 pub(super) async fn handle_tcp_connect(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     let target_label = format_target_addr(&target_addr);
 
     // 将目标地址转换为协议 Address，之后直连规则和 proxy Connect 都使用同一表示。
+    // SOCKS5 入口不读取 TCP payload 做 SNI/Host 嗅探：直连判断只基于客户端
+    // 握手里显式给出的 IP/域名。这样浏览器发起 CONNECT 后，视频分片数据不会
+    // 被 agent 先抢读再补发。
     let address = convert_target_addr(&target_addr);
 
     if direct_checker.is_direct(&address) {
@@ -23,6 +27,10 @@ pub(super) async fn handle_tcp_connect(
 
         match TcpStream::connect(&target_str).await {
             Ok(mut target_stream) => {
+                // SOCKS5 直连隧道也关闭 Nagle，避免本地代理模式下小控制帧被延迟合并。
+                if let Err(err) = target_stream.set_nodelay(true) {
+                    debug!("SOCKS5 直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
+                }
                 // SOCKS5 要先回复成功，客户端才会开始发送 TCP payload。
                 let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
                 let mut client_stream = protocol
@@ -32,24 +40,23 @@ pub(super) async fn handle_tcp_connect(
 
                 info!("SOCKS5 直连隧道已建立，开始数据中继");
 
-                match tokio::io::copy_bidirectional_with_sizes(
+                match relay_tcp_bidirectional(
                     &mut client_stream,
                     &mut target_stream,
-                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-                    DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                    TcpRelayOptions::standard(&target_label),
                 )
                 .await
                 {
-                    Ok((client_to_target, target_to_client)) => {
+                    Ok(stats) => {
                         info!(
                             "直连 SOCKS5 中继完成: {} 字节发出, {} 字节接收",
-                            client_to_target, target_to_client
+                            stats.client_to_remote, stats.remote_to_client
                         );
                         telemetry::emit_traffic(
                             "SOCKS5 CONNECT (direct)",
                             target_label,
-                            client_to_target,
-                            target_to_client,
+                            stats.client_to_remote,
+                            stats.remote_to_client,
                         );
                     }
                     Err(e) => {
@@ -66,24 +73,34 @@ pub(super) async fn handle_tcp_connect(
         }
     } else {
         // === 代理路径 ===
-        let connected_stream = match pool
+        // SOCKS5 的 DOMAIN 目标必须原样交给 proxy 端解析。
+        // 如果 agent 在本地先解析，再把 IP 发给 proxy，会破坏“从 proxy 出口访问”的
+        // DNS/CDN 语义，也会让远端分流规则失去域名上下文。这里刻意只透传
+        // Address::Domain，不做任何 agent 侧 DNS fallback。
+        //
+        // SOCKS5 reply success 也必须在 proxy stream 真实建立之后再发送。
+        // 否则浏览器会认为 CONNECT 已成功并开始写 TLS/HTTP2 字节；如果随后远端建连失败，
+        // 本地代理只能关闭一个“已经成功”的隧道，视频分片层面会变成更难诊断的解析/播放卡顿。
+        let connected_stream = match sessions
             .as_ref()
-            .get_connected_stream(address, TransportProtocol::Tcp)
+            .connect_to_target(address, TransportProtocol::Tcp)
             .await
         {
             Ok(stream) => {
-                info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                info!(
+                    "通过 proxy session manager 获取目标流, stream_id: {}",
+                    stream.stream_id()
+                );
                 stream
             }
             Err(e) => {
-                error!("从连接池获取流失败: {}", e);
+                error!("SOCKS5 获取 proxy 流失败: {}", e);
                 let _ = protocol.reply_error(&ReplyError::HostUnreachable).await;
                 return Err(e);
             }
         };
 
-        // 发送成功回复，使用虚拟绑定地址
-        // 代理路径中真实出口在 proxy 端，agent 本地只返回占位绑定地址。
+        // proxy stream 建好后再回复成功，之后客户端才会开始发送隧道 payload。
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let mut client_stream = protocol
             .reply_success(bind_addr)
@@ -106,7 +123,7 @@ pub(super) async fn handle_tcp_connect(
 pub(super) async fn handle_tcp_bind(
     protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
     target_addr: TargetAddr,
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {
     info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
@@ -148,25 +165,30 @@ pub(super) async fn handle_tcp_bind(
 
                 match TcpStream::connect(&target_str).await {
                     Ok(mut target_stream) => {
+                        // BIND 直连同样关闭 Nagle，保持与 CONNECT 直连一致的小包时延。
+                        if let Err(err) = target_stream.set_nodelay(true) {
+                            debug!(
+                                "SOCKS5 BIND 直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}"
+                            );
+                        }
                         info!("SOCKS5 BIND 直连隧道已建立，开始数据中继");
-                        match tokio::io::copy_bidirectional_with_sizes(
+                        match relay_tcp_bidirectional(
                             &mut incoming_stream,
                             &mut target_stream,
-                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-                            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+                            TcpRelayOptions::standard(&target_label),
                         )
                         .await
                         {
-                            Ok((c2t, t2c)) => {
+                            Ok(stats) => {
                                 info!(
                                     "直连 SOCKS5 BIND 中继完成: {} 字节发出, {} 字节接收",
-                                    c2t, t2c
+                                    stats.client_to_remote, stats.remote_to_client
                                 );
                                 telemetry::emit_traffic(
                                     "SOCKS5 BIND (direct)",
                                     target_label,
-                                    c2t,
-                                    t2c,
+                                    stats.client_to_remote,
+                                    stats.remote_to_client,
                                 );
                             }
                             Err(e) => {
@@ -182,17 +204,21 @@ pub(super) async fn handle_tcp_bind(
                 }
             } else {
                 // === 代理路径 ===
-                let connected_stream = match pool
+                // BIND 代理路径与 CONNECT 保持一致：域名只透传，不在 agent 本地解析。
+                let connected_stream = match sessions
                     .as_ref()
-                    .get_connected_stream(address, TransportProtocol::Tcp)
+                    .connect_to_target(address, TransportProtocol::Tcp)
                     .await
                 {
                     Ok(stream) => {
-                        info!("从连接池获取已连接流, stream_id: {}", stream.stream_id());
+                        info!(
+                            "通过 proxy session manager 获取目标流, stream_id: {}",
+                            stream.stream_id()
+                        );
                         stream
                     }
                     Err(e) => {
-                        error!("从连接池获取流失败: {}", e);
+                        error!("通过 proxy session manager 获取目标流失败: {}", e);
                         return Err(e);
                     }
                 };
@@ -221,32 +247,33 @@ pub(super) async fn handle_tcp_bind(
 
 async fn relay_data(
     client_stream: &mut TcpStream,
-    connected_stream: ConnectedStream,
+    connected_stream: YamuxTargetStream,
     protocol: &str,
     target: String,
 ) -> Result<()> {
-    // ConnectedStream 隐藏 legacy/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
+    // YamuxTargetStream 隐藏 direct framed TCP/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
+    // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为底层传输
+    // 分叉不同 flush 或半关闭策略，避免同一视频分片在不同入口表现不一致。
     let mut proxy_io = connected_stream.into_async_io();
 
-    // 使用 tokio 优化的双向拷贝
-    // 比手动 select 循环更高效：
-    // 1. 尽可能使用零拷贝
-    // 2. 优化的缓冲区
-    // 3. 正确处理背压
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         client_stream,
         &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        TcpRelayOptions::standard(&target),
     )
     .await
     {
-        Ok((client_to_proxy, proxy_to_client)) => {
+        Ok(stats) => {
             info!(
                 "SOCKS5 中继完成: {} 字节 客户端->代理, {} 字节 代理->客户端",
-                client_to_proxy, proxy_to_client
+                stats.client_to_remote, stats.remote_to_client
             );
-            telemetry::emit_traffic(protocol, target, client_to_proxy, proxy_to_client);
+            telemetry::emit_traffic(
+                protocol,
+                target,
+                stats.client_to_remote,
+                stats.remote_to_client,
+            );
         }
         Err(e) => {
             // 客户端关闭连接时出现的连接错误是预期的

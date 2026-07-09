@@ -10,6 +10,8 @@ final class NativeAgent {
 
     static native long start(int tunFd, String configJson, PpaassVpnService vpnService);
 
+    static native long startHttpProxy(String configJson, int listenPort);
+
     static native boolean isRunning(long handle);
 
     static native void stop(long handle);
@@ -19,4 +21,10 @@ final class NativeAgent {
     static native long vpnUploadBytes();
 
     static native String dnsResolutionRecordsJson();
+
+    static native String httpProxyClientsJson();
+
+    static native boolean blockHttpProxyClient(String ip);
+
+    static native boolean unblockHttpProxyClient(String ip);
 }

@@ -165,23 +165,19 @@ impl ServerConnection {
         Ok(())
     }
 
-    pub async fn handle_pre_connect_request(
-        &mut self,
-        pre_connect_idle_timeout: Duration,
-        username: &str,
-        mut idle_permit: Option<IdleConnectionPermit>,
-    ) -> Result<()> {
-        // 只在“认证完成但还没收到第一个 Connect”的阶段使用 idle 超时。
-        // 一旦 Connect 到达，就移交给具体的 relay / Yamux session，不再用该超时杀外层连接。
+    pub async fn handle_connect_request(&mut self, username: &str) -> Result<()> {
+        // Yamux 子 stream 认证成功后应立即发送 Connect。这里保留一个短超时，
+        // 防止异常客户端完成认证后悬挂子 stream。
+        let connect_request_timeout = Duration::from_secs(self.proxy_config.auth_timeout_secs);
         loop {
             let request =
-                match tokio::time::timeout(pre_connect_idle_timeout, self.read_request()).await {
+                match tokio::time::timeout(connect_request_timeout, self.read_request()).await {
                     Ok(result) => result?,
                     Err(_) => {
                         warn!(
-                            "用户 '{}' 的预热连接等待 Connect 超时（{} 秒），正在关闭以防止泄漏",
+                            "用户 '{}' 的 Yamux 子 stream 等待 Connect 超时（{} 秒），正在关闭",
                             username,
-                            pre_connect_idle_timeout.as_secs()
+                            connect_request_timeout.as_secs()
                         );
                         return Ok(());
                     }
@@ -189,10 +185,6 @@ impl ServerConnection {
 
             match request {
                 Some(ProxyRequest::Connect(connect_request)) => {
-                    // 从这里开始，这条 agent 连接不再算作“已认证但未 Connect”的 idle 连接。
-                    // 如果它是 Yamux 外层 session，不应再被 pre-connect idle timeout 杀掉；
-                    // 每条 Yamux 子流会在 relay 层应用 yamux_tcp_relay_idle_timeout_secs。
-                    drop(idle_permit.take());
                     debug!(
                         "[连接请求] 请求 ID={}，地址={:?}，传输协议={:?}",
                         connect_request.request_id,
@@ -200,7 +192,6 @@ impl ServerConnection {
                         connect_request.transport
                     );
                     self.handle_connect(connect_request).await?;
-                    // 中继结束（连接关闭）后，返回以关闭连接
                     return Ok(());
                 }
                 Some(ProxyRequest::Auth(auth_request)) => {

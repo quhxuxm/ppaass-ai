@@ -11,10 +11,6 @@ pub struct UserConfig {
     /// proxy 用该公钥解开 agent 发来的会话密钥。
     pub public_key_pem: String,
 
-    /// 为空表示不限速；有值时按 Mbps 做粗粒度秒级限制。
-    #[serde(default)]
-    pub bandwidth_limit_mbps: Option<u64>,
-
     /// 绝对过期时间；不配置表示永不过期。支持 RFC3339 或 Unix 秒级时间戳。
     #[serde(
         default,
@@ -86,7 +82,6 @@ mod tests {
         UserConfig {
             username: "user1".to_string(),
             public_key_pem: "public-key".to_string(),
-            bandwidth_limit_mbps: None,
             expires_at: expires_at.map(str::to_string),
         }
     }

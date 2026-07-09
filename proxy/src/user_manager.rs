@@ -46,12 +46,6 @@ impl UserManager {
         // 认证路径只读用户配置，RwLock 让多个连接可以并发查询。
         Ok(self.users.read().users.get(username).cloned())
     }
-
-    #[instrument(skip(self))]
-    pub async fn list_users(&self) -> Result<Vec<String>> {
-        // 启动阶段需要枚举所有用户，用于初始化带宽监控器。
-        Ok(self.users.read().users.keys().cloned().collect())
-    }
 }
 
 fn load_users(path: &Path) -> Result<UsersConfig> {

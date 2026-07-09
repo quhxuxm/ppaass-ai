@@ -1,9 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
-use common::{QuicPolicy, QuicUdpStats, spawn_guarded};
+use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::{SinkExt, StreamExt};
-use protocol::{Address, TransportProtocol};
+use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
@@ -20,9 +20,9 @@ use super::network::{
 };
 use super::udp_relay::UdpRelay;
 use crate::android_log;
-use crate::connection_pool::AndroidConnectionPool;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::Result;
+use crate::yamux_session::AndroidYamuxSessionManager;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
@@ -38,7 +38,7 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
-    pub(super) udp_pool: Arc<AndroidConnectionPool>,
+    pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) shutdown: CancellationToken,
@@ -66,14 +66,20 @@ pub(super) fn spawn_udp_sessions(
                 _ = shutdown.cancelled() => break,
                 message = udp_rx.next() => {
                     let Some((data, source, target)) = message else { break };
-                    if context.proxy_dns && target.port() == 53 {
+                    // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
+                    // 非 DNS 的 UDP/53 必须继续按普通 UDP 转发，避免被 DNS ID 改写和缓存逻辑误处理。
+                    let is_dns_proxy_query =
+                        context.proxy_dns && target.port() == 53 && is_dns_query_packet(&data);
+                    if is_dns_proxy_query {
                         if let Some(dns_proxy) = &dns_proxy {
                             dns_proxy.send(source, target, data);
                         }
                         continue;
                     }
 
-                    let (address, _) = address_for_tun_target(target, context.proxy_dns);
+                    // 上面已经消化了真实 DNS 查询；没有通过 DNS 校验的 UDP/53
+                    // 不能再启用 proxy_dns 虚拟地址映射。
+                    let (address, _) = address_for_tun_target(target, false);
                     if context.tun_networks.is_ipv4_broadcast(target.ip()) {
                         debug!("Android TUN UDP broadcast dropped -> {}", target);
                         continue;
@@ -100,25 +106,24 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let mut direct_match = context.direct_checker.is_direct(&address);
-                    let mut proxy_address = address.clone();
+                    let proxy_address = address.clone();
                     if !direct_match {
-                        if context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target.ip(), |domain| {
+                        // UDP/QUIC 代理目标保持原始 IP；只有域名规则可能改判直连时，
+                        // 才需要查 DNS cache。这样可以避免 proxy 端重新 DNS 到不同
+                        // CDN 边缘节点，减少 HTTP/3 视频播放抖动。
+                        if context.direct_checker.has_domain_direct_rules()
+                            && context
+                                .direct_domain_cache
+                                .matching_domain_for_ip(target.ip(), |domain| {
                                 context.direct_checker.is_direct_domain(domain)
                             })
                             .is_some()
                         {
                             direct_match = true;
-                        } else if let Some(domain) = context
-                            .direct_domain_cache
-                            .matching_domain_for_ip(target.ip(), |_| true)
-                        {
-                            proxy_address = domain_address(&domain, target.port());
                         }
                     }
 
-                    if target.port() == 443 && quic_policy.should_block_udp443(direct_match) {
+                    if target.port() == 443 && quic_policy.should_block_udp443() {
                         quic_stats.record_blocked();
                         debug!(
                             "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
@@ -146,10 +151,11 @@ pub(super) fn spawn_udp_sessions(
                     let sessions_c = sessions.clone();
                     let session_context = UdpSessionContext {
                         tun_networks: context.tun_networks,
-                        proxy_dns: context.proxy_dns,
+                        // 普通 UDP 会话内部不再处理 proxy_dns，防止二次映射到 Address::ProxyDns。
+                        proxy_dns: false,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
-                        udp_pool: context.udp_pool.clone(),
+                        udp_sessions: context.udp_sessions.clone(),
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         shutdown: shutdown.clone(),
@@ -203,7 +209,7 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         quic_policy,
         netstack_tx,
-        udp_pool,
+        udp_sessions,
         direct_checker,
         direct_domain_cache,
         shutdown,
@@ -234,15 +240,16 @@ pub(super) async fn handle_tun_udp(
 
     let mut direct_target = None;
     let mut direct_label = target_label.clone();
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
-        } else if let Some(domain) = direct_domain_cache
-            .matching_domain_for_ip(target.ip(), |domain| {
-                direct_checker.is_direct_domain(domain)
-            })
+        } else if direct_checker.has_domain_direct_rules()
+            && let Some(domain) = direct_domain_cache
+                .matching_domain_for_ip(target.ip(), |domain| {
+                    direct_checker.is_direct_domain(domain)
+                })
         {
             debug!(
                 "Android TUN UDP cached direct domain matched: {} ({})",
@@ -258,17 +265,13 @@ pub(super) async fn handle_tun_udp(
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
         debug!(
-            "Android TUN UDP cached proxy domain matched: {} ({})",
+            "Android TUN UDP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
             target, domain
         );
-        proxy_address = domain_address(&domain, target.port());
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
-    if !proxy_dns_request
-        && target.port() == 443
-        && quic_policy.should_block_udp443(direct_target.is_some())
-    {
+    if !proxy_dns_request && target.port() == 443 && quic_policy.should_block_udp443() {
         debug!(
             "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
             quic_policy, target_label
@@ -303,8 +306,8 @@ pub(super) async fn handle_tun_udp(
         debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
         android_log::info(format!("Android TUN UDP PROXY {proxy_label}"));
     }
-    let proxy_io = match udp_pool
-        .get_connected_stream(proxy_address, TransportProtocol::Udp)
+    let proxy_io = match udp_sessions
+        .connect_to_target(proxy_address, TransportProtocol::Udp)
         .await
     {
         Ok(proxy_io) => proxy_io,
@@ -486,13 +489,6 @@ async fn drain_dropped_udp(
                 }
             }
         }
-    }
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
     }
 }
 

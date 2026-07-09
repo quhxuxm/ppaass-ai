@@ -1,14 +1,8 @@
 use super::*;
 
 pub(super) fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
-    if packet.len() < 12 || read_u16(packet, 4)? == 0 {
-        return None;
-    }
-
-    let mut offset = 12;
-    let query = parse_dns_name(packet, &mut offset)?;
-    let record_type = dns_type_name(read_u16(packet, offset)?).to_string();
-    Some((query, record_type))
+    let query = common::dns::parse_dns_query_packet(packet)?;
+    Some((query.query, query.record_type))
 }
 
 pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
@@ -30,13 +24,14 @@ pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     }
 
     let mut answers = Vec::new();
+    let mut min_ttl = None;
     for _ in 0..ancount {
         parse_dns_name(packet, &mut offset)?;
         let record_type = read_u16(packet, offset)?;
         offset = offset.checked_add(2)?;
         let _class = read_u16(packet, offset)?;
         offset = offset.checked_add(2)?;
-        let _ttl = read_u32(packet, offset)?;
+        let ttl = read_u32(packet, offset)?;
         offset = offset.checked_add(4)?;
         let rdlength = read_u16(packet, offset)? as usize;
         offset = offset.checked_add(2)?;
@@ -47,6 +42,7 @@ pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
         }
 
         if let Some(answer) = parse_dns_answer_rdata(packet, rdata_offset, rdlength, record_type) {
+            min_ttl = Some(min_ttl.map_or(ttl, |current: u32| current.min(ttl)));
             answers.push(answer);
         }
         offset = rdata_end;
@@ -55,6 +51,7 @@ pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     Some(DnsResponseSummary {
         status: dns_rcode_name(flags & 0x000f).to_string(),
         answers,
+        min_ttl,
     })
 }
 
@@ -175,24 +172,6 @@ fn read_u16(packet: &[u8], offset: usize) -> Option<u16> {
 fn read_u32(packet: &[u8], offset: usize) -> Option<u32> {
     let bytes = packet.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
-fn dns_type_name(record_type: u16) -> String {
-    match record_type {
-        1 => "A".to_string(),
-        2 => "NS".to_string(),
-        5 => "CNAME".to_string(),
-        6 => "SOA".to_string(),
-        12 => "PTR".to_string(),
-        15 => "MX".to_string(),
-        16 => "TXT".to_string(),
-        28 => "AAAA".to_string(),
-        33 => "SRV".to_string(),
-        64 => "SVCB".to_string(),
-        65 => "HTTPS".to_string(),
-        255 => "ANY".to_string(),
-        other => format!("TYPE{other}"),
-    }
 }
 
 fn dns_rcode_name(rcode: u16) -> &'static str {

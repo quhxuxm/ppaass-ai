@@ -1,7 +1,6 @@
 mod bridge;
 mod direct_domain_cache;
 mod dns_proxy;
-mod domain_sniff;
 mod network;
 mod supervisor;
 mod tcp;
@@ -11,15 +10,14 @@ mod udp_relay;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::spawn_guarded;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::AndroidAgentConfig;
-use crate::connection_pool::AndroidConnectionPool;
 use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::fd_device::{AndroidTunDevice, RawFd};
+use crate::yamux_session::AndroidYamuxSessionManager;
 
 use direct_domain_cache::DirectDomainCache;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
@@ -27,8 +25,8 @@ use supervisor::spawn_netstack_supervisor;
 
 #[derive(Clone)]
 struct ForwardContext {
-    tcp_pool: Arc<AndroidConnectionPool>,
-    udp_pool: Arc<AndroidConnectionPool>,
+    tcp_sessions: Arc<AndroidYamuxSessionManager>,
+    udp_sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
     direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
@@ -57,14 +55,13 @@ pub async fn run_android_agent(
     let quic_policy = config.tun.effective_quic_policy();
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp_pool_size={}, udp_pool_size={}",
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp=direct-framed, udp_yamux_sessions={}",
         config.tun.ipv4,
         config.tun.ipv6,
         mtu,
         proxy_dns,
         quic_policy,
-        config.tcp_pool_size,
-        config.udp_pool_size
+        config.yamux.udp_session_count()
     );
     info!(
         "Android TUN UDP/443 QUIC policy: {}",
@@ -74,29 +71,11 @@ pub async fn run_android_agent(
     let device = Arc::new(AndroidTunDevice::from_raw_fd(raw_fd)?);
     let config = Arc::new(config);
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
-    let tcp_pool = AndroidConnectionPool::new(
-        config.clone(),
-        shutdown.clone(),
-        config.tcp_pool_size,
-        "tcp_pool",
-    );
-    let udp_pool = AndroidConnectionPool::new(
-        config.clone(),
-        shutdown.clone(),
-        config.udp_pool_size,
-        "udp_pool",
-    );
-    let tcp_pool_for_prewarm = tcp_pool.clone();
-    spawn_guarded("android tcp pool prewarm", async move {
-        tcp_pool_for_prewarm.prewarm().await;
-    });
-    let udp_pool_for_prewarm = udp_pool.clone();
-    spawn_guarded("android udp pool prewarm", async move {
-        udp_pool_for_prewarm.prewarm().await;
-    });
+    let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config.clone(), shutdown.clone());
+    let udp_sessions = AndroidYamuxSessionManager::new_udp(config.clone(), shutdown.clone());
     let context = ForwardContext {
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         direct_checker,
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,

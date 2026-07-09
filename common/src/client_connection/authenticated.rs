@@ -1,8 +1,8 @@
-//! agent/proxy 级联场景共用的客户端握手逻辑。
+//! agent/proxy 级联场景共用的 PPAASS 子流握手逻辑。
 //!
-//! Desktop agent 用它连接远端 proxy；proxy 的 forward 模式也复用它连接下一跳 proxy。
-//! 生命周期是：TCP connect -> 发送 Auth -> 收到 AuthResponse 后启用 AES ->
-//! 发送 ConnectRequest -> 返回 `ClientStream` 做数据中继。
+//! 外层 raw TCP 只承载 Yamux session；每个 Yamux 子 stream 内执行：
+//! 发送 Auth -> 收到 AuthResponse 后启用 AES -> 发送 ConnectRequest ->
+//! 返回 `ClientStream` 做数据中继。
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -15,49 +15,46 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
 
+use crate::configure_proxy_tcp_socket;
+
 use super::config::{BindInterface, ClientConnectionConfig};
 use super::socket_bind::bind_socket_to_interface;
 use super::stream::ClientStream;
+use super::yamux::YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE;
 
-type FramedWriter = SplitSink<Framed<TcpStream, AgentCodec>, ProxyRequest>;
-type FramedReader = SplitStream<Framed<TcpStream, AgentCodec>>;
+type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
+type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
 
 /// 已认证的客户端连接，用于连接远端代理
 /// 可用于发送连接请求到远端代理，或转换为流
-pub struct AuthenticatedConnection {
+pub struct AuthenticatedConnection<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // 认证成功后保留下来的 framed writer/reader；后续 Connect 和 Data 继续复用同一 TCP 连接。
-    writer: FramedWriter,
-    reader: FramedReader,
+    writer: FramedWriter<S>,
+    reader: FramedReader<S>,
     timeout: Duration,
 }
 
-impl AuthenticatedConnection {
-    /// 建立到远端代理的已认证连接，但不立即连接目标
-    /// 适用于连接池场景，仅预热认证
-    pub async fn authenticate_only<C>(config: &C) -> Result<Self, std::io::Error>
+impl<S> AuthenticatedConnection<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// 在一条已经建立的双向流上执行 PPAASS 认证。
+    ///
+    /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功后才启用 AES。
+    pub async fn authenticate_stream<C>(stream: S, config: &C) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
     {
-        let remote_addr = config.remote_addr();
         let username = config.username();
         let timeout = config.timeout_duration();
-
-        debug!("正在连接远端代理: {}", remote_addr);
-
-        // 1. TCP 连接 — 可选绑定到指定本地地址，
-        //    以绕过可能存在的 TUN 默认路由。
-        let stream = if let Some(bind) = config.bind_addr() {
-            connect_bound(config, &remote_addr, bind, config.bind_interface(), timeout).await?
-        } else {
-            connect_unbound(config, &remote_addr, timeout).await?
-        };
-        if let Err(err) = stream.set_nodelay(true) {
-            warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
-        }
 
         // 2. 设置编解码器。认证成功前 cipher_state 只有压缩配置，没有 AES cipher。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
@@ -141,7 +138,7 @@ impl AuthenticatedConnection {
         mut self,
         address: Address,
         transport: TransportProtocol,
-    ) -> Result<(ClientStream, String), std::io::Error> {
+    ) -> Result<(ClientStream<S>, String), std::io::Error> {
         // 6. 发送连接请求。request_id 后续就是 DataPacket 的 stream_id。
         let request_id = crate::generate_id();
         let connect_request = ConnectRequest {
@@ -170,7 +167,7 @@ impl AuthenticatedConnection {
             Err(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "连接目标响应超时",
+                    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
                 ));
             }
         };
@@ -195,6 +192,7 @@ impl AuthenticatedConnection {
                 writer: self.writer,
                 reader: self.reader,
                 end_sent: false,
+                pending_write_len: None,
                 stream_id: request_id.clone(),
                 read_buf: Vec::new(),
                 read_pos: 0,
@@ -204,9 +202,41 @@ impl AuthenticatedConnection {
     }
 }
 
+impl AuthenticatedConnection<TcpStream> {
+    pub async fn connect<C>(config: &C) -> Result<Self, std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
+        let stream = connect_tcp_stream(config).await?;
+        Self::authenticate_stream(stream, config).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
+
+pub(super) async fn connect_tcp_stream<C>(config: &C) -> std::io::Result<TcpStream>
+where
+    C: ClientConnectionConfig,
+{
+    let remote_addr = config.remote_addr();
+    let timeout = config.timeout_duration();
+
+    debug!("正在连接远端代理: {}", remote_addr);
+
+    // TCP 连接 — 可选绑定到指定本地地址，以绕过可能存在的 TUN 默认路由。
+    let stream = if let Some(bind) = config.bind_addr() {
+        connect_bound(config, &remote_addr, bind, config.bind_interface(), timeout).await?
+    } else {
+        connect_unbound(config, &remote_addr, timeout).await?
+    };
+    if let Err(err) = stream.set_nodelay(true) {
+        warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+    }
+
+    Ok(stream)
+}
 
 /// 连接到 `remote_addr`，同时将套接字绑定到 `bind`。
 ///
@@ -257,6 +287,7 @@ where
             continue;
         }
         tune_proxy_socket(config, &socket, *dst);
+        tune_proxy_keepalive(&socket, *dst);
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
             warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -332,6 +363,7 @@ where
             continue;
         }
         tune_proxy_socket(config, &socket, dst);
+        tune_proxy_keepalive(&socket, dst);
         if let Err(e) = socket.set_nonblocking(true) {
             warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
             last_error = Some(e);
@@ -374,5 +406,11 @@ where
     }
     if let Err(err) = socket.set_send_buffer_size(buffer_size) {
         warn!("设置代理连接 socket 发送缓冲失败 (dst={}): {err}", dst);
+    }
+}
+
+fn tune_proxy_keepalive(socket: &Socket, dst: SocketAddr) {
+    if let Err(err) = configure_proxy_tcp_socket(socket) {
+        debug!("设置代理 TCP keepalive 失败 (dst={}): {err}", dst);
     }
 }

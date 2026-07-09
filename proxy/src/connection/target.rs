@@ -28,7 +28,7 @@ pub(super) fn target_addr_for_address(
 ) -> Result<String> {
     match address {
         Address::ProxyDns { port } => proxy_dns_target_addr(proxy_config, *port),
-        Address::TcpYamux | Address::UdpYamux | Address::UdpRelay => Err(ProxyError::Connection(
+        Address::UdpRelay => Err(ProxyError::Connection(
             "virtual target address cannot be used as a TCP target".to_string(),
         )),
         _ => Ok(format_target_addr(address)),
@@ -77,8 +77,6 @@ fn format_target_addr(address: &Address) -> String {
             )
         }
         Address::ProxyDns { port } => format!("proxy-dns:{port}"),
-        Address::TcpYamux => "tcp-yamux".to_string(),
-        Address::UdpYamux => "udp-yamux".to_string(),
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }
@@ -88,11 +86,9 @@ pub(super) fn relay_target_addr(address: &Address) -> Result<String> {
         Address::Domain { .. } | Address::Ipv4 { .. } | Address::Ipv6 { .. } => {
             Ok(format_target_addr(address))
         }
-        Address::ProxyDns { .. } | Address::TcpYamux | Address::UdpYamux | Address::UdpRelay => {
-            Err(ProxyError::Connection(
-                "UDP relay packet contains virtual target address".to_string(),
-            ))
-        }
+        Address::ProxyDns { .. } | Address::UdpRelay => Err(ProxyError::Connection(
+            "UDP relay packet contains virtual target address".to_string(),
+        )),
     }
 }
 

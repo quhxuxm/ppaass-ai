@@ -11,7 +11,6 @@ PxzO8/ImXr5KWigaTnkfTVGFzFHrzgTdqPJiLtNRPCmxQAMZpu/U9nxCA5YY2xR5
 ywIDAQAB
 -----END PUBLIC KEY-----
 """
-bandwidth_limit_mbps = 100
 # 不配置 expires_at 表示永不过期；配置时使用 RFC3339 时间。
 # expires_at = "2026-12-31T23:59:59Z"
 
@@ -28,4 +27,3 @@ Xsg2dea7zeV8pRw0uL010Cx208clFEtV3EMdgY2iSpbTW+gOuhgciVdzjR/EAXtH
 lwIDAQAB
 -----END PUBLIC KEY-----
 """
-bandwidth_limit_mbps = 50

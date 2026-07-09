@@ -5,8 +5,6 @@ export type AgentConfigSummary = {
   proxy_addrs: string[];
   username: string;
   private_key_path: string;
-  tcp_pool_size: number;
-  udp_pool_size: number;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;
@@ -14,26 +12,18 @@ export type AgentConfigSummary = {
   log_file: string;
   runtime_threads?: number | null;
   effective_runtime_threads: number;
-  tcp_mode: string;
-  udp_mode: string;
-  tcp_yamux_sessions: number;
   udp_yamux_sessions: number;
-  tcp_yamux_max_streams_per_session: number;
   udp_yamux_max_streams_per_session: number;
-  tcp_yamux_open_stream_timeout_secs: number;
   udp_yamux_open_stream_timeout_secs: number;
-  tcp_yamux_keepalive_interval_secs: number;
   udp_yamux_keepalive_interval_secs: number;
-  tcp_yamux_connection_write_timeout_secs: number;
   udp_yamux_connection_write_timeout_secs: number;
-  tcp_yamux_stream_window_size_kb: number;
   udp_yamux_stream_window_size_kb: number;
   tun_enabled: boolean;
   tun_name: string;
   tun_ipv4: string;
   tun_mtu: number;
   tun_proxy_dns: boolean;
-  tun_block_quic: boolean;
+  tun_quic_policy: string;
   direct_mode: string;
   direct_rules: string[];
 };
@@ -127,6 +117,8 @@ export type DirectRuleGroup = {
   key: string;
   label: string;
   icon: string;
+  /** 当前规则类型在哪些入口或模式下可用，用于直连规则页给用户做配置提示。 */
+  modes: string[];
   items: Array<{ rule: string; index: number }>;
 };
 

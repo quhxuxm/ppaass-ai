@@ -88,8 +88,7 @@ pub fn emit_traffic<S1: Into<String>, S2: Into<String>>(
     let protocol = protocol.into();
     let target = target.into();
 
-    TOTAL_OUTBOUND_BYTES.fetch_add(outbound_bytes, Ordering::Relaxed);
-    TOTAL_INBOUND_BYTES.fetch_add(inbound_bytes, Ordering::Relaxed);
+    record_traffic(outbound_bytes, inbound_bytes);
 
     info!(
         protocol = %protocol,
@@ -98,6 +97,15 @@ pub fn emit_traffic<S1: Into<String>, S2: Into<String>>(
         inbound_bytes,
         "流量统计"
     );
+}
+
+/// 只累计流量快照，不输出逐包日志。
+///
+/// UDP/QUIC 中继可能是高包率路径，如果每个 datagram 都调用 `emit_traffic` 会把日志
+/// 系统打满；总览页只需要累计值和采样差分，因此这里提供无日志的热路径入口。
+pub fn record_traffic(outbound_bytes: u64, inbound_bytes: u64) {
+    TOTAL_OUTBOUND_BYTES.fetch_add(outbound_bytes, Ordering::Relaxed);
+    TOTAL_INBOUND_BYTES.fetch_add(inbound_bytes, Ordering::Relaxed);
 }
 
 #[allow(dead_code)]

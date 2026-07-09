@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import Button from "primevue/button";
 import Card from "primevue/card";
-import InputNumber from "primevue/inputnumber";
+import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import SelectButton from "primevue/selectbutton";
@@ -49,7 +49,7 @@ const emit = defineEmits<{
               </label>
               <label class="field">
                 <span><i class="pi pi-microchip"></i>线程</span>
-                <InputNumber :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
+                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
               </label>
             </div>
           </template>
@@ -109,6 +109,42 @@ const emit = defineEmits<{
                 </div>
               </div>
             </div>
+            <!-- 直连规则的页面说明以“怎么配置、何时生效”为主，避免把实现细节当成用户操作指南。 -->
+            <div class="rule-scope-grid">
+              <div class="rule-scope-item">
+                <i class="pi pi-globe"></i>
+                <div>
+                  <span>代理入口填域名</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="HTTP" severity="info" rounded />
+                    <Tag value="SOCKS5" severity="info" rounded />
+                  </div>
+                  <p>使用 HTTP / SOCKS5 时，可添加 example.com 或 *.example.com，让这些域名直接访问。</p>
+                </div>
+              </div>
+              <div class="rule-scope-item">
+                <i class="pi pi-hashtag"></i>
+                <div>
+                  <span>TUN 优先填 IP/CIDR</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="TUN" severity="success" rounded />
+                    <Tag value="IP/CIDR" severity="secondary" rounded />
+                  </div>
+                  <p>TUN 模式下更适合添加固定 IP 或网段，例如 192.168.0.0/16、10.0.0.0/8。</p>
+                </div>
+              </div>
+              <div class="rule-scope-item">
+                <i class="pi pi-database"></i>
+                <div>
+                  <span>TUN 域名规则</span>
+                  <div class="rule-scope-modes">
+                    <Tag value="TUN" severity="success" rounded />
+                    <Tag value="需代理 DNS" severity="warn" rounded />
+                  </div>
+                  <p>需要先开启代理 DNS；浏览器或应用完成 DNS 查询后，命中缓存的域名规则才会生效。</p>
+                </div>
+              </div>
+            </div>
           </template>
         </Card>
 
@@ -144,12 +180,16 @@ const emit = defineEmits<{
                   <span>添加规则</span>
                   <strong>{{ directModeLabel }}</strong>
                 </div>
+                <div class="rule-scope-note">
+                  <i class="pi pi-info-circle"></i>
+                  <span>添加前先看入口：HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需要开启代理 DNS 并等待 DNS 缓存命中。</span>
+                </div>
                 <div class="rule-compose">
                   <label class="field rule-input-field">
                     <span><i class="pi pi-plus-circle"></i>规则值</span>
                     <InputText
                       :model-value="ruleDraft"
-                      placeholder="域名 / 通配符 / CIDR"
+                      placeholder="example.com / *.example.com / 10.0.0.0/8"
                       :disabled="configLocked"
                       @keydown.enter.prevent="emit('add-draft-rules')"
                       @update:model-value="emit('update:ruleDraft', String($event))"
@@ -171,6 +211,9 @@ const emit = defineEmits<{
                       <div>
                         <i :class="group.icon"></i>
                         <span>{{ group.label }}</span>
+                      </div>
+                      <div class="rule-group-modes">
+                        <Tag v-for="mode in group.modes" :key="`${group.key}-${mode}`" :value="mode" severity="secondary" rounded />
                       </div>
                       <strong>{{ group.items.length }}</strong>
                     </div>

@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant C as Client App
+    participant A as Agent
+    participant Y as UDP raw Yamux Substream
+    participant P as Proxy
+    participant T as Target
+
+    Note over A,Y: TCP 目标不走此图；TCP 使用 direct framed PPAASS 连接
+    A->>Y: open substream on UDP raw Yamux session
+    A->>Y: Auth
+    Y->>P: Auth
+    P-->>Y: AuthResponse success
+    Y-->>A: AuthResponse success
+    A->>Y: ConnectRequest(request_id, target, Udp)
+    Y->>P: ConnectRequest(request_id, target, Udp)
+    P->>T: UDP connect or UdpRelay flow dispatch
+    P-->>Y: ConnectResponse success
+    Y-->>A: ConnectResponse success
+    C->>A: payload bytes
+    A->>Y: encrypted Data(stream_id=request_id, data)
+    Y->>P: encrypted Data(stream_id=request_id, data)
+    P->>T: payload bytes
+    T-->>P: response bytes
+    P-->>Y: encrypted Data(stream_id=request_id, data)
+    Y-->>A: encrypted Data(stream_id=request_id, data)
+    A-->>C: response bytes
+    A->>Y: encrypted Data(stream_id, empty, is_end=true)

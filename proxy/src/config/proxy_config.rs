@@ -1,4 +1,4 @@
-use common::{TransportConfig, YamuxServerConfig};
+use common::YamuxServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -25,7 +25,9 @@ pub struct ProxyConfig {
     #[serde(default = "default_log_file")]
     pub log_file: String,
 
-    /// Tokio 运行时工作线程数（默认 4，适合 512M 小内存 proxy）。
+    /// Tokio 运行时工作线程数（默认 8）。
+    /// 视频分片会同时触发 DNS、目标 TCP connect、协议编解码和 relay 任务，
+    /// 4 线程在小型 VPS 上容易被瞬时并发打满，8 线程更适合作为通用性能默认值。
     #[serde(default = "default_runtime_threads")]
     pub runtime_threads: Option<usize>,
 
@@ -36,14 +38,15 @@ pub struct ProxyConfig {
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
 
-    /// TCP/UDP 传输模式：auto/yamux 接受对应 Yamux 和 legacy，legacy 拒绝对应 Yamux 外层连接。
-    #[serde(default)]
-    pub transport: TransportConfig,
-
-    /// 入站 Yamux acceptor 参数。proxy 只接受 agent 建立的 TCP/UDP Yamux 外层 session；
+    /// 入站 Yamux acceptor 参数。proxy 对每条 raw TCP 连接都直接维护一个 Yamux session；
     /// 外层 session 数由 agent 端控制。
     #[serde(default)]
     pub yamux: YamuxServerConfig,
+
+    /// Yamux 外层 session 空闲超时时间（秒）。
+    /// 当一条 raw Yamux TCP 连接没有任何活跃子流时，超过该时间后主动关闭；0 表示不限制。
+    #[serde(default = "default_yamux_session_idle_timeout_secs")]
+    pub yamux_session_idle_timeout_secs: u64,
 
     #[serde(default)]
     pub forward_mode: bool,
@@ -71,49 +74,22 @@ pub struct ProxyConfig {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// 已认证但尚未发送第一个 Connect 请求的预热连接空闲超时时间（秒）。
-    /// 连接进入 legacy TCP relay、UDP relay 或 Yamux 外层 session 后不再使用该超时。
-    #[serde(
-        default = "default_pre_connect_idle_timeout_secs",
-        alias = "idle_connection_timeout_secs"
-    )]
-    pub pre_connect_idle_timeout_secs: u64,
-
     /// TCP relay 空闲超时时间（秒）；建立 CONNECT 后若双向都无数据活动将被关闭。
     /// 0 表示不限制。
     #[serde(default = "default_tcp_relay_idle_timeout_secs")]
     pub tcp_relay_idle_timeout_secs: u64,
 
-    /// Yamux TCP 子流空闲超时时间（秒）。
-    /// 0 表示不限制；默认不限制，避免 WebSocket、SSH 等长连接被子流 idle 误杀。
-    #[serde(default = "default_yamux_tcp_relay_idle_timeout_secs")]
-    pub yamux_tcp_relay_idle_timeout_secs: u64,
+    /// TCP relay 进入半关闭后的空闲回收时间（秒）。
+    /// 浏览器/agent 请求方向已结束后，HTTPS/HTTP2 目标连接可能长时间不发 EOF；
+    /// 这个值用于在响应方向也无活动时更快回收连接，0 表示回退到普通 TCP idle。
+    #[serde(default = "default_tcp_relay_half_close_idle_timeout_secs")]
+    pub tcp_relay_half_close_idle_timeout_secs: u64,
 
     /// 认证超时时间（秒）- 未在该时间内完成认证握手的连接将被关闭。
     /// 这可以防止 agent 通过 TCP 建连后从未发送认证请求造成僵尸连接
     /// （例如半开连接、端口扫描器、异常客户端）。
     #[serde(default = "default_auth_timeout_secs")]
     pub auth_timeout_secs: u64,
-
-    /// proxy 同时接受的 agent TCP 连接总数上限；0 表示不限制。
-    #[serde(default = "default_max_connections")]
-    pub max_connections: usize,
-
-    /// 单个用户同时占用的 agent TCP 连接数上限；0 表示不限制。
-    #[serde(default = "default_max_connections_per_user")]
-    pub max_connections_per_user: usize,
-
-    /// 单个用户已认证但尚未发送 Connect 请求的预热连接数上限；0 表示不限制。
-    #[serde(default = "default_max_idle_connections_per_user")]
-    pub max_idle_connections_per_user: usize,
-
-    /// 单条 UDP relay TCP 连接中允许同时存在的目标 UDP flow 数；0 表示不限制。
-    #[serde(default = "default_max_udp_relay_flows_per_connection")]
-    pub max_udp_relay_flows_per_connection: usize,
-
-    /// proxy 全局同时存在的 UDP relay flow 数；每个 flow 持有一个 UDP socket，0 表示不限制。
-    #[serde(default = "default_max_udp_relay_flows")]
-    pub max_udp_relay_flows: usize,
 
     /// UDP relay 空闲超时时间（秒）；会话和 flow 在该时间内无数据活动将被关闭。
     #[serde(default = "default_udp_relay_idle_timeout_secs")]
@@ -122,10 +98,6 @@ pub struct ProxyConfig {
     /// UDP relay 每个内部队列最多缓存的包数量。
     #[serde(default = "default_udp_relay_channel_size")]
     pub udp_relay_channel_size: usize,
-
-    /// proxy 全局 UDP relay 队列中允许积压的 payload 字节数；0 表示不限制。
-    #[serde(default = "default_max_udp_relay_buffered_bytes")]
-    pub max_udp_relay_buffered_bytes: usize,
 }
 
 fn default_log_level() -> String {
@@ -152,40 +124,20 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
-fn default_pre_connect_idle_timeout_secs() -> u64 {
-    120
-}
-
 fn default_tcp_relay_idle_timeout_secs() -> u64 {
-    300
+    60
 }
 
-fn default_yamux_tcp_relay_idle_timeout_secs() -> u64 {
+fn default_tcp_relay_half_close_idle_timeout_secs() -> u64 {
+    30
+}
+
+fn default_yamux_session_idle_timeout_secs() -> u64 {
     300
 }
 
 fn default_auth_timeout_secs() -> u64 {
     30
-}
-
-fn default_max_connections() -> usize {
-    512
-}
-
-fn default_max_connections_per_user() -> usize {
-    128
-}
-
-fn default_max_idle_connections_per_user() -> usize {
-    32
-}
-
-fn default_max_udp_relay_flows_per_connection() -> usize {
-    128
-}
-
-fn default_max_udp_relay_flows() -> usize {
-    256
 }
 
 fn default_udp_relay_idle_timeout_secs() -> u64 {
@@ -196,16 +148,12 @@ fn default_udp_relay_channel_size() -> usize {
     64
 }
 
-fn default_max_udp_relay_buffered_bytes() -> usize {
-    16 * 1024 * 1024
-}
-
 fn default_async_runtime_stack_size_mb() -> usize {
     2
 }
 
 fn default_runtime_threads() -> Option<usize> {
-    Some(4)
+    Some(8)
 }
 
 impl ProxyConfig {
@@ -228,21 +176,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yamux_tcp_relay_idle_timeout_defaults_to_small_memory_friendly_limit() {
+    fn tcp_relay_idle_timeout_defaults_to_recycle_stalled_streams() {
         let config: ProxyConfig = toml::from_str(
             r#"
-listen_addr = "127.0.0.1:0"
-tcp_relay_idle_timeout_secs = 300
-"#,
+	listen_addr = "127.0.0.1:0"
+	tcp_relay_idle_timeout_secs = 60
+	"#,
         )
         .unwrap();
 
-        assert_eq!(config.tcp_relay_idle_timeout_secs, 300);
-        assert_eq!(config.yamux_tcp_relay_idle_timeout_secs, 300);
+        assert_eq!(config.tcp_relay_idle_timeout_secs, 60);
+        assert_eq!(config.tcp_relay_half_close_idle_timeout_secs, 30);
+        assert_eq!(config.yamux_session_idle_timeout_secs, 300);
     }
 
     #[test]
-    fn udp_relay_memory_defaults_are_bounded() {
+    fn udp_relay_queue_defaults_are_bounded() {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
@@ -250,9 +199,6 @@ listen_addr = "127.0.0.1:0"
         )
         .unwrap();
 
-        assert_eq!(config.max_udp_relay_flows_per_connection, 128);
-        assert_eq!(config.max_udp_relay_flows, 256);
         assert_eq!(config.udp_relay_channel_size, 64);
-        assert_eq!(config.max_udp_relay_buffered_bytes, 16 * 1024 * 1024);
     }
 }

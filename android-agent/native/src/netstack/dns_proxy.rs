@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::spawn_guarded;
+use common::{dns::parse_dns_query_packet, spawn_guarded};
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -27,6 +27,8 @@ const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
 const DIRECT_DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const DNS_RESPONSE_CACHE_MAX_ENTRIES: usize = 4096;
+const DNS_RESPONSE_CACHE_MAX_TTL: Duration = Duration::from_secs(300);
 
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
@@ -52,6 +54,97 @@ struct PendingDnsRequest {
 struct DnsResponseSummary {
     status: String,
     answers: Vec<String>,
+    min_ttl: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct DnsCacheKey {
+    query: String,
+    record_type: String,
+}
+
+struct CachedDnsResponse {
+    packet: Vec<u8>,
+    expires_at: Instant,
+}
+
+#[derive(Default)]
+struct DnsResponseCache {
+    entries: HashMap<DnsCacheKey, CachedDnsResponse>,
+}
+
+impl DnsResponseCache {
+    fn get(&mut self, query: &str, record_type: &str, request_id: u16) -> Option<Vec<u8>> {
+        self.cleanup_expired();
+        let key = dns_cache_key(query, record_type);
+        let entry = self.entries.get(&key)?;
+        if entry.expires_at <= Instant::now() {
+            self.entries.remove(&key);
+            return None;
+        }
+
+        let mut packet = entry.packet.clone();
+        write_dns_id(&mut packet, request_id);
+        Some(packet)
+    }
+
+    fn insert(
+        &mut self,
+        query: &str,
+        record_type: &str,
+        summary: &DnsResponseSummary,
+        response: &[u8],
+    ) {
+        if summary.status != "NOERROR" || summary.answers.is_empty() {
+            return;
+        }
+        let Some(ttl_secs) = summary.min_ttl else {
+            return;
+        };
+        if ttl_secs == 0 {
+            return;
+        }
+
+        self.cleanup_expired();
+        if self.entries.len() >= DNS_RESPONSE_CACHE_MAX_ENTRIES {
+            self.evict_one();
+        }
+
+        let mut packet = response.to_vec();
+        // 缓存完整 DNS 响应；命中时再替换成当前请求的 transaction id。
+        write_dns_id(&mut packet, 0);
+        self.entries.insert(
+            dns_cache_key(query, record_type),
+            CachedDnsResponse {
+                packet,
+                expires_at: Instant::now()
+                    + Duration::from_secs(u64::from(ttl_secs)).min(DNS_RESPONSE_CACHE_MAX_TTL),
+            },
+        );
+    }
+
+    fn cleanup_expired(&mut self) {
+        let now = Instant::now();
+        self.entries.retain(|_, entry| entry.expires_at > now);
+    }
+
+    fn evict_one(&mut self) {
+        if let Some(key) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.expires_at)
+            .map(|(key, _)| key.clone())
+        {
+            self.entries.remove(&key);
+        }
+    }
+}
+
+fn dns_cache_key(query: &str, record_type: &str) -> DnsCacheKey {
+    DnsCacheKey {
+        query: query.trim().trim_end_matches('.').to_ascii_lowercase(),
+        record_type: record_type.to_ascii_uppercase(),
+    }
 }
 
 impl DnsProxy {
@@ -96,6 +189,7 @@ async fn run_dns_proxy(
     shutdown: CancellationToken,
 ) {
     let mut pending = HashMap::new();
+    let mut response_cache = DnsResponseCache::default();
     let mut next_id = 0u16;
     let mut retry_request = None;
     let mut reconnect_delay = Duration::from_millis(200);
@@ -114,7 +208,14 @@ async fn run_dns_proxy(
             }
         };
 
-        if try_send_direct_dns_response(&context, &netstack_tx, &first_request).await {
+        if try_send_cached_dns_response(&context, &netstack_tx, &mut response_cache, &first_request)
+            .await
+        {
+            continue;
+        }
+        if try_send_direct_dns_response(&context, &netstack_tx, &mut response_cache, &first_request)
+            .await
+        {
             continue;
         }
 
@@ -149,7 +250,24 @@ async fn run_dns_proxy(
 
         loop {
             if let Some(request) = retry_request.take() {
-                if try_send_direct_dns_response(&context, &netstack_tx, &request).await {
+                if try_send_cached_dns_response(
+                    &context,
+                    &netstack_tx,
+                    &mut response_cache,
+                    &request,
+                )
+                .await
+                {
+                    continue;
+                }
+                if try_send_direct_dns_response(
+                    &context,
+                    &netstack_tx,
+                    &mut response_cache,
+                    &request,
+                )
+                .await
+                {
                     continue;
                 }
                 if let Err(e) =
@@ -181,7 +299,20 @@ async fn run_dns_proxy(
                         let _ = writer.shutdown().await;
                         return;
                     };
-                    if try_send_direct_dns_response(&context, &netstack_tx, &request).await {
+                    if try_send_cached_dns_response(
+                        &context,
+                        &netstack_tx,
+                        &mut response_cache,
+                        &request,
+                    ).await {
+                        continue;
+                    }
+                    if try_send_direct_dns_response(
+                        &context,
+                        &netstack_tx,
+                        &mut response_cache,
+                        &request,
+                    ).await {
                         continue;
                     }
                     if let Err(e) = send_dns_request(
@@ -209,6 +340,7 @@ async fn run_dns_proxy(
                             if let Err(e) = handle_dns_response(
                                 &netstack_tx,
                                 context.direct_domain_cache.as_ref(),
+                                &mut response_cache,
                                 &mut pending,
                                 &mut response,
                             ).await {
@@ -235,14 +367,61 @@ async fn connect_dns_stream(
     context: &ForwardContext,
 ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     context
-        .udp_pool
-        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+        .udp_sessions
+        .connect_to_target(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
         .await
+}
+
+async fn try_send_cached_dns_response(
+    context: &ForwardContext,
+    netstack_tx: &UdpWriter,
+    response_cache: &mut DnsResponseCache,
+    request: &DnsProxyRequest,
+) -> bool {
+    let Some(original_id) = dns_id(&request.packet) else {
+        debug!("Android TUN DNS request too short; skipping cache lookup");
+        return false;
+    };
+    let Some(question) = parse_dns_question(&request.packet) else {
+        debug!("Android TUN DNS request parse failed; skipping cache lookup");
+        return false;
+    };
+    let Some(response) = response_cache.get(&question.query, &question.record_type, original_id)
+    else {
+        return false;
+    };
+
+    let summary = parse_dns_response(&response).unwrap_or_else(|| DnsResponseSummary {
+        status: "INVALID".to_string(),
+        answers: Vec::new(),
+        min_ttl: None,
+    });
+    context
+        .direct_domain_cache
+        .record_resolution(&question.query, &summary.answers);
+    traffic_stats::record_dns_resolution(DnsResolutionRecord {
+        timestamp_ms: traffic_stats::current_time_millis(),
+        resolver: "agent-cache".to_string(),
+        client: request.client.to_string(),
+        upstream: request.target.to_string(),
+        query: question.query,
+        record_type: question.record_type,
+        status: summary.status,
+        answers: summary.answers,
+        duration_ms: 0,
+    });
+
+    let mut tx = netstack_tx.lock().await;
+    if let Err(e) = tx.send((response, request.target, request.client)).await {
+        debug!("Android TUN DNS cached response writeback failed: {e}");
+    }
+    true
 }
 
 async fn try_send_direct_dns_response(
     context: &ForwardContext,
     netstack_tx: &UdpWriter,
+    response_cache: &mut DnsResponseCache,
     request: &DnsProxyRequest,
 ) -> bool {
     let Some(question) = parse_dns_question(&request.packet) else {
@@ -309,7 +488,9 @@ async fn try_send_direct_dns_response(
     let summary = parse_dns_response(&response).unwrap_or_else(|| DnsResponseSummary {
         status: "INVALID".to_string(),
         answers: Vec::new(),
+        min_ttl: None,
     });
+    response_cache.insert(&question.query, &question.record_type, &summary, &response);
     context
         .direct_domain_cache
         .record_resolution(&question.query, &summary.answers);
@@ -447,6 +628,7 @@ where
 async fn handle_dns_response(
     netstack_tx: &UdpWriter,
     direct_domain_cache: &DirectDomainCache,
+    response_cache: &mut DnsResponseCache,
     pending: &mut HashMap<u16, PendingDnsRequest>,
     response: &mut [u8],
 ) -> io::Result<()> {
@@ -463,7 +645,14 @@ async fn handle_dns_response(
     let response_summary = parse_dns_response(response).unwrap_or_else(|| DnsResponseSummary {
         status: "INVALID".to_string(),
         answers: Vec::new(),
+        min_ttl: None,
     });
+    response_cache.insert(
+        &request.query,
+        &request.record_type,
+        &response_summary,
+        response,
+    );
     direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
     traffic_stats::record_dns_resolution(DnsResolutionRecord {
         timestamp_ms: traffic_stats::current_time_millis(),
@@ -563,13 +752,12 @@ fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
 }
 
 fn parse_dns_question(packet: &[u8]) -> Option<DnsQuestion> {
-    if packet.len() < 12 || read_u16(packet, 4)? == 0 {
-        return None;
-    }
+    // DNS 查询本身交给 hickory-proto 校验；这里仅补充计算 question 结束位置，
+    // 便于构造错误响应时原样带回客户端问题段。
+    let parsed = parse_dns_query_packet(packet)?;
 
     let mut offset = 12;
-    let query = parse_dns_name(packet, &mut offset)?;
-    let record_type = dns_type_name(read_u16(packet, offset)?).to_string();
+    parse_dns_name(packet, &mut offset)?;
     offset = offset.checked_add(2)?;
     let _class = read_u16(packet, offset)?;
     offset = offset.checked_add(2)?;
@@ -577,8 +765,8 @@ fn parse_dns_question(packet: &[u8]) -> Option<DnsQuestion> {
         return None;
     }
     Some(DnsQuestion {
-        query,
-        record_type,
+        query: parsed.query,
+        record_type: parsed.record_type,
         question_end: offset,
     })
 }
@@ -602,13 +790,14 @@ fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     }
 
     let mut answers = Vec::new();
+    let mut min_ttl = None;
     for _ in 0..ancount {
         parse_dns_name(packet, &mut offset)?;
         let record_type = read_u16(packet, offset)?;
         offset = offset.checked_add(2)?;
         let _class = read_u16(packet, offset)?;
         offset = offset.checked_add(2)?;
-        let _ttl = read_u32(packet, offset)?;
+        let ttl = read_u32(packet, offset)?;
         offset = offset.checked_add(4)?;
         let rdlength = read_u16(packet, offset)? as usize;
         offset = offset.checked_add(2)?;
@@ -619,6 +808,7 @@ fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
         }
 
         if let Some(answer) = parse_dns_answer_rdata(packet, rdata_offset, rdlength, record_type) {
+            min_ttl = Some(min_ttl.map_or(ttl, |current: u32| current.min(ttl)));
             answers.push(answer);
         }
         offset = rdata_end;
@@ -627,6 +817,7 @@ fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     Some(DnsResponseSummary {
         status: dns_rcode_name(flags & 0x000f).to_string(),
         answers,
+        min_ttl,
     })
 }
 
@@ -749,24 +940,6 @@ fn read_u32(packet: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-fn dns_type_name(record_type: u16) -> String {
-    match record_type {
-        1 => "A".to_string(),
-        2 => "NS".to_string(),
-        5 => "CNAME".to_string(),
-        6 => "SOA".to_string(),
-        12 => "PTR".to_string(),
-        15 => "MX".to_string(),
-        16 => "TXT".to_string(),
-        28 => "AAAA".to_string(),
-        33 => "SRV".to_string(),
-        64 => "SVCB".to_string(),
-        65 => "HTTPS".to_string(),
-        255 => "ANY".to_string(),
-        other => format!("TYPE{other}"),
-    }
-}
-
 fn dns_rcode_name(rcode: u16) -> &'static str {
     match rcode {
         0 => "NOERROR",
@@ -798,6 +971,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_dns_response_as_query() {
+        let packet = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 0x5d,
+            0xb8, 0xd8, 0x22,
+        ];
+
+        assert_eq!(parse_dns_query(&packet), None);
+    }
+
+    #[test]
+    fn rejects_dns_query_with_trailing_bytes() {
+        let mut packet = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+        packet.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+
+        assert_eq!(parse_dns_query(&packet), None);
+    }
+
+    #[test]
     fn parses_dns_response_answers() {
         let response = vec![
             0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
@@ -809,5 +1006,24 @@ mod tests {
         let parsed = parse_dns_response(&response).unwrap();
         assert_eq!(parsed.status, "NOERROR");
         assert_eq!(parsed.answers, vec!["93.184.216.34"]);
+        assert_eq!(parsed.min_ttl, Some(60));
+    }
+
+    #[test]
+    fn dns_response_cache_rewrites_transaction_id_on_hit() {
+        let response = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 0x5d,
+            0xb8, 0xd8, 0x22,
+        ];
+        let summary = parse_dns_response(&response).unwrap();
+        let mut cache = DnsResponseCache::default();
+
+        cache.insert("Example.COM.", "a", &summary, &response);
+
+        let cached = cache.get("example.com", "A", 0xabcd).unwrap();
+        assert_eq!(dns_id(&cached), Some(0xabcd));
+        assert_eq!(&cached[2..], &response[2..]);
     }
 }

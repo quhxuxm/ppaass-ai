@@ -22,7 +22,7 @@ You are an expert Rust developer, specializing in network application developing
   - The listning address of the agent.
   - The proxy address
   - The username
-  - The connection pool size
+  - The UDP Yamux session count
   - The log level
 
 ## Architecture requirements
@@ -31,7 +31,7 @@ The communication between agent and proxy should be secure, using RSA encryption
 
 The configuration for both sides should be read from a configuration file using the `config` crate, and the configuration data should be serialized/deserialized using `serde`. And configuration should be able to be overridden by command line arguments using `clap`.
 
-The agent side should have a connection pool for proxy side, and the connection pool should be configurable via the configuration file.
+The agent side should use direct framed TCP connections for TCP relay and Yamux sessions for UDP relay; the UDP session count should be configurable via the configuration file.
 
 The RSA keys should be generated using a secure random number generator, and the keys should be stored securely on both sides.
 
@@ -55,12 +55,12 @@ The user management in proxy side should use the proxy users TOML configuration 
   - Use `tokio-codec` for network package encoding and decoding.
   - Use `fast-socks5` latest stable version to implement the socks5 protocol logic in agent side.
   - Use `hyper` latest stable version to implement the http protocol logic in agent side.
-  - Use `deadpool` crate to implement the connection pool in agent side.
+  - Use a lightweight Yamux session manager in the agent side.
   - All the used crates should be the latest available stable version on crates.io.
   - The version of the crates should be defined in the workspace `Cargo.toml` file.
 - Important logic:
   - The configuration file format should be `TOML`.
-  - The pooled connections from agent to proxy do not need to be reusable, but the pool should prewarm number of connections to improve performance.
+  - The Yamux sessions from agent to proxy should be created lazily on demand; agent startup should not proactively open idle sessions.
   - The project should keep the desktop agent backend in `desktop-agent-be` and the server proxy in `proxy`.
   - The common logic should be organized as a separate crate named `common` in the workspace.
   - The protocol between agent and proxy should be designed by yourself, it should be efficient and secure and organized as a separate crate named `protocol` in the workspace.
@@ -78,7 +78,7 @@ The user management in proxy side should use the proxy users TOML configuration 
   - The `Data forwarding process` should use `tokio::io::copy_bidirectional` to forward data between client, agent, proxy and target.
 - Flow:
   - The data exchange between agent and proxy should include 3 process:
-    - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process is happen on connection is created in pool.
+    - *Authentication process* to use the user's private key to encrypt a randomly generated AES key, and then send to proxy. On proxy side, proxy should find the user's public key and decrypt to the raw AES key, so that this AES key can be used to encrypt the following traffic. This process happens inside each Yamux substream.
     - *Connect process* to send the target server address from agent to proxy, and proxy connect to the target server. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*.
     - *Data forwarding process* to forward the data between client and target server via agent and proxy. The data sent in this process should be encrypted with the AES key which exchanged in the *Authentication process*. The data relay in both agent and proxy should bidirectional.
 

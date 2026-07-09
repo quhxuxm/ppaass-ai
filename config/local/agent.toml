@@ -6,17 +6,12 @@ proxy_addrs = ["140.82.30.214:80"]
 # proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-tcp_pool_size = 5
-udp_pool_size = 5
 connect_timeout_secs = 20
 # Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
 # 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
-compression_mode = "lz4"
-
-# 连接在池中停留的最长时间（秒），超过后将被丢弃并替换。
-# 该值应小于代理端的 `pre_connect_idle_timeout_secs`（默认 120 秒），
-# 使 agent 在代理关闭连接前主动替换连接。
-pool_max_connection_age_secs = 90
+# TUN 看视频/HTTPS 时，负载通常已经压缩或加密，二次压缩收益很低，还会增加 CPU 和调度抖动；
+# 本地示例默认关闭压缩，把 CPU 留给 relay 和浏览器解码。
+compression_mode = "none"
 
 # 日志级别：trace、debug、info、warn、error
 log_level = "info"
@@ -30,42 +25,24 @@ async_runtime_stack_size_mb = 4
 # 日志文件名（仅在设置 log_dir 时使用）
 # log_file = "desktop-agent.log"
 
-# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数）
-# runtime_threads = 4
-
-[transport]
-# TCP 传输模式：auto 优先 Yamux，失败时回退旧协议；可选 auto、yamux、legacy。
-tcp_mode = "yamux"
-# UDP 传输模式：UDP Yamux 与 TCP Yamux 使用独立外层 session；可选 auto、yamux、legacy。
-udp_mode = "yamux"
-
-[yamux.tcp]
-# TCP Yamux 外层连接数。
-sessions = 5
-# 每条 TCP Yamux 外层连接允许的并发子流数。
-max_streams_per_session = 256
-# 打开 TCP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
-open_stream_timeout_secs = 10
-# TCP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
-keepalive_interval_secs = 30
-# TCP Yamux 底层连接写超时。
-connection_write_timeout_secs = 10
-# 每个 TCP Yamux 子流的流控窗口大小。
-stream_window_size_kb = 2048
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数；视频场景手动配置时建议 8）
+# runtime_threads = 8
 
 [yamux.udp]
-# UDP Yamux 外层连接数。
+# UDP relay 使用独立 raw Yamux 连接池；每个 UDP relay 通道会打开一个 Yamux 子流，
+# 子流内继续执行加密 PPAASS Auth/Connect/Data 协议。
+# sessions 是最大外层连接数，实际连接数按 UDP relay 压力逐步增长。
 sessions = 5
-# 每条 UDP Yamux 外层连接允许的并发子流数。
-max_streams_per_session = 256
+# 每条 UDP Yamux 外层连接允许的并发子流数，影响同一 session 内可同时承载的 UDP relay 通道数。
+max_streams_per_session = 32
 # 打开 UDP Yamux 子流的控制面超时时间；目标连接等待使用 connect_timeout_secs/proxy 超时。
 open_stream_timeout_secs = 10
 # UDP Yamux keepalive 间隔；设置为 0 可关闭 keepalive。
 keepalive_interval_secs = 30
 # UDP Yamux 底层连接写超时。
-connection_write_timeout_secs = 10
+connection_write_timeout_secs = 300
 # 每个 UDP Yamux 子流的流控窗口大小。
-stream_window_size_kb = 2048
+stream_window_size_kb = 8192
 
 
 # TUN 模式配置
@@ -97,8 +74,13 @@ mtu = 1500
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
-# 默认允许 UDP/443 QUIC，经共享 UDP relay 转发；如需强制浏览器回退 TCP/TLS，改为 true。
-block_quic = false
+# 默认不阻断 QUIC：TUN 捕获 UDP/443 后会按 direct_access 决定直连或代理到 proxy，
+# 再由 proxy 端使用真实 UDP/QUIC 访问目标 CDN。只有需要强制浏览器回退
+# TCP/TLS 时，才临时启用阻断策略。
+# QUIC 策略：
+#   allow - 按照规则直接发送 QUIC 到目标；没有匹配直连规则的通过 proxy 转发 QUIC。
+#   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
+quic_policy = "allow"
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；
 # 也可以显式指定，例如：wintun_file = "wintun.dll"
 wintun_file = "wintun.dll"

@@ -13,6 +13,9 @@ pub enum AndroidAgentError {
     #[error("connection error: {0}")]
     Connection(String),
 
+    #[error("SOCKS5 error: {0}")]
+    Socks5(String),
+
     #[error("unsupported platform: {0}")]
     UnsupportedPlatform(String),
 }

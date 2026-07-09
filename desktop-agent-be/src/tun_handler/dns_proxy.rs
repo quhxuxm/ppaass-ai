@@ -1,14 +1,14 @@
 //! TUN DNS 代理。
 //!
 //! 当 TUN 捕获到 UDP/53 且启用 proxy_dns 时，DNS 请求会走这里：
-//! agent 通过 UDP 连接池连接 proxy 的 `Address::ProxyDns` 虚拟目标，让 proxy 端使用
+//! agent 通过 UDP Yamux session manager 连接 proxy 的 `Address::ProxyDns` 虚拟目标，让 proxy 端使用
 //! 它所在网络的 DNS 上游解析。同时本模块记录响应中的域名/IP 映射，供 direct_access
 //! 在后续 TCP/UDP IP 连接上还原域名规则。
 
 use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
-use crate::connection_pool::ConnectionPool;
 use crate::telemetry::{self, DnsResolutionRecord};
+use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
@@ -33,6 +33,8 @@ use parser::{parse_dns_query, parse_dns_response};
 const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
+const DNS_RESPONSE_CACHE_MAX_ENTRIES: usize = 4096;
+const DNS_RESPONSE_CACHE_MAX_TTL: Duration = Duration::from_secs(300);
 
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
@@ -59,11 +61,102 @@ struct PendingDnsRequest {
 struct DnsResponseSummary {
     status: String,
     answers: Vec<String>,
+    min_ttl: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct DnsCacheKey {
+    query: String,
+    record_type: String,
+}
+
+struct CachedDnsResponse {
+    packet: Vec<u8>,
+    expires_at: Instant,
+}
+
+#[derive(Default)]
+struct DnsResponseCache {
+    entries: HashMap<DnsCacheKey, CachedDnsResponse>,
+}
+
+impl DnsResponseCache {
+    fn get(&mut self, query: &str, record_type: &str, request_id: u16) -> Option<Vec<u8>> {
+        self.cleanup_expired();
+        let key = dns_cache_key(query, record_type);
+        let entry = self.entries.get(&key)?;
+        if entry.expires_at <= Instant::now() {
+            self.entries.remove(&key);
+            return None;
+        }
+
+        let mut packet = entry.packet.clone();
+        write_dns_id(&mut packet, request_id);
+        Some(packet)
+    }
+
+    fn insert(
+        &mut self,
+        query: &str,
+        record_type: &str,
+        summary: &DnsResponseSummary,
+        response: &[u8],
+    ) {
+        if summary.status != "NOERROR" || summary.answers.is_empty() {
+            return;
+        }
+        let Some(ttl_secs) = summary.min_ttl else {
+            return;
+        };
+        if ttl_secs == 0 {
+            return;
+        }
+
+        self.cleanup_expired();
+        if self.entries.len() >= DNS_RESPONSE_CACHE_MAX_ENTRIES {
+            self.evict_one();
+        }
+
+        let mut packet = response.to_vec();
+        // 缓存完整 DNS 响应；命中时再替换成当前请求的 transaction id。
+        write_dns_id(&mut packet, 0);
+        self.entries.insert(
+            dns_cache_key(query, record_type),
+            CachedDnsResponse {
+                packet,
+                expires_at: Instant::now()
+                    + Duration::from_secs(u64::from(ttl_secs)).min(DNS_RESPONSE_CACHE_MAX_TTL),
+            },
+        );
+    }
+
+    fn cleanup_expired(&mut self) {
+        let now = Instant::now();
+        self.entries.retain(|_, entry| entry.expires_at > now);
+    }
+
+    fn evict_one(&mut self) {
+        if let Some(key) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.expires_at)
+            .map(|(key, _)| key.clone())
+        {
+            self.entries.remove(&key);
+        }
+    }
+}
+
+fn dns_cache_key(query: &str, record_type: &str) -> DnsCacheKey {
+    DnsCacheKey {
+        query: query.trim().trim_end_matches('.').to_ascii_lowercase(),
+        record_type: record_type.to_ascii_uppercase(),
+    }
 }
 
 impl DnsProxy {
     pub(super) fn spawn(
-        pool: Arc<ConnectionPool>,
+        sessions: Arc<YamuxSessionManager>,
         netstack_tx: UdpWriter,
         direct_domain_cache: Arc<DirectDomainCache>,
         shutdown: CancellationToken,
@@ -71,7 +164,7 @@ impl DnsProxy {
         let (tx, rx) = mpsc::channel(DNS_REQUEST_CHANNEL_SIZE);
         spawn_guarded(
             "desktop tun dns proxy",
-            run_dns_proxy(pool, netstack_tx, direct_domain_cache, rx, shutdown),
+            run_dns_proxy(sessions, netstack_tx, direct_domain_cache, rx, shutdown),
         );
         Arc::new(Self { tx })
     }
@@ -90,13 +183,14 @@ impl DnsProxy {
 }
 
 async fn run_dns_proxy(
-    pool: Arc<ConnectionPool>,
+    sessions: Arc<YamuxSessionManager>,
     netstack_tx: UdpWriter,
     direct_domain_cache: Arc<DirectDomainCache>,
     mut rx: mpsc::Receiver<DnsProxyRequest>,
     shutdown: CancellationToken,
 ) {
     let mut pending = HashMap::new();
+    let mut response_cache = DnsResponseCache::default();
     let mut next_id = 0u16;
     // 共享 DNS proxy 连接断开时，保留当前请求并在重连后优先重发。
     let mut retry_request = None;
@@ -116,7 +210,18 @@ async fn run_dns_proxy(
             }
         };
 
-        let connected = connect_dns_stream(&pool).await;
+        if try_send_cached_dns_response(
+            &netstack_tx,
+            direct_domain_cache.as_ref(),
+            &mut response_cache,
+            &first_request,
+        )
+        .await
+        {
+            continue;
+        }
+
+        let connected = connect_dns_stream(&sessions).await;
         let proxy_io = match connected {
             Ok(proxy_io) => {
                 reconnect_delay = Duration::from_millis(200);
@@ -146,6 +251,16 @@ async fn run_dns_proxy(
 
         loop {
             if let Some(request) = retry_request.take() {
+                if try_send_cached_dns_response(
+                    &netstack_tx,
+                    direct_domain_cache.as_ref(),
+                    &mut response_cache,
+                    &request,
+                )
+                .await
+                {
+                    continue;
+                }
                 if let Err(e) =
                     send_dns_request(&mut writer, &mut pending, &mut next_id, &request).await
                 {
@@ -177,6 +292,14 @@ async fn run_dns_proxy(
                         let _ = writer.shutdown().await;
                         return;
                     };
+                    if try_send_cached_dns_response(
+                        &netstack_tx,
+                        direct_domain_cache.as_ref(),
+                        &mut response_cache,
+                        &request,
+                    ).await {
+                        continue;
+                    }
                     if let Err(e) = send_dns_request(
                         &mut writer,
                         &mut pending,
@@ -200,6 +323,7 @@ async fn run_dns_proxy(
                             if let Err(e) = handle_dns_response(
                                 &netstack_tx,
                                 direct_domain_cache.as_ref(),
+                                &mut response_cache,
                                 &mut pending,
                                 &mut response,
                             ).await {
@@ -221,12 +345,58 @@ async fn run_dns_proxy(
 }
 
 async fn connect_dns_stream(
-    pool: &ConnectionPool,
+    sessions: &YamuxSessionManager,
 ) -> crate::error::Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    let connected = pool
-        .get_connected_stream(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
+    let connected = sessions
+        .connect_to_target(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
         .await?;
     Ok(connected.into_async_io())
+}
+
+async fn try_send_cached_dns_response(
+    netstack_tx: &UdpWriter,
+    direct_domain_cache: &DirectDomainCache,
+    response_cache: &mut DnsResponseCache,
+    request: &DnsProxyRequest,
+) -> bool {
+    let Some(original_id) = dns_id(&request.packet) else {
+        debug!("TUN UDP DNS 请求过短，跳过缓存查询");
+        return false;
+    };
+    let Some((query, record_type)) = parse_dns_query(&request.packet) else {
+        debug!("TUN UDP DNS 请求解析失败，跳过缓存查询");
+        return false;
+    };
+    let Some(response) = response_cache.get(&query, &record_type, original_id) else {
+        return false;
+    };
+
+    let response_summary = parse_dns_response(&response).unwrap_or_else(|| DnsResponseSummary {
+        status: "INVALID".to_string(),
+        answers: Vec::new(),
+        min_ttl: None,
+    });
+    direct_domain_cache.record_resolution(&query, &response_summary.answers);
+    telemetry::emit_dns_resolution(DnsResolutionRecord {
+        timestamp_ms: telemetry::current_time_millis(),
+        resolver: "agent-cache".to_string(),
+        client: request.client.to_string(),
+        upstream: request.target.to_string(),
+        query,
+        record_type,
+        status: response_summary.status,
+        answers: response_summary.answers,
+        duration_ms: 0,
+    });
+
+    let mut writer = netstack_tx.lock().await;
+    if let Err(e) = writer
+        .send((response, request.target, request.client))
+        .await
+    {
+        debug!("TUN UDP DNS 缓存回复写回失败：{e}");
+    }
+    true
 }
 
 async fn send_dns_request<W>(
@@ -284,6 +454,7 @@ where
 async fn handle_dns_response(
     netstack_tx: &UdpWriter,
     direct_domain_cache: &DirectDomainCache,
+    response_cache: &mut DnsResponseCache,
     pending: &mut HashMap<u16, PendingDnsRequest>,
     response: &mut [u8],
 ) -> io::Result<()> {
@@ -301,7 +472,14 @@ async fn handle_dns_response(
     let response_summary = parse_dns_response(response).unwrap_or_else(|| DnsResponseSummary {
         status: "INVALID".to_string(),
         answers: Vec::new(),
+        min_ttl: None,
     });
+    response_cache.insert(
+        &request.query,
+        &request.record_type,
+        &response_summary,
+        response,
+    );
     direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),

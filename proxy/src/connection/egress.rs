@@ -13,13 +13,22 @@ mod stream;
 use auto::AutoInterfaceSelector;
 use bind::bind_socket_to_interface;
 use route_guard::TargetRouteGuard;
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use source::{BoundSource, interface_bind_addrs};
 use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
+
+// proxy 到目标站点的出站 TCP 缓冲。
+// 视频分片下载通常是目标站点到 proxy 的大流量下行，默认系统缓冲在高 RTT 或蜂窝网络下
+// 容易过早限制 TCP 窗口；1MB 与 Android agent 侧保持一致，能给 HLS burst 留出余量。
+const PROXY_EGRESS_TCP_BUFFER_SIZE: usize = 1024 * 1024;
+const PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE: Duration = Duration::from_secs(18);
+const PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
+const PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY: Duration = Duration::from_millis(250);
 
 pub struct EgressState {
     // None 表示完全交给系统默认路由；Some 表示需要做接口/源地址绑定。
@@ -50,8 +59,8 @@ impl EgressState {
     pub async fn connect_tcp(&self, target_addr: &str) -> io::Result<EgressTcpStream> {
         // 未指定出站设备时走系统默认路由，不做额外绑定。
         if self.interface.is_none() {
-            let stream = TcpStream::connect(target_addr).await?;
-            enable_nodelay_best_effort(&stream, "默认出站 TCP 连接");
+            let stream = connect_tcp_default_with_retry(target_addr).await?;
+            tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
             return Ok(EgressTcpStream::new(stream, None));
         }
 
@@ -86,8 +95,8 @@ async fn connect_tcp_with_interface(
     egress_state: &EgressState,
 ) -> io::Result<EgressTcpStream> {
     if egress_state.interface.is_none() {
-        let stream = TcpStream::connect(target_addr).await?;
-        enable_nodelay_best_effort(&stream, "默认出站 TCP 连接");
+        let stream = connect_tcp_default_with_retry(target_addr).await?;
+        tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
         return Ok(EgressTcpStream::new(stream, None));
     }
 
@@ -183,6 +192,29 @@ async fn connect_udp_with_interface(
     }))
 }
 
+async fn connect_tcp_default_with_retry(target_addr: &str) -> io::Result<TcpStream> {
+    let started = Instant::now();
+    let mut delay = PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY;
+
+    loop {
+        match TcpStream::connect(target_addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(err)
+                if is_transient_addr_not_available(&err)
+                    && started.elapsed() + delay < PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE =>
+            {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn is_transient_addr_not_available(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::AddrNotAvailable || err.raw_os_error() == Some(49)
+}
+
 fn normalize_interface(interface: Option<&str>) -> Option<&str> {
     interface.map(str::trim).filter(|name| !name.is_empty())
 }
@@ -203,13 +235,23 @@ async fn connect_tcp_addr(
     let stream = TcpSocket::from_std_stream(socket.into())
         .connect(dst)
         .await?;
-    enable_nodelay_best_effort(&stream, "绑定出站 TCP 连接");
+    tune_egress_tcp_stream(&stream, "绑定出站 TCP 连接");
     Ok(EgressTcpStream::new(stream, route_guard))
 }
 
-fn enable_nodelay_best_effort(stream: &TcpStream, context: &str) {
+fn tune_egress_tcp_stream(stream: &TcpStream, context: &str) {
     if let Err(err) = stream.set_nodelay(true) {
         tracing::warn!("设置 {context} TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+    }
+
+    // 缓冲调优是 best-effort：部分系统会按内核上限截断或拒绝设置。
+    // 设置失败不能影响连接建立，否则一个内核参数差异就会变成用户可见的请求失败。
+    let sock_ref = SockRef::from(stream);
+    if let Err(err) = sock_ref.set_recv_buffer_size(PROXY_EGRESS_TCP_BUFFER_SIZE) {
+        tracing::warn!("设置 {context} 接收缓冲失败，将继续使用系统默认值: {err}");
+    }
+    if let Err(err) = sock_ref.set_send_buffer_size(PROXY_EGRESS_TCP_BUFFER_SIZE) {
+        tracing::warn!("设置 {context} 发送缓冲失败，将继续使用系统默认值: {err}");
     }
 }
 

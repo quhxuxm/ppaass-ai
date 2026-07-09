@@ -1,7 +1,7 @@
 //! TUN 模式下 agent->proxy 控制连接的旁路准备。
 //!
 //! TUN 一旦接管默认路由，agent 自己连接 proxy 的 TCP 连接也可能被送回 TUN。
-//! 因此在安装 TUN 路由前，需要先探测当前物理出口 IP/接口，并写入连接池，
+//! 因此在安装 TUN 路由前，需要先探测当前物理出口 IP/接口，并写入 Yamux session manager，
 //! 后续新建 proxy 连接都会绑定到这个物理出口。
 
 use super::device::tun_ipv4_peer;
@@ -11,8 +11,8 @@ use super::*;
 pub(super) async fn configure_proxy_routing(
     config: &TunConfig,
     proxy_addrs: &[String],
-    tcp_pool: &ConnectionPool,
-    udp_pool: &ConnectionPool,
+    tcp_sessions: &YamuxSessionManager,
+    udp_sessions: &YamuxSessionManager,
     shutdown: &CancellationToken,
 ) -> Option<common::BindInterface> {
     // 通过 OS 路由决策探测物理出口 IP/接口，用于后续 proxy 连接 bind。
@@ -58,7 +58,7 @@ pub(super) async fn configure_proxy_routing(
 
     let mut bind_interface = None;
     if let Some(route) = proxy_route {
-        // 这里设置的是连接池的“未来连接”绑定；已有连接不会被迁移。
+        // 这里设置的是 Yamux session manager 的“未来连接”绑定；已有连接不会被迁移。
         bind_interface = route.bind_interface.clone();
         info!(
             "检测到物理出口：ip={} interface={:?}；代理连接将绑定到该出口（尝试 {} 次，用时 {:?}）",
@@ -67,19 +67,19 @@ pub(super) async fn configure_proxy_routing(
             attempts,
             started.elapsed()
         );
-        tcp_pool.set_proxy_bind_ip(Some(route.local_ip));
-        tcp_pool.set_proxy_bind_interface(route.bind_interface.clone());
-        udp_pool.set_proxy_bind_ip(Some(route.local_ip));
-        udp_pool.set_proxy_bind_interface(route.bind_interface);
+        tcp_sessions.set_proxy_bind_ip(Some(route.local_ip));
+        tcp_sessions.set_proxy_bind_interface(route.bind_interface.clone());
+        udp_sessions.set_proxy_bind_ip(Some(route.local_ip));
+        udp_sessions.set_proxy_bind_interface(route.bind_interface);
     } else {
         warn!(
             "无法检测物理出口 IP — 代理连接可能会回环进入 TUN。\
              请确保启动 TUN 模式前代理服务器可达。"
         );
-        tcp_pool.set_proxy_bind_ip(None);
-        tcp_pool.set_proxy_bind_interface(None);
-        udp_pool.set_proxy_bind_ip(None);
-        udp_pool.set_proxy_bind_interface(None);
+        tcp_sessions.set_proxy_bind_ip(None);
+        tcp_sessions.set_proxy_bind_interface(None);
+        udp_sessions.set_proxy_bind_ip(None);
+        udp_sessions.set_proxy_bind_interface(None);
     }
 
     debug!(

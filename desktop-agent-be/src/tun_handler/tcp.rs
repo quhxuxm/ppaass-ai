@@ -2,17 +2,17 @@
 //!
 //! netstack 把系统 IP 包还原成 `TcpStream` 后进入这里。处理顺序是：
 //! 1. 过滤 TUN 自身网段和 proxy DNS 特例；
-//! 2. 用 IP/CIDR、DNS 缓存、SNI/Host 嗅探判断是否直连；
-//! 3. 命中直连则连真实目标，否则从 TCP 连接池拿 proxy stream 双向中继。
+//! 2. 用 IP/CIDR 和 DNS proxy 缓存判断是否直连；
+//! 3. 命中直连则连真实目标，否则从 proxy session manager 打开目标流并双向中继。
 
 use super::TunForwardContext;
-use super::domain_sniff::{extract_http_host, extract_tls_sni};
 use super::network::{address_for_tun_target, reject_tun_target};
-use super::system_dns::resolve_via_system;
 use crate::error::{AgentError, Result};
+use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
-use common::{BindInterface, DEFAULT_STREAM_RELAY_BUFFER_SIZE, bind_socket_to_interface};
-use protocol::{Address, TransportProtocol};
+use crate::yamux_session::YamuxSessionManager;
+use common::{BindInterface, bind_socket_to_interface};
+use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -21,14 +21,10 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 use tracing::debug;
 
-/// 嗅探首段字节的最大长度。TLS ClientHello 最大约 16KB，但常见的 SNI/Host
-/// 通常在前 1-2KB 即出现；选择 4KB 兼顾覆盖率与首字节延迟。
-const SNIFF_MAX_BYTES: usize = 4096;
-/// 等待客户端首段字节的最长时间。某些应用握手前会短暂沉默，
-/// 但超过 300ms 仍未发数据多半是 server-first 协议，直接放弃嗅探走原路径。
-const SNIFF_TIMEOUT: Duration = Duration::from_millis(300);
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
+const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -37,8 +33,8 @@ pub(super) async fn handle_tun_tcp(
     context: TunForwardContext,
 ) -> Result<()> {
     let TunForwardContext {
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         direct_checker,
         direct_domain_cache,
         tun_networks,
@@ -57,20 +53,21 @@ pub(super) async fn handle_tun_tcp(
     } else {
         target.to_string()
     };
-
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
-    let mut direct_domain = None;
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
     }
 
-    // 2. 缓存中已知 IP -> 域名映射且命中域名规则：先使用原始 IP 直连，
-    //    避免 macOS 待机恢复后系统 DNS 慢解析阻塞直连路径。
+    // 2. 缓存中已知 IP -> 域名映射且命中域名规则：仍然使用原始 IP 直连。
+    //    这里的域名只来自 proxy DNS 缓存，不触发 agent 本机 DNS 解析，也不再
+    //    从 TCP payload 读取 TLS SNI/HTTP Host。这样 TUN 数据面不会因为首包
+    //    嗅探和补发逻辑影响视频分片下载。
     if direct_target.is_none()
         && !proxy_dns_request
+        && direct_checker.has_domain_direct_rules()
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
             direct_checker.is_direct_domain(domain)
         })
@@ -79,7 +76,6 @@ pub(super) async fn handle_tun_tcp(
             "TUN TCP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
             target, domain
         );
-        direct_domain = Some(domain);
         direct_target = Some(target);
     }
 
@@ -87,35 +83,11 @@ pub(super) async fn handle_tun_tcp(
         && !proxy_dns_request
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
-        debug!("TUN TCP 缓存域名用于代理目标：{} ({})", target, domain);
-        proxy_address = domain_address(&domain, target.port());
+        debug!(
+            "TUN TCP 缓存域名用于代理标签：{} ({})，代理目标保留原始 IP",
+            target, domain
+        );
         proxy_reason = Some(format!("缓存域名 {domain}"));
-    }
-
-    // 3. DNS 路径无法命中（例如浏览器使用 DoH 或操作系统 DNS 缓存）时，
-    //    从首段字节中嗅探 SNI / HTTP Host，作为域名规则的兜底来源。
-    let mut sniffed: Vec<u8> = Vec::new();
-    if direct_target.is_none() && !proxy_dns_request {
-        sniffed = sniff_first_bytes(&mut client).await;
-        if !sniffed.is_empty()
-            && let Some(domain) = sniff_domain(target.port(), &sniffed)
-        {
-            debug!("TUN TCP 嗅探域名 {} <- {}", domain, target);
-            // 嗅探到的 IP -> 域名映射写回缓存，下一次同 IP 的连接可以走快路径。
-            direct_domain_cache.record_resolution(&domain, &[target.ip().to_string()]);
-            if direct_checker.is_direct_domain(&domain) {
-                debug!(
-                    "TUN TCP 嗅探域名规则命中：{} ({})，先使用原始 IP 直连",
-                    target, domain
-                );
-                direct_domain = Some(domain);
-                direct_target = Some(target);
-            } else {
-                debug!("TUN TCP 嗅探域名用于代理目标：{} ({})", target, domain);
-                proxy_address = domain_address(&domain, target.port());
-                proxy_reason = Some(format!("嗅探域名 {domain}"));
-            }
-        }
     }
 
     if let Some(connect_target) = direct_target {
@@ -124,32 +96,26 @@ pub(super) async fn handle_tun_tcp(
         let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
             target: connect_target,
             target_str: &target_str,
-            direct_domain: direct_domain.as_deref(),
-            source,
             direct_egress: direct_egress.as_ref(),
-            tcp_pool: tcp_pool.as_ref(),
-            udp_pool: udp_pool.as_ref(),
+            tcp_sessions: tcp_sessions.as_ref(),
+            udp_sessions: udp_sessions.as_ref(),
             tun_networks,
         })
         .await?;
-        // 把嗅探时已经读出的字节先补发给目标，否则握手会丢首段。
-        if !sniffed.is_empty() {
-            if let Err(e) = target_stream.write_all(&sniffed).await {
-                debug!("TUN TCP 直连补发首段字节失败：{e}");
-            } else if let Err(e) = target_stream.flush().await {
-                debug!("TUN TCP 直连刷新首段字节失败：{e}");
-            }
-        }
-        match tokio::io::copy_bidirectional_with_sizes(
+        match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-            DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+            TcpRelayOptions::standard(&target_str),
         )
         .await
         {
-            Ok((c2t, t2c)) => {
-                telemetry::emit_traffic("TUN TCP (直连)", target_label, c2t, t2c);
+            Ok(stats) => {
+                telemetry::emit_traffic(
+                    "TUN TCP (直连)",
+                    target_label,
+                    stats.client_to_remote,
+                    stats.remote_to_client,
+                );
             }
             Err(e) => debug!("TUN TCP 直连中继结束：{e}"),
         }
@@ -157,7 +123,7 @@ pub(super) async fn handle_tun_tcp(
         return Ok(());
     }
 
-    // 默认路径通过连接池获取已认证 proxy 流，再做双向拷贝。
+    // 默认路径通过 proxy session manager 获取已认证 proxy 流，再做双向拷贝。
     if proxy_dns_request {
         debug!("TUN TCP DNS -> 代理 -> {}", target_label);
     } else {
@@ -167,81 +133,43 @@ pub(super) async fn handle_tun_tcp(
     if !proxy_dns_request {
         debug!("TUN TCP 代理目标：{}", proxy_label);
     }
-    let connected = tcp_pool
-        .as_ref()
-        .get_connected_stream(proxy_address, TransportProtocol::Tcp)
-        .await?;
+    // TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始字节流交给
+    // copy_bidirectional，中间没有“已读首段再补发”的状态，减少短连接分片卡顿点。
+    let (connected, prefetched) = connect_proxy_stream_with_tun_prefetch(
+        &mut client,
+        tcp_sessions.as_ref(),
+        proxy_address,
+        &proxy_label,
+    )
+    .await?;
     let mut proxy_io = connected.into_async_io();
-    // 嗅探阶段消耗的字节同样需要补发给 proxy，否则 proxy 端收到的报文头会被截断。
-    if !sniffed.is_empty() {
-        if let Err(e) = proxy_io.write_all(&sniffed).await {
-            debug!("TUN TCP 代理补发首段字节失败：{e}");
-        } else if let Err(e) = proxy_io.flush().await {
-            debug!("TUN TCP 代理刷新首段字节失败：{e}");
-        }
+    if !prefetched.is_empty() {
+        // 这里只做“预读后原样补写”，不解析、不嗅探、不参与直连规则。
+        // TUN TCP 三次握手已经由 netstack 接住；如果等待 proxy 建连期间完全不读本地流，
+        // 浏览器的 TLS/HTTP2 首包会卡在接收窗口里。先缓存少量首包，远端通道建立后
+        // 立即写出，可以降低视频分片连接在建连阶段的抖动。
+        proxy_io.write_all(&prefetched).await?;
+        proxy_io.flush().await?;
     }
-    // TUN TCP 流和 proxy stream 都实现 AsyncRead/AsyncWrite，可直接双向中继。
-    match tokio::io::copy_bidirectional_with_sizes(
+    match relay_tcp_bidirectional(
         &mut client,
         &mut proxy_io,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
-        DEFAULT_STREAM_RELAY_BUFFER_SIZE,
+        TcpRelayOptions::tun(&proxy_label),
     )
     .await
     {
-        Ok((c2p, p2c)) => {
-            telemetry::emit_traffic("TUN TCP", target_label, c2p, p2c);
+        Ok(stats) => {
+            telemetry::emit_traffic(
+                "TUN TCP",
+                target_label,
+                stats.client_to_remote,
+                stats.remote_to_client,
+            );
         }
         Err(e) => debug!("TUN TCP 中继结束：{e}"),
     }
     let _ = client.shutdown().await;
     Ok(())
-}
-
-/// 在不超过 `SNIFF_TIMEOUT` 的前提下，尝试从客户端读取最多 `SNIFF_MAX_BYTES`
-/// 个字节用于域名嗅探。读取到的数据在后续转发时会被原样补发。
-async fn sniff_first_bytes(client: &mut netstack_smoltcp::TcpStream) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(SNIFF_MAX_BYTES);
-    let deadline = tokio::time::Instant::now() + SNIFF_TIMEOUT;
-    let mut chunk = [0u8; 1024];
-
-    loop {
-        if buffer.len() >= SNIFF_MAX_BYTES {
-            break;
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match timeout(remaining, client.read(&mut chunk)).await {
-            Ok(Ok(0)) => break,
-            Ok(Ok(n)) => buffer.extend_from_slice(&chunk[..n]),
-            Ok(Err(e)) => {
-                debug!("TUN TCP 嗅探读取出错：{e}");
-                break;
-            }
-            // 超时后停止嗅探，已经读到的字节仍会被补发，避免阻塞 server-first 协议。
-            Err(_) => break,
-        }
-    }
-
-    buffer
-}
-
-fn sniff_domain(port: u16, buf: &[u8]) -> Option<String> {
-    match port {
-        // HTTP 端口优先匹配明文 Host 头，TLS 反代场景再退到 SNI。
-        80 | 8080 | 8000 => extract_http_host(buf).or_else(|| extract_tls_sni(buf)),
-        // 其他端口默认按 TLS（含 443/8443/853 等）解析，失败再尝试 HTTP。
-        _ => extract_tls_sni(buf).or_else(|| extract_http_host(buf)),
-    }
-}
-
-fn domain_address(domain: &str, port: u16) -> Address {
-    Address::Domain {
-        host: domain.to_string(),
-        port,
-    }
 }
 
 fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
@@ -251,26 +179,48 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     }
 }
 
-async fn resolve_direct_target_via_system(
-    transport: &'static str,
-    source: SocketAddr,
-    target: SocketAddr,
-    domain: &str,
-) -> Option<SocketAddr> {
-    match resolve_via_system(transport, source, domain, target.port(), target.ip()).await {
-        Ok(resolved) => {
+async fn connect_proxy_stream_with_tun_prefetch(
+    client: &mut netstack_smoltcp::TcpStream,
+    tcp_sessions: &YamuxSessionManager,
+    proxy_address: protocol::Address,
+    label: &str,
+) -> Result<(crate::yamux_session::YamuxTargetStream, Vec<u8>)> {
+    let mut connect =
+        Box::pin(tcp_sessions.connect_to_target(proxy_address, TransportProtocol::Tcp));
+    let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
+
+    loop {
+        if prefetched.len() >= TUN_TCP_PREFETCH_LIMIT {
             debug!(
-                "TUN {} 域名规则命中：{} -> 使用 Agent DNS 解析 {} -> {}",
-                transport, target, domain, resolved
+                "TUN TCP 预读达到 {} 字节上限，暂停读取等待 proxy 建连：{}",
+                TUN_TCP_PREFETCH_LIMIT, label
             );
-            Some(resolved)
+            let connected = connect.await?;
+            return Ok((connected, prefetched));
         }
-        Err(e) => {
-            debug!(
-                "TUN {} 域名规则命中但 Agent DNS 解析失败：{} -> {}，错误：{}",
-                transport, target, domain, e
-            );
-            None
+
+        let remaining = TUN_TCP_PREFETCH_LIMIT - prefetched.len();
+        let mut buf = vec![0u8; remaining.min(TUN_TCP_PREFETCH_CHUNK)];
+        tokio::select! {
+            connected = &mut connect => {
+                return Ok((connected?, prefetched));
+            }
+            read = client.read(&mut buf) => {
+                let read = read?;
+                if read == 0 {
+                    // 客户端在 proxy 目标通道建好前已经关闭；没有必要继续建立远端连接。
+                    // 如果已经预读到数据，则仍等待 proxy 连接并把这些数据补写出去，
+                    // 后续 copy_bidirectional 会自然观察到客户端 EOF 并传播半关闭。
+                    if prefetched.is_empty() {
+                        return Err(AgentError::Connection(format!(
+                            "TUN TCP 客户端在 proxy 建连前关闭：{label}"
+                        )));
+                    }
+                    let connected = connect.await?;
+                    return Ok((connected, prefetched));
+                }
+                prefetched.extend_from_slice(&buf[..read]);
+            }
         }
     }
 }
@@ -303,11 +253,9 @@ async fn connect_direct_tcp(
 struct DirectTcpRefreshContext<'a> {
     target: SocketAddr,
     target_str: &'a str,
-    direct_domain: Option<&'a str>,
-    source: SocketAddr,
     direct_egress: &'a super::TunDirectEgress,
-    tcp_pool: &'a crate::connection_pool::ConnectionPool,
-    udp_pool: &'a crate::connection_pool::ConnectionPool,
+    tcp_sessions: &'a YamuxSessionManager,
+    udp_sessions: &'a crate::yamux_session::YamuxSessionManager,
     tun_networks: super::network::TunNetworks,
 }
 
@@ -317,11 +265,9 @@ async fn connect_direct_tcp_with_refresh(
     let DirectTcpRefreshContext {
         target,
         target_str,
-        direct_domain,
-        source,
         direct_egress,
-        tcp_pool,
-        udp_pool,
+        tcp_sessions,
+        udp_sessions,
         tun_networks,
     } = context;
     let initial_bind_interface = direct_egress.bind_interface();
@@ -333,34 +279,16 @@ async fn connect_direct_tcp_with_refresh(
                 target_str, initial_bind_interface, first_err
             );
             let refreshed_bind_interface = direct_egress
-                .refresh_after_direct_failure(target.ip(), tcp_pool, udp_pool, tun_networks)
+                .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
                 .await;
             match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
                 Ok(stream) => Ok(stream),
                 Err(retry_err) => {
-                    if let Some(domain) = direct_domain
-                        && let Some(resolved) =
-                            resolve_direct_target_via_system("TCP", source, target, domain).await
-                    {
-                        if resolved != target {
-                            debug!(
-                                "TUN TCP 原始 IP 直连失败，尝试系统 DNS 兜底：{} -> {}",
-                                domain, resolved
-                            );
-                            return connect_direct_tcp(resolved, refreshed_bind_interface.as_ref())
-                                .await
-                                .map_err(|resolved_err| {
-                                    AgentError::Connection(format!(
-                                        "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}；系统 DNS 解析 {domain} -> {resolved} 后仍失败={resolved_err}"
-                                    ))
-                                });
-                        }
-                        debug!(
-                            "TUN TCP 系统 DNS 兜底仍指向原始目标：{} -> {}",
-                            domain, resolved
-                        );
-                    }
-
+                    // 这里刻意不做 agent 侧域名解析兜底。
+                    // TUN 流量进来时系统/应用已经完成了解析，agent 看到的是原始目标 IP；
+                    // 如果直连失败后再用 agent 本机 DNS 重新解析域名，会改变客户端实际
+                    // 选择的 CDN/出口语义，也会和“域名由 proxy 端解析”的安全要求冲突。
+                    // 因此直连失败只刷新物理出口重试同一个 IP，不把域名解析拉回 agent。
                     Err(AgentError::Connection(format!(
                         "直连 {target_str} 失败：首次错误={first_err}；刷新物理出口后重试错误={retry_err}"
                     )))
@@ -378,5 +306,8 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
 
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("TUN TCP 直连 keepalive 设置失败 target={target}: {err}");
+    }
+    if let Err(err) = socket.set_tcp_nodelay(true) {
+        debug!("TUN TCP 直连 TCP_NODELAY 设置失败 target={target}: {err}");
     }
 }

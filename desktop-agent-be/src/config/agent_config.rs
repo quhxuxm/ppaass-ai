@@ -1,12 +1,10 @@
 //! Desktop Agent 配置模型。
 //!
-//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、连接池、
-//! transport/Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
+//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、
+//! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
-use common::{
-    QuicPolicy, TransportConfig, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH,
-};
+use common::{QuicPolicy, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -22,12 +20,6 @@ pub struct AgentConfig {
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
-    #[serde(default = "default_tcp_pool_size", alias = "pool_size")]
-    pub tcp_pool_size: usize,
-
-    #[serde(default = "default_udp_pool_size")]
-    pub udp_pool_size: usize,
-
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
@@ -36,19 +28,7 @@ pub struct AgentConfig {
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
-    /// 连接池中连接的最大存活时间（秒）。
-    /// 超过此时间的连接会被丢弃并替换为新连接，避免因代理端的空闲超时
-    /// 关闭连接导致请求失败。
-    /// 应设为小于代理端 `pre_connect_idle_timeout_secs` 的值
-    /// （默认 90 秒，代理端默认 120 秒）。
-    #[serde(default = "default_pool_max_connection_age_secs")]
-    pub pool_max_connection_age_secs: u64,
-
-    /// TCP/UDP 传输模式：auto、yamux、legacy。
-    #[serde(default)]
-    pub transport: TransportConfig,
-
-    /// Yamux 多路复用配置。TCP 与 UDP 使用各自独立的 Yamux 外层连接池。
+    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层 session。
     #[serde(default)]
     pub yamux: YamuxConfig,
 
@@ -81,7 +61,7 @@ pub struct AgentConfig {
 ///
 /// 当 `enabled = true` 时，agent 创建 TUN 设备，在其上构建小型
 /// 用户空间 TCP/IP 协议栈（通过 netstack-smoltcp），并将接受的
-/// TCP 流通过主连接池转发到代理；UDP 流通过单独的 UDP 连接池转发。
+/// TCP 流通过 direct framed TCP 转发到代理；UDP 流通过单独的 UDP Yamux session manager 转发。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
     /// 启用 TUN 模式
@@ -109,18 +89,6 @@ pub struct TunConfig {
     /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy。
     #[serde(default)]
     pub proxy_dns: bool,
-
-    /// 旧配置项：是否阻断未命中直连规则的 UDP/443 QUIC 流量。
-    ///
-    /// 新配置建议使用 `quic_policy`：
-    /// - allow：按普通 UDP 转发，未命中直连规则时走 UDP relay。
-    /// - direct_if_rule_match：只允许直连规则命中的 QUIC，其余 UDP/443 丢弃。
-    /// - block：全部 UDP/443 丢弃。
-    ///
-    /// 为兼容历史配置，未显式设置 `quic_policy` 时，`block_quic = true`
-    /// 会映射为 `direct_if_rule_match`。
-    #[serde(default = "default_tun_block_quic")]
-    pub block_quic: bool,
 
     /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
     #[serde(default)]
@@ -166,7 +134,6 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
-            block_quic: default_tun_block_quic(),
             quic_policy: None,
             wintun_file: None,
             route_state_file: None,
@@ -201,10 +168,6 @@ fn default_tun_mtu() -> u16 {
     1500
 }
 
-fn default_tun_block_quic() -> bool {
-    false
-}
-
 fn default_macos_tun_helper_enabled() -> bool {
     cfg!(target_os = "macos")
 }
@@ -217,14 +180,6 @@ fn default_macos_tun_helper_fallback_to_privilege() -> bool {
     true
 }
 
-fn default_tcp_pool_size() -> usize {
-    10
-}
-
-fn default_udp_pool_size() -> usize {
-    5
-}
-
 fn default_connect_timeout_secs() -> u64 {
     30
 }
@@ -235,12 +190,6 @@ fn default_listen_addr() -> String {
 
 fn default_compression_mode() -> String {
     "none".to_string()
-}
-
-fn default_pool_max_connection_age_secs() -> u64 {
-    // 默认 90 秒 — 低于代理端默认的 pre_connect_idle_timeout_secs (120 秒)。
-    // 确保池中连接在代理端关闭之前被淘汰，避免使用过期连接导致请求失败。
-    90
 }
 
 fn default_log_level() -> String {
@@ -278,17 +227,8 @@ impl AgentConfig {
 
 impl TunConfig {
     /// 返回最终生效的 QUIC 策略。
-    ///
-    /// 这里特意把旧 `block_quic` 的兼容逻辑放在配置层，转发路径只消费
-    /// `QuicPolicy`，后续新增策略时不用再到多处业务代码里拼 bool 条件。
     pub fn effective_quic_policy(&self) -> QuicPolicy {
-        self.quic_policy.unwrap_or({
-            if self.block_quic {
-                QuicPolicy::DirectIfRuleMatch
-            } else {
-                QuicPolicy::Allow
-            }
-        })
+        self.quic_policy.unwrap_or_default()
     }
 }
 
@@ -323,39 +263,20 @@ private_key_path = "keys/user1.pem"
     fn tun_allows_quic_by_default() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
-        assert!(!config.tun.block_quic);
         assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
     }
 
     #[test]
-    fn legacy_block_quic_maps_to_direct_if_rule_match() {
+    fn explicit_quic_policy_blocks_quic() {
         let config: AgentConfig = toml::from_str(
             &(MINIMAL_AGENT_CONFIG.to_owned()
                 + r#"
 [tun]
-block_quic = true
+quic_policy = "block"
 "#),
         )
         .unwrap();
 
-        assert_eq!(
-            config.tun.effective_quic_policy(),
-            QuicPolicy::DirectIfRuleMatch
-        );
-    }
-
-    #[test]
-    fn explicit_quic_policy_overrides_legacy_block_quic() {
-        let config: AgentConfig = toml::from_str(
-            &(MINIMAL_AGENT_CONFIG.to_owned()
-                + r#"
-[tun]
-block_quic = true
-quic_policy = "allow"
-"#),
-        )
-        .unwrap();
-
-        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
+        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Block);
     }
 }

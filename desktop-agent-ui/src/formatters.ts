@@ -46,7 +46,20 @@ export function normalizeDnsRecords(records: unknown): DnsResolutionRecord[] {
 }
 
 export function isAgentDnsRecord(record: DnsResolutionRecord) {
-  return record.resolver === "agent";
+  return !record.resolver || record.resolver === "agent";
+}
+
+export function isAgentDnsCacheRecord(record: DnsResolutionRecord) {
+  return record.resolver === "agent-cache";
+}
+
+export function isAgentDirectDnsRecord(record: DnsResolutionRecord) {
+  return record.resolver === "agent-direct";
+}
+
+export function isAgentDnsCacheMissRecord(record: DnsResolutionRecord) {
+  // 只有 Agent 内部 DNS 路径才有 cache 命中/未命中语义；系统解析绕过了 Agent cache。
+  return isAgentDnsRecord(record) || isAgentDirectDnsRecord(record);
 }
 
 export function isSystemDnsRecord(record: DnsResolutionRecord) {
@@ -54,7 +67,12 @@ export function isSystemDnsRecord(record: DnsResolutionRecord) {
 }
 
 export function isAgentOrSystemDnsRecord(record: DnsResolutionRecord) {
-  return isAgentDnsRecord(record) || isSystemDnsRecord(record);
+  return (
+    isAgentDnsRecord(record) ||
+    isAgentDnsCacheRecord(record) ||
+    isAgentDirectDnsRecord(record) ||
+    isSystemDnsRecord(record)
+  );
 }
 
 export function dnsRecordTimestamp(record: DnsResolutionRecord) {

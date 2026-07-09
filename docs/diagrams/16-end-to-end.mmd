@@ -1,7 +1,7 @@
 sequenceDiagram
     participant App as 本地应用
     participant Agent as Agent入口
-    participant Pool as ConnectionPool
+    participant Streams as 目标流管理
     participant Proxy as Proxy
     participant Target as Target
 
@@ -12,16 +12,21 @@ sequenceDiagram
         Target-->>Agent: 响应
         Agent-->>App: 响应
     else 代理
-        Agent->>Pool: get_connected_stream(target, transport)
-        Pool->>Proxy: Auth if new outer connection
-        Proxy-->>Pool: AuthResponse
-        Pool->>Proxy: ConnectRequest
+        Agent->>Streams: connect_to_target(target, transport)
+        alt TCP
+            Streams->>Proxy: direct framed PPAASS TCP connection
+        else UDP relay
+            Streams->>Proxy: raw Yamux session + substream
+        end
+        Streams->>Proxy: Auth
+        Proxy-->>Streams: AuthResponse
+        Streams->>Proxy: ConnectRequest
         Proxy->>Target: connect target
-        Proxy-->>Pool: ConnectResponse
+        Proxy-->>Streams: ConnectResponse
         App->>Agent: payload
-        Agent->>Proxy: DataPacket / Yamux payload
+        Agent->>Proxy: encrypted DataPacket
         Proxy->>Target: payload
         Target-->>Proxy: response
-        Proxy-->>Agent: DataPacket / Yamux payload
+        Proxy-->>Agent: encrypted DataPacket
         Agent-->>App: response
     end
