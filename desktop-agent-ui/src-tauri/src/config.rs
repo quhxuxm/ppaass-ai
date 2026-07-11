@@ -220,6 +220,7 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
+        tun_proxy_udp: bool_at(&value, &["tun", "proxy_udp"]).unwrap_or(true),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
         tun_quic_policy,
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
@@ -593,6 +594,39 @@ private_key_path = "keys/user1.pem"
         .unwrap();
 
         assert_eq!(summary.tun_quic_policy, "allow");
+    }
+
+    #[test]
+    fn summarize_config_proxies_tun_udp_by_default() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#,
+        )
+        .unwrap();
+
+        assert!(summary.tun_proxy_udp);
+    }
+
+    #[test]
+    fn summarize_config_reads_disabled_tun_udp_proxy() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+
+[tun]
+proxy_udp = false
+"#,
+        )
+        .unwrap();
+
+        assert!(!summary.tun_proxy_udp);
     }
 
     #[test]

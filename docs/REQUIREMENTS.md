@@ -23,6 +23,7 @@ You are an expert Rust developer, specializing in network application developing
   - The proxy address
   - The username
   - The UDP Yamux session count
+  - The desktop TUN UDP proxy/direct switch
   - The log level
 
 ## Architecture requirements
@@ -31,7 +32,7 @@ The communication between agent and proxy should be secure, using RSA encryption
 
 The configuration for both sides should be read from a configuration file using the `config` crate, and the configuration data should be serialized/deserialized using `serde`. And configuration should be able to be overridden by command line arguments using `clap`.
 
-The agent side should use direct framed TCP connections for TCP relay and Yamux sessions for UDP relay; the UDP session count should be configurable via the configuration file.
+The agent side should use direct framed TCP connections for TCP relay and Yamux sessions for UDP relay; the UDP session count should be configurable via the configuration file. Desktop TUN mode may bypass the UDP relay when `proxy_udp` is disabled and send ordinary UDP directly from the agent's bound physical interface.
 
 The RSA keys should be generated using a secure random number generator, and the keys should be stored securely on both sides.
 

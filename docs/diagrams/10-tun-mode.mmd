@@ -15,6 +15,6 @@ flowchart TD
 
     I --> O{"UDP/53 且 proxy_dns 且确认为 DNS 包?"}
     O -->|"是"| P["DnsProxy -> Address::ProxyDns"]
-    O -->|"否"| Q{"direct_access 或 DNS 缓存命中?"}
+    O -->|"否"| Q{"proxy_udp 已关闭，或 direct_access / DNS 缓存命中?"}
     Q -->|"是"| R["绑定物理接口直连 UDP"]
     Q -->|"否"| S["udp_sessions / 共享 Address::UdpRelay"]

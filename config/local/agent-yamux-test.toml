@@ -25,6 +25,7 @@ enabled = false
 name = "ppaass-tun"
 ipv4 = "10.10.10.1/24"
 mtu = 1500
+proxy_udp = true
 proxy_dns = false
 quic_policy = "allow"
 

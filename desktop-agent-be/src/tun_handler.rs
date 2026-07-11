@@ -2,9 +2,9 @@
 //!
 //! 当 TUN 模式启用时，agent 会打开一个 TUN 设备，并使用
 //! [`netstack-smoltcp`](https://crates.io/crates/netstack-smoltcp) 在其上构建
-//! 用户空间 TCP/IP 协议栈。协议栈接受的 TCP/UDP 流会通过各自的
-//! [`YamuxSessionManager`] 转发到代理，复用 SOCKS5/HTTP 处理器所使用的相同协议。
-//! 匹配 `direct_access` 规则的目标将直连，不经过代理。
+//! 用户空间 TCP/IP 协议栈。协议栈接受的 TCP/UDP 流会按配置选择
+//! agent 本地直连，或通过 [`YamuxSessionManager`] 转发到 proxy。
+//! `direct_access` 规则与 TUN UDP 的 `proxy_udp` 开关共同决定具体路径。
 
 mod device;
 mod direct_domain_cache;
@@ -41,7 +41,7 @@ use futures::FutureExt;
 use netstack::{spawn_netstack_supervisor, wait_tun_task};
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
-use proxy_routing::{configure_proxy_routing, install_route_guard};
+use proxy_routing::{bind_interface_is_usable, configure_proxy_routing, install_route_guard};
 use route::{
     RouteGuard, cleanup_stale_routes, detect_default_route_interface, detect_proxy_route,
     refresh_macos_scoped_default_bypass as refresh_macos_scoped_default_bypass_local,
@@ -75,6 +75,8 @@ struct TunForwardContext {
     tun_networks: TunNetworks,
     // true 时，系统 DNS 请求会被映射成 proxy 端 DNS 虚拟目标。
     proxy_dns: bool,
+    // true 保持原有 UDP 路由语义；false 时普通 UDP 统一从 agent 直连。
+    proxy_udp: bool,
     // 直连路径的物理出口绑定信息，可在失败后刷新。
     direct_egress: Arc<TunDirectEgress>,
 }
@@ -82,12 +84,24 @@ struct TunForwardContext {
 struct TunDirectEgress {
     // 用 proxy 地址探测当前物理出口，防止 TUN 默认路由生效后误选到 TUN。
     proxy_addrs: Arc<Vec<String>>,
-    // 直连 socket 使用的物理接口绑定；macOS/Windows 常靠 if_index，Linux 可用 name。
-    bind_interface: RwLock<Option<common::BindInterface>>,
+    // IPv4/IPv6 可能使用不同物理出口，必须按目标地址族选择绑定。
+    bind_interfaces: RwLock<TunDirectBindInterfaces>,
     #[cfg(target_os = "macos")]
     helper_socket: Option<String>,
     refresh_lock: tokio::sync::Mutex<()>,
-    last_refresh: RwLock<Option<Instant>>,
+    last_refresh: RwLock<TunDirectRefreshTimes>,
+}
+
+#[derive(Default)]
+struct TunDirectBindInterfaces {
+    ipv4: Option<common::BindInterface>,
+    ipv6: Option<common::BindInterface>,
+}
+
+#[derive(Default)]
+struct TunDirectRefreshTimes {
+    ipv4: Option<Instant>,
+    ipv6: Option<Instant>,
 }
 
 impl TunDirectEgress {
@@ -96,19 +110,30 @@ impl TunDirectEgress {
         bind_interface: Option<common::BindInterface>,
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
+        let fallback = bind_interface.filter(bind_interface_is_usable);
+        let ipv4 = detect_default_route_interface(false)
+            .filter(bind_interface_is_usable)
+            .or_else(|| fallback.clone());
+        let ipv6 = detect_default_route_interface(true)
+            .filter(bind_interface_is_usable)
+            .or_else(|| fallback.clone());
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
-            bind_interface: RwLock::new(bind_interface),
+            bind_interfaces: RwLock::new(TunDirectBindInterfaces { ipv4, ipv6 }),
             #[cfg(target_os = "macos")]
             helper_socket,
             refresh_lock: tokio::sync::Mutex::new(()),
-            last_refresh: RwLock::new(None),
+            last_refresh: RwLock::new(TunDirectRefreshTimes::default()),
         }
     }
 
-    fn bind_interface(&self) -> Option<common::BindInterface> {
-        let guard = self.bind_interface.read().ok()?;
-        guard.clone()
+    fn bind_interface(&self, target_ip: IpAddr) -> Option<common::BindInterface> {
+        let guard = self.bind_interfaces.read().ok()?;
+        if target_ip.is_ipv6() {
+            guard.ipv6.clone()
+        } else {
+            guard.ipv4.clone()
+        }
     }
 
     async fn refresh_after_direct_failure(
@@ -119,13 +144,13 @@ impl TunDirectEgress {
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
         // 直连失败后刷新物理出口，但用冷却时间避免大量连接同时触发路由探测。
-        if self.refresh_recently() {
-            return self.bind_interface();
+        if self.refresh_recently(target_ip) {
+            return self.bind_interface(target_ip);
         }
 
         let _guard = self.refresh_lock.lock().await;
-        if self.refresh_recently() {
-            return self.bind_interface();
+        if self.refresh_recently(target_ip) {
+            return self.bind_interface(target_ip);
         }
 
         let refreshed = self
@@ -136,7 +161,7 @@ impl TunDirectEgress {
                 tun_networks,
             )
             .await;
-        self.mark_refreshed();
+        self.mark_refreshed(target_ip);
         refreshed
     }
 
@@ -147,33 +172,56 @@ impl TunDirectEgress {
         udp_sessions: &YamuxSessionManager,
         tun_networks: TunNetworks,
     ) -> Option<common::BindInterface> {
+        // helper 管理的 macOS 路由可能在待机/切网后需要先刷新。
+        // 优先重新探测 proxy 出口，这样可以同步刷新两类 proxy session manager；
+        // 若探测结果属于 TUN、地址族不匹配或没有可用接口，再按目标地址族取系统默认接口。
+        self.refresh_macos_scoped_default_bypass();
         let Some(route) = detect_proxy_route(self.proxy_addrs.as_slice()).await else {
             warn!("刷新 direct access 物理出口失败：无法探测当前 proxy 出口路由");
-            self.refresh_macos_scoped_default_bypass();
             return self.refresh_default_route_interface(target_ip);
         };
 
         if tun_networks.contains_ip(route.local_ip) {
             warn!(
-                "刷新 direct access 物理出口时探测到 TUN 地址 {}，尝试使用系统默认物理接口兜底",
-                route.local_ip,
+                "刷新 direct access 物理出口时探测到 TUN 路由：\
+                 route_ip={} target_ip={}，尝试使用对应地址族的系统默认接口兜底",
+                route.local_ip, target_ip
             );
-            self.refresh_macos_scoped_default_bypass();
             return self.refresh_default_route_interface(target_ip);
         }
 
-        self.refresh_macos_scoped_default_bypass();
-        let bind_interface = route.bind_interface.clone();
-        self.update_bind_interface(bind_interface.clone());
+        let bind_interface = route.bind_interface.filter(bind_interface_is_usable);
+        let Some(bind_interface) = bind_interface else {
+            warn!(
+                "刷新 direct access 物理出口时未得到可用接口：\
+                 route_ip={} target_ip={}",
+                route.local_ip, target_ip
+            );
+            return self.refresh_default_route_interface(target_ip);
+        };
+        // proxy 出口刷新与 direct 目标的地址族选择分开：
+        // 即使当前 direct 目标是 IPv4、proxy 走 IPv6（或反之），
+        // 后续 proxy session 也应该立即拿到新出口。
         tcp_sessions.set_proxy_bind_ip(Some(route.local_ip));
-        tcp_sessions.set_proxy_bind_interface(bind_interface.clone());
+        tcp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
         udp_sessions.set_proxy_bind_ip(Some(route.local_ip));
-        udp_sessions.set_proxy_bind_interface(bind_interface.clone());
+        udp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
+
+        if route.local_ip.is_ipv6() != target_ip.is_ipv6() {
+            info!(
+                "已刷新 proxy 物理出口，但地址族与 direct 目标不同：\
+                 route_ip={} target_ip={}，direct 改用对应地址族的系统默认接口",
+                route.local_ip, target_ip
+            );
+            return self.refresh_default_route_interface(target_ip);
+        }
+
+        self.update_bind_interface(target_ip, Some(bind_interface.clone()));
         info!(
             "已刷新 direct access 物理出口：ip={} interface={:?}",
             route.local_ip, bind_interface
         );
-        bind_interface
+        Some(bind_interface)
     }
 
     fn refresh_macos_scoped_default_bypass(&self) {
@@ -192,8 +240,9 @@ impl TunDirectEgress {
 
     fn refresh_default_route_interface(&self, target_ip: IpAddr) -> Option<common::BindInterface> {
         let bind_interface = detect_default_route_interface(target_ip.is_ipv6());
+        let bind_interface = bind_interface.filter(bind_interface_is_usable);
         if bind_interface.is_some() {
-            self.update_bind_interface(bind_interface.clone());
+            self.update_bind_interface(target_ip, bind_interface.clone());
             info!(
                 "已用系统默认路由刷新 direct access 物理接口：target_ip={} interface={:?}",
                 target_ip, bind_interface
@@ -202,31 +251,47 @@ impl TunDirectEgress {
         } else {
             warn!(
                 "无法从系统默认路由刷新 direct access 物理接口，保留旧接口绑定 {:?}",
-                self.bind_interface()
+                self.bind_interface(target_ip)
             );
-            self.bind_interface()
+            self.bind_interface(target_ip)
         }
     }
 
-    fn update_bind_interface(&self, bind_interface: Option<common::BindInterface>) {
-        if let Ok(mut guard) = self.bind_interface.write() {
-            *guard = bind_interface.clone();
+    fn update_bind_interface(
+        &self,
+        target_ip: IpAddr,
+        bind_interface: Option<common::BindInterface>,
+    ) {
+        if let Ok(mut guard) = self.bind_interfaces.write() {
+            if target_ip.is_ipv6() {
+                guard.ipv6 = bind_interface;
+            } else {
+                guard.ipv4 = bind_interface;
+            }
         }
     }
 
-    fn refresh_recently(&self) -> bool {
-        self.last_refresh_time()
+    fn refresh_recently(&self, target_ip: IpAddr) -> bool {
+        self.last_refresh_time(target_ip)
             .is_some_and(|last_refresh| last_refresh.elapsed() < DIRECT_EGRESS_REFRESH_COOLDOWN)
     }
 
-    fn last_refresh_time(&self) -> Option<Instant> {
+    fn last_refresh_time(&self, target_ip: IpAddr) -> Option<Instant> {
         let guard = self.last_refresh.read().ok()?;
-        *guard
+        if target_ip.is_ipv6() {
+            guard.ipv6
+        } else {
+            guard.ipv4
+        }
     }
 
-    fn mark_refreshed(&self) {
+    fn mark_refreshed(&self, target_ip: IpAddr) {
         if let Ok(mut guard) = self.last_refresh.write() {
-            *guard = Some(Instant::now());
+            if target_ip.is_ipv6() {
+                guard.ipv6 = Some(Instant::now());
+            } else {
+                guard.ipv4 = Some(Instant::now());
+            }
         }
     }
 }
@@ -249,6 +314,15 @@ pub async fn run_tun_mode(
     if proxy_dns {
         info!("TUN DNS 请求将交给 proxy 端默认 DNS 处理");
     }
+    let proxy_udp = config.proxy_udp;
+    info!(
+        "TUN 普通 UDP 转发：{}",
+        if proxy_udp {
+            "保持原有 proxy/direct_access 路由"
+        } else {
+            "agent 端直连目标"
+        }
+    );
     let quic_policy = config.effective_quic_policy();
     info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
 
@@ -306,6 +380,7 @@ pub async fn run_tun_mode(
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,
         proxy_dns,
+        proxy_udp,
         direct_egress,
     };
     let netstack_task = spawn_netstack_supervisor(

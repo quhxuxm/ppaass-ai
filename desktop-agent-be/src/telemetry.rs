@@ -85,10 +85,23 @@ pub fn emit_traffic<S1: Into<String>, S2: Into<String>>(
     outbound_bytes: u64,
     inbound_bytes: u64,
 ) {
+    record_traffic(outbound_bytes, inbound_bytes);
+
+    log_traffic(protocol, target, outbound_bytes, inbound_bytes);
+}
+
+/// 记录一条会话流量日志，但不重复累加全局流量快照。
+///
+/// 高包率 UDP 路径会在每个 datagram 完成时调用 `record_traffic`，
+/// 会话结束时只需用本函数输出聚合日志，避免统计翻倍。
+pub fn log_traffic<S1: Into<String>, S2: Into<String>>(
+    protocol: S1,
+    target: S2,
+    outbound_bytes: u64,
+    inbound_bytes: u64,
+) {
     let protocol = protocol.into();
     let target = target.into();
-
-    record_traffic(outbound_bytes, inbound_bytes);
 
     info!(
         protocol = %protocol,

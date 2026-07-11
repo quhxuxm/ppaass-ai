@@ -248,7 +248,9 @@ TUN 模式里的关键细节：
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
-- 默认允许未命中直连规则的 UDP/443 QUIC 走共享 UDP relay；需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
+- `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；关闭后普通 UDP 全部由 Agent 绑定物理出口直接发往目标。
+- `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
+- 默认允许 UDP/443 QUIC；`proxy_udp` 关闭时由 Agent 直连，开启时按直连规则或共享 UDP relay 分流。需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
@@ -282,7 +284,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `private_key_path`: 用户私钥。
 - `compression_mode`: `none`、`lz4`、`gzip`、`zstd`。
 - `[yamux.udp]`: Agent 端 UDP relay 的 raw Yamux 最大 session 数、每 session 子流数、窗口等。TCP relay 不再使用 Yamux session。
-- `[tun]`: TUN 设备、DNS、QUIC、helper、状态文件。
+- `[tun]`: TUN 设备、普通 UDP 直连/代理切换、DNS、QUIC、helper、状态文件。
 - `[direct_access]`: `proxy_all`、`direct_all`、`rules`。
 
 ### Proxy 配置
@@ -366,7 +368,7 @@ Android 和桌面 TUN 的相同点：
 
 - 都用 `netstack-smoltcp`。
 - 都复用 `common` 和 `protocol`。
-- 都支持 TCP direct framed、UDP raw Yamux relay、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。
+- 都支持 TCP direct framed、UDP raw Yamux relay、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。桌面 TUN 还可通过 `proxy_udp` 将普通 UDP 全部切换为 Agent 本地直连。
 
 不同点：
 

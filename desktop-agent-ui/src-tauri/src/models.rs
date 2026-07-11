@@ -40,6 +40,7 @@ pub(crate) struct AgentConfigSummary {
     pub(crate) tun_name: String,
     pub(crate) tun_ipv4: String,
     pub(crate) tun_mtu: u64,
+    pub(crate) tun_proxy_udp: bool,
     pub(crate) tun_proxy_dns: bool,
     pub(crate) tun_quic_policy: String,
     pub(crate) direct_mode: String,

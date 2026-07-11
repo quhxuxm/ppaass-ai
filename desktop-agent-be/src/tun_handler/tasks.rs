@@ -144,12 +144,14 @@ pub(super) fn spawn_udp_sessions(
                 shutdown.clone(),
             )
         });
-        // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
-        let udp_relay = UdpRelay::spawn(
-            context.udp_sessions.clone(),
-            udp_tx.clone(),
-            shutdown.clone(),
-        );
+        // 仅在允许通过 proxy 转发 UDP 时启动共享 relay；全部直连时不创建空闲 shard 任务。
+        let udp_relay = context.proxy_udp.then(|| {
+            UdpRelay::spawn(
+                context.udp_sessions.clone(),
+                udp_tx.clone(),
+                shutdown.clone(),
+            )
+        });
         let quic_stats = Arc::new(QuicUdpStats::default());
         spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
@@ -207,9 +209,12 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
 
-                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut direct_match = should_direct_udp(
+                        context.proxy_udp,
+                        context.direct_checker.is_direct(&address),
+                    );
                     let proxy_address = address.clone();
-                    if !direct_match {
+                    if context.proxy_udp && !direct_match {
                         // UDP/QUIC 只有在域名规则可能改判为直连时才查缓存。
                         // 非直连代理目标始终保留原始 IP，避免 proxy 端重新 DNS 到
                         // 不同 CDN 边缘节点后出现播放抖动。
@@ -239,7 +244,11 @@ pub(super) fn spawn_udp_sessions(
                         if target_addr.port() == 443 {
                             quic_stats.record_proxied();
                         }
-                        udp_relay.send(source_addr, target_addr, proxy_address, data);
+                        if let Some(udp_relay) = &udp_relay {
+                            udp_relay.send(source_addr, target_addr, proxy_address, data);
+                        } else {
+                            warn!("TUN UDP proxy relay 未启动，丢弃一个 UDP 包 -> {}", target_addr);
+                        }
                         continue;
                     }
 
@@ -257,6 +266,7 @@ pub(super) fn spawn_udp_sessions(
                         // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
                         // proxy_dns 标记，避免会话内部二次映射到 Address::ProxyDns。
                         proxy_dns: false,
+                        force_direct: !context.proxy_udp,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),
@@ -264,6 +274,7 @@ pub(super) fn spawn_udp_sessions(
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         direct_egress: context.direct_egress.clone(),
+                        shutdown: shutdown.clone(),
                     };
                     spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
@@ -284,6 +295,10 @@ pub(super) fn spawn_udp_sessions(
         }
         debug!("udp_task 退出");
     })
+}
+
+fn should_direct_udp(proxy_udp: bool, direct_access_match: bool) -> bool {
+    !proxy_udp || direct_access_match
 }
 
 fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationToken) {
@@ -309,4 +324,17 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_direct_udp;
+
+    #[test]
+    fn udp_proxy_switch_preserves_old_routing_or_forces_direct() {
+        assert!(!should_direct_udp(true, false));
+        assert!(should_direct_udp(true, true));
+        assert!(should_direct_udp(false, false));
+        assert!(should_direct_udp(false, true));
+    }
 }

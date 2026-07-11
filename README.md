@@ -86,6 +86,10 @@ connection_timeout_secs = 30                # Connection timeout
 [yamux.udp]
 sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # UDP relay substreams per session
+
+[tun]
+proxy_udp = true                     # true: keep proxy relay behavior; false: send ordinary UDP directly from the agent
+proxy_dns = false                    # DNS proxying remains independently configurable
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)

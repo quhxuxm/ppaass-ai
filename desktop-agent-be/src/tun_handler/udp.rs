@@ -21,16 +21,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use super::direct_domain_cache::DirectDomainCache;
 
 pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
+const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
+
 #[derive(Clone)]
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
+    pub(super) force_direct: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) tcp_sessions: Arc<YamuxSessionManager>,
@@ -38,6 +42,7 @@ pub(super) struct UdpSessionContext {
     pub(super) direct_checker: Arc<DirectAccessChecker>,
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) direct_egress: Arc<super::TunDirectEgress>,
+    pub(super) shutdown: CancellationToken,
 }
 
 struct DirectUdpRelayContext {
@@ -51,6 +56,7 @@ struct DirectUdpRelayContext {
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     tun_networks: TunNetworks,
+    shutdown: CancellationToken,
 }
 
 pub(super) async fn handle_tun_udp(
@@ -63,6 +69,7 @@ pub(super) async fn handle_tun_udp(
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
+        force_direct,
         quic_policy,
         netstack_tx,
         tcp_sessions,
@@ -70,6 +77,7 @@ pub(super) async fn handle_tun_udp(
         direct_checker,
         direct_domain_cache,
         direct_egress,
+        shutdown,
     } = context;
 
     // UDP 目标同样先处理 proxy DNS 虚拟地址。
@@ -77,12 +85,12 @@ pub(super) async fn handle_tun_udp(
     if !proxy_dns_request {
         if tun_networks.is_ipv4_broadcast(target.ip()) {
             debug!("TUN UDP 广播已丢弃 -> {}", target);
-            drain_dropped_udp(rx).await;
+            drain_dropped_udp(rx, &shutdown).await;
             return Ok(());
         }
         if is_tun_local_udp_target(client, target, tun_networks) {
             debug!("TUN UDP 本地网段流量已丢弃：{} -> {}", client, target);
-            drain_dropped_udp(rx).await;
+            drain_dropped_udp(rx, &shutdown).await;
             return Ok(());
         }
         // 普通 UDP 目标不能指向 TUN 自身网段。
@@ -94,11 +102,11 @@ pub(super) async fn handle_tun_udp(
         target.to_string()
     };
 
-    let mut direct_target = None;
+    let mut direct_target = (!proxy_dns_request && force_direct).then_some(target);
     let mut direct_label = target_label.clone();
     let proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request {
+    if direct_target.is_none() && !proxy_dns_request {
         // UDP 没有 TCP 的 SNI 嗅探机会，主要依赖 IP/CIDR 和 DNS proxy 记录的域名缓存。
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
@@ -133,7 +141,7 @@ pub(super) async fn handle_tun_udp(
             "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}，等待应用回退 TCP",
             quic_policy, target_label
         );
-        drain_dropped_udp(rx).await;
+        drain_dropped_udp(rx, &shutdown).await;
         return Ok(());
     }
 
@@ -152,6 +160,7 @@ pub(super) async fn handle_tun_udp(
             tcp_sessions,
             udp_sessions,
             tun_networks,
+            shutdown,
         })
         .await?;
         return Ok(());
@@ -247,6 +256,7 @@ async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
         tcp_sessions,
         udp_sessions,
         tun_networks,
+        shutdown,
     } = context;
 
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
@@ -259,56 +269,62 @@ async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
         tun_networks,
     )
     .await?;
-    let socket = Arc::new(socket);
-    let outbound_bytes = Arc::new(AtomicU64::new(0));
-    let inbound_bytes = Arc::new(AtomicU64::new(0));
+    let mut outbound_bytes = 0u64;
+    let mut inbound_bytes = 0u64;
+    let idle = tokio::time::sleep(UDP_SESSION_IDLE);
+    tokio::pin!(idle);
+    let mut buf = vec![0u8; 65535];
 
-    let socket_w = socket.clone();
-    let outbound_bytes_w = outbound_bytes.clone();
-    // 写方向：TUN 会话 payload 发往真实目标。
-    let write = async move {
-        while let Some(data) = rx.recv().await {
-            let data_len = data.len();
-            if let Err(e) = socket_w.send(&data).await {
-                debug!("UDP 直连发送错误：{e}");
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = &mut idle => {
+                debug!(
+                    "TUN UDP 直连会话空闲超过 {} 秒，关闭 -> {}",
+                    UDP_SESSION_IDLE.as_secs(),
+                    target_label
+                );
                 break;
             }
-            outbound_bytes_w.fetch_add(data_len as u64, Ordering::Relaxed);
-        }
-    };
-    let netstack_tx_r = netstack_tx.clone();
-    let inbound_bytes_r = inbound_bytes.clone();
-    // 读方向：真实目标回复写回 netstack，并保持原 source/target 方向。
-    let read = async move {
-        let mut buf = vec![0u8; 65535];
-        loop {
-            match socket.recv(&mut buf).await {
-                Ok(n) => {
-                    let pkt = buf[..n].to_vec();
-                    let mut s = netstack_tx_r.lock().await;
-                    if let Err(e) = s.send((pkt, original_target, client)).await {
-                        debug!("UDP 直连回复错误：{e}");
+            maybe_data = rx.recv() => {
+                let Some(data) = maybe_data else { break };
+                let data_len = data.len();
+                if let Err(e) = socket.send(&data).await {
+                    debug!("UDP 直连发送错误：{e}");
+                    break;
+                }
+                let data_len = data_len as u64;
+                outbound_bytes += data_len;
+                telemetry::record_traffic(data_len, 0);
+                idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+            }
+            received = socket.recv(&mut buf) => {
+                match received {
+                    Ok(n) => {
+                        let pkt = buf[..n].to_vec();
+                        let mut s = netstack_tx.lock().await;
+                        if let Err(e) = s.send((pkt, original_target, client)).await {
+                            debug!("UDP 直连回复错误：{e}");
+                            break;
+                        }
+                        let received_bytes = n as u64;
+                        inbound_bytes += received_bytes;
+                        telemetry::record_traffic(0, received_bytes);
+                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                    }
+                    Err(e) => {
+                        debug!("UDP 直连接收错误：{e}");
                         break;
                     }
-                    inbound_bytes_r.fetch_add(n as u64, Ordering::Relaxed);
-                }
-                Err(e) => {
-                    debug!("UDP 直连接收错误：{e}");
-                    break;
                 }
             }
         }
-    };
-    // 直连会话和代理会话一样，任一方向结束就释放会话。
-    tokio::select! {
-        _ = write => {}
-        _ = read => {}
     }
-    telemetry::emit_traffic(
+    telemetry::log_traffic(
         "TUN UDP (直连)",
         target_label,
-        outbound_bytes.load(Ordering::Relaxed),
-        inbound_bytes.load(Ordering::Relaxed),
+        outbound_bytes,
+        inbound_bytes,
     );
     Ok(())
 }
@@ -321,8 +337,26 @@ async fn connect_direct_udp_with_refresh(
     udp_sessions: &YamuxSessionManager,
     tun_networks: TunNetworks,
 ) -> Result<UdpSocket> {
-    let initial_bind_interface = direct_egress.bind_interface();
-    match connect_direct_udp(target, initial_bind_interface.as_ref()).await {
+    let initial_bind_interface = match direct_egress.bind_interface(target.ip()) {
+        Some(bind_interface) => Some(bind_interface),
+        None => {
+            debug!(
+                "TUN UDP 直连缺少物理出口绑定，发送前尝试刷新：target={}",
+                target_label
+            );
+            direct_egress
+                .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
+                .await
+        }
+    };
+    let initial_bind_interface = initial_bind_interface.ok_or_else(|| {
+        AgentError::Connection(format!(
+            "UDP 直连 {target_label} 已拒绝：无法确定 {} 物理出口接口，不能在 TUN 模式下无绑定发送",
+            if target.is_ipv6() { "IPv6" } else { "IPv4" }
+        ))
+    })?;
+
+    match connect_direct_udp(target, &initial_bind_interface).await {
         Ok(socket) => Ok(socket),
         Err(first_err) => {
             debug!(
@@ -331,8 +365,14 @@ async fn connect_direct_udp_with_refresh(
             );
             let refreshed_bind_interface = direct_egress
                 .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
-                .await;
-            connect_direct_udp(target, refreshed_bind_interface.as_ref())
+                .await
+                .ok_or_else(|| {
+                    AgentError::Connection(format!(
+                        "UDP 直连 {target_label} 失败：首次错误={first_err}；\
+                         刷新后仍无法确定物理出口接口"
+                    ))
+                })?;
+            connect_direct_udp(target, &refreshed_bind_interface)
                 .await
                 .map_err(|retry_err| {
                     AgentError::Connection(format!(
@@ -345,7 +385,7 @@ async fn connect_direct_udp_with_refresh(
 
 async fn connect_direct_udp(
     target: SocketAddr,
-    bind_interface: Option<&BindInterface>,
+    bind_interface: &BindInterface,
 ) -> std::io::Result<UdpSocket> {
     let socket = bind_direct_udp(target, bind_interface)?;
     socket.connect(target).await?;
@@ -354,14 +394,14 @@ async fn connect_direct_udp(
 
 fn bind_direct_udp(
     target: SocketAddr,
-    bind_interface: Option<&BindInterface>,
+    bind_interface: &BindInterface,
 ) -> std::io::Result<UdpSocket> {
     let socket = Socket::new(
         Domain::for_address(target),
         Type::DGRAM,
         Some(Protocol::UDP),
     )?;
-    bind_socket_to_interface(&socket, bind_interface, target)?;
+    bind_socket_to_interface(&socket, Some(bind_interface), target)?;
 
     let bind_addr = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
@@ -374,9 +414,20 @@ fn bind_direct_udp(
     UdpSocket::from_std(socket.into())
 }
 
-async fn drain_dropped_udp(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
-    while let Ok(Some(_)) = timeout(Duration::from_secs(10), rx.recv()).await {
-        // 保持会话短暂存活，避免应用持续重试被丢弃 UDP 时频繁创建/销毁任务。
+async fn drain_dropped_udp(
+    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    shutdown: &CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            received = timeout(Duration::from_secs(10), rx.recv()) => {
+                if !matches!(received, Ok(Some(_))) {
+                    break;
+                }
+                // 保持会话短暂存活，避免应用持续重试被丢弃 UDP 时频繁创建/销毁任务。
+            }
+        }
     }
 }
 

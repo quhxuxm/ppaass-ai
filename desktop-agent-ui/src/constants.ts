@@ -33,7 +33,7 @@ export const directModeOptions = [
 ];
 
 export const quicPolicyLabels: Record<string, string> = {
-  allow: "按照规则直接发送QUIC到目标",
+  allow: "允许 QUIC",
   block: "全部阻断"
 };
 

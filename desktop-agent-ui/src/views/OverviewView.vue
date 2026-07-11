@@ -405,6 +405,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="kv-row"><span>设备</span><strong>{{ summary.tun_name }}</strong></div>
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
           <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
+          <div class="kv-row"><span>UDP</span><strong>{{ summary.tun_proxy_udp ? "代理开启" : "Agent 直连" }}</strong></div>
           <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "代理解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">

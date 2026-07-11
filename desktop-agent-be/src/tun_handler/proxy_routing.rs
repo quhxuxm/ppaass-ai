@@ -98,8 +98,11 @@ fn proxy_route_has_interface(route: &route::ProxyRoute) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
-fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
-    interface.name.is_some()
+pub(super) fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface
+        .name
+        .as_deref()
+        .is_some_and(|name| !name.is_empty() && !name.as_bytes().contains(&0))
 }
 
 #[cfg(any(
@@ -110,8 +113,8 @@ fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
     target_os = "watchos",
     windows,
 ))]
-fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
-    interface.index.is_some()
+pub(super) fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface.index.is_some_and(|index| index != 0)
 }
 
 #[cfg(not(any(
@@ -125,8 +128,12 @@ fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
     target_os = "watchos",
     windows,
 )))]
-fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
-    interface.name.is_some() || interface.index.is_some()
+pub(super) fn bind_interface_is_usable(interface: &common::BindInterface) -> bool {
+    interface
+        .name
+        .as_deref()
+        .is_some_and(|name| !name.is_empty() && !name.as_bytes().contains(&0))
+        || interface.index.is_some_and(|index| index != 0)
 }
 
 pub(super) fn install_route_guard(

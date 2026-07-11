@@ -61,7 +61,8 @@ pub struct AgentConfig {
 ///
 /// 当 `enabled = true` 时，agent 创建 TUN 设备，在其上构建小型
 /// 用户空间 TCP/IP 协议栈（通过 netstack-smoltcp），并将接受的
-/// TCP 流通过 direct framed TCP 转发到代理；UDP 流通过单独的 UDP Yamux session manager 转发。
+/// TCP 流通过 direct framed TCP 转发到代理；UDP 可通过单独的
+/// Yamux session manager 转发，也可由 agent 本地 UDP socket 直连目标。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
     /// 启用 TUN 模式
@@ -89,6 +90,11 @@ pub struct TunConfig {
     /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy。
     #[serde(default)]
     pub proxy_dns: bool,
+
+    /// TUN 模式下是否通过 proxy 转发普通 UDP。
+    /// 关闭时，普通 UDP 会从 agent 端直接发往目标；proxy_dns 仍保持独立语义。
+    #[serde(default = "default_tun_proxy_udp")]
+    pub proxy_udp: bool,
 
     /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
     #[serde(default)]
@@ -134,6 +140,7 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
+            proxy_udp: default_tun_proxy_udp(),
             quic_policy: None,
             wintun_file: None,
             route_state_file: None,
@@ -166,6 +173,10 @@ fn default_tun_ipv4() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+fn default_tun_proxy_udp() -> bool {
+    true
 }
 
 fn default_macos_tun_helper_enabled() -> bool {
@@ -264,6 +275,27 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn tun_proxies_udp_by_default_for_backward_compatibility() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert!(config.tun.proxy_udp);
+    }
+
+    #[test]
+    fn tun_can_disable_udp_proxying() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+proxy_udp = false
+"#),
+        )
+        .unwrap();
+
+        assert!(!config.tun.proxy_udp);
     }
 
     #[test]
