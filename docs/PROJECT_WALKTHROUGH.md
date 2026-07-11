@@ -248,9 +248,9 @@ TUN 模式里的关键细节：
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
-- `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；关闭后普通 UDP 全部由 Agent 绑定物理出口直接发往目标。
+- `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。
 - `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
-- 默认允许 UDP/443 QUIC；`proxy_udp` 关闭时由 Agent 直连，开启时按直连规则或共享 UDP relay 分流。需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
+- UDP/443 QUIC 使用独立策略：默认允许并始终按 `direct_access` 选择 Agent 直连或共享 UDP relay，因此必须经 Proxy 的网站不会受 `proxy_udp` 开关影响；需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
@@ -368,7 +368,7 @@ Android 和桌面 TUN 的相同点：
 
 - 都用 `netstack-smoltcp`。
 - 都复用 `common` 和 `protocol`。
-- 都支持 TCP direct framed、UDP raw Yamux relay、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。桌面 TUN 还可通过 `proxy_udp` 将普通 UDP 全部切换为 Agent 本地直连。
+- 都支持 TCP direct framed、UDP raw Yamux relay、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。桌面 TUN 还可通过 `proxy_udp` 将代理 DNS 与 QUIC 之外的普通 UDP 切换为 Agent 本地直连。
 
 不同点：
 

@@ -92,7 +92,8 @@ pub struct TunConfig {
     pub proxy_dns: bool,
 
     /// TUN 模式下是否通过 proxy 转发普通 UDP。
-    /// 关闭时，普通 UDP 会从 agent 端直接发往目标；proxy_dns 仍保持独立语义。
+    /// 关闭时，除独立处理的代理 DNS 与 UDP/443 QUIC 外，其余 UDP 从 agent
+    /// 直接发往目标；QUIC 由 quic_policy 与 direct_access 分流。
     #[serde(default = "default_tun_proxy_udp")]
     pub proxy_udp: bool,
 

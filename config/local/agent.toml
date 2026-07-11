@@ -73,17 +73,16 @@ ipv4 = "10.10.10.1/24"
 mtu = 1500
 # 普通 UDP 转发开关：
 #   true  - 保持原有行为，按 direct_access 分流，未命中直连规则的 UDP 通过 proxy relay。
-#   false - 普通 UDP 全部由 agent 绑定物理出口后直接发往目标。
-# 旧配置未填写时默认为 true；DNS 是否经 proxy 仍由 proxy_dns 独立控制。
+#   false - 除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 agent 绑定物理出口直连。
+# 旧配置未填写时默认为 true；DNS 与 UDP/443 QUIC 分别由独立策略控制。
 proxy_udp = true
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
-# 默认不阻断 QUIC：proxy_udp=true 时按 direct_access 决定直连或代理到 proxy；
-# proxy_udp=false 时则由 agent 直接发往目标 CDN。只有需要强制浏览器回退
-# TCP/TLS 时，才临时启用阻断策略。
+# 默认不阻断 QUIC：无论 proxy_udp 是否开启，都按 direct_access 决定直连或
+# 通过 proxy relay 转发。只有需要强制浏览器回退 TCP/TLS 时才启用阻断策略。
 # QUIC 策略：
-#   allow - 允许 QUIC，具体经 proxy 还是 agent 直连由 proxy_udp 和 direct_access 决定。
+#   allow - 允许 QUIC，具体经 proxy 还是 agent 直连由 direct_access 决定。
 #   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
 quic_policy = "allow"
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；

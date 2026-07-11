@@ -75,7 +75,8 @@ struct TunForwardContext {
     tun_networks: TunNetworks,
     // true 时，系统 DNS 请求会被映射成 proxy 端 DNS 虚拟目标。
     proxy_dns: bool,
-    // true 保持原有 UDP 路由语义；false 时普通 UDP 统一从 agent 直连。
+    // true 保持普通 UDP 原有路由语义；false 时除代理 DNS 与 QUIC 外均从 agent 直连。
+    // UDP/443 QUIC 由 quic_policy 与 direct_access 独立决定。
     proxy_udp: bool,
     // 直连路径的物理出口绑定信息，可在失败后刷新。
     direct_egress: Arc<TunDirectEgress>,
@@ -316,7 +317,7 @@ pub async fn run_tun_mode(
     }
     let proxy_udp = config.proxy_udp;
     info!(
-        "TUN 普通 UDP 转发：{}",
+        "TUN 普通 UDP（不含代理 DNS/UDP443）转发：{}",
         if proxy_udp {
             "保持原有 proxy/direct_access 路由"
         } else {

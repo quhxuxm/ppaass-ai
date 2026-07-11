@@ -92,10 +92,10 @@ const emit = defineEmits<{
           <template #content>
             <div class="toggle-list">
               <div class="switch-row">
-                <span>代理 UDP</span>
+                <span>代理普通 UDP</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_udp" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_udp', $event)" />
               </div>
-              <small class="field-help">关闭后普通 UDP 由 Agent 直接转发到目标；代理 DNS 仍由下方独立开关控制。</small>
+              <small class="field-help">关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 直连；DNS 和 QUIC 各自独立分流。</small>
               <div class="switch-row">
                 <span>代理 DNS</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
@@ -111,7 +111,7 @@ const emit = defineEmits<{
                 :disabled="configLocked"
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
-              <small class="field-help">允许时，QUIC 会遵循上方“代理 UDP”开关和直连规则；阻断时应用可回退到 TCP/TLS。</small>
+              <small class="field-help">允许时，QUIC 按直连规则分流，必须代理的网站仍走 Proxy relay；阻断时应用可回退到 TCP/TLS。</small>
             </label>
           </template>
         </Card>

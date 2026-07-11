@@ -88,8 +88,9 @@ sessions = 5                         # Max UDP relay raw Yamux outer sessions, g
 max_streams_per_session = 128        # UDP relay substreams per session
 
 [tun]
-proxy_udp = true                     # true: keep proxy relay behavior; false: send ordinary UDP directly from the agent
+proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and QUIC stay independent
 proxy_dns = false                    # DNS proxying remains independently configurable
+quic_policy = "allow"               # allow: route UDP/443 by direct_access; block: force TCP/TLS fallback
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)
