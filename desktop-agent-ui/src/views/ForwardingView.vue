@@ -97,12 +97,13 @@ const emit = defineEmits<{
               </div>
               <small class="field-help">关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 直连；DNS 和 QUIC 各自独立分流。</small>
               <div class="switch-row">
-                <span>代理 DNS</span>
+                <span>DNS 经 Proxy</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
+              <small class="field-help">仅控制传统 DNS（UDP/TCP 53）；不控制 UDP/443 QUIC。</small>
             </div>
             <label class="field">
-              <span><i class="pi pi-bolt"></i>QUIC 策略</span>
+              <span><i class="pi pi-bolt"></i>QUIC（UDP/443）策略</span>
               <Select
                 :model-value="summary.tun_quic_policy"
                 :options="quicPolicyOptions"
