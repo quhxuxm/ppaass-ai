@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Card from "primevue/card";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
+import AppIcon from "../components/AppIcon";
 import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
@@ -29,7 +30,7 @@ const emit = defineEmits<{
       </template>
       <template #content>
         <label class="field">
-          <span><i class="pi pi-server"></i>节点</span>
+          <span><AppIcon name="server" />节点</span>
           <Textarea
             :model-value="summary.proxy_addrs.join('\n')"
             :disabled="configLocked"
@@ -45,11 +46,11 @@ const emit = defineEmits<{
       <template #title><h2>身份凭据</h2></template>
       <template #content>
         <label class="field">
-          <span><i class="pi pi-user"></i>用户</span>
+          <span><AppIcon name="user" />用户</span>
           <InputText :model-value="summary.username" :disabled="configLocked" @update:model-value="emit('set-field', 'username', $event)" />
         </label>
         <label class="field">
-          <span><i class="pi pi-key"></i>私钥</span>
+          <span><AppIcon name="key" />私钥</span>
           <InputText :model-value="summary.private_key_path" :disabled="configLocked" @update:model-value="emit('set-field', 'private_key_path', $event)" />
         </label>
       </template>
@@ -65,7 +66,7 @@ const emit = defineEmits<{
       <template #content>
         <div class="field-pair">
           <label class="field">
-            <span><i class="pi pi-clock"></i>控制连接超时</span>
+            <span><AppIcon name="clock" />控制连接超时</span>
             <ConfigNumberInput
               :model-value="summary.connect_timeout_secs"
               :min="0"
@@ -76,7 +77,7 @@ const emit = defineEmits<{
             />
           </label>
           <label class="field">
-            <span><i class="pi pi-box"></i>消息压缩</span>
+            <span><AppIcon name="package" />消息压缩</span>
             <Select
               :model-value="summary.compression_mode"
               :options="compressionOptions"
@@ -126,36 +127,36 @@ const emit = defineEmits<{
           </div>
           <div class="field-pair">
             <label class="field">
-              <span><i class="pi pi-share-alt"></i>外层连接</span>
+              <span><AppIcon name="share" />外层连接</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
               <small>限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。</small>
             </label>
             <label class="field">
-              <span><i class="pi pi-sitemap"></i>并发子流</span>
+              <span><AppIcon name="network" />并发子流</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
               <small>限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
-              <span><i class="pi pi-stopwatch"></i>打开子流超时</span>
+              <span><AppIcon name="timer" />打开子流超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
               <small>影响新 UDP relay 通道申请 Yamux 子流的等待时间。</small>
             </label>
             <label class="field">
-              <span><i class="pi pi-heart"></i>Keepalive</span>
+              <span><AppIcon name="heart-pulse" />Keepalive</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
               <small>影响 UDP Yamux 外层连接的保活探测；0 表示关闭。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
-              <span><i class="pi pi-send"></i>写超时</span>
+              <span><AppIcon name="send" />写超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
               <small>影响 UDP Yamux 外层连接写入帧的超时判断。</small>
             </label>
             <label class="field">
-              <span><i class="pi pi-window-maximize"></i>流控窗口</span>
+              <span><AppIcon name="panels" />流控窗口</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
               <small>影响每个 UDP relay Yamux 子流可缓冲的窗口大小。</small>
             </label>

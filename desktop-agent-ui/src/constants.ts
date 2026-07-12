@@ -1,20 +1,21 @@
 import type { TabKey } from "./types";
+import type { AppIconName } from "./components/AppIcon";
 
-export const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
-  { key: "overview", label: "总览", icon: "pi pi-th-large" },
-  { key: "forwarding", label: "转发", icon: "pi pi-sitemap" },
-  { key: "egress", label: "出口", icon: "pi pi-share-alt" },
-  { key: "routing", label: "系统", icon: "pi pi-cog" },
-  { key: "diagnostics", label: "诊断", icon: "pi pi-wifi" },
-  { key: "logs", label: "日志", icon: "pi pi-list" },
-  { key: "toml", label: "TOML", icon: "pi pi-code" }
+export const tabs: Array<{ key: TabKey; label: string; icon: AppIconName }> = [
+  { key: "overview", label: "总览", icon: "layout-dashboard" },
+  { key: "forwarding", label: "转发", icon: "network" },
+  { key: "egress", label: "出口", icon: "waypoints" },
+  { key: "routing", label: "系统", icon: "settings" },
+  { key: "diagnostics", label: "诊断", icon: "activity" },
+  { key: "logs", label: "日志", icon: "scroll-text" },
+  { key: "toml", label: "TOML", icon: "code" }
 ];
 
-export const directRulePresets = [
-  { label: "本机", icon: "pi pi-desktop", rules: ["localhost", "127.0.0.0/8", "::1"] },
-  { label: "私网", icon: "pi pi-building", rules: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
-  { label: "中国", icon: "pi pi-map-marker", rules: ["*.cn"] },
-  { label: "Microsoft", icon: "pi pi-cloud", rules: ["*.microsoft.com", "*.bing.com"] }
+export const directRulePresets: Array<{ label: string; icon: AppIconName; rules: string[] }> = [
+  { label: "本机", icon: "monitor", rules: ["localhost", "127.0.0.0/8", "::1"] },
+  { label: "私网", icon: "building", rules: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+  { label: "中国", icon: "map-pin", rules: ["*.cn"] },
+  { label: "Microsoft", icon: "cloud", rules: ["*.microsoft.com", "*.bing.com"] }
 ];
 
 export const compressionOptions = ["none", "lz4", "gzip", "zstd"];

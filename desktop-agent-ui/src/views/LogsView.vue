@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import Button from "primevue/button";
 import Card from "primevue/card";
+import AppIcon from "../components/AppIcon";
 import { tokenizeLogLine } from "../highlighters";
 
 const props = defineProps<{
@@ -31,7 +32,9 @@ watch(() => [props.logs.length, props.logs.at(-1)], scrollToLatestLog, { flush: 
     <template #title>
       <div class="panel-heading inline">
         <h2>日志</h2>
-        <Button icon="pi pi-refresh" label="刷新" severity="secondary" outlined size="small" @click="emit('refresh')" />
+        <Button label="刷新" severity="secondary" outlined size="small" @click="emit('refresh')">
+          <template #icon="slotProps"><AppIcon :class="slotProps.class" name="refresh" /></template>
+        </Button>
       </div>
     </template>
     <template #content>

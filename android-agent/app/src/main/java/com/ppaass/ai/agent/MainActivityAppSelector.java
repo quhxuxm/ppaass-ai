@@ -44,7 +44,10 @@ protected void showAppSelector() {
         list.setDivider(null);
         list.setDividerHeight(0);
         list.setCacheColorHint(Color.TRANSPARENT);
-        list.setSelector(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        list.setSelector(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 118),
+                COLOR_ACCENT));
 
         TextView selectionSummary = chip(appSelectionSummary(checked), COLOR_STATUS_STOPPED);
         list.setOnItemClickListener((parent, view, position, id) -> {
@@ -56,6 +59,7 @@ protected void showAppSelector() {
         LinearLayout dialogContent = new LinearLayout(this);
         dialogContent.setOrientation(LinearLayout.VERTICAL);
         dialogContent.setPadding(dp(18), dp(16), dp(18), 0);
+        dialogContent.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
 
         LinearLayout titleRow = horizontalRow();
         TextView dialogTitle = titleText("VPN 应用", 20f);
@@ -99,6 +103,10 @@ protected void showAppSelector() {
                 .create();
         appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
         appSelectorDialog.setOnShowListener(dialog -> {
+            Window window = appSelectorDialog.getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+            }
             appSelectorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT_DARK);
             appSelectorDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_MUTED);
             Button clearButton = appSelectorDialog.getButton(AlertDialog.BUTTON_NEUTRAL);

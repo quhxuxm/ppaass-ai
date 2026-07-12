@@ -5399,6 +5399,9 @@ html.app-dark .metric-tile:hover,
 html.app-dark .dns-record-row:hover,
 html.app-dark .endpoint-row:hover,
 html.app-dark .kv-row:hover,
+html.app-dark .switch-row:hover,
+html.app-dark .method-fact:hover,
+html.app-dark .policy-fact:hover,
 html.app-dark .forwarding-method:hover,
 html.app-dark .rule-scope-item:hover {
   border-color: rgba(72, 232, 255, 0.34);
@@ -6017,4 +6020,399 @@ html.app-dark .overview-drag-ghost {
 html.app-dark .overview-drag-ghost-lines span {
   border-color: rgba(123, 153, 171, 0.2);
   background: rgba(17, 27, 36, 0.82);
+}
+
+/* Interaction highlight: balanced periwinkle stays vivid without feeling cold. */
+:root.app-dark,
+:root.app-dark .app-frame {
+  --app-primary: #8f9cff;
+  --app-primary-strong: #bdc5ff;
+  --p-primary-color: #8f9cff !important;
+  --p-primary-hover-color: #bdc5ff !important;
+  --p-primary-active-color: #727ee8 !important;
+  --p-primary-400: #bdc5ff !important;
+  --p-primary-500: #8f9cff !important;
+  --p-primary-600: #727ee8 !important;
+  --p-primary-700: #555fb8 !important;
+  --p-form-field-hover-border-color: rgba(143, 156, 255, 0.62) !important;
+  --p-form-field-focus-border-color: #8f9cff !important;
+  --p-button-text-primary-color: #d9ddff !important;
+  --p-button-text-primary-hover-background: rgba(143, 156, 255, 0.14) !important;
+  --p-button-outlined-primary-color: #d9ddff !important;
+  --p-button-outlined-primary-border-color: rgba(143, 156, 255, 0.44) !important;
+  --p-button-outlined-primary-hover-background: rgba(143, 156, 255, 0.13) !important;
+}
+
+html.app-dark .nav-button.p-button:hover,
+html.app-dark .sidebar-toggle.p-button:hover {
+  border-color: rgba(143, 156, 255, 0.38) !important;
+  background: rgba(143, 156, 255, 0.13) !important;
+  color: #f3f4ff !important;
+  box-shadow: inset 0 0 0 1px rgba(143, 156, 255, 0.05) !important;
+}
+
+html.app-dark .nav-button.p-button.active,
+html.app-dark .nav-button.p-button.active:hover {
+  border-color: rgba(143, 156, 255, 0.54) !important;
+  background: rgba(143, 156, 255, 0.18) !important;
+  color: #eef0ff !important;
+  box-shadow:
+    inset 3px 0 0 #8f9cff,
+    0 0 24px rgba(143, 156, 255, 0.15) !important;
+}
+
+html.app-dark .nav-button.p-button.active .p-button-label,
+html.app-dark .nav-button.p-button.active .p-button-icon {
+  color: #f3f4ff !important;
+}
+
+html.app-dark .nav-button.p-button.active .p-button-icon {
+  --icon-accent: #eef0ff;
+  --icon-plate: rgba(143, 156, 255, 0.22);
+  --icon-border: rgba(143, 156, 255, 0.56);
+  --icon-glow: rgba(143, 156, 255, 0.24);
+}
+
+html.app-dark .metric-tile:hover,
+html.app-dark .dns-record-row:hover,
+html.app-dark .endpoint-row:hover,
+html.app-dark .kv-row:hover,
+html.app-dark .forwarding-method:hover,
+html.app-dark .rule-scope-item:hover {
+  border-color: rgba(143, 156, 255, 0.46);
+  background: rgba(20, 24, 48, 0.96);
+}
+
+html.app-dark .p-button:not(.p-button-text):not(.p-button-outlined):not(.p-button-secondary):not(.p-button-danger):not(.p-button-primary),
+html.app-dark .diagnostic-run-button.p-button {
+  border-color: rgba(143, 156, 255, 0.46) !important;
+  background: rgba(143, 156, 255, 0.15) !important;
+  color: #e7e9ff !important;
+  box-shadow: 0 0 20px rgba(143, 156, 255, 0.1) !important;
+}
+
+html.app-dark .p-button:not(.p-button-text):not(.p-button-outlined):not(.p-button-secondary):not(.p-button-danger):not(.p-button-primary):not(:disabled):hover,
+html.app-dark .diagnostic-run-button.p-button:not(:disabled):hover {
+  border-color: rgba(143, 156, 255, 0.72) !important;
+  background: rgba(143, 156, 255, 0.26) !important;
+  color: #ffffff !important;
+}
+
+html.app-dark .p-button.p-button-text:not(:disabled):hover,
+html.app-dark .p-button.p-button-outlined:not(:disabled):hover,
+html.app-dark .icon-button:hover:not(:disabled),
+html.app-dark .ghost-button:hover,
+html.app-dark .preset-button:hover,
+html.app-dark .overview-drag-handle:hover {
+  border-color: rgba(143, 156, 255, 0.48) !important;
+  background: rgba(143, 156, 255, 0.14) !important;
+  color: #f3f4ff !important;
+  box-shadow: 0 0 20px rgba(143, 156, 255, 0.12) !important;
+}
+
+html.app-dark .field input:focus,
+html.app-dark .field select:focus,
+html.app-dark .field textarea:focus,
+html.app-dark .field .p-inputtext:enabled:focus,
+html.app-dark .field .p-select:not(.p-disabled).p-focus,
+html.app-dark .toml-editor-shell:focus-within {
+  border-color: #8f9cff;
+  box-shadow:
+    0 0 0 3px rgba(143, 156, 255, 0.17),
+    0 0 24px rgba(143, 156, 255, 0.13);
+}
+
+html.app-dark .p-select-option:not(.p-select-option-selected):not(.p-disabled).p-focus {
+  background: rgba(143, 156, 255, 0.14);
+  color: #f3f4ff;
+}
+
+html.app-dark .p-select-option.p-select-option-selected {
+  background: rgba(143, 156, 255, 0.2);
+  color: #ffffff;
+}
+
+html.app-dark .p-selectbutton .p-togglebutton.p-togglebutton-checked,
+html.app-dark .segmented button.selected {
+  border-color: rgba(143, 156, 255, 0.44);
+  background: rgba(143, 156, 255, 0.19);
+  color: #f3f4ff;
+  box-shadow: 0 0 18px rgba(143, 156, 255, 0.12);
+}
+
+html.app-dark .overview-card.drop-target {
+  border-color: #8f9cff;
+  box-shadow:
+    0 0 0 3px rgba(143, 156, 255, 0.18),
+    0 18px 42px rgba(0, 0, 0, 0.34),
+    0 0 28px rgba(143, 156, 255, 0.15);
+}
+
+html.app-dark .overview-drag-ghost {
+  border-color: rgba(143, 156, 255, 0.46);
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, 0.58),
+    0 0 28px rgba(143, 156, 255, 0.14);
+}
+
+html.app-dark ::selection {
+  background: rgba(143, 156, 255, 0.32);
+}
+
+html.app-dark * {
+  scrollbar-color: rgba(143, 156, 255, 0.46) rgba(8, 13, 18, 0.72);
+}
+
+html.app-dark *::-webkit-scrollbar-thumb {
+  background: rgba(143, 156, 255, 0.44);
+}
+
+html.app-dark .nav-button.p-button:hover .p-button-label,
+html.app-dark .nav-button.p-button:hover .p-button-icon,
+html.app-dark .p-button.p-button-text:not(:disabled):hover .p-button-label,
+html.app-dark .p-button.p-button-text:not(:disabled):hover .p-button-icon,
+html.app-dark .p-button.p-button-outlined:not(:disabled):hover .p-button-label,
+html.app-dark .p-button.p-button-outlined:not(:disabled):hover .p-button-icon,
+html.app-dark .p-button.p-button-secondary:not(:disabled):hover .p-button-label,
+html.app-dark .p-button.p-button-secondary:not(:disabled):hover .p-button-icon {
+  color: #f5f6ff !important;
+}
+
+html.app-dark .metric-tile:hover span,
+html.app-dark .dns-record-row:hover span,
+html.app-dark .endpoint-row:hover span,
+html.app-dark .kv-row:hover span,
+html.app-dark .switch-row:hover span,
+html.app-dark .method-fact:hover span,
+html.app-dark .policy-fact:hover span,
+html.app-dark .forwarding-method:hover span,
+html.app-dark .rule-scope-item:hover span {
+  color: #dfe3ff;
+}
+
+html.app-dark .metric-tile:hover strong,
+html.app-dark .dns-record-row:hover strong,
+html.app-dark .endpoint-row:hover strong,
+html.app-dark .kv-row:hover strong,
+html.app-dark .method-fact:hover strong,
+html.app-dark .policy-fact:hover strong,
+html.app-dark .forwarding-method:hover strong,
+html.app-dark .rule-scope-item:hover strong {
+  color: #ffffff;
+}
+
+html.app-dark .metric-tile:hover > i,
+html.app-dark .endpoint-row:hover > i,
+html.app-dark .forwarding-method:hover > i,
+html.app-dark .rule-scope-item:hover > i {
+  filter: brightness(1.22) saturate(1.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 20px var(--icon-glow) !important;
+}
+
+/* Unified desktop icon language: one rounded 1.9px stroke family, with semantic color only for state. */
+.app-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.p-button .app-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.app-icon-spin {
+  animation: app-icon-spin 0.85s linear infinite;
+}
+
+@keyframes app-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+html.app-dark .nav-button.p-button {
+  --icon-accent: #b8c0ff;
+  --icon-plate: rgba(143, 156, 255, 0.1);
+  --icon-border: rgba(143, 156, 255, 0.27);
+  --icon-glow: transparent;
+}
+
+html.app-dark .nav-button.p-button .nav-icon-plate.p-button-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px !important;
+  height: 28px !important;
+  flex: 0 0 28px !important;
+  border: 1px solid rgba(143, 156, 255, 0.27) !important;
+  border-radius: 8px !important;
+  background: rgba(143, 156, 255, 0.1) !important;
+  color: #b8c0ff !important;
+  box-shadow: inset 0 1px 0 rgba(245, 247, 255, 0.06) !important;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+html.app-dark .nav-button.p-button .nav-icon-plate .app-icon {
+  width: 16px;
+  height: 16px;
+}
+
+html.app-dark .nav-button.p-button:hover .nav-icon-plate,
+html.app-dark .nav-button.p-button.active .nav-icon-plate {
+  border-color: rgba(174, 184, 255, 0.55) !important;
+  background: rgba(143, 156, 255, 0.2) !important;
+  color: #f3f4ff !important;
+  transform: translateY(-1px);
+}
+
+html.app-dark .metric-tile > .app-icon,
+html.app-dark .endpoint-row > .app-icon,
+html.app-dark .dns-empty > .app-icon,
+html.app-dark .rule-scope-note > .app-icon,
+html.app-dark .field > span > .app-icon,
+html.app-dark .overview-drag-ghost-heading > .app-icon,
+html.app-dark .forwarding-method > .app-icon,
+html.app-dark .rule-scope-item > .app-icon,
+html.app-dark .rule-group-heading .app-icon {
+  --line-icon-color: #b8c0ff;
+  --line-icon-background: rgba(143, 156, 255, 0.1);
+  --line-icon-border: rgba(143, 156, 255, 0.27);
+  box-sizing: border-box;
+  border: 1px solid var(--line-icon-border);
+  background: var(--line-icon-background);
+  color: var(--line-icon-color);
+  box-shadow: inset 0 1px 0 rgba(245, 247, 255, 0.055);
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+html.app-dark .metric-tile > .app-icon {
+  width: 30px;
+  height: 30px;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+html.app-dark .metric-tile {
+  grid-template-columns: 30px minmax(0, 1fr);
+}
+
+html.app-dark .endpoint-row > .app-icon {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border-radius: 8px;
+}
+
+html.app-dark .dns-empty > .app-icon {
+  width: 34px;
+  height: 34px;
+  padding: 6px;
+  border-radius: 10px;
+}
+
+html.app-dark .field > span > .app-icon,
+html.app-dark .rule-group-heading .app-icon {
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-radius: 7px;
+}
+
+html.app-dark .forwarding-method > .app-icon {
+  width: 38px;
+  height: 38px;
+  padding: 7px;
+  border-radius: 10px;
+}
+
+html.app-dark .rule-scope-item > .app-icon {
+  width: 34px;
+  height: 34px;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+html.app-dark .rule-scope-note {
+  grid-template-columns: 24px minmax(0, 1fr);
+}
+
+html.app-dark .rule-scope-note > .app-icon {
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-radius: 7px;
+}
+
+html.app-dark .overview-drag-ghost-heading > .app-icon {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border-radius: 8px;
+}
+
+html.app-dark .overview-drag-handle > .app-icon {
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
+html.app-dark .app-icon.semantic-success {
+  --line-icon-color: #8fffc4;
+  --line-icon-background: rgba(98, 245, 166, 0.1);
+  --line-icon-border: rgba(98, 245, 166, 0.28);
+}
+
+html.app-dark .app-icon.semantic-warning {
+  --line-icon-color: #ffeb8a;
+  --line-icon-background: rgba(255, 229, 92, 0.1);
+  --line-icon-border: rgba(255, 229, 92, 0.28);
+}
+
+html.app-dark .app-icon.semantic-danger {
+  --line-icon-color: #ff9bbb;
+  --line-icon-background: rgba(255, 92, 145, 0.1);
+  --line-icon-border: rgba(255, 92, 145, 0.28);
+}
+
+html.app-dark .metric-tile:hover > .app-icon,
+html.app-dark .endpoint-row:hover > .app-icon,
+html.app-dark .forwarding-method:hover > .app-icon,
+html.app-dark .rule-scope-item:hover > .app-icon {
+  --line-icon-color: #f3f4ff;
+  --line-icon-background: rgba(143, 156, 255, 0.2);
+  --line-icon-border: rgba(174, 184, 255, 0.5);
+  filter: none;
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
+}
+
+html.app-dark .p-button:not(:disabled):hover .app-icon {
+  color: #f7f8ff;
+}
+
+html.app-dark .empty-state > .app-icon {
+  width: 42px;
+  height: 42px;
+  padding: 8px;
+  border: 1px solid var(--line-icon-border, rgba(255, 229, 92, 0.28));
+  border-radius: 12px;
+  background: var(--line-icon-background, rgba(255, 229, 92, 0.1));
+  color: var(--line-icon-color, #ffeb8a);
 }

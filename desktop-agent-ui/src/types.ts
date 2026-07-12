@@ -1,3 +1,5 @@
+import type { AppIconName } from "./components/AppIcon";
+
 export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
 
 export type AgentConfigSummary = {
@@ -117,7 +119,7 @@ export type ToastKind = "info" | "success" | "error";
 export type DirectRuleGroup = {
   key: string;
   label: string;
-  icon: string;
+  icon: AppIconName;
   /** 当前规则类型在哪些入口或模式下可用，用于直连规则页给用户做配置提示。 */
   modes: string[];
   items: Array<{ rule: string; index: number }>;

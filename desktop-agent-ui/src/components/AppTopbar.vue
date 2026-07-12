@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Button from "primevue/button";
+import AppIcon from "./AppIcon";
 
 defineProps<{
   subtitle: string;
@@ -26,26 +27,34 @@ const emit = defineEmits<{
       <p>{{ subtitle }}</p>
     </div>
     <div class="toolbar">
-      <Button icon="pi pi-refresh" severity="secondary" outlined rounded aria-label="重新载入" @click="emit('reload')" />
+      <Button severity="secondary" outlined rounded aria-label="重新载入" @click="emit('reload')">
+        <template #icon="slotProps"><AppIcon :class="slotProps.class" name="refresh" /></template>
+      </Button>
       <Button
-        icon="pi pi-undo"
         label="恢复默认"
         severity="secondary"
         outlined
         :disabled="!configAvailable || configLocked || busy"
         @click="emit('restore-default-config')"
-      />
+      >
+        <template #icon="slotProps"><AppIcon :class="slotProps.class" name="restore" /></template>
+      </Button>
       <Button
-        icon="pi pi-save"
         severity="secondary"
         outlined
         rounded
         aria-label="保存配置"
         :disabled="configLocked || !dirty || busy"
         @click="emit('save')"
-      />
-      <Button v-if="running" label="停止" icon="pi pi-stop" severity="danger" :disabled="busy" @click="emit('stop')" />
-      <Button v-else label="启动" icon="pi pi-play" severity="primary" :disabled="busy" @click="emit('start')" />
+      >
+        <template #icon="slotProps"><AppIcon :class="slotProps.class" name="save" /></template>
+      </Button>
+      <Button v-if="running" label="停止" severity="danger" :disabled="busy" @click="emit('stop')">
+        <template #icon="slotProps"><AppIcon :class="slotProps.class" name="stop" /></template>
+      </Button>
+      <Button v-else label="启动" severity="primary" :disabled="busy" @click="emit('start')">
+        <template #icon="slotProps"><AppIcon :class="slotProps.class" name="play" /></template>
+      </Button>
     </div>
   </header>
 </template>

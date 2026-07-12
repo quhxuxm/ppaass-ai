@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import ProgressSpinner from "primevue/progressspinner";
 import AppSidebar from "./components/AppSidebar.vue";
+import AppIcon from "./components/AppIcon";
 import AppTopbar from "./components/AppTopbar.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useDesktopAgent } from "./composables/useDesktopAgent";
@@ -93,7 +94,7 @@ const sidebarCollapsed = ref(false);
         </section>
 
         <section v-else-if="!state.config" class="empty-state">
-          <i class="pi pi-exclamation-triangle"></i>
+          <AppIcon class="semantic-warning" name="triangle-alert" />
           <h2>未载入配置</h2>
         </section>
 

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import Button from "primevue/button";
 import Tag from "primevue/tag";
+import AppIcon, { type AppIconName } from "./AppIcon";
 import { shortPath } from "../formatters";
 import type { TabKey } from "../types";
 
 defineProps<{
-  tabs: Array<{ key: TabKey; label: string; icon: string }>;
+  tabs: Array<{ key: TabKey; label: string; icon: AppIconName }>;
   activeTab: TabKey;
   collapsed: boolean;
   running: boolean;
@@ -31,13 +32,16 @@ const emit = defineEmits<{
       </div>
       <Button
         class="sidebar-toggle"
-        :icon="collapsed ? 'pi pi-angle-right' : 'pi pi-angle-left'"
         text
         rounded
         :aria-label="collapsed ? '展开导航' : '收起导航'"
         :title="collapsed ? '展开导航' : '收起导航'"
         @click="emit('update:collapsed', !collapsed)"
-      />
+      >
+        <template #icon="slotProps">
+          <AppIcon :class="slotProps.class" :name="collapsed ? 'chevron-right' : 'chevron-left'" />
+        </template>
+      </Button>
     </div>
 
     <nav class="nav">
@@ -45,12 +49,17 @@ const emit = defineEmits<{
         v-for="tab in tabs"
         :key="tab.key"
         :class="['nav-button', { active: activeTab === tab.key }]"
-        :icon="tab.icon"
         :label="tab.label"
         :title="tab.label"
         text
         @click="emit('update:activeTab', tab.key)"
-      />
+      >
+        <template #icon="slotProps">
+          <span :class="[slotProps.class, 'nav-icon-plate']">
+            <AppIcon :name="tab.icon" />
+          </span>
+        </template>
+      </Button>
     </nav>
 
     <div class="sidebar-status">

@@ -4,6 +4,7 @@ import Badge from "primevue/badge";
 import Card from "primevue/card";
 import Knob from "primevue/knob";
 import Tag from "primevue/tag";
+import AppIcon from "../components/AppIcon";
 import {
   dnsAnswerLabel,
   dnsAnswers,
@@ -258,7 +259,7 @@ function hourlyBarHeight(bytes: number) {
               aria-label="拖动调整顺序"
               title="拖动调整顺序"
             >
-              <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+              <AppIcon name="move" />
             </button>
           </div>
         </div>
@@ -266,32 +267,32 @@ function hourlyBarHeight(bytes: number) {
       <template #content>
         <div v-if="card.key === 'status'" class="status-board">
           <div class="metric-tile">
-            <i class="pi pi-sitemap"></i>
+            <AppIcon name="network" />
             <span>当前转发</span>
             <strong>{{ activeForwardingLabel }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-globe"></i>
+            <AppIcon name="globe" />
             <span>代理入口</span>
             <strong>{{ summary.listen_addr }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>公共出口</span>
             <strong>{{ summary.proxy_addrs.length }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-wave-pulse"></i>
+            <AppIcon name="activity" />
             <span>UDP Yamux</span>
             <strong>{{ summary.udp_yamux_sessions }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-box"></i>
+            <AppIcon name="package" />
             <span>压缩</span>
             <strong>{{ summary.compression_mode }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-chart-line"></i>
+            <AppIcon name="scroll-text" />
             <span>日志</span>
             <strong>{{ summary.log_level }}</strong>
           </div>
@@ -303,11 +304,11 @@ function hourlyBarHeight(bytes: number) {
         </div>
         <div v-else-if="card.key === 'egress'" class="endpoint-list">
           <div v-for="proxy in summary.proxy_addrs" :key="proxy" class="endpoint-row">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>{{ proxy }}</span>
           </div>
           <div v-if="!summary.proxy_addrs.length" class="endpoint-row muted">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>未配置</span>
           </div>
         </div>
@@ -359,11 +360,11 @@ function hourlyBarHeight(bytes: number) {
         </div>
         <div v-else-if="card.key === 'dns'" class="dns-records">
           <div v-if="!summary.tun_proxy_dns" class="dns-empty">
-            <i class="pi pi-info-circle"></i>
+            <AppIcon name="info" />
             <span>代理 DNS 未启用</span>
           </div>
           <div v-else-if="!recentDnsRecords.length" class="dns-empty">
-            <i class="pi pi-globe"></i>
+            <AppIcon name="globe" />
             <span>等待经过代理的 DNS 请求</span>
           </div>
           <div v-else class="dns-record-list">
@@ -429,7 +430,7 @@ function hourlyBarHeight(bytes: number) {
     >
       <div class="overview-drag-ghost-heading">
         <strong>{{ overviewCardTitle(draggingOverviewCard) }}</strong>
-        <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+        <AppIcon name="move" />
       </div>
       <div class="overview-drag-ghost-lines" aria-hidden="true">
         <span></span>

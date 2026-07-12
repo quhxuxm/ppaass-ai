@@ -31,9 +31,10 @@ protected void buildStatusScreen(LinearLayout root) {
 
         ImageView appIcon = new ImageView(this);
         appIcon.setImageResource(R.drawable.ic_vpn);
-        appIcon.setColorFilter(COLOR_ACTION_INFO);
-        appIcon.setBackground(iconPlateBackground(COLOR_ACTION_INFO));
+        appIcon.setColorFilter(COLOR_ACCENT);
+        appIcon.setBackground(iconPlateBackground(COLOR_ACCENT));
         appIcon.setPadding(dp(10), dp(10), dp(10), dp(10));
+        appIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         iconParams.setMargins(0, 0, dp(12), 0);
         headerRow.addView(appIcon, iconParams);
@@ -73,12 +74,17 @@ protected void buildStatusScreen(LinearLayout root) {
         selectAppsButton.setAllCaps(false);
         selectAppsButton.setTextSize(14f);
         selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
-        selectAppsButton.setTextColor(COLOR_ACCENT_DARK);
+        selectAppsButton.setTextColor(interactiveTextColors(
+                COLOR_ACCENT_DARK,
+                Color.rgb(245, 246, 255)));
         selectAppsButton.setSingleLine(true);
         selectAppsButton.setMinHeight(0);
         selectAppsButton.setMinWidth(0);
         selectAppsButton.setPadding(dp(14), 0, dp(14), 0);
-        selectAppsButton.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        selectAppsButton.setBackground(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 112),
+                COLOR_ACCENT));
         flattenButton(selectAppsButton);
         selectAppsButton.setOnClickListener(view -> showAppSelector());
         trackEditable(selectAppsButton);

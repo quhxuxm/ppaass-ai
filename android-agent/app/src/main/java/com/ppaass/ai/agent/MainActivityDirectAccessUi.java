@@ -293,9 +293,8 @@ protected void addDirectRuleManager(LinearLayout root) {
         directRuleDraft.setSingleLine(true);
         directRuleDraft.setImeOptions(EditorInfo.IME_ACTION_DONE);
         directRuleDraft.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        directRuleDraft.setTextColor(COLOR_TEXT);
         directRuleDraft.setTextSize(15f);
-        directRuleDraft.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(directRuleDraft);
         directRuleDraft.setPadding(dp(12), 0, dp(12), 0);
         directRuleDraft.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_DONE) {

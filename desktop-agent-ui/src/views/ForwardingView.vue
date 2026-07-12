@@ -4,6 +4,7 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import ToggleSwitch from "primevue/toggleswitch";
+import AppIcon from "../components/AppIcon";
 import { quicPolicyOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
@@ -39,7 +40,7 @@ const emit = defineEmits<{
               <div class="method-fact"><span>监听状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
             </div>
             <label class="field">
-              <span><i class="pi pi-wifi"></i>监听地址</span>
+              <span><AppIcon name="radio-tower" />监听地址</span>
               <InputText :model-value="summary.listen_addr" :disabled="configLocked" @update:model-value="emit('set-field', 'listen_addr', $event)" />
             </label>
           </template>
@@ -81,7 +82,7 @@ const emit = defineEmits<{
               <div class="method-fact"><span>当前状态</span><strong>{{ tunModeLabel }}</strong></div>
             </div>
             <label class="field">
-              <span><i class="pi pi-desktop"></i>名称</span>
+              <span><AppIcon name="monitor" />名称</span>
               <InputText :model-value="summary.tun_name" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_name', $event)" />
             </label>
           </template>
@@ -103,7 +104,7 @@ const emit = defineEmits<{
               <small class="field-help">仅控制传统 DNS（UDP/TCP 53）；不控制 UDP/443 QUIC。</small>
             </div>
             <label class="field">
-              <span><i class="pi pi-bolt"></i>QUIC（UDP/443）策略</span>
+              <span><AppIcon name="zap" />QUIC（UDP/443）策略</span>
               <Select
                 :model-value="summary.tun_quic_policy"
                 :options="quicPolicyOptions"

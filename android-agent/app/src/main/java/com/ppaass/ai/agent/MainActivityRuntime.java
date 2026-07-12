@@ -38,7 +38,9 @@ protected void updateVpnToggle() {
             vpnStatus.setText(systemManaged ? "始终开启 VPN" : running ? "已连接" : "未连接");
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
             vpnStatus.setTextColor(chipText(statusColor));
-            vpnStatus.setBackground(rounded(chipFill(statusColor), chipFill(statusColor)));
+            vpnStatus.setBackground(rounded(
+                    chipFill(statusColor),
+                    alphaColor(statusColor, 112)));
         }
         updateConfigEditability(!running && !isHttpProxyRunning());
         updateConnectivityButton();

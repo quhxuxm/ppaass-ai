@@ -226,7 +226,7 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         }
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextColor(message ? COLOR_TEXT : Color.rgb(30, 41, 59));
+        view.setTextColor(message ? COLOR_TEXT : COLOR_ACCENT_DARK);
         view.setTextSize(message ? 13.5f : 14.5f);
         view.setTypeface(message ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         view.setSingleLine(true);

@@ -172,11 +172,7 @@ protected void setQuicPolicy(Spinner spinner, String fallback) {
 protected Spinner spinner(LinearLayout root, String title, String[] values, String selected) {
         root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                values);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ArrayAdapter<String> adapter = spinnerAdapter(values);
         spinner.setAdapter(adapter);
         int selectedIndex = 0;
         for (int i = 0; i < values.length; i++) {
@@ -186,7 +182,8 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
             }
         }
         spinner.setSelection(selectedIndex);
-        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setBackground(controlBackground());
+        spinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
         spinner.setPadding(dp(12), 0, dp(12), 0);
         root.addView(spinner, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -198,14 +195,11 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
 protected Spinner quicPolicySpinner(LinearLayout root, String title, String selected) {
         root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
-        ArrayAdapter<QuicPolicyOption> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                QUIC_POLICY_OPTIONS);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ArrayAdapter<QuicPolicyOption> adapter = spinnerAdapter(QUIC_POLICY_OPTIONS);
         spinner.setAdapter(adapter);
         setQuicPolicy(spinner, selected);
-        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setBackground(controlBackground());
+        spinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
         spinner.setPadding(dp(12), 0, dp(12), 0);
         root.addView(spinner, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -213,6 +207,33 @@ protected Spinner quicPolicySpinner(LinearLayout root, String title, String sele
         trackEditable(spinner);
         addFieldHelp(root, "允许时按直连规则发送 QUIC，未命中的 UDP/443 使用代理 UDP relay；阻断会丢弃 UDP/443 以强制回落到 TCP/TLS。");
         return spinner;
+    }
+
+protected <T> ArrayAdapter<T> spinnerAdapter(T[] values) {
+        return new ArrayAdapter<T>(this, android.R.layout.simple_spinner_item, values) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getView(position, convertView, parent), false);
+            }
+
+            @Override
+            public View getDropDownView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getDropDownView(position, convertView, parent), true);
+            }
+        };
+    }
+
+protected View styleSpinnerItem(View view, boolean dropdown) {
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            text.setTextColor(COLOR_TEXT);
+            text.setTextSize(15f);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setMinHeight(dp(48));
+            text.setPadding(dp(12), 0, dp(12), 0);
+            text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
+        }
+        return view;
     }
 
 protected String selectedCompressionMode() {
@@ -279,9 +300,8 @@ protected EditText field(LinearLayout root, String title, String value, int line
         edit.setMinLines(lines);
         edit.setMaxLines(lines == 1 ? 1 : lines + 4);
         edit.setInputType(inputType);
-        edit.setTextColor(COLOR_TEXT);
         edit.setTextSize(lines == 1 ? 16f : 13f);
-        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(edit);
         edit.setMinHeight(dp(48));
         edit.setPadding(dp(12), 0, dp(12), 0);
         if (lines > 1) {
@@ -303,9 +323,8 @@ protected EditText numberControl(LinearLayout root, String title, String value, 
         edit.setInputType(InputType.TYPE_CLASS_NUMBER);
         edit.setGravity(Gravity.CENTER);
         edit.setSingleLine(true);
-        edit.setTextColor(COLOR_TEXT);
         edit.setTextSize(16f);
-        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(edit);
         edit.setPadding(0, 0, 0, 0);
         Button plus = stepButton("+");
 
@@ -343,6 +362,20 @@ protected Switch switchControl(LinearLayout root, String title, boolean checked)
                 1f));
         Switch switchView = new Switch(this);
         switchView.setChecked(checked);
+        switchView.setThumbTintList(new android.content.res.ColorStateList(
+                new int[][]{
+                        new int[]{android.R.attr.state_checked},
+                        new int[]{-android.R.attr.state_enabled},
+                        new int[]{}
+                },
+                new int[]{COLOR_ACCENT_DARK, alphaColor(COLOR_MUTED, 104), COLOR_MUTED}));
+        switchView.setTrackTintList(new android.content.res.ColorStateList(
+                new int[][]{
+                        new int[]{android.R.attr.state_checked},
+                        new int[]{-android.R.attr.state_enabled},
+                        new int[]{}
+                },
+                new int[]{COLOR_ACCENT_SOFT, alphaColor(COLOR_CONTROL, 132), COLOR_CONTROL}));
         row.addView(switchView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -367,13 +400,18 @@ protected Button stepButton(String text) {
         button.setText(text);
         button.setTextSize(18f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setTextColor(COLOR_ACCENT_DARK);
+        button.setTextColor(interactiveTextColors(
+                COLOR_ACCENT_DARK,
+                Color.rgb(245, 246, 255)));
         button.setAllCaps(false);
         button.setIncludeFontPadding(false);
         button.setMinHeight(0);
         button.setMinWidth(0);
         button.setPadding(0, 0, 0, 0);
-        button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        button.setBackground(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 110),
+                COLOR_ACCENT));
         flattenButton(button);
         return button;
     }
