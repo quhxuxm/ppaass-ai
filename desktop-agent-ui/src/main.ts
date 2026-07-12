@@ -5,6 +5,8 @@ import "primeicons/primeicons.css";
 import "./styles.css";
 import App from "./App.vue";
 
+document.documentElement.classList.add("app-dark");
+
 createApp(App)
   .use(PrimeVue, {
     theme: {
