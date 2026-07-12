@@ -132,8 +132,12 @@ protected int cardAccent(int index) {
     }
 
 protected GradientDrawable iconPlateBackground(int color) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(alphaColor(color, 24));
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{
+                        alphaColor(color, 46),
+                        alphaColor(color, 14)
+                });
         drawable.setCornerRadius(dp(10));
         drawable.setStroke(dp(1), alphaColor(color, 108));
         return drawable;
@@ -197,14 +201,28 @@ protected void styleInput(EditText edit) {
 protected ImageView iconPlate(int icon, int color) {
         ImageView view = new ImageView(this);
         view.setImageResource(icon);
-        view.setColorFilter(color);
+        view.setImageTintList(interactiveTextColors(
+                color,
+                Color.rgb(245, 246, 255)));
         view.setBackground(iconPlateBackground(color));
         view.setPadding(dp(4), dp(4), dp(4), dp(4));
         view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         return view;
     }
 
-protected int sectionIconColor() {
+protected int sectionIconColor(String text) {
+        if (text.contains("实时") || text.contains("连通")) {
+            return COLOR_STATUS_RUNNING;
+        }
+        if (text.contains("流量") || text.contains("TCP") || text.contains("UDP")) {
+            return COLOR_ACTION_START;
+        }
+        if (text.contains("DNS") || text.contains("连接") || text.contains("应用")) {
+            return COLOR_ACCENT;
+        }
+        if (text.contains("代理") || text.contains("直连") || text.contains("规则")) {
+            return COLOR_ACTION_WARN;
+        }
         return COLOR_ACCENT_DARK;
     }
 
@@ -741,7 +759,7 @@ protected void sectionTitle(LinearLayout root, String text) {
         LinearLayout row = horizontalRow();
         row.setPadding(0, 0, 0, dp(6));
 
-        ImageView icon = iconPlate(sectionIconResource(text), sectionIconColor());
+        ImageView icon = iconPlate(sectionIconResource(text), sectionIconColor(text));
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(32), dp(32));
         iconParams.setMargins(0, 0, dp(8), 0);
         row.addView(icon, iconParams);

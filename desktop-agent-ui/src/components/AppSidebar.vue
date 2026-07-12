@@ -25,7 +25,9 @@ const emit = defineEmits<{
 <template>
   <aside :class="['sidebar', { collapsed }]">
     <div class="brand">
-      <div class="brand-mark">P</div>
+      <div class="brand-mark">
+        <img src="/app-icon.png" alt="" aria-hidden="true" />
+      </div>
       <div class="brand-copy">
         <div class="brand-title">PPAASS</div>
         <div class="brand-subtitle">桌面代理</div>
@@ -55,9 +57,7 @@ const emit = defineEmits<{
         @click="emit('update:activeTab', tab.key)"
       >
         <template #icon="slotProps">
-          <span :class="[slotProps.class, 'nav-icon-plate']">
-            <AppIcon :name="tab.icon" />
-          </span>
+          <AppIcon :class="[slotProps.class, 'nav-icon-plate']" :name="tab.icon" />
         </template>
       </Button>
     </nav>

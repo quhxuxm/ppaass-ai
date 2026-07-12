@@ -1,33 +1,99 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="PPAASS Agent icon">
   <defs>
-    <filter id="shadow" x="-18%" y="-18%" width="136%" height="136%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="30" stdDeviation="30" flood-color="#155ee8" flood-opacity="0.14"/>
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#1f2937" flood-opacity="0.08"/>
+    <linearGradient id="plate" x1="160" y1="116" x2="866" y2="916" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0d1520"/>
+      <stop offset="0.52" stop-color="#05090d"/>
+      <stop offset="1" stop-color="#020406"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="148" y1="132" x2="876" y2="886" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8f9cff"/>
+      <stop offset="0.52" stop-color="#ff709b"/>
+      <stop offset="1" stop-color="#69efae"/>
+    </linearGradient>
+    <linearGradient id="route" x1="330" y1="724" x2="796" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#69efae"/>
+      <stop offset="0.34" stop-color="#8f9cff"/>
+      <stop offset="0.72" stop-color="#b890ff"/>
+      <stop offset="1" stop-color="#ff709b"/>
+    </linearGradient>
+    <radialGradient id="violet-wash" cx="0" cy="0" r="1" gradientTransform="translate(228 188) rotate(48) scale(416)">
+      <stop stop-color="#8f9cff" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#8f9cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rose-wash" cx="0" cy="0" r="1" gradientTransform="translate(850 310) rotate(138) scale(318)">
+      <stop stop-color="#ff709b" stop-opacity="0.19"/>
+      <stop offset="1" stop-color="#ff709b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mint-wash" cx="0" cy="0" r="1" gradientTransform="translate(760 856) rotate(-132) scale(350)">
+      <stop stop-color="#69efae" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#69efae" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="plate-shadow" x="-20%" y="-20%" width="140%" height="148%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="30" stdDeviation="34" flood-color="#000000" flood-opacity="0.52"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#8f9cff" flood-opacity="0.12"/>
+    </filter>
+    <filter id="route-glow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="0" stdDeviation="22" flood-color="#8f9cff" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.46"/>
     </filter>
     <clipPath id="plate-clip">
-      <rect x="64" y="64" width="896" height="896" rx="220"/>
+      <rect x="64" y="64" width="896" height="896" rx="224"/>
     </clipPath>
   </defs>
 
-  <rect x="64" y="64" width="896" height="896" rx="220" fill="#ffffff" filter="url(#shadow)"/>
-  <rect x="74" y="74" width="876" height="876" rx="210" fill="none" stroke="#d7e4ff" stroke-width="20"/>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#plate)" filter="url(#plate-shadow)"/>
 
   <g clip-path="url(#plate-clip)">
-    <circle cx="244" cy="208" r="168" fill="#eaf1ff"/>
-    <circle cx="842" cy="184" r="128" fill="#fff0a6" opacity="0.72"/>
-    <circle cx="866" cy="810" r="172" fill="#d9f8ec" opacity="0.82"/>
-    <circle cx="128" cy="840" r="150" fill="#ffd9ea" opacity="0.76"/>
-    <rect x="148" y="788" width="728" height="42" rx="21" fill="#eaf1ff"/>
+    <rect x="64" y="64" width="896" height="896" fill="url(#violet-wash)"/>
+    <rect x="64" y="64" width="896" height="896" fill="url(#rose-wash)"/>
+    <rect x="64" y="64" width="896" height="896" fill="url(#mint-wash)"/>
+
+    <g fill="#d9ddff" opacity="0.09">
+      <circle cx="188" cy="286" r="8"/>
+      <circle cx="188" cy="512" r="8"/>
+      <circle cx="188" cy="738" r="8"/>
+      <circle cx="836" cy="286" r="8"/>
+      <circle cx="836" cy="512" r="8"/>
+      <circle cx="836" cy="738" r="8"/>
+    </g>
+
+    <path d="M190 832C304 754 398 820 500 746C608 668 710 710 846 620" fill="none" stroke="#8f9cff" stroke-width="12" stroke-linecap="round" opacity="0.07"/>
   </g>
 
-  <path d="M316 754V270h262c145 0 238 84 238 212 0 130-93 216-238 216H464v56H316Zm148-188h98c66 0 105-31 105-84 0-51-39-82-105-82h-98v166Z" fill="#155ee8"/>
-  <path d="M464 400h98c66 0 105 31 105 82 0 53-39 84-105 84h-98V400Z" fill="#ffffff" opacity="0.94"/>
+  <rect x="73" y="73" width="878" height="878" rx="215" fill="none" stroke="url(#rim)" stroke-width="18" opacity="0.7"/>
+  <rect x="91" y="91" width="842" height="842" rx="198" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.08"/>
 
-  <rect x="270" y="780" width="164" height="28" rx="14" fill="#e51670"/>
-  <rect x="450" y="780" width="164" height="28" rx="14" fill="#f2c100"/>
-  <rect x="630" y="780" width="128" height="28" rx="14" fill="#00b985"/>
-  <circle cx="786" cy="794" r="18" fill="#155ee8"/>
+  <path
+    d="M340 770V302C340 246 384 206 440 206H604C737 206 816 282 816 400C816 518 737 594 604 594H340"
+    fill="none"
+    stroke="#10172a"
+    stroke-width="158"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.94"/>
+  <path
+    d="M340 770V302C340 246 384 206 440 206H604C737 206 816 282 816 400C816 518 737 594 604 594H340"
+    fill="none"
+    stroke="url(#route)"
+    stroke-width="112"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#route-glow)"/>
+  <path
+    d="M340 770V302C340 246 384 206 440 206H604C737 206 816 282 816 400"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="12"
+    stroke-linecap="round"
+    opacity="0.18"/>
 
-  <path d="M722 314c48 30 84 72 106 124" fill="none" stroke="#155ee8" stroke-width="18" stroke-linecap="round" opacity="0.24"/>
-  <path d="M250 244c72-42 150-60 234-54" fill="none" stroke="#e51670" stroke-width="18" stroke-linecap="round" opacity="0.18"/>
+  <path d="M474 400H612" fill="none" stroke="#d9ddff" stroke-width="20" stroke-linecap="round" opacity="0.66"/>
+  <circle cx="632" cy="400" r="52" fill="#69efae" opacity="0.1"/>
+  <circle cx="632" cy="400" r="28" fill="#69efae"/>
+  <circle cx="632" cy="400" r="8" fill="#f7fcff"/>
+
+  <circle cx="340" cy="770" r="34" fill="#69efae"/>
+  <circle cx="340" cy="770" r="10" fill="#f7fcff"/>
+  <circle cx="816" cy="400" r="30" fill="#ff709b"/>
+  <circle cx="816" cy="400" r="8" fill="#fff4f7"/>
 </svg>

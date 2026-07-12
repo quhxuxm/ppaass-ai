@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PPAASS Agent tray icon">
+  <path
+    d="M18 54V18c0-5 4-8 9-8h10c10 0 16 6 16 14s-6 14-16 14H18"
+    fill="none"
+    stroke="#000000"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
+  <path d="M29 24h9" fill="none" stroke="#000000" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="42" cy="24" r="3" fill="#000000"/>
+</svg>

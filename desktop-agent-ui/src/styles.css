@@ -6211,18 +6211,59 @@ html.app-dark .rule-scope-item:hover > i {
     0 0 20px var(--icon-glow) !important;
 }
 
-/* Unified desktop icon language: one rounded 1.9px stroke family, with semantic color only for state. */
+/* Unified duotone icon language: consistent geometry, fixed semantic hues and a restrained neon accent. */
 .app-icon {
-  display: block;
+  --icon-rgb: 143, 156, 255;
+  --icon-color: #c3c9ff;
+  --icon-bright: #eef0ff;
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  place-items: center;
   width: 1em;
   height: 1em;
   flex: 0 0 auto;
+  color: var(--icon-color);
+  line-height: 0;
+}
+
+.app-icon-glyph {
+  z-index: 1;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
   overflow: visible;
   fill: none;
+  color: inherit !important;
   stroke: currentColor;
-  stroke-width: 1.9;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(var(--icon-rgb), 0.2));
+}
+
+.app-icon[data-tone="rose"] {
+  --icon-rgb: 255, 112, 155;
+  --icon-color: #ff9cbd;
+  --icon-bright: #fff0f5;
+}
+
+.app-icon[data-tone="mint"] {
+  --icon-rgb: 105, 239, 174;
+  --icon-color: #91f4c1;
+  --icon-bright: #edfff6;
+}
+
+.app-icon[data-tone="amber"] {
+  --icon-rgb: 249, 211, 102;
+  --icon-color: #f9db7e;
+  --icon-bright: #fff9e8;
+}
+
+.app-icon[data-tone="sky"] {
+  --icon-rgb: 108, 190, 255;
+  --icon-color: #8dccff;
+  --icon-bright: #edf8ff;
 }
 
 .p-button .app-icon {
@@ -6230,7 +6271,7 @@ html.app-dark .rule-scope-item:hover > i {
   height: 15px;
 }
 
-.app-icon-spin {
+.app-icon-spin .app-icon-glyph {
   animation: app-icon-spin 0.85s linear infinite;
 }
 
@@ -6240,24 +6281,23 @@ html.app-dark .rule-scope-item:hover > i {
   }
 }
 
-html.app-dark .nav-button.p-button {
-  --icon-accent: #b8c0ff;
-  --icon-plate: rgba(143, 156, 255, 0.1);
-  --icon-border: rgba(143, 156, 255, 0.27);
-  --icon-glow: transparent;
-}
-
 html.app-dark .nav-button.p-button .nav-icon-plate.p-button-icon {
   display: inline-grid;
   place-items: center;
-  width: 28px !important;
-  height: 28px !important;
-  flex: 0 0 28px !important;
-  border: 1px solid rgba(143, 156, 255, 0.27) !important;
-  border-radius: 8px !important;
-  background: rgba(143, 156, 255, 0.1) !important;
-  color: #b8c0ff !important;
-  box-shadow: inset 0 1px 0 rgba(245, 247, 255, 0.06) !important;
+  box-sizing: border-box;
+  width: 29px !important;
+  height: 29px !important;
+  flex: 0 0 29px !important;
+  padding: 5px;
+  border: 1px solid rgba(var(--icon-rgb), 0.38) !important;
+  border-radius: 9px !important;
+  background:
+    radial-gradient(circle at 78% 18%, rgba(var(--icon-rgb), 0.28), transparent 38%),
+    linear-gradient(145deg, rgba(var(--icon-rgb), 0.18), rgba(143, 156, 255, 0.055)) !important;
+  color: var(--icon-color) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(245, 247, 255, 0.09),
+    0 0 12px rgba(var(--icon-rgb), 0.07) !important;
   transition:
     border-color 0.16s ease,
     background-color 0.16s ease,
@@ -6265,17 +6305,14 @@ html.app-dark .nav-button.p-button .nav-icon-plate.p-button-icon {
     transform 0.16s ease;
 }
 
-html.app-dark .nav-button.p-button .nav-icon-plate .app-icon {
-  width: 16px;
-  height: 16px;
-}
-
 html.app-dark .nav-button.p-button:hover .nav-icon-plate,
 html.app-dark .nav-button.p-button.active .nav-icon-plate {
-  border-color: rgba(174, 184, 255, 0.55) !important;
-  background: rgba(143, 156, 255, 0.2) !important;
-  color: #f3f4ff !important;
-  transform: translateY(-1px);
+  border-color: rgba(var(--icon-rgb), 0.68) !important;
+  background:
+    radial-gradient(circle at 78% 18%, rgba(var(--icon-rgb), 0.42), transparent 38%),
+    linear-gradient(145deg, rgba(var(--icon-rgb), 0.28), rgba(143, 156, 255, 0.18)) !important;
+  color: var(--icon-bright) !important;
+  transform: translateY(-1px) scale(1.025);
 }
 
 html.app-dark .metric-tile > .app-icon,
@@ -6287,14 +6324,18 @@ html.app-dark .overview-drag-ghost-heading > .app-icon,
 html.app-dark .forwarding-method > .app-icon,
 html.app-dark .rule-scope-item > .app-icon,
 html.app-dark .rule-group-heading .app-icon {
-  --line-icon-color: #b8c0ff;
-  --line-icon-background: rgba(143, 156, 255, 0.1);
-  --line-icon-border: rgba(143, 156, 255, 0.27);
+  --line-icon-color: var(--icon-color);
+  --line-icon-background:
+    radial-gradient(circle at 78% 18%, rgba(var(--icon-rgb), 0.3), transparent 38%),
+    linear-gradient(145deg, rgba(var(--icon-rgb), 0.19), rgba(143, 156, 255, 0.05));
+  --line-icon-border: rgba(var(--icon-rgb), 0.4);
   box-sizing: border-box;
   border: 1px solid var(--line-icon-border);
   background: var(--line-icon-background);
   color: var(--line-icon-color);
-  box-shadow: inset 0 1px 0 rgba(245, 247, 255, 0.055);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 247, 255, 0.09),
+    0 0 14px rgba(var(--icon-rgb), 0.055);
   transition:
     border-color 0.16s ease,
     background-color 0.16s ease,
@@ -6302,69 +6343,92 @@ html.app-dark .rule-group-heading .app-icon {
     transform 0.16s ease;
 }
 
+html.app-dark .nav-icon-plate::after,
+html.app-dark .metric-tile > .app-icon::after,
+html.app-dark .endpoint-row > .app-icon::after,
+html.app-dark .dns-empty > .app-icon::after,
+html.app-dark .rule-scope-note > .app-icon::after,
+html.app-dark .field > span > .app-icon::after,
+html.app-dark .overview-drag-ghost-heading > .app-icon::after,
+html.app-dark .forwarding-method > .app-icon::after,
+html.app-dark .rule-scope-item > .app-icon::after,
+html.app-dark .rule-group-heading .app-icon::after,
+html.app-dark .empty-state > .app-icon::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 2;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgb(var(--icon-rgb));
+  box-shadow: 0 0 7px rgba(var(--icon-rgb), 0.82);
+}
+
 html.app-dark .metric-tile > .app-icon {
-  width: 30px;
-  height: 30px;
+  width: 31px;
+  height: 31px;
   padding: 5px;
   border-radius: 9px;
 }
 
 html.app-dark .metric-tile {
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: 31px minmax(0, 1fr);
 }
 
 html.app-dark .endpoint-row > .app-icon {
-  width: 28px;
-  height: 28px;
-  padding: 5px;
-  border-radius: 8px;
-}
-
-html.app-dark .dns-empty > .app-icon {
-  width: 34px;
-  height: 34px;
-  padding: 6px;
-  border-radius: 10px;
-}
-
-html.app-dark .field > span > .app-icon,
-html.app-dark .rule-group-heading .app-icon {
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border-radius: 7px;
-}
-
-html.app-dark .forwarding-method > .app-icon {
-  width: 38px;
-  height: 38px;
-  padding: 7px;
-  border-radius: 10px;
-}
-
-html.app-dark .rule-scope-item > .app-icon {
-  width: 34px;
-  height: 34px;
+  width: 29px;
+  height: 29px;
   padding: 5px;
   border-radius: 9px;
 }
 
+html.app-dark .dns-empty > .app-icon {
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+  border-radius: 11px;
+}
+
+html.app-dark .field > span > .app-icon,
+html.app-dark .rule-group-heading .app-icon {
+  width: 25px;
+  height: 25px;
+  padding: 4px;
+  border-radius: 8px;
+}
+
+html.app-dark .forwarding-method > .app-icon {
+  width: 39px;
+  height: 39px;
+  padding: 7px;
+  border-radius: 11px;
+}
+
+html.app-dark .rule-scope-item > .app-icon {
+  width: 35px;
+  height: 35px;
+  padding: 5px;
+  border-radius: 10px;
+}
+
 html.app-dark .rule-scope-note {
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 25px minmax(0, 1fr);
 }
 
 html.app-dark .rule-scope-note > .app-icon {
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   padding: 4px;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 html.app-dark .overview-drag-ghost-heading > .app-icon {
-  width: 28px;
-  height: 28px;
+  width: 29px;
+  height: 29px;
   padding: 5px;
-  border-radius: 8px;
+  border-radius: 9px;
 }
 
 html.app-dark .overview-drag-handle > .app-icon {
@@ -6374,45 +6438,70 @@ html.app-dark .overview-drag-handle > .app-icon {
 }
 
 html.app-dark .app-icon.semantic-success {
-  --line-icon-color: #8fffc4;
-  --line-icon-background: rgba(98, 245, 166, 0.1);
-  --line-icon-border: rgba(98, 245, 166, 0.28);
+  --icon-rgb: 105, 239, 174;
+  --icon-color: #91f4c1;
+  --icon-bright: #edfff6;
 }
 
 html.app-dark .app-icon.semantic-warning {
-  --line-icon-color: #ffeb8a;
-  --line-icon-background: rgba(255, 229, 92, 0.1);
-  --line-icon-border: rgba(255, 229, 92, 0.28);
+  --icon-rgb: 249, 211, 102;
+  --icon-color: #f9db7e;
+  --icon-bright: #fff9e8;
 }
 
 html.app-dark .app-icon.semantic-danger {
-  --line-icon-color: #ff9bbb;
-  --line-icon-background: rgba(255, 92, 145, 0.1);
-  --line-icon-border: rgba(255, 92, 145, 0.28);
+  --icon-rgb: 255, 112, 155;
+  --icon-color: #ff9cbd;
+  --icon-bright: #fff0f5;
 }
 
 html.app-dark .metric-tile:hover > .app-icon,
 html.app-dark .endpoint-row:hover > .app-icon,
 html.app-dark .forwarding-method:hover > .app-icon,
 html.app-dark .rule-scope-item:hover > .app-icon {
-  --line-icon-color: #f3f4ff;
-  --line-icon-background: rgba(143, 156, 255, 0.2);
-  --line-icon-border: rgba(174, 184, 255, 0.5);
+  --line-icon-color: var(--icon-bright);
+  --line-icon-background:
+    radial-gradient(circle at 78% 18%, rgba(var(--icon-rgb), 0.46), transparent 40%),
+    linear-gradient(145deg, rgba(var(--icon-rgb), 0.29), rgba(143, 156, 255, 0.14));
+  --line-icon-border: rgba(var(--icon-rgb), 0.66);
   filter: none;
-  transform: translateY(-1px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
+  transform: translateY(-1px) scale(1.025);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 18px rgba(var(--icon-rgb), 0.11) !important;
 }
 
 html.app-dark .p-button:not(:disabled):hover .app-icon {
-  color: #f7f8ff;
+  color: #f8f8ff !important;
 }
 
 html.app-dark .empty-state > .app-icon {
+  --line-icon-color: var(--icon-color);
+  --line-icon-background:
+    radial-gradient(circle at 78% 18%, rgba(var(--icon-rgb), 0.34), transparent 40%),
+    linear-gradient(145deg, rgba(var(--icon-rgb), 0.2), rgba(143, 156, 255, 0.06));
+  --line-icon-border: rgba(var(--icon-rgb), 0.44);
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  padding: 8px;
+  border: 1px solid var(--line-icon-border);
+  border-radius: 13px;
+  background: var(--line-icon-background);
+  color: var(--line-icon-color);
+}
+
+/* The in-app brand uses the same master artwork as Dock, launcher and installer icons. */
+html.app-dark .brand-mark {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html.app-dark .brand-mark img {
+  display: block;
   width: 42px;
   height: 42px;
-  padding: 8px;
-  border: 1px solid var(--line-icon-border, rgba(255, 229, 92, 0.28));
-  border-radius: 12px;
-  background: var(--line-icon-background, rgba(255, 229, 92, 0.1));
-  color: var(--line-icon-color, #ffeb8a);
+  max-width: none;
 }

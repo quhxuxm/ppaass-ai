@@ -107,6 +107,59 @@ export const appIconNodes = {
 
 export type AppIconName = keyof typeof appIconNodes;
 
+type AppIconTone = "violet" | "rose" | "mint" | "amber" | "sky";
+
+const appIconTones: Record<AppIconName, AppIconTone> = {
+  activity: "sky",
+  "alert-circle": "rose",
+  asterisk: "amber",
+  building: "mint",
+  chart: "rose",
+  "check-circle": "mint",
+  "chevron-left": "violet",
+  "chevron-right": "violet",
+  "circle-plus": "violet",
+  clock: "amber",
+  cloud: "sky",
+  code: "mint",
+  compass: "mint",
+  cpu: "amber",
+  database: "sky",
+  ellipsis: "violet",
+  globe: "sky",
+  hash: "amber",
+  "heart-pulse": "rose",
+  info: "sky",
+  key: "amber",
+  "layout-dashboard": "violet",
+  loader: "violet",
+  "map-pin": "rose",
+  monitor: "violet",
+  move: "violet",
+  network: "rose",
+  package: "violet",
+  panels: "sky",
+  play: "mint",
+  plus: "violet",
+  "radio-tower": "sky",
+  refresh: "sky",
+  restore: "amber",
+  route: "mint",
+  save: "violet",
+  "scroll-text": "rose",
+  send: "mint",
+  server: "sky",
+  settings: "amber",
+  share: "rose",
+  "shield-check": "mint",
+  stop: "rose",
+  timer: "amber",
+  "triangle-alert": "amber",
+  user: "rose",
+  waypoints: "mint",
+  zap: "amber"
+};
+
 export default defineComponent({
   name: "AppIcon",
   inheritAttrs: false,
@@ -128,16 +181,28 @@ export default defineComponent({
         : { "aria-hidden": "true" };
 
       return h(
-        "svg",
+        "span",
         {
-          ...baseAttributes,
           ...accessibleAttributes,
           ...attrs,
-          class: ["app-icon", attrs.class]
+          class: ["app-icon", attrs.class],
+          "data-icon": props.name,
+          "data-tone": appIconTones[props.name]
         },
         [
-          props.title ? h("title", props.title) : null,
-          ...children.map(([tag, attributes], index) => h(tag, { ...attributes, key: index }))
+          h(
+            "svg",
+            {
+              ...baseAttributes,
+              class: "app-icon-glyph",
+              "aria-hidden": "true",
+              focusable: "false"
+            },
+            [
+              props.title ? h("title", props.title) : null,
+              ...children.map(([tag, attributes], index) => h(tag, { ...attributes, key: index }))
+            ]
+          )
         ]
       );
     };

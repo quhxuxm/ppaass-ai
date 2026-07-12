@@ -28,7 +28,9 @@ const TRAY_SHOW_ID: &str = "show";
 const TRAY_TUN_ID: &str = "tun-enabled";
 #[cfg(any(windows, target_os = "macos"))]
 const TRAY_EXIT_ID: &str = "exit";
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+#[cfg(windows)]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -92,6 +94,9 @@ pub(crate) fn setup_system_tray(
                 restore_main_window(tray.app_handle());
             }
         });
+
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
 
     tray_builder
         .build(app)
