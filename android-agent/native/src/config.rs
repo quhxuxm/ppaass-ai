@@ -19,6 +19,11 @@ pub struct AndroidAgentConfig {
     #[serde(default)]
     pub transport_mode: TransportMode,
 
+    /// TCP 与 UDP manager 各自维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
+    /// 避免一个应用的丢包同时卡住所有应用。
+    #[serde(default = "default_quic_connection_pool_size")]
+    pub quic_connection_pool_size: usize,
+
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
@@ -101,6 +106,11 @@ impl AndroidAgentConfig {
         }
         Ok(())
     }
+
+    /// 限制连接池的 socket/内存开销，同时避免错误配置 0 导致轮询取模崩溃。
+    pub fn effective_quic_connection_pool_size(&self) -> usize {
+        self.quic_connection_pool_size.clamp(1, 8)
+    }
 }
 
 impl ClientConnectionConfig for AndroidAgentConfig {
@@ -143,6 +153,10 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_quic_connection_pool_size() -> usize {
+    4
 }
 
 fn default_http_proxy_max_concurrent_connects() -> usize {
@@ -195,6 +209,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.transport_mode, TransportMode::Quic);
+    }
+
+    #[test]
+    fn quic_connection_pool_defaults_to_four_and_is_bounded() {
+        let default_config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
+        )
+        .unwrap();
+        assert_eq!(default_config.effective_quic_connection_pool_size(), 4);
+
+        let disabled: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","quic_connection_pool_size":0}"#,
+        )
+        .unwrap();
+        assert_eq!(disabled.effective_quic_connection_pool_size(), 1);
+
+        let excessive: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","quic_connection_pool_size":64}"#,
+        )
+        .unwrap();
+        assert_eq!(excessive.effective_quic_connection_pool_size(), 8);
     }
 
     #[test]

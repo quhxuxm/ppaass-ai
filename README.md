@@ -8,7 +8,7 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **QUIC by Default**: Agent traffic uses multiplexed QUIC bidirectional streams by default, with the previous TCP/Yamux path available as a compatibility mode
+- **QUIC by Default**: Desktop and Android agents use configurable QUIC connection pools with multiplexed bidirectional streams by default, with the previous TCP/Yamux path available as a compatibility mode
 - **Encrypted PPAASS Frames**: The existing RSA authentication and AES-256-GCM encrypted Auth/Connect/Data frames are unchanged inside both QUIC and TCP transports
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
@@ -82,6 +82,7 @@ proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
 transport_mode = "quic"              # quic (default) or tcp compatibility mode
+quic_connection_pool_size = 4         # 1-8; independent QUIC congestion windows per TCP/UDP manager
 connection_timeout_secs = 30                # Connection timeout
 
 [yamux.udp]
@@ -115,7 +116,7 @@ The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured por
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **QUIC Multiplexing**: TCP and UDP targets use independent QUIC bidirectional streams without cross-stream TCP head-of-line blocking
+- **QUIC Multiplexing**: TCP and UDP targets use configurable connection pools and independent QUIC bidirectional streams without cross-stream TCP head-of-line blocking
 - **TCP Compatibility**: TCP targets retain independent framed connections and UDP relay retains Yamux when `transport_mode = "tcp"`
 - **Zero-Copy**: Efficient buffer management with bytes crate
 

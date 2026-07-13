@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportMode {
-    /// QUIC 连接上的独立双向流。避免 TCP 队头阻塞，并复用一条 UDP 连接。
+    /// QUIC 连接上的独立双向流。避免 TCP 队头阻塞，并可通过连接池分散拥塞窗口。
     #[default]
     Quic,
     /// 兼容旧版本 proxy 的 TCP/Yamux 传输。

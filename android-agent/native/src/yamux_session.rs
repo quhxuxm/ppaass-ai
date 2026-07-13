@@ -34,15 +34,25 @@ struct AndroidYamuxSession {
     connection: YamuxClientConnection,
 }
 
+#[derive(Clone)]
+struct AndroidQuicConnection {
+    id: usize,
+    connection: QuicClientConnection,
+}
+
 pub struct AndroidYamuxSessionManager {
     config: Arc<AndroidAgentConfig>,
     shutdown: CancellationToken,
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
-    quic_connection: Mutex<Option<QuicClientConnection>>,
+    // 每个 slot 拥有独立 QUIC connection/UDP socket/拥塞窗口。slot 级锁使首次
+    // 并发建连可以平行进行，不会被一把全局锁串行化。
+    quic_connections: Vec<Mutex<Option<AndroidQuicConnection>>>,
     yamux_refill_lock: Mutex<()>,
     direct_tcp_connects: Semaphore,
+    quic_next_index: AtomicUsize,
+    quic_next_connection_id: AtomicUsize,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
 }
@@ -78,15 +88,18 @@ impl AndroidYamuxSessionManager {
         let direct_tcp_connect_limit = config
             .http_proxy_max_concurrent_connects
             .clamp(1, MAX_CONFIGURED_DIRECT_TCP_CONNECTS);
+        let quic_pool_size = config.effective_quic_connection_pool_size();
         Arc::new(Self {
             config,
             shutdown,
             manager_name,
             yamux_transport,
             yamux_sessions: Mutex::new(Vec::new()),
-            quic_connection: Mutex::new(None),
+            quic_connections: (0..quic_pool_size).map(|_| Mutex::new(None)).collect(),
             yamux_refill_lock: Mutex::new(()),
             direct_tcp_connects: Semaphore::new(direct_tcp_connect_limit),
+            quic_next_index: AtomicUsize::new(0),
+            quic_next_connection_id: AtomicUsize::new(0),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
         })
@@ -124,29 +137,61 @@ impl AndroidYamuxSessionManager {
                 "Android agent is stopping".into(),
             ));
         }
+        let slot_index = self.next_quic_connection_slot();
         for attempt in 0..2 {
-            let connection = {
-                let mut current = self.quic_connection.lock().await;
-                if current.as_ref().is_none_or(QuicClientConnection::is_closed) {
-                    *current = Some(
-                        QuicClientConnection::connect(self.config.as_ref())
-                            .await
-                            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?,
+            let handle = {
+                let mut current = self.quic_connections[slot_index].lock().await;
+                if current
+                    .as_ref()
+                    .is_none_or(|handle| handle.connection.is_closed())
+                {
+                    let connection = QuicClientConnection::connect(self.config.as_ref())
+                        .await
+                        .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+                    let connection_id = self.quic_next_connection_id.fetch_add(1, Ordering::AcqRel);
+                    debug!(
+                        manager = self.manager_name,
+                        slot = slot_index,
+                        connection_id,
+                        "Android QUIC connection pool slot established"
                     );
+                    *current = Some(AndroidQuicConnection {
+                        id: connection_id,
+                        connection,
+                    });
                 }
                 current
                     .as_ref()
                     .expect("Android QUIC connection initialized")
                     .clone()
             };
-            match connection
+            match handle
+                .connection
                 .connect_to_target(self.config.as_ref(), address.clone(), transport)
                 .await
             {
                 Ok((stream, _)) => return Ok(AndroidYamuxTargetStream::Quic(stream)),
-                Err(err) if attempt == 0 && connection.is_closed() => {
-                    *self.quic_connection.lock().await = None;
-                    warn!("Android QUIC connection closed; reconnecting: {err}");
+                Err(err) if attempt == 0 && handle.connection.is_closed() => {
+                    let stats = handle.connection.stats();
+                    let mut current = self.quic_connections[slot_index].lock().await;
+                    // 只移除本次失败的旧连接。并发任务可能已在该 slot 建立了
+                    // 新连接，不能无条件清空它。
+                    if current
+                        .as_ref()
+                        .is_some_and(|current| current.id == handle.id)
+                    {
+                        *current = None;
+                    }
+                    warn!(
+                        manager = self.manager_name,
+                        slot = slot_index,
+                        connection_id = handle.id,
+                        rtt_ms = stats.path.rtt.as_millis(),
+                        cwnd = stats.path.cwnd,
+                        lost_packets = stats.path.lost_packets,
+                        congestion_events = stats.path.congestion_events,
+                        "Android QUIC proxy connection closed; rebuilding only this pool slot: {err}"
+                    );
                 }
                 Err(err) => return Err(AndroidAgentError::Connection(err.to_string())),
             }
@@ -154,6 +199,11 @@ impl AndroidYamuxSessionManager {
         Err(AndroidAgentError::Connection(
             "Android QUIC proxy connection failed".into(),
         ))
+    }
+
+    fn next_quic_connection_slot(&self) -> usize {
+        // AndroidAgentConfig 已把 pool size 夹到至少 1，因此这里不会除以 0。
+        self.quic_next_index.fetch_add(1, Ordering::AcqRel) % self.quic_connections.len()
     }
 
     async fn open_direct_tcp_stream(&self, address: Address) -> Result<AndroidYamuxTargetStream> {
@@ -557,6 +607,12 @@ fn target_label(address: &Address) -> String {
 mod tests {
     use super::*;
 
+    const MINIMAL_AGENT_CONFIG: &str = r#"{
+        "proxy_addrs": ["127.0.0.1:8080"],
+        "username": "user1",
+        "private_key_pem": "key"
+    }"#;
+
     #[test]
     fn yamux_session_errors_do_not_close_session_for_target_timeouts() {
         assert!(is_yamux_actual_target_connect_error(
@@ -576,5 +632,18 @@ mod tests {
         assert!(is_yamux_actual_target_connect_error(
             "连接失败: Connection refused"
         ));
+    }
+
+    #[test]
+    fn quic_pool_round_robins_across_independent_connections() {
+        let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        let manager =
+            AndroidYamuxSessionManager::new_tcp_direct(Arc::new(config), CancellationToken::new());
+
+        assert_eq!(manager.quic_connections.len(), 4);
+        let slots: Vec<_> = (0..10)
+            .map(|_| manager.next_quic_connection_slot())
+            .collect();
+        assert_eq!(slots, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
     }
 }

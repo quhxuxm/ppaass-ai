@@ -39,20 +39,33 @@ impl YamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<YamuxTargetStream> {
+        let slot_index = self.next_quic_connection_slot();
         for attempt in 0..2 {
-            let connection = {
-                let mut current = self.quic_connection.lock().await;
-                if current.as_ref().is_none_or(QuicClientConnection::is_closed) {
+            let handle = {
+                let mut current = self.quic_connections[slot_index].lock().await;
+                if current
+                    .as_ref()
+                    .is_none_or(|handle| handle.connection.is_closed())
+                {
                     let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new(
                         &self.config,
                         self.get_proxy_bind_ip(),
                         self.get_proxy_bind_interface(),
                     );
-                    *current = Some(
-                        QuicClientConnection::connect(&adapter)
-                            .await
-                            .map_err(|err| AgentError::Connection(err.to_string()))?,
+                    let connection = QuicClientConnection::connect(&adapter)
+                        .await
+                        .map_err(|err| AgentError::Connection(err.to_string()))?;
+                    let connection_id = self.quic_next_connection_id.fetch_add(1, Ordering::AcqRel);
+                    debug!(
+                        manager = self.manager_name,
+                        slot = slot_index,
+                        connection_id,
+                        "QUIC 连接池 slot 已建立"
                     );
+                    *current = Some(QuicConnectionHandle {
+                        id: connection_id,
+                        connection,
+                    });
                 }
                 current
                     .as_ref()
@@ -65,16 +78,35 @@ impl YamuxSessionManager {
                 self.get_proxy_bind_ip(),
                 self.get_proxy_bind_interface(),
             );
-            match connection
+            match handle
+                .connection
                 .connect_to_target(&adapter, address.clone(), transport)
                 .await
             {
                 Ok((stream, stream_id)) => {
                     return Ok(YamuxTargetStream::new_quic(stream, stream_id));
                 }
-                Err(err) if attempt == 0 && connection.is_closed() => {
-                    *self.quic_connection.lock().await = None;
-                    warn!("QUIC proxy 连接已关闭，重新握手后重试：{err}");
+                Err(err) if attempt == 0 && handle.connection.is_closed() => {
+                    let stats = handle.connection.stats();
+                    let mut current = self.quic_connections[slot_index].lock().await;
+                    // 只移除本次失败的旧连接。并发任务可能已经在该 slot 建立了
+                    // 新连接，不能像旧实现那样无条件清空它。
+                    if current
+                        .as_ref()
+                        .is_some_and(|current| current.id == handle.id)
+                    {
+                        *current = None;
+                    }
+                    warn!(
+                        manager = self.manager_name,
+                        slot = slot_index,
+                        connection_id = handle.id,
+                        rtt_ms = stats.path.rtt.as_millis(),
+                        cwnd = stats.path.cwnd,
+                        lost_packets = stats.path.lost_packets,
+                        congestion_events = stats.path.congestion_events,
+                        "QUIC proxy 连接已关闭，仅重建当前 pool slot 后重试：{err}"
+                    );
                 }
                 Err(err) => return Err(AgentError::Connection(err.to_string())),
             }

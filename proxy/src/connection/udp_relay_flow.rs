@@ -24,6 +24,13 @@ pub(super) struct QueuedUdpRelayResponse {
     pub(super) packet: UdpRelayPacket,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UdpRelayResponseQueueResult {
+    Queued,
+    Full,
+    Closed,
+}
+
 #[derive(Clone)]
 pub(super) struct UdpRelayFlowChannels {
     pub(super) response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
@@ -201,15 +208,19 @@ async fn spawn_udp_relay_flow(
                                     data: buf[..n].to_vec(),
                                 },
                             };
-                            match response_tx.try_send(response) {
-                                Ok(()) => {
+                            match try_queue_udp_relay_response(
+                                &response_tx,
+                                response,
+                                relay_label,
+                                flow_id,
+                            ) {
+                                UdpRelayResponseQueueResult::Queued => {
                                     idle.as_mut().reset(tokio::time::Instant::now() + flow_idle_timeout);
                                 }
-                                Err(TrySendError::Full(_)) => {
-                                    debug!("{relay_label} flow {flow_id} 响应队列已满，关闭该 flow 以释放 socket");
-                                    break;
-                                }
-                                Err(TrySendError::Closed(_)) => break,
+                                // UDP/QUIC 可以从单包丢失中恢复；不能因短暂背压关闭 socket，
+                                // 否则源端口变化会迫使内层 HTTP/3/QUIC 整条连接重建。
+                                UdpRelayResponseQueueResult::Full => {}
+                                UdpRelayResponseQueueResult::Closed => break,
                             }
                         }
                         Err(e) => {
@@ -226,4 +237,66 @@ async fn spawn_udp_relay_flow(
     });
 
     Ok(UdpRelayFlow { tx })
+}
+
+fn try_queue_udp_relay_response(
+    response_tx: &tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
+    response: QueuedUdpRelayResponse,
+    relay_label: &str,
+    flow_id: u64,
+) -> UdpRelayResponseQueueResult {
+    match response_tx.try_send(response) {
+        Ok(()) => UdpRelayResponseQueueResult::Queued,
+        Err(TrySendError::Full(_)) => {
+            debug!("{relay_label} flow {flow_id} 响应队列已满，丢弃一个 UDP 响应并保持 flow");
+            UdpRelayResponseQueueResult::Full
+        }
+        Err(TrySendError::Closed(_)) => UdpRelayResponseQueueResult::Closed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queued_response(flow_id: u64) -> QueuedUdpRelayResponse {
+        QueuedUdpRelayResponse {
+            packet: UdpRelayPacket {
+                flow_id,
+                address: Address::UdpRelay,
+                data: vec![flow_id as u8],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn full_response_queue_drops_one_packet_but_remains_usable() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.try_send(queued_response(1)).unwrap();
+
+        assert_eq!(
+            try_queue_udp_relay_response(&tx, queued_response(2), "test relay", 2),
+            UdpRelayResponseQueueResult::Full
+        );
+        assert!(!tx.is_closed());
+        assert_eq!(rx.recv().await.unwrap().packet.flow_id, 1);
+
+        // 队列恢复容量后，同一 flow channel 仍可继续使用。
+        assert_eq!(
+            try_queue_udp_relay_response(&tx, queued_response(3), "test relay", 3),
+            UdpRelayResponseQueueResult::Queued
+        );
+        assert_eq!(rx.recv().await.unwrap().packet.flow_id, 3);
+    }
+
+    #[test]
+    fn closed_response_queue_stops_the_flow() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        drop(rx);
+
+        assert_eq!(
+            try_queue_udp_relay_response(&tx, queued_response(1), "test relay", 1),
+            UdpRelayResponseQueueResult::Closed
+        );
+    }
 }

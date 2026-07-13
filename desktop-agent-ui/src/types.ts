@@ -8,6 +8,7 @@ export type AgentConfigSummary = {
   username: string;
   private_key_path: string;
   transport_mode: string;
+  quic_connection_pool_size: number;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;

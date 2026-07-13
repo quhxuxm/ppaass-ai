@@ -110,14 +110,30 @@ const emit = defineEmits<{
         </div>
       </template>
       <template #content>
-        <section class="policy-section tcp-transport-note">
+        <section class="policy-section yamux-settings">
           <div class="section-heading">
             <div class="section-title">
-              <span>QUIC 双向流</span>
+              <span>QUIC 连接池</span>
               <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN / UDP" severity="secondary" />
             </div>
+            <strong>{{ summary.quic_connection_pool_size }} 条 / 业务类型</strong>
           </div>
-          <p>TCP 与 UDP 目标会复用 QUIC 连接，并在独立双向流中继续使用原有 PPAASS 认证和加密协议。</p>
+          <div class="field-pair">
+            <label class="field">
+              <span><AppIcon name="share" />每类连接数</span>
+              <ConfigNumberInput
+                :model-value="summary.quic_connection_pool_size"
+                :min="1"
+                :max="8"
+                :allow-empty="false"
+                :disabled="configLocked"
+                :use-grouping="false"
+                @update:model-value="emit('set-field', 'quic_connection_pool_size', $event)"
+              />
+              <small>TCP 与 UDP 各自使用该数量的 QUIC 连接分流；建议保持默认 4，范围 1–8。</small>
+            </label>
+          </div>
+          <p>各目标在连接池中分流，并在独立双向流中继续使用原有 PPAASS 认证和加密协议；增加连接数可隔离拥塞，但会占用更多网络与内存资源。</p>
         </section>
       </template>
     </Card>

@@ -41,6 +41,13 @@ final class AgentConfigJson {
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
                 .put("transport_mode", normalizeTransportMode(
                         prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE)))
+                .put("quic_connection_pool_size", parseClampedInt(
+                        prefs.getString(
+                                "quic_connection_pool_size",
+                                String.valueOf(DefaultConfig.QUIC_CONNECTION_POOL_SIZE)),
+                        DefaultConfig.QUIC_CONNECTION_POOL_SIZE,
+                        DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
+                        DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", parsePositiveInt(
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
@@ -131,6 +138,10 @@ final class AgentConfigJson {
 
     private static int parseMinInt(String value, int fallback, int min) {
         return Math.max(min, parseInt(value, fallback));
+    }
+
+    private static int parseClampedInt(String value, int fallback, int min, int max) {
+        return Math.max(min, Math.min(max, parseInt(value, fallback)));
     }
 
     private static String normalizeCompressionMode(String value) {

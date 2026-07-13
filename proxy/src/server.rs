@@ -8,11 +8,13 @@ use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use common::{
-    DEFAULT_TCP_LISTEN_BACKLOG, PPAASS_QUIC_ALPN, QuicBiStream, bind_tcp_listener_with_backlog,
-    configure_proxy_tcp_stream, spawn_guarded,
+    DEFAULT_TCP_LISTEN_BACKLOG, PPAASS_QUIC_ALPN, QUIC_UDP_SOCKET_BUFFER_SIZE, QuicBiStream,
+    bind_tcp_listener_with_backlog, configure_proxy_tcp_stream, configure_quic_udp_socket,
+    quic_transport_config, spawn_guarded,
 };
 use futures::StreamExt;
 use protocol::CompressionMode;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,9 +140,7 @@ async fn build_quic_endpoint(listen_addr: &str) -> Result<quinn::Endpoint> {
         })?
         .next()
         .ok_or_else(|| {
-            crate::error::ProxyError::Configuration(format!(
-                "QUIC 监听地址无法解析: {listen_addr}"
-            ))
+            crate::error::ProxyError::Configuration(format!("QUIC 监听地址无法解析: {listen_addr}"))
         })?;
     let generated =
         rcgen::generate_simple_self_signed(vec!["ppaass.local".to_string()]).map_err(|err| {
@@ -159,12 +159,35 @@ async fn build_quic_endpoint(listen_addr: &str) -> Result<quinn::Endpoint> {
         crate::error::ProxyError::Configuration(format!("创建 QUIC 配置失败: {err}"))
     })?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
-    let transport = Arc::get_mut(&mut server_config.transport)
-        .expect("new QUIC server config owns transport config");
-    transport.max_concurrent_uni_streams(0_u8.into());
-    transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(4096));
-    transport.keep_alive_interval(Some(Duration::from_secs(15)));
-    quinn::Endpoint::server(server_config, address).map_err(Into::into)
+    let mut transport = quic_transport_config(4096);
+    Arc::get_mut(&mut transport)
+        .expect("new QUIC transport config has a single owner")
+        .keep_alive_interval(Some(Duration::from_secs(15)));
+    server_config.transport_config(transport);
+
+    // Endpoint::server 会在内部直接创建 UDP socket，无法在交给 Quinn 前扩大
+    // SO_RCVBUF/SO_SNDBUF。显式创建 socket，避免多 agent/多流并发时内核队列溢出。
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::DGRAM,
+        Some(Protocol::UDP),
+    )?;
+    configure_quic_udp_socket(&socket);
+    socket.bind(&SockAddr::from(address))?;
+    socket.set_nonblocking(true)?;
+    debug!(
+        requested = QUIC_UDP_SOCKET_BUFFER_SIZE,
+        recv = ?socket.recv_buffer_size().ok(),
+        send = ?socket.send_buffer_size().ok(),
+        "proxy QUIC UDP socket 就绪"
+    );
+    quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket.into(),
+        Arc::new(quinn::TokioRuntime),
+    )
+    .map_err(Into::into)
 }
 
 async fn handle_quic_connection(

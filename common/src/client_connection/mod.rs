@@ -10,7 +10,10 @@ pub mod yamux;
 // 重新导出公共项
 pub use authenticated::AuthenticatedConnection;
 pub use config::{BindInterface, ClientConnectionConfig};
-pub use quic::{PPAASS_QUIC_ALPN, QuicBiStream, QuicClientConnection};
+pub use quic::{
+    PPAASS_QUIC_ALPN, QUIC_UDP_SOCKET_BUFFER_SIZE, QuicBiStream, QuicClientConnection,
+    configure_quic_udp_socket, quic_transport_config,
+};
 pub use socket_bind::bind_socket_to_interface;
 pub use stream::ClientStream;
 pub use yamux::{

@@ -21,6 +21,8 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
 
 // UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
 const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
+const DEFAULT_QUIC_CONNECTION_POOL_SIZE: u64 = 4;
+const MAX_QUIC_CONNECTION_POOL_SIZE: u64 = 8;
 
 static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -189,6 +191,9 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
             "tcp" => "tcp".to_string(),
             _ => "quic".to_string(),
         },
+        quic_connection_pool_size: int_at(&value, &["quic_connection_pool_size"])
+            .unwrap_or(DEFAULT_QUIC_CONNECTION_POOL_SIZE)
+            .clamp(1, MAX_QUIC_CONNECTION_POOL_SIZE) as usize,
         connect_timeout_secs: int_at(&value, &["connect_timeout_secs"]).unwrap_or(30),
         compression_mode: string_or(&value, &["compression_mode"], "none"),
         log_level: string_or(&value, &["log_level"], "info"),
@@ -583,6 +588,36 @@ stream_window_size_kb = 1024
         assert_eq!(summary.udp_yamux_keepalive_interval_secs, 0);
         assert_eq!(summary.udp_yamux_connection_write_timeout_secs, 9);
         assert_eq!(summary.udp_yamux_stream_window_size_kb, 1024);
+    }
+
+    #[test]
+    fn summarize_config_defaults_and_clamps_quic_connection_pool_size() {
+        let base = r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#;
+
+        assert_eq!(summarize_config(base).unwrap().quic_connection_pool_size, 4);
+        assert_eq!(
+            summarize_config(&format!("{base}quic_connection_pool_size = 0\n"))
+                .unwrap()
+                .quic_connection_pool_size,
+            1
+        );
+        assert_eq!(
+            summarize_config(&format!("{base}quic_connection_pool_size = 64\n"))
+                .unwrap()
+                .quic_connection_pool_size,
+            8
+        );
+        assert_eq!(
+            summarize_config(&format!("{base}quic_connection_pool_size = 6\n"))
+                .unwrap()
+                .quic_connection_pool_size,
+            6
+        );
     }
 
     #[test]

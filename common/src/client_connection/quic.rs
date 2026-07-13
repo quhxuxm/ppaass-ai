@@ -4,7 +4,7 @@
 //! QUIC 双向流内执行，因此切换传输模式不会改变应用协议帧。
 
 use quinn::crypto::rustls::QuicClientConfig;
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
+use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
@@ -22,6 +22,51 @@ use super::stream::ClientStream;
 use protocol::{Address, TransportProtocol};
 
 pub const PPAASS_QUIC_ALPN: &[u8] = b"ppaass/1";
+
+/// QUIC endpoint 的 UDP socket 缓冲区。
+///
+/// Quinn 的一个 endpoint 会把所有连接的 UDP 包集中到同一个 socket；系统默认
+/// 缓冲在多并发流量下容易溢出，溢出后会被 QUIC 视为网络丢包并收缩拥塞窗口。
+pub const QUIC_UDP_SOCKET_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+
+const QUIC_STREAM_RECEIVE_WINDOW: u32 = 8 * 1024 * 1024;
+const QUIC_CONNECTION_RECEIVE_WINDOW: u32 = 64 * 1024 * 1024;
+const QUIC_SEND_WINDOW: u64 = 64 * 1024 * 1024;
+
+/// 创建适合高 RTT、多并发代理流量的 QUIC transport 参数。
+///
+/// `max_incoming_bidi_streams` 是对端允许主动打开的流数：agent 端传 0，proxy 端
+/// 传入它允许的 agent 业务流数。
+pub fn quic_transport_config(max_incoming_bidi_streams: u32) -> Arc<TransportConfig> {
+    let mut transport = TransportConfig::default();
+    transport
+        .max_concurrent_bidi_streams(VarInt::from_u32(max_incoming_bidi_streams))
+        .max_concurrent_uni_streams(VarInt::from_u32(0))
+        .stream_receive_window(VarInt::from_u32(QUIC_STREAM_RECEIVE_WINDOW))
+        .receive_window(VarInt::from_u32(QUIC_CONNECTION_RECEIVE_WINDOW))
+        .send_window(QUIC_SEND_WINDOW)
+        .send_fairness(true);
+    Arc::new(transport)
+}
+
+/// 在把 UDP socket 交给 Quinn 前扩大内核收发队列。
+///
+/// 某些平台会按系统上限截断请求值，因此这里采用 best-effort：设置失败不阻止连接，
+/// 但记录实际缓冲大小便于诊断。
+pub fn configure_quic_udp_socket(socket: &Socket) {
+    if let Err(err) = socket.set_recv_buffer_size(QUIC_UDP_SOCKET_BUFFER_SIZE) {
+        warn!("设置 QUIC UDP SO_RCVBUF 失败，继续使用系统值：{err}");
+    }
+    if let Err(err) = socket.set_send_buffer_size(QUIC_UDP_SOCKET_BUFFER_SIZE) {
+        warn!("设置 QUIC UDP SO_SNDBUF 失败，继续使用系统值：{err}");
+    }
+    debug!(
+        requested = QUIC_UDP_SOCKET_BUFFER_SIZE,
+        recv = ?socket.recv_buffer_size().ok(),
+        send = ?socket.send_buffer_size().ok(),
+        "QUIC UDP socket 缓冲区已配置"
+    );
+}
 
 /// 把 quinn 的收、发半流组合成通用 AsyncRead + AsyncWrite。
 pub struct QuicBiStream {
@@ -112,6 +157,11 @@ impl QuicClientConnection {
         self.connection.close_reason().is_some()
     }
 
+    /// 返回当前连接的 RTT、拥塞窗口和丢包等运行指标。
+    pub fn stats(&self) -> quinn::ConnectionStats {
+        self.connection.stats()
+    }
+
     pub async fn connect_to_target<C>(
         &self,
         config: &C,
@@ -147,6 +197,7 @@ where
         Type::DGRAM,
         Some(Protocol::UDP),
     )?;
+    configure_quic_udp_socket(&socket);
     config.protect_socket(&socket, remote)?;
     bind_socket_to_interface(&socket, config.bind_interface().as_ref(), remote)?;
     let local = SocketAddr::new(
@@ -194,7 +245,10 @@ fn insecure_client_config() -> io::Result<ClientConfig> {
     crypto.alpn_protocols = vec![PPAASS_QUIC_ALPN.to_vec()];
     let crypto =
         QuicClientConfig::try_from(crypto).map_err(|err| io::Error::other(err.to_string()))?;
-    Ok(ClientConfig::new(Arc::new(crypto)))
+    let mut config = ClientConfig::new(Arc::new(crypto));
+    // proxy 不会反向主动打开业务流，因此客户端 incoming bidi 设为 0。
+    config.transport_config(quic_transport_config(0));
+    Ok(config)
 }
 
 /// PPAASS 在 QUIC 流内完成原有的用户认证与应用层加密；这里接受 proxy 启动时

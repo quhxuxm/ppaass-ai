@@ -11,7 +11,7 @@ Android App 负责平台 VPN 层：
 Rust 库负责数据包和协议层：
 
 - `android-agent/native` 使用 `AsyncFd` 包装 VPN fd。
-- Agent 到 proxy 默认使用 QUIC 双向流，界面可切换回 TCP 兼容模式；两种模式内的 PPAASS RSA/AES 加密协议保持一致。
+- Agent 到 proxy 默认使用 QUIC 双向流，界面可配置 QUIC 连接池数量或切换回 TCP 兼容模式；两种模式内的 PPAASS RSA/AES 加密协议保持一致。
 - `netstack-smoltcp` 将 IP 包转换为 TCP stream 和 UDP payload session。
 - TCP 和 UDP 流量会通过 `common` 和 `protocol` crate 转发到现有的 PPAASS proxy 协议。
 - Android 的应用 allow-list 决定哪些应用进入 VPN。
@@ -56,7 +56,7 @@ cargo ndk -t <abi> -o app/src/main/jniLibs build --manifest-path native/Cargo.to
 
 Android App 层使用纯 Java。数据包栈和 proxy 协议桥接仍然在 `android-agent/native` 的 Rust 代码中。
 
-Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；界面里的 session 数是最大外层连接数，实际连接会在现有 session 没有可立即打开子流的容量时按需增长，默认值来自 `DefaultConfig`。
+Android native 内部会分别维护 TCP 和 UDP 两个 session manager。QUIC 模式下，两个 manager 各自按界面配置维护独立连接池；TCP 兼容模式下，界面里的 Yamux session 数是 UDP 最大外层连接数。
 
 ## 运行配置
 
@@ -64,6 +64,7 @@ Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；
 
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
 - transport mode，默认 `quic`；连接尚未支持 QUIC 的旧版 proxy 时选择 `tcp`
+- QUIC 连接数，默认 4，可配置 1–8；TCP 和 UDP manager 各自使用该数量的独立拥塞窗口
 - 控制连接超时，QUIC 握手/双向流与 TCP 兼容连接共用，默认 30 秒
 - username，默认是 `user1`
 - RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥

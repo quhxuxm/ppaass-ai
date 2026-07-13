@@ -6,6 +6,7 @@ proxy_addrs = ["127.0.0.1:9090", "127.0.0.1:9090"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 transport_mode = "quic"
+quic_connection_pool_size = 4
 connect_timeout_secs = 20
 # Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
 # 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。

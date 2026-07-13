@@ -10,6 +10,7 @@ const props = withDefaults(
   defineProps<{
     modelValue: number;
     min?: number;
+    max?: number;
     suffix?: string;
     disabled?: boolean;
     useGrouping?: boolean;
@@ -17,6 +18,7 @@ const props = withDefaults(
   }>(),
   {
     min: undefined,
+    max: undefined,
     suffix: undefined,
     disabled: false,
     useGrouping: false,
@@ -60,6 +62,7 @@ function restoreEmptyDraft() {
     v-bind="$attrs"
     :model-value="draftValue"
     :min="min"
+    :max="max"
     :suffix="suffix"
     :disabled="disabled"
     :use-grouping="useGrouping"

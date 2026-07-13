@@ -138,6 +138,12 @@ fn main() -> Result<()> {
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);
         info!("传输模式：    {}", config.transport_mode.as_str());
+        if config.transport_mode == common::TransportMode::Quic {
+            info!(
+                "QUIC 连接池： TCP/UDP 各 {} 条",
+                config.effective_quic_connection_pool_size()
+            );
+        }
         info!("压缩模式：    {}", config.get_compression_mode());
         info!("日志级别：    {}", config.log_level);
         info!(

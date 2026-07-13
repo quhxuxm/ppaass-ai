@@ -20,6 +20,10 @@ pub struct AgentConfig {
     /// Agent 到 proxy 的外层传输。默认使用 QUIC；tcp 用于兼容旧 proxy。
     #[serde(default)]
     pub transport_mode: TransportMode,
+    /// TCP 与 UDP manager 各自维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
+    /// 避免一个应用的丢包同时卡住所有应用。
+    #[serde(default = "default_quic_connection_pool_size")]
+    pub quic_connection_pool_size: usize,
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
@@ -199,6 +203,10 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
+fn default_quic_connection_pool_size() -> usize {
+    4
+}
+
 fn default_listen_addr() -> String {
     "0.0.0.0:10080".to_string()
 }
@@ -238,6 +246,11 @@ impl AgentConfig {
     pub fn get_compression_mode(&self) -> CompressionMode {
         self.compression_mode.parse().unwrap_or_default()
     }
+
+    /// 限制连接池的内核 socket/内存成本，同时保证错误配置 0 不会导致取模崩溃。
+    pub fn effective_quic_connection_pool_size(&self) -> usize {
+        self.quic_connection_pool_size.clamp(1, 8)
+    }
 }
 
 impl TunConfig {
@@ -272,6 +285,22 @@ private_key_path = "keys/user1.pem"
             toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
                 .unwrap();
         assert_eq!(config.transport_mode, TransportMode::Tcp);
+    }
+
+    #[test]
+    fn quic_connection_pool_defaults_to_four_and_is_bounded() {
+        let default_config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        assert_eq!(default_config.effective_quic_connection_pool_size(), 4);
+
+        let disabled: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 0\n"))
+                .unwrap();
+        assert_eq!(disabled.effective_quic_connection_pool_size(), 1);
+
+        let excessive: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 64\n"))
+                .unwrap();
+        assert_eq!(excessive.effective_quic_connection_pool_size(), 8);
     }
 
     #[test]

@@ -66,11 +66,23 @@ protected void updateEditTextEditable(EditText editText, boolean editable) {
 
 protected void saveConfig() {
         String quicPolicyValue = selectedQuicPolicy();
+        String quicConnectionPoolSizeValue = boundedIntString(
+                quicConnectionPoolSize == null
+                        ? null
+                        : quicConnectionPoolSize.getText().toString(),
+                DefaultConfig.QUIC_CONNECTION_POOL_SIZE,
+                DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
+                DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE);
+        if (quicConnectionPoolSize != null) {
+            quicConnectionPoolSize.setText(quicConnectionPoolSizeValue);
+            quicConnectionPoolSize.setSelection(quicConnectionPoolSizeValue.length());
+        }
         prefs.edit()
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("transport_mode", selectedTransportMode())
+                .putString("quic_connection_pool_size", quicConnectionPoolSizeValue)
                 .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
@@ -118,6 +130,7 @@ protected void restoreDefaultConfig() {
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
+        quicConnectionPoolSize.setText(String.valueOf(DefaultConfig.QUIC_CONNECTION_POOL_SIZE));
         connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
@@ -397,6 +410,16 @@ protected EditText field(LinearLayout root, String title, String value, int line
     }
 
 protected EditText numberControl(LinearLayout root, String title, String value, int step, int min) {
+        return numberControl(root, title, value, step, min, Integer.MAX_VALUE);
+    }
+
+protected EditText numberControl(
+        LinearLayout root,
+        String title,
+        String value,
+        int step,
+        int min,
+        int max) {
         root.addView(controlLabel(title), labelParams());
         LinearLayout row = horizontalRow();
 
@@ -409,10 +432,13 @@ protected EditText numberControl(LinearLayout root, String title, String value, 
         edit.setTextSize(16f);
         styleInput(edit);
         edit.setPadding(0, 0, 0, 0);
+        if (max < Integer.MAX_VALUE) {
+            edit.setFilters(new InputFilter[]{boundedIntegerFilter(min, max)});
+        }
         Button plus = stepButton("+");
 
-        minus.setOnClickListener(view -> adjustNumber(edit, -step, min));
-        plus.setOnClickListener(view -> adjustNumber(edit, step, min));
+        minus.setOnClickListener(view -> adjustNumber(edit, -step, min, max));
+        plus.setOnClickListener(view -> adjustNumber(edit, step, min, max));
 
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         row.addView(minus, buttonParams);
@@ -426,6 +452,37 @@ protected EditText numberControl(LinearLayout root, String title, String value, 
         trackEditable(edit);
         trackEditable(plus);
         return edit;
+    }
+
+protected InputFilter boundedIntegerFilter(int min, int max) {
+        return (source, start, end, dest, destStart, destEnd) -> {
+            String candidate = dest.subSequence(0, destStart).toString()
+                    + source.subSequence(start, end)
+                    + dest.subSequence(destEnd, dest.length());
+            if (candidate.isEmpty()) {
+                return null;
+            }
+            try {
+                int parsed = Integer.parseInt(candidate);
+                int minDigits = String.valueOf(Math.max(0, min)).length();
+                if (parsed > max || (parsed < min && candidate.length() >= minDigits)) {
+                    return "";
+                }
+                return null;
+            } catch (NumberFormatException ignored) {
+                return "";
+            }
+        };
+    }
+
+protected String boundedIntString(String value, int fallback, int min, int max) {
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value == null ? "" : value.trim());
+        } catch (NumberFormatException ignored) {
+            parsed = fallback;
+        }
+        return String.valueOf(Math.max(min, Math.min(max, parsed)));
     }
 
 protected void addFieldHelp(LinearLayout root, String text) {
@@ -468,13 +525,18 @@ protected Switch switchControl(LinearLayout root, String title, boolean checked)
     }
 
 protected void adjustNumber(EditText edit, int delta, int min) {
+        adjustNumber(edit, delta, min, Integer.MAX_VALUE);
+    }
+
+protected void adjustNumber(EditText edit, int delta, int min, int max) {
         int current;
         try {
             current = Integer.parseInt(edit.getText().toString().trim());
         } catch (NumberFormatException ignored) {
             current = min;
         }
-        edit.setText(String.valueOf(Math.max(min, current + delta)));
+        long adjusted = Math.max(min, Math.min((long) max, (long) current + delta));
+        edit.setText(String.valueOf(adjusted));
         edit.setSelection(edit.getText().length());
     }
 

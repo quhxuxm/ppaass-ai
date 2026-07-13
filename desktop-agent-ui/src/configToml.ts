@@ -9,6 +9,7 @@ const defaultFieldValues = {
   username: "user1",
   private_key_path: "keys/user1.pem",
   transport_mode: "quic",
+  quic_connection_pool_size: 4,
   connect_timeout_secs: 30,
   compression_mode: "none",
   log_level: "info",
@@ -50,6 +51,7 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
   if (
     [
       "connect_timeout_secs",
+      "quic_connection_pool_size",
       "udp_yamux_sessions",
       "udp_yamux_max_streams_per_session",
       "udp_yamux_open_stream_timeout_secs",
@@ -65,7 +67,8 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
       return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
     }
     const minimum = minimumNumberForField(field);
-    return Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
+    const normalized = Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
+    return field === "quic_connection_pool_size" ? Math.min(8, normalized) : normalized;
   }
   if (field === "proxy_addrs" || field === "direct_rules") {
     return String(value)
@@ -83,6 +86,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     username: { section: null, key: "username", kind: "string" },
     private_key_path: { section: null, key: "private_key_path", kind: "string" },
     transport_mode: { section: null, key: "transport_mode", kind: "string" },
+    quic_connection_pool_size: { section: null, key: "quic_connection_pool_size", kind: "number" },
     connect_timeout_secs: { section: null, key: "connect_timeout_secs", kind: "number" },
     compression_mode: { section: null, key: "compression_mode", kind: "string" },
     log_level: { section: null, key: "log_level", kind: "string" },
@@ -128,6 +132,7 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     username: stringOrDefault(matchString(raw, null, "username"), "username"),
     private_key_path: stringOrDefault(matchString(raw, null, "private_key_path"), "private_key_path"),
     transport_mode: normalizeTransportMode(matchString(raw, null, "transport_mode") ?? "quic"),
+    quic_connection_pool_size: normalizeQuicConnectionPoolSize(matchNumber(raw, null, "quic_connection_pool_size")),
     connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
     compression_mode: stringOrDefault(matchString(raw, null, "compression_mode"), "compression_mode"),
     log_level: stringOrDefault(matchString(raw, null, "log_level"), "log_level"),
@@ -254,6 +259,7 @@ function arrayOrDefault(value: string[], field: keyof AgentConfigSummary) {
 
 function minimumNumberForField(field: keyof AgentConfigSummary) {
   if (
+    field === "quic_connection_pool_size" ||
     field === "udp_yamux_sessions" ||
     field === "udp_yamux_max_streams_per_session" ||
     field === "udp_yamux_open_stream_timeout_secs" ||
@@ -265,6 +271,10 @@ function minimumNumberForField(field: keyof AgentConfigSummary) {
     return 256;
   }
   return 0;
+}
+
+function normalizeQuicConnectionPoolSize(value: number | undefined) {
+  return Math.min(8, Math.max(1, value ?? defaultValueForField<number>("quic_connection_pool_size")));
 }
 
 function normalizeQuicPolicy(value: string) {
