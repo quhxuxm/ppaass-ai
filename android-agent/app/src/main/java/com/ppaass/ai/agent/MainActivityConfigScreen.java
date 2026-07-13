@@ -41,12 +41,19 @@ protected void buildConfigScreen(LinearLayout root) {
         proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         addFieldHelp(connection, "TCP / UDP 共用远端出口。");
-        transportMode = spinner(
+        transportModeControl(
                 connection,
-                "传输模式",
-                new String[]{"quic", "tcp"},
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
-        addFieldHelp(connection, "默认 QUIC；连接旧版 Proxy 时可切换为 TCP。PPAASS RSA/AES 加密方式保持不变。");
+        addFieldHelp(connection, "选择后立即保存，下次启动 VPN 或 HTTP / SOCKS5 代理时生效。PPAASS RSA/AES 加密方式保持不变。");
+        connectTimeoutSecs = numberControl(
+                connection,
+                "控制连接超时（秒）",
+                prefString(
+                        "connect_timeout_secs",
+                        String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
+                1,
+                1);
+        addFieldHelp(connection, "QUIC 握手、打开双向流以及 TCP 兼容连接共用此超时。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,

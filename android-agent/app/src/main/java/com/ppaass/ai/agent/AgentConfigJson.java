@@ -45,7 +45,11 @@ final class AgentConfigJson {
                 .put("runtime_threads", parsePositiveInt(
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                         DefaultConfig.RUNTIME_THREADS))
-                .put("connect_timeout_secs", 30)
+                .put("connect_timeout_secs", parsePositiveInt(
+                        prefs.getString(
+                                "connect_timeout_secs",
+                                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
+                        DefaultConfig.CONNECT_TIMEOUT_SECS))
                 .put("http_proxy_max_concurrent_connects", parsePositiveInt(
                         prefs.getString(
                                 "http_proxy_max_concurrent_connects",

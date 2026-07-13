@@ -28,13 +28,13 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 cargo install cargo-ndk
 ```
 
-在本目录下使用本地 Gradle 构建 debug APK，也可以直接用 Android Studio 打开本目录：
+项目自带固定为 Gradle 9.4.1 的 Wrapper；构建脚本会自动安装缺失的 Rust Android targets。也可以直接用 Android Studio 打开本目录：
 
 ```bash
-gradle assembleDebug
+./gradlew assembleDebug
 ```
 
-构建 release APK 时使用对应平台脚本：
+构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本：
 
 ```bash
 # Windows
@@ -47,8 +47,10 @@ bash ./build-release-apk-macos.command
 Gradle 构建过程中会执行：
 
 ```bash
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o app/src/main/jniLibs build --manifest-path native/Cargo.toml --release
+cargo ndk -t <abi> -o app/src/main/jniLibs build --manifest-path native/Cargo.toml --release --jobs 1
 ```
+
+三个 ABI 会依次构建。Windows 默认使用单 Cargo 作业以避免 NDK 原生依赖并行构建卡住；需要自行提高并行度时可设置 `PPAASS_ANDROID_CARGO_JOBS`。
 
 只有在 `app/src/main/jniLibs` 下已经存在预构建 `.so` 文件时，才使用 `-PskipRustBuild=true`。
 
@@ -62,6 +64,7 @@ Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；
 
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
 - transport mode，默认 `quic`；连接尚未支持 QUIC 的旧版 proxy 时选择 `tcp`
+- 控制连接超时，QUIC 握手/双向流与 TCP 兼容连接共用，默认 30 秒
 - username，默认是 `user1`
 - RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
 - HTTP Proxy 监听端口和专属运行线程数。线程数只影响 Android HTTP Proxy 的 native Tokio runtime，VPN Agent 仍使用通用运行线程配置。

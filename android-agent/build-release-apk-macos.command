@@ -32,6 +32,14 @@ if ! cargo ndk --version >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "Error: rustup was not found in PATH."
+  exit 1
+fi
+
+echo "Ensuring Rust Android targets are installed..."
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
 find_android_build_tool() {
   local tool_name="$1"
   local tool_path

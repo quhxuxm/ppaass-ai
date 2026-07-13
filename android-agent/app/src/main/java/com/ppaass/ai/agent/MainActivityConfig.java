@@ -71,6 +71,7 @@ protected void saveConfig() {
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("transport_mode", selectedTransportMode())
+                .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString(
@@ -116,7 +117,8 @@ protected void restoreDefaultConfig() {
                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
-        setSpinnerValue(transportMode, DefaultConfig.TRANSPORT_MODE);
+        setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
+        connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
         setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
@@ -194,6 +196,81 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
         return spinner;
     }
 
+protected void transportModeControl(LinearLayout root, String selected) {
+        transportModeValue = normalizeTransportMode(selected);
+        root.addView(controlLabel("Agent 到 Proxy 传输"), labelParams());
+
+        LinearLayout row = horizontalRow();
+        row.setPadding(dp(4), dp(4), dp(4), dp(4));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        addTransportModeButton(row, "QUIC（推荐）", "quic");
+        addTransportModeButton(row, "TCP（兼容）", "tcp");
+        root.addView(row, matchWrap());
+        updateTransportModeButtons();
+    }
+
+protected void addTransportModeButton(LinearLayout row, String label, String value) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTag(value);
+        button.setContentDescription("使用 " + value.toUpperCase() + " 传输");
+        button.setTextSize(13f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(6), 0, dp(6), 0);
+        flattenButton(button);
+        button.setOnClickListener(view -> {
+            setTransportMode(String.valueOf(view.getTag()), true);
+            if (isVpnRunning() || isHttpProxyRunning()) {
+                Toast.makeText(
+                        this,
+                        "传输模式已保存，停止并重新启动代理后生效",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        transportModeButtons.add(button);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(4), 0, 0, 0);
+        }
+        row.addView(button, params);
+    }
+
+protected void setTransportMode(String value, boolean persist) {
+        transportModeValue = normalizeTransportMode(value);
+        updateTransportModeButtons();
+        if (persist && prefs != null) {
+            prefs.edit().putString("transport_mode", transportModeValue).apply();
+        }
+    }
+
+protected void updateTransportModeButtons() {
+        String selected = normalizeTransportMode(transportModeValue);
+        transportModeValue = selected;
+        for (Button button : transportModeButtons) {
+            boolean active = selected.equals(String.valueOf(button.getTag()));
+            button.setSelected(active);
+            String label = "quic".equals(String.valueOf(button.getTag()))
+                    ? "QUIC（推荐）"
+                    : "TCP（兼容）";
+            button.setText(active ? "✓ " + label : label);
+            button.setTextColor(interactiveTextColors(
+                    active ? Color.rgb(243, 244, 255) : COLOR_MUTED,
+                    Color.rgb(245, 246, 255)));
+            int fill = active ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
+            int stroke = active ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
+            button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));
+        }
+    }
+
+protected String normalizeTransportMode(String value) {
+        return value != null && "tcp".equalsIgnoreCase(value.trim()) ? "tcp" : "quic";
+    }
+
 protected Spinner quicPolicySpinner(LinearLayout root, String title, String selected) {
         root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
@@ -239,11 +316,7 @@ protected View styleSpinnerItem(View view, boolean dropdown) {
     }
 
 protected String selectedTransportMode() {
-        if (transportMode != null && transportMode.getSelectedItem() != null
-                && "tcp".equalsIgnoreCase(transportMode.getSelectedItem().toString().trim())) {
-            return "tcp";
-        }
-        return DefaultConfig.TRANSPORT_MODE;
+        return normalizeTransportMode(transportModeValue);
     }
 
 protected String selectedCompressionMode() {

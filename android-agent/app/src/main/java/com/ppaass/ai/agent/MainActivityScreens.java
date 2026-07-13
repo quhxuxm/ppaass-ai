@@ -32,6 +32,7 @@ protected void buildUi() {
         screenSwitchAnimating = false;
         configTabButtons.clear();
         configTabPages.clear();
+        transportModeButtons.clear();
         directModeButtons.clear();
         directRuleValues.clear();
         directRulesConfig = null;
