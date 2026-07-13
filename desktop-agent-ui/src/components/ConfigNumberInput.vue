@@ -13,12 +13,14 @@ const props = withDefaults(
     suffix?: string;
     disabled?: boolean;
     useGrouping?: boolean;
+    allowEmpty?: boolean;
   }>(),
   {
     min: undefined,
     suffix: undefined,
     disabled: false,
-    useGrouping: false
+    useGrouping: false,
+    allowEmpty: true
   }
 );
 
@@ -61,7 +63,7 @@ function restoreEmptyDraft() {
     :suffix="suffix"
     :disabled="disabled"
     :use-grouping="useGrouping"
-    :allow-empty="true"
+    :allow-empty="allowEmpty"
     @focus="focused = true"
     @blur="restoreEmptyDraft"
     @update:model-value="updateDraft"

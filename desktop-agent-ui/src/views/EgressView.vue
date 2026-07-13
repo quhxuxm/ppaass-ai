@@ -64,7 +64,7 @@ const emit = defineEmits<{
         </div>
       </template>
       <template #content>
-        <div class="field-pair">
+        <div class="field-pair channel-parameters-grid">
           <label class="field">
             <span><AppIcon name="waypoints" />传输模式</span>
             <Select
@@ -81,6 +81,7 @@ const emit = defineEmits<{
             <span><AppIcon name="clock" />控制连接超时</span>
             <ConfigNumberInput
               :model-value="summary.connect_timeout_secs"
+              suffix=" s"
               :min="0"
               :allow-empty="false"
               :disabled="configLocked"
