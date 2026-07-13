@@ -47,12 +47,21 @@ import {
   TriangleAlert,
   UserRound,
   Waypoints,
-  Zap
+  Zap,
+  type IconNode
 } from "lucide";
 
-type IconAttributes = Readonly<Record<string, string | number>>;
-type IconChild = readonly [tag: string, attributes: IconAttributes];
-type IconNode = readonly [tag: string, attributes: IconAttributes, children?: readonly IconChild[]];
+const svgBaseAttributes = {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: 24,
+  height: 24,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  "stroke-width": 2,
+  "stroke-linecap": "round",
+  "stroke-linejoin": "round"
+} as const;
 
 export const appIconNodes = {
   activity: Activity,
@@ -175,7 +184,7 @@ export default defineComponent({
   },
   setup(props, { attrs }) {
     return () => {
-      const [, baseAttributes, children = []] = appIconNodes[props.name];
+      const children = appIconNodes[props.name];
       const accessibleAttributes = props.title
         ? { role: "img", "aria-label": props.title }
         : { "aria-hidden": "true" };
@@ -193,7 +202,7 @@ export default defineComponent({
           h(
             "svg",
             {
-              ...baseAttributes,
+              ...svgBaseAttributes,
               class: "app-icon-glyph",
               "aria-hidden": "true",
               focusable: "false"
