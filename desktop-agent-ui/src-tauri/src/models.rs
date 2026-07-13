@@ -23,6 +23,7 @@ pub(crate) struct AgentConfigSummary {
     pub(crate) proxy_addrs: Vec<String>,
     pub(crate) username: String,
     pub(crate) private_key_path: String,
+    pub(crate) transport_mode: String,
     pub(crate) connect_timeout_secs: u64,
     pub(crate) compression_mode: String,
     pub(crate) log_level: String,

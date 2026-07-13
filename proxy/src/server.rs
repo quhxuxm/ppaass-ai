@@ -1,16 +1,15 @@
 //! proxy 入站服务层。
 //!
-//! 这一层只关心 agent 到 proxy 的入站 TCP 连接：直接 framed TCP 连接会作为一条
-//! 独立的加密 PPAASS 连接处理；Yamux 外层连接会拆出子 stream 后交给同一套
-//! `ServerConnection` 认证、CONNECT 和 relay。
+//! 这一层接收 agent 到 proxy 的 TCP 与 QUIC 连接：QUIC 双向流、直接 framed TCP
+//! 连接以及 Yamux 子流最终都交给同一套 `ServerConnection` 做认证、CONNECT 和 relay。
 
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
 use crate::user_manager::UserManager;
 use common::{
-    DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_proxy_tcp_stream,
-    spawn_guarded,
+    DEFAULT_TCP_LISTEN_BACKLOG, PPAASS_QUIC_ALPN, QuicBiStream, bind_tcp_listener_with_backlog,
+    configure_proxy_tcp_stream, spawn_guarded,
 };
 use futures::StreamExt;
 use protocol::CompressionMode;
@@ -62,12 +61,17 @@ impl ProxyServer {
 
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
-        // 启动代理服务器
+        // TCP 与 QUIC 共用同一个端口号：TCP listener 保持旧客户端兼容，
+        // QUIC endpoint 监听同地址的 UDP socket。
         let listener = bind_tcp_listener_with_backlog(
             self.config.listen_addr.as_str(),
             DEFAULT_TCP_LISTEN_BACKLOG,
         )?;
-        info!("代理服务器正在监听 {}", self.config.listen_addr);
+        let quic_endpoint = build_quic_endpoint(&self.config.listen_addr).await?;
+        info!(
+            "代理服务器正在监听 {}（TCP + QUIC/UDP）",
+            self.config.listen_addr
+        );
 
         loop {
             // 同时等待新连接和 Ctrl-C。收到关闭信号后退出 accept loop，
@@ -95,6 +99,21 @@ impl ProxyServer {
                         }
                     }
                 }
+                incoming = quic_endpoint.accept() => {
+                    if let Some(incoming) = incoming {
+                        let context = ConnectionContext {
+                            proxy_config: self.config.clone(),
+                            user_manager: self.user_manager.clone(),
+                            egress_state: self.egress_state.clone(),
+                            compression_mode: self.config.get_compression_mode(),
+                        };
+                        spawn_guarded("proxy QUIC connection", async move {
+                            if let Err(err) = handle_quic_connection(context, incoming).await {
+                                debug!("QUIC 入站连接已结束：{err}");
+                            }
+                        });
+                    }
+                }
                 _ = tokio::signal::ctrl_c() => {
                     info!("收到关闭信号");
                     break;
@@ -103,6 +122,78 @@ impl ProxyServer {
         }
 
         Ok(())
+    }
+}
+
+async fn build_quic_endpoint(listen_addr: &str) -> Result<quinn::Endpoint> {
+    use quinn::crypto::rustls::QuicServerConfig;
+    use rustls::pki_types::PrivatePkcs8KeyDer;
+
+    let address = tokio::net::lookup_host(listen_addr)
+        .await
+        .map_err(|err| {
+            crate::error::ProxyError::Configuration(format!(
+                "QUIC 监听地址无效 {listen_addr}: {err}"
+            ))
+        })?
+        .next()
+        .ok_or_else(|| {
+            crate::error::ProxyError::Configuration(format!(
+                "QUIC 监听地址无法解析: {listen_addr}"
+            ))
+        })?;
+    let generated =
+        rcgen::generate_simple_self_signed(vec!["ppaass.local".to_string()]).map_err(|err| {
+            crate::error::ProxyError::Configuration(format!("生成 QUIC 证书失败: {err}"))
+        })?;
+    let cert_chain = vec![generated.cert.into()];
+    let key = PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der()).into();
+    let mut tls = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)
+        .map_err(|err| {
+            crate::error::ProxyError::Configuration(format!("创建 QUIC TLS 配置失败: {err}"))
+        })?;
+    tls.alpn_protocols = vec![PPAASS_QUIC_ALPN.to_vec()];
+    let crypto = QuicServerConfig::try_from(tls).map_err(|err| {
+        crate::error::ProxyError::Configuration(format!("创建 QUIC 配置失败: {err}"))
+    })?;
+    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+    let transport = Arc::get_mut(&mut server_config.transport)
+        .expect("new QUIC server config owns transport config");
+    transport.max_concurrent_uni_streams(0_u8.into());
+    transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(4096));
+    transport.keep_alive_interval(Some(Duration::from_secs(15)));
+    quinn::Endpoint::server(server_config, address).map_err(Into::into)
+}
+
+async fn handle_quic_connection(
+    context: ConnectionContext,
+    incoming: quinn::Incoming,
+) -> Result<()> {
+    let connection = incoming
+        .await
+        .map_err(|err| crate::error::ProxyError::Connection(err.to_string()))?;
+    debug!("接受 QUIC 连接 remote={}", connection.remote_address());
+    loop {
+        match connection.accept_bi().await {
+            Ok((send, recv)) => {
+                let context = context.clone();
+                spawn_guarded("proxy QUIC bidirectional stream", async move {
+                    let stream = QuicBiStream::new(send, recv);
+                    if let Err(err) =
+                        handle_protocol_stream(context, stream, "QUIC bidirectional stream").await
+                    {
+                        debug!("QUIC 双向流已结束：{err}");
+                    }
+                });
+            }
+            Err(quinn::ConnectionError::ApplicationClosed(_))
+            | Err(quinn::ConnectionError::LocallyClosed) => return Ok(()),
+            Err(err) => {
+                return Err(crate::error::ProxyError::Connection(err.to_string()));
+            }
+        }
     }
 }
 

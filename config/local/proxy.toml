@@ -1,7 +1,7 @@
 # PPAASS Proxy 服务器配置
 # 该配置用于演示，包含真实 RSA 密钥
 
-# 监听传入 agent 连接的地址
+# 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 QUIC/UDP。
 listen_addr = "0.0.0.0:8080"
 
 # 用户配置文件路径

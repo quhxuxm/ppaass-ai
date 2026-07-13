@@ -8,6 +8,7 @@ const defaultFieldValues = {
   proxy_addrs: ["127.0.0.1:8080"],
   username: "user1",
   private_key_path: "keys/user1.pem",
+  transport_mode: "quic",
   connect_timeout_secs: 30,
   compression_mode: "none",
   log_level: "info",
@@ -42,6 +43,9 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
   }
   if (field === "tun_quic_policy") {
     return normalizeQuicPolicy(String(value ?? ""));
+  }
+  if (field === "transport_mode") {
+    return normalizeTransportMode(String(value ?? ""));
   }
   if (
     [
@@ -78,6 +82,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     proxy_addrs: { section: null, key: "proxy_addrs", kind: "array" },
     username: { section: null, key: "username", kind: "string" },
     private_key_path: { section: null, key: "private_key_path", kind: "string" },
+    transport_mode: { section: null, key: "transport_mode", kind: "string" },
     connect_timeout_secs: { section: null, key: "connect_timeout_secs", kind: "number" },
     compression_mode: { section: null, key: "compression_mode", kind: "string" },
     log_level: { section: null, key: "log_level", kind: "string" },
@@ -122,6 +127,7 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
     username: stringOrDefault(matchString(raw, null, "username"), "username"),
     private_key_path: stringOrDefault(matchString(raw, null, "private_key_path"), "private_key_path"),
+    transport_mode: normalizeTransportMode(matchString(raw, null, "transport_mode") ?? "quic"),
     connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
     compression_mode: stringOrDefault(matchString(raw, null, "compression_mode"), "compression_mode"),
     log_level: stringOrDefault(matchString(raw, null, "log_level"), "log_level"),
@@ -263,6 +269,10 @@ function minimumNumberForField(field: keyof AgentConfigSummary) {
 
 function normalizeQuicPolicy(value: string) {
   return ["allow", "block"].includes(value) ? value : defaultValueForField<string>("tun_quic_policy");
+}
+
+function normalizeTransportMode(value: string) {
+  return ["quic", "tcp"].includes(value) ? value : defaultValueForField<string>("transport_mode");
 }
 
 function matchString(raw: string, section: string | null, key: string) {

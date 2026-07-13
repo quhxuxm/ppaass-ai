@@ -8,8 +8,8 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **Split Agent-to-Proxy Transport**: TCP targets use independent framed PPAASS TCP connections, while UDP relay uses raw Yamux session pools
-- **Encrypted PPAASS Frames**: Auth/Connect/Data frames remain encrypted on both direct framed TCP connections and UDP Yamux substreams
+- **QUIC by Default**: Agent traffic uses multiplexed QUIC bidirectional streams by default, with the previous TCP/Yamux path available as a compatibility mode
+- **Encrypted PPAASS Frames**: The existing RSA authentication and AES-256-GCM encrypted Auth/Connect/Data frames are unchanged inside both QUIC and TCP transports
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
@@ -81,6 +81,7 @@ listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
+transport_mode = "quic"              # quic (default) or tcp compatibility mode
 connection_timeout_secs = 30                # Connection timeout
 
 [yamux.udp]
@@ -100,10 +101,13 @@ listen_addr = "0.0.0.0:8080"              # Proxy listen address
 users_path = "config/users.toml"          # Users configuration file
 ```
 
+The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured port for both protocols in the server firewall when QUIC is used.
+
 ## Security
 
 - **RSA-2048**: Used for secure key exchange
 - **AES-256-GCM**: Used for data encryption with authenticated encryption
+- **QUIC/TLS**: Adds transport encryption around the unchanged PPAASS encrypted frames in QUIC mode
 - **Timestamp Validation**: Prevents replay attacks (5-minute tolerance)
 - **Secure Key Storage**: Private keys stored securely on disk
 - **Per-User Authentication**: Each user has unique credentials
@@ -111,8 +115,8 @@ users_path = "config/users.toml"          # Users configuration file
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **Direct TCP Relay**: TCP targets use independent framed TCP connections to avoid Yamux head-of-line blocking
-- **UDP Multiplexing**: UDP relay keeps encrypted PPAASS substreams over raw Yamux connections
+- **QUIC Multiplexing**: TCP and UDP targets use independent QUIC bidirectional streams without cross-stream TCP head-of-line blocking
+- **TCP Compatibility**: TCP targets retain independent framed connections and UDP relay retains Yamux when `transport_mode = "tcp"`
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
 ### Performance Testing

@@ -11,6 +11,7 @@ Android App 负责平台 VPN 层：
 Rust 库负责数据包和协议层：
 
 - `android-agent/native` 使用 `AsyncFd` 包装 VPN fd。
+- Agent 到 proxy 默认使用 QUIC 双向流，界面可切换回 TCP 兼容模式；两种模式内的 PPAASS RSA/AES 加密协议保持一致。
 - `netstack-smoltcp` 将 IP 包转换为 TCP stream 和 UDP payload session。
 - TCP 和 UDP 流量会通过 `common` 和 `protocol` crate 转发到现有的 PPAASS proxy 协议。
 - Android 的应用 allow-list 决定哪些应用进入 VPN。
@@ -60,6 +61,7 @@ Android native 内部会分别维护 TCP 和 UDP 两个 `YamuxSessionManager`；
 打开 App 后填写：
 
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
+- transport mode，默认 `quic`；连接尚未支持 QUIC 的旧版 proxy 时选择 `tcp`
 - username，默认是 `user1`
 - RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
 - HTTP Proxy 监听端口和专属运行线程数。线程数只影响 Android HTTP Proxy 的 native Tokio runtime，VPN Agent 仍使用通用运行线程配置。

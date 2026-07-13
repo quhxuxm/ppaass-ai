@@ -1,9 +1,10 @@
-# Local direct-TCP / UDP-Yamux smoke-test desktop agent.
+# Local QUIC plus TCP-compatibility smoke-test desktop agent.
 
 listen_addr = "127.0.0.1:11080"
 proxy_addrs = ["127.0.0.1:18080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+transport_mode = "quic"
 connect_timeout_secs = 20
 compression_mode = "none"
 log_level = "info"

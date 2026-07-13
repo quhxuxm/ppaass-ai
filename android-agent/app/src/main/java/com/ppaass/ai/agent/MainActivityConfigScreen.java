@@ -41,6 +41,12 @@ protected void buildConfigScreen(LinearLayout root) {
         proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         addFieldHelp(connection, "TCP / UDP 共用远端出口。");
+        transportMode = spinner(
+                connection,
+                "传输模式",
+                new String[]{"quic", "tcp"},
+                prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
+        addFieldHelp(connection, "默认 QUIC；连接旧版 Proxy 时可切换为 TCP。PPAASS RSA/AES 加密方式保持不变。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
@@ -89,14 +95,14 @@ protected void buildConfigScreen(LinearLayout root) {
                 new String[]{"none", "lz4", "gzip", "zstd"},
                 prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
-        LinearLayout tcpConfig = configSection(root, "TCP");
+        LinearLayout tcpConfig = configSection(root, "TCP 兼容模式");
         LinearLayout tcpRelay = configGroup(
                 tcpConfig,
                 "TCP 转发",
                 "普通 TCP 连接");
-        addFieldHelp(tcpRelay, "TCP 目标连接使用独立的普通 TCP 连接承载。");
+        addFieldHelp(tcpRelay, "transport_mode=tcp 时，TCP 目标连接使用独立的普通 TCP 连接承载。");
 
-        LinearLayout udpConfig = configSection(root, "UDP");
+        LinearLayout udpConfig = configSection(root, "UDP TCP 兼容模式");
         udpYamuxConfig = configGroup(
                 udpConfig,
                 "UDP Yamux",

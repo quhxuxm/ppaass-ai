@@ -69,6 +69,7 @@ protected EditText username;
 protected EditText privateKey;
 protected EditText runtimeThreads;
 protected Spinner compressionMode;
+protected Spinner transportMode;
 protected LinearLayout udpYamuxConfig;
 protected String directAccessModeValue;
 protected EditText directRuleDraft;

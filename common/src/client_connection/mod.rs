@@ -2,6 +2,7 @@
 
 pub mod authenticated;
 pub mod config;
+pub mod quic;
 pub mod socket_bind;
 pub mod stream;
 pub mod yamux;
@@ -9,6 +10,7 @@ pub mod yamux;
 // 重新导出公共项
 pub use authenticated::AuthenticatedConnection;
 pub use config::{BindInterface, ClientConnectionConfig};
+pub use quic::{PPAASS_QUIC_ALPN, QuicBiStream, QuicClientConnection};
 pub use socket_bind::bind_socket_to_interface;
 pub use stream::ClientStream;
 pub use yamux::{

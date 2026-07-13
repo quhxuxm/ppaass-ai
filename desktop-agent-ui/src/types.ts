@@ -7,6 +7,7 @@ export type AgentConfigSummary = {
   proxy_addrs: string[];
   username: string;
   private_key_path: string;
+  transport_mode: string;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;

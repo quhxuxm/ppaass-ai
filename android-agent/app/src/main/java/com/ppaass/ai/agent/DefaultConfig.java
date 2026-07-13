@@ -11,6 +11,7 @@ final class DefaultConfig {
     static final int HTTP_PROXY_MAX_CONCURRENT_CONNECTS = 16;
     static final String QUIC_POLICY = "allow";
     static final String COMPRESSION_MODE = "none";
+    static final String TRANSPORT_MODE = "quic";
     static final String DIRECT_ACCESS_MODE = "proxy_all";
     static final String DIRECT_ACCESS_RULES =
             "localhost\n"

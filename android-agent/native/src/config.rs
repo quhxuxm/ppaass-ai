@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, QuicPolicy, YamuxConfig};
+use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
@@ -15,6 +15,9 @@ pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_pem: String,
+
+    #[serde(default)]
+    pub transport_mode: TransportMode,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -183,6 +186,15 @@ mod tests {
         let config = AndroidTunConfig::default();
 
         assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn agent_transport_defaults_to_quic() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Quic);
     }
 
     #[test]

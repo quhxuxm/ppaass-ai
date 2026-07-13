@@ -8,8 +8,9 @@ use std::time::Duration;
 #[cfg(test)]
 use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
 use common::{
-    AuthenticatedConnection, ClientStream, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
+    AuthenticatedConnection, ClientStream, QuicBiStream, QuicClientConnection, TransportMode,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream,
 };
 use protocol::{Address, TransportProtocol};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -39,6 +40,7 @@ pub struct AndroidYamuxSessionManager {
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
+    quic_connection: Mutex<Option<QuicClientConnection>>,
     yamux_refill_lock: Mutex<()>,
     direct_tcp_connects: Semaphore,
     yamux_next_index: AtomicUsize,
@@ -82,6 +84,7 @@ impl AndroidYamuxSessionManager {
             manager_name,
             yamux_transport,
             yamux_sessions: Mutex::new(Vec::new()),
+            quic_connection: Mutex::new(None),
             yamux_refill_lock: Mutex::new(()),
             direct_tcp_connects: Semaphore::new(direct_tcp_connect_limit),
             yamux_next_index: AtomicUsize::new(0),
@@ -94,6 +97,10 @@ impl AndroidYamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<AndroidYamuxTargetStream> {
+        if self.config.transport_mode == TransportMode::Quic {
+            return self.open_quic_stream(address, transport).await;
+        }
+
         if transport == TransportProtocol::Tcp && self.yamux_transport == TransportProtocol::Tcp {
             return self.open_direct_tcp_stream(address).await;
         }
@@ -105,6 +112,48 @@ impl AndroidYamuxSessionManager {
             )));
         }
         self.open_target_stream(address, transport).await
+    }
+
+    async fn open_quic_stream(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<AndroidYamuxTargetStream> {
+        if self.shutdown.is_cancelled() {
+            return Err(AndroidAgentError::Connection(
+                "Android agent is stopping".into(),
+            ));
+        }
+        for attempt in 0..2 {
+            let connection = {
+                let mut current = self.quic_connection.lock().await;
+                if current.as_ref().is_none_or(QuicClientConnection::is_closed) {
+                    *current = Some(
+                        QuicClientConnection::connect(self.config.as_ref())
+                            .await
+                            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?,
+                    );
+                }
+                current
+                    .as_ref()
+                    .expect("Android QUIC connection initialized")
+                    .clone()
+            };
+            match connection
+                .connect_to_target(self.config.as_ref(), address.clone(), transport)
+                .await
+            {
+                Ok((stream, _)) => return Ok(AndroidYamuxTargetStream::Quic(stream)),
+                Err(err) if attempt == 0 && connection.is_closed() => {
+                    *self.quic_connection.lock().await = None;
+                    warn!("Android QUIC connection closed; reconnecting: {err}");
+                }
+                Err(err) => return Err(AndroidAgentError::Connection(err.to_string())),
+            }
+        }
+        Err(AndroidAgentError::Connection(
+            "Android QUIC proxy connection failed".into(),
+        ))
     }
 
     async fn open_direct_tcp_stream(&self, address: Address) -> Result<AndroidYamuxTargetStream> {
@@ -422,6 +471,7 @@ impl AndroidYamuxSessionManager {
 pub enum AndroidYamuxTargetStream {
     Direct(ClientStream<TcpStream>),
     Yamux(YamuxClientStream),
+    Quic(ClientStream<QuicBiStream>),
 }
 
 impl AsyncRead for AndroidYamuxTargetStream {
@@ -433,6 +483,7 @@ impl AsyncRead for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Quic(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -446,6 +497,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Quic(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -453,6 +505,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Quic(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -460,6 +513,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Quic(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }

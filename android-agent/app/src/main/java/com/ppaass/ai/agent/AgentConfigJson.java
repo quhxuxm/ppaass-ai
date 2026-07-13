@@ -39,6 +39,8 @@ final class AgentConfigJson {
                 .put("username", prefs.getString("username", DefaultConfig.USERNAME))
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
+                .put("transport_mode", normalizeTransportMode(
+                        prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE)))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", parsePositiveInt(
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
@@ -139,6 +141,13 @@ final class AgentConfigJson {
             return normalized;
         }
         return DefaultConfig.COMPRESSION_MODE;
+    }
+
+    private static String normalizeTransportMode(String value) {
+        if (value != null && "tcp".equals(value.trim().toLowerCase())) {
+            return "tcp";
+        }
+        return "quic";
     }
 
     private static String normalizeDirectAccessMode(String value) {

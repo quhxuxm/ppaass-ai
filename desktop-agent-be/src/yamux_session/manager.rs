@@ -1,14 +1,15 @@
-//! agent 到 proxy 的 proxy 目标连接管理器。
+//! agent 到 proxy 的目标连接管理器。
 //!
-//! TCP 语义使用独立 framed TCP 连接；UDP 语义继续使用 raw TCP 上的 Yamux 外层
-//! 连接池，并在子 stream 内执行完整的 PPAASS Auth/Connect/Data 加密协议。
+//! 默认在 QUIC 连接上为每个目标打开独立双向流；TCP 兼容模式下，TCP 语义使用
+//! 独立 framed TCP 连接，UDP 语义使用 raw TCP 上的 Yamux 连接池。所有路径都在
+//! 业务流内执行完整的 PPAASS Auth/Connect/Data 加密协议。
 
 use super::proxy_connection::new_yamux_connection;
 use super::target_stream::YamuxTargetStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use common::{
-    BindInterface, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
+    BindInterface, QuicClientConnection, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
     YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection,
 };
 use protocol::{Address, TransportProtocol};
@@ -36,6 +37,7 @@ pub struct YamuxSessionManager {
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
     proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
+    quic_connection: Arc<Mutex<Option<QuicClientConnection>>>,
     yamux_refill_lock: Arc<Mutex<()>>,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
@@ -62,6 +64,7 @@ impl YamuxSessionManager {
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
             proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
+            quic_connection: Arc::new(Mutex::new(None)),
             yamux_refill_lock: Arc::new(Mutex::new(())),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),

@@ -6,7 +6,7 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
-import { compressionOptions } from "../constants";
+import { compressionOptions, transportModeOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
 defineProps<{
@@ -66,6 +66,18 @@ const emit = defineEmits<{
       <template #content>
         <div class="field-pair">
           <label class="field">
+            <span><AppIcon name="waypoints" />传输模式</span>
+            <Select
+              :model-value="summary.transport_mode"
+              :options="transportModeOptions"
+              option-label="label"
+              option-value="value"
+              :disabled="configLocked"
+              @update:model-value="emit('set-field', 'transport_mode', $event)"
+            />
+            <small>QUIC 使用 UDP 多路复用，网络切换和并发流量下更稳定；TCP 用于连接旧版 Proxy。</small>
+          </label>
+          <label class="field">
             <span><AppIcon name="clock" />控制连接超时</span>
             <ConfigNumberInput
               :model-value="summary.connect_timeout_secs"
@@ -89,7 +101,27 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card class="panel span-12">
+    <Card v-if="summary.transport_mode === 'quic'" class="panel span-12">
+      <template #title>
+        <div class="panel-heading inline">
+          <h2>QUIC</h2>
+          <Tag value="默认传输" severity="success" />
+        </div>
+      </template>
+      <template #content>
+        <section class="policy-section tcp-transport-note">
+          <div class="section-heading">
+            <div class="section-title">
+              <span>QUIC 双向流</span>
+              <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN / UDP" severity="secondary" />
+            </div>
+          </div>
+          <p>TCP 与 UDP 目标会复用 QUIC 连接，并在独立双向流中继续使用原有 PPAASS 认证和加密协议。</p>
+        </section>
+      </template>
+    </Card>
+
+    <Card v-else class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>TCP</h2>
@@ -109,7 +141,7 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card class="panel span-12">
+    <Card v-if="summary.transport_mode === 'tcp'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP</h2>

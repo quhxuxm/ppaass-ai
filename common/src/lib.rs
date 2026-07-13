@@ -5,14 +5,15 @@ pub mod quic;
 pub mod task_guard;
 pub mod tcp_keepalive;
 pub mod tcp_listener;
+pub mod transport;
 pub mod tun_control;
 pub mod yamux_settings;
 
 pub use client_connection::{
-    AuthenticatedConnection, BindInterface, ClientConnectionConfig, ClientStream,
-    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
-    bind_socket_to_interface,
+    AuthenticatedConnection, BindInterface, ClientConnectionConfig, ClientStream, PPAASS_QUIC_ALPN,
+    QuicBiStream, QuicClientConnection, YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
 pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
@@ -22,6 +23,7 @@ pub use tcp_keepalive::{
     PROXY_TCP_USER_TIMEOUT, configure_proxy_tcp_socket, configure_proxy_tcp_stream,
 };
 pub use tcp_listener::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
+pub use transport::TransportMode;
 pub use yamux_settings::{YamuxConfig, YamuxServerConfig, YamuxSettings, YamuxTransportConfig};
 
 /// TCP relay copy buffer for HTTP CONNECT, SOCKS, and TUN data paths.

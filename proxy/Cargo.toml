@@ -37,6 +37,9 @@ pretty-hex.workspace = true
 socket2.workspace = true
 if-addrs.workspace = true
 route_manager.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

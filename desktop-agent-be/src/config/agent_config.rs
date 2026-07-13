@@ -4,7 +4,7 @@
 //! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
-use common::{QuicPolicy, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
+use common::{QuicPolicy, TransportMode, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -17,6 +17,9 @@ pub struct AgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
+    /// Agent 到 proxy 的外层传输。默认使用 QUIC；tcp 用于兼容旧 proxy。
+    #[serde(default)]
+    pub transport_mode: TransportMode,
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
@@ -260,6 +263,15 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::None);
+        assert_eq!(config.transport_mode, TransportMode::Quic);
+    }
+
+    #[test]
+    fn transport_mode_can_switch_back_to_tcp() {
+        let config: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
+                .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Tcp);
     }
 
     #[test]

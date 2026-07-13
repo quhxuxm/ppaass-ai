@@ -70,6 +70,7 @@ protected void saveConfig() {
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
+                .putString("transport_mode", selectedTransportMode())
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString(
@@ -115,6 +116,7 @@ protected void restoreDefaultConfig() {
                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
+        setSpinnerValue(transportMode, DefaultConfig.TRANSPORT_MODE);
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
         setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
@@ -234,6 +236,14 @@ protected View styleSpinnerItem(View view, boolean dropdown) {
             text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
         }
         return view;
+    }
+
+protected String selectedTransportMode() {
+        if (transportMode != null && transportMode.getSelectedItem() != null
+                && "tcp".equalsIgnoreCase(transportMode.getSelectedItem().toString().trim())) {
+            return "tcp";
+        }
+        return DefaultConfig.TRANSPORT_MODE;
     }
 
 protected String selectedCompressionMode() {

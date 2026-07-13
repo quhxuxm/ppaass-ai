@@ -1,4 +1,4 @@
-# Local direct-TCP / UDP-Yamux smoke-test proxy.
+# Local QUIC plus TCP-compatibility smoke-test proxy.
 
 listen_addr = "0.0.0.0:18080"
 users_path = "config/local/users.toml"

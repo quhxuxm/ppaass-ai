@@ -5,6 +5,8 @@ listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+# Agent -> proxy 传输：quic（默认）或 tcp（兼容旧版 proxy）。
+transport_mode = "quic"
 connect_timeout_secs = 20
 # Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
 # 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
