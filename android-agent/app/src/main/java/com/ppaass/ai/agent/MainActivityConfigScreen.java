@@ -44,9 +44,12 @@ protected void buildConfigScreen(LinearLayout root) {
         transportModeControl(
                 connection,
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
-        addFieldHelp(connection, "选择后立即保存，下次启动 VPN 或 HTTP / SOCKS5 代理时生效。PPAASS RSA/AES 加密方式保持不变。");
+        addFieldHelp(connection, "仅在 VPN 和 HTTP / SOCKS5 代理停止时可修改；选择后立即保存，下次启动时生效。PPAASS RSA/AES 加密方式保持不变。");
+        quicConnectionPoolConfig = new LinearLayout(this);
+        quicConnectionPoolConfig.setOrientation(LinearLayout.VERTICAL);
+        connection.addView(quicConnectionPoolConfig, matchWrap());
         quicConnectionPoolSize = numberControl(
-                connection,
+                quicConnectionPoolConfig,
                 "QUIC 连接数",
                 boundedIntString(
                         prefString(
@@ -58,7 +61,8 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
                 DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE);
-        addFieldHelp(connection, "仅 QUIC 模式生效。TCP 与 UDP 各自使用该数量的连接；范围 1–8，默认 4。连接池可分散并发程序的拥塞影响，但会增加少量资源占用。");
+        addFieldHelp(quicConnectionPoolConfig, "TCP 与 UDP 各自使用该数量的连接；范围 1–8，默认 4。连接池可分散并发程序的拥塞影响，但会增加少量资源占用。");
+        updateQuicConnectionPoolVisibility();
         connectTimeoutSecs = numberControl(
                 connection,
                 "控制连接超时（秒）",

@@ -236,15 +236,17 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
         button.setPadding(dp(6), 0, dp(6), 0);
         flattenButton(button);
         button.setOnClickListener(view -> {
-            setTransportMode(String.valueOf(view.getTag()), true);
             if (isVpnRunning() || isHttpProxyRunning()) {
                 Toast.makeText(
                         this,
-                        "传输模式已保存，停止并重新启动代理后生效",
+                        "修改传输模式前请先停止 VPN 和 HTTP / SOCKS5 代理",
                         Toast.LENGTH_SHORT).show();
+                return;
             }
+            setTransportMode(String.valueOf(view.getTag()), true);
         });
         transportModeButtons.add(button);
+        trackEditable(button);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
         if (row.getChildCount() > 0) {
@@ -256,9 +258,20 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
 protected void setTransportMode(String value, boolean persist) {
         transportModeValue = normalizeTransportMode(value);
         updateTransportModeButtons();
+        updateQuicConnectionPoolVisibility();
         if (persist && prefs != null) {
             prefs.edit().putString("transport_mode", transportModeValue).apply();
         }
+    }
+
+protected void updateQuicConnectionPoolVisibility() {
+        if (quicConnectionPoolConfig == null) {
+            return;
+        }
+        quicConnectionPoolConfig.setVisibility(
+                "quic".equals(normalizeTransportMode(transportModeValue))
+                        ? View.VISIBLE
+                        : View.GONE);
     }
 
 protected void updateTransportModeButtons() {

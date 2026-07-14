@@ -33,6 +33,7 @@ protected void buildUi() {
         configTabButtons.clear();
         configTabPages.clear();
         transportModeButtons.clear();
+        quicConnectionPoolConfig = null;
         directModeButtons.clear();
         directRuleValues.clear();
         directRulesConfig = null;

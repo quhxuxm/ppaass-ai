@@ -72,6 +72,7 @@ protected EditText runtimeThreads;
 protected Spinner compressionMode;
 protected String transportModeValue;
 protected final List<Button> transportModeButtons = new ArrayList<>();
+protected LinearLayout quicConnectionPoolConfig;
 protected EditText quicConnectionPoolSize;
 protected LinearLayout udpYamuxConfig;
 protected String directAccessModeValue;
