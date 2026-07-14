@@ -184,7 +184,7 @@ export default defineComponent({
   },
   setup(props, { attrs }) {
     return () => {
-      const [, , children = []] = appIconNodes[props.name];
+      const children = appIconNodes[props.name];
       const accessibleAttributes = props.title
         ? { role: "img", "aria-label": props.title }
         : { "aria-hidden": "true" };
