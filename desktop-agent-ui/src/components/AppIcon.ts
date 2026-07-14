@@ -48,20 +48,8 @@ import {
   UserRound,
   Waypoints,
   Zap,
-  type IconNode
-} from "lucide";
-
-const svgBaseAttributes = {
-  xmlns: "http://www.w3.org/2000/svg",
-  width: 24,
-  height: 24,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  stroke: "currentColor",
-  "stroke-width": 2,
-  "stroke-linecap": "round",
-  "stroke-linejoin": "round"
-} as const;
+  type LucideIcon
+} from "@lucide/vue";
 
 export const appIconNodes = {
   activity: Activity,
@@ -112,7 +100,7 @@ export const appIconNodes = {
   user: UserRound,
   waypoints: Waypoints,
   zap: Zap
-} as const satisfies Record<string, IconNode>;
+} as const satisfies Record<string, LucideIcon>;
 
 export type AppIconName = keyof typeof appIconNodes;
 
@@ -184,7 +172,7 @@ export default defineComponent({
   },
   setup(props, { attrs }) {
     return () => {
-      const children = appIconNodes[props.name];
+      const Glyph = appIconNodes[props.name];
       const accessibleAttributes = props.title
         ? { role: "img", "aria-label": props.title }
         : { "aria-hidden": "true" };
@@ -200,17 +188,15 @@ export default defineComponent({
         },
         [
           h(
-            "svg",
+            Glyph,
             {
-              ...svgBaseAttributes,
+              size: 24,
+              strokeWidth: 2,
               class: "app-icon-glyph",
               "aria-hidden": "true",
               focusable: "false"
             },
-            [
-              props.title ? h("title", props.title) : null,
-              ...children.map(([tag, attributes], index) => h(tag, { ...attributes, key: index }))
-            ]
+            props.title ? { default: () => h("title", props.title) } : undefined
           )
         ]
       );
