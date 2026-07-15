@@ -2,6 +2,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket}
 use std::process::Command;
 #[cfg(any(windows, target_os = "linux"))]
 use std::process::Stdio;
+#[cfg(target_os = "windows")]
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::models::ConnectivityCheck;
@@ -10,6 +12,8 @@ use crate::process_util::hide_child_console;
 const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
 const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(target_os = "windows")]
+const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(crate) fn probe_tun_ready(tun_name: &str) -> (bool, String) {
     let interface_ready = tun_interface_ready(tun_name);
@@ -344,7 +348,35 @@ fn powershell_status(script: &str, tun_name: &str) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_child_console(&mut command);
-    command.status().is_ok_and(|status| status.success())
+    command_status_with_timeout(&mut command, WINDOWS_TUN_PROBE_TIMEOUT)
+}
+
+#[cfg(target_os = "windows")]
+fn command_status_with_timeout(command: &mut Command, timeout: Duration) -> bool {
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                // NetTCPIP/CIM providers can occasionally stall on Windows (notably while a
+                // Wintun adapter is being created). Never let the whole diagnostics command
+                // wait indefinitely for a readiness hint.
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
