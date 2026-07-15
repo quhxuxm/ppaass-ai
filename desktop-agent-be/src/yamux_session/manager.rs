@@ -1,8 +1,9 @@
 //! agent 到 proxy 的目标连接管理器。
 //!
-//! 默认在 QUIC 连接池上为每个目标打开独立双向流；TCP 兼容模式下，TCP 语义使用
-//! 独立 framed TCP 连接，UDP 语义使用 raw TCP 上的 Yamux 连接池。所有路径都在
-//! 业务流内执行完整的 PPAASS Auth/Connect/Data 加密协议。
+//! TCP 语义始终使用独立 framed TCP 连接。QUIC 模式只影响 UDP 语义：在
+//! QUIC 连接池上为每个 UDP 目标打开独立双向流；TCP 模式下，UDP 语义使用
+//! raw TCP 上的 Yamux 连接池。所有路径都在业务流内执行完整的
+//! PPAASS Auth/Connect/Data 加密协议。
 
 use super::proxy_connection::new_yamux_connection;
 use super::target_stream::YamuxTargetStream;
@@ -67,7 +68,13 @@ impl YamuxSessionManager {
         yamux_transport: TransportProtocol,
         manager_name: &'static str,
     ) -> Self {
-        let quic_pool_size = config.effective_quic_connection_pool_size();
+        // TCP manager 始终走 direct framed TCP，不需要占用 QUIC socket/内存。
+        // 只有 UDP manager 保留可配置的 QUIC 连接池。
+        let quic_pool_size = if config.transport_mode.uses_quic_for(yamux_transport) {
+            config.effective_quic_connection_pool_size()
+        } else {
+            0
+        };
         Self {
             config,
             manager_name,
@@ -107,7 +114,9 @@ impl YamuxSessionManager {
     }
 
     fn next_quic_connection_slot(&self) -> usize {
-        // AgentConfig 已把 pool size 夹到至少 1，因此这里不会除以 0。
+        // 只有 UDP manager 会进入此路径，AgentConfig 已把 pool size 夹到至少 1。
+        debug_assert_eq!(self.yamux_transport, TransportProtocol::Udp);
+        debug_assert!(!self.quic_connections.is_empty());
         self.quic_next_index.fetch_add(1, Ordering::AcqRel) % self.quic_connections.len()
     }
 }
@@ -152,14 +161,27 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn quic_pool_round_robins_across_independent_connections() {
+    fn only_udp_manager_allocates_quic_pool() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        let manager = YamuxSessionManager::new(Arc::new(config));
+        let config = Arc::new(config);
+        let tcp_manager = YamuxSessionManager::new(config.clone());
+        let udp_manager = YamuxSessionManager::new_udp(config);
 
-        assert_eq!(manager.quic_connections.len(), 4);
+        assert!(tcp_manager.quic_connections.is_empty());
+        assert_eq!(udp_manager.quic_connections.len(), 4);
         let slots: Vec<_> = (0..10)
-            .map(|_| manager.next_quic_connection_slot())
+            .map(|_| udp_manager.next_quic_connection_slot())
             .collect();
         assert_eq!(slots, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
+    }
+
+    #[test]
+    fn tcp_transport_mode_does_not_allocate_quic_pool() {
+        let config: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
+                .unwrap();
+        let manager = YamuxSessionManager::new_udp(Arc::new(config));
+
+        assert!(manager.quic_connections.is_empty());
     }
 }

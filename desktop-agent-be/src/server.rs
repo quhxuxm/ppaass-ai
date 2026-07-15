@@ -38,7 +38,8 @@ impl AgentServer {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
-        // QUIC 模式下 TCP/UDP 各使用独立连接池；TCP 兼容模式保留原有连接策略。
+        // TCP 始终使用 direct framed TCP；UDP 根据 transport_mode 选择
+        // QUIC 连接池或 raw TCP 上的 Yamux session。
         let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
         let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config.clone()));
 

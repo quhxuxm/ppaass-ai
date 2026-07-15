@@ -16,7 +16,11 @@ sequenceDiagram
         alt TCP
             Streams->>Proxy: direct framed PPAASS TCP connection
         else UDP relay
-            Streams->>Proxy: raw Yamux session + substream
+            alt transport_mode = quic
+                Streams->>Proxy: UDP QUIC connection + bidirectional stream
+            else transport_mode = tcp
+                Streams->>Proxy: raw TCP/Yamux session + substream
+            end
         end
         Streams->>Proxy: Auth
         Proxy-->>Streams: AuthResponse

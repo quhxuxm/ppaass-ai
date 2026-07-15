@@ -19,8 +19,8 @@ pub struct AndroidAgentConfig {
     #[serde(default)]
     pub transport_mode: TransportMode,
 
-    /// TCP 与 UDP manager 各自维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
-    /// 避免一个应用的丢包同时卡住所有应用。
+    /// UDP manager 维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
+    /// 避免一个应用的丢包同时卡住所有应用。TCP 始终使用 direct framed TCP。
     #[serde(default = "default_quic_connection_pool_size")]
     pub quic_connection_pool_size: usize,
 

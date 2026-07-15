@@ -57,6 +57,13 @@ pub struct AndroidYamuxSessionManager {
     yamux_next_session_id: AtomicUsize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyStreamRoute {
+    DirectTcp,
+    Quic,
+    Yamux,
+}
+
 impl AndroidYamuxSessionManager {
     pub fn new_tcp_direct(
         config: Arc<AndroidAgentConfig>,
@@ -74,7 +81,7 @@ impl AndroidYamuxSessionManager {
         Self::new_for_transport(
             config,
             shutdown,
-            "udp_yamux_sessions",
+            "udp_proxy_connections",
             TransportProtocol::Udp,
         )
     }
@@ -88,7 +95,13 @@ impl AndroidYamuxSessionManager {
         let direct_tcp_connect_limit = config
             .http_proxy_max_concurrent_connects
             .clamp(1, MAX_CONFIGURED_DIRECT_TCP_CONNECTS);
-        let quic_pool_size = config.effective_quic_connection_pool_size();
+        // transport_mode=quic 只控制 UDP 的外层传输。TCP manager 始终使用
+        // direct framed TCP，因此不应分配也不可能误用 QUIC connection pool。
+        let quic_pool_size = if config.transport_mode.uses_quic_for(yamux_transport) {
+            config.effective_quic_connection_pool_size()
+        } else {
+            0
+        };
         Arc::new(Self {
             config,
             shutdown,
@@ -110,21 +123,19 @@ impl AndroidYamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<AndroidYamuxTargetStream> {
-        if self.config.transport_mode == TransportMode::Quic {
-            return self.open_quic_stream(address, transport).await;
-        }
+        let route = proxy_stream_route(self.config.transport_mode, self.yamux_transport, transport)
+            .ok_or_else(|| {
+                AndroidAgentError::Connection(format!(
+                    "Android {} only supports {:?} proxy streams",
+                    self.manager_name, self.yamux_transport
+                ))
+            })?;
 
-        if transport == TransportProtocol::Tcp && self.yamux_transport == TransportProtocol::Tcp {
-            return self.open_direct_tcp_stream(address).await;
+        match route {
+            ProxyStreamRoute::DirectTcp => self.open_direct_tcp_stream(address).await,
+            ProxyStreamRoute::Quic => self.open_quic_stream(address, transport).await,
+            ProxyStreamRoute::Yamux => self.open_target_stream(address, transport).await,
         }
-
-        if transport != self.yamux_transport {
-            return Err(AndroidAgentError::Connection(format!(
-                "Android {} only supports {:?} proxy streams",
-                self.manager_name, self.yamux_transport
-            )));
-        }
-        self.open_target_stream(address, transport).await
     }
 
     async fn open_quic_stream(
@@ -136,6 +147,12 @@ impl AndroidYamuxSessionManager {
             return Err(AndroidAgentError::Connection(
                 "Android agent is stopping".into(),
             ));
+        }
+        if self.quic_connections.is_empty() {
+            return Err(AndroidAgentError::Connection(format!(
+                "Android {} QUIC transport is disabled",
+                self.manager_name
+            )));
         }
         let slot_index = self.next_quic_connection_slot();
         for attempt in 0..2 {
@@ -518,6 +535,25 @@ impl AndroidYamuxSessionManager {
     }
 }
 
+fn proxy_stream_route(
+    transport_mode: TransportMode,
+    manager_transport: TransportProtocol,
+    target_transport: TransportProtocol,
+) -> Option<ProxyStreamRoute> {
+    if manager_transport != target_transport {
+        return None;
+    }
+
+    if target_transport == TransportProtocol::Tcp {
+        // TCP 不受 transport_mode 影响，一律沿用原来的独立 framed TCP 连接。
+        Some(ProxyStreamRoute::DirectTcp)
+    } else if transport_mode.uses_quic_for(target_transport) {
+        Some(ProxyStreamRoute::Quic)
+    } else {
+        Some(ProxyStreamRoute::Yamux)
+    }
+}
+
 pub enum AndroidYamuxTargetStream {
     Direct(ClientStream<TcpStream>),
     Yamux(YamuxClientStream),
@@ -635,15 +671,84 @@ mod tests {
     }
 
     #[test]
-    fn quic_pool_round_robins_across_independent_connections() {
+    fn udp_quic_pool_round_robins_across_independent_connections() {
         let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
         let manager =
-            AndroidYamuxSessionManager::new_tcp_direct(Arc::new(config), CancellationToken::new());
+            AndroidYamuxSessionManager::new_udp(Arc::new(config), CancellationToken::new());
 
         assert_eq!(manager.quic_connections.len(), 4);
         let slots: Vec<_> = (0..10)
             .map(|_| manager.next_quic_connection_slot())
             .collect();
         assert_eq!(slots, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
+    }
+
+    #[test]
+    fn quic_mode_routes_only_udp_over_quic() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Tcp,
+                TransportProtocol::Tcp,
+            ),
+            Some(ProxyStreamRoute::DirectTcp)
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Udp,
+                TransportProtocol::Udp,
+            ),
+            Some(ProxyStreamRoute::Quic)
+        );
+    }
+
+    #[test]
+    fn tcp_mode_keeps_udp_on_yamux_and_tcp_on_direct_framed_tcp() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Tcp,
+                TransportProtocol::Tcp,
+                TransportProtocol::Tcp,
+            ),
+            Some(ProxyStreamRoute::DirectTcp)
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Tcp,
+                TransportProtocol::Udp,
+                TransportProtocol::Udp,
+            ),
+            Some(ProxyStreamRoute::Yamux)
+        );
+    }
+
+    #[test]
+    fn tcp_manager_never_allocates_a_quic_pool() {
+        let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        let manager =
+            AndroidYamuxSessionManager::new_tcp_direct(Arc::new(config), CancellationToken::new());
+
+        assert!(manager.quic_connections.is_empty());
+    }
+
+    #[test]
+    fn manager_rejects_cross_protocol_routes() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Tcp,
+                TransportProtocol::Udp,
+            ),
+            None
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Udp,
+                TransportProtocol::Tcp,
+            ),
+            None
+        );
     }
 }

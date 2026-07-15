@@ -6,20 +6,20 @@
 2. Agent 和 Proxy 之间的认证、加密、连接复用、数据封包分别由谁负责。
 3. 桌面 UI、Android VPN、测试和部署脚本分别接在核心代理系统的哪个位置。
 
-本文所有流程图都保存在 `docs/diagrams/*.mmd`。部分旧 SVG 渲染产物已经清理，避免展示与当前 raw Yamux 架构不一致的旧图。
+本文所有流程图都保存在 `docs/diagrams/*.mmd`。部分旧 SVG 渲染产物已经清理，避免展示与当前混合传输架构不一致的旧图。
 
 ## 1. 项目一句话
 
-PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量；TCP 目标通过独立 framed TCP 连接到 proxy，UDP relay 继续通过 raw TCP Yamux 外层连接承载子流。两种路径内都使用 PPAASS 的 Auth/Connect/Data 加密协议。Proxy 做用户认证、出站连接和数据回传。
+PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，服务端侧运行 Proxy。Agent 接收本机 HTTP/SOCKS5/TUN/VPN 流量；TCP 目标始终通过独立 framed TCP 连接到 Proxy。配置值 `transport_mode = "quic"` 表示混合模式，只有 UDP relay 使用 QUIC 连接池；配置值 `transport_mode = "tcp"` 表示全 TCP 模式，UDP relay 改由 raw TCP/Yamux 承载。所有路径内都使用 PPAASS 的 Auth/Connect/Data 加密协议。Proxy 做用户认证、出站连接和数据回传。
 
 核心 workspace：
 
 ```text
 ppaass-ai/
-├── desktop-agent-be/    # 桌面 Agent 后端：HTTP/SOCKS5/TUN、TCP direct framed、UDP Yamux
-├── proxy/               # 服务端 Proxy：direct framed/Yamux accept、认证、连接目标、relay、上游转发
+├── desktop-agent-be/    # 桌面 Agent 后端：HTTP/SOCKS5/TUN、TCP direct framed、UDP QUIC/Yamux
+├── proxy/               # 服务端 Proxy：TCP direct framed/Yamux 与 QUIC accept、认证、连接目标、relay、上游转发
 ├── protocol/            # Agent <-> Proxy 自定义协议、消息、编解码、加密、压缩
-├── common/              # Agent/Proxy 复用的客户端握手、ClientStream、Yamux、工具
+├── common/              # Agent/Proxy 复用的客户端握手、ClientStream、QUIC、Yamux、工具
 ├── desktop-agent-ui/    # Tauri 2 + Vue 3 桌面 UI，内嵌 desktop-agent-be 运行
 ├── android-agent/       # Android VpnService + Rust JNI native Agent
 ├── tests/               # mock target、mock client、集成测试、性能测试和报告
@@ -52,7 +52,7 @@ Agent 是客户端入口。
 - 启动 Tokio runtime。
 - 监听 `listen_addr`，用首字节识别 HTTP 还是 SOCKS5。
 - 如果 `[tun] enabled = true`，额外启动 TUN 模式。
-- 所有需要走代理的目标，最后都通过 `YamuxSessionManager::connect_to_target(...)` 拿到一个可读写的代理流；TCP 返回 direct framed PPAASS 连接，UDP relay 返回 Yamux 子流。
+- 所有需要走代理的目标，最后都通过 `YamuxSessionManager::connect_to_target(...)` 拿到一个可读写的代理流；TCP 始终返回 direct framed PPAASS TCP 连接，UDP relay 在混合模式返回 QUIC 双向流，在全 TCP 模式返回 Yamux 子流。
 
 ### 3.2 Proxy
 
@@ -67,10 +67,10 @@ Proxy 是服务端出口。
 它做的事情：
 
 - 读取 `proxy.toml` 和 `users.toml`。
-- 监听 Agent 的入站 TCP 连接，先 peek 首包判断是 direct framed PPAASS 还是 raw Yamux。
-- 对每条 direct framed 连接或每个 Yamux 子流执行 PPAASS Auth，然后等待 `ConnectRequest`。
+- 同时监听 Agent 的入站 TCP 和 UDP/QUIC。TCP 入站先 peek 首包判断是 direct framed PPAASS 还是 raw Yamux；QUIC 入站接受独立双向流。
+- 对每条 direct framed 连接、QUIC 双向流或 Yamux 子流执行 PPAASS Auth，然后等待 `ConnectRequest`。
 - 根据目标类型进入 TCP relay、单目标 UDP、共享 UDP relay、Proxy DNS 或上游转发。
-- TCP relay 使用独立 direct framed TCP 连接；UDP relay 使用 Agent 侧 raw Yamux session 池。
+- TCP relay 始终使用独立 direct framed TCP 连接；UDP relay 根据 Agent 模式使用 QUIC 连接池或 raw TCP/Yamux session 池。
 
 ### 3.3 Protocol
 
@@ -117,12 +117,12 @@ Mermaid 源码：[03-auth-encryption.mmd](diagrams/03-auth-encryption.mmd)
 
 安全观察：当前实现为了满足“Agent 持私钥、Proxy 持公钥”的需求，使用了私钥操作和公钥还原的 RSA 原语。这是签名式思路，不是常见的“公钥加密、私钥解密”KEM 流程。生产安全评审时，这块值得单独审计。
 
-## 6. 目标流管理：TCP direct framed + UDP raw Yamux
+## 6. 目标流管理：TCP 固定 direct framed，UDP 可选 QUIC/Yamux
 
-Agent 仍然保留 `tcp_sessions` 和 `udp_sessions` 两个管理器名称，但两条路径的底层传输不同：
+Agent 保留 `tcp_sessions` 和 `udp_sessions` 两个管理器名称，两条路径的底层传输明确分开：
 
-- `tcp_sessions`: HTTP CONNECT、普通 HTTP、SOCKS5 TCP、TUN TCP 使用；当前实现会为每个 TCP 目标建立一条 direct framed PPAASS TCP 连接到 Proxy。
-- `udp_sessions`: SOCKS5 UDP、TUN UDP、DNS proxy、共享 UDP relay 使用；通过 raw TCP Yamux 外层连接打开子流。
+- `tcp_sessions`: HTTP CONNECT、普通 HTTP、SOCKS5 TCP、TUN TCP 使用；无论 `transport_mode` 取何值，每个 TCP 目标都建立一条 direct framed PPAASS TCP 连接到 Proxy。
+- `udp_sessions`: SOCKS5 UDP、TUN UDP、DNS proxy、共享 UDP relay 使用；`transport_mode = "quic"` 时从 UDP QUIC 连接池打开双向流，`transport_mode = "tcp"` 时从 raw TCP/Yamux 外层连接打开子流。
 
 关键文件：
 
@@ -135,10 +135,11 @@ Mermaid 源码：[04-yamux-session-manager.mmd](diagrams/04-yamux-session-manage
 
 当前传输关系：
 
-- TCP 目标：Agent 直接连 Proxy，连接内执行 PPAASS Auth，然后发送 `ConnectRequest`，后续数据通过加密 `DataPacket` 传输。
-- UDP relay：Agent 到 Proxy 的外层连接是 raw TCP + `tokio-yamux`；每个 UDP relay 目标或共享 relay 通道先打开 Yamux 子流，再在子流内执行 PPAASS Auth/Connect/Data。
-- Agent 启动时不预热 UDP Yamux session；`sessions` 表示最大外层连接数，请求路径只在现有 session 没有可立即打开子流的容量时按需补 1 条。
-- Proxy accept 到入站 TCP 后先判断首包是否像 Yamux header；direct framed 连接直接进入协议状态机，Yamux 连接先 accept 子流再进入同一套协议状态机。
+- TCP 目标：Agent 直接连 Proxy，连接内执行 PPAASS Auth，然后发送 `ConnectRequest`，后续数据通过加密 `DataPacket` 传输；这条路径不读取 QUIC 连接数，也不受模式切换影响。
+- 混合模式 UDP relay：Agent 从仅供 UDP 使用的 QUIC 连接池打开双向流，再在流内执行 PPAASS Auth/Connect/Data。连接池大小为 1–8，用多个 UDP 拥塞窗口隔离并发影响。
+- 全 TCP 模式 UDP relay：Agent 到 Proxy 的外层连接是 raw TCP + `tokio-yamux`；每个 UDP relay 目标或共享 relay 通道先打开 Yamux 子流，再在子流内执行 PPAASS Auth/Connect/Data。
+- Agent 启动时不预热 UDP Yamux session；`sessions` 只在全 TCP 模式生效，表示最大外层连接数，请求路径在现有 session 没有可立即打开子流的容量时按需补 1 条。
+- Proxy 的 TCP accept 会判断首包是否像 Yamux header；direct framed 连接直接进入协议状态机，Yamux 连接先 accept 子流。Proxy 的 QUIC accept 则为每条双向流进入同一套协议状态机。
 
 ## 7. HTTP 本地代理路径
 
@@ -175,26 +176,26 @@ Mermaid 源码：[07-proxy-state-machine.mmd](diagrams/07-proxy-state-machine.mm
 
 关键文件：
 
-- `proxy/src/server.rs`: 入站 TCP accept、direct framed/Yamux 识别、Yamux server session、认证超时。
-- `proxy/src/connection/auth.rs`: 每条 direct framed 连接或每个 Yamux 子流内的 Auth。
+- `proxy/src/server.rs`: 入站 TCP/QUIC accept、direct framed/Yamux 识别、QUIC/Yamux server session、认证超时。
+- `proxy/src/connection/auth.rs`: 每条 direct framed 连接、QUIC 双向流或 Yamux 子流内的 Auth。
 - `proxy/src/connection/connect.rs`: Connect 分流。
 - `proxy/src/connection/relay.rs`: TCP/单目标 UDP 中继。
 - `proxy/src/connection/udp_relay.rs`: 共享 UDP relay。
 - `proxy/src/connection/upstream.rs`: forward mode 连接上游 PPAASS proxy。
 
-## 10. UDP Yamux 子流内 DataPacket 中继
+## 10. UDP QUIC/Yamux 业务流内的 DataPacket 中继
 
-UDP relay 路径中的每条共享 relay 通道或 UDP 目标连接会对应一个 Yamux 子流。子流内仍然不是裸 UDP，而是完整的 PPAASS 协议帧。TCP 目标也使用同一套 Auth/Connect/Data 帧，但承载在 direct framed TCP 连接上，不经过 Yamux 子流：
+UDP relay 路径中的每条共享 relay 通道或 UDP 目标连接都会对应一条代理业务流：混合模式使用 QUIC 双向流，全 TCP 模式使用 Yamux 子流。业务流内不是裸 UDP，而是完整的 PPAASS 协议帧。TCP 目标也使用同一套 Auth/Connect/Data 帧，但始终承载在 direct framed TCP 连接上，不经过 UDP QUIC 连接池或 Yamux 子流。
 
-Mermaid 源码：[08-yamux-substream-datapacket.mmd](diagrams/08-yamux-substream-datapacket.mmd)
+全 TCP 模式的 Yamux 流程图源码：[08-yamux-substream-datapacket.mmd](diagrams/08-yamux-substream-datapacket.mmd)
 
 顺序：
 
-- Agent 在 UDP Yamux 子流内发送 `Auth`。
-- Proxy 对该子流认证成功后返回 `AuthResponse`。
-- Agent 在同一子流内发送目标 `ConnectRequest`，例如单目标 UDP 或 `Address::UdpRelay`。
+- Agent 在 UDP QUIC 双向流或 Yamux 子流内发送 `Auth`。
+- Proxy 对该业务流认证成功后返回 `AuthResponse`。
+- Agent 在同一业务流内发送目标 `ConnectRequest`，例如单目标 UDP 或 `Address::UdpRelay`。
 - 成功后双方继续通过加密的 `DataPacket` 传输 payload 和半关闭信号。
-- 上层 SOCKS/TUN UDP 只看到普通 UDP payload，Yamux 外层只负责 UDP relay 子流复用和流控。
+- 上层 SOCKS/TUN UDP 只看到普通 UDP payload；QUIC 或 Yamux 外层只负责 UDP relay 业务流的复用和流控。
 
 ## 11. UDP relay
 
@@ -248,10 +249,10 @@ TUN 模式里的关键细节：
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
-- `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。
-- UDP/443 命中直连规则时保持直连；未命中时仅在外层 TCP 模式使用 UDP relay，外层 QUIC 模式会阻断并让应用回退 TCP/TLS，避免把 HTTP/3 套进可靠 QUIC stream 后产生队头阻塞。
+- `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；混合模式通过 UDP QUIC 连接池承载，全 TCP 模式通过 TCP/Yamux 承载。关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。
+- UDP/443 命中直连规则时保持直连；未命中时仅在全 TCP 模式使用 UDP relay，混合模式会阻断并让应用回退 TCP/TLS，避免把 HTTP/3 套进可靠 QUIC stream 后产生队头阻塞。
 - `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
-- UDP/443 QUIC 使用独立策略：默认允许并始终按 `direct_access` 选择 Agent 直连或共享 UDP relay，因此必须经 Proxy 的网站不会受 `proxy_udp` 开关影响；需要强制浏览器回退 TCP/TLS 时可开启 QUIC 阻断。
+- UDP/443 QUIC 使用独立策略：默认允许命中 `direct_access` 的流量直连；未命中时，全 TCP 模式可走共享 UDP relay，混合模式会回退 TCP/TLS。需要强制所有浏览器 QUIC 回退时可开启 QUIC 阻断。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
@@ -283,8 +284,10 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `proxy_addrs`: 远端 Proxy 地址列表，连接时随机选择。
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
+- `transport_mode`: 保留 `quic`/`tcp` 配置值以兼容旧配置；`quic` 是 TCP direct framed + UDP QUIC 的混合模式，`tcp` 是 TCP direct framed + UDP TCP/Yamux 的全 TCP 模式。
+- `quic_connection_pool_size`: 仅混合模式的 UDP relay 使用，范围 1–8；TCP manager 不分配 QUIC 连接池。
 - `compression_mode`: `none`、`lz4`、`gzip`、`zstd`。
-- `[yamux.udp]`: Agent 端 UDP relay 的 raw Yamux 最大 session 数、每 session 子流数、窗口等。TCP relay 不再使用 Yamux session。
+- `[yamux.udp]`: 仅全 TCP 模式下 Agent 端 UDP relay 使用的 raw Yamux 最大 session 数、每 session 子流数、窗口等。TCP relay 始终不使用 Yamux session。
 - `[tun]`: TUN 设备、普通 UDP 直连/代理切换、DNS、QUIC、helper、状态文件。
 - `[direct_access]`: `proxy_all`、`direct_all`、`rules`。
 
@@ -298,7 +301,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `users_path`: 用户配置文件。
 - `compression_mode`: Proxy 响应编码使用的压缩模式。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
-- `[yamux]`: Proxy 作为 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接直接进入 PPAASS 协议处理。
+- `[yamux]`: Proxy 作为全 TCP 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接和混合模式 QUIC 双向流直接进入 PPAASS 协议处理。
 - `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。
@@ -369,7 +372,7 @@ Android 和桌面 TUN 的相同点：
 
 - 都用 `netstack-smoltcp`。
 - 都复用 `common` 和 `protocol`。
-- 都支持 TCP direct framed、UDP raw Yamux relay、direct_access、proxy DNS、QUIC 转发和可选 QUIC 阻断。桌面 TUN 还可通过 `proxy_udp` 将代理 DNS 与 QUIC 之外的普通 UDP 切换为 Agent 本地直连。
+- 都支持 TCP 固定 direct framed、UDP QUIC/Yamux 可选传输、direct_access、proxy DNS、应用 QUIC 分流和可选 QUIC 阻断。桌面 TUN 还可通过 `proxy_udp` 将代理 DNS 与 UDP/443 QUIC 之外的普通 UDP 切换为 Agent 本地直连。
 
 不同点：
 
@@ -444,7 +447,7 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 6. `proxy/src/server.rs`、`proxy/src/connection/auth.rs`、`proxy/src/connection/connect.rs`：看 Proxy 状态机。
 7. `desktop-agent-be/src/server.rs`：看本地入口如何分 HTTP/SOCKS/TUN。
 8. `desktop-agent-be/src/http_handler.rs` 和 `socks5_handler.rs`：看本地代理细节。
-9. `desktop-agent-be/src/yamux_session/*`：看 TCP direct framed 和 UDP raw Yamux 如何被统一包装成目标流。
+9. `desktop-agent-be/src/yamux_session/*`：看固定的 TCP direct framed 与可选的 UDP QUIC/Yamux 如何被统一包装成目标流。
 10. `proxy/src/connection/relay.rs`、`udp_relay.rs`：看数据搬运。
 11. `desktop-agent-be/src/tun_handler/*`：最后再读 TUN，因为它依赖前面所有概念。
 12. `desktop-agent-ui/src-tauri/src/app.rs` 和 `agent.rs`：看 UI 如何嵌入 Agent。
@@ -454,8 +457,9 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 ## 20. 常见容易误解的点
 
 - Agent 本地 SOCKS5 默认无认证，不代表系统无用户认证；真正的用户认证发生在 Agent 到 Proxy。
-- Yamux 外层连接是 raw TCP，不再经过 PPAASS Auth/Connect；PPAASS Auth/Connect 发生在 UDP Yamux 子流内。
-- TCP relay 不走 Yamux 外层，而是每个目标建立 direct framed PPAASS TCP 连接；UDP relay 才走 raw Yamux session 池。
+- 全 TCP 模式的 Yamux 外层连接是 raw TCP，不再经过 PPAASS Auth/Connect；PPAASS Auth/Connect 发生在 UDP Yamux 子流内。
+- `transport_mode = "quic"` 不是“所有数据走 QUIC”，而是 TCP 目标继续使用 direct framed PPAASS TCP，只有 UDP relay 使用 QUIC 连接池。
+- `transport_mode = "tcp"` 也不改变 TCP 目标路径，只是把 UDP relay 从 QUIC 切换到 raw TCP/Yamux。
 - `Address::UdpRelay`、`Address::ProxyDns` 是协议虚拟地址，不是真实互联网目标。
 - TUN 模式要先固定 proxy 控制连接的物理出口，再安装 TUN 路由。
 - `direct_access` 在 TUN 模式下直接看 IP/CIDR；域名规则只在 DNS proxy 缓存命中时影响已解析 IP，不再通过 TLS SNI/HTTP Host 嗅探补充。

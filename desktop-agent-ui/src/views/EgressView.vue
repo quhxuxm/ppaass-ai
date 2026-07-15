@@ -59,14 +59,14 @@ const emit = defineEmits<{
     <Card class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
-          <h2>公共通道参数</h2>
-          <Tag value="TCP / UDP 共用" severity="info" />
+          <h2>传输策略</h2>
+          <Tag value="TCP 始终走 TCP" severity="info" />
         </div>
       </template>
       <template #content>
         <div class="field-pair channel-parameters-grid">
           <label class="field">
-            <span><AppIcon name="waypoints" />传输模式</span>
+            <span><AppIcon name="waypoints" />UDP 代理通道</span>
             <Select
               :model-value="summary.transport_mode"
               :options="transportModeOptions"
@@ -75,7 +75,7 @@ const emit = defineEmits<{
               :disabled="configLocked"
               @update:model-value="emit('set-field', 'transport_mode', $event)"
             />
-            <small>QUIC 使用 UDP 多路复用，网络切换和并发流量下更稳定；TCP 用于连接旧版 Proxy。</small>
+            <small>混合模式仅让 UDP 数据使用 QUIC，TCP 数据仍使用原有 TCP 通道；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。代理启动后此项锁定，停止后才能切换。</small>
           </label>
           <label class="field">
             <span><AppIcon name="clock" />控制连接超时</span>
@@ -102,25 +102,45 @@ const emit = defineEmits<{
       </template>
     </Card>
 
+    <Card class="panel span-12">
+      <template #title>
+        <div class="panel-heading inline">
+          <h2>TCP 数据</h2>
+          <Tag value="两种模式均使用 TCP" severity="success" />
+        </div>
+      </template>
+      <template #content>
+        <section class="policy-section tcp-transport-note">
+          <div class="section-heading">
+            <div class="section-title">
+              <span>TCP 转发</span>
+              <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN TCP" severity="secondary" />
+            </div>
+          </div>
+          <p>所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不经过 QUIC 连接池。</p>
+        </section>
+      </template>
+    </Card>
+
     <Card v-if="summary.transport_mode === 'quic'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
-          <h2>QUIC</h2>
-          <Tag value="默认传输" severity="success" />
+          <h2>UDP 数据 · QUIC</h2>
+          <Tag value="混合模式" severity="success" />
         </div>
       </template>
       <template #content>
         <section class="policy-section yamux-settings">
           <div class="section-heading">
             <div class="section-title">
-              <span>QUIC 连接池</span>
-              <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN / UDP" severity="secondary" />
+              <span>UDP QUIC 连接池</span>
+              <Tag class="mode-effect-tag" value="仅作用于 UDP relay" severity="secondary" />
             </div>
-            <strong>{{ summary.quic_connection_pool_size }} 条 / 业务类型</strong>
+            <strong>{{ summary.quic_connection_pool_size }} 条</strong>
           </div>
           <div class="field-pair">
             <label class="field">
-              <span><AppIcon name="share" />每类连接数</span>
+              <span><AppIcon name="share" />UDP QUIC 连接数</span>
               <ConfigNumberInput
                 :model-value="summary.quic_connection_pool_size"
                 :min="1"
@@ -130,30 +150,10 @@ const emit = defineEmits<{
                 :use-grouping="false"
                 @update:model-value="emit('set-field', 'quic_connection_pool_size', $event)"
               />
-              <small>TCP 与 UDP 各自使用该数量的 QUIC 连接分流；建议保持默认 4，范围 1–8。</small>
+              <small>仅 UDP relay 使用该连接池；建议保持默认 4，范围 1–8。</small>
             </label>
           </div>
-          <p>各目标在连接池中分流，并在独立双向流中继续使用原有 PPAASS 认证和加密协议；增加连接数可隔离拥塞，但会占用更多网络与内存资源。</p>
-        </section>
-      </template>
-    </Card>
-
-    <Card v-else class="panel span-12">
-      <template #title>
-        <div class="panel-heading inline">
-          <h2>TCP</h2>
-          <Tag value="普通 TCP 连接" severity="success" />
-        </div>
-      </template>
-      <template #content>
-        <section class="policy-section tcp-transport-note">
-          <div class="section-heading">
-            <div class="section-title">
-              <span>TCP 转发</span>
-              <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN" severity="secondary" />
-            </div>
-          </div>
-          <p>TCP 目标连接使用独立的普通 TCP 连接承载。</p>
+          <p>UDP 目标在连接池中分流，并在独立双向流中继续使用原有 PPAASS 认证和加密协议；增加连接数可隔离 UDP 拥塞，但会占用更多网络与内存资源。</p>
         </section>
       </template>
     </Card>
@@ -161,8 +161,8 @@ const emit = defineEmits<{
     <Card v-if="summary.transport_mode === 'tcp'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
-          <h2>UDP</h2>
-          <Tag value="独立 UDP Yamux 池" severity="info" />
+          <h2>UDP 数据 · TCP/Yamux</h2>
+          <Tag value="全 TCP 模式" severity="info" />
         </div>
       </template>
       <template #content>

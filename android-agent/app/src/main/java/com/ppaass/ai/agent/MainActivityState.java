@@ -74,6 +74,7 @@ protected String transportModeValue;
 protected final List<Button> transportModeButtons = new ArrayList<>();
 protected LinearLayout quicConnectionPoolConfig;
 protected EditText quicConnectionPoolSize;
+// 整个 UDP Yamux 配置区只在“全 TCP 模式”下显示。
 protected LinearLayout udpYamuxConfig;
 protected String directAccessModeValue;
 protected EditText directRuleDraft;

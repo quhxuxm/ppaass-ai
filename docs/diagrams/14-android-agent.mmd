@@ -10,6 +10,9 @@ flowchart TD
     Netstack --> Direct{"direct_access 命中?"}
     Direct -->|"是"| ProtectedSocket["protect 后的直连 socket"]
     Direct -->|"否 TCP"| TcpProxy["direct framed PPAASS TCP"]
-    Direct -->|"否 UDP"| UdpProxy["raw Yamux UDP relay"]
+    Direct -->|"否 UDP"| UdpMode{"transport_mode"}
+    UdpMode -->|"quic / 混合"| UdpQuic["UDP QUIC 连接池"]
+    UdpMode -->|"tcp / 全 TCP"| UdpProxy["raw TCP/Yamux UDP relay"]
     TcpProxy --> Proxy["PPAASS Proxy"]
     UdpProxy --> Proxy
+    UdpQuic --> Proxy

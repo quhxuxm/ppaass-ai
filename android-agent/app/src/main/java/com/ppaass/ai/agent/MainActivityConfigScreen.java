@@ -44,13 +44,13 @@ protected void buildConfigScreen(LinearLayout root) {
         transportModeControl(
                 connection,
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
-        addFieldHelp(connection, "仅在 VPN 和 HTTP / SOCKS5 代理停止时可修改；选择后立即保存，下次启动时生效。PPAASS RSA/AES 加密方式保持不变。");
+        addFieldHelp(connection, "混合模式下，TCP 数据仍使用原有 TCP 通道，只有 UDP 数据使用 QUIC；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。VPN 或 HTTP / SOCKS5 代理启动后此项锁定，全部停止后才能切换。");
         quicConnectionPoolConfig = new LinearLayout(this);
         quicConnectionPoolConfig.setOrientation(LinearLayout.VERTICAL);
         connection.addView(quicConnectionPoolConfig, matchWrap());
         quicConnectionPoolSize = numberControl(
                 quicConnectionPoolConfig,
-                "QUIC 连接数",
+                "UDP QUIC 连接数",
                 boundedIntString(
                         prefString(
                                 "quic_connection_pool_size",
@@ -61,8 +61,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
                 DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE);
-        addFieldHelp(quicConnectionPoolConfig, "TCP 与 UDP 各自使用该数量的连接；范围 1–8，默认 4。连接池可分散并发程序的拥塞影响，但会增加少量资源占用。");
-        updateQuicConnectionPoolVisibility();
+        addFieldHelp(quicConnectionPoolConfig, "仅 UDP relay 使用该连接池；范围 1–8，默认 4。连接池可分散 UDP 拥塞，但会增加少量资源占用。");
         connectTimeoutSecs = numberControl(
                 connection,
                 "控制连接超时（秒）",
@@ -71,7 +70,7 @@ protected void buildConfigScreen(LinearLayout root) {
                         String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(connection, "QUIC 握手、打开双向流以及 TCP 兼容连接共用此超时。");
+        addFieldHelp(connection, "UDP QUIC 握手、打开双向流以及普通 TCP 连接共用此超时。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
@@ -120,72 +119,74 @@ protected void buildConfigScreen(LinearLayout root) {
                 new String[]{"none", "lz4", "gzip", "zstd"},
                 prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
-        LinearLayout tcpConfig = configSection(root, "TCP 兼容模式");
+        LinearLayout tcpConfig = configSection(root, "TCP 数据通道");
         LinearLayout tcpRelay = configGroup(
                 tcpConfig,
                 "TCP 转发",
-                "普通 TCP 连接");
-        addFieldHelp(tcpRelay, "transport_mode=tcp 时，TCP 目标连接使用独立的普通 TCP 连接承载。");
+                "两种模式均使用 TCP");
+        addFieldHelp(tcpRelay, "所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不经过 QUIC 连接池。");
 
-        LinearLayout udpConfig = configSection(root, "UDP TCP 兼容模式");
-        udpYamuxConfig = configGroup(
-                udpConfig,
-                "UDP Yamux",
-                "作用于 UDP relay 子流");
-        yamuxUdpSessions = numberControl(
+        udpYamuxConfig = configSection(root, "UDP 数据 · TCP/Yamux");
+        LinearLayout udpYamux = configGroup(
                 udpYamuxConfig,
+                "UDP Yamux",
+                "仅全 TCP 模式");
+        yamuxUdpSessions = numberControl(
+                udpYamux,
                 "外层连接",
                 prefString(
                         "yamux_udp_sessions",
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。");
+        addFieldHelp(udpYamux, "限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。");
         yamuxUdpMaxStreamsPerSession = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "并发子流",
                 prefString(
                         "yamux_udp_max_streams_per_session",
                         String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。");
+        addFieldHelp(udpYamux, "限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。");
         yamuxUdpOpenStreamTimeoutSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "打开子流超时",
                 prefString(
                         "yamux_udp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "影响新 UDP relay 通道申请 Yamux 子流的等待时间。");
+        addFieldHelp(udpYamux, "影响新 UDP relay 通道申请 Yamux 子流的等待时间。");
         yamuxUdpKeepaliveIntervalSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "Keepalive 间隔",
                 prefString(
                         "yamux_udp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
-        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接的保活探测；0 表示关闭。");
+        addFieldHelp(udpYamux, "影响 UDP Yamux 外层连接的保活探测；0 表示关闭。");
         yamuxUdpConnectionWriteTimeoutSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "写超时",
                 prefString(
                         "yamux_udp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接写入帧的超时判断。");
+        addFieldHelp(udpYamux, "影响 UDP Yamux 外层连接写入帧的超时判断。");
         yamuxUdpStreamWindowSizeKb = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "流控窗口 KB",
                 prefString(
                         "yamux_udp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
-        addFieldHelp(udpYamuxConfig, "影响每个 UDP relay Yamux 子流可缓冲的窗口大小。");
+        addFieldHelp(udpYamux, "影响每个 UDP relay Yamux 子流可缓冲的窗口大小。");
+
+        updateTransportModeSettingsVisibility();
 
         buildDirectAccessSection(root);
     }

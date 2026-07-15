@@ -2,6 +2,30 @@ use super::*;
 use crate::yamux_session::proxy_connection::new_direct_tcp_target_stream;
 use common::TransportMode;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyStreamRoute {
+    DirectTcp,
+    Quic,
+    Yamux,
+    InvalidManager,
+}
+
+fn proxy_stream_route(
+    mode: TransportMode,
+    manager_transport: TransportProtocol,
+    transport: TransportProtocol,
+) -> ProxyStreamRoute {
+    if transport != manager_transport {
+        return ProxyStreamRoute::InvalidManager;
+    }
+
+    match transport {
+        TransportProtocol::Tcp => ProxyStreamRoute::DirectTcp,
+        TransportProtocol::Udp if mode.uses_quic_for(transport) => ProxyStreamRoute::Quic,
+        TransportProtocol::Udp => ProxyStreamRoute::Yamux,
+    }
+}
+
 impl YamuxSessionManager {
     #[instrument(skip(self))]
     pub async fn connect_to_target(
@@ -9,29 +33,27 @@ impl YamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<YamuxTargetStream> {
-        if self.config.transport_mode == TransportMode::Quic {
-            return self.open_quic_target_stream(address, transport).await;
-        }
-
-        if transport == TransportProtocol::Tcp && self.yamux_transport == TransportProtocol::Tcp {
-            let (stream, stream_id) = new_direct_tcp_target_stream(
-                &self.config,
-                self.get_proxy_bind_ip(),
-                self.get_proxy_bind_interface(),
-                address,
-            )
-            .await?;
-            return Ok(YamuxTargetStream::new_direct(stream, stream_id));
-        }
-
-        if transport != self.yamux_transport {
-            return Err(AgentError::Connection(format!(
+        // TCP 数据始终使用原有的 direct framed TCP 路径，transport_mode
+        // 只决定 UDP 数据是否改用 QUIC。先校验 manager 类型，避免误调用
+        // 绕过 TCP/UDP 语义隔离。
+        match proxy_stream_route(self.config.transport_mode, self.yamux_transport, transport) {
+            ProxyStreamRoute::DirectTcp => {
+                let (stream, stream_id) = new_direct_tcp_target_stream(
+                    &self.config,
+                    self.get_proxy_bind_ip(),
+                    self.get_proxy_bind_interface(),
+                    address,
+                )
+                .await?;
+                Ok(YamuxTargetStream::new_direct(stream, stream_id))
+            }
+            ProxyStreamRoute::Quic => self.open_quic_target_stream(address, transport).await,
+            ProxyStreamRoute::Yamux => self.open_target_stream(address, transport).await,
+            ProxyStreamRoute::InvalidManager => Err(AgentError::Connection(format!(
                 "{} only handles {:?} traffic, got {:?}",
                 self.manager_name, self.yamux_transport, transport
-            )));
+            ))),
         }
-
-        self.open_target_stream(address, transport).await
     }
 
     async fn open_quic_target_stream(
@@ -39,6 +61,12 @@ impl YamuxSessionManager {
         address: Address,
         transport: TransportProtocol,
     ) -> Result<YamuxTargetStream> {
+        if self.quic_connections.is_empty() {
+            return Err(AgentError::Connection(format!(
+                "{} QUIC transport is disabled",
+                self.manager_name
+            )));
+        }
         let slot_index = self.next_quic_connection_slot();
         for attempt in 0..2 {
             let handle = {
@@ -112,5 +140,70 @@ impl YamuxSessionManager {
             }
         }
         Err(AgentError::Connection("QUIC proxy 连接失败".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hybrid_mode_routes_tcp_direct_and_udp_over_quic() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Tcp,
+                TransportProtocol::Tcp,
+            ),
+            ProxyStreamRoute::DirectTcp
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Udp,
+                TransportProtocol::Udp,
+            ),
+            ProxyStreamRoute::Quic
+        );
+    }
+
+    #[test]
+    fn tcp_mode_routes_tcp_direct_and_udp_over_yamux() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Tcp,
+                TransportProtocol::Tcp,
+                TransportProtocol::Tcp,
+            ),
+            ProxyStreamRoute::DirectTcp
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Tcp,
+                TransportProtocol::Udp,
+                TransportProtocol::Udp,
+            ),
+            ProxyStreamRoute::Yamux
+        );
+    }
+
+    #[test]
+    fn mismatched_manager_is_rejected_before_transport_selection() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Tcp,
+                TransportProtocol::Udp,
+            ),
+            ProxyStreamRoute::InvalidManager
+        );
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Quic,
+                TransportProtocol::Udp,
+                TransportProtocol::Tcp,
+            ),
+            ProxyStreamRoute::InvalidManager
+        );
     }
 }

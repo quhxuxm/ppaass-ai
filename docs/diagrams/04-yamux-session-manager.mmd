@@ -10,14 +10,17 @@ flowchart TD
     G -->|"是"| H["返回 ClientStream<TcpStream>"]
 
     B -->|"UDP"| I["udp_sessions"]
-    I --> J{"有可立即打开子流的 raw Yamux session?"}
-    J -->|"否"| K["按需补充 UDP raw Yamux 外层连接"]
-    J -->|"是"| L["打开 Yamux 子流"]
-    K --> L
-    L --> M["子流内发送 Auth"]
+    I --> J{"transport_mode"}
+    J -->|"quic / 混合"| K["从 UDP QUIC 连接池打开双向流"]
+    J -->|"tcp / 全 TCP"| L{"有可立即打开子流的 raw Yamux session?"}
+    L -->|"否"| R["按需补充 UDP raw Yamux 外层连接"]
+    L -->|"是"| S["打开 Yamux 子流"]
+    R --> S
+    K --> M["业务流内发送 Auth"]
+    S --> M
     M --> N{"AuthResponse 成功?"}
     N -->|"否"| Z
-    N -->|"是"| O["子流内发送 ConnectRequest"]
+    N -->|"是"| O["业务流内发送 ConnectRequest"]
     O --> P{"ConnectResponse 成功?"}
     P -->|"否"| Y
-    P -->|"是"| Q["返回 YamuxClientStream"]
+    P -->|"是"| Q["返回 QUIC 或 Yamux 目标流"]

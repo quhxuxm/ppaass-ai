@@ -4,7 +4,9 @@ listen_addr = "127.0.0.1:11080"
 proxy_addrs = ["127.0.0.1:18080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+# quic 表示 TCP 走 TCP、UDP 走 QUIC；测试 tcp 时 UDP relay 改走 TCP/Yamux。
 transport_mode = "quic"
+# 仅 UDP relay 使用。
 quic_connection_pool_size = 4
 connect_timeout_secs = 20
 compression_mode = "none"

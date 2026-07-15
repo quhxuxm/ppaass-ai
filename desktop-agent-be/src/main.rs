@@ -137,10 +137,16 @@ fn main() -> Result<()> {
         info!("监听地址：    {}", config.listen_addr);
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);
-        info!("传输模式：    {}", config.transport_mode.as_str());
-        if config.transport_mode == common::TransportMode::Quic {
+        info!(
+            "UDP 传输模式：{}（TCP 数据始终使用 TCP）",
+            config.transport_mode.as_str()
+        );
+        if config
+            .transport_mode
+            .uses_quic_for(protocol::TransportProtocol::Udp)
+        {
             info!(
-                "QUIC 连接池： TCP/UDP 各 {} 条",
+                "UDP QUIC 连接池：{} 条",
                 config.effective_quic_connection_pool_size()
             );
         }

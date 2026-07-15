@@ -19,16 +19,20 @@ flowchart LR
     AndroidDirect -->|"否"| AndroidStreams["Android 目标流管理"]
 
     AgentStreams -->|"TCP: direct framed PPAASS"| ProxyInbound["Proxy 入站 TCP"]
-    AgentStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
+    AgentStreams -->|"UDP: 全 TCP 模式 raw Yamux"| ProxyInbound
+    AgentStreams -->|"UDP: 混合模式 QUIC 双向流"| ProxyQuic["Proxy 入站 QUIC"]
     AndroidStreams -->|"TCP: direct framed PPAASS"| ProxyInbound
-    AndroidStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
+    AndroidStreams -->|"UDP: 全 TCP 模式 raw Yamux"| ProxyInbound
+    AndroidStreams -->|"UDP: 混合模式 QUIC 双向流"| ProxyQuic
 
     ProxyInbound --> Peek{"首包像 Yamux?"}
     Peek -->|"否"| DirectFramed["direct framed PPAASS 连接"]
     Peek -->|"是"| YamuxAccept["raw Yamux session"]
     YamuxAccept --> Substream["accept 子流"]
+    ProxyQuic --> QuicStream["accept 双向流"]
     DirectFramed --> Auth["Auth/Connect/Data"]
     Substream --> Auth
+    QuicStream --> Auth
     Auth --> ConnectDispatch["Connect 分流"]
     ConnectDispatch -->|"普通 TCP/UDP"| Target["目标服务器"]
     ConnectDispatch -->|"Address::UdpRelay"| UdpRelay["共享 UDP relay"]

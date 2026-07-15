@@ -114,7 +114,7 @@ const emit = defineEmits<{
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
               <small class="field-help">
-                允许时，命中直连规则的 QUIC 保持直连；外层使用 TCP 时其余流量走 Proxy relay，外层使用 QUIC 时其余流量会回退 TCP/TLS，避免 QUIC 套 QUIC 导致下载卡顿。
+                允许时，命中直连规则的 UDP/443 QUIC 保持直连；未命中的流量在全 TCP 模式下通过 TCP/Yamux relay，在混合模式下会回退 TCP/TLS，避免把 HTTP/3 套进可靠 QUIC 流。阻断会强制所有应用 QUIC 回退。
               </small>
             </label>
           </template>

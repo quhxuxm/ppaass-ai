@@ -40,7 +40,7 @@ pub(super) async fn handle_tun_tcp(
         tun_networks,
         proxy_dns,
         proxy_udp: _,
-        outer_transport_quic: _,
+        udp_transport_quic: _,
         direct_egress,
     } = context;
 

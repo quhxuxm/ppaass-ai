@@ -17,10 +17,11 @@ pub struct AgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
-    /// Agent 到 proxy 的外层传输。默认使用 QUIC；tcp 用于兼容旧 proxy。
+    /// Agent 到 proxy 的 UDP 外层传输。默认使用 QUIC；TCP 业务数据不受此字段影响，
+    /// 始终使用 direct framed TCP。
     #[serde(default)]
     pub transport_mode: TransportMode,
-    /// TCP 与 UDP manager 各自维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
+    /// UDP manager 维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
     /// 避免一个应用的丢包同时卡住所有应用。
     #[serde(default = "default_quic_connection_pool_size")]
     pub quic_connection_pool_size: usize,
@@ -35,7 +36,7 @@ pub struct AgentConfig {
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
-    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层 session。
+    /// Yamux 多路复用配置，仅用于 UDP 选择 TCP 传输时的外层 session。
     #[serde(default)]
     pub yamux: YamuxConfig,
 
@@ -100,11 +101,11 @@ pub struct TunConfig {
 
     /// TUN 模式下是否通过 proxy 转发普通 UDP。
     /// 关闭时，除独立处理的代理 DNS 与 UDP/443 QUIC 外，其余 UDP 从 agent
-    /// 直接发往目标；QUIC 由 quic_policy、direct_access 与外层传输共同分流。
+    /// 直接发往目标；QUIC 由 quic_policy、direct_access 与 UDP 传输模式共同分流。
     #[serde(default = "default_tun_proxy_udp")]
     pub proxy_udp: bool,
 
-    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。外层 QUIC 不会再用可靠
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。UDP 传输为 QUIC 时不会再用可靠
     /// stream 代理 UDP/443，而是让未命中直连规则的应用回退 TCP/TLS。
     #[serde(default)]
     pub quic_policy: Option<QuicPolicy>,

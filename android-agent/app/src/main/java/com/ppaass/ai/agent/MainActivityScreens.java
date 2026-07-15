@@ -34,6 +34,7 @@ protected void buildUi() {
         configTabPages.clear();
         transportModeButtons.clear();
         quicConnectionPoolConfig = null;
+        udpYamuxConfig = null;
         directModeButtons.clear();
         directRuleValues.clear();
         directRulesConfig = null;

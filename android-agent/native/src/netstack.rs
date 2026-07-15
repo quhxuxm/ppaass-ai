@@ -27,6 +27,7 @@ use supervisor::spawn_netstack_supervisor;
 struct ForwardContext {
     tcp_sessions: Arc<AndroidYamuxSessionManager>,
     udp_sessions: Arc<AndroidYamuxSessionManager>,
+    udp_transport_quic: bool,
     direct_checker: Arc<DirectAccessChecker>,
     direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
@@ -53,14 +54,24 @@ pub async fn run_android_agent(
     let mtu = config.tun.mtu as usize;
     let proxy_dns = config.tun.proxy_dns;
     let quic_policy = config.tun.effective_quic_policy();
+    let udp_transport_quic = config
+        .transport_mode
+        .uses_quic_for(protocol::TransportProtocol::Udp);
+    let udp_transport = if udp_transport_quic {
+        "quic"
+    } else {
+        "tcp-yamux"
+    };
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp=direct-framed, udp_yamux_sessions={}",
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, transport_mode={} (UDP only), tcp_transport=direct-framed-tcp, udp_transport={}, udp_yamux_sessions={}",
         config.tun.ipv4,
         config.tun.ipv6,
         mtu,
         proxy_dns,
         quic_policy,
+        config.transport_mode.as_str(),
+        udp_transport,
         config.yamux.udp_session_count()
     );
     info!(
@@ -76,6 +87,7 @@ pub async fn run_android_agent(
     let context = ForwardContext {
         tcp_sessions,
         udp_sessions,
+        udp_transport_quic,
         direct_checker,
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,

@@ -5,8 +5,9 @@ listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-# Agent -> proxy 传输：quic（默认）或 tcp（兼容旧版 proxy）。
+# UDP 代理通道：quic 表示混合模式（TCP 仍走 TCP，UDP 走 QUIC）；tcp 表示全 TCP 模式。
 transport_mode = "quic"
+# 仅 UDP relay 使用的 QUIC 连接池大小；TCP 业务不进入该连接池。
 quic_connection_pool_size = 4
 connect_timeout_secs = 20
 # Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。

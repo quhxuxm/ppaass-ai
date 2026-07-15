@@ -46,9 +46,11 @@ pub async fn run_android_http_proxy(
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config, shutdown.clone());
 
-    info!("Android HTTP / SOCKS5 proxy listening on {bind_addr}");
+    info!(
+        "Android HTTP / SOCKS5 proxy listening on {bind_addr}; tcp_transport=direct-framed-tcp (transport_mode only applies to UDP)"
+    );
     android_log::info(format!(
-        "Android HTTP / SOCKS5 proxy listening on {bind_addr}"
+        "Android HTTP / SOCKS5 proxy listening on {bind_addr}; TCP uses direct framed TCP"
     ));
 
     loop {

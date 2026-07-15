@@ -8,8 +8,8 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **QUIC by Default**: Desktop and Android agents use configurable QUIC connection pools with multiplexed bidirectional streams by default, with the previous TCP/Yamux path available as a compatibility mode
-- **Encrypted PPAASS Frames**: The existing RSA authentication and AES-256-GCM encrypted Auth/Connect/Data frames are unchanged inside both QUIC and TCP transports
+- **Hybrid Transport by Default**: TCP targets always use independent framed TCP connections; UDP relay uses a configurable QUIC connection pool when `transport_mode = "quic"`, with a full-TCP UDP/Yamux option available through `transport_mode = "tcp"`
+- **Encrypted PPAASS Frames**: The existing RSA authentication and AES-256-GCM encrypted Auth/Connect/Data frames are unchanged inside both UDP QUIC streams and TCP transports
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
@@ -81,8 +81,8 @@ listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-transport_mode = "quic"              # quic (default) or tcp compatibility mode
-quic_connection_pool_size = 4         # 1-8; independent QUIC congestion windows per TCP/UDP manager
+transport_mode = "quic"              # quic: TCP over TCP + UDP over QUIC (default); tcp: all traffic over TCP
+quic_connection_pool_size = 4         # 1-8; independent QUIC congestion windows for UDP relay only
 connection_timeout_secs = 30                # Connection timeout
 
 [yamux.udp]
@@ -92,7 +92,7 @@ max_streams_per_session = 128        # UDP relay substreams per session
 [tun]
 proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and QUIC stay independent
 proxy_dns = false                    # DNS proxying remains independently configurable
-quic_policy = "allow"               # allow: direct QUIC where permitted; outer QUIC forces proxied HTTP/3 to fall back to TCP/TLS
+quic_policy = "allow"               # allow: direct QUIC where permitted; UDP-over-QUIC mode forces proxied HTTP/3 to fall back to TCP/TLS
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)
@@ -108,7 +108,7 @@ The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured por
 
 - **RSA-2048**: Used for secure key exchange
 - **AES-256-GCM**: Used for data encryption with authenticated encryption
-- **QUIC/TLS**: Adds transport encryption around the unchanged PPAASS encrypted frames in QUIC mode
+- **QUIC/TLS**: Adds transport encryption around unchanged PPAASS encrypted UDP relay frames in hybrid mode; TCP target data remains on the original framed TCP path
 - **Timestamp Validation**: Prevents replay attacks (5-minute tolerance)
 - **Secure Key Storage**: Private keys stored securely on disk
 - **Per-User Authentication**: Each user has unique credentials
@@ -116,8 +116,9 @@ The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured por
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **QUIC Multiplexing**: TCP and UDP targets use configurable connection pools and independent QUIC bidirectional streams without cross-stream TCP head-of-line blocking
-- **TCP Compatibility**: TCP targets retain independent framed connections and UDP relay retains Yamux when `transport_mode = "tcp"`
+- **UDP QUIC Multiplexing**: In hybrid mode, UDP targets use configurable connection pools and independent QUIC bidirectional streams; TCP targets never enter the QUIC pool
+- **Stable TCP Path**: HTTP, SOCKS5 TCP, and TUN TCP targets always retain independent framed TCP connections
+- **Full-TCP Option**: UDP relay uses raw TCP/Yamux when `transport_mode = "tcp"`, so both TCP and UDP traffic are carried over TCP
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
 ### Performance Testing

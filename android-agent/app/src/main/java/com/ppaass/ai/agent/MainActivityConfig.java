@@ -211,13 +211,13 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
 
 protected void transportModeControl(LinearLayout root, String selected) {
         transportModeValue = normalizeTransportMode(selected);
-        root.addView(controlLabel("Agent 到 Proxy 传输"), labelParams());
+        root.addView(controlLabel("UDP 代理通道"), labelParams());
 
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
         row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-        addTransportModeButton(row, "QUIC（推荐）", "quic");
-        addTransportModeButton(row, "TCP（兼容）", "tcp");
+        addTransportModeButton(row, transportModeLabel("quic"), "quic");
+        addTransportModeButton(row, transportModeLabel("tcp"), "tcp");
         root.addView(row, matchWrap());
         updateTransportModeButtons();
     }
@@ -226,7 +226,7 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
         Button button = new Button(this);
         button.setText(label);
         button.setTag(value);
-        button.setContentDescription("使用 " + value.toUpperCase() + " 传输");
+        button.setContentDescription(transportModeDescription(value));
         button.setTextSize(13f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
@@ -258,20 +258,20 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
 protected void setTransportMode(String value, boolean persist) {
         transportModeValue = normalizeTransportMode(value);
         updateTransportModeButtons();
-        updateQuicConnectionPoolVisibility();
+        updateTransportModeSettingsVisibility();
         if (persist && prefs != null) {
             prefs.edit().putString("transport_mode", transportModeValue).apply();
         }
     }
 
-protected void updateQuicConnectionPoolVisibility() {
-        if (quicConnectionPoolConfig == null) {
-            return;
+protected void updateTransportModeSettingsVisibility() {
+        boolean hybridMode = "quic".equals(normalizeTransportMode(transportModeValue));
+        if (quicConnectionPoolConfig != null) {
+            quicConnectionPoolConfig.setVisibility(hybridMode ? View.VISIBLE : View.GONE);
         }
-        quicConnectionPoolConfig.setVisibility(
-                "quic".equals(normalizeTransportMode(transportModeValue))
-                        ? View.VISIBLE
-                        : View.GONE);
+        if (udpYamuxConfig != null) {
+            udpYamuxConfig.setVisibility(hybridMode ? View.GONE : View.VISIBLE);
+        }
     }
 
 protected void updateTransportModeButtons() {
@@ -280,9 +280,7 @@ protected void updateTransportModeButtons() {
         for (Button button : transportModeButtons) {
             boolean active = selected.equals(String.valueOf(button.getTag()));
             button.setSelected(active);
-            String label = "quic".equals(String.valueOf(button.getTag()))
-                    ? "QUIC（推荐）"
-                    : "TCP（兼容）";
+            String label = transportModeLabel(String.valueOf(button.getTag()));
             button.setText(active ? "✓ " + label : label);
             button.setTextColor(interactiveTextColors(
                     active ? Color.rgb(243, 244, 255) : COLOR_MUTED,
@@ -291,6 +289,16 @@ protected void updateTransportModeButtons() {
             int stroke = active ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
             button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));
         }
+    }
+
+protected String transportModeLabel(String value) {
+        return "tcp".equals(normalizeTransportMode(value)) ? "全 TCP 模式" : "混合模式";
+    }
+
+protected String transportModeDescription(String value) {
+        return "tcp".equals(normalizeTransportMode(value))
+                ? "使用全 TCP 模式，TCP 和 UDP relay 均通过 TCP"
+                : "使用混合模式，TCP 数据走 TCP，UDP 数据走 QUIC";
     }
 
 protected String normalizeTransportMode(String value) {
@@ -310,7 +318,7 @@ protected Spinner quicPolicySpinner(LinearLayout root, String title, String sele
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
-        addFieldHelp(root, "允许时按直连规则发送 QUIC，未命中的 UDP/443 使用代理 UDP relay；阻断会丢弃 UDP/443 以强制回落到 TCP/TLS。");
+        addFieldHelp(root, "允许时，命中直连规则的 UDP/443 QUIC 保持直连；未命中的流量在全 TCP 模式下通过 TCP/Yamux relay，在混合模式下会回退 TCP/TLS，避免把 HTTP/3 套进可靠 QUIC 流。阻断会强制所有应用 QUIC 回退。");
         return spinner;
     }
 
