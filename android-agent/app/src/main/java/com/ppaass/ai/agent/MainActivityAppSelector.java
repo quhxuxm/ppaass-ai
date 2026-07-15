@@ -41,8 +41,9 @@ protected void showAppSelector() {
         ListView list = new ListView(this);
         list.setAdapter(adapter);
         list.setFastScrollEnabled(true);
-        list.setDivider(null);
-        list.setDividerHeight(0);
+        // 项目卡片直接作为 ListView 行根视图，行间距由透明分隔线提供。
+        list.setDivider(new ColorDrawable(Color.TRANSPARENT));
+        list.setDividerHeight(dp(4));
         list.setCacheColorHint(Color.TRANSPARENT);
         list.setSelector(interactiveRounded(
                 COLOR_ACCENT_SOFT,
@@ -79,7 +80,9 @@ protected void showAppSelector() {
 
         LinearLayout listShell = new LinearLayout(this);
         listShell.setOrientation(LinearLayout.VERTICAL);
-        listShell.setPadding(dp(4), dp(4), dp(4), dp(4));
+        // 列表项自身已有完整的圆角边框，外壳只保留上下留白，
+        // 避免左右 padding 让应用项看起来没有铺满列表。
+        listShell.setPadding(0, dp(4), 0, dp(4));
         listShell.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
         listShell.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,

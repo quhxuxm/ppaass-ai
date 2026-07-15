@@ -11,6 +11,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AbsListView;
 import android.widget.BaseAdapter;
 import android.widget.CheckBox;
 import android.widget.ImageView;
@@ -60,15 +61,16 @@ final class AppListAdapter extends BaseAdapter {
     public View getView(int position, View convertView, ViewGroup parent) {
         AppRow row;
         if (convertView == null) {
-            LinearLayout outer = new LinearLayout(context);
-            outer.setOrientation(LinearLayout.VERTICAL);
-            outer.setPadding(0, 0, 0, dp(4));
-
-            LinearLayout container = new LinearLayout(context);
+            LinearLayout container = new FullWidthRow(context);
             container.setOrientation(LinearLayout.HORIZONTAL);
             container.setGravity(Gravity.CENTER_VERTICAL);
             container.setMinimumHeight(dp(68));
             container.setPadding(dp(12), dp(10), dp(12), dp(10));
+            // 实际绘制项目背景的容器必须直接作为 ListView 的行根视图。
+            // 如果再套一层透明 LinearLayout，部分系统会让内层按内容宽度收缩。
+            container.setLayoutParams(new AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
 
             ImageView icon = new ImageView(context);
             icon.setPadding(dp(4), dp(4), dp(4), dp(4));
@@ -109,10 +111,9 @@ final class AppListAdapter extends BaseAdapter {
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            outer.addView(container, matchWrap());
             row = new AppRow(container, icon, label, packageName, systemBadge, checkBox);
-            outer.setTag(row);
-            convertView = outer;
+            container.setTag(row);
+            convertView = container;
         } else {
             row = (AppRow) convertView.getTag();
         }
@@ -205,6 +206,25 @@ final class AppListAdapter extends BaseAdapter {
 
     private int dp(int value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    // 部分 Android 厂商的 ListView 会使用 AT_MOST 测量行根视图。
+    // 即使 LayoutParams 是 MATCH_PARENT，LinearLayout 仍会按内容宽度收缩；
+    // 将 ListView 给出的可用宽度改为 EXACTLY，保证每个项目等宽铺满。
+    private static final class FullWidthRow extends LinearLayout {
+        FullWidthRow(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            if (View.MeasureSpec.getMode(widthMeasureSpec) == View.MeasureSpec.AT_MOST) {
+                widthMeasureSpec = View.MeasureSpec.makeMeasureSpec(
+                        View.MeasureSpec.getSize(widthMeasureSpec),
+                        View.MeasureSpec.EXACTLY);
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
     }
 
     private static final class AppRow {
