@@ -68,6 +68,7 @@ impl AgentServer {
                 self.config.listen_addr
             );
             let tun_cfg = self.config.tun.clone();
+            let transport_mode = self.config.transport_mode;
             let proxy_addrs = self.config.proxy_addrs.clone();
             let tcp_sessions = self.tcp_sessions.clone();
             let udp_sessions = self.udp_sessions.clone();
@@ -75,6 +76,7 @@ impl AgentServer {
             let tun_shutdown = shutdown.clone();
             tun_tasks.spawn(run_tun_mode(
                 tun_cfg,
+                transport_mode,
                 proxy_addrs,
                 tcp_sessions,
                 udp_sessions,

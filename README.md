@@ -92,7 +92,7 @@ max_streams_per_session = 128        # UDP relay substreams per session
 [tun]
 proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and QUIC stay independent
 proxy_dns = false                    # DNS proxying remains independently configurable
-quic_policy = "allow"               # allow: route UDP/443 by direct_access; block: force TCP/TLS fallback
+quic_policy = "allow"               # allow: direct QUIC where permitted; outer QUIC forces proxied HTTP/3 to fall back to TCP/TLS
 ```
 
 ### Proxy Configuration (`config/proxy.toml`)

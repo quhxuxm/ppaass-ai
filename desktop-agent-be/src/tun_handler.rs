@@ -33,7 +33,9 @@ use crate::tun_helper_client::{
     start_tun as start_tun_via_helper,
 };
 use crate::yamux_session::YamuxSessionManager;
-use common::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};
+use common::{
+    TransportMode, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded,
+};
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
 use dns::DnsGuard;
@@ -76,8 +78,11 @@ struct TunForwardContext {
     // true 时，系统 DNS 请求会被映射成 proxy 端 DNS 虚拟目标。
     proxy_dns: bool,
     // true 保持普通 UDP 原有路由语义；false 时除代理 DNS 与 QUIC 外均从 agent 直连。
-    // UDP/443 QUIC 由 quic_policy 与 direct_access 独立决定。
+    // UDP/443 QUIC 由 quic_policy、direct_access 与外层传输独立决定。
     proxy_udp: bool,
+    // 外层 QUIC 目前用可靠有序 stream 承载代理 UDP。UDP/443 再走该路径会形成
+    // QUIC-over-QUIC 队头阻塞，因此代理路径需要让应用回退 TCP。
+    outer_transport_quic: bool,
     // 直连路径的物理出口绑定信息，可在失败后刷新。
     direct_egress: Arc<TunDirectEgress>,
 }
@@ -301,6 +306,7 @@ impl TunDirectEgress {
 #[instrument(skip(tcp_sessions, udp_sessions, direct_access_checker, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
+    transport_mode: TransportMode,
     proxy_addrs: Vec<String>,
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
@@ -326,6 +332,12 @@ pub async fn run_tun_mode(
     );
     let quic_policy = config.effective_quic_policy();
     info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
+    let outer_transport_quic = transport_mode == TransportMode::Quic;
+    if outer_transport_quic && !quic_policy.should_block_udp443() {
+        info!(
+            "外层传输为 QUIC：直连规则命中的 UDP/443 保持直连；需要代理的 UDP/443 将阻断并回退 TCP/TLS"
+        );
+    }
 
     // 先解析 TUN 网段，后续会用它识别异常回环目标。
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
@@ -382,6 +394,7 @@ pub async fn run_tun_mode(
         tun_networks,
         proxy_dns,
         proxy_udp,
+        outer_transport_quic,
         direct_egress,
     };
     let netstack_task = spawn_netstack_supervisor(

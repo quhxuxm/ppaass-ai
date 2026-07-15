@@ -113,7 +113,9 @@ const emit = defineEmits<{
                 :disabled="configLocked"
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
-              <small class="field-help">允许时，QUIC 按直连规则分流，必须代理的网站仍走 Proxy relay；阻断时应用可回退到 TCP/TLS。</small>
+              <small class="field-help">
+                允许时，命中直连规则的 QUIC 保持直连；外层使用 TCP 时其余流量走 Proxy relay，外层使用 QUIC 时其余流量会回退 TCP/TLS，避免 QUIC 套 QUIC 导致下载卡顿。
+              </small>
             </label>
           </template>
         </Card>

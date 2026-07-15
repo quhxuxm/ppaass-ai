@@ -66,6 +66,11 @@ netstack-smoltcp = "0.2.2"
 route_manager = "0.2.11"
 socket2 = { version = "0.6.4", features = ["all"] }
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+# macOS 没有公开的 UDP GSO/GRO 接口。Quinn 的 macOS 快速数据通路使用
+# sendmsg_x/recvmsg_x 一次批量收发最多 32 个数据报，避免高速下载退化为逐包系统调用。
+# 该 feature 只在 common 的 macOS target dependency 中启用，不影响 Windows/Linux/Android。
+# 这两个接口是 Apple 私有 API；未来若提供 Mac App Store 构建，必须为该构建禁用此 feature。
+quinn-udp = { version = "0.5.15", default-features = false, features = ["fast-apple-datapath"] }
 rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
 rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "pem", "ring"] }
 if-addrs = "0.15"

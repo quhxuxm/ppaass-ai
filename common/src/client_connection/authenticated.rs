@@ -192,7 +192,6 @@ where
                 writer: self.writer,
                 reader: self.reader,
                 end_sent: false,
-                pending_write_len: None,
                 stream_id: request_id.clone(),
                 read_buf: Vec::new(),
                 read_pos: 0,

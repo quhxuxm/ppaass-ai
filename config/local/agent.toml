@@ -83,10 +83,11 @@ proxy_udp = true
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
-# 默认不阻断 QUIC：无论 proxy_udp 是否开启，都按 direct_access 决定直连或
-# 通过 proxy relay 转发。只有需要强制浏览器回退 TCP/TLS 时才启用阻断策略。
+# 默认允许 QUIC：命中 direct_access 的目标保持直连。未命中目标在外层 TCP 模式下
+# 通过 proxy relay；外层 QUIC 模式下会阻断 UDP/443，让应用回退 TCP/TLS，避免
+# QUIC 套在可靠 QUIC stream 上造成队头阻塞和重复重传。
 # QUIC 策略：
-#   allow - 允许 QUIC，具体经 proxy 还是 agent 直连由 direct_access 决定。
+#   allow - 允许直连 QUIC；代理路径按外层传输选择 relay 或 TCP/TLS 回退。
 #   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
 quic_policy = "allow"
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；

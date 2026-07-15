@@ -100,11 +100,12 @@ pub struct TunConfig {
 
     /// TUN 模式下是否通过 proxy 转发普通 UDP。
     /// 关闭时，除独立处理的代理 DNS 与 UDP/443 QUIC 外，其余 UDP 从 agent
-    /// 直接发往目标；QUIC 由 quic_policy 与 direct_access 分流。
+    /// 直接发往目标；QUIC 由 quic_policy、direct_access 与外层传输共同分流。
     #[serde(default = "default_tun_proxy_udp")]
     pub proxy_udp: bool,
 
-    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。外层 QUIC 不会再用可靠
+    /// stream 代理 UDP/443，而是让未命中直连规则的应用回退 TCP/TLS。
     #[serde(default)]
     pub quic_policy: Option<QuicPolicy>,
 

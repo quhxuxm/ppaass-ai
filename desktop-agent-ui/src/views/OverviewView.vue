@@ -407,7 +407,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
           <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
           <div class="kv-row"><span>普通 UDP</span><strong>{{ summary.tun_proxy_udp ? "按规则分流" : "Agent 直连" }}</strong></div>
-          <div class="kv-row"><span>QUIC</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : "按规则分流" }}</strong></div>
+          <div class="kv-row"><span>QUIC</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : summary.transport_mode === "quic" ? "直连或回退 TCP" : "按规则分流" }}</strong></div>
           <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "经 Proxy 解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">

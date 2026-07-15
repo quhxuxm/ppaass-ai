@@ -151,14 +151,17 @@ pub(super) fn spawn_udp_sessions(
                 shutdown.clone(),
             )
         });
-        // proxy_udp 只控制普通 UDP；QUIC allow 仍会按 direct_access 使用共享 relay。
-        let udp_relay = should_start_udp_relay(context.proxy_udp, quic_policy).then(|| {
-            UdpRelay::spawn(
-                context.udp_sessions.clone(),
-                udp_tx.clone(),
-                shutdown.clone(),
-            )
-        });
+        // proxy_udp 只控制普通 UDP。外层是 QUIC 时，不再为代理 UDP/443 单独启动
+        // 可靠 stream relay，避免 QUIC-over-QUIC 队头阻塞。
+        let udp_relay =
+            should_start_udp_relay(context.proxy_udp, quic_policy, context.outer_transport_quic)
+                .then(|| {
+                    UdpRelay::spawn(
+                        context.udp_sessions.clone(),
+                        udp_tx.clone(),
+                        shutdown.clone(),
+                    )
+                });
         let quic_stats = Arc::new(QuicUdpStats::default());
         spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
@@ -243,12 +246,14 @@ pub(super) fn spawn_udp_sessions(
                         quic_policy,
                         context.proxy_udp,
                         direct_access_match,
+                        context.outer_transport_quic,
                     ) {
                         UdpRoute::Block => {
                             quic_stats.record_blocked();
                             debug!(
-                                "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}",
+                                "TUN UDP/443 QUIC 已阻断（策略={:?} outer_quic={}）-> {}，等待应用回退 TCP/TLS",
                                 quic_policy,
+                                context.outer_transport_quic,
                                 target_addr
                             );
                             continue;
@@ -320,12 +325,18 @@ fn classify_udp_route(
     quic_policy: QuicPolicy,
     proxy_udp: bool,
     direct_access_match: bool,
+    outer_transport_quic: bool,
 ) -> UdpRoute {
     if target_port == 443 {
         if quic_policy.should_block_udp443() {
             UdpRoute::Block
         } else if direct_access_match {
             UdpRoute::Direct
+        } else if outer_transport_quic {
+            // 代理 UDP 当前承载在可靠有序的目标 stream 上。内层 HTTP/3/QUIC
+            // 套在外层 QUIC stream 上会产生跨层重传和队头阻塞；丢弃首包后，
+            // 浏览器会按 Happy Eyeballs/Alt-Svc 逻辑回退到 TCP/TLS。
+            UdpRoute::Block
         } else {
             UdpRoute::Proxy
         }
@@ -336,8 +347,12 @@ fn classify_udp_route(
     }
 }
 
-fn should_start_udp_relay(proxy_udp: bool, quic_policy: QuicPolicy) -> bool {
-    proxy_udp || !quic_policy.should_block_udp443()
+fn should_start_udp_relay(
+    proxy_udp: bool,
+    quic_policy: QuicPolicy,
+    outer_transport_quic: bool,
+) -> bool {
+    proxy_udp || (!quic_policy.should_block_udp443() && !outer_transport_quic)
 }
 
 fn should_consult_udp_domain_cache(proxy_udp: bool, target_port: u16) -> bool {
@@ -379,36 +394,36 @@ mod tests {
     #[test]
     fn ordinary_udp_proxy_switch_preserves_old_routing_or_forces_direct() {
         assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, true, false),
+            classify_udp_route(3478, QuicPolicy::Allow, true, false, true),
             UdpRoute::Proxy
         );
         assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, true, true),
+            classify_udp_route(3478, QuicPolicy::Allow, true, true, true),
             UdpRoute::Direct
         );
         assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, false, false),
+            classify_udp_route(3478, QuicPolicy::Allow, false, false, true),
             UdpRoute::Direct
         );
         assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Block, false, true),
+            classify_udp_route(3478, QuicPolicy::Block, false, true, true),
             UdpRoute::Direct
         );
     }
 
     #[test]
-    fn quic_allow_keeps_proxy_required_site_on_proxy_when_general_udp_proxy_is_off() {
+    fn quic_allow_uses_proxy_only_when_outer_transport_is_tcp() {
         assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, false, false),
+            classify_udp_route(443, QuicPolicy::Allow, false, false, false),
             UdpRoute::Proxy
         );
         assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, false, true),
+            classify_udp_route(443, QuicPolicy::Allow, false, true, true),
             UdpRoute::Direct
         );
         assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, true, false),
-            UdpRoute::Proxy
+            classify_udp_route(443, QuicPolicy::Allow, true, false, true),
+            UdpRoute::Block
         );
     }
 
@@ -417,7 +432,13 @@ mod tests {
         for proxy_udp in [false, true] {
             for direct_access_match in [false, true] {
                 assert_eq!(
-                    classify_udp_route(443, QuicPolicy::Block, proxy_udp, direct_access_match),
+                    classify_udp_route(
+                        443,
+                        QuicPolicy::Block,
+                        proxy_udp,
+                        direct_access_match,
+                        false,
+                    ),
                     UdpRoute::Block
                 );
             }
@@ -426,9 +447,10 @@ mod tests {
 
     #[test]
     fn relay_and_domain_cache_stay_available_for_quic() {
-        assert!(should_start_udp_relay(false, QuicPolicy::Allow));
-        assert!(!should_start_udp_relay(false, QuicPolicy::Block));
-        assert!(should_start_udp_relay(true, QuicPolicy::Block));
+        assert!(should_start_udp_relay(false, QuicPolicy::Allow, false));
+        assert!(!should_start_udp_relay(false, QuicPolicy::Allow, true));
+        assert!(!should_start_udp_relay(false, QuicPolicy::Block, false));
+        assert!(should_start_udp_relay(true, QuicPolicy::Block, true));
 
         assert!(should_consult_udp_domain_cache(false, 443));
         assert!(!should_consult_udp_domain_cache(false, 3478));
