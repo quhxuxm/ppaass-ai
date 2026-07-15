@@ -14,7 +14,7 @@ use super::{
 // single idle session to reserve several MiB indefinitely.
 const DEFAULT_MAX_ENTRIES: usize = 64;
 const DEFAULT_MAX_TOTAL_BYTES: usize = 1024 * 1024;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct ReassemblyConfig {
@@ -94,16 +94,30 @@ impl FragmentReassembler {
         fragment: DecryptedUdpFragment,
         now: Instant,
     ) -> UdpTransportResult<Option<Vec<u8>>> {
-        self.cleanup_expired(now);
         validate_fragment(&fragment)?;
 
         let header = fragment.header;
+        if header.fragment_count == 1 {
+            if fragment.payload.len() != header.total_len as usize {
+                return Err(UdpTransportError::InvalidHeader(
+                    "single fragment length does not match total_len",
+                ));
+            }
+            return Ok(Some(fragment.payload));
+        }
+
+        self.cleanup_expired(now);
+
         let key = (header.session_id, header.message_id);
         if !self.entries.contains_key(&key) {
-            if self.entries.len() >= self.config.max_entries {
+            if fragment.payload.len() > self.config.max_total_bytes {
                 return Err(UdpTransportError::ReassemblyLimit(
-                    "maximum incomplete message count reached",
+                    "current message exceeds maximum buffered fragment bytes",
                 ));
+            }
+            if self.entries.len() >= self.config.max_entries {
+                self.evict_oldest_except(None)
+                    .expect("a full non-empty reassembly table has an oldest entry");
             }
             self.entries.insert(
                 key,
@@ -120,39 +134,60 @@ impl FragmentReassembler {
             );
         }
 
-        let entry = self.entries.get_mut(&key).expect("entry was inserted");
-        if entry.fragment_count != header.fragment_count || entry.total_len != header.total_len {
-            return Err(UdpTransportError::ConflictingFragment);
-        }
-
         let index = usize::from(header.fragment_index);
-        if let Some(existing) = &entry.fragments[index] {
-            return if existing == &fragment.payload {
-                Ok(None)
-            } else {
-                Err(UdpTransportError::ConflictingFragment)
-            };
+        let entry_bytes = {
+            let entry = self.entries.get(&key).expect("entry was inserted");
+            if entry.fragment_count != header.fragment_count || entry.total_len != header.total_len
+            {
+                return Err(UdpTransportError::ConflictingFragment);
+            }
+            if let Some(existing) = &entry.fragments[index] {
+                return if existing == &fragment.payload {
+                    Ok(None)
+                } else {
+                    Err(UdpTransportError::ConflictingFragment)
+                };
+            }
+
+            let entry_bytes = entry
+                .received_bytes
+                .checked_add(fragment.payload.len())
+                .ok_or(UdpTransportError::InvalidHeader(
+                    "fragment byte counter overflow",
+                ))?;
+            if entry_bytes > entry.total_len as usize {
+                return Err(UdpTransportError::InvalidHeader(
+                    "fragment bytes exceed declared total_len",
+                ));
+            }
+            if entry_bytes > self.config.max_total_bytes {
+                return Err(UdpTransportError::ReassemblyLimit(
+                    "current message exceeds maximum buffered fragment bytes",
+                ));
+            }
+            entry_bytes
+        };
+
+        loop {
+            let new_total = self.total_bytes.checked_add(fragment.payload.len()).ok_or(
+                UdpTransportError::ReassemblyLimit("buffer byte counter overflow"),
+            )?;
+            if new_total <= self.config.max_total_bytes {
+                break;
+            }
+            self.evict_oldest_except(Some(key))
+                .ok_or(UdpTransportError::ReassemblyLimit(
+                    "maximum buffered fragment bytes reached",
+                ))?;
         }
 
         let new_total = self.total_bytes.checked_add(fragment.payload.len()).ok_or(
             UdpTransportError::ReassemblyLimit("buffer byte counter overflow"),
         )?;
-        if new_total > self.config.max_total_bytes {
-            return Err(UdpTransportError::ReassemblyLimit(
-                "maximum buffered fragment bytes reached",
-            ));
-        }
-        let entry_bytes = entry
-            .received_bytes
-            .checked_add(fragment.payload.len())
-            .ok_or(UdpTransportError::InvalidHeader(
-                "fragment byte counter overflow",
-            ))?;
-        if entry_bytes > entry.total_len as usize {
-            return Err(UdpTransportError::InvalidHeader(
-                "fragment bytes exceed declared total_len",
-            ));
-        }
+        let entry = self
+            .entries
+            .get_mut(&key)
+            .expect("current entry is never evicted");
 
         entry.fragments[index] = Some(fragment.payload);
         entry.received_count += 1;
@@ -176,6 +211,24 @@ impl FragmentReassembler {
             message.extend_from_slice(fragment.as_deref().expect("all fragments received"));
         }
         Ok(Some(message))
+    }
+
+    fn evict_oldest_except(
+        &mut self,
+        except: Option<(UdpSessionId, u64)>,
+    ) -> Option<(UdpSessionId, u64)> {
+        let oldest = self
+            .entries
+            .iter()
+            .filter(|(key, _)| except.as_ref() != Some(*key))
+            .min_by_key(|(_, entry)| entry.updated_at)
+            .map(|(key, _)| *key)?;
+        let removed = self
+            .entries
+            .remove(&oldest)
+            .expect("selected reassembly entry exists");
+        self.total_bytes -= removed.received_bytes;
+        Some(oldest)
     }
 
     pub fn cleanup_expired(&mut self, now: Instant) -> usize {
@@ -209,6 +262,11 @@ fn validate_fragment(fragment: &DecryptedUdpFragment) -> UdpTransportResult<()> 
             fragment.header.total_len as usize,
         ));
     }
+    if fragment.payload.len() > fragment.header.total_len as usize {
+        return Err(UdpTransportError::InvalidHeader(
+            "fragment bytes exceed declared total_len",
+        ));
+    }
     if usize::from(fragment.header.fragment_count) > UDP_MAX_FRAGMENTS {
         return Err(UdpTransportError::TooManyFragments(usize::from(
             fragment.header.fragment_count,
@@ -232,6 +290,7 @@ mod tests {
 
         assert_eq!(config.max_entries, 64);
         assert_eq!(config.max_total_bytes, 1024 * 1024);
+        assert_eq!(config.timeout, Duration::from_secs(1));
         assert!(config.max_total_bytes >= UDP_MAX_MESSAGE_SIZE);
     }
 }

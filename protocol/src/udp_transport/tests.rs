@@ -363,27 +363,44 @@ fn fragmented_message_reassembles_out_of_order() {
 }
 
 #[test]
-fn standard_quic_initial_relay_packet_fits_one_outer_datagram() {
-    let (mut agent, _) = codecs();
-    let relay_packet = UdpRelayPacket {
-        flow_id: 7,
-        address: Address::Ipv4 {
-            addr: [192, 0, 2, 1],
-            port: 443,
-        },
-        data: noisy_bytes(1_200),
-    }
-    .encode()
-    .unwrap();
-    let datagrams = agent
-        .encode_message(&UdpSessionMessage::Data {
-            flow_id: 11,
-            data: relay_packet,
-        })
+fn max_tun_udp_payloads_fit_one_outer_datagram() {
+    // An IPv4 UDP packet can carry MTU - 20-byte IP header - 8-byte UDP
+    // header. IPv6 uses a 40-byte IP header. Use maximum-width flow IDs so
+    // this remains true after the bitcode integer fields grow.
+    for (address, payload_len) in [
+        (
+            Address::Ipv4 {
+                addr: [192, 0, 2, 1],
+                port: 443,
+            },
+            usize::from(UDP_NATIVE_MAX_TUN_MTU) - 20 - 8,
+        ),
+        (
+            Address::Ipv6 {
+                addr: [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                port: 443,
+            },
+            usize::from(UDP_NATIVE_MAX_TUN_MTU) - 40 - 8,
+        ),
+    ] {
+        let (mut agent, _) = codecs();
+        let relay_packet = UdpRelayPacket {
+            flow_id: u64::MAX,
+            address,
+            data: noisy_bytes(payload_len),
+        }
+        .encode()
         .unwrap();
+        let datagrams = agent
+            .encode_message(&UdpSessionMessage::Data {
+                flow_id: u64::MAX,
+                data: relay_packet,
+            })
+            .unwrap();
 
-    assert_eq!(datagrams.len(), 1);
-    assert!(datagrams[0].len() <= UDP_MAX_DATAGRAM_SIZE);
+        assert_eq!(datagrams.len(), 1);
+        assert!(datagrams[0].len() <= UDP_MAX_DATAGRAM_SIZE);
+    }
 }
 
 #[test]
@@ -440,39 +457,150 @@ fn exact_plaintext_limit_fits_and_one_byte_more_is_rejected() {
 }
 
 #[test]
-fn reassembly_enforces_entry_byte_fragment_and_timeout_limits() {
+fn single_fragment_reassembly_bypasses_full_fragment_buffers() {
     let start = Instant::now();
-    let mut one_entry = FragmentReassembler::new(ReassemblyConfig {
+    let mut reassembler = FragmentReassembler::new(ReassemblyConfig {
+        max_entries: 1,
+        max_total_bytes: 1,
+        timeout: Duration::from_secs(1),
+    })
+    .unwrap();
+
+    assert!(
+        reassembler
+            .push(fragment(1, 0, 2, 2, b"a"), start)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(reassembler.entry_count(), 1);
+    assert_eq!(reassembler.buffered_bytes(), 1);
+
+    assert_eq!(
+        reassembler.push(fragment(2, 0, 1, 1, b"z"), start).unwrap(),
+        Some(b"z".to_vec())
+    );
+    assert_eq!(reassembler.entry_count(), 1);
+    assert_eq!(reassembler.buffered_bytes(), 1);
+}
+
+#[test]
+fn new_fragmented_message_evicts_oldest_incomplete_message() {
+    let start = Instant::now();
+    let mut reassembler = FragmentReassembler::new(ReassemblyConfig {
+        max_entries: 2,
+        max_total_bytes: 100,
+        timeout: Duration::from_secs(10),
+    })
+    .unwrap();
+
+    reassembler.push(fragment(1, 0, 2, 2, b"a"), start).unwrap();
+    reassembler
+        .push(fragment(2, 0, 2, 2, b"b"), start + Duration::from_millis(1))
+        .unwrap();
+    reassembler
+        .push(fragment(3, 0, 2, 2, b"c"), start + Duration::from_millis(2))
+        .unwrap();
+
+    assert_eq!(reassembler.entry_count(), 2);
+    assert_eq!(reassembler.buffered_bytes(), 2);
+    assert_eq!(
+        reassembler
+            .push(fragment(2, 1, 2, 2, b"d"), start + Duration::from_millis(3),)
+            .unwrap(),
+        Some(b"bd".to_vec())
+    );
+    assert_eq!(reassembler.entry_count(), 1);
+    assert_eq!(reassembler.buffered_bytes(), 1);
+}
+
+#[test]
+fn reassembly_byte_limit_evicts_only_as_many_other_messages_as_needed() {
+    let start = Instant::now();
+    let mut reassembler = FragmentReassembler::new(ReassemblyConfig {
+        max_entries: 4,
+        max_total_bytes: 5,
+        timeout: Duration::from_secs(10),
+    })
+    .unwrap();
+
+    reassembler
+        .push(fragment(1, 0, 2, 4, b"aa"), start)
+        .unwrap();
+    reassembler
+        .push(
+            fragment(2, 0, 2, 4, b"bb"),
+            start + Duration::from_millis(1),
+        )
+        .unwrap();
+    reassembler
+        .push(
+            fragment(3, 0, 2, 4, b"ccc"),
+            start + Duration::from_millis(2),
+        )
+        .unwrap();
+
+    assert_eq!(reassembler.entry_count(), 2);
+    assert_eq!(reassembler.buffered_bytes(), 5);
+    assert_eq!(
+        reassembler
+            .push(fragment(3, 1, 2, 4, b"d"), start + Duration::from_millis(3),)
+            .unwrap(),
+        Some(b"cccd".to_vec())
+    );
+    assert_eq!(reassembler.entry_count(), 0);
+    assert_eq!(reassembler.buffered_bytes(), 0);
+}
+
+#[test]
+fn reassembly_rejects_a_current_message_that_cannot_fit_without_evicting_others() {
+    let start = Instant::now();
+    let mut reassembler = FragmentReassembler::new(ReassemblyConfig {
+        max_entries: 2,
+        max_total_bytes: 3,
+        timeout: Duration::from_secs(10),
+    })
+    .unwrap();
+
+    reassembler.push(fragment(1, 0, 2, 2, b"x"), start).unwrap();
+    reassembler
+        .push(
+            fragment(2, 0, 2, 4, b"ab"),
+            start + Duration::from_millis(1),
+        )
+        .unwrap();
+    assert!(matches!(
+        reassembler.push(
+            fragment(2, 1, 2, 4, b"cd"),
+            start + Duration::from_millis(2),
+        ),
+        Err(UdpTransportError::ReassemblyLimit(_))
+    ));
+    assert_eq!(reassembler.entry_count(), 2);
+    assert_eq!(reassembler.buffered_bytes(), 3);
+    assert_eq!(
+        reassembler
+            .push(fragment(1, 1, 2, 2, b"y"), start + Duration::from_millis(3),)
+            .unwrap(),
+        Some(b"xy".to_vec())
+    );
+}
+
+#[test]
+fn reassembly_enforces_fragment_and_timeout_limits() {
+    let start = Instant::now();
+    let mut reassembler = FragmentReassembler::new(ReassemblyConfig {
         max_entries: 1,
         max_total_bytes: 100,
         timeout: Duration::from_secs(1),
     })
     .unwrap();
-    assert!(
-        one_entry
-            .push(fragment(1, 0, 2, 2, b"a"), start)
-            .unwrap()
-            .is_none()
+    reassembler.push(fragment(1, 0, 2, 2, b"a"), start).unwrap();
+    assert_eq!(
+        reassembler.cleanup_expired(start + Duration::from_secs(1)),
+        1
     );
-    assert!(matches!(
-        one_entry.push(fragment(2, 0, 2, 2, b"b"), start),
-        Err(UdpTransportError::ReassemblyLimit(_))
-    ));
-    assert_eq!(one_entry.cleanup_expired(start + Duration::from_secs(1)), 1);
-    assert_eq!(one_entry.entry_count(), 0);
-    assert_eq!(one_entry.buffered_bytes(), 0);
-
-    let mut one_byte = FragmentReassembler::new(ReassemblyConfig {
-        max_entries: 2,
-        max_total_bytes: 1,
-        timeout: Duration::from_secs(1),
-    })
-    .unwrap();
-    one_byte.push(fragment(1, 0, 2, 2, b"a"), start).unwrap();
-    assert!(matches!(
-        one_byte.push(fragment(1, 1, 2, 2, b"b"), start),
-        Err(UdpTransportError::ReassemblyLimit(_))
-    ));
+    assert_eq!(reassembler.entry_count(), 0);
+    assert_eq!(reassembler.buffered_bytes(), 0);
 
     let invalid_header = UdpPacketHeader::new(
         UdpPacketKind::Encrypted,

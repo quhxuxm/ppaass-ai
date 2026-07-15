@@ -24,23 +24,10 @@ pub(super) struct SocksUdpRelayRequest {
     packet: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SocksUdpFlowKey {
     client: SocketAddr,
-    target: String,
-}
-
-impl PartialEq for SocksUdpFlowKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.client == other.client && self.target == other.target
-    }
-}
-
-impl Hash for SocksUdpFlowKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.client.hash(state);
-        self.target.hash(state);
-    }
+    target: Address,
 }
 
 pub(super) struct SocksUdpRelayState {
@@ -63,7 +50,7 @@ impl SocksUdpRelayState {
     fn flow_id(&mut self, client: SocketAddr, target: &Address) -> u64 {
         let key = SocksUdpFlowKey {
             client,
-            target: format!("{target:?}"),
+            target: target.clone(),
         };
         if let Some(id) = self.flow_ids.get(&key) {
             return *id;
@@ -135,12 +122,9 @@ impl SocksUdpRelay {
 
 fn socks_udp_relay_shard_index(client: SocketAddr, target: &Address, shard_count: usize) -> usize {
     debug_assert!(shard_count > 0);
-    let key = SocksUdpFlowKey {
-        client,
-        target: format!("{target:?}"),
-    };
     let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
+    client.hash(&mut hasher);
+    target.hash(&mut hasher);
     (hasher.finish() % shard_count as u64) as usize
 }
 
@@ -309,4 +293,61 @@ async fn handle_socks_udp_response(
     udp_socket.send_to(&response, client).await?;
     telemetry::record_traffic(0, response_payload_len as u64);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn youtube_address() -> Address {
+        Address::Domain {
+            host: "www.youtube.com".to_string(),
+            port: 443,
+        }
+    }
+
+    #[test]
+    fn structurally_equal_targets_reuse_the_same_flow() {
+        let client = SocketAddr::from(([127, 0, 0, 1], 51_000));
+        let mut state = SocksUdpRelayState::new();
+
+        let first = state.flow_id(client, &youtube_address());
+        let second = state.flow_id(client, &youtube_address());
+
+        assert_eq!(first, second);
+        assert_eq!(state.active_flows(), 1);
+        assert_eq!(state.tracked_flow_keys(), 1);
+    }
+
+    #[test]
+    fn client_and_target_are_both_part_of_the_flow_key() {
+        let first_client = SocketAddr::from(([127, 0, 0, 1], 51_000));
+        let second_client = SocketAddr::from(([127, 0, 0, 1], 51_001));
+        let mut state = SocksUdpRelayState::new();
+
+        let first = state.flow_id(first_client, &youtube_address());
+        let different_client = state.flow_id(second_client, &youtube_address());
+        let different_target = state.flow_id(
+            first_client,
+            &Address::Domain {
+                host: "www.youtube.com".to_string(),
+                port: 8443,
+            },
+        );
+
+        assert_ne!(first, different_client);
+        assert_ne!(first, different_target);
+        assert_eq!(state.active_flows(), 3);
+        assert_eq!(state.tracked_flow_keys(), 3);
+    }
+
+    #[test]
+    fn equal_structured_targets_choose_the_same_shard() {
+        let client = SocketAddr::from(([127, 0, 0, 1], 51_000));
+
+        let first = socks_udp_relay_shard_index(client, &youtube_address(), 4);
+        let second = socks_udp_relay_shard_index(client, &youtube_address(), 4);
+
+        assert_eq!(first, second);
+    }
 }

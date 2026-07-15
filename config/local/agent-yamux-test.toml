@@ -29,6 +29,7 @@ stream_window_size_kb = 8192
 enabled = false
 name = "ppaass-tun"
 ipv4 = "10.10.10.1/24"
+# transport_mode=udp 时运行时最多使用 1280，避免内层 UDP/QUIC 被 PUDP 再分片。
 mtu = 1500
 proxy_udp = true
 proxy_dns = false

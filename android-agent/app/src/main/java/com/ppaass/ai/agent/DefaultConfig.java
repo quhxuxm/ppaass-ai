@@ -6,6 +6,8 @@ final class DefaultConfig {
     static final String TUN_IPV4 = "10.10.10.2/24";
     static final String TUN_IPV6 = "";
     static final int TUN_MTU = 1500;
+    // Matches protocol::udp_transport::UDP_NATIVE_MAX_TUN_MTU.
+    static final int NATIVE_UDP_MAX_TUN_MTU = 1280;
     static final int HTTP_PROXY_PORT = 18080;
     static final int HTTP_PROXY_THREADS = 4;
     static final int HTTP_PROXY_MAX_CONCURRENT_CONNECTS = 16;

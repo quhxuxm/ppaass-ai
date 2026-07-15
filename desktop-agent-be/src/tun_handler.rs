@@ -43,6 +43,7 @@ use futures::FutureExt;
 use netstack::{spawn_netstack_supervisor, wait_tun_task};
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
+use protocol::udp_transport::UDP_NATIVE_MAX_TUN_MTU;
 use proxy_routing::{bind_interface_is_usable, configure_proxy_routing, install_route_guard};
 use route::{
     RouteGuard, cleanup_stale_routes, detect_default_route_interface, detect_proxy_route,
@@ -310,6 +311,16 @@ pub async fn run_tun_mode(
     direct_access_checker: Arc<DirectAccessChecker>,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    let mut config = config;
+    let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
+    if native_udp && config.mtu > UDP_NATIVE_MAX_TUN_MTU {
+        warn!(
+            configured_mtu = config.mtu,
+            effective_mtu = UDP_NATIVE_MAX_TUN_MTU,
+            "原生加密 UDP 模式下限制 TUN MTU，避免浏览器 QUIC 数据报被外层再次分片"
+        );
+        config.mtu = UDP_NATIVE_MAX_TUN_MTU;
+    }
     info!(
         "启动 TUN 模式转发器：设备={} ipv4={} ipv6={:?} mtu={}",
         config.name, config.ipv4, config.ipv6, config.mtu
@@ -329,7 +340,6 @@ pub async fn run_tun_mode(
     );
     let quic_policy = config.effective_quic_policy();
     info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
-    let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
     if !quic_policy.should_block_udp443() {
         info!(
             "TUN UDP/443 已允许：直连规则命中时直连，否则通过 proxy 转发（UDP 传输={}）",

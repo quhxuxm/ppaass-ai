@@ -17,13 +17,19 @@ final class AgentConfigJson {
     static JSONObject build(Context context) throws JSONException {
         SharedPreferences prefs = context.getSharedPreferences("ppaass_agent", Context.MODE_PRIVATE);
         String quicPolicy = selectedQuicPolicy(prefs);
+        String transportMode = normalizeTransportMode(
+                prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE));
+        int configuredTunMtu = parseInt(
+                prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
+                DefaultConfig.TUN_MTU);
+        int effectiveTunMtu = "udp".equals(transportMode)
+                ? Math.min(configuredTunMtu, DefaultConfig.NATIVE_UDP_MAX_TUN_MTU)
+                : configuredTunMtu;
 
         JSONObject tunJson = new JSONObject()
                 .put("ipv4", prefs.getString("tun_ipv4", DefaultConfig.TUN_IPV4))
                 .put("ipv6", prefs.getString("tun_ipv6", DefaultConfig.TUN_IPV6))
-                .put("mtu", parseInt(
-                        prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
-                        DefaultConfig.TUN_MTU))
+                .put("mtu", effectiveTunMtu)
                 .put("proxy_dns", true)
                 .put("quic_policy", quicPolicy);
         JSONObject yamuxJson = new JSONObject()
@@ -39,8 +45,7 @@ final class AgentConfigJson {
                 .put("username", prefs.getString("username", DefaultConfig.USERNAME))
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
-                .put("transport_mode", normalizeTransportMode(
-                        prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE)))
+                .put("transport_mode", transportMode)
                 .put("udp_session_pool_size", parseClampedInt(
                         prefs.getString(
                                 "udp_session_pool_size",

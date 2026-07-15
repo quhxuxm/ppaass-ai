@@ -74,6 +74,8 @@ enabled = true
 name = "utun8"         # Windows 如 "ppaass-tun"，macOS 如 "utun8"，Linux 如 "tun0"
 ipv4 = "10.10.10.1/24"
 # ipv6 = "fd00:dead:beef::1/64"
+# UDP 传输模式下运行时最多使用 1280，确保浏览器 QUIC 数据报不会被加密外层再分片；
+# TCP 传输模式保留此配置值。
 mtu = 1500
 # 普通 UDP 转发开关：
 #   true  - 保持原有行为，按 direct_access 分流，未命中直连规则的 UDP 通过 proxy relay。
