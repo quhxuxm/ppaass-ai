@@ -78,11 +78,8 @@ struct TunForwardContext {
     // true 时，系统 DNS 请求会被映射成 proxy 端 DNS 虚拟目标。
     proxy_dns: bool,
     // true 保持普通 UDP 原有路由语义；false 时除代理 DNS 与 QUIC 外均从 agent 直连。
-    // UDP/443 QUIC 由 quic_policy、direct_access 与 UDP 传输模式独立决定。
+    // UDP/443 QUIC 由 quic_policy 与 direct_access 独立决定。
     proxy_udp: bool,
-    // UDP 传输 QUIC 目前用可靠有序 stream 承载代理 UDP。UDP/443 再走该路径会形成
-    // QUIC-over-QUIC 队头阻塞，因此代理路径需要让应用回退 TCP。
-    udp_transport_quic: bool,
     // 直连路径的物理出口绑定信息，可在失败后刷新。
     direct_egress: Arc<TunDirectEgress>,
 }
@@ -333,9 +330,14 @@ pub async fn run_tun_mode(
     let quic_policy = config.effective_quic_policy();
     info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
     let udp_transport_quic = transport_mode.uses_quic_for(protocol::TransportProtocol::Udp);
-    if udp_transport_quic && !quic_policy.should_block_udp443() {
+    if !quic_policy.should_block_udp443() {
         info!(
-            "UDP 传输为 QUIC：直连规则命中的 UDP/443 保持直连；需要代理的 UDP/443 将阻断并回退 TCP/TLS"
+            "TUN UDP/443 已允许：直连规则命中时直连，否则通过 proxy 转发（UDP 传输={}）",
+            if udp_transport_quic {
+                "QUIC"
+            } else {
+                "TCP/Yamux"
+            }
         );
     }
 
@@ -394,7 +396,6 @@ pub async fn run_tun_mode(
         tun_networks,
         proxy_dns,
         proxy_udp,
-        udp_transport_quic,
         direct_egress,
     };
     let netstack_task = spawn_netstack_supervisor(

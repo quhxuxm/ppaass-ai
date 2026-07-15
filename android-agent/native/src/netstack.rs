@@ -27,7 +27,6 @@ use supervisor::spawn_netstack_supervisor;
 struct ForwardContext {
     tcp_sessions: Arc<AndroidYamuxSessionManager>,
     udp_sessions: Arc<AndroidYamuxSessionManager>,
-    udp_transport_quic: bool,
     direct_checker: Arc<DirectAccessChecker>,
     direct_domain_cache: Arc<DirectDomainCache>,
     tun_networks: TunNetworks,
@@ -87,7 +86,6 @@ pub async fn run_android_agent(
     let context = ForwardContext {
         tcp_sessions,
         udp_sessions,
-        udp_transport_quic,
         direct_checker,
         direct_domain_cache: Arc::new(DirectDomainCache::new(Duration::from_secs(300))),
         tun_networks,

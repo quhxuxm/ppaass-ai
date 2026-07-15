@@ -250,9 +250,9 @@ TUN 模式里的关键细节：
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
 - `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；混合模式通过 UDP QUIC 连接池承载，全 TCP 模式通过 TCP/Yamux 承载。关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。
-- UDP/443 命中直连规则时保持直连；未命中时仅在全 TCP 模式使用 UDP relay，混合模式会阻断并让应用回退 TCP/TLS，避免把 HTTP/3 套进可靠 QUIC stream 后产生队头阻塞。
+- UDP/443 命中直连规则时保持直连；未命中时使用共享 UDP relay，混合模式通过 UDP QUIC 连接池承载，全 TCP 模式通过 TCP/Yamux 承载。
 - `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
-- UDP/443 QUIC 使用独立策略：默认允许命中 `direct_access` 的流量直连；未命中时，全 TCP 模式可走共享 UDP relay，混合模式会回退 TCP/TLS。需要强制所有浏览器 QUIC 回退时可开启 QUIC 阻断。
+- UDP/443 QUIC 使用独立策略：默认允许命中 `direct_access` 的流量直连，未命中时按 `transport_mode` 选择 QUIC 或 TCP/Yamux UDP relay。只有显式开启 QUIC 阻断时，才会丢弃 UDP/443 并强制应用回退 TCP/TLS。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 

@@ -17,6 +17,5 @@ flowchart TD
     O -->|"是"| P["DnsProxy -> Address::ProxyDns"]
     O -->|"否"| Q{"普通 UDP: proxy_udp + direct_access + transport_mode<br/>UDP/443: quic_policy + direct_access + transport_mode"}
     Q -->|"直连"| R["绑定物理接口直连 UDP"]
-    Q -->|"普通 UDP 代理"| S["udp_sessions: QUIC 或 TCP/Yamux"]
-    Q -->|"全 TCP 模式代理 UDP/443"| S
-    Q -->|"混合模式或策略阻断 UDP/443"| T["丢弃 UDP/443，应用回退 TCP/TLS"]
+    Q -->|"允许且未直连"| S["udp_sessions: QUIC 或 TCP/Yamux"]
+    Q -->|"显式阻断 UDP/443"| T["丢弃 UDP/443，应用回退 TCP/TLS"]

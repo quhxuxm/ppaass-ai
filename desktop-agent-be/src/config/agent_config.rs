@@ -105,8 +105,8 @@ pub struct TunConfig {
     #[serde(default = "default_tun_proxy_udp")]
     pub proxy_udp: bool,
 
-    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。UDP 传输为 QUIC 时不会再用可靠
-    /// stream 代理 UDP/443，而是让未命中直连规则的应用回退 TCP/TLS。
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。allow 时命中直连
+    /// 规则的目标直连，其余目标通过 proxy UDP relay 转发；block 时统一阻断。
     #[serde(default)]
     pub quic_policy: Option<QuicPolicy>,
 
