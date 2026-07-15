@@ -51,12 +51,32 @@ pub fn clear() {
 
 #[cfg(unix)]
 pub fn protect_fd(fd: std::os::fd::RawFd) -> io::Result<()> {
+    protect_fd_impl(fd, false)
+}
+
+/// Native UDP transport is only created by the VPN netstack. It must never
+/// continue without VpnService.protect(), otherwise its own encrypted packets
+/// are captured by the TUN again and form a routing loop.
+#[cfg(unix)]
+pub fn protect_fd_required(fd: std::os::fd::RawFd) -> io::Result<()> {
+    protect_fd_impl(fd, true)
+}
+
+#[cfg(unix)]
+fn protect_fd_impl(fd: std::os::fd::RawFd, required: bool) -> io::Result<()> {
     let protector = SOCKET_PROTECTOR
         .lock()
         .map_err(|_| io::Error::other("Android socket protector mutex was poisoned"))?;
     let Some(protector) = protector.as_ref() else {
         // HTTP proxy mode can run without VpnService; in that case there is no socket to exclude.
-        return Ok(());
+        return if required {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "VpnService socket protector is not installed",
+            ))
+        } else {
+            Ok(())
+        };
     };
 
     let protected = protector

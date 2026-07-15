@@ -6,13 +6,13 @@ proxy_addrs = ["140.82.30.214:80"]
 # proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-# UDP 代理通道：quic 表示混合模式（TCP 仍走 TCP，UDP 走 QUIC）；tcp 表示全 TCP 模式。
-transport_mode = "quic"
-# 仅 UDP relay 使用的 QUIC 连接池大小；TCP 业务不进入该连接池。
-quic_connection_pool_size = 4
+# UDP 代理通道：udp 表示 TCP 仍走 TCP、UDP 走原生加密 UDP；tcp 表示全 TCP 模式。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。
+udp_session_pool_size = 4
 connect_timeout_secs = 20
-# Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
-# 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+# Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+# 仅适用于 TCP 目标和 transport_mode=tcp 的 UDP relay；原生加密 UDP 数据报不压缩。
 # TUN 看视频/HTTPS 时，负载通常已经压缩或加密，二次压缩收益很低，还会增加 CPU 和调度抖动；
 # 本地示例默认关闭压缩，把 CPU 留给 relay 和浏览器解码。
 compression_mode = "none"
@@ -84,7 +84,7 @@ proxy_udp = true
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
 # 默认允许 QUIC：命中 direct_access 的目标保持直连，未命中目标通过 proxy UDP
-# relay；混合模式使用 QUIC，全 TCP 模式使用 TCP/Yamux。
+# relay；原生 UDP 模式使用加密 UDP，全 TCP 模式使用 TCP/Yamux。
 # QUIC 策略：
 #   allow - 允许直连 QUIC；未命中的流量按 UDP 传输模式通过 proxy relay。
 #   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。

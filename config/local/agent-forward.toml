@@ -5,13 +5,13 @@ listen_addr = "127.0.0.1:7080"
 proxy_addrs = ["127.0.0.1:9090", "127.0.0.1:9090"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-# quic 表示 TCP 走 TCP、UDP 走 QUIC；tcp 表示 TCP 与 UDP relay 都走 TCP。
-transport_mode = "quic"
-# 仅 UDP relay 使用。
-quic_connection_pool_size = 4
+# udp 表示 TCP 走 TCP、UDP 走原生加密 UDP；tcp 表示 TCP 与 UDP relay 都走 TCP。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池。
+udp_session_pool_size = 4
 connect_timeout_secs = 20
-# Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
-# 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+# Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+# 仅适用于 TCP 目标和 transport_mode=tcp 的 UDP relay；原生加密 UDP 数据报不压缩。
 compression_mode = "lz4"
 
 # 日志级别：trace、debug、info、warn、error

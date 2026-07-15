@@ -6,6 +6,7 @@
 use super::udp_associate::create_udp_packet;
 use super::*;
 use crate::telemetry;
+use protocol::udp_transport::UDP_MAX_MESSAGE_SIZE;
 use std::collections::hash_map::DefaultHasher;
 
 const SOCKS_UDP_RELAY_CHANNEL_SIZE: usize = 4096;
@@ -185,7 +186,9 @@ async fn run_socks_udp_relay(
         let idle = tokio::time::sleep(SOCKS_UDP_RELAY_CONNECTION_IDLE);
         tokio::pin!(idle);
         retry_request = Some(first_request);
-        let mut response_buf = vec![0u8; 65535];
+        // UdpRelayPacket adds flow/address metadata to the original UDP payload.
+        // Keep one complete native-UDP message in a single AsyncRead call.
+        let mut response_buf = vec![0u8; UDP_MAX_MESSAGE_SIZE];
 
         loop {
             if let Some(request) = retry_request.take() {

@@ -19,11 +19,14 @@ mod upstream;
 pub use agent_io::AgentIo;
 pub use egress::EgressState;
 pub use response_sink::BytesToProxyResponseSink;
+pub(crate) use target::target_addr_for_address;
+pub(crate) use udp_relay_flow::{
+    QueuedUdpRelayResponse, UdpRelayFlowChannels, UdpRelayFlowSet, udp_relay_channel_size,
+};
+pub(crate) use upstream::UpstreamConnection;
 // UpstreamConnection 在 ServerConnection 定义之后于文件末尾导出
 
 use crate::config::{ProxyConfig, UserConfig};
-use crate::connection::target::target_addr_for_address;
-use crate::connection::upstream::UpstreamConnection;
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
 use common::spawn_guarded;

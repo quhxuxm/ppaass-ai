@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(test)]
 use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
 use common::{
-    AuthenticatedConnection, ClientStream, QuicBiStream, QuicClientConnection, TransportMode,
+    AuthenticatedConnection, ClientStream, TransportMode, UdpClientConnection, UdpClientStream,
     YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
     YamuxClientConnection, YamuxClientStream,
 };
@@ -35,9 +35,9 @@ struct AndroidYamuxSession {
 }
 
 #[derive(Clone)]
-struct AndroidQuicConnection {
+struct AndroidUdpSession {
     id: usize,
-    connection: QuicClientConnection,
+    connection: UdpClientConnection,
 }
 
 pub struct AndroidYamuxSessionManager {
@@ -46,13 +46,13 @@ pub struct AndroidYamuxSessionManager {
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     yamux_sessions: Mutex<Vec<AndroidYamuxSession>>,
-    // 每个 slot 拥有独立 QUIC connection/UDP socket/拥塞窗口。slot 级锁使首次
+    // 每个 slot 拥有独立原生 UDP socket、会话密钥与序号空间。slot 级锁使首次
     // 并发建连可以平行进行，不会被一把全局锁串行化。
-    quic_connections: Vec<Mutex<Option<AndroidQuicConnection>>>,
+    udp_sessions: Vec<Mutex<Option<AndroidUdpSession>>>,
     yamux_refill_lock: Mutex<()>,
     direct_tcp_connects: Semaphore,
-    quic_next_index: AtomicUsize,
-    quic_next_connection_id: AtomicUsize,
+    udp_next_index: AtomicUsize,
+    udp_next_session_id: AtomicUsize,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
 }
@@ -60,7 +60,7 @@ pub struct AndroidYamuxSessionManager {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyStreamRoute {
     DirectTcp,
-    Quic,
+    NativeUdp,
     Yamux,
 }
 
@@ -95,10 +95,10 @@ impl AndroidYamuxSessionManager {
         let direct_tcp_connect_limit = config
             .http_proxy_max_concurrent_connects
             .clamp(1, MAX_CONFIGURED_DIRECT_TCP_CONNECTS);
-        // transport_mode=quic 只控制 UDP 的外层传输。TCP manager 始终使用
-        // direct framed TCP，因此不应分配也不可能误用 QUIC connection pool。
-        let quic_pool_size = if config.transport_mode.uses_quic_for(yamux_transport) {
-            config.effective_quic_connection_pool_size()
+        // transport_mode=udp 只控制 UDP 的外层传输。TCP manager 始终使用
+        // direct framed TCP，因此不应分配也不可能误用原生 UDP 会话池。
+        let udp_pool_size = if config.transport_mode.uses_native_udp_for(yamux_transport) {
+            config.effective_udp_session_pool_size()
         } else {
             0
         };
@@ -108,11 +108,11 @@ impl AndroidYamuxSessionManager {
             manager_name,
             yamux_transport,
             yamux_sessions: Mutex::new(Vec::new()),
-            quic_connections: (0..quic_pool_size).map(|_| Mutex::new(None)).collect(),
+            udp_sessions: (0..udp_pool_size).map(|_| Mutex::new(None)).collect(),
             yamux_refill_lock: Mutex::new(()),
             direct_tcp_connects: Semaphore::new(direct_tcp_connect_limit),
-            quic_next_index: AtomicUsize::new(0),
-            quic_next_connection_id: AtomicUsize::new(0),
+            udp_next_index: AtomicUsize::new(0),
+            udp_next_session_id: AtomicUsize::new(0),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
         })
@@ -133,12 +133,12 @@ impl AndroidYamuxSessionManager {
 
         match route {
             ProxyStreamRoute::DirectTcp => self.open_direct_tcp_stream(address).await,
-            ProxyStreamRoute::Quic => self.open_quic_stream(address, transport).await,
+            ProxyStreamRoute::NativeUdp => self.open_udp_stream(address, transport).await,
             ProxyStreamRoute::Yamux => self.open_target_stream(address, transport).await,
         }
     }
 
-    async fn open_quic_stream(
+    async fn open_udp_stream(
         &self,
         address: Address,
         transport: TransportProtocol,
@@ -148,49 +148,48 @@ impl AndroidYamuxSessionManager {
                 "Android agent is stopping".into(),
             ));
         }
-        if self.quic_connections.is_empty() {
+        if self.udp_sessions.is_empty() {
             return Err(AndroidAgentError::Connection(format!(
-                "Android {} QUIC transport is disabled",
+                "Android {} native UDP transport is disabled",
                 self.manager_name
             )));
         }
-        let slot_index = self.next_quic_connection_slot();
+        let slot_index = self.next_udp_session_slot();
         for attempt in 0..2 {
             let handle = {
-                let mut current = self.quic_connections[slot_index].lock().await;
+                let mut current = self.udp_sessions[slot_index].lock().await;
                 if current
                     .as_ref()
                     .is_none_or(|handle| handle.connection.is_closed())
                 {
-                    let connection = QuicClientConnection::connect(self.config.as_ref())
+                    let connection = UdpClientConnection::connect(self.config.as_ref())
                         .await
                         .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
-                    let connection_id = self.quic_next_connection_id.fetch_add(1, Ordering::AcqRel);
+                    let connection_id = self.udp_next_session_id.fetch_add(1, Ordering::AcqRel);
                     debug!(
                         manager = self.manager_name,
                         slot = slot_index,
                         connection_id,
-                        "Android QUIC connection pool slot established"
+                        "Android native encrypted UDP session pool slot established"
                     );
-                    *current = Some(AndroidQuicConnection {
+                    *current = Some(AndroidUdpSession {
                         id: connection_id,
                         connection,
                     });
                 }
                 current
                     .as_ref()
-                    .expect("Android QUIC connection initialized")
+                    .expect("Android UDP session initialized")
                     .clone()
             };
             match handle
                 .connection
-                .connect_to_target(self.config.as_ref(), address.clone(), transport)
+                .connect_to_target(address.clone(), transport)
                 .await
             {
-                Ok((stream, _)) => return Ok(AndroidYamuxTargetStream::Quic(stream)),
+                Ok((stream, _)) => return Ok(AndroidYamuxTargetStream::Udp(stream)),
                 Err(err) if attempt == 0 && handle.connection.is_closed() => {
-                    let stats = handle.connection.stats();
-                    let mut current = self.quic_connections[slot_index].lock().await;
+                    let mut current = self.udp_sessions[slot_index].lock().await;
                     // 只移除本次失败的旧连接。并发任务可能已在该 slot 建立了
                     // 新连接，不能无条件清空它。
                     if current
@@ -203,24 +202,20 @@ impl AndroidYamuxSessionManager {
                         manager = self.manager_name,
                         slot = slot_index,
                         connection_id = handle.id,
-                        rtt_ms = stats.path.rtt.as_millis(),
-                        cwnd = stats.path.cwnd,
-                        lost_packets = stats.path.lost_packets,
-                        congestion_events = stats.path.congestion_events,
-                        "Android QUIC proxy connection closed; rebuilding only this pool slot: {err}"
+                        "Android native UDP proxy session closed; rebuilding only this pool slot: {err}"
                     );
                 }
                 Err(err) => return Err(AndroidAgentError::Connection(err.to_string())),
             }
         }
         Err(AndroidAgentError::Connection(
-            "Android QUIC proxy connection failed".into(),
+            "Android native UDP proxy session failed".into(),
         ))
     }
 
-    fn next_quic_connection_slot(&self) -> usize {
+    fn next_udp_session_slot(&self) -> usize {
         // AndroidAgentConfig 已把 pool size 夹到至少 1，因此这里不会除以 0。
-        self.quic_next_index.fetch_add(1, Ordering::AcqRel) % self.quic_connections.len()
+        self.udp_next_index.fetch_add(1, Ordering::AcqRel) % self.udp_sessions.len()
     }
 
     async fn open_direct_tcp_stream(&self, address: Address) -> Result<AndroidYamuxTargetStream> {
@@ -547,8 +542,8 @@ fn proxy_stream_route(
     if target_transport == TransportProtocol::Tcp {
         // TCP 不受 transport_mode 影响，一律沿用原来的独立 framed TCP 连接。
         Some(ProxyStreamRoute::DirectTcp)
-    } else if transport_mode.uses_quic_for(target_transport) {
-        Some(ProxyStreamRoute::Quic)
+    } else if transport_mode.uses_native_udp_for(target_transport) {
+        Some(ProxyStreamRoute::NativeUdp)
     } else {
         Some(ProxyStreamRoute::Yamux)
     }
@@ -557,7 +552,7 @@ fn proxy_stream_route(
 pub enum AndroidYamuxTargetStream {
     Direct(ClientStream<TcpStream>),
     Yamux(YamuxClientStream),
-    Quic(ClientStream<QuicBiStream>),
+    Udp(UdpClientStream),
 }
 
 impl AsyncRead for AndroidYamuxTargetStream {
@@ -569,7 +564,7 @@ impl AsyncRead for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
-            Self::Quic(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Udp(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -583,7 +578,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
-            Self::Quic(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Udp(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -591,7 +586,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
-            Self::Quic(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Udp(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -599,7 +594,7 @@ impl AsyncWrite for AndroidYamuxTargetStream {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
-            Self::Quic(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Udp(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
@@ -671,23 +666,21 @@ mod tests {
     }
 
     #[test]
-    fn udp_quic_pool_round_robins_across_independent_connections() {
+    fn udp_session_pool_round_robins_across_independent_sockets() {
         let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
         let manager =
             AndroidYamuxSessionManager::new_udp(Arc::new(config), CancellationToken::new());
 
-        assert_eq!(manager.quic_connections.len(), 4);
-        let slots: Vec<_> = (0..10)
-            .map(|_| manager.next_quic_connection_slot())
-            .collect();
+        assert_eq!(manager.udp_sessions.len(), 4);
+        let slots: Vec<_> = (0..10).map(|_| manager.next_udp_session_slot()).collect();
         assert_eq!(slots, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
     }
 
     #[test]
-    fn quic_mode_routes_only_udp_over_quic() {
+    fn udp_mode_routes_only_udp_over_native_udp() {
         assert_eq!(
             proxy_stream_route(
-                TransportMode::Quic,
+                TransportMode::Udp,
                 TransportProtocol::Tcp,
                 TransportProtocol::Tcp,
             ),
@@ -695,11 +688,11 @@ mod tests {
         );
         assert_eq!(
             proxy_stream_route(
-                TransportMode::Quic,
+                TransportMode::Udp,
                 TransportProtocol::Udp,
                 TransportProtocol::Udp,
             ),
-            Some(ProxyStreamRoute::Quic)
+            Some(ProxyStreamRoute::NativeUdp)
         );
     }
 
@@ -724,19 +717,19 @@ mod tests {
     }
 
     #[test]
-    fn tcp_manager_never_allocates_a_quic_pool() {
+    fn tcp_manager_never_allocates_a_native_udp_pool() {
         let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
         let manager =
             AndroidYamuxSessionManager::new_tcp_direct(Arc::new(config), CancellationToken::new());
 
-        assert!(manager.quic_connections.is_empty());
+        assert!(manager.udp_sessions.is_empty());
     }
 
     #[test]
     fn manager_rejects_cross_protocol_routes() {
         assert_eq!(
             proxy_stream_route(
-                TransportMode::Quic,
+                TransportMode::Udp,
                 TransportProtocol::Tcp,
                 TransportProtocol::Udp,
             ),
@@ -744,7 +737,7 @@ mod tests {
         );
         assert_eq!(
             proxy_stream_route(
-                TransportMode::Quic,
+                TransportMode::Udp,
                 TransportProtocol::Udp,
                 TransportProtocol::Tcp,
             ),

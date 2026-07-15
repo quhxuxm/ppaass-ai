@@ -17,7 +17,7 @@ log_level = "info"
 # 日志文件名（仅在设置 log_dir 时使用）
 # log_file = "proxy.log"
 
-# 数据传输压缩模式：none、zstd、lz4、gzip
+# Framed TCP/TCP-Yamux 数据压缩模式：none、zstd、lz4、gzip；原生加密 UDP 数据报不压缩。
 # - none：不压缩（默认）
 # - zstd：Zstandard 压缩，速度与压缩率较均衡
 # - lz4：LZ4 压缩，速度最快，压缩率较低
@@ -71,6 +71,12 @@ yamux_session_idle_timeout_secs = 300
 
 # UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
 udp_relay_channel_size = 64
+udp_relay_max_flows = 256
+
+# 原生 UDP session 及每 session 外层 flow 的资源上限。
+udp_session_limit = 4096
+udp_session_channel_size = 256
+udp_session_max_flows = 256
 
 [yamux]
 # proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。

@@ -28,7 +28,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for AgentIo<R, W> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         // SinkWriter::poll_write 只把帧放入编码缓冲区。在每次写入后强制
-        // flush 会把 64KB 的中继块继续拆成独立发送，使 QUIC 无法批量处理。
+        // flush 会让 64KB 的中继块立即单独发送，增加外层 TCP 的小写入和调度开销。
         // 上层 copy/copy_bidirectional 会在读取 Pending、EOF 或关闭时显式 flush。
         Pin::new(&mut self.writer).poll_write(cx, buf)
     }

@@ -53,11 +53,11 @@ pub async fn run_android_agent(
     let mtu = config.tun.mtu as usize;
     let proxy_dns = config.tun.proxy_dns;
     let quic_policy = config.tun.effective_quic_policy();
-    let udp_transport_quic = config
+    let native_udp = config
         .transport_mode
-        .uses_quic_for(protocol::TransportProtocol::Udp);
-    let udp_transport = if udp_transport_quic {
-        "quic"
+        .uses_native_udp_for(protocol::TransportProtocol::Udp);
+    let udp_transport = if native_udp {
+        "native-encrypted-udp"
     } else {
         "tcp-yamux"
     };

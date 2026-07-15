@@ -41,13 +41,13 @@ final class AgentConfigJson {
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
                 .put("transport_mode", normalizeTransportMode(
                         prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE)))
-                .put("quic_connection_pool_size", parseClampedInt(
+                .put("udp_session_pool_size", parseClampedInt(
                         prefs.getString(
-                                "quic_connection_pool_size",
-                                String.valueOf(DefaultConfig.QUIC_CONNECTION_POOL_SIZE)),
-                        DefaultConfig.QUIC_CONNECTION_POOL_SIZE,
-                        DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
-                        DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE))
+                                "udp_session_pool_size",
+                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE)),
+                        DefaultConfig.UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MAX_UDP_SESSION_POOL_SIZE))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", parsePositiveInt(
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
@@ -158,11 +158,16 @@ final class AgentConfigJson {
         return DefaultConfig.COMPRESSION_MODE;
     }
 
-    private static String normalizeTransportMode(String value) {
-        if (value != null && "tcp".equals(value.trim().toLowerCase())) {
-            return "tcp";
+    private static String normalizeTransportMode(String value) throws JSONException {
+        if (value == null) {
+            return DefaultConfig.TRANSPORT_MODE;
         }
-        return "quic";
+        String normalized = value.trim().toLowerCase();
+        if ("udp".equals(normalized) || "tcp".equals(normalized)) {
+            return normalized;
+        }
+        throw new JSONException(
+                "transport_mode must be 'udp' or 'tcp'; removed mode 'quic' is not supported");
     }
 
     private static String normalizeDirectAccessMode(String value) {

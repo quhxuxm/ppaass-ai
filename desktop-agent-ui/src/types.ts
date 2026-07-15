@@ -1,14 +1,15 @@
 import type { AppIconName } from "./components/AppIcon";
 
 export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
+export type AgentTransportMode = "udp" | "tcp";
 
 export type AgentConfigSummary = {
   listen_addr: string;
   proxy_addrs: string[];
   username: string;
   private_key_path: string;
-  transport_mode: string;
-  quic_connection_pool_size: number;
+  transport_mode: AgentTransportMode;
+  udp_session_pool_size: number;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;

@@ -6,7 +6,7 @@ stateDiagram-v2
     DirectFramed --> AuthReading: direct framed PPAASS
     YamuxSession --> SubstreamAccepted: accept 子流
     SubstreamAccepted --> AuthReading: 子流内读取第一帧
-    AuthReading --> AuthFailed: 非 Auth / 用户不存在 / 时间戳过期 / 用户过期
+    AuthReading --> AuthFailed: 非 Auth / 用户不存在 / 时间戳或用户过期
     AuthFailed --> StreamClosed
     AuthReading --> AuthOk: Auth 成功
     AuthOk --> ConnectDispatch: 收到 ConnectRequest
@@ -19,5 +19,19 @@ stateDiagram-v2
     SharedUdpRelay --> StreamClosed
     UpstreamProxy --> StreamClosed
     StreamClosed --> YamuxSession: Yamux 子流结束，等待下一个子流
-    StreamClosed --> Closed: direct framed 连接结束
-    YamuxSession --> Closed: 外层 TCP/Yamux 关闭
+    StreamClosed --> TcpClosed: direct framed 连接结束
+    YamuxSession --> TcpClosed: 外层 TCP/Yamux 关闭
+
+    [*] --> UdpDatagramAccepted
+    UdpDatagramAccepted --> UdpAuthVerify: AuthInit
+    UdpAuthVerify --> UdpDropped: RSA proof / 时间窗口失败
+    UdpAuthVerify --> UdpSessionReady: AuthOk + HKDF 双向密钥
+    UdpDatagramAccepted --> UdpPacketVerify: Encrypted + session ID
+    UdpPacketVerify --> UdpDropped: header / AEAD / replay window 失败
+    UdpPacketVerify --> UdpReassembly: 独立分片验证成功
+    UdpReassembly --> UdpDropped: 超界 / 超时 / 冲突
+    UdpReassembly --> UdpMessageDispatch: 完整 Connect/Data/Close
+    UdpMessageDispatch --> NativeUdpRelay: 按 flow_id 处理
+    NativeUdpRelay --> UdpSessionReady: 响应继续逐包保护
+    UdpSessionReady --> UdpDatagramAccepted: 等待后续数据报
+    UdpDropped --> UdpDatagramAccepted: 丢弃，不阻塞其他包

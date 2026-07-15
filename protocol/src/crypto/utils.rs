@@ -1,5 +1,10 @@
 use crate::error::{ProtocolError, Result};
-use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey, rand_core::OsRng, traits::PublicKeyParts};
+use rsa::{
+    BigUint, Oaep, Pkcs1v15Encrypt, Pss, RsaPublicKey,
+    rand_core::OsRng,
+    sha2::{Digest as RsaDigest, Sha256 as RsaSha256},
+    traits::PublicKeyParts,
+};
 use sha2::{Digest, Sha256};
 
 pub fn hash_password(password: &str, salt: &[u8]) -> Vec<u8> {
@@ -13,6 +18,31 @@ pub fn encrypt_with_public_key(public_key: &RsaPublicKey, data: &[u8]) -> Result
     let mut rng = OsRng;
     public_key
         .encrypt(&mut rng, Pkcs1v15Encrypt, data)
+        .map_err(|e| ProtocolError::Encryption(e.to_string()))
+}
+
+/// Verify an RSASSA-PSS-SHA256 signature over `message`.
+///
+/// This is deliberately not implemented through the legacy raw RSA
+/// `decrypt_with_public_key` helper, whose semantics are retained for the
+/// original TCP protocol only.
+pub fn verify_pss_sha256(
+    public_key: &RsaPublicKey,
+    message: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    let digest = RsaSha256::digest(message);
+    public_key
+        .verify(Pss::new::<RsaSha256>(), &digest, signature)
+        .map_err(|e| ProtocolError::AuthenticationFailed(e.to_string()))
+}
+
+/// Encrypt plaintext using RSAES-OAEP with SHA-256 for both OAEP and MGF1.
+/// The original PKCS#1 v1.5 helper remains available for the TCP protocol.
+pub fn encrypt_oaep_sha256(public_key: &RsaPublicKey, plaintext: &[u8]) -> Result<Vec<u8>> {
+    let mut rng = OsRng;
+    public_key
+        .encrypt(&mut rng, Oaep::new::<RsaSha256>(), plaintext)
         .map_err(|e| ProtocolError::Encryption(e.to_string()))
 }
 

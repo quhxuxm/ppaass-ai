@@ -20,8 +20,8 @@ pub(super) struct QueuedUdpRelayData {
     pub(super) data: Vec<u8>,
 }
 
-pub(super) struct QueuedUdpRelayResponse {
-    pub(super) packet: UdpRelayPacket,
+pub(crate) struct QueuedUdpRelayResponse {
+    pub(crate) packet: UdpRelayPacket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,15 +32,16 @@ enum UdpRelayResponseQueueResult {
 }
 
 #[derive(Clone)]
-pub(super) struct UdpRelayFlowChannels {
-    pub(super) response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
-    pub(super) flow_done_tx: tokio::sync::mpsc::Sender<u64>,
+pub(crate) struct UdpRelayFlowChannels {
+    pub(crate) response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
+    pub(crate) flow_done_tx: tokio::sync::mpsc::Sender<u64>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct UdpRelayFlowOptions {
     pub(super) idle_timeout: Duration,
     pub(super) channel_size: usize,
+    pub(super) max_flows: usize,
 }
 
 #[derive(Clone)]
@@ -51,14 +52,35 @@ pub(super) struct UdpRelayFlowContext {
     flow_task_name: &'static str,
 }
 
-pub(super) struct UdpRelayFlowSet {
+pub(crate) struct UdpRelayFlowSet {
     flows: HashMap<u64, UdpRelayFlow>,
     options: UdpRelayFlowOptions,
     context: UdpRelayFlowContext,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UdpRelayFlowAdmission {
+    Existing,
+    AtCapacity,
+    Create,
+}
+
+fn classify_udp_relay_flow_admission(
+    flow_exists: bool,
+    active_flow_count: usize,
+    max_flows: usize,
+) -> UdpRelayFlowAdmission {
+    if flow_exists {
+        UdpRelayFlowAdmission::Existing
+    } else if active_flow_count >= max_flows {
+        UdpRelayFlowAdmission::AtCapacity
+    } else {
+        UdpRelayFlowAdmission::Create
+    }
+}
+
 impl UdpRelayFlowSet {
-    pub(super) fn new(
+    pub(crate) fn new(
         proxy_config: &ProxyConfig,
         egress_state: Arc<EgressState>,
         channels: UdpRelayFlowChannels,
@@ -71,6 +93,7 @@ impl UdpRelayFlowSet {
             options: UdpRelayFlowOptions {
                 idle_timeout: Duration::from_secs(proxy_config.udp_relay_idle_timeout_secs),
                 channel_size,
+                max_flows: proxy_config.udp_relay_max_flows,
             },
             context: UdpRelayFlowContext {
                 egress_state,
@@ -81,11 +104,11 @@ impl UdpRelayFlowSet {
         }
     }
 
-    pub(super) fn idle_timeout(&self) -> Duration {
+    pub(crate) fn idle_timeout(&self) -> Duration {
         self.options.idle_timeout
     }
 
-    pub(super) fn remove(&mut self, flow_id: u64) {
+    pub(crate) fn remove(&mut self, flow_id: u64) {
         if self.flows.remove(&flow_id).is_some() {
             debug!(
                 "{} flow {flow_id} 已清理，active_flows={}",
@@ -95,15 +118,30 @@ impl UdpRelayFlowSet {
         }
     }
 
-    pub(super) async fn dispatch(&mut self, relay_packet: UdpRelayPacket) {
+    pub(crate) async fn dispatch(&mut self, relay_packet: UdpRelayPacket) {
         let flow_id = relay_packet.flow_id;
 
-        if !self.flows.contains_key(&flow_id)
-            && !self
-                .create_flow(flow_id, relay_packet.address.clone())
-                .await
-        {
-            return;
+        match classify_udp_relay_flow_admission(
+            self.flows.contains_key(&flow_id),
+            self.flows.len(),
+            self.options.max_flows,
+        ) {
+            UdpRelayFlowAdmission::Existing => {}
+            UdpRelayFlowAdmission::AtCapacity => {
+                debug!(
+                    "{} flow 数已达上限 {}，丢弃新 flow {flow_id} 的数据报",
+                    self.context.relay_label, self.options.max_flows
+                );
+                return;
+            }
+            UdpRelayFlowAdmission::Create => {
+                if !self
+                    .create_flow(flow_id, relay_packet.address.clone())
+                    .await
+                {
+                    return;
+                }
+            }
         }
 
         let Some(flow) = self.flows.get(&flow_id) else {
@@ -127,6 +165,13 @@ impl UdpRelayFlowSet {
     }
 
     async fn create_flow(&mut self, flow_id: u64, address: Address) -> bool {
+        if self.flows.len() >= self.options.max_flows {
+            debug!(
+                "{} flow 数已达上限 {}，拒绝新 flow {flow_id}",
+                self.context.relay_label, self.options.max_flows
+            );
+            return false;
+        }
         match spawn_udp_relay_flow(flow_id, address, self.options, self.context.clone()).await {
             Ok(flow) => {
                 self.flows.insert(flow_id, flow);
@@ -148,7 +193,7 @@ impl UdpRelayFlowSet {
     }
 }
 
-pub(super) fn udp_relay_channel_size(config: &ProxyConfig) -> usize {
+pub(crate) fn udp_relay_channel_size(config: &ProxyConfig) -> usize {
     config.udp_relay_channel_size.max(1)
 }
 
@@ -267,6 +312,26 @@ mod tests {
                 data: vec![flow_id as u8],
             },
         }
+    }
+
+    #[test]
+    fn existing_inner_flow_remains_usable_at_capacity() {
+        assert_eq!(
+            classify_udp_relay_flow_admission(true, 256, 256),
+            UdpRelayFlowAdmission::Existing
+        );
+    }
+
+    #[test]
+    fn new_inner_flow_is_rejected_at_capacity_without_off_by_one() {
+        assert_eq!(
+            classify_udp_relay_flow_admission(false, 255, 256),
+            UdpRelayFlowAdmission::Create
+        );
+        assert_eq!(
+            classify_udp_relay_flow_admission(false, 256, 256),
+            UdpRelayFlowAdmission::AtCapacity
+        );
     }
 
     #[tokio::test]

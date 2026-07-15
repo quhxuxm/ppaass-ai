@@ -75,7 +75,7 @@ const emit = defineEmits<{
               :disabled="configLocked"
               @update:model-value="emit('set-field', 'transport_mode', $event)"
             />
-            <small>混合模式仅让 UDP 数据使用 QUIC，TCP 数据仍使用原有 TCP 通道；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。代理启动后此项锁定，停止后才能切换。</small>
+            <small>原生 UDP 模式仅让 UDP 数据使用加密 UDP，TCP 数据始终使用原有 TCP 通道；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。代理启动后此项锁定，停止后才能切换。</small>
           </label>
           <label class="field">
             <span><AppIcon name="clock" />控制连接超时</span>
@@ -117,43 +117,43 @@ const emit = defineEmits<{
               <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN TCP" severity="secondary" />
             </div>
           </div>
-          <p>所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不经过 QUIC 连接池。</p>
+          <p>所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不进入原生 UDP 会话池。</p>
         </section>
       </template>
     </Card>
 
-    <Card v-if="summary.transport_mode === 'quic'" class="panel span-12">
+    <Card v-if="summary.transport_mode === 'udp'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
-          <h2>UDP 数据 · QUIC</h2>
-          <Tag value="混合模式" severity="success" />
+          <h2>UDP 数据 · 原生加密 UDP</h2>
+          <Tag value="UDP 模式" severity="success" />
         </div>
       </template>
       <template #content>
         <section class="policy-section yamux-settings">
           <div class="section-heading">
             <div class="section-title">
-              <span>UDP QUIC 连接池</span>
+              <span>加密 UDP 会话池</span>
               <Tag class="mode-effect-tag" value="仅作用于 UDP relay" severity="secondary" />
             </div>
-            <strong>{{ summary.quic_connection_pool_size }} 条</strong>
+            <strong>{{ summary.udp_session_pool_size }} 条</strong>
           </div>
           <div class="field-pair">
             <label class="field">
-              <span><AppIcon name="share" />UDP QUIC 连接数</span>
+              <span><AppIcon name="share" />UDP 会话数</span>
               <ConfigNumberInput
-                :model-value="summary.quic_connection_pool_size"
+                :model-value="summary.udp_session_pool_size"
                 :min="1"
                 :max="8"
                 :allow-empty="false"
                 :disabled="configLocked"
                 :use-grouping="false"
-                @update:model-value="emit('set-field', 'quic_connection_pool_size', $event)"
+                @update:model-value="emit('set-field', 'udp_session_pool_size', $event)"
               />
-              <small>仅 UDP relay 使用该连接池；建议保持默认 4，范围 1–8。</small>
+              <small>同时维护的已认证 UDP 会话数；默认 4，范围 1–8。</small>
             </label>
           </div>
-          <p>UDP 目标在连接池中分流，并在独立双向流中继续使用原有 PPAASS 认证和加密协议；增加连接数可隔离 UDP 拥塞，但会占用更多网络与内存资源。</p>
+          <p>Agent 先使用 RSA 完成身份认证，之后每个 UDP 数据报都独立使用 AES-256-GCM 加密与认证。该通道不做重传或有序化，保留 UDP 允许丢包、乱序的语义。</p>
         </section>
       </template>
     </Card>

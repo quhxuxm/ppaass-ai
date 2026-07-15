@@ -241,7 +241,7 @@ function hourlyBarHeight(bytes: number) {
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
             <Tag
               v-else-if="card.key === 'egress'"
-              :value="summary.transport_mode === 'quic' ? 'TCP + QUIC' : '全 TCP'"
+              :value="summary.transport_mode === 'udp' ? 'TCP + 加密 UDP' : '全 TCP'"
               severity="info"
             />
             <Tag v-else-if="card.key === 'speed'" value="系统" severity="info" />
@@ -284,7 +284,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="metric-tile">
             <AppIcon name="activity" />
             <span>传输策略</span>
-            <strong>{{ summary.transport_mode === "quic" ? "TCP + QUIC" : "全 TCP" }}</strong>
+            <strong>{{ summary.transport_mode === "udp" ? "TCP + 加密 UDP" : "全 TCP" }}</strong>
           </div>
           <div class="metric-tile">
             <AppIcon name="package" />
@@ -407,7 +407,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
           <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
           <div class="kv-row"><span>普通 UDP</span><strong>{{ summary.tun_proxy_udp ? "按规则分流" : "Agent 直连" }}</strong></div>
-          <div class="kv-row"><span>QUIC 应用流量</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : summary.transport_mode === "quic" ? "直连或经 QUIC 代理" : "直连或经 TCP 代理" }}</strong></div>
+          <div class="kv-row"><span>QUIC 应用流量</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : summary.transport_mode === "udp" ? "直连或经加密 UDP 代理" : "直连或经 TCP 代理" }}</strong></div>
           <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "经 Proxy 解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">

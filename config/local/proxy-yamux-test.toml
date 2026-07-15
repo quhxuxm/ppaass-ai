@@ -1,10 +1,11 @@
-# Local QUIC plus TCP-compatibility smoke-test proxy.
+# Local native encrypted UDP plus full-TCP smoke-test proxy.
 
 listen_addr = "0.0.0.0:18080"
 users_path = "config/local/users.toml"
 log_level = "info"
 log_dir = "logs"
 log_file = "proxy-yamux-test.log"
+# 仅 framed TCP/TCP-Yamux 使用此压缩设置；原生加密 UDP 不压缩。
 compression_mode = "none"
 runtime_threads = 4
 replay_attack_tolerance = 300
@@ -16,6 +17,10 @@ tcp_relay_half_close_idle_timeout_secs = 30
 yamux_session_idle_timeout_secs = 300
 udp_relay_idle_timeout_secs = 60
 udp_relay_channel_size = 64
+udp_relay_max_flows = 256
+udp_session_limit = 4096
+udp_session_channel_size = 256
+udp_session_max_flows = 256
 
 [yamux]
 max_streams_per_session = 128

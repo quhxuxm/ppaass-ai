@@ -8,8 +8,8 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **Hybrid Transport by Default**: TCP targets always use independent framed TCP connections; UDP relay uses a configurable QUIC connection pool when `transport_mode = "quic"`, with a full-TCP UDP/Yamux option available through `transport_mode = "tcp"`
-- **Encrypted PPAASS Frames**: The existing RSA authentication and AES-256-GCM encrypted Auth/Connect/Data frames are unchanged inside both UDP QUIC streams and TCP transports
+- **Hybrid Transport by Default**: TCP targets always use the original independent framed TCP path; proxied UDP uses a configurable pool of native encrypted UDP sessions when `transport_mode = "udp"`, with TCP/Yamux available through `transport_mode = "tcp"`
+- **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
@@ -81,34 +81,44 @@ listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-transport_mode = "quic"              # quic: TCP over TCP + UDP over QUIC (default); tcp: all traffic over TCP
-quic_connection_pool_size = 4         # 1-8; independent QUIC congestion windows for UDP relay only
-connection_timeout_secs = 30                # Connection timeout
+transport_mode = "udp"               # udp: TCP over TCP + proxied UDP over native encrypted UDP (default); tcp: proxied UDP over TCP/Yamux
+udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
+connect_timeout_secs = 30             # Connection timeout
+compression_mode = "none"             # Framed TCP/TCP-Yamux only; native UDP datagrams are not compressed
 
 [yamux.udp]
 sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # UDP relay substreams per session
 
 [tun]
-proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and QUIC stay independent
+proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and application-layer QUIC policy stay independent
 proxy_dns = false                    # DNS proxying remains independently configurable
-quic_policy = "allow"               # allow: direct QUIC where permitted, otherwise proxy via the selected UDP transport; block: force TCP/TLS fallback
+quic_policy = "allow"               # application UDP/443 policy: allow direct/proxied QUIC; block forces application TCP/TLS fallback
 ```
+
+The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 
 ### Proxy Configuration (`config/proxy.toml`)
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 users_path = "config/users.toml"          # Users configuration file
+udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
+udp_session_limit = 4096                   # Authenticated native UDP sessions
+udp_session_channel_size = 256             # Datagrams queued per native UDP session
+udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
 
-The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured port for both protocols in the server firewall when QUIC is used.
+The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
+Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
 
 ## Security
 
-- **RSA-2048**: Used for secure key exchange
-- **AES-256-GCM**: Used for data encryption with authenticated encryption
-- **QUIC/TLS**: Adds transport encryption around unchanged PPAASS encrypted UDP relay frames in hybrid mode; TCP target data remains on the original framed TCP path
+- **RSA-2048**: Authenticates the user identity and establishes native UDP session material
+- **HKDF Key Separation**: Derives independent Agent-to-Proxy and Proxy-to-Agent keys and nonce prefixes
+- **AES-256-GCM**: Protects every native UDP datagram independently; version, session ID, sequence number, and other header fields are authenticated as AAD
+- **Replay and Fragment Protection**: Per-direction packet sequences and a sliding replay window reject duplicate or stale packets while permitting bounded reordering; oversized payloads use bounded fragments that are each authenticated independently
+- **Stable TCP Security Path**: TCP targets retain the original framed PPAASS Auth/Connect/Data encryption; TCP-mode UDP retains the existing TCP/Yamux business-stream protocol
 - **Timestamp Validation**: Prevents replay attacks (5-minute tolerance)
 - **Secure Key Storage**: Private keys stored securely on disk
 - **Per-User Authentication**: Each user has unique credentials
@@ -116,7 +126,7 @@ The proxy listens on both TCP and UDP at `listen_addr`. Allow the configured por
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **UDP QUIC Multiplexing**: In hybrid mode, UDP targets use configurable connection pools and independent QUIC bidirectional streams; TCP targets never enter the QUIC pool
+- **Native UDP Session Pool**: In UDP mode, proxied UDP flows are mapped stably across 1–8 stateful UDP sessions; the outer transport adds no reliable ordering or retransmission
 - **Stable TCP Path**: HTTP, SOCKS5 TCP, and TUN TCP targets always retain independent framed TCP connections
 - **Full-TCP Option**: UDP relay uses raw TCP/Yamux when `transport_mode = "tcp"`, so both TCP and UDP traffic are carried over TCP
 - **Zero-Copy**: Efficient buffer management with bytes crate
@@ -202,7 +212,7 @@ cargo audit
 
 ### Performance Issues
 
-1. Increase pool size in agent configuration
+1. Increase `udp_session_pool_size` for native UDP mode, or adjust UDP Yamux sessions for TCP mode
 2. Check Yamux session and stream settings
 3. Review network latency
 

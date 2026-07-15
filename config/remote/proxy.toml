@@ -1,7 +1,7 @@
 # PPAASS Proxy 服务器配置
 # 该配置用于演示，包含真实 RSA 密钥
 
-# 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 QUIC/UDP，防火墙需放行两种协议。
+# 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 PPAASS 原生加密 UDP，防火墙需放行两种协议。
 listen_addr = "0.0.0.0:80"
 
 # 用户配置文件路径
@@ -17,7 +17,7 @@ log_dir = "logs"
 # 日志文件名（仅在设置 log_dir 时使用）
 log_file = "proxy.log"
 
-# 数据传输压缩模式：none、zstd、lz4、gzip
+# Framed TCP/TCP-Yamux 数据压缩模式：none、zstd、lz4、gzip；原生加密 UDP 数据报不压缩。
 # - none：不压缩（默认）
 # - zstd：Zstandard 压缩，速度与压缩率较均衡
 # - lz4：LZ4 压缩，速度最快，压缩率较低
@@ -86,6 +86,16 @@ udp_relay_idle_timeout_secs = 60
 
 # UDP relay 每个内部队列最多缓存的包数量；队列满时按 UDP 语义丢包。
 udp_relay_channel_size = 128
+
+# 每条共享 UDP relay 的内层 flow/目标 socket 上限。
+# 该限制同时适用于 TCP/Yamux 和原生 UDP 承载的共享 relay。
+udp_relay_max_flows = 256
+
+# 已认证原生 UDP session 的全局上限与每 session 资源上限。
+# 队列满时丢弃单个数据报；flow 满时拒绝新 Connect，已有 flow 不受影响。
+udp_session_limit = 4096
+udp_session_channel_size = 256
+udp_session_max_flows = 256
 
 [yamux]
 # proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。

@@ -20,7 +20,7 @@ export const directRulePresets: Array<{ label: string; icon: AppIconName; rules:
 
 export const compressionOptions = ["none", "lz4", "gzip", "zstd"];
 export const transportModeOptions = [
-  { label: "混合模式（TCP + QUIC）", value: "quic" },
+  { label: "原生 UDP 模式（TCP + 加密 UDP）", value: "udp" },
   { label: "全 TCP 模式", value: "tcp" }
 ];
 export const logLevelOptions = ["trace", "debug", "info", "warn", "error"];

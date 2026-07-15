@@ -329,12 +329,12 @@ pub async fn run_tun_mode(
     );
     let quic_policy = config.effective_quic_policy();
     info!("TUN UDP/443 QUIC 策略：{}", quic_policy.description_zh());
-    let udp_transport_quic = transport_mode.uses_quic_for(protocol::TransportProtocol::Udp);
+    let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
     if !quic_policy.should_block_udp443() {
         info!(
             "TUN UDP/443 已允许：直连规则命中时直连，否则通过 proxy 转发（UDP 传输={}）",
-            if udp_transport_quic {
-                "QUIC"
+            if native_udp {
+                "原生加密 UDP"
             } else {
                 "TCP/Yamux"
             }

@@ -1,14 +1,15 @@
-# Local QUIC plus TCP-compatibility smoke-test desktop agent.
+# Local native-UDP plus TCP-mode smoke-test desktop agent.
 
 listen_addr = "127.0.0.1:11080"
 proxy_addrs = ["127.0.0.1:18080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-# quic 表示 TCP 走 TCP、UDP 走 QUIC；测试 tcp 时 UDP relay 改走 TCP/Yamux。
-transport_mode = "quic"
-# 仅 UDP relay 使用。
-quic_connection_pool_size = 4
+# udp 表示 TCP 走 TCP、UDP 走原生加密 UDP；测试 tcp 时 UDP relay 改走 TCP/Yamux。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池。
+udp_session_pool_size = 4
 connect_timeout_secs = 20
+# 仅 framed TCP/TCP-Yamux 使用此压缩设置；原生加密 UDP 不压缩。
 compression_mode = "none"
 log_level = "info"
 log_dir = "logs"

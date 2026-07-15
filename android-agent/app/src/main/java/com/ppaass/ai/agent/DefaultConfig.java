@@ -12,10 +12,10 @@ final class DefaultConfig {
     static final int CONNECT_TIMEOUT_SECS = 30;
     static final String QUIC_POLICY = "allow";
     static final String COMPRESSION_MODE = "none";
-    static final String TRANSPORT_MODE = "quic";
-    static final int QUIC_CONNECTION_POOL_SIZE = 4;
-    static final int MIN_QUIC_CONNECTION_POOL_SIZE = 1;
-    static final int MAX_QUIC_CONNECTION_POOL_SIZE = 8;
+    static final String TRANSPORT_MODE = "udp";
+    static final int UDP_SESSION_POOL_SIZE = 4;
+    static final int MIN_UDP_SESSION_POOL_SIZE = 1;
+    static final int MAX_UDP_SESSION_POOL_SIZE = 8;
     static final String DIRECT_ACCESS_MODE = "proxy_all";
     static final String DIRECT_ACCESS_RULES =
             "localhost\n"

@@ -12,28 +12,30 @@ try {
   const { transportModeOptions } = await server.ssrLoadModule("/src/constants.ts");
 
   assert.deepEqual(transportModeOptions, [
-    { label: "混合模式（TCP + QUIC）", value: "quic" },
+    { label: "原生 UDP 模式（TCP + 加密 UDP）", value: "udp" },
     { label: "全 TCP 模式", value: "tcp" }
   ]);
 
-  const hybridSummary = summarizeRaw('transport_mode = "quic"\n');
+  const udpSummary = summarizeRaw('transport_mode = "udp"\n');
   const fullTcpSummary = summarizeRaw('transport_mode = "tcp"\n');
-  assert.equal(hybridSummary.transport_mode, "quic");
-  assert.equal(hybridSummary.quic_connection_pool_size, 4);
+  assert.equal(udpSummary.transport_mode, "udp");
+  assert.equal(udpSummary.udp_session_pool_size, 4);
   assert.equal(fullTcpSummary.transport_mode, "tcp");
-  assert.equal(coerceField("transport_mode", "unknown"), "quic");
-  assert.equal(summarizeRaw("quic_connection_pool_size = 0\n").quic_connection_pool_size, 1);
-  assert.equal(summarizeRaw("quic_connection_pool_size = 99\n").quic_connection_pool_size, 8);
-  assert.equal(coerceField("quic_connection_pool_size", 0), 1);
-  assert.equal(coerceField("quic_connection_pool_size", 99), 8);
+  assert.throws(() => coerceField("transport_mode", "unknown"), /udp 或 tcp/);
+  assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /udp 或 tcp/);
+  assert.throws(() => summarizeRaw("quic_connection_pool_size = 4\n"), /已移除/);
+  assert.equal(summarizeRaw("udp_session_pool_size = 0\n").udp_session_pool_size, 1);
+  assert.equal(summarizeRaw("udp_session_pool_size = 99\n").udp_session_pool_size, 8);
+  assert.equal(coerceField("udp_session_pool_size", 0), 1);
+  assert.equal(coerceField("udp_session_pool_size", 99), 8);
 
   const updated = applyFieldToToml(
-    'transport_mode = "quic"\n',
-    "quic_connection_pool_size",
-    coerceField("quic_connection_pool_size", 6)
+    'transport_mode = "udp"\n',
+    "udp_session_pool_size",
+    coerceField("udp_session_pool_size", 6)
   );
-  assert.match(updated, /^quic_connection_pool_size = 6$/m);
-  assert.equal(summarizeRaw(updated).quic_connection_pool_size, 6);
+  assert.match(updated, /^udp_session_pool_size = 6$/m);
+  assert.equal(summarizeRaw(updated).udp_session_pool_size, 6);
 } finally {
   await server.close();
 }

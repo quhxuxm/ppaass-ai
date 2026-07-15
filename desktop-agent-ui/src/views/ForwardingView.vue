@@ -114,7 +114,7 @@ const emit = defineEmits<{
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
               <small class="field-help">
-                允许时，命中直连规则的 UDP/443 QUIC 保持直连，未命中的流量经 UDP relay：混合模式使用 QUIC，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。
+                允许时，命中直连规则的 UDP/443 QUIC 保持直连，未命中的流量经 UDP relay：原生 UDP 模式使用加密 UDP，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。
               </small>
             </label>
           </template>

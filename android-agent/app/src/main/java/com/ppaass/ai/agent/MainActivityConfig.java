@@ -66,23 +66,23 @@ protected void updateEditTextEditable(EditText editText, boolean editable) {
 
 protected void saveConfig() {
         String quicPolicyValue = selectedQuicPolicy();
-        String quicConnectionPoolSizeValue = boundedIntString(
-                quicConnectionPoolSize == null
+        String udpSessionPoolSizeValue = boundedIntString(
+                udpSessionPoolSize == null
                         ? null
-                        : quicConnectionPoolSize.getText().toString(),
-                DefaultConfig.QUIC_CONNECTION_POOL_SIZE,
-                DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
-                DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE);
-        if (quicConnectionPoolSize != null) {
-            quicConnectionPoolSize.setText(quicConnectionPoolSizeValue);
-            quicConnectionPoolSize.setSelection(quicConnectionPoolSizeValue.length());
+                        : udpSessionPoolSize.getText().toString(),
+                DefaultConfig.UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
+        if (udpSessionPoolSize != null) {
+            udpSessionPoolSize.setText(udpSessionPoolSizeValue);
+            udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
         }
         prefs.edit()
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("transport_mode", selectedTransportMode())
-                .putString("quic_connection_pool_size", quicConnectionPoolSizeValue)
+                .putString("udp_session_pool_size", udpSessionPoolSizeValue)
                 .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
@@ -130,7 +130,7 @@ protected void restoreDefaultConfig() {
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
-        quicConnectionPoolSize.setText(String.valueOf(DefaultConfig.QUIC_CONNECTION_POOL_SIZE));
+        udpSessionPoolSize.setText(String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE));
         connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
@@ -216,7 +216,7 @@ protected void transportModeControl(LinearLayout root, String selected) {
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
         row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
-        addTransportModeButton(row, transportModeLabel("quic"), "quic");
+        addTransportModeButton(row, transportModeLabel("udp"), "udp");
         addTransportModeButton(row, transportModeLabel("tcp"), "tcp");
         root.addView(row, matchWrap());
         updateTransportModeButtons();
@@ -265,12 +265,14 @@ protected void setTransportMode(String value, boolean persist) {
     }
 
 protected void updateTransportModeSettingsVisibility() {
-        boolean hybridMode = "quic".equals(normalizeTransportMode(transportModeValue));
-        if (quicConnectionPoolConfig != null) {
-            quicConnectionPoolConfig.setVisibility(hybridMode ? View.VISIBLE : View.GONE);
+        String mode = normalizeTransportMode(transportModeValue);
+        boolean udpMode = "udp".equals(mode);
+        boolean tcpMode = "tcp".equals(mode);
+        if (udpSessionPoolConfig != null) {
+            udpSessionPoolConfig.setVisibility(udpMode ? View.VISIBLE : View.GONE);
         }
         if (udpYamuxConfig != null) {
-            udpYamuxConfig.setVisibility(hybridMode ? View.GONE : View.VISIBLE);
+            udpYamuxConfig.setVisibility(tcpMode ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -292,17 +294,26 @@ protected void updateTransportModeButtons() {
     }
 
 protected String transportModeLabel(String value) {
-        return "tcp".equals(normalizeTransportMode(value)) ? "全 TCP 模式" : "混合模式";
+        return "tcp".equals(normalizeTransportMode(value)) ? "全 TCP 模式" : "原生 UDP 模式";
     }
 
 protected String transportModeDescription(String value) {
         return "tcp".equals(normalizeTransportMode(value))
                 ? "使用全 TCP 模式，TCP 和 UDP relay 均通过 TCP"
-                : "使用混合模式，TCP 数据走 TCP，UDP 数据走 QUIC";
+                : "使用原生 UDP 模式，TCP 数据走 TCP，UDP 报文逐包使用 AES-256-GCM 加密";
     }
 
 protected String normalizeTransportMode(String value) {
-        return value != null && "tcp".equalsIgnoreCase(value.trim()) ? "tcp" : "quic";
+        if (value == null || value.trim().isEmpty()) {
+            return DefaultConfig.TRANSPORT_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("udp".equals(normalized) || "tcp".equals(normalized)) {
+            return normalized;
+        }
+        // 保留未知值，让 AgentConfigJson 在启动时明确拒绝。不将旧 quic
+        // 配置静默迁移成语义不同的原生 UDP。
+        return normalized;
     }
 
 protected Spinner quicPolicySpinner(LinearLayout root, String title, String selected) {
@@ -318,7 +329,7 @@ protected Spinner quicPolicySpinner(LinearLayout root, String title, String sele
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
-        addFieldHelp(root, "允许时，命中直连规则的 UDP/443 QUIC 保持直连，未命中的流量经 UDP relay：混合模式使用 QUIC，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。");
+        addFieldHelp(root, "QUIC 策略只控制应用层 UDP/443。允许时，命中直连规则的 QUIC 保持直连，未命中的流量经 UDP relay：原生 UDP 模式逐包加密传输，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。");
         return spinner;
     }
 

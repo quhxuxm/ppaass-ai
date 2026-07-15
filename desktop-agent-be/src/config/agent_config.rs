@@ -11,28 +11,29 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
-    /// Agent 到 proxy 的 UDP 外层传输。默认使用 QUIC；TCP 业务数据不受此字段影响，
-    /// 始终使用 direct framed TCP。
+    /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
+    /// TCP 业务数据不受此字段影响，始终使用 direct framed TCP。
     #[serde(default)]
     pub transport_mode: TransportMode,
-    /// UDP manager 维护的 QUIC 连接数。多条连接可以隔离拥塞窗口，
-    /// 避免一个应用的丢包同时卡住所有应用。
-    #[serde(default = "default_quic_connection_pool_size")]
-    pub quic_connection_pool_size: usize,
+    /// UDP manager 维护的已认证原生 UDP 会话数。多个会话可分散并发数据报，
+    /// 但不会将 UDP 变成可靠、有序的字节流。
+    #[serde(default = "default_udp_session_pool_size")]
+    pub udp_session_pool_size: usize,
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
-    /// 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+    /// Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+    /// 适用于 TCP 目标与 TCP/Yamux UDP；原生加密 UDP 数据报不压缩。
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
@@ -205,7 +206,7 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 
-fn default_quic_connection_pool_size() -> usize {
+fn default_udp_session_pool_size() -> usize {
     4
 }
 
@@ -249,9 +250,9 @@ impl AgentConfig {
         self.compression_mode.parse().unwrap_or_default()
     }
 
-    /// 限制连接池的内核 socket/内存成本，同时保证错误配置 0 不会导致取模崩溃。
-    pub fn effective_quic_connection_pool_size(&self) -> usize {
-        self.quic_connection_pool_size.clamp(1, 8)
+    /// 限制 UDP 会话池的内核 socket/内存成本，同时保证错误配置 0 不会导致取模崩溃。
+    pub fn effective_udp_session_pool_size(&self) -> usize {
+        self.udp_session_pool_size.clamp(1, 8)
     }
 }
 
@@ -278,11 +279,16 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::None);
-        assert_eq!(config.transport_mode, TransportMode::Quic);
+        assert_eq!(config.transport_mode, TransportMode::Udp);
     }
 
     #[test]
-    fn transport_mode_can_switch_back_to_tcp() {
+    fn transport_mode_accepts_udp_and_tcp() {
+        let udp: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"udp\"\n"))
+                .unwrap();
+        assert_eq!(udp.transport_mode, TransportMode::Udp);
+
         let config: AgentConfig =
             toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
                 .unwrap();
@@ -290,19 +296,37 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn quic_connection_pool_defaults_to_four_and_is_bounded() {
+    fn removed_quic_transport_mode_is_rejected() {
+        let result = toml::from_str::<AgentConfig>(
+            &(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"quic\"\n"),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn udp_session_pool_defaults_to_four_and_is_bounded() {
         let default_config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        assert_eq!(default_config.effective_quic_connection_pool_size(), 4);
+        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
 
         let disabled: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 0\n"))
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 0\n"))
                 .unwrap();
-        assert_eq!(disabled.effective_quic_connection_pool_size(), 1);
+        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
 
         let excessive: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 64\n"))
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 64\n"))
                 .unwrap();
-        assert_eq!(excessive.effective_quic_connection_pool_size(), 8);
+        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
+    }
+
+    #[test]
+    fn removed_quic_connection_pool_field_is_rejected() {
+        let result = toml::from_str::<AgentConfig>(
+            &(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 4\n"),
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

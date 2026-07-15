@@ -1,36 +1,61 @@
 sequenceDiagram
     participant App as 本地应用
     participant Agent as Agent入口
-    participant Streams as 目标流管理
+    participant Transport as 传输管理
     participant Proxy as Proxy
     participant Target as Target
 
     App->>Agent: HTTP/SOCKS/TUN TCP/UDP
     Agent->>Agent: 解析目标 + direct_access 判断
     alt 直连
-        Agent->>Target: 本机 socket 连接目标
+        Agent->>Target: 本地 TCP/UDP socket 连接目标
+        Note over Agent,Target: 直连 UDP 不经过 PPAASS 原生 UDP 封装
         Target-->>Agent: 响应
         Agent-->>App: 响应
-    else 代理
-        Agent->>Streams: connect_to_target(target, transport)
-        alt TCP
-            Streams->>Proxy: direct framed PPAASS TCP connection
-        else UDP relay
-            alt transport_mode = quic
-                Streams->>Proxy: UDP QUIC connection + bidirectional stream
-            else transport_mode = tcp
-                Streams->>Proxy: raw TCP/Yamux session + substream
+    else 代理 TCP
+        Agent->>Transport: connect TCP target
+        Transport->>Proxy: direct framed PPAASS TCP
+        Transport->>Proxy: Auth + ConnectRequest
+        Proxy-->>Transport: AuthResponse + ConnectResponse
+        Proxy->>Target: connect TCP target
+        App->>Agent: TCP payload
+        Agent->>Proxy: encrypted DataPacket
+        Proxy->>Target: TCP payload
+        Target-->>Proxy: TCP response
+        Proxy-->>Agent: encrypted DataPacket
+        Agent-->>App: TCP response
+    else 代理 UDP
+        alt transport_mode = udp
+            Agent->>Transport: open UDP flow
+            opt 选中的 session 尚未建立
+                Transport->>Proxy: raw UDP AuthInit + RSA identity proof
+                Proxy-->>Transport: AuthOk + RSA-protected session secret
+                Note over Transport,Proxy: HKDF 派生 c2s/s2c key 与 nonce prefix
+            end
+            Transport->>Proxy: AEAD Connect(flow_id, target)
+            Proxy-->>Transport: AEAD ConnectResponse(flow_id)
+            loop 每个 UDP payload
+                App->>Agent: UDP payload
+                Agent->>Transport: flow_id + payload
+                Transport->>Proxy: raw UDP AEAD Data + AAD + seq
+                Note over Transport,Proxy: 超 MTU 时有界分片；逐片认证；滑动窗口防重放
+                Proxy->>Target: UDP payload
+                Target-->>Proxy: UDP response
+                Proxy-->>Transport: raw UDP AEAD Data + AAD + seq
+                Transport-->>Agent: flow_id + response
+                Agent-->>App: UDP response
+            end
+        else transport_mode = tcp
+            Transport->>Proxy: raw TCP/Yamux session + substream
+            Transport->>Proxy: Auth + ConnectRequest(UDP target)
+            Proxy-->>Transport: AuthResponse + ConnectResponse
+            loop 每个 UDP payload
+                App->>Agent: UDP payload
+                Agent->>Proxy: encrypted DataPacket over Yamux
+                Proxy->>Target: UDP payload
+                Target-->>Proxy: UDP response
+                Proxy-->>Agent: encrypted DataPacket over Yamux
+                Agent-->>App: UDP response
             end
         end
-        Streams->>Proxy: Auth
-        Proxy-->>Streams: AuthResponse
-        Streams->>Proxy: ConnectRequest
-        Proxy->>Target: connect target
-        Proxy-->>Streams: ConnectResponse
-        App->>Agent: payload
-        Agent->>Proxy: encrypted DataPacket
-        Proxy->>Target: payload
-        Target-->>Proxy: response
-        Proxy-->>Agent: encrypted DataPacket
-        Agent-->>App: response
     end

@@ -1,5 +1,10 @@
 flowchart TD
-    JavaUI["MainActivity Java UI"] --> Prefs["SharedPreferences"]
+    JavaUI["MainActivity Java UI"] --> ModeUi{"UDP transport 选择"}
+    ModeUi -->|"udp"| PoolUi["显示 UDP session 数 1-8"]
+    ModeUi -->|"tcp"| HidePool["隐藏 UDP session 数"]
+    JavaUI --> Running{"VPN/本地代理运行中?"}
+    Running -->|"是"| LockMode["锁定 transport_mode"]
+    JavaUI --> Prefs["SharedPreferences"]
     Prefs --> Service["PpaassVpnService"]
     Service --> Builder["VpnService.Builder"]
     Builder --> Fd["TUN fd detachFd"]
@@ -11,8 +16,8 @@ flowchart TD
     Direct -->|"是"| ProtectedSocket["protect 后的直连 socket"]
     Direct -->|"否 TCP"| TcpProxy["direct framed PPAASS TCP"]
     Direct -->|"否 UDP"| UdpMode{"transport_mode"}
-    UdpMode -->|"quic / 混合"| UdpQuic["UDP QUIC 连接池"]
-    UdpMode -->|"tcp / 全 TCP"| UdpProxy["raw TCP/Yamux UDP relay"]
+    UdpMode -->|"udp"| UdpNative["1-8 条原生加密 UDP session<br/>稳定 flow 映射"]
+    UdpMode -->|"tcp"| UdpProxy["raw TCP/Yamux UDP relay"]
     TcpProxy --> Proxy["PPAASS Proxy"]
     UdpProxy --> Proxy
-    UdpQuic --> Proxy
+    UdpNative --> Proxy

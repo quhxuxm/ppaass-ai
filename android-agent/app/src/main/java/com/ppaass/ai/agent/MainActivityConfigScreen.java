@@ -44,24 +44,24 @@ protected void buildConfigScreen(LinearLayout root) {
         transportModeControl(
                 connection,
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
-        addFieldHelp(connection, "混合模式下，TCP 数据仍使用原有 TCP 通道，只有 UDP 数据使用 QUIC；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。VPN 或 HTTP / SOCKS5 代理启动后此项锁定，全部停止后才能切换。");
-        quicConnectionPoolConfig = new LinearLayout(this);
-        quicConnectionPoolConfig.setOrientation(LinearLayout.VERTICAL);
-        connection.addView(quicConnectionPoolConfig, matchWrap());
-        quicConnectionPoolSize = numberControl(
-                quicConnectionPoolConfig,
-                "UDP QUIC 连接数",
+        addFieldHelp(connection, "原生 UDP 模式下，TCP 数据仍使用原有 TCP 通道，UDP 报文使用原生 UDP 传输，每包独立经 AES-256-GCM 加密和防篡改；全 TCP 模式会让 UDP relay 使用 TCP/Yamux。VPN 或 HTTP / SOCKS5 代理启动后此项锁定，全部停止后才能切换。旧 quic 配置不会自动迁移，需手动重新选择。");
+        udpSessionPoolConfig = new LinearLayout(this);
+        udpSessionPoolConfig.setOrientation(LinearLayout.VERTICAL);
+        connection.addView(udpSessionPoolConfig, matchWrap());
+        udpSessionPoolSize = numberControl(
+                udpSessionPoolConfig,
+                "UDP 会话数",
                 boundedIntString(
                         prefString(
-                                "quic_connection_pool_size",
-                                String.valueOf(DefaultConfig.QUIC_CONNECTION_POOL_SIZE)),
-                        DefaultConfig.QUIC_CONNECTION_POOL_SIZE,
-                        DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
-                        DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE),
+                                "udp_session_pool_size",
+                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE)),
+                        DefaultConfig.UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MAX_UDP_SESSION_POOL_SIZE),
                 1,
-                DefaultConfig.MIN_QUIC_CONNECTION_POOL_SIZE,
-                DefaultConfig.MAX_QUIC_CONNECTION_POOL_SIZE);
-        addFieldHelp(quicConnectionPoolConfig, "仅 UDP relay 使用该连接池；范围 1–8，默认 4。连接池可分散 UDP 拥塞，但会增加少量资源占用。");
+                DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
+        addFieldHelp(udpSessionPoolConfig, "仅原生 UDP 模式显示；范围 1–8，默认 4。每个会话使用独立 UDP socket、包序号和重放防护状态，会增加少量资源占用。VPN 或 HTTP / SOCKS5 代理运行时不可修改。");
         connectTimeoutSecs = numberControl(
                 connection,
                 "控制连接超时（秒）",
@@ -70,7 +70,7 @@ protected void buildConfigScreen(LinearLayout root) {
                         String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(connection, "UDP QUIC 握手、打开双向流以及普通 TCP 连接共用此超时。");
+        addFieldHelp(connection, "原生 UDP 会话握手与普通 TCP 连接共用此超时。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
@@ -124,7 +124,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 tcpConfig,
                 "TCP 转发",
                 "两种模式均使用 TCP");
-        addFieldHelp(tcpRelay, "所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不经过 QUIC 连接池。");
+        addFieldHelp(tcpRelay, "所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不经过 UDP 会话池。");
 
         udpYamuxConfig = configSection(root, "UDP 数据 · TCP/Yamux");
         LinearLayout udpYamux = configGroup(

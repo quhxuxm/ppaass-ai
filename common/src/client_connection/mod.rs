@@ -2,20 +2,17 @@
 
 pub mod authenticated;
 pub mod config;
-pub mod quic;
 pub mod socket_bind;
 pub mod stream;
+pub mod udp;
 pub mod yamux;
 
 // 重新导出公共项
 pub use authenticated::AuthenticatedConnection;
 pub use config::{BindInterface, ClientConnectionConfig};
-pub use quic::{
-    PPAASS_QUIC_ALPN, QUIC_UDP_SOCKET_BUFFER_SIZE, QuicBiStream, QuicClientConnection,
-    configure_quic_udp_socket, quic_transport_config,
-};
 pub use socket_bind::bind_socket_to_interface;
 pub use stream::ClientStream;
+pub use udp::{UdpClientConnection, UdpClientStream};
 pub use yamux::{
     YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
     YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,

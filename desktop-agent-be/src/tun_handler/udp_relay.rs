@@ -9,7 +9,7 @@ use crate::telemetry;
 use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use futures::SinkExt;
-use protocol::{Address, TransportProtocol, UdpRelayPacket};
+use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -301,7 +301,9 @@ async fn run_udp_relay(
         let idle = tokio::time::sleep(UDP_RELAY_CONNECTION_IDLE);
         tokio::pin!(idle);
         retry_request = Some(first_request);
-        let mut response_buf = vec![0u8; 65535];
+        // UdpRelayPacket adds flow/address metadata to the original UDP payload.
+        // Keep one complete native-UDP message in a single AsyncRead call.
+        let mut response_buf = vec![0u8; UDP_MAX_MESSAGE_SIZE];
 
         loop {
             if let Some(request) = retry_request.take() {

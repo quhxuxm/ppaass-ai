@@ -22,7 +22,7 @@ use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows_sys::Win32::Networking::WinSock::{
     AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_IN6, SOCKET_ADDRESS,
 };
-pub(super) fn target_addr_for_address(
+pub(crate) fn target_addr_for_address(
     proxy_config: &ProxyConfig,
     address: &Address,
 ) -> Result<String> {

@@ -39,7 +39,7 @@ impl AgentServer {
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
         // TCP 始终使用 direct framed TCP；UDP 根据 transport_mode 选择
-        // QUIC 连接池或 raw TCP 上的 Yamux session。
+        // 原生加密 UDP 会话池或 raw TCP 上的 Yamux session。
         let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
         let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config.clone()));
 

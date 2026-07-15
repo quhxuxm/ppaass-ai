@@ -143,11 +143,11 @@ fn main() -> Result<()> {
         );
         if config
             .transport_mode
-            .uses_quic_for(protocol::TransportProtocol::Udp)
+            .uses_native_udp_for(protocol::TransportProtocol::Udp)
         {
             info!(
-                "UDP QUIC 连接池：{} 条",
-                config.effective_quic_connection_pool_size()
+                "原生加密 UDP 会话池：{} 条",
+                config.effective_udp_session_pool_size()
             );
         }
         info!("压缩模式：    {}", config.get_compression_mode());
