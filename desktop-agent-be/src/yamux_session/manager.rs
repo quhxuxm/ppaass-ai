@@ -15,7 +15,7 @@ use common::{
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, warn};
 
@@ -51,6 +51,9 @@ pub struct YamuxSessionManager {
     udp_next_session_id: AtomicUsize,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
+    // 自动模式按原生 UDP pool slot 独立记录回退状态。一个 session 超时不会
+    // 让其他仍可用的 UDP session 一并切到 TCP。
+    auto_udp_fallback_to_yamux: Vec<AtomicBool>,
 }
 
 impl YamuxSessionManager {
@@ -87,6 +90,9 @@ impl YamuxSessionManager {
             udp_next_session_id: AtomicUsize::new(0),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
+            auto_udp_fallback_to_yamux: (0..udp_pool_size)
+                .map(|_| AtomicBool::new(false))
+                .collect(),
         }
     }
 
@@ -182,5 +188,19 @@ private_key_path = "keys/user1.pem"
         let manager = YamuxSessionManager::new_udp(Arc::new(config));
 
         assert!(manager.udp_sessions.is_empty());
+    }
+
+    #[test]
+    fn auto_fallback_state_is_isolated_per_udp_session_slot() {
+        let config: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
+                .unwrap();
+        let manager = YamuxSessionManager::new_udp(Arc::new(config));
+
+        assert_eq!(manager.auto_udp_fallback_to_yamux.len(), 4);
+        manager.auto_udp_fallback_to_yamux[1].store(true, Ordering::Release);
+        assert!(!manager.auto_udp_fallback_to_yamux[0].load(Ordering::Acquire));
+        assert!(manager.auto_udp_fallback_to_yamux[1].load(Ordering::Acquire));
+        assert!(!manager.auto_udp_fallback_to_yamux[2].load(Ordering::Acquire));
     }
 }

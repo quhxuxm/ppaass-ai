@@ -452,9 +452,9 @@ fn normalize_quic_policy(value: &str) -> String {
 
 fn normalize_transport_mode(value: &str) -> Result<String, String> {
     match value {
-        "udp" | "tcp" => Ok(value.to_string()),
+        "auto" | "udp" | "tcp" => Ok(value.to_string()),
         _ => Err(format!(
-            "transport_mode 只支持 udp 或 tcp，当前值为 {value:?}"
+            "transport_mode 只支持 auto、udp 或 tcp，当前值为 {value:?}"
         )),
     }
 }
@@ -614,6 +614,12 @@ private_key_path = "keys/user1.pem"
 
         let default_summary = summarize_config(base).unwrap();
         assert_eq!(default_summary.transport_mode, "udp");
+        assert_eq!(
+            summarize_config(&format!("{base}transport_mode = \"auto\"\n"))
+                .unwrap()
+                .transport_mode,
+            "auto"
+        );
         assert_eq!(default_summary.udp_session_pool_size, 4);
         assert_eq!(
             summarize_config(&format!("{base}udp_session_pool_size = 0\n"))

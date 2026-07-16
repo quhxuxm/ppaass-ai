@@ -44,7 +44,7 @@ protected void buildConfigScreen(LinearLayout root) {
         transportModeControl(
                 connection,
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
-        addFieldHelp(connection, "原生 UDP 模式下，TCP 数据仍使用原有 TCP 通道，UDP 报文使用原生 UDP 传输，每包独立经 AES-256-GCM 加密和防篡改；全 TCP 模式会让 UDP relay 使用 TCP/Yamux。VPN 或 HTTP / SOCKS5 代理启动后此项锁定，全部停止后才能切换。旧 quic 配置不会自动迁移，需手动重新选择。");
+        addFieldHelp(connection, "自动模式让每个 UDP session 优先使用原生加密 UDP；某个 session 认证或 CONNECT 超时后，仅将该 session 的后续流量切到 TCP/Yamux。原生 UDP 和全 TCP 模式可用于强制指定通道。TCP 数据始终走 TCP。");
         udpSessionPoolConfig = new LinearLayout(this);
         udpSessionPoolConfig.setOrientation(LinearLayout.VERTICAL);
         connection.addView(udpSessionPoolConfig, matchWrap());

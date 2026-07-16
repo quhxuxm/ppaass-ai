@@ -12,17 +12,20 @@ try {
   const { transportModeOptions } = await server.ssrLoadModule("/src/constants.ts");
 
   assert.deepEqual(transportModeOptions, [
+    { label: "自动模式（加密 UDP 超时后转 TCP/Yamux）", value: "auto" },
     { label: "原生 UDP 模式（TCP + 加密 UDP）", value: "udp" },
     { label: "全 TCP 模式", value: "tcp" }
   ]);
 
   const udpSummary = summarizeRaw('transport_mode = "udp"\n');
+  const autoSummary = summarizeRaw('transport_mode = "auto"\n');
   const fullTcpSummary = summarizeRaw('transport_mode = "tcp"\n');
   assert.equal(udpSummary.transport_mode, "udp");
+  assert.equal(autoSummary.transport_mode, "auto");
   assert.equal(udpSummary.udp_session_pool_size, 4);
   assert.equal(fullTcpSummary.transport_mode, "tcp");
-  assert.throws(() => coerceField("transport_mode", "unknown"), /udp 或 tcp/);
-  assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /udp 或 tcp/);
+  assert.throws(() => coerceField("transport_mode", "unknown"), /auto、udp 或 tcp/);
+  assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /auto、udp 或 tcp/);
   assert.throws(() => summarizeRaw("quic_connection_pool_size = 4\n"), /已移除/);
   assert.equal(summarizeRaw("udp_session_pool_size = 0\n").udp_session_pool_size, 1);
   assert.equal(summarizeRaw("udp_session_pool_size = 99\n").udp_session_pool_size, 8);

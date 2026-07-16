@@ -283,10 +283,10 @@ function normalizeQuicPolicy(value: string) {
 }
 
 function normalizeTransportMode(value: string): AgentTransportMode {
-  if (value === "udp" || value === "tcp") {
+  if (value === "auto" || value === "udp" || value === "tcp") {
     return value;
   }
-  throw new Error(`transport_mode 只支持 udp 或 tcp，当前值为 ${JSON.stringify(value)}`);
+  throw new Error(`transport_mode 只支持 auto、udp 或 tcp，当前值为 ${JSON.stringify(value)}`);
 }
 
 function rejectRemovedDesktopTransportFields(raw: string) {

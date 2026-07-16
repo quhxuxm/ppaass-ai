@@ -75,7 +75,7 @@ const emit = defineEmits<{
               :disabled="configLocked"
               @update:model-value="emit('set-field', 'transport_mode', $event)"
             />
-            <small>原生 UDP 模式仅让 UDP 数据使用加密 UDP，TCP 数据始终使用原有 TCP 通道；全 TCP 模式会让 UDP relay 也使用 TCP/Yamux。代理启动后此项锁定，停止后才能切换。</small>
+            <small>自动模式让每个 UDP session 优先使用加密 UDP；某个 session 认证或 CONNECT 超时后，仅将该 session 的后续流量切到 TCP/Yamux。TCP 数据始终使用原有 TCP 通道。</small>
           </label>
           <label class="field">
             <span><AppIcon name="clock" />控制连接超时</span>
@@ -122,11 +122,11 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card v-if="summary.transport_mode === 'udp'" class="panel span-12">
+    <Card v-if="summary.transport_mode !== 'tcp'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP 数据 · 原生加密 UDP</h2>
-          <Tag value="UDP 模式" severity="success" />
+          <Tag :value="summary.transport_mode === 'auto' ? '自动模式首选' : 'UDP 模式'" severity="success" />
         </div>
       </template>
       <template #content>
@@ -158,11 +158,11 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card v-if="summary.transport_mode === 'tcp'" class="panel span-12">
+    <Card v-if="summary.transport_mode !== 'udp'" class="panel span-12">
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP 数据 · TCP/Yamux</h2>
-          <Tag value="全 TCP 模式" severity="info" />
+          <Tag :value="summary.transport_mode === 'auto' ? '自动回退通道' : '全 TCP 模式'" severity="info" />
         </div>
       </template>
       <template #content>

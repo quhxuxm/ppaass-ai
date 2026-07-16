@@ -5,7 +5,7 @@ listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
 username = "user1"
 private_key_path = "keys/user1.pem"
-# UDP 代理通道：udp 表示 TCP 仍走 TCP、UDP 走原生加密 UDP；tcp 表示全 TCP 模式。
+# UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
 transport_mode = "udp"
 # 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。
 udp_session_pool_size = 4

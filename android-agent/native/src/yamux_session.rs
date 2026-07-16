@@ -1,7 +1,7 @@
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -55,10 +55,14 @@ pub struct AndroidYamuxSessionManager {
     udp_next_session_id: AtomicUsize,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
+    // 自动模式按原生 UDP pool slot 独立回退，避免一个坏 session 影响其他
+    // 仍然可用的加密 UDP session。
+    auto_udp_fallback_to_yamux: Vec<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyStreamRoute {
+    Auto,
     DirectTcp,
     NativeUdp,
     Yamux,
@@ -115,6 +119,9 @@ impl AndroidYamuxSessionManager {
             udp_next_session_id: AtomicUsize::new(0),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
+            auto_udp_fallback_to_yamux: (0..udp_pool_size)
+                .map(|_| AtomicBool::new(false))
+                .collect(),
         })
     }
 
@@ -134,6 +141,30 @@ impl AndroidYamuxSessionManager {
         match route {
             ProxyStreamRoute::DirectTcp => self.open_direct_tcp_stream(address).await,
             ProxyStreamRoute::NativeUdp => self.open_udp_stream(address, transport).await,
+            ProxyStreamRoute::Auto => {
+                let slot_index = self.next_udp_session_slot();
+                if self.auto_udp_fallback_to_yamux[slot_index].load(Ordering::Acquire) {
+                    return self.open_target_stream(address, transport).await;
+                }
+                match self
+                    .open_udp_stream_in_slot(address.clone(), transport, slot_index)
+                    .await
+                {
+                    Ok(stream) => Ok(stream),
+                    Err(err) if is_native_udp_timeout(&err) => {
+                        self.auto_udp_fallback_to_yamux[slot_index].store(true, Ordering::Release);
+                        warn!(
+                            slot = slot_index,
+                            "Android automatic UDP session timed out; switching only this session slot to TCP/Yamux: {err}"
+                        );
+                        android_log::warn(format!(
+                            "Automatic UDP session slot {slot_index} switched to TCP/Yamux after timeout: {err}"
+                        ));
+                        self.open_target_stream(address, transport).await
+                    }
+                    Err(err) => Err(err),
+                }
+            }
             ProxyStreamRoute::Yamux => self.open_target_stream(address, transport).await,
         }
     }
@@ -155,6 +186,16 @@ impl AndroidYamuxSessionManager {
             )));
         }
         let slot_index = self.next_udp_session_slot();
+        self.open_udp_stream_in_slot(address, transport, slot_index)
+            .await
+    }
+
+    async fn open_udp_stream_in_slot(
+        &self,
+        address: Address,
+        transport: TransportProtocol,
+        slot_index: usize,
+    ) -> Result<AndroidYamuxTargetStream> {
         for attempt in 0..2 {
             let handle = {
                 let mut current = self.udp_sessions[slot_index].lock().await;
@@ -164,7 +205,7 @@ impl AndroidYamuxSessionManager {
                 {
                     let connection = UdpClientConnection::connect(self.config.as_ref())
                         .await
-                        .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+                        .map_err(AndroidAgentError::Io)?;
                     let connection_id = self.udp_next_session_id.fetch_add(1, Ordering::AcqRel);
                     debug!(
                         manager = self.manager_name,
@@ -205,7 +246,7 @@ impl AndroidYamuxSessionManager {
                         "Android native UDP proxy session closed; rebuilding only this pool slot: {err}"
                     );
                 }
-                Err(err) => return Err(AndroidAgentError::Connection(err.to_string())),
+                Err(err) => return Err(AndroidAgentError::Io(err)),
             }
         }
         Err(AndroidAgentError::Connection(
@@ -542,10 +583,24 @@ fn proxy_stream_route(
     if target_transport == TransportProtocol::Tcp {
         // TCP 不受 transport_mode 影响，一律沿用原来的独立 framed TCP 连接。
         Some(ProxyStreamRoute::DirectTcp)
+    } else if transport_mode.automatically_falls_back_to_tcp() {
+        Some(ProxyStreamRoute::Auto)
     } else if transport_mode.uses_native_udp_for(target_transport) {
         Some(ProxyStreamRoute::NativeUdp)
     } else {
         Some(ProxyStreamRoute::Yamux)
+    }
+}
+
+fn is_native_udp_timeout(error: &AndroidAgentError) -> bool {
+    match error {
+        AndroidAgentError::Io(error) => error.kind() == io::ErrorKind::TimedOut,
+        AndroidAgentError::Connection(message) => {
+            message.contains("UDP CONNECT 响应超时")
+                || message.contains("原生 UDP 认证响应超时")
+                || message.contains("连接原生 UDP proxy 超时")
+        }
+        _ => false,
     }
 }
 
@@ -717,6 +772,24 @@ mod tests {
     }
 
     #[test]
+    fn auto_mode_routes_udp_through_runtime_fallback_path() {
+        assert_eq!(
+            proxy_stream_route(
+                TransportMode::Auto,
+                TransportProtocol::Udp,
+                TransportProtocol::Udp,
+            ),
+            Some(ProxyStreamRoute::Auto)
+        );
+        assert!(is_native_udp_timeout(&AndroidAgentError::Connection(
+            "UDP CONNECT 响应超时".into()
+        )));
+        assert!(!is_native_udp_timeout(&AndroidAgentError::Connection(
+            "authentication failed".into()
+        )));
+    }
+
+    #[test]
     fn tcp_manager_never_allocates_a_native_udp_pool() {
         let config: AndroidAgentConfig = serde_json::from_str(MINIMAL_AGENT_CONFIG).unwrap();
         let manager =
@@ -743,5 +816,26 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn auto_fallback_state_is_isolated_per_udp_session_slot() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{
+                "proxy_addrs": ["127.0.0.1:8080"],
+                "username": "user1",
+                "private_key_pem": "key",
+                "transport_mode": "auto"
+            }"#,
+        )
+        .unwrap();
+        let manager =
+            AndroidYamuxSessionManager::new_udp(Arc::new(config), CancellationToken::new());
+
+        assert_eq!(manager.auto_udp_fallback_to_yamux.len(), 4);
+        manager.auto_udp_fallback_to_yamux[2].store(true, Ordering::Release);
+        assert!(!manager.auto_udp_fallback_to_yamux[1].load(Ordering::Acquire));
+        assert!(manager.auto_udp_fallback_to_yamux[2].load(Ordering::Acquire));
+        assert!(!manager.auto_udp_fallback_to_yamux[3].load(Ordering::Acquire));
     }
 }

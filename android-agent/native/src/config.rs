@@ -236,6 +236,15 @@ mod tests {
     }
 
     #[test]
+    fn agent_transport_accepts_auto() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Auto);
+    }
+
+    #[test]
     fn udp_session_pool_defaults_to_four_and_is_bounded() {
         let default_config: AndroidAgentConfig = serde_json::from_str(
             r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,

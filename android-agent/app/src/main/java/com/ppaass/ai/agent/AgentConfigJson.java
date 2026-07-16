@@ -22,7 +22,7 @@ final class AgentConfigJson {
         int configuredTunMtu = parseInt(
                 prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
                 DefaultConfig.TUN_MTU);
-        int effectiveTunMtu = "udp".equals(transportMode)
+        int effectiveTunMtu = !"tcp".equals(transportMode)
                 ? Math.min(configuredTunMtu, DefaultConfig.NATIVE_UDP_MAX_TUN_MTU)
                 : configuredTunMtu;
 
@@ -168,11 +168,11 @@ final class AgentConfigJson {
             return DefaultConfig.TRANSPORT_MODE;
         }
         String normalized = value.trim().toLowerCase();
-        if ("udp".equals(normalized) || "tcp".equals(normalized)) {
+        if ("auto".equals(normalized) || "udp".equals(normalized) || "tcp".equals(normalized)) {
             return normalized;
         }
         throw new JSONException(
-                "transport_mode must be 'udp' or 'tcp'; removed mode 'quic' is not supported");
+                "transport_mode must be 'auto', 'udp', or 'tcp'; removed mode 'quic' is not supported");
     }
 
     private static String normalizeDirectAccessMode(String value) {

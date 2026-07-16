@@ -20,6 +20,7 @@ export const directRulePresets: Array<{ label: string; icon: AppIconName; rules:
 
 export const compressionOptions = ["none", "lz4", "gzip", "zstd"];
 export const transportModeOptions = [
+  { label: "自动模式（加密 UDP 超时后转 TCP/Yamux）", value: "auto" },
   { label: "原生 UDP 模式（TCP + 加密 UDP）", value: "udp" },
   { label: "全 TCP 模式", value: "tcp" }
 ];

@@ -283,7 +283,12 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn transport_mode_accepts_udp_and_tcp() {
+    fn transport_mode_accepts_auto_udp_and_tcp() {
+        let auto: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
+                .unwrap();
+        assert_eq!(auto.transport_mode, TransportMode::Auto);
+
         let udp: AgentConfig =
             toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"udp\"\n"))
                 .unwrap();

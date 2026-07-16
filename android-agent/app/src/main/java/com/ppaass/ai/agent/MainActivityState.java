@@ -72,7 +72,7 @@ protected EditText runtimeThreads;
 protected Spinner compressionMode;
 protected String transportModeValue;
 protected final List<Button> transportModeButtons = new ArrayList<>();
-// 原生 UDP 会话池只在 transport_mode=udp 时显示。
+// 原生 UDP 会话池在 transport_mode=udp/auto 时显示。
 protected LinearLayout udpSessionPoolConfig;
 protected EditText udpSessionPoolSize;
 // 整个 UDP Yamux 配置区只在“全 TCP 模式”下显示。

@@ -216,6 +216,7 @@ protected void transportModeControl(LinearLayout root, String selected) {
         LinearLayout row = horizontalRow();
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
         row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        addTransportModeButton(row, transportModeLabel("auto"), "auto");
         addTransportModeButton(row, transportModeLabel("udp"), "udp");
         addTransportModeButton(row, transportModeLabel("tcp"), "tcp");
         root.addView(row, matchWrap());
@@ -266,8 +267,8 @@ protected void setTransportMode(String value, boolean persist) {
 
 protected void updateTransportModeSettingsVisibility() {
         String mode = normalizeTransportMode(transportModeValue);
-        boolean udpMode = "udp".equals(mode);
-        boolean tcpMode = "tcp".equals(mode);
+        boolean udpMode = "udp".equals(mode) || "auto".equals(mode);
+        boolean tcpMode = "tcp".equals(mode) || "auto".equals(mode);
         if (udpSessionPoolConfig != null) {
             udpSessionPoolConfig.setVisibility(udpMode ? View.VISIBLE : View.GONE);
         }
@@ -294,11 +295,19 @@ protected void updateTransportModeButtons() {
     }
 
 protected String transportModeLabel(String value) {
-        return "tcp".equals(normalizeTransportMode(value)) ? "全 TCP 模式" : "原生 UDP 模式";
-    }
+        String normalized = normalizeTransportMode(value);
+        if ("auto".equals(normalized)) {
+            return "自动模式";
+        }
+        return "tcp".equals(normalized) ? "全 TCP 模式" : "原生 UDP 模式";
+}
 
 protected String transportModeDescription(String value) {
-        return "tcp".equals(normalizeTransportMode(value))
+        String normalized = normalizeTransportMode(value);
+        if ("auto".equals(normalized)) {
+            return "优先使用原生加密 UDP，超时后自动切换到 TCP/Yamux";
+        }
+        return "tcp".equals(normalized)
                 ? "使用全 TCP 模式，TCP 和 UDP relay 均通过 TCP"
                 : "使用原生 UDP 模式，TCP 数据走 TCP，UDP 报文逐包使用 AES-256-GCM 加密";
     }
@@ -308,7 +317,7 @@ protected String normalizeTransportMode(String value) {
             return DefaultConfig.TRANSPORT_MODE;
         }
         String normalized = value.trim().toLowerCase();
-        if ("udp".equals(normalized) || "tcp".equals(normalized)) {
+        if ("auto".equals(normalized) || "udp".equals(normalized) || "tcp".equals(normalized)) {
             return normalized;
         }
         // 保留未知值，让 AgentConfigJson 在启动时明确拒绝。不将旧 quic

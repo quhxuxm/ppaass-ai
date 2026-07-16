@@ -1,7 +1,7 @@
 import type { AppIconName } from "./components/AppIcon";
 
 export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
-export type AgentTransportMode = "udp" | "tcp";
+export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
   listen_addr: string;

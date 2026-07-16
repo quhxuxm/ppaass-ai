@@ -8,7 +8,7 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **Hybrid Transport by Default**: TCP targets always use the original independent framed TCP path; proxied UDP uses a configurable pool of native encrypted UDP sessions when `transport_mode = "udp"`, with TCP/Yamux available through `transport_mode = "tcp"`
+- **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
 - **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
@@ -81,7 +81,7 @@ listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-transport_mode = "udp"               # udp: TCP over TCP + proxied UDP over native encrypted UDP (default); tcp: proxied UDP over TCP/Yamux
+transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
 udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
 connect_timeout_secs = 30             # Connection timeout
 compression_mode = "none"             # Framed TCP/TCP-Yamux only; native UDP datagrams are not compressed

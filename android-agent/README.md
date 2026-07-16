@@ -57,14 +57,14 @@ cargo ndk -t <abi> -o app/src/main/jniLibs build --manifest-path native/Cargo.to
 
 Android App 层使用纯 Java。数据包栈和 proxy 协议桥接仍然在 `android-agent/native` 的 Rust 代码中。
 
-Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径在两种模式下都为每个 TCP 目标建立独立 framed TCP 连接；配置值 `udp` 表示只有代理 UDP 使用有状态原生加密 UDP 会话池，配置值 `tcp` 表示代理 UDP 使用 TCP/Yamux，界面里的 Yamux session 数是 UDP 最大外层 TCP 连接数。旧配置值 `quic` 和旧字段 `quic_connection_pool_size` 不做别名或自动迁移，加载时会被拒绝。
+Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径始终为每个 TCP 目标建立独立 framed TCP 连接；`udp` 表示代理 UDP 使用有状态原生加密 UDP 会话池，`tcp` 表示使用 TCP/Yamux，`auto` 表示每个 UDP session 优先使用加密 UDP，某个 session 的认证或 CONNECT 超时后仅将该 session slot 回退到 TCP/Yamux。旧 `quic` 配置仍会被拒绝。
 
 ## 运行配置
 
 打开 App 后填写：
 
 - proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
-- UDP 代理通道，默认配置值为 `udp`，UI 显示为“原生加密 UDP”：TCP 数据仍走 TCP，只有代理 UDP 数据走原生 UDP；选择“TCP/Yamux”后代理 UDP 也走 TCP。VPN 或 HTTP/SOCKS5 代理运行期间传输模式控件会锁定，不能切换
+- UDP 代理通道，默认配置值为 `udp`；可选择原生加密 UDP、TCP/Yamux 或自动模式。自动模式按 UDP session 独立回退，一个 session 超时不会影响其他 session。VPN 或 HTTP/SOCKS5 代理运行期间控件会锁定
 - UDP 会话数，对应 `udp_session_pool_size`，默认 4，可配置 1–8；仅原生 UDP 模式显示。每个 flow 会稳定映射到其中一个有状态 UDP 会话
 - 控制连接超时，原生 UDP 会话建立与普通 TCP 连接共用，默认 30 秒
 - username，默认是 `user1`
