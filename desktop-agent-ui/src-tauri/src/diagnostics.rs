@@ -72,22 +72,17 @@ pub(crate) fn run_connectivity_tests_blocking(
     if tun_enabled {
         let tun_route = format!("tun://{tun_name}");
         if tun_ready {
-            let mut tun_jobs = Vec::new();
-            for &(target, url, quic_host) in &targets {
-                let tun_target = target.to_string();
-                let url = url.to_string();
-                let tun_route_for_http = tun_route.clone();
-                tun_jobs.push(thread::spawn(move || {
-                    run_curl_check(&tun_target, "TUN", &url, None, &tun_route_for_http)
-                }));
-                let quic_target = target.to_string();
-                let quic_host = quic_host.to_string();
-                let tun_route_for_quic = tun_route.clone();
-                tun_jobs.push(thread::spawn(move || {
-                    run_quic_check(&quic_target, &quic_host, &tun_route_for_quic)
-                }));
+            // Run HTTPS checks before QUIC probes. Native UDP mode has to establish and
+            // authenticate its outer session on the first UDP flow; starting two 1200-byte
+            // QUIC probes alongside both HTTPS checks can temporarily starve the TUN netstack
+            // and make otherwise healthy TCP checks fail. Diagnostics should observe the path,
+            // not create an artificial cold-start burst on it.
+            for &(target, url, _) in &targets {
+                tun_results.push(run_curl_check(target, "TUN", url, None, &tun_route));
             }
-            tun_results = collect_connectivity_checks(tun_jobs);
+            for &(target, _, quic_host) in &targets {
+                tun_results.push(run_quic_check(target, quic_host, &tun_route));
+            }
         } else {
             for (target, url, quic_host) in targets.iter().copied() {
                 tun_results.push(failed_connectivity_check(

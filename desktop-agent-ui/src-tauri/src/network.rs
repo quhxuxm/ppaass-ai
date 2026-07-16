@@ -11,7 +11,8 @@ use crate::process_util::hide_child_console;
 
 const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
-const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const QUIC_PROBE_ATTEMPTS: usize = 3;
+const QUIC_PROBE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(target_os = "windows")]
 const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -220,37 +221,47 @@ fn run_quic_version_negotiation(host: &str) -> Result<String, String> {
     let socket =
         UdpSocket::bind(bind_addr).map_err(|err| format!("绑定 UDP socket 失败：{err}"))?;
     socket
-        .set_read_timeout(Some(QUIC_PROBE_TIMEOUT))
+        .set_read_timeout(Some(QUIC_PROBE_ATTEMPT_TIMEOUT))
         .map_err(|err| format!("设置 QUIC 超时失败：{err}"))?;
     socket
         .connect(target)
         .map_err(|err| format!("连接 UDP/443 失败：{err}"))?;
 
-    let probe = quic_version_negotiation_probe();
-    socket
-        .send(&probe)
-        .map_err(|err| format!("发送 QUIC 探测包失败：{err}"))?;
-
+    let mut last_error = "UDP/443 QUIC 探测超时".to_string();
     let mut response = [0u8; 1500];
-    let n = socket.recv(&mut response).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::WouldBlock
-            || err.kind() == std::io::ErrorKind::TimedOut
-        {
-            "UDP/443 QUIC 探测超时".to_string()
-        } else {
-            format!("接收 QUIC 响应失败：{err}")
-        }
-    })?;
+    for attempt in 1..=QUIC_PROBE_ATTEMPTS {
+        // Native UDP transport is intentionally unreliable. A cold session may lose its first
+        // application datagram while authentication/flow state is converging, so diagnostics
+        // must behave like a real QUIC client and retry instead of treating one loss as failure.
+        let probe = quic_version_negotiation_probe();
+        socket
+            .send(&probe)
+            .map_err(|err| format!("发送 QUIC 探测包失败（第 {attempt} 次）：{err}"))?;
 
-    if is_quic_version_negotiation_response(&response[..n]) {
-        Ok(format!(
-            "QUIC Version Negotiation 响应：{n} bytes，目标 {target}"
-        ))
-    } else {
-        Err(format!(
-            "UDP/443 有响应，但不是 QUIC Version Negotiation：{n} bytes"
-        ))
+        match socket.recv(&mut response) {
+            Ok(n) if is_quic_version_negotiation_response(&response[..n]) => {
+                return Ok(format!(
+                    "QUIC Version Negotiation 响应：{n} bytes，目标 {target}，第 {attempt} 次探测"
+                ));
+            }
+            Ok(n) => {
+                last_error = format!(
+                    "UDP/443 有响应，但不是 QUIC Version Negotiation：{n} bytes（第 {attempt} 次）"
+                );
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                last_error = format!("UDP/443 QUIC 第 {attempt} 次探测超时");
+            }
+            Err(err) => {
+                last_error = format!("接收 QUIC 响应失败（第 {attempt} 次）：{err}");
+            }
+        }
     }
+
+    Err(format!("{last_error}；共尝试 {QUIC_PROBE_ATTEMPTS} 次"))
 }
 
 fn resolve_quic_target(host: &str) -> Result<SocketAddr, String> {
