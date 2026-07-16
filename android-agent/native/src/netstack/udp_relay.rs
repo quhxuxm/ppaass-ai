@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -22,7 +22,6 @@ const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
 const UDP_RELAY_SHARD_COUNT: usize = 4;
 const UDP_RELAY_REQUEST_BATCH_LIMIT: usize = 32;
-const NATIVE_UDP_REQUEST_BATCH_LIMIT: usize = 1;
 const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
 
 pub(super) struct UdpRelay {
@@ -278,8 +277,6 @@ async fn run_udp_relay(
                 continue;
             }
         };
-        let request_batch_limit = udp_relay_request_batch_limit(proxy_io.is_native_udp());
-
         debug!("Android TUN UDP relay connected");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(60));
@@ -293,15 +290,9 @@ async fn run_udp_relay(
 
         loop {
             if let Some(request) = retry_request.take() {
-                if let Err((e, request)) = send_udp_relay_request_batch(
-                    &mut writer,
-                    &mut state,
-                    request,
-                    &mut rx,
-                    &stats,
-                    request_batch_limit,
-                )
-                .await
+                if let Err((e, request)) =
+                    send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
+                        .await
                 {
                     debug!("Android TUN UDP relay write failed: {e}");
                     retry_request = Some(request);
@@ -337,14 +328,7 @@ async fn run_udp_relay(
                         return;
                     };
                     if let Err((e, request)) =
-                        send_udp_relay_request_batch(
-                            &mut writer,
-                            &mut state,
-                            request,
-                            &mut rx,
-                            &stats,
-                            request_batch_limit,
-                        ).await
+                        send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
                     {
                         debug!("Android TUN UDP relay write failed: {e}");
                         retry_request = Some(request);
@@ -388,7 +372,7 @@ async fn run_udp_relay(
 
 async fn connect_udp_relay_stream(
     context: &ForwardContext,
-) -> Result<crate::yamux_session::AndroidYamuxTargetStream> {
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     context
         .udp_sessions
         .connect_to_target(Address::UdpRelay, TransportProtocol::Udp)
@@ -401,15 +385,13 @@ async fn send_udp_relay_request_batch<W>(
     first_request: UdpRelayRequest,
     rx: &mut mpsc::Receiver<UdpRelayRequest>,
     stats: &UdpRelayStats,
-    batch_limit: usize,
 ) -> std::result::Result<(), (io::Error, UdpRelayRequest)>
 where
     W: AsyncWrite + Unpin,
 {
-    let batch_limit = batch_limit.max(1);
-    let mut batch = Vec::with_capacity(batch_limit);
+    let mut batch = Vec::with_capacity(UDP_RELAY_REQUEST_BATCH_LIMIT);
     batch.push(first_request);
-    for _ in 1..batch_limit {
+    for _ in 1..UDP_RELAY_REQUEST_BATCH_LIMIT {
         match rx.try_recv() {
             Ok(request) => batch.push(request),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
@@ -440,16 +422,6 @@ where
         );
     }
     Ok(())
-}
-
-fn udp_relay_request_batch_limit(native_udp: bool) -> usize {
-    if native_udp {
-        // Native UDP flush is a no-op because each write already queues one
-        // datagram. TCP-sized draining only increases real-time packet jitter.
-        NATIVE_UDP_REQUEST_BATCH_LIMIT
-    } else {
-        UDP_RELAY_REQUEST_BATCH_LIMIT
-    }
 }
 
 async fn write_udp_relay_request<W>(
@@ -569,16 +541,9 @@ mod tests {
 
         let mut rx = tokio::sync::mpsc::channel(1).1;
         let stats = UdpRelayStats::default();
-        send_udp_relay_request_batch(
-            &mut writer,
-            &mut state,
-            request,
-            &mut rx,
-            &stats,
-            UDP_RELAY_REQUEST_BATCH_LIMIT,
-        )
-        .await
-        .unwrap();
+        send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
+            .await
+            .unwrap();
         drop(writer);
 
         let mut encoded = Vec::new();
@@ -602,15 +567,6 @@ mod tests {
         assert_eq!(
             snapshot.sent_payload_bytes,
             b"quic-client-initial".len() as u64
-        );
-    }
-
-    #[test]
-    fn native_udp_disables_tcp_style_request_batching() {
-        assert_eq!(udp_relay_request_batch_limit(true), 1);
-        assert_eq!(
-            udp_relay_request_batch_limit(false),
-            UDP_RELAY_REQUEST_BATCH_LIMIT
         );
     }
 }

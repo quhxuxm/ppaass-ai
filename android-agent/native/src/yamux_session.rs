@@ -620,12 +620,6 @@ pub enum AndroidYamuxTargetStream {
     Udp(UdpClientStream),
 }
 
-impl AndroidYamuxTargetStream {
-    pub fn is_native_udp(&self) -> bool {
-        matches!(self, Self::Udp(_))
-    }
-}
-
 impl AsyncRead for AndroidYamuxTargetStream {
     fn poll_read(
         mut self: Pin<&mut Self>,

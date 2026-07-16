@@ -61,11 +61,6 @@ const overviewCards = computed(() => buildOverviewCards(overviewCardOrder.value)
 const speedGaugeMax = computed(() => Math.max(256 * 1024, props.traffic.download_bps, props.traffic.upload_bps) * 1.25);
 const downloadGaugeValue = computed(() => Math.round((props.traffic.download_bps / speedGaugeMax.value) * 100));
 const uploadGaugeValue = computed(() => Math.round((props.traffic.upload_bps / speedGaugeMax.value) * 100));
-const effectiveTunMtu = computed(() =>
-  props.summary.transport_mode !== "tcp"
-    ? Math.min(props.summary.tun_mtu, 1280)
-    : props.summary.tun_mtu
-);
 const transportModeLabel = computed(() => {
   if (props.summary.transport_mode === "auto") return "自动：加密 UDP → TCP";
   return props.summary.transport_mode === "udp" ? "TCP + 加密 UDP" : "全 TCP";
@@ -416,9 +411,7 @@ function hourlyBarHeight(bytes: number) {
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
           <div class="kv-row">
             <span>MTU</span>
-            <strong
-              :title="effectiveTunMtu === summary.tun_mtu ? undefined : `UDP 模式自动从配置值 ${summary.tun_mtu} 调整，避免 QUIC 外层分片`"
-            >{{ effectiveTunMtu }}{{ effectiveTunMtu === summary.tun_mtu ? "" : "（UDP 生效）" }}</strong>
+            <strong>{{ summary.tun_mtu }}</strong>
           </div>
           <div class="kv-row"><span>普通 UDP</span><strong>{{ summary.tun_proxy_udp ? "按规则分流" : "Agent 直连" }}</strong></div>
           <div class="kv-row"><span>QUIC 应用流量</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : summary.transport_mode === "auto" ? "直连或自动回退代理" : summary.transport_mode === "udp" ? "直连或经加密 UDP 代理" : "直连或经 TCP 代理" }}</strong></div>

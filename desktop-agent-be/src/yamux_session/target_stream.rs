@@ -58,12 +58,6 @@ pub enum YamuxTargetIo {
     Udp(UdpClientStream),
 }
 
-impl YamuxTargetIo {
-    pub fn is_native_udp(&self) -> bool {
-        matches!(self, Self::Udp(_))
-    }
-}
-
 impl AsyncRead for YamuxTargetIo {
     fn poll_read(
         mut self: Pin<&mut Self>,
