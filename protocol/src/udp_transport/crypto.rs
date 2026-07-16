@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, AeadInPlace, KeyInit, Payload},
 };
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
@@ -238,25 +238,27 @@ impl UdpSessionCrypto {
             );
             let aad = header.encode()?;
             let nonce = make_nonce(self.send.nonce_prefix, seq);
-            let ciphertext = self
-                .send
-                .cipher
-                .encrypt(
-                    Nonce::from_slice(&nonce),
-                    Payload {
-                        msg: fragment,
-                        aad: &aad,
-                    },
-                )
-                .map_err(|_| UdpTransportError::EncryptionFailed)?;
-
-            let datagram_len = aad.len() + ciphertext.len();
+            // Build the wire datagram once and encrypt the payload in place.  The
+            // previous path allocated a ciphertext Vec in aes-gcm and then copied
+            // it into a second datagram Vec for every fragment.
+            let datagram_len = aad.len() + fragment.len() + UDP_AEAD_TAG_LEN;
             if datagram_len > UDP_MAX_DATAGRAM_SIZE {
                 return Err(UdpTransportError::DatagramTooLarge(datagram_len));
             }
             let mut datagram = Vec::with_capacity(datagram_len);
             datagram.extend_from_slice(&aad);
-            datagram.extend_from_slice(&ciphertext);
+            datagram.extend_from_slice(fragment);
+            let payload_start = aad.len();
+            let tag = self
+                .send
+                .cipher
+                .encrypt_in_place_detached(
+                    Nonce::from_slice(&nonce),
+                    &aad,
+                    &mut datagram[payload_start..],
+                )
+                .map_err(|_| UdpTransportError::EncryptionFailed)?;
+            datagram.extend_from_slice(&tag);
             datagrams.push(datagram);
         }
 
