@@ -37,8 +37,10 @@ protected Button secondaryButton(String text) {
         button.setTextSize(13f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
-        button.setSingleLine(true);
-        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setSingleLine(false);
+        button.setMaxLines(2);
+        button.setEllipsize(null);
+        button.setGravity(Gravity.CENTER);
         button.setMinHeight(0);
         button.setMinWidth(0);
         button.setPadding(dp(8), 0, dp(8), 0);
@@ -328,8 +330,10 @@ protected Button actionButton(String text, int color) {
         button.setTextSize(15f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
-        button.setSingleLine(true);
-        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setSingleLine(false);
+        button.setMaxLines(2);
+        button.setEllipsize(null);
+        button.setGravity(Gravity.CENTER);
         button.setIncludeFontPadding(false);
         button.setMinHeight(0);
         button.setMinWidth(0);
@@ -795,8 +799,13 @@ protected TextView controlLabel(String text) {
         view.setTextSize(13f);
         view.setTextColor(COLOR_MUTED);
         view.setGravity(Gravity.CENTER_VERTICAL);
-        view.setMaxLines(2);
-        view.setEllipsize(TextUtils.TruncateAt.END);
+        view.setSingleLine(false);
+        view.setMaxLines(Integer.MAX_VALUE);
+        view.setEllipsize(null);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            view.setBreakStrategy(Layout.BREAK_STRATEGY_BALANCED);
+            view.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);
+        }
         return view;
     }
 
@@ -812,8 +821,9 @@ protected TextView chip(String text, int color) {
         view.setTextSize(12f);
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setTextColor(chipText(color));
-        view.setSingleLine(true);
-        view.setEllipsize(TextUtils.TruncateAt.END);
+        view.setSingleLine(false);
+        view.setMaxLines(2);
+        view.setEllipsize(null);
         view.setGravity(Gravity.CENTER);
         view.setPadding(dp(10), dp(5), dp(10), dp(5));
         int fill = chipFill(color);

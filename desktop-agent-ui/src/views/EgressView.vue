@@ -75,7 +75,7 @@ const emit = defineEmits<{
               :disabled="configLocked"
               @update:model-value="emit('set-field', 'transport_mode', $event)"
             />
-            <small>自动模式让每个 UDP session 优先使用加密 UDP；某个 session 认证或 CONNECT 超时后，仅将该 session 的后续流量切到 TCP/Yamux。TCP 数据始终使用原有 TCP 通道。</small>
+            <small>自动：原生 UDP 超时后仅该 session 转 TCP/Yamux；TCP 始终走 TCP。</small>
           </label>
           <label class="field">
             <span><AppIcon name="clock" />控制连接超时</span>
@@ -117,7 +117,7 @@ const emit = defineEmits<{
               <Tag class="mode-effect-tag" value="HTTP / SOCKS5 / TUN TCP" severity="secondary" />
             </div>
           </div>
-          <p>所有 TCP 目标连接始终使用独立的普通 TCP 连接承载，不进入原生 UDP 会话池。</p>
+          <p>TCP 目标始终使用独立 TCP 连接。</p>
         </section>
       </template>
     </Card>
@@ -150,10 +150,10 @@ const emit = defineEmits<{
                 :use-grouping="false"
                 @update:model-value="emit('set-field', 'udp_session_pool_size', $event)"
               />
-              <small>同时维护的已认证 UDP 会话数；默认 4，范围 1–8。</small>
+              <small>已认证 UDP 会话数，范围 1–8，默认 4。</small>
             </label>
           </div>
-          <p>Agent 先使用 RSA 完成身份认证，之后每个 UDP 数据报都独立使用 AES-256-GCM 加密与认证。该通道不做重传或有序化，保留 UDP 允许丢包、乱序的语义。</p>
+          <p>RSA 认证，UDP 数据使用 AES-256-GCM；不重传、不保序。</p>
         </section>
       </template>
     </Card>
@@ -178,36 +178,36 @@ const emit = defineEmits<{
             <label class="field">
               <span><AppIcon name="share" />外层连接</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
-              <small>限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。</small>
+              <small>Yamux 外层连接上限。</small>
             </label>
             <label class="field">
               <span><AppIcon name="network" />并发子流</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
-              <small>限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。</small>
+              <small>单连接最大 UDP 子流数。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><AppIcon name="timer" />打开子流超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
-              <small>影响新 UDP relay 通道申请 Yamux 子流的等待时间。</small>
+              <small>申请 Yamux 子流的超时。</small>
             </label>
             <label class="field">
               <span><AppIcon name="heart-pulse" />Keepalive</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
-              <small>影响 UDP Yamux 外层连接的保活探测；0 表示关闭。</small>
+              <small>Yamux 保活间隔；0 为关闭。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><AppIcon name="send" />写超时</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
-              <small>影响 UDP Yamux 外层连接写入帧的超时判断。</small>
+              <small>Yamux 写入超时。</small>
             </label>
             <label class="field">
               <span><AppIcon name="panels" />流控窗口</span>
               <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
-              <small>影响每个 UDP relay Yamux 子流可缓冲的窗口大小。</small>
+              <small>单个 UDP 子流缓冲窗口。</small>
             </label>
           </div>
         </section>

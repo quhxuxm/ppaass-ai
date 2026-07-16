@@ -120,7 +120,7 @@ const emit = defineEmits<{
                     <Tag value="HTTP" severity="info" rounded />
                     <Tag value="SOCKS5" severity="info" rounded />
                   </div>
-                  <p>使用 HTTP / SOCKS5 时，可添加 example.com 或 *.example.com，让这些域名直接访问。</p>
+                  <p>HTTP/SOCKS5 支持域名规则，如 example.com、*.example.com。</p>
                 </div>
               </div>
               <div class="rule-scope-item">
@@ -131,7 +131,7 @@ const emit = defineEmits<{
                     <Tag value="TUN" severity="success" rounded />
                     <Tag value="IP/CIDR" severity="secondary" rounded />
                   </div>
-                  <p>TUN 模式下更适合添加固定 IP 或网段，例如 192.168.0.0/16、10.0.0.0/8。</p>
+                  <p>TUN 建议使用固定 IP/CIDR，如 192.168.0.0/16。</p>
                 </div>
               </div>
               <div class="rule-scope-item">
@@ -142,7 +142,7 @@ const emit = defineEmits<{
                     <Tag value="TUN" severity="success" rounded />
                     <Tag value="需代理 DNS" severity="warn" rounded />
                   </div>
-                  <p>需要先开启代理 DNS；浏览器或应用完成 DNS 查询后，命中缓存的域名规则才会生效。</p>
+                  <p>域名规则需开启代理 DNS，并在 DNS 缓存命中后生效。</p>
                 </div>
               </div>
             </div>

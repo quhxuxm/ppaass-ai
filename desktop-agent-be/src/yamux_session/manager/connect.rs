@@ -107,6 +107,16 @@ impl YamuxSessionManager {
         for attempt in 0..2 {
             let handle = {
                 let mut current = self.udp_sessions[slot_index].lock().await;
+                if self.config.transport_mode.automatically_falls_back_to_tcp()
+                    && current
+                        .as_ref()
+                        .is_some_and(|handle| handle.connection.timed_out())
+                {
+                    return Err(AgentError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "原生 UDP 会话保活响应超时",
+                    )));
+                }
                 if current
                     .as_ref()
                     .is_none_or(|handle| handle.connection.is_closed())

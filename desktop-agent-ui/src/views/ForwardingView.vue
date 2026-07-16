@@ -96,12 +96,12 @@ const emit = defineEmits<{
                 <span>代理普通 UDP</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_udp" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_udp', $event)" />
               </div>
-              <small class="field-help">关闭后除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 Agent 直连；DNS 和 QUIC 各自独立分流。</small>
+              <small class="field-help">关闭后普通 UDP 直连；DNS 与 QUIC 单独分流。</small>
               <div class="switch-row">
                 <span>DNS 经 Proxy</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
-              <small class="field-help">仅控制传统 DNS（UDP/TCP 53）；不控制 UDP/443 QUIC。</small>
+              <small class="field-help">仅控制传统 DNS（53 端口）。</small>
             </div>
             <label class="field">
               <span><AppIcon name="zap" />QUIC（UDP/443）策略</span>
@@ -114,7 +114,7 @@ const emit = defineEmits<{
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
               <small class="field-help">
-                允许时，命中直连规则的 UDP/443 QUIC 保持直连，未命中的流量经 UDP relay：原生 UDP 模式使用加密 UDP，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。
+                允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。
               </small>
             </label>
           </template>

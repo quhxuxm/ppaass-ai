@@ -12,8 +12,8 @@ try {
   const { transportModeOptions } = await server.ssrLoadModule("/src/constants.ts");
 
   assert.deepEqual(transportModeOptions, [
-    { label: "自动模式（加密 UDP 超时后转 TCP/Yamux）", value: "auto" },
-    { label: "原生 UDP 模式（TCP + 加密 UDP）", value: "udp" },
+    { label: "自动模式", value: "auto" },
+    { label: "原生 UDP 模式", value: "udp" },
     { label: "全 TCP 模式", value: "tcp" }
   ]);
 

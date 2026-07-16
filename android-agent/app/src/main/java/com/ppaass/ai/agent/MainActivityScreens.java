@@ -39,7 +39,6 @@ protected void buildUi() {
         directRuleValues.clear();
         directRulesConfig = null;
         directRuleCountFact = null;
-        lastVpnToggleLabel = null;
         lastRxBytes = -1;
         lastTxBytes = -1;
         lastTrafficSampleMs = 0;

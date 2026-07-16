@@ -33,6 +33,7 @@ const STREAM_INBOUND_CAPACITY: usize = 256;
 const AUTH_INITIAL_RETRY: Duration = Duration::from_millis(200);
 const CONTROL_MAX_RETRY: Duration = Duration::from_secs(2);
 const SESSION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const MIN_SESSION_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct UdpClientConnection {
@@ -42,6 +43,7 @@ pub struct UdpClientConnection {
 struct UdpClientConnectionInner {
     command_tx: mpsc::Sender<ClientCommand>,
     closed: Arc<AtomicBool>,
+    timed_out: Arc<AtomicBool>,
     next_flow_id: AtomicU64,
     timeout: Duration,
 }
@@ -80,9 +82,14 @@ impl UdpClientConnection {
         let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_CAPACITY);
         let closed = Arc::new(AtomicBool::new(false));
         let driver_closed = closed.clone();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let driver_timed_out = timed_out.clone();
 
         tokio::spawn(async move {
-            if let Err(error) = run_session_driver(socket, codec, command_rx).await {
+            if let Err(error) = run_session_driver(socket, codec, command_rx, timeout).await {
+                if error.kind() == io::ErrorKind::TimedOut {
+                    driver_timed_out.store(true, Ordering::Release);
+                }
                 debug!(session = %hex::encode(session_id), "原生 UDP 会话结束：{error}");
             }
             driver_closed.store(true, Ordering::Release);
@@ -97,6 +104,7 @@ impl UdpClientConnection {
             inner: Arc::new(UdpClientConnectionInner {
                 command_tx,
                 closed,
+                timed_out,
                 next_flow_id: AtomicU64::new(first_flow_id),
                 timeout,
             }),
@@ -105,6 +113,14 @@ impl UdpClientConnection {
 
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::Acquire) || self.inner.command_tx.is_closed()
+    }
+
+    /// Returns true when this encrypted UDP transport was closed because the
+    /// proxy stopped returning authenticated traffic (including keepalive
+    /// pongs). Auto mode uses this signal to move only the affected pool slot
+    /// to TCP/Yamux.
+    pub fn timed_out(&self) -> bool {
+        self.inner.timed_out.load(Ordering::Acquire)
     }
 
     pub async fn connect_to_target(
@@ -377,6 +393,7 @@ async fn run_session_driver(
     socket: UdpSocket,
     mut codec: UdpSessionCodec,
     mut command_rx: mpsc::Receiver<ClientCommand>,
+    configured_timeout: Duration,
 ) -> io::Result<()> {
     let mut streams = HashMap::<u64, mpsc::Sender<Vec<u8>>>::new();
     let mut pending = HashMap::<u64, oneshot::Sender<std::result::Result<(), String>>>::new();
@@ -387,6 +404,8 @@ async fn run_session_driver(
     // followed by an unnecessary ping burst.
     keepalive.tick().await;
     let mut ping_token = 0_u64;
+    let health_timeout = configured_timeout.max(MIN_SESSION_HEALTH_TIMEOUT);
+    let mut last_authenticated_receive = Instant::now();
 
     loop {
         tokio::select! {
@@ -425,8 +444,13 @@ async fn run_session_driver(
                     continue;
                 }
                 let message = match codec.decode_datagram(&receive_buffer[..size]) {
-                    Ok(Some(message)) => message,
-                    Ok(None) => continue,
+                    Ok(message) => {
+                        // A valid fragment also proves that the authenticated
+                        // return path is alive, even before reassembly finishes.
+                        last_authenticated_receive = Instant::now();
+                        let Some(message) = message else { continue };
+                        message
+                    }
                     Err(error) => {
                         trace!("丢弃无效原生 UDP 数据报：{error}");
                         continue;
@@ -472,6 +496,12 @@ async fn run_session_driver(
                 }
             }
             _ = keepalive.tick() => {
+                if last_authenticated_receive.elapsed() >= health_timeout {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "原生 UDP 会话保活响应超时",
+                    ));
+                }
                 send_message(&socket, &mut codec, &UdpSessionMessage::Ping { token: ping_token }).await?;
                 ping_token = ping_token.wrapping_add(1);
             }

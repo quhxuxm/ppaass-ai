@@ -232,6 +232,10 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
         button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(null);
+        button.setGravity(Gravity.CENTER);
+        button.setIncludeFontPadding(false);
         button.setMinHeight(0);
         button.setMinWidth(0);
         button.setPadding(dp(6), 0, dp(6), 0);
@@ -297,9 +301,9 @@ protected void updateTransportModeButtons() {
 protected String transportModeLabel(String value) {
         String normalized = normalizeTransportMode(value);
         if ("auto".equals(normalized)) {
-            return "自动模式";
+            return "自动";
         }
-        return "tcp".equals(normalized) ? "全 TCP 模式" : "原生 UDP 模式";
+        return "tcp".equals(normalized) ? "全 TCP" : "原生 UDP";
 }
 
 protected String transportModeDescription(String value) {
@@ -338,7 +342,7 @@ protected Spinner quicPolicySpinner(LinearLayout root, String title, String sele
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
-        addFieldHelp(root, "QUIC 策略只控制应用层 UDP/443。允许时，命中直连规则的 QUIC 保持直连，未命中的流量经 UDP relay：原生 UDP 模式逐包加密传输，全 TCP 模式使用 TCP/Yamux。只有选择阻断时才会强制应用回退到 TCP/TLS。");
+        addFieldHelp(root, "允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。");
         return spinner;
     }
 

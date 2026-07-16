@@ -287,8 +287,19 @@ button {
 }
 
 .p-tag {
+  max-width: 100%;
+  height: auto;
   min-height: 26px;
   padding-block: 0;
+}
+
+.p-tag .p-tag-label {
+  min-width: 0;
+  padding-block: 5px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .p-badge {
@@ -703,6 +714,7 @@ body.overview-dragging * {
 
 .panel-heading.inline {
   align-items: center;
+  flex-wrap: wrap;
   margin-bottom: 0;
 }
 
@@ -1322,6 +1334,9 @@ body.overview-dragging * {
   color: #475569;
   font-size: 13px;
   font-weight: 700;
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .field-help {

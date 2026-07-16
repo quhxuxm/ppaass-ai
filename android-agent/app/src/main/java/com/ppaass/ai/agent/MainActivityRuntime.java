@@ -61,25 +61,10 @@ protected void updateHttpProxyToggle() {
     }
 
 protected void updateFlipButton(String label, int color, boolean enabled) {
-        boolean shouldFlip = lastVpnToggleLabel != null && !label.equals(lastVpnToggleLabel);
-        lastVpnToggleLabel = label;
-        if (!shouldFlip) {
-            vpnToggle.animate().cancel();
-            vpnToggle.setRotationY(0f);
-            applyToggleButtonState(label, color, enabled);
-            return;
-        }
-
-        vpnToggle.animate()
-                .rotationY(90f)
-                .setDuration(110)
-                .withEndAction(() -> {
-                    applyToggleButtonState(label, color, enabled);
-                    vpnToggle.setRotationY(-90f);
-                    vpnToggle.animate().rotationY(0f).setDuration(110).start();
-                })
-                .start();
-    }
+        vpnToggle.animate().cancel();
+        vpnToggle.setRotationY(0f);
+        applyToggleButtonState(label, color, enabled);
+}
 
 protected void applyToggleButtonState(String label, int color, boolean enabled) {
         vpnToggle.setText(label);

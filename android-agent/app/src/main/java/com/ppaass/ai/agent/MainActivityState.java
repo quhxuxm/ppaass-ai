@@ -123,7 +123,6 @@ protected SpeedGaugeView speedGauge;
 protected TrafficBarView trafficChart;
 protected final long[] hourlyDownloadBytes = new long[24];
 protected final long[] hourlyUploadBytes = new long[24];
-protected String lastVpnToggleLabel;
 protected long lastRxBytes = -1;
 protected long lastTxBytes = -1;
 protected long lastTrafficSampleMs;
