@@ -780,43 +780,6 @@ async fn run_connected_udp_channel(
     send_channel_closed(&event_tx, flow_id, close_reason);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{FlowAdmission, classify_flow_admission};
-
-    #[test]
-    fn existing_flow_remains_idempotent_when_session_is_full() {
-        assert_eq!(
-            classify_flow_admission(true, 256, 256),
-            FlowAdmission::Existing
-        );
-    }
-
-    #[test]
-    fn new_flow_is_rejected_at_limit_without_off_by_one() {
-        assert_eq!(
-            classify_flow_admission(false, 255, 256),
-            FlowAdmission::Create
-        );
-        assert_eq!(
-            classify_flow_admission(false, 256, 256),
-            FlowAdmission::AtCapacity
-        );
-        assert_eq!(
-            classify_flow_admission(false, 257, 256),
-            FlowAdmission::AtCapacity
-        );
-    }
-
-    #[test]
-    fn zero_flow_limit_disables_new_flow_creation() {
-        assert_eq!(
-            classify_flow_admission(false, 0, 0),
-            FlowAdmission::AtCapacity
-        );
-    }
-}
-
 async fn run_udp_relay_channel(
     context: SessionContext,
     flow_id: u64,
@@ -951,4 +914,41 @@ async fn run_forward_channel(
     };
     upstream.close().await;
     send_channel_closed(&event_tx, flow_id, close_reason);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FlowAdmission, classify_flow_admission};
+
+    #[test]
+    fn existing_flow_remains_idempotent_when_session_is_full() {
+        assert_eq!(
+            classify_flow_admission(true, 256, 256),
+            FlowAdmission::Existing
+        );
+    }
+
+    #[test]
+    fn new_flow_is_rejected_at_limit_without_off_by_one() {
+        assert_eq!(
+            classify_flow_admission(false, 255, 256),
+            FlowAdmission::Create
+        );
+        assert_eq!(
+            classify_flow_admission(false, 256, 256),
+            FlowAdmission::AtCapacity
+        );
+        assert_eq!(
+            classify_flow_admission(false, 257, 256),
+            FlowAdmission::AtCapacity
+        );
+    }
+
+    #[test]
+    fn zero_flow_limit_disables_new_flow_creation() {
+        assert_eq!(
+            classify_flow_admission(false, 0, 0),
+            FlowAdmission::AtCapacity
+        );
+    }
 }
