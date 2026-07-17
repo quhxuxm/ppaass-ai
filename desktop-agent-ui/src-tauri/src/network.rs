@@ -12,7 +12,6 @@ use crate::process_util::hide_child_console;
 const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
 const QUIC_PROBE_ATTEMPTS: usize = 3;
-const QUIC_PROBE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(target_os = "windows")]
 const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -134,10 +133,15 @@ pub(crate) fn run_curl_check(
     }
 }
 
-pub(crate) fn run_quic_check(target: &str, host: &str, route_label: &str) -> ConnectivityCheck {
+pub(crate) fn run_quic_check(
+    target: &str,
+    host: &str,
+    route_label: &str,
+    attempt_timeout: Duration,
+) -> ConnectivityCheck {
     let start = Instant::now();
     let url = format!("quic://{host}:443");
-    let result = run_quic_version_negotiation(host);
+    let result = run_quic_version_negotiation(host, attempt_timeout);
 
     match result {
         Ok(detail) => ConnectivityCheck {
@@ -211,7 +215,7 @@ fn display_connect_addr(addr: SocketAddr) -> String {
     }
 }
 
-fn run_quic_version_negotiation(host: &str) -> Result<String, String> {
+fn run_quic_version_negotiation(host: &str, attempt_timeout: Duration) -> Result<String, String> {
     let target = resolve_quic_target(host)?;
     let bind_addr = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
@@ -221,7 +225,7 @@ fn run_quic_version_negotiation(host: &str) -> Result<String, String> {
     let socket =
         UdpSocket::bind(bind_addr).map_err(|err| format!("绑定 UDP socket 失败：{err}"))?;
     socket
-        .set_read_timeout(Some(QUIC_PROBE_ATTEMPT_TIMEOUT))
+        .set_read_timeout(Some(attempt_timeout))
         .map_err(|err| format!("设置 QUIC 超时失败：{err}"))?;
     socket
         .connect(target)
