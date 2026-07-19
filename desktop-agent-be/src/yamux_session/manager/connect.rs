@@ -182,9 +182,7 @@ fn is_native_udp_timeout(error: &AgentError) -> bool {
     match error {
         AgentError::Io(error) => error.kind() == std::io::ErrorKind::TimedOut,
         AgentError::Connection(message) => {
-            message.contains("UDP CONNECT 响应超时")
-                || message.contains("原生 UDP 认证响应超时")
-                || message.contains("连接原生 UDP proxy 超时")
+            message.contains("原生 UDP 认证响应超时") || message.contains("连接原生 UDP proxy 超时")
         }
         _ => false,
     }

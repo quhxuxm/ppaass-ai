@@ -36,11 +36,13 @@ pub const UDP_TRANSPORT_MAGIC: [u8; 4] = *b"PUDP";
 pub const UDP_TRANSPORT_VERSION: u8 = 1;
 /// Maximum complete UDP datagram size, including header and authentication tag.
 ///
-/// 1350 bytes plus IPv6/UDP headers is 1398 bytes. Together with
+/// 1351 bytes plus IPv6/UDP headers is 1399 bytes. The extra byte lets an
+/// `OpenData(Address::UdpRelay, UdpRelayPacket)` envelope carry the largest
+/// IPv4 UDP payload allowed by [`UDP_NATIVE_MAX_TUN_MTU`] without fragmentation. Together with
 /// [`UDP_NATIVE_MAX_TUN_MTU`], this keeps complete IPv4 and IPv6 TUN UDP
 /// packets in one independently authenticated datagram while leaving room for
 /// lower-MTU Windows, mobile, and nested-VPN paths.
-pub const UDP_MAX_DATAGRAM_SIZE: usize = 1_350;
+pub const UDP_MAX_DATAGRAM_SIZE: usize = 1_351;
 /// Maximum TUN MTU that guarantees a complete IPv4 or IPv6 UDP packet fits in
 /// one native encrypted UDP datagram with the current relay envelope.
 pub const UDP_NATIVE_MAX_TUN_MTU: u16 = 1_280;

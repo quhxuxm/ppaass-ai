@@ -606,9 +606,7 @@ fn is_native_udp_timeout(error: &AndroidAgentError) -> bool {
     match error {
         AndroidAgentError::Io(error) => error.kind() == io::ErrorKind::TimedOut,
         AndroidAgentError::Connection(message) => {
-            message.contains("UDP CONNECT 响应超时")
-                || message.contains("原生 UDP 认证响应超时")
-                || message.contains("连接原生 UDP proxy 超时")
+            message.contains("原生 UDP 认证响应超时") || message.contains("连接原生 UDP proxy 超时")
         }
         _ => false,
     }
@@ -792,7 +790,7 @@ mod tests {
             Some(ProxyStreamRoute::Auto)
         );
         assert!(is_native_udp_timeout(&AndroidAgentError::Connection(
-            "UDP CONNECT 响应超时".into()
+            "原生 UDP 认证响应超时".into()
         )));
         assert!(!is_native_udp_timeout(&AndroidAgentError::Connection(
             "authentication failed".into()

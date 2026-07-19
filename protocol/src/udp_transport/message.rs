@@ -6,9 +6,11 @@ use super::{UdpTransportError, UdpTransportResult};
 /// Messages multiplexed inside an authenticated native UDP session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UdpSessionMessage {
-    Connect {
+    /// Opens a logical UDP flow and carries its first datagram atomically.
+    OpenData {
         flow_id: u64,
         address: Address,
+        data: Vec<u8>,
     },
     ConnectResponse {
         flow_id: u64,

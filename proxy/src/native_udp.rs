@@ -399,7 +399,6 @@ struct SessionContext {
 
 struct ChannelState {
     input_tx: Option<mpsc::Sender<Vec<u8>>>,
-    cached_connect_response: Option<UdpSessionMessage>,
     abort_handle: AbortHandle,
 }
 
@@ -479,19 +478,15 @@ async fn run_session(
                 let Some(message) = message else { continue };
 
                 match message {
-                    UdpSessionMessage::Connect { flow_id, address } => {
+                    UdpSessionMessage::OpenData { flow_id, address, data } => {
                         match classify_flow_admission(
                             channels.contains_key(&flow_id),
                             channels.len(),
                             context.config.udp_session_max_flows,
                         ) {
                             FlowAdmission::Existing => {
-                                if let Some(response) = channels
-                                    .get(&flow_id)
-                                    .and_then(|channel| channel.cached_connect_response.clone())
-                                {
-                                    send_session_message(&context, &mut codec, &response).await?;
-                                }
+                                // OpenData is an application datagram, not a retryable
+                                // control message. Never deliver a duplicate first packet.
                                 continue;
                             }
                             FlowAdmission::AtCapacity => {
@@ -519,6 +514,9 @@ async fn run_session(
                         }
 
                         let (input_tx, input_rx) = mpsc::channel(channel_size);
+                        input_tx
+                            .try_send(data)
+                            .expect("new native UDP flow queue has capacity");
                         let worker_context = context.clone();
                         let worker_outbound_tx = outbound_tx.clone();
                         let worker_event_tx = channel_event_tx.clone();
@@ -537,7 +535,6 @@ async fn run_session(
                             flow_id,
                             ChannelState {
                                 input_tx: Some(input_tx),
-                                cached_connect_response: None,
                                 abort_handle,
                             },
                         );
@@ -592,7 +589,6 @@ async fn run_session(
                             response,
                             UdpSessionMessage::ConnectResponse { success: true, .. }
                         );
-                        channel.cached_connect_response = Some(response.clone());
                         if !success {
                             channel.input_tx = None;
                         }

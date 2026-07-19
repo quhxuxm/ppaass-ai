@@ -201,7 +201,7 @@ Mermaid 源码：[07-proxy-state-machine.mmd](diagrams/07-proxy-state-machine.mm
 
 ## 10. UDP 的两种代理承载
 
-UDP relay 的两种传输模式共享上层 flow/目标语义，但线协议不同。`udp` 模式通过认证的原生数据报传递 `Connect`、`ConnectResponse`、`Data`、`Close` 和保活消息；`tcp` 模式则为 UDP 目标或共享 relay 打开 Yamux 子流，并继续使用完整的 PPAASS Auth/Connect/Data 帧。TCP 目标始终使用 direct framed TCP，不进入任何 UDP transport 分支。
+UDP relay 的两种传输模式共享上层 flow/目标语义，但线协议不同。`udp` 模式通过认证的原生数据报传递 `OpenData`、`ConnectResponse`、`Data`、`Close` 和保活消息；`OpenData` 把目标地址与首个 UDP payload 合并，不再单独往返 `Connect`。`tcp` 模式则为 UDP 目标或共享 relay 打开 Yamux 子流，并继续使用完整的 PPAASS Auth/Connect/Data 帧。TCP 目标始终使用 direct framed TCP，不进入任何 UDP transport 分支。
 
 TCP 模式的 Yamux 流程图源码：[08-yamux-substream-datapacket.mmd](diagrams/08-yamux-substream-datapacket.mmd)
 

@@ -20,7 +20,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::PollSender;
 use tracing::{debug, info, trace, warn};
@@ -45,22 +45,17 @@ struct UdpClientConnectionInner {
     closed: Arc<AtomicBool>,
     timed_out: Arc<AtomicBool>,
     next_flow_id: AtomicU64,
-    timeout: Duration,
 }
 
 enum ClientCommand {
-    Open {
+    Register {
         flow_id: u64,
-        address: Address,
         inbound_tx: mpsc::Sender<Vec<u8>>,
-        response_tx: oneshot::Sender<std::result::Result<(), String>>,
     },
-    ResendConnect {
+    OpenData {
         flow_id: u64,
         address: Address,
-    },
-    CancelOpen {
-        flow_id: u64,
+        data: Vec<u8>,
     },
     Data {
         flow_id: u64,
@@ -106,7 +101,6 @@ impl UdpClientConnection {
                 closed,
                 timed_out,
                 next_flow_id: AtomicU64::new(first_flow_id),
-                timeout,
             }),
         })
     }
@@ -147,75 +141,20 @@ impl UdpClientConnection {
             return Err(io::Error::other("原生 UDP channel ID 已耗尽"));
         }
         let (inbound_tx, inbound_rx) = mpsc::channel(STREAM_INBOUND_CAPACITY);
-        let (response_tx, mut response_rx) = oneshot::channel();
         self.inner
             .command_tx
-            .send(ClientCommand::Open {
+            .send(ClientCommand::Register {
                 flow_id,
-                address: address.clone(),
                 inbound_tx,
-                response_tx,
             })
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "原生 UDP 会话已关闭"))?;
-
-        let deadline = Instant::now() + self.inner.timeout;
-        let mut retry_delay = AUTH_INITIAL_RETRY;
-        let result = loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "UDP CONNECT 响应超时",
-                ));
-            }
-            let wait = retry_delay.min(deadline.saturating_duration_since(now));
-            match tokio::time::timeout(wait, &mut response_rx).await {
-                Ok(Ok(Ok(()))) => break Ok(()),
-                Ok(Ok(Err(message))) => {
-                    break Err(io::Error::new(io::ErrorKind::ConnectionRefused, message));
-                }
-                Ok(Err(_)) => {
-                    break Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "原生 UDP 会话在 CONNECT 期间关闭",
-                    ));
-                }
-                Err(_) if Instant::now() < deadline => {
-                    self.inner
-                        .command_tx
-                        .send(ClientCommand::ResendConnect {
-                            flow_id,
-                            address: address.clone(),
-                        })
-                        .await
-                        .map_err(|_| {
-                            io::Error::new(io::ErrorKind::NotConnected, "原生 UDP 会话已关闭")
-                        })?;
-                    retry_delay = (retry_delay * 2).min(CONTROL_MAX_RETRY);
-                }
-                Err(_) => {
-                    break Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "UDP CONNECT 响应超时",
-                    ));
-                }
-            }
-        };
-
-        if let Err(error) = result {
-            let _ = self
-                .inner
-                .command_tx
-                .send(ClientCommand::CancelOpen { flow_id })
-                .await;
-            return Err(error);
-        }
 
         let stream_id = flow_id.to_string();
         Ok((
             UdpClientStream {
                 flow_id,
+                open_address: Some(address),
                 stream_id: stream_id.clone(),
                 command_tx: PollSender::new(self.inner.command_tx.clone()),
                 inbound_rx,
@@ -396,7 +335,6 @@ async fn run_session_driver(
     configured_timeout: Duration,
 ) -> io::Result<()> {
     let mut streams = HashMap::<u64, mpsc::Sender<Vec<u8>>>::new();
-    let mut pending = HashMap::<u64, oneshot::Sender<std::result::Result<(), String>>>::new();
     let mut receive_buffer = vec![0_u8; UDP_MAX_DATAGRAM_SIZE + 1];
     let mut keepalive = tokio::time::interval(SESSION_KEEPALIVE_INTERVAL);
     keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -412,24 +350,21 @@ async fn run_session_driver(
             command = command_rx.recv() => {
                 let Some(command) = command else { return Ok(()) };
                 let message = match command {
-                    ClientCommand::Open { flow_id, address, inbound_tx, response_tx } => {
+                    ClientCommand::Register { flow_id, inbound_tx } => {
                         streams.insert(flow_id, inbound_tx);
-                        pending.insert(flow_id, response_tx);
-                        Some(UdpSessionMessage::Connect { flow_id, address })
+                        None
                     }
-                    ClientCommand::ResendConnect { flow_id, address } => {
-                        pending.contains_key(&flow_id).then_some(UdpSessionMessage::Connect { flow_id, address })
-                    }
-                    ClientCommand::CancelOpen { flow_id } => {
-                        pending.remove(&flow_id);
-                        streams.remove(&flow_id);
-                        Some(UdpSessionMessage::Close { flow_id, reason: Some("connect cancelled".to_string()) })
+                    ClientCommand::OpenData { flow_id, address, data } => {
+                        streams.contains_key(&flow_id).then_some(UdpSessionMessage::OpenData {
+                            flow_id,
+                            address,
+                            data,
+                        })
                     }
                     ClientCommand::Data { flow_id, data } => {
                         streams.contains_key(&flow_id).then_some(UdpSessionMessage::Data { flow_id, data })
                     }
                     ClientCommand::Close { flow_id } => {
-                        pending.remove(&flow_id);
                         streams.remove(&flow_id);
                         Some(UdpSessionMessage::Close { flow_id, reason: None })
                     }
@@ -458,13 +393,9 @@ async fn run_session_driver(
                 };
                 match message {
                     UdpSessionMessage::ConnectResponse { flow_id, success, error } => {
-                        if let Some(response) = pending.remove(&flow_id) {
-                            if success {
-                                let _ = response.send(Ok(()));
-                            } else {
-                                streams.remove(&flow_id);
-                                let _ = response.send(Err(error.unwrap_or_else(|| "UDP CONNECT failed".to_string())));
-                            }
+                        if !success {
+                            streams.remove(&flow_id);
+                            debug!(flow_id, error = ?error, "proxy 拒绝原生 UDP flow");
                         }
                     }
                     UdpSessionMessage::Data { flow_id, data } => {
@@ -482,16 +413,14 @@ async fn run_session_driver(
                     }
                     UdpSessionMessage::Close { flow_id, reason } => {
                         streams.remove(&flow_id);
-                        if let Some(response) = pending.remove(&flow_id) {
-                            let _ = response.send(Err(reason.unwrap_or_else(|| "proxy closed UDP channel".to_string())));
-                        }
+                        debug!(flow_id, reason = ?reason, "proxy 关闭原生 UDP flow");
                     }
                     UdpSessionMessage::Ping { token } => {
                         send_message(&socket, &mut codec, &UdpSessionMessage::Pong { token }).await?;
                     }
                     UdpSessionMessage::Pong { .. } => {}
-                    UdpSessionMessage::Connect { .. } => {
-                        trace!("忽略 proxy 发来的意外 UDP CONNECT");
+                    UdpSessionMessage::OpenData { .. } => {
+                        trace!("忽略 proxy 发来的意外 UDP OpenData");
                     }
                 }
             }
@@ -539,6 +468,7 @@ fn udp_protocol_error(error: impl std::fmt::Display) -> io::Error {
 
 pub struct UdpClientStream {
     flow_id: u64,
+    open_address: Option<Address>,
     stream_id: String,
     command_tx: PollSender<ClientCommand>,
     inbound_rx: mpsc::Receiver<Vec<u8>>,
@@ -620,14 +550,21 @@ impl AsyncWrite for UdpClientStream {
         match self.command_tx.poll_reserve(cx) {
             Poll::Ready(Ok(())) => {
                 let flow_id = self.flow_id;
-                self.command_tx
-                    .send_item(ClientCommand::Data {
+                let command = match self.open_address.clone() {
+                    Some(address) => ClientCommand::OpenData {
+                        flow_id,
+                        address,
+                        data: buf.to_vec(),
+                    },
+                    None => ClientCommand::Data {
                         flow_id,
                         data: buf.to_vec(),
-                    })
-                    .map_err(|_| {
-                        io::Error::new(io::ErrorKind::NotConnected, "原生 UDP 会话已关闭")
-                    })?;
+                    },
+                };
+                self.command_tx.send_item(command).map_err(|_| {
+                    io::Error::new(io::ErrorKind::NotConnected, "原生 UDP 会话已关闭")
+                })?;
+                self.open_address = None;
                 Poll::Ready(Ok(buf.len()))
             }
             Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
@@ -686,7 +623,50 @@ impl Unpin for UdpClientStream {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn first_write_opens_flow_with_data_and_later_writes_use_data() {
+        let (command_tx, mut command_rx) = mpsc::channel(2);
+        let (_inbound_tx, inbound_rx) = mpsc::channel(1);
+        let address = Address::Ipv4 {
+            addr: [127, 0, 0, 1],
+            port: 53,
+        };
+        let mut stream = UdpClientStream {
+            flow_id: 7,
+            open_address: Some(address.clone()),
+            stream_id: "test-stream".to_string(),
+            command_tx: PollSender::new(command_tx),
+            inbound_rx,
+            read_buf: Vec::new(),
+            read_pos: 0,
+            close_sent: false,
+        };
+
+        stream.write_all(b"first").await.unwrap();
+        match command_rx.recv().await.unwrap() {
+            ClientCommand::OpenData {
+                flow_id,
+                address: actual_address,
+                data,
+            } => {
+                assert_eq!(flow_id, 7);
+                assert_eq!(actual_address, address);
+                assert_eq!(data, b"first");
+            }
+            _ => panic!("first write did not open the UDP flow"),
+        }
+
+        stream.write_all(b"second").await.unwrap();
+        match command_rx.recv().await.unwrap() {
+            ClientCommand::Data { flow_id, data } => {
+                assert_eq!(flow_id, 7);
+                assert_eq!(data, b"second");
+            }
+            _ => panic!("later write did not use UDP flow data"),
+        }
+    }
 
     #[tokio::test]
     async fn stream_rejects_short_read_buffer_without_splitting_datagram() {
@@ -694,6 +674,7 @@ mod tests {
         let (inbound_tx, inbound_rx) = mpsc::channel(1);
         let mut stream = UdpClientStream {
             flow_id: 1,
+            open_address: None,
             stream_id: "test-stream".to_string(),
             command_tx: PollSender::new(command_tx),
             inbound_rx,

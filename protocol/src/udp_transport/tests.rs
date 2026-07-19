@@ -392,13 +392,19 @@ fn max_tun_udp_payloads_fit_one_outer_datagram() {
         .encode()
         .unwrap();
         let datagrams = agent
-            .encode_message(&UdpSessionMessage::Data {
+            .encode_message(&UdpSessionMessage::OpenData {
                 flow_id: u64::MAX,
+                address: Address::UdpRelay,
                 data: relay_packet,
             })
             .unwrap();
 
-        assert_eq!(datagrams.len(), 1);
+        assert_eq!(
+            datagrams.len(),
+            1,
+            "OpenData lengths: {:?}",
+            datagrams.iter().map(Vec::len).collect::<Vec<_>>()
+        );
         assert!(datagrams[0].len() <= UDP_MAX_DATAGRAM_SIZE);
     }
 }
@@ -620,12 +626,13 @@ fn reassembly_enforces_fragment_and_timeout_limits() {
 #[test]
 fn all_session_message_variants_are_bitcode_serializable() {
     let messages = [
-        UdpSessionMessage::Connect {
+        UdpSessionMessage::OpenData {
             flow_id: 1,
             address: Address::Ipv4 {
                 addr: [127, 0, 0, 1],
                 port: 53,
             },
+            data: vec![0, 1, 2],
         },
         UdpSessionMessage::ConnectResponse {
             flow_id: 1,
@@ -647,7 +654,7 @@ fn all_session_message_variants_are_bitcode_serializable() {
     for (expected_index, message) in messages.iter().enumerate() {
         let decoded = UdpSessionMessage::decode(&message.encode().unwrap()).unwrap();
         let actual_index = match decoded {
-            UdpSessionMessage::Connect { .. } => 0,
+            UdpSessionMessage::OpenData { .. } => 0,
             UdpSessionMessage::ConnectResponse { .. } => 1,
             UdpSessionMessage::Data { .. } => 2,
             UdpSessionMessage::Close { .. } => 3,
