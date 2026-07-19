@@ -17,13 +17,19 @@ final class AgentConfigJson {
     static JSONObject build(Context context) throws JSONException {
         SharedPreferences prefs = context.getSharedPreferences("ppaass_agent", Context.MODE_PRIVATE);
         String quicPolicy = selectedQuicPolicy(prefs);
+        String transportMode = normalizeTransportMode(
+                prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE));
+        int configuredTunMtu = parseInt(
+                prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
+                DefaultConfig.TUN_MTU);
+        int effectiveTunMtu = !"tcp".equals(transportMode)
+                ? Math.min(configuredTunMtu, DefaultConfig.NATIVE_UDP_MAX_TUN_MTU)
+                : configuredTunMtu;
 
         JSONObject tunJson = new JSONObject()
                 .put("ipv4", prefs.getString("tun_ipv4", DefaultConfig.TUN_IPV4))
                 .put("ipv6", prefs.getString("tun_ipv6", DefaultConfig.TUN_IPV6))
-                .put("mtu", parseInt(
-                        prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
-                        DefaultConfig.TUN_MTU))
+                .put("mtu", effectiveTunMtu)
                 .put("proxy_dns", true)
                 .put("quic_policy", quicPolicy);
         JSONObject yamuxJson = new JSONObject()
@@ -39,11 +45,23 @@ final class AgentConfigJson {
                 .put("username", prefs.getString("username", DefaultConfig.USERNAME))
                 .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
                         prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
+                .put("transport_mode", transportMode)
+                .put("udp_session_pool_size", parseClampedInt(
+                        prefs.getString(
+                                "udp_session_pool_size",
+                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE)),
+                        DefaultConfig.UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MAX_UDP_SESSION_POOL_SIZE))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", parsePositiveInt(
                         prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                         DefaultConfig.RUNTIME_THREADS))
-                .put("connect_timeout_secs", 30)
+                .put("connect_timeout_secs", parsePositiveInt(
+                        prefs.getString(
+                                "connect_timeout_secs",
+                                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
+                        DefaultConfig.CONNECT_TIMEOUT_SECS))
                 .put("http_proxy_max_concurrent_connects", parsePositiveInt(
                         prefs.getString(
                                 "http_proxy_max_concurrent_connects",
@@ -127,6 +145,10 @@ final class AgentConfigJson {
         return Math.max(min, parseInt(value, fallback));
     }
 
+    private static int parseClampedInt(String value, int fallback, int min, int max) {
+        return Math.max(min, Math.min(max, parseInt(value, fallback)));
+    }
+
     private static String normalizeCompressionMode(String value) {
         if (value == null) {
             return DefaultConfig.COMPRESSION_MODE;
@@ -139,6 +161,18 @@ final class AgentConfigJson {
             return normalized;
         }
         return DefaultConfig.COMPRESSION_MODE;
+    }
+
+    private static String normalizeTransportMode(String value) throws JSONException {
+        if (value == null) {
+            return DefaultConfig.TRANSPORT_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("auto".equals(normalized) || "udp".equals(normalized) || "tcp".equals(normalized)) {
+            return normalized;
+        }
+        throw new JSONException(
+                "transport_mode must be 'auto', 'udp', or 'tcp'; removed mode 'quic' is not supported");
     }
 
     private static String normalizeDirectAccessMode(String value) {

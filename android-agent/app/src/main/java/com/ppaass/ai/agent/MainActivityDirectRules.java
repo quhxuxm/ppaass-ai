@@ -173,16 +173,20 @@ protected void addDirectRuleChip(LinearLayout root, String rule, int index) {
         text.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button remove = new Button(this);
-        remove.setText("x");
-        remove.setTextSize(11f);
-        remove.setTypeface(Typeface.DEFAULT_BOLD);
-        remove.setAllCaps(false);
-        remove.setMinHeight(0);
-        remove.setMinWidth(0);
-        remove.setPadding(0, 0, 0, 0);
-        remove.setTextColor(COLOR_ACTION_STOP);
-        remove.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        ImageButton remove = new ImageButton(this);
+        remove.setImageResource(R.drawable.ic_close_24);
+        remove.setImageTintList(interactiveTextColors(
+                COLOR_ACTION_STOP,
+                Color.rgb(255, 240, 246)));
+        remove.setContentDescription("删除规则");
+        remove.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        remove.setMinimumHeight(0);
+        remove.setMinimumWidth(0);
+        remove.setPadding(dp(4), dp(4), dp(4), dp(4));
+        remove.setBackground(interactiveRounded(
+                COLOR_SURFACE,
+                alphaColor(COLOR_ACTION_STOP, 92),
+                COLOR_ACTION_STOP));
         flattenButton(remove);
         remove.setOnClickListener(view -> removeDirectRule(index));
         trackEditable(remove);
@@ -200,10 +204,13 @@ protected void updateDirectModeButtons() {
         directAccessModeValue = selectedMode;
         for (Button button : directModeButtons) {
             boolean selected = selectedMode.equals(String.valueOf(button.getTag()));
-            button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
+            button.setSelected(selected);
+            button.setTextColor(interactiveTextColors(
+                    selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
             int fill = selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
-            int stroke = selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
-            button.setBackground(rounded(fill, stroke));
+            int stroke = selected ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
+            button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));
         }
         updateDirectAccessSummary();
         updateDirectRuleConfigVisibility();

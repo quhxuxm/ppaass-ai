@@ -25,8 +25,10 @@ import java.util.*;
 abstract class MainActivityConfigScreen extends MainActivityStatusScreen {
 
 protected void buildConfigScreen(LinearLayout root) {
+        buildAppearanceSection(root);
+
         LinearLayout actions = configSection(root, "配置");
-        TextView actionsSubtitle = mutedText("将所有代理设置恢复为内置默认值", 13f);
+        TextView actionsSubtitle = mutedText("恢复内置默认值", 13f);
         LinearLayout.LayoutParams actionsSubtitleParams = matchWrap();
         actionsSubtitleParams.setMargins(0, 0, 0, dp(10));
         actions.addView(actionsSubtitle, actionsSubtitleParams);
@@ -41,6 +43,36 @@ protected void buildConfigScreen(LinearLayout root) {
         proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         addFieldHelp(connection, "TCP / UDP 共用远端出口。");
+        transportModeControl(
+                connection,
+                prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
+        addFieldHelp(connection, "自动：原生 UDP 超时后仅该 session 转 TCP/Yamux；TCP 始终走 TCP。");
+        udpSessionPoolConfig = new LinearLayout(this);
+        udpSessionPoolConfig.setOrientation(LinearLayout.VERTICAL);
+        connection.addView(udpSessionPoolConfig, matchWrap());
+        udpSessionPoolSize = numberControl(
+                udpSessionPoolConfig,
+                "UDP 会话数",
+                boundedIntString(
+                        prefString(
+                                "udp_session_pool_size",
+                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE)),
+                        DefaultConfig.UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MAX_UDP_SESSION_POOL_SIZE),
+                1,
+                DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
+        addFieldHelp(udpSessionPoolConfig, "Auto/原生 UDP 使用；范围 1–8，运行中不可修改。");
+        connectTimeoutSecs = numberControl(
+                connection,
+                "控制连接超时（秒）",
+                prefString(
+                        "connect_timeout_secs",
+                        String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
+                1,
+                1);
+        addFieldHelp(connection, "原生 UDP 握手与 TCP 连接共用。");
         username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
         privateKey = field(
                 connection,
@@ -56,14 +88,14 @@ protected void buildConfigScreen(LinearLayout root) {
                 prefString("http_proxy_port", String.valueOf(DefaultConfig.HTTP_PROXY_PORT)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "同一个端口同时接受 HTTP 代理与 SOCKS5 代理连接，类似桌面端 listen_addr。");
+        addFieldHelp(httpProxy, "同端口支持 HTTP 与 SOCKS5。");
         httpProxyThreads = numberControl(
                 httpProxy,
                 "代理线程",
                 prefString("http_proxy_threads", String.valueOf(DefaultConfig.HTTP_PROXY_THREADS)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "显式代理专属运行线程数，修改后重启 HTTP / SOCKS5 代理生效。");
+        addFieldHelp(httpProxy, "HTTP/SOCKS5 工作线程，重启后生效。");
         httpProxyMaxConcurrentConnects = numberControl(
                 httpProxy,
                 "并发建连",
@@ -72,7 +104,7 @@ protected void buildConfigScreen(LinearLayout root) {
                         String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS)),
                 1,
                 1);
-        addFieldHelp(httpProxy, "限制 HTTP / SOCKS5 同时向远端 proxy 建立目标连接的数量，浏览器并发较高时可适当调大。");
+        addFieldHelp(httpProxy, "HTTP/SOCKS5 最大并发连接数。");
 
         LinearLayout runtime = configSection(root, "运行参数");
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
@@ -82,81 +114,124 @@ protected void buildConfigScreen(LinearLayout root) {
                 prefString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
                 1,
                 1);
-        addFieldHelp(runtime, "只影响 Android VPN 代理；HTTP / SOCKS5 代理使用上方代理线程。");
+        addFieldHelp(runtime, "仅用于 Android VPN。");
         compressionMode = spinner(
                 runtime,
                 "压缩模式",
                 new String[]{"none", "lz4", "gzip", "zstd"},
                 prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
-        LinearLayout tcpConfig = configSection(root, "TCP");
+        LinearLayout tcpConfig = configSection(root, "TCP 数据通道");
         LinearLayout tcpRelay = configGroup(
                 tcpConfig,
                 "TCP 转发",
-                "普通 TCP 连接");
-        addFieldHelp(tcpRelay, "TCP 目标连接使用独立的普通 TCP 连接承载。");
+                "两种模式均使用 TCP");
+        addFieldHelp(tcpRelay, "TCP 目标始终使用独立 TCP 连接。");
 
-        LinearLayout udpConfig = configSection(root, "UDP");
-        udpYamuxConfig = configGroup(
-                udpConfig,
-                "UDP Yamux",
-                "作用于 UDP relay 子流");
-        yamuxUdpSessions = numberControl(
+        udpYamuxConfig = configSection(root, "UDP 数据 · TCP/Yamux");
+        LinearLayout udpYamux = configGroup(
                 udpYamuxConfig,
+                "UDP Yamux",
+                "仅全 TCP 模式");
+        yamuxUdpSessions = numberControl(
+                udpYamux,
                 "外层连接",
                 prefString(
                         "yamux_udp_sessions",
                         String.valueOf(DefaultConfig.UDP_YAMUX_SESSIONS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "限制 UDP relay raw Yamux 外层连接上限；实际连接数按需增长。");
+        addFieldHelp(udpYamux, "Yamux 外层连接上限。");
         yamuxUdpMaxStreamsPerSession = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "并发子流",
                 prefString(
                         "yamux_udp_max_streams_per_session",
                         String.valueOf(DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "限制单条 UDP Yamux session 同时承载的 UDP relay 子流数。");
+        addFieldHelp(udpYamux, "单连接最大 UDP 子流数。");
         yamuxUdpOpenStreamTimeoutSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "打开子流超时",
                 prefString(
                         "yamux_udp_open_stream_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "影响新 UDP relay 通道申请 Yamux 子流的等待时间。");
+        addFieldHelp(udpYamux, "申请 Yamux 子流的超时。");
         yamuxUdpKeepaliveIntervalSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "Keepalive 间隔",
                 prefString(
                         "yamux_udp_keepalive_interval_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS)),
                 5,
                 0);
-        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接的保活探测；0 表示关闭。");
+        addFieldHelp(udpYamux, "Yamux 保活间隔；0 为关闭。");
         yamuxUdpConnectionWriteTimeoutSecs = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "写超时",
                 prefString(
                         "yamux_udp_connection_write_timeout_secs",
                         String.valueOf(DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS)),
                 1,
                 1);
-        addFieldHelp(udpYamuxConfig, "影响 UDP Yamux 外层连接写入帧的超时判断。");
+        addFieldHelp(udpYamux, "Yamux 写入超时。");
         yamuxUdpStreamWindowSizeKb = numberControl(
-                udpYamuxConfig,
+                udpYamux,
                 "流控窗口 KB",
                 prefString(
                         "yamux_udp_stream_window_size_kb",
                         String.valueOf(DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB)),
                 256,
                 DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB);
-        addFieldHelp(udpYamuxConfig, "影响每个 UDP relay Yamux 子流可缓冲的窗口大小。");
+        addFieldHelp(udpYamux, "单个 UDP 子流缓冲窗口。");
+
+        updateTransportModeSettingsVisibility();
 
         buildDirectAccessSection(root);
+    }
+
+protected void buildAppearanceSection(LinearLayout root) {
+        LinearLayout appearance = configSection(root, "外观");
+        appearance.addView(controlLabel("配色风格"), labelParams());
+
+        Spinner themeSpinner = new Spinner(this);
+        themeSpinner.setAdapter(spinnerAdapter(UiPalette.THEME_LABELS));
+        String selectedTheme = UiPalette.normalizeTheme(
+                prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
+        themeSpinner.setSelection(UiPalette.themeIndex(selectedTheme), false);
+        themeSpinner.setBackground(controlBackground());
+        themeSpinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+        themeSpinner.setPadding(dp(12), 0, dp(12), 0);
+        appearance.addView(themeSpinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+        addFieldHelp(appearance, "选择后立即应用，不影响代理配置和运行状态。");
+
+        themeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= UiPalette.THEME_KEYS.length) {
+                    return;
+                }
+                String theme = UiPalette.THEME_KEYS[position];
+                String current = UiPalette.normalizeTheme(
+                        prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
+                if (theme.equals(current)) {
+                    return;
+                }
+                prefs.edit().putString(UiPalette.PREF_COLOR_THEME, theme).apply();
+                UiPalette.apply(theme);
+                recreate();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // 保留当前配色。
+            }
+        });
     }
 
 }

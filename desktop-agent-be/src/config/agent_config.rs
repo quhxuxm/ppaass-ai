@@ -4,31 +4,40 @@
 //! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
-use common::{QuicPolicy, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
+use common::{QuicPolicy, TransportMode, YamuxConfig, tun_control::DEFAULT_TUN_HELPER_SOCKET_PATH};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_path: String,
+    /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
+    /// TCP 业务数据不受此字段影响，始终使用 direct framed TCP。
+    #[serde(default)]
+    pub transport_mode: TransportMode,
+    /// UDP manager 维护的已认证原生 UDP 会话数。多个会话可分散并发数据报，
+    /// 但不会将 UDP 变成可靠、有序的字节流。
+    #[serde(default = "default_udp_session_pool_size")]
+    pub udp_session_pool_size: usize,
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
 
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
-    /// 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+    /// Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+    /// 适用于 TCP 目标与 TCP/Yamux UDP；原生加密 UDP 数据报不压缩。
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
-    /// Yamux 多路复用配置。TCP relay 与 UDP relay 使用各自独立的 Yamux 外层 session。
+    /// Yamux 多路复用配置，仅用于 UDP 选择 TCP 传输时的外层 session。
     #[serde(default)]
     pub yamux: YamuxConfig,
 
@@ -61,7 +70,8 @@ pub struct AgentConfig {
 ///
 /// 当 `enabled = true` 时，agent 创建 TUN 设备，在其上构建小型
 /// 用户空间 TCP/IP 协议栈（通过 netstack-smoltcp），并将接受的
-/// TCP 流通过 direct framed TCP 转发到代理；UDP 流通过单独的 UDP Yamux session manager 转发。
+/// TCP 流通过 direct framed TCP 转发到代理；UDP 可通过单独的
+/// Yamux session manager 转发，也可由 agent 本地 UDP socket 直连目标。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
     /// 启用 TUN 模式
@@ -90,7 +100,14 @@ pub struct TunConfig {
     #[serde(default)]
     pub proxy_dns: bool,
 
-    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。
+    /// TUN 模式下是否通过 proxy 转发普通 UDP。
+    /// 关闭时，除独立处理的代理 DNS 与 UDP/443 QUIC 外，其余 UDP 从 agent
+    /// 直接发往目标；QUIC 由 quic_policy、direct_access 与 UDP 传输模式共同分流。
+    #[serde(default = "default_tun_proxy_udp")]
+    pub proxy_udp: bool,
+
+    /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。allow 时命中直连
+    /// 规则的目标直连，其余目标通过 proxy UDP relay 转发；block 时统一阻断。
     #[serde(default)]
     pub quic_policy: Option<QuicPolicy>,
 
@@ -134,6 +151,7 @@ impl Default for TunConfig {
             ipv6: None,
             mtu: default_tun_mtu(),
             proxy_dns: false,
+            proxy_udp: default_tun_proxy_udp(),
             quic_policy: None,
             wintun_file: None,
             route_state_file: None,
@@ -168,6 +186,10 @@ fn default_tun_mtu() -> u16 {
     1500
 }
 
+fn default_tun_proxy_udp() -> bool {
+    true
+}
+
 fn default_macos_tun_helper_enabled() -> bool {
     cfg!(target_os = "macos")
 }
@@ -182,6 +204,10 @@ fn default_macos_tun_helper_fallback_to_privilege() -> bool {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_udp_session_pool_size() -> usize {
+    4
 }
 
 fn default_listen_addr() -> String {
@@ -223,6 +249,11 @@ impl AgentConfig {
     pub fn get_compression_mode(&self) -> CompressionMode {
         self.compression_mode.parse().unwrap_or_default()
     }
+
+    /// 限制 UDP 会话池的内核 socket/内存成本，同时保证错误配置 0 不会导致取模崩溃。
+    pub fn effective_udp_session_pool_size(&self) -> usize {
+        self.udp_session_pool_size.clamp(1, 8)
+    }
 }
 
 impl TunConfig {
@@ -248,6 +279,59 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.get_compression_mode(), CompressionMode::None);
+        assert_eq!(config.transport_mode, TransportMode::Udp);
+    }
+
+    #[test]
+    fn transport_mode_accepts_auto_udp_and_tcp() {
+        let auto: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
+                .unwrap();
+        assert_eq!(auto.transport_mode, TransportMode::Auto);
+
+        let udp: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"udp\"\n"))
+                .unwrap();
+        assert_eq!(udp.transport_mode, TransportMode::Udp);
+
+        let config: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
+                .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Tcp);
+    }
+
+    #[test]
+    fn removed_quic_transport_mode_is_rejected() {
+        let result = toml::from_str::<AgentConfig>(
+            &(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"quic\"\n"),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn udp_session_pool_defaults_to_four_and_is_bounded() {
+        let default_config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
+
+        let disabled: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 0\n"))
+                .unwrap();
+        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
+
+        let excessive: AgentConfig =
+            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 64\n"))
+                .unwrap();
+        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
+    }
+
+    #[test]
+    fn removed_quic_connection_pool_field_is_rejected() {
+        let result = toml::from_str::<AgentConfig>(
+            &(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 4\n"),
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -264,6 +348,27 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn tun_proxies_udp_by_default_for_backward_compatibility() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert!(config.tun.proxy_udp);
+    }
+
+    #[test]
+    fn tun_can_disable_udp_proxying() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+proxy_udp = false
+"#),
+        )
+        .unwrap();
+
+        assert!(!config.tun.proxy_udp);
     }
 
     #[test]

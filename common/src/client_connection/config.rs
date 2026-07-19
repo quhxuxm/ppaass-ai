@@ -27,7 +27,7 @@ pub trait ClientConnectionConfig: Debug {
     /// 连接操作的超时时长
     fn timeout_duration(&self) -> Duration;
 
-    /// Agent -> proxy 消息的压缩模式。
+    /// Framed TCP/TCP-Yamux 消息的压缩模式；原生 UDP 数据报不使用此设置。
     fn compression_mode(&self) -> CompressionMode {
         CompressionMode::None
     }
@@ -35,6 +35,14 @@ pub trait ClientConnectionConfig: Debug {
     /// Optional TCP socket send/receive buffer size for latency-sensitive clients.
     fn tcp_socket_buffer_size(&self) -> Option<usize> {
         None
+    }
+
+    /// Optional native UDP transport socket send/receive buffer size.
+    ///
+    /// Raw UDP has no transport-level retransmission. A larger kernel queue
+    /// absorbs short packet bursts without turning scheduler jitter into loss.
+    fn udp_socket_buffer_size(&self) -> Option<usize> {
+        Some(4 * 1024 * 1024)
     }
 
     /// 可选的本地套接字绑定地址。
@@ -57,5 +65,12 @@ pub trait ClientConnectionConfig: Debug {
     /// outside of the VPN before it connects.
     fn protect_socket(&self, _socket: &Socket, _dst: SocketAddr) -> io::Result<()> {
         Ok(())
+    }
+
+    /// Protect a native UDP transport socket from platform VPN routing.
+    /// Android overrides this with a fail-closed implementation because a
+    /// missing VpnService protector would recursively feed the socket into TUN.
+    fn protect_udp_socket(&self, socket: &Socket, dst: SocketAddr) -> io::Result<()> {
+        self.protect_socket(socket, dst)
     }
 }

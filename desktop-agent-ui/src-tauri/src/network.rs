@@ -2,6 +2,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket}
 use std::process::Command;
 #[cfg(any(windows, target_os = "linux"))]
 use std::process::Stdio;
+#[cfg(target_os = "windows")]
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::models::ConnectivityCheck;
@@ -9,7 +11,9 @@ use crate::process_util::hide_child_console;
 
 const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
-const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const QUIC_PROBE_ATTEMPTS: usize = 3;
+#[cfg(target_os = "windows")]
+const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(crate) fn probe_tun_ready(tun_name: &str) -> (bool, String) {
     let interface_ready = tun_interface_ready(tun_name);
@@ -129,10 +133,15 @@ pub(crate) fn run_curl_check(
     }
 }
 
-pub(crate) fn run_quic_check(target: &str, host: &str, route_label: &str) -> ConnectivityCheck {
+pub(crate) fn run_quic_check(
+    target: &str,
+    host: &str,
+    route_label: &str,
+    attempt_timeout: Duration,
+) -> ConnectivityCheck {
     let start = Instant::now();
     let url = format!("quic://{host}:443");
-    let result = run_quic_version_negotiation(host);
+    let result = run_quic_version_negotiation(host, attempt_timeout);
 
     match result {
         Ok(detail) => ConnectivityCheck {
@@ -206,7 +215,7 @@ fn display_connect_addr(addr: SocketAddr) -> String {
     }
 }
 
-fn run_quic_version_negotiation(host: &str) -> Result<String, String> {
+fn run_quic_version_negotiation(host: &str, attempt_timeout: Duration) -> Result<String, String> {
     let target = resolve_quic_target(host)?;
     let bind_addr = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
@@ -216,37 +225,47 @@ fn run_quic_version_negotiation(host: &str) -> Result<String, String> {
     let socket =
         UdpSocket::bind(bind_addr).map_err(|err| format!("绑定 UDP socket 失败：{err}"))?;
     socket
-        .set_read_timeout(Some(QUIC_PROBE_TIMEOUT))
+        .set_read_timeout(Some(attempt_timeout))
         .map_err(|err| format!("设置 QUIC 超时失败：{err}"))?;
     socket
         .connect(target)
         .map_err(|err| format!("连接 UDP/443 失败：{err}"))?;
 
-    let probe = quic_version_negotiation_probe();
-    socket
-        .send(&probe)
-        .map_err(|err| format!("发送 QUIC 探测包失败：{err}"))?;
-
+    let mut last_error = "UDP/443 QUIC 探测超时".to_string();
     let mut response = [0u8; 1500];
-    let n = socket.recv(&mut response).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::WouldBlock
-            || err.kind() == std::io::ErrorKind::TimedOut
-        {
-            "UDP/443 QUIC 探测超时".to_string()
-        } else {
-            format!("接收 QUIC 响应失败：{err}")
-        }
-    })?;
+    for attempt in 1..=QUIC_PROBE_ATTEMPTS {
+        // Native UDP transport is intentionally unreliable. A cold session may lose its first
+        // application datagram while authentication/flow state is converging, so diagnostics
+        // must behave like a real QUIC client and retry instead of treating one loss as failure.
+        let probe = quic_version_negotiation_probe();
+        socket
+            .send(&probe)
+            .map_err(|err| format!("发送 QUIC 探测包失败（第 {attempt} 次）：{err}"))?;
 
-    if is_quic_version_negotiation_response(&response[..n]) {
-        Ok(format!(
-            "QUIC Version Negotiation 响应：{n} bytes，目标 {target}"
-        ))
-    } else {
-        Err(format!(
-            "UDP/443 有响应，但不是 QUIC Version Negotiation：{n} bytes"
-        ))
+        match socket.recv(&mut response) {
+            Ok(n) if is_quic_version_negotiation_response(&response[..n]) => {
+                return Ok(format!(
+                    "QUIC Version Negotiation 响应：{n} bytes，目标 {target}，第 {attempt} 次探测"
+                ));
+            }
+            Ok(n) => {
+                last_error = format!(
+                    "UDP/443 有响应，但不是 QUIC Version Negotiation：{n} bytes（第 {attempt} 次）"
+                );
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                last_error = format!("UDP/443 QUIC 第 {attempt} 次探测超时");
+            }
+            Err(err) => {
+                last_error = format!("接收 QUIC 响应失败（第 {attempt} 次）：{err}");
+            }
+        }
     }
+
+    Err(format!("{last_error}；共尝试 {QUIC_PROBE_ATTEMPTS} 次"))
 }
 
 fn resolve_quic_target(host: &str) -> Result<SocketAddr, String> {
@@ -344,7 +363,35 @@ fn powershell_status(script: &str, tun_name: &str) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_child_console(&mut command);
-    command.status().is_ok_and(|status| status.success())
+    command_status_with_timeout(&mut command, WINDOWS_TUN_PROBE_TIMEOUT)
+}
+
+#[cfg(target_os = "windows")]
+fn command_status_with_timeout(command: &mut Command, timeout: Duration) -> bool {
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                // NetTCPIP/CIM providers can occasionally stall on Windows (notably while a
+                // Wintun adapter is being created). Never let the whole diagnostics command
+                // wait indefinitely for a readiness hint.
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

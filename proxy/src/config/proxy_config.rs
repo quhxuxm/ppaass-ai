@@ -31,7 +31,7 @@ pub struct ProxyConfig {
     #[serde(default = "default_runtime_threads")]
     pub runtime_threads: Option<usize>,
 
-    /// 数据传输压缩模式：none、zstd、lz4、gzip
+    /// Framed TCP/TCP-Yamux 数据压缩模式：none、zstd、lz4、gzip。原生 UDP 不压缩。
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
 
@@ -98,6 +98,26 @@ pub struct ProxyConfig {
     /// UDP relay 每个内部队列最多缓存的包数量。
     #[serde(default = "default_udp_relay_channel_size")]
     pub udp_relay_channel_size: usize,
+
+    /// 每条共享 UDP relay 同时存在的内层 flow/目标 socket 上限。
+    /// 该限制同时适用于 TCP/Yamux 和原生 UDP 承载的共享 relay。
+    #[serde(default = "default_udp_relay_max_flows")]
+    pub udp_relay_max_flows: usize,
+
+    /// 同时存在的已认证原生 UDP 会话上限。达到上限时拒绝新的认证，现有
+    /// 会话继续工作，避免伪造源地址的握手耗尽内存。
+    #[serde(default = "default_udp_session_limit")]
+    pub udp_session_limit: usize,
+
+    /// 每个原生 UDP 会话从 listener 到会话任务的有界数据报队列大小。
+    #[serde(default = "default_udp_session_channel_size")]
+    pub udp_session_channel_size: usize,
+
+    /// 每个已认证原生 UDP 会话允许同时存在的外层 flow 上限。
+    /// 达到上限时已存在 flow 的重复 Connect 仍保持幂等，但不再为新 flow
+    /// 创建队列、socket 或 worker 任务。
+    #[serde(default = "default_udp_session_max_flows")]
+    pub udp_session_max_flows: usize,
 }
 
 fn default_log_level() -> String {
@@ -148,6 +168,22 @@ fn default_udp_relay_channel_size() -> usize {
     64
 }
 
+fn default_udp_relay_max_flows() -> usize {
+    256
+}
+
+fn default_udp_session_limit() -> usize {
+    4096
+}
+
+fn default_udp_session_channel_size() -> usize {
+    256
+}
+
+fn default_udp_session_max_flows() -> usize {
+    256
+}
+
 fn default_async_runtime_stack_size_mb() -> usize {
     2
 }
@@ -164,7 +200,7 @@ impl ProxyConfig {
         Ok(config)
     }
 
-    /// 获取协议层的压缩模式
+    /// 获取 framed TCP/TCP-Yamux 协议的压缩模式。
     pub fn get_compression_mode(&self) -> protocol::CompressionMode {
         // 未知压缩值回退到协议默认值，避免错误配置直接导致启动失败。
         self.compression_mode.parse().unwrap_or_default()
@@ -200,5 +236,35 @@ listen_addr = "127.0.0.1:0"
         .unwrap();
 
         assert_eq!(config.udp_relay_channel_size, 64);
+        assert_eq!(config.udp_relay_max_flows, 256);
+        assert_eq!(config.udp_session_limit, 4096);
+        assert_eq!(config.udp_session_channel_size, 256);
+        assert_eq!(config.udp_session_max_flows, 256);
+    }
+
+    #[test]
+    fn udp_session_max_flows_is_configurable() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+udp_session_max_flows = 17
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.udp_session_max_flows, 17);
+    }
+
+    #[test]
+    fn udp_relay_max_flows_is_configurable() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+udp_relay_max_flows = 23
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.udp_relay_max_flows, 23);
     }
 }

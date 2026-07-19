@@ -3,6 +3,8 @@ sequenceDiagram
     participant P as Proxy ServerConnection
     participant U as users.toml
 
+    Note over A,P: 仅 direct framed TCP 与 TCP/Yamux 子流；原生 UDP 使用独立 session 握手
+
     A->>A: 生成随机 AES-256 key
     A->>A: 读取用户私钥 PEM
     A->>A: 用私钥操作包装 AES key

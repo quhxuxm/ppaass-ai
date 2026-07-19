@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Button from "primevue/button";
 import Card from "primevue/card";
+import AppIcon from "../components/AppIcon";
 import { formatTimestamp, shortProxyUrl } from "../formatters";
 import type { AgentConfigSummary, ConnectivityReport } from "../types";
 
@@ -30,16 +31,25 @@ const emit = defineEmits<{
           <Button
             class="diagnostic-run-button"
             :label="diagnosticsRunning ? '测试中' : '运行测试'"
-            :icon="diagnosticsRunning ? 'pi pi-spin pi-spinner' : 'pi pi-play'"
             :disabled="diagnosticsRunning"
             @click="emit('run')"
-          />
+          >
+            <template #icon="slotProps">
+              <AppIcon
+                :class="[slotProps.class, { 'app-icon-spin': diagnosticsRunning }]"
+                :name="diagnosticsRunning ? 'loader' : 'play'"
+              />
+            </template>
+          </Button>
         </div>
       </template>
       <template #content>
         <div class="diagnostic-summary">
           <div class="metric-tile">
-            <i :class="diagnostics?.agent_reachable ? 'pi pi-check-circle' : 'pi pi-exclamation-circle'"></i>
+            <AppIcon
+              :class="diagnostics?.agent_reachable ? 'semantic-success' : 'semantic-danger'"
+              :name="diagnostics?.agent_reachable ? 'check-circle' : 'alert-circle'"
+            />
             <span>本地入口</span>
             <strong>
               {{
@@ -56,17 +66,17 @@ const emit = defineEmits<{
             </strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-globe"></i>
+            <AppIcon name="globe" />
             <span>站点</span>
             <strong>Google / YouTube</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-compass"></i>
+            <AppIcon name="compass" />
             <span>TUN</span>
             <strong>{{ tunDiagnosticsLabel }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-shield"></i>
+            <AppIcon name="shield-check" />
             <span>结果</span>
             <strong>{{ diagnostics ? `${diagnosticsPassed}/${diagnosticsTotal}` : "—" }}</strong>
           </div>

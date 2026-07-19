@@ -24,6 +24,13 @@ type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
 type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UdpRoute {
+    Direct,
+    Proxy,
+    Block,
+}
+
 pub(super) fn spawn_packet_bridge(
     device: Arc<tun_rs::AsyncDevice>,
     stack: netstack_smoltcp::Stack,
@@ -44,6 +51,13 @@ pub(super) fn spawn_packet_bridge(
                 read = device_in.recv(&mut buf) => {
                     match read {
                         Ok(n) if n > 0 => {
+                            if !tun_packet_is_safe_for_netstack(&buf[..n]) {
+                                debug!(
+                                    bytes = n,
+                                    "TUN 丢弃分片或长度异常的 IP 包，避免终止整个 netstack 传输流"
+                                );
+                                continue;
+                            }
                             let pkt = buf[..n].to_vec();
                             if let Err(e) = stack_sink.send(pkt).await {
                                 warn!("向 netstack 推送数据包失败：{e}");
@@ -89,6 +103,56 @@ pub(super) fn spawn_packet_bridge(
     });
 
     (tun_to_stack, stack_to_tun)
+}
+
+fn tun_packet_is_safe_for_netstack(packet: &[u8]) -> bool {
+    let Some(version) = packet.first().map(|byte| byte >> 4) else {
+        return false;
+    };
+    match version {
+        4 => {
+            if packet.len() < 20 {
+                return false;
+            }
+            let header_len = usize::from(packet[0] & 0x0f) * 4;
+            let total_len = usize::from(u16::from_be_bytes([packet[2], packet[3]]));
+            if header_len < 20 || total_len < header_len || total_len > packet.len() {
+                return false;
+            }
+
+            // netstack-smoltcp 0.2.2 does not reassemble IP fragments before
+            // dispatching them to its TCP/UDP stream parsers. Passing a later
+            // fragment there can be mistaken for a complete transport header
+            // and makes the stream return None. Drop the individual fragment;
+            // never let it terminate the whole Desktop UDP task.
+            let fragment = u16::from_be_bytes([packet[6], packet[7]]);
+            if fragment & 0x3fff != 0 {
+                return false;
+            }
+
+            packet[9] != 17 || valid_udp_payload(&packet[header_len..total_len])
+        }
+        6 => {
+            if packet.len() < 40 {
+                return false;
+            }
+            let payload_len = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
+            let total_len = 40 + payload_len;
+            if total_len > packet.len() || packet[6] == 44 {
+                return false;
+            }
+            packet[6] != 17 || valid_udp_payload(&packet[40..total_len])
+        }
+        _ => false,
+    }
+}
+
+fn valid_udp_payload(payload: &[u8]) -> bool {
+    if payload.len() < 8 {
+        return false;
+    }
+    let declared_len = usize::from(u16::from_be_bytes([payload[4], payload[5]]));
+    declared_len >= 8 && declared_len <= payload.len()
 }
 
 pub(super) fn spawn_tcp_listener(
@@ -144,12 +208,15 @@ pub(super) fn spawn_udp_sessions(
                 shutdown.clone(),
             )
         });
-        // 未命中直连规则的普通 UDP 走共享 relay，避免每个 UDP flow 都开一条 proxy 连接。
-        let udp_relay = UdpRelay::spawn(
-            context.udp_sessions.clone(),
-            udp_tx.clone(),
-            shutdown.clone(),
-        );
+        // proxy_udp 只控制普通 UDP。quic_policy=allow 时，即使普通 UDP
+        // 被配置为直连，仍需要 relay 承载未命中 direct_access 的 UDP/443。
+        let udp_relay = should_start_udp_relay(context.proxy_udp, quic_policy).then(|| {
+            UdpRelay::spawn(
+                context.udp_sessions.clone(),
+                udp_tx.clone(),
+                shutdown.clone(),
+            )
+        });
         let quic_stats = Arc::new(QuicUdpStats::default());
         spawn_quic_udp_stats_logger(quic_stats.clone(), shutdown.clone());
 
@@ -207,10 +274,14 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
 
-                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    // 先独立计算 direct_access 结论。proxy_udp=false 只强制普通 UDP
+                    // 直连，不能把本应经 proxy 的浏览器 QUIC 一并改成直连。
+                    let mut direct_access_match = context.direct_checker.is_direct(&address);
                     let proxy_address = address.clone();
-                    if !direct_match {
-                        // UDP/QUIC 只有在域名规则可能改判为直连时才查缓存。
+                    if !direct_access_match
+                        && should_consult_udp_domain_cache(context.proxy_udp, target_addr.port())
+                    {
+                        // 会参与 proxy/direct 分流的 UDP 才查询 DNS 记录的域名缓存。
                         // 非直连代理目标始终保留原始 IP，避免 proxy 端重新 DNS 到
                         // 不同 CDN 边缘节点后出现播放抖动。
                         if context.direct_checker.has_domain_direct_rules()
@@ -221,26 +292,40 @@ pub(super) fn spawn_udp_sessions(
                             })
                             .is_some()
                         {
-                            direct_match = true;
+                            direct_access_match = true;
                         }
                     }
 
-                    if target_addr.port() == 443 && quic_policy.should_block_udp443() {
-                        quic_stats.record_blocked();
-                        debug!(
-                            "TUN UDP/443 QUIC 已按策略 {:?} 阻断 -> {}",
-                            quic_policy,
-                            target_addr
-                        );
-                        continue;
-                    }
-
-                    if !direct_match {
-                        if target_addr.port() == 443 {
-                            quic_stats.record_proxied();
+                    match classify_udp_route(
+                        target_addr.port(),
+                        quic_policy,
+                        context.proxy_udp,
+                        direct_access_match,
+                    ) {
+                        UdpRoute::Block => {
+                            quic_stats.record_blocked();
+                            debug!(
+                                "TUN UDP/443 QUIC 已按显式策略 {:?} 阻断 -> {}",
+                                quic_policy,
+                                target_addr
+                            );
+                            continue;
                         }
-                        udp_relay.send(source_addr, target_addr, proxy_address, data);
-                        continue;
+                        UdpRoute::Proxy => {
+                            if target_addr.port() == 443 {
+                                quic_stats.record_proxied();
+                            }
+                            if let Some(udp_relay) = &udp_relay {
+                                udp_relay.send(source_addr, target_addr, proxy_address, data);
+                            } else {
+                                warn!(
+                                    "TUN UDP proxy relay 未启动，丢弃一个 UDP 包 -> {}",
+                                    target_addr
+                                );
+                            }
+                            continue;
+                        }
+                        UdpRoute::Direct => {}
                     }
 
                     if target_addr.port() == 443 {
@@ -257,6 +342,7 @@ pub(super) fn spawn_udp_sessions(
                         // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
                         // proxy_dns 标记，避免会话内部二次映射到 Address::ProxyDns。
                         proxy_dns: false,
+                        force_direct: !context.proxy_udp,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),
@@ -264,6 +350,7 @@ pub(super) fn spawn_udp_sessions(
                         direct_checker: context.direct_checker.clone(),
                         direct_domain_cache: context.direct_domain_cache.clone(),
                         direct_egress: context.direct_egress.clone(),
+                        shutdown: shutdown.clone(),
                     };
                     spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
@@ -284,6 +371,35 @@ pub(super) fn spawn_udp_sessions(
         }
         debug!("udp_task 退出");
     })
+}
+
+fn classify_udp_route(
+    target_port: u16,
+    quic_policy: QuicPolicy,
+    proxy_udp: bool,
+    direct_access_match: bool,
+) -> UdpRoute {
+    if target_port == 443 {
+        if quic_policy.should_block_udp443() {
+            UdpRoute::Block
+        } else if direct_access_match {
+            UdpRoute::Direct
+        } else {
+            UdpRoute::Proxy
+        }
+    } else if !proxy_udp || direct_access_match {
+        UdpRoute::Direct
+    } else {
+        UdpRoute::Proxy
+    }
+}
+
+fn should_start_udp_relay(proxy_udp: bool, quic_policy: QuicPolicy) -> bool {
+    proxy_udp || !quic_policy.should_block_udp443()
+}
+
+fn should_consult_udp_domain_cache(proxy_udp: bool, target_port: u16) -> bool {
+    proxy_udp || target_port == 443
 }
 
 fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationToken) {
@@ -309,4 +425,116 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        UdpRoute, classify_udp_route, should_consult_udp_domain_cache, should_start_udp_relay,
+    };
+    use common::QuicPolicy;
+
+    fn ipv4_packet(protocol: u8, payload: &[u8]) -> Vec<u8> {
+        let total_len = 20 + payload.len();
+        let mut packet = vec![0_u8; total_len];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+        packet[8] = 64;
+        packet[9] = protocol;
+        packet[12..16].copy_from_slice(&[10, 0, 0, 1]);
+        packet[16..20].copy_from_slice(&[1, 1, 1, 1]);
+        packet[20..].copy_from_slice(payload);
+        packet
+    }
+
+    fn udp_payload(data: &[u8], declared_len: Option<u16>) -> Vec<u8> {
+        let mut payload = vec![0_u8; 8 + data.len()];
+        let udp_len = declared_len.unwrap_or(payload.len() as u16);
+        payload[0..2].copy_from_slice(&50_000_u16.to_be_bytes());
+        payload[2..4].copy_from_slice(&443_u16.to_be_bytes());
+        payload[4..6].copy_from_slice(&udp_len.to_be_bytes());
+        payload[8..].copy_from_slice(data);
+        payload
+    }
+
+    #[test]
+    fn tun_packet_guard_keeps_valid_udp_and_tcp() {
+        assert!(super::tun_packet_is_safe_for_netstack(&ipv4_packet(
+            17,
+            &udp_payload(b"media", None),
+        )));
+        assert!(super::tun_packet_is_safe_for_netstack(&ipv4_packet(
+            6,
+            b"tcp payload",
+        )));
+    }
+
+    #[test]
+    fn tun_packet_guard_drops_fragments_and_invalid_udp_lengths() {
+        let mut fragment = ipv4_packet(17, b"fragment bytes");
+        fragment[6..8].copy_from_slice(&0x2000_u16.to_be_bytes());
+        assert!(!super::tun_packet_is_safe_for_netstack(&fragment));
+
+        let invalid_udp = ipv4_packet(17, &udp_payload(b"short", Some(400)));
+        assert!(!super::tun_packet_is_safe_for_netstack(&invalid_udp));
+    }
+
+    #[test]
+    fn ordinary_udp_proxy_switch_preserves_old_routing_or_forces_direct() {
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Allow, true, false),
+            UdpRoute::Proxy
+        );
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Allow, true, true),
+            UdpRoute::Direct
+        );
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Allow, false, false),
+            UdpRoute::Direct
+        );
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Block, false, true),
+            UdpRoute::Direct
+        );
+    }
+
+    #[test]
+    fn quic_allow_routes_direct_matches_direct_and_other_targets_to_proxy() {
+        assert_eq!(
+            classify_udp_route(443, QuicPolicy::Allow, false, false),
+            UdpRoute::Proxy
+        );
+        assert_eq!(
+            classify_udp_route(443, QuicPolicy::Allow, false, true),
+            UdpRoute::Direct
+        );
+        assert_eq!(
+            classify_udp_route(443, QuicPolicy::Allow, true, false),
+            UdpRoute::Proxy
+        );
+    }
+
+    #[test]
+    fn explicit_quic_block_overrides_udp_and_direct_access_routing() {
+        for proxy_udp in [false, true] {
+            for direct_access_match in [false, true] {
+                assert_eq!(
+                    classify_udp_route(443, QuicPolicy::Block, proxy_udp, direct_access_match,),
+                    UdpRoute::Block
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn relay_and_domain_cache_stay_available_for_quic() {
+        assert!(should_start_udp_relay(false, QuicPolicy::Allow));
+        assert!(!should_start_udp_relay(false, QuicPolicy::Block));
+        assert!(should_start_udp_relay(true, QuicPolicy::Block));
+
+        assert!(should_consult_udp_domain_cache(false, 443));
+        assert!(!should_consult_udp_domain_cache(false, 3478));
+        assert!(should_consult_udp_domain_cache(true, 3478));
+    }
 }

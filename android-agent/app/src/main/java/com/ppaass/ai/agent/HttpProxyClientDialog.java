@@ -3,15 +3,19 @@ package com.ppaass.ai.agent;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ImageView;
@@ -30,16 +34,15 @@ import java.util.List;
 import java.util.Set;
 
 final class HttpProxyClientDialog {
-    private static final int COLOR_SURFACE = Color.WHITE;
-    private static final int COLOR_CONTROL = Color.rgb(248, 250, 255);
-    private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
-    private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
-    private static final int COLOR_BORDER = Color.rgb(225, 229, 239);
-    private static final int COLOR_ACCENT = Color.rgb(229, 22, 112);
-    private static final int COLOR_ACCENT_DARK = Color.rgb(21, 94, 232);
-    private static final int COLOR_ACCENT_SOFT = Color.rgb(234, 241, 255);
-    private static final int COLOR_ACTION_STOP = Color.rgb(181, 17, 88);
-    private static final int COLOR_ACTION_STOP_SOFT = Color.rgb(255, 217, 235);
+    private final int COLOR_SURFACE = UiPalette.SURFACE;
+    private final int COLOR_CONTROL = UiPalette.CONTROL;
+    private final int COLOR_TEXT = UiPalette.TEXT;
+    private final int COLOR_MUTED = UiPalette.MUTED;
+    private final int COLOR_BORDER = UiPalette.BORDER;
+    private final int COLOR_ACCENT = UiPalette.ACCENT;
+    private final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
+    private final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
+    private final int COLOR_ACTION_STOP = UiPalette.ACTION_STOP;
 
     private final Context context;
     private final SharedPreferences prefs;
@@ -67,6 +70,7 @@ final class HttpProxyClientDialog {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(14), dp(16), dp(12));
+        root.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
 
         LinearLayout header = horizontalRow();
         LinearLayout titleColumn = new LinearLayout(context);
@@ -125,7 +129,13 @@ final class HttpProxyClientDialog {
 
         dialog = new AlertDialog.Builder(context).setView(root).create();
         close.setOnClickListener(view -> dialog.dismiss());
-        dialog.setOnShowListener(view -> startAutoRefresh());
+        dialog.setOnShowListener(view -> {
+            Window window = dialog.getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+            }
+            startAutoRefresh();
+        });
         dialog.setOnDismissListener(view -> stopAutoRefresh());
         dialog.show();
     }
@@ -342,9 +352,15 @@ final class HttpProxyClientDialog {
     }
 
     private void styleTab(Button button, boolean selected) {
-        button.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_MUTED);
+        button.setSelected(selected);
+        button.setTextColor(interactiveTextColors(
+                selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                COLOR_ACCENT_DARK));
         int fill = selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
-        button.setBackground(rounded(fill, fill));
+        button.setBackground(interactiveRounded(
+                fill,
+                selected ? alphaColor(COLOR_ACCENT, 138) : fill,
+                COLOR_ACCENT));
     }
 
     private ImageButton iconButton(int icon, int color, String description) {
@@ -352,23 +368,51 @@ final class HttpProxyClientDialog {
         boolean stopAction = color == COLOR_ACTION_STOP;
         button.setImageResource(icon);
         int tint = color == COLOR_MUTED ? COLOR_MUTED : (stopAction ? COLOR_ACTION_STOP : COLOR_ACCENT_DARK);
-        button.setColorFilter(tint);
+        button.setImageTintList(interactiveTextColors(tint, Color.rgb(245, 246, 255)));
         button.setContentDescription(description);
         button.setScaleType(ImageView.ScaleType.CENTER);
         button.setPadding(dp(8), dp(8), dp(8), dp(8));
         button.setMinimumHeight(0);
         button.setMinimumWidth(0);
-        button.setBackground(iconPlateBackground(tint));
+        button.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(alphaColor(tint, 76)),
+                iconPlateBackground(tint),
+                null));
         flattenButton(button);
         return button;
     }
 
     private GradientDrawable iconPlateBackground(int color) {
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(Color.WHITE);
+        drawable.setColor(alphaColor(color, 24));
         drawable.setCornerRadius(dp(10));
-        drawable.setStroke(dp(1), alphaColor(color, 74));
+        drawable.setStroke(dp(1), alphaColor(color, 112));
         return drawable;
+    }
+
+    private Drawable interactiveRounded(int fill, int stroke, int rippleColor) {
+        return new RippleDrawable(
+                ColorStateList.valueOf(alphaColor(rippleColor, 74)),
+                rounded(fill, stroke),
+                null);
+    }
+
+    private ColorStateList interactiveTextColors(int normal, int highlighted) {
+        return new ColorStateList(
+                new int[][]{
+                        new int[]{android.R.attr.state_pressed},
+                        new int[]{android.R.attr.state_focused},
+                        new int[]{android.R.attr.state_selected},
+                        new int[]{-android.R.attr.state_enabled},
+                        new int[]{}
+                },
+                new int[]{
+                        highlighted,
+                        highlighted,
+                        highlighted,
+                        alphaColor(normal, 112),
+                        normal
+                });
     }
 
     private void startAutoRefresh() {

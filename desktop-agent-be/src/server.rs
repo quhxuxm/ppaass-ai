@@ -1,7 +1,7 @@
 //! Desktop Agent 本地服务层。
 //!
 //! 这一层负责监听本地端口，自动识别 SOCKS5/HTTP 客户端，并在需要时并行启动
-//! TUN 模式。真正的目标连接不会在这里建立，而是交给 `YamuxSessionManager` 获取
+//! TUN 模式。真正的目标连接不会在这里建立，而是交给传输会话管理器获取
 //! 已认证的 agent->proxy 流，或由 `DirectAccessChecker` 决定直连。
 
 use crate::config::AgentConfig;
@@ -24,9 +24,9 @@ const TUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
 pub struct AgentServer {
     // 全局只读配置；连接处理任务通过 Arc 克隆读取。
     config: Arc<AgentConfig>,
-    // TCP 语义的 proxy Yamux session 管理器，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
+    // TCP 语义的 proxy 传输管理器，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
     tcp_sessions: Arc<YamuxSessionManager>,
-    // UDP 语义的 proxy Yamux session 管理器，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
+    // UDP 语义的 proxy 传输管理器，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
     udp_sessions: Arc<YamuxSessionManager>,
     // 直连规则：命中后绕过 proxy，直接使用本机网络出口连接目标。
     direct_access_checker: Arc<DirectAccessChecker>,
@@ -38,7 +38,8 @@ impl AgentServer {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
-        // TCP/UDP 分别维护 raw Yamux session，避免两类流量互相挤占。
+        // TCP 始终使用 direct framed TCP；UDP 根据 transport_mode 选择
+        // 原生加密 UDP 会话池或 raw TCP 上的 Yamux session。
         let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
         let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config.clone()));
 
@@ -68,6 +69,7 @@ impl AgentServer {
                 self.config.listen_addr
             );
             let tun_cfg = self.config.tun.clone();
+            let transport_mode = self.config.transport_mode;
             let proxy_addrs = self.config.proxy_addrs.clone();
             let tcp_sessions = self.tcp_sessions.clone();
             let udp_sessions = self.udp_sessions.clone();
@@ -75,6 +77,7 @@ impl AgentServer {
             let tun_shutdown = shutdown.clone();
             tun_tasks.spawn(run_tun_mode(
                 tun_cfg,
+                transport_mode,
                 proxy_addrs,
                 tcp_sessions,
                 udp_sessions,

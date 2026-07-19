@@ -26,6 +26,7 @@ use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 // 视频分片下载通常是目标站点到 proxy 的大流量下行，默认系统缓冲在高 RTT 或蜂窝网络下
 // 容易过早限制 TCP 窗口；1MB 与 Android agent 侧保持一致，能给 HLS burst 留出余量。
 const PROXY_EGRESS_TCP_BUFFER_SIZE: usize = 1024 * 1024;
+const PROXY_EGRESS_UDP_BUFFER_SIZE: usize = 1024 * 1024;
 const PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE: Duration = Duration::from_secs(18);
 const PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
 const PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY: Duration = Duration::from_millis(250);
@@ -269,6 +270,7 @@ async fn connect_udp_addr(
 
     let socket = UdpSocket::from_std(socket.into())?;
     socket.connect(dst).await?;
+    tune_egress_udp_socket(&socket, "绑定出站 UDP 连接");
     Ok(socket)
 }
 
@@ -281,7 +283,10 @@ async fn connect_udp_default(target_addr: &str) -> io::Result<UdpSocket> {
         let bind_addr = if dst.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
         match UdpSocket::bind(bind_addr).await {
             Ok(socket) => match socket.connect(dst).await {
-                Ok(()) => return Ok(socket),
+                Ok(()) => {
+                    tune_egress_udp_socket(&socket, "默认出站 UDP 连接");
+                    return Ok(socket);
+                }
                 Err(err) => last_error = Some(err),
             },
             Err(err) => last_error = Some(err),
@@ -295,6 +300,19 @@ async fn connect_udp_default(target_addr: &str) -> io::Result<UdpSocket> {
             io::Error::new(io::ErrorKind::NotFound, "未解析到目标地址")
         }
     }))
+}
+
+fn tune_egress_udp_socket(socket: &UdpSocket, context: &str) {
+    // QUIC/video traffic is bursty. Keep target-facing buffers large enough
+    // that a short scheduler pause does not turn into avoidable packet loss.
+    // These options are best-effort and work through socket2 on Unix and Windows.
+    let sock_ref = SockRef::from(socket);
+    if let Err(err) = sock_ref.set_recv_buffer_size(PROXY_EGRESS_UDP_BUFFER_SIZE) {
+        tracing::warn!("设置 {context} 接收缓冲失败，将继续使用系统默认值: {err}");
+    }
+    if let Err(err) = sock_ref.set_send_buffer_size(PROXY_EGRESS_UDP_BUFFER_SIZE) {
+        tracing::warn!("设置 {context} 发送缓冲失败，将继续使用系统默认值: {err}");
+    }
 }
 
 fn connect_context_error(

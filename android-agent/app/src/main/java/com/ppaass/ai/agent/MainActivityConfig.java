@@ -66,10 +66,24 @@ protected void updateEditTextEditable(EditText editText, boolean editable) {
 
 protected void saveConfig() {
         String quicPolicyValue = selectedQuicPolicy();
+        String udpSessionPoolSizeValue = boundedIntString(
+                udpSessionPoolSize == null
+                        ? null
+                        : udpSessionPoolSize.getText().toString(),
+                DefaultConfig.UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
+        if (udpSessionPoolSize != null) {
+            udpSessionPoolSize.setText(udpSessionPoolSizeValue);
+            udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
+        }
         prefs.edit()
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
                 .putString("username", username.getText().toString())
                 .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
+                .putString("transport_mode", selectedTransportMode())
+                .putString("udp_session_pool_size", udpSessionPoolSizeValue)
+                .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString(
@@ -115,6 +129,9 @@ protected void restoreDefaultConfig() {
                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
         username.setText(DefaultConfig.USERNAME);
         privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
+        setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
+        udpSessionPoolSize.setText(String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE));
+        connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));
         setQuicPolicy(quicPolicy, DefaultConfig.QUIC_POLICY);
         runtimeThreads.setText(String.valueOf(DefaultConfig.RUNTIME_THREADS));
         setSpinnerValue(compressionMode, DefaultConfig.COMPRESSION_MODE);
@@ -172,11 +189,7 @@ protected void setQuicPolicy(Spinner spinner, String fallback) {
 protected Spinner spinner(LinearLayout root, String title, String[] values, String selected) {
         root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                values);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ArrayAdapter<String> adapter = spinnerAdapter(values);
         spinner.setAdapter(adapter);
         int selectedIndex = 0;
         for (int i = 0; i < values.length; i++) {
@@ -186,7 +199,8 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
             }
         }
         spinner.setSelection(selectedIndex);
-        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setBackground(controlBackground());
+        spinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
         spinner.setPadding(dp(12), 0, dp(12), 0);
         root.addView(spinner, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -195,24 +209,172 @@ protected Spinner spinner(LinearLayout root, String title, String[] values, Stri
         return spinner;
     }
 
+protected void transportModeControl(LinearLayout root, String selected) {
+        transportModeValue = normalizeTransportMode(selected);
+        root.addView(controlLabel("UDP 代理通道"), labelParams());
+
+        LinearLayout row = horizontalRow();
+        row.setPadding(dp(4), dp(4), dp(4), dp(4));
+        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        addTransportModeButton(row, transportModeLabel("auto"), "auto");
+        addTransportModeButton(row, transportModeLabel("udp"), "udp");
+        addTransportModeButton(row, transportModeLabel("tcp"), "tcp");
+        root.addView(row, matchWrap());
+        updateTransportModeButtons();
+    }
+
+protected void addTransportModeButton(LinearLayout row, String label, String value) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTag(value);
+        button.setContentDescription(transportModeDescription(value));
+        button.setTextSize(13f);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(null);
+        button.setGravity(Gravity.CENTER);
+        button.setIncludeFontPadding(false);
+        button.setMinHeight(0);
+        button.setMinWidth(0);
+        button.setPadding(dp(6), 0, dp(6), 0);
+        flattenButton(button);
+        button.setOnClickListener(view -> {
+            if (isVpnRunning() || isHttpProxyRunning()) {
+                Toast.makeText(
+                        this,
+                        "修改传输模式前请先停止 VPN 和 HTTP / SOCKS5 代理",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            setTransportMode(String.valueOf(view.getTag()), true);
+        });
+        transportModeButtons.add(button);
+        trackEditable(button);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(4), 0, 0, 0);
+        }
+        row.addView(button, params);
+    }
+
+protected void setTransportMode(String value, boolean persist) {
+        transportModeValue = normalizeTransportMode(value);
+        updateTransportModeButtons();
+        updateTransportModeSettingsVisibility();
+        if (persist && prefs != null) {
+            prefs.edit().putString("transport_mode", transportModeValue).apply();
+        }
+    }
+
+protected void updateTransportModeSettingsVisibility() {
+        String mode = normalizeTransportMode(transportModeValue);
+        boolean udpMode = "udp".equals(mode) || "auto".equals(mode);
+        boolean tcpMode = "tcp".equals(mode) || "auto".equals(mode);
+        if (udpSessionPoolConfig != null) {
+            udpSessionPoolConfig.setVisibility(udpMode ? View.VISIBLE : View.GONE);
+        }
+        if (udpYamuxConfig != null) {
+            udpYamuxConfig.setVisibility(tcpMode ? View.VISIBLE : View.GONE);
+        }
+    }
+
+protected void updateTransportModeButtons() {
+        String selected = normalizeTransportMode(transportModeValue);
+        transportModeValue = selected;
+        for (Button button : transportModeButtons) {
+            boolean active = selected.equals(String.valueOf(button.getTag()));
+            button.setSelected(active);
+            String label = transportModeLabel(String.valueOf(button.getTag()));
+            button.setText(active ? "✓ " + label : label);
+            button.setTextColor(interactiveTextColors(
+                    active ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
+            int fill = active ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
+            int stroke = active ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
+            button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));
+        }
+    }
+
+protected String transportModeLabel(String value) {
+        String normalized = normalizeTransportMode(value);
+        if ("auto".equals(normalized)) {
+            return "自动";
+        }
+        return "tcp".equals(normalized) ? "全 TCP" : "原生 UDP";
+}
+
+protected String transportModeDescription(String value) {
+        String normalized = normalizeTransportMode(value);
+        if ("auto".equals(normalized)) {
+            return "优先使用原生加密 UDP，超时后自动切换到 TCP/Yamux";
+        }
+        return "tcp".equals(normalized)
+                ? "使用全 TCP 模式，TCP 和 UDP relay 均通过 TCP"
+                : "使用原生 UDP 模式，TCP 数据走 TCP，UDP 报文逐包使用 AES-256-GCM 加密";
+    }
+
+protected String normalizeTransportMode(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return DefaultConfig.TRANSPORT_MODE;
+        }
+        String normalized = value.trim().toLowerCase();
+        if ("auto".equals(normalized) || "udp".equals(normalized) || "tcp".equals(normalized)) {
+            return normalized;
+        }
+        // 保留未知值，让 AgentConfigJson 在启动时明确拒绝。不将旧 quic
+        // 配置静默迁移成语义不同的原生 UDP。
+        return normalized;
+    }
+
 protected Spinner quicPolicySpinner(LinearLayout root, String title, String selected) {
         root.addView(controlLabel(title), labelParams());
         Spinner spinner = new Spinner(this);
-        ArrayAdapter<QuicPolicyOption> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                QUIC_POLICY_OPTIONS);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ArrayAdapter<QuicPolicyOption> adapter = spinnerAdapter(QUIC_POLICY_OPTIONS);
         spinner.setAdapter(adapter);
         setQuicPolicy(spinner, selected);
-        spinner.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        spinner.setBackground(controlBackground());
+        spinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
         spinner.setPadding(dp(12), 0, dp(12), 0);
         root.addView(spinner, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
         trackEditable(spinner);
-        addFieldHelp(root, "允许时按直连规则发送 QUIC，未命中的 UDP/443 使用代理 UDP relay；阻断会丢弃 UDP/443 以强制回落到 TCP/TLS。");
+        addFieldHelp(root, "允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。");
         return spinner;
+    }
+
+protected <T> ArrayAdapter<T> spinnerAdapter(T[] values) {
+        return new ArrayAdapter<T>(this, android.R.layout.simple_spinner_item, values) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getView(position, convertView, parent), false);
+            }
+
+            @Override
+            public View getDropDownView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getDropDownView(position, convertView, parent), true);
+            }
+        };
+    }
+
+protected View styleSpinnerItem(View view, boolean dropdown) {
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            text.setTextColor(COLOR_TEXT);
+            text.setTextSize(15f);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setMinHeight(dp(48));
+            text.setPadding(dp(12), 0, dp(12), 0);
+            text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
+        }
+        return view;
+    }
+
+protected String selectedTransportMode() {
+        return normalizeTransportMode(transportModeValue);
     }
 
 protected String selectedCompressionMode() {
@@ -279,9 +441,8 @@ protected EditText field(LinearLayout root, String title, String value, int line
         edit.setMinLines(lines);
         edit.setMaxLines(lines == 1 ? 1 : lines + 4);
         edit.setInputType(inputType);
-        edit.setTextColor(COLOR_TEXT);
         edit.setTextSize(lines == 1 ? 16f : 13f);
-        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(edit);
         edit.setMinHeight(dp(48));
         edit.setPadding(dp(12), 0, dp(12), 0);
         if (lines > 1) {
@@ -294,6 +455,16 @@ protected EditText field(LinearLayout root, String title, String value, int line
     }
 
 protected EditText numberControl(LinearLayout root, String title, String value, int step, int min) {
+        return numberControl(root, title, value, step, min, Integer.MAX_VALUE);
+    }
+
+protected EditText numberControl(
+        LinearLayout root,
+        String title,
+        String value,
+        int step,
+        int min,
+        int max) {
         root.addView(controlLabel(title), labelParams());
         LinearLayout row = horizontalRow();
 
@@ -303,14 +474,16 @@ protected EditText numberControl(LinearLayout root, String title, String value, 
         edit.setInputType(InputType.TYPE_CLASS_NUMBER);
         edit.setGravity(Gravity.CENTER);
         edit.setSingleLine(true);
-        edit.setTextColor(COLOR_TEXT);
         edit.setTextSize(16f);
-        edit.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(edit);
         edit.setPadding(0, 0, 0, 0);
+        if (max < Integer.MAX_VALUE) {
+            edit.setFilters(new InputFilter[]{boundedIntegerFilter(min, max)});
+        }
         Button plus = stepButton("+");
 
-        minus.setOnClickListener(view -> adjustNumber(edit, -step, min));
-        plus.setOnClickListener(view -> adjustNumber(edit, step, min));
+        minus.setOnClickListener(view -> adjustNumber(edit, -step, min, max));
+        plus.setOnClickListener(view -> adjustNumber(edit, step, min, max));
 
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         row.addView(minus, buttonParams);
@@ -324,6 +497,37 @@ protected EditText numberControl(LinearLayout root, String title, String value, 
         trackEditable(edit);
         trackEditable(plus);
         return edit;
+    }
+
+protected InputFilter boundedIntegerFilter(int min, int max) {
+        return (source, start, end, dest, destStart, destEnd) -> {
+            String candidate = dest.subSequence(0, destStart).toString()
+                    + source.subSequence(start, end)
+                    + dest.subSequence(destEnd, dest.length());
+            if (candidate.isEmpty()) {
+                return null;
+            }
+            try {
+                int parsed = Integer.parseInt(candidate);
+                int minDigits = String.valueOf(Math.max(0, min)).length();
+                if (parsed > max || (parsed < min && candidate.length() >= minDigits)) {
+                    return "";
+                }
+                return null;
+            } catch (NumberFormatException ignored) {
+                return "";
+            }
+        };
+    }
+
+protected String boundedIntString(String value, int fallback, int min, int max) {
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value == null ? "" : value.trim());
+        } catch (NumberFormatException ignored) {
+            parsed = fallback;
+        }
+        return String.valueOf(Math.max(min, Math.min(max, parsed)));
     }
 
 protected void addFieldHelp(LinearLayout root, String text) {
@@ -343,6 +547,20 @@ protected Switch switchControl(LinearLayout root, String title, boolean checked)
                 1f));
         Switch switchView = new Switch(this);
         switchView.setChecked(checked);
+        switchView.setThumbTintList(new android.content.res.ColorStateList(
+                new int[][]{
+                        new int[]{android.R.attr.state_checked},
+                        new int[]{-android.R.attr.state_enabled},
+                        new int[]{}
+                },
+                new int[]{COLOR_ACCENT_DARK, alphaColor(COLOR_MUTED, 104), COLOR_MUTED}));
+        switchView.setTrackTintList(new android.content.res.ColorStateList(
+                new int[][]{
+                        new int[]{android.R.attr.state_checked},
+                        new int[]{-android.R.attr.state_enabled},
+                        new int[]{}
+                },
+                new int[]{COLOR_ACCENT_SOFT, alphaColor(COLOR_CONTROL, 132), COLOR_CONTROL}));
         row.addView(switchView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -352,13 +570,18 @@ protected Switch switchControl(LinearLayout root, String title, boolean checked)
     }
 
 protected void adjustNumber(EditText edit, int delta, int min) {
+        adjustNumber(edit, delta, min, Integer.MAX_VALUE);
+    }
+
+protected void adjustNumber(EditText edit, int delta, int min, int max) {
         int current;
         try {
             current = Integer.parseInt(edit.getText().toString().trim());
         } catch (NumberFormatException ignored) {
             current = min;
         }
-        edit.setText(String.valueOf(Math.max(min, current + delta)));
+        long adjusted = Math.max(min, Math.min((long) max, (long) current + delta));
+        edit.setText(String.valueOf(adjusted));
         edit.setSelection(edit.getText().length());
     }
 
@@ -367,13 +590,18 @@ protected Button stepButton(String text) {
         button.setText(text);
         button.setTextSize(18f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
-        button.setTextColor(COLOR_ACCENT_DARK);
+        button.setTextColor(interactiveTextColors(
+                COLOR_ACCENT_DARK,
+                Color.rgb(245, 246, 255)));
         button.setAllCaps(false);
         button.setIncludeFontPadding(false);
         button.setMinHeight(0);
         button.setMinWidth(0);
         button.setPadding(0, 0, 0, 0);
-        button.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        button.setBackground(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 110),
+                COLOR_ACCENT));
         flattenButton(button);
         return button;
     }

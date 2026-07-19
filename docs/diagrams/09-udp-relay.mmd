@@ -1,8 +1,12 @@
 flowchart LR
-    Agent["Agent UdpRelay"] -->|"DataPacket payload = UdpRelayPacket"| Proxy["Proxy Shared UDP Relay"]
+    Agent["Agent UDP flow"] --> Mode{"transport_mode"}
+    Mode -->|"udp"| Native["认证的 UdpSessionMessage<br/>逐包 AEAD / seq / 防重放"]
+    Mode -->|"tcp"| Yamux["Yamux 子流内<br/>DataPacket(UdpRelayPacket)"]
+    Native --> Proxy["Proxy Shared UDP Relay"]
+    Yamux --> Proxy
     Proxy --> Table["flow_id 映射 UDP socket"]
     Table --> TargetA["目标 A"]
     Table --> TargetB["目标 B"]
     TargetA --> Table
     TargetB --> Table
-    Table -->|"按 flow_id 封装 UdpRelayPacket"| Agent
+    Table -->|"按原传输模式回包"| Agent

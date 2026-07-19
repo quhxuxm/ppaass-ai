@@ -683,28 +683,28 @@ function buildDirectRuleGroups(rules: string[]) {
     {
       key: "wildcard",
       label: "通配符",
-      icon: "pi pi-asterisk",
+      icon: "asterisk",
       modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
       items: []
     },
     {
       key: "network",
       label: "IP / CIDR",
-      icon: "pi pi-hashtag",
+      icon: "hash",
       modes: ["TUN", "已解析 IP 目标"],
       items: []
     },
     {
       key: "domain",
       label: "域名",
-      icon: "pi pi-globe",
+      icon: "globe",
       modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
       items: []
     },
     {
       key: "other",
       label: "其他",
-      icon: "pi pi-ellipsis-h",
+      icon: "ellipsis",
       modes: ["按规则内容匹配"],
       items: []
     }

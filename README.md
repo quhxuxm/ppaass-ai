@@ -8,8 +8,8 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **Split Agent-to-Proxy Transport**: TCP targets use independent framed PPAASS TCP connections, while UDP relay uses raw Yamux session pools
-- **Encrypted PPAASS Frames**: Auth/Connect/Data frames remain encrypted on both direct framed TCP connections and UDP Yamux substreams
+- **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
+- **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
 - **Production Ready**: Built with tokio and graceful shutdown
 
@@ -81,24 +81,44 @@ listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
 username = "user1"                    # Your username
 private_key_path = "keys/user1.pem"  # Path to your RSA private key
-connection_timeout_secs = 30                # Connection timeout
+transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
+udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
+connect_timeout_secs = 30             # Connection timeout
+compression_mode = "none"             # Framed TCP/TCP-Yamux only; native UDP datagrams are not compressed
 
 [yamux.udp]
 sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
 max_streams_per_session = 128        # UDP relay substreams per session
+
+[tun]
+proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and application-layer QUIC policy stay independent
+proxy_dns = false                    # DNS proxying remains independently configurable
+quic_policy = "allow"               # application UDP/443 policy: allow direct/proxied QUIC; block forces application TCP/TLS fallback
 ```
+
+The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 
 ### Proxy Configuration (`config/proxy.toml`)
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 users_path = "config/users.toml"          # Users configuration file
+udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
+udp_session_limit = 4096                   # Authenticated native UDP sessions
+udp_session_channel_size = 256             # Datagrams queued per native UDP session
+udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
+
+The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
+Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
 
 ## Security
 
-- **RSA-2048**: Used for secure key exchange
-- **AES-256-GCM**: Used for data encryption with authenticated encryption
+- **RSA-2048**: Authenticates the user identity and establishes native UDP session material
+- **HKDF Key Separation**: Derives independent Agent-to-Proxy and Proxy-to-Agent keys and nonce prefixes
+- **AES-256-GCM**: Protects every native UDP datagram independently; version, session ID, sequence number, and other header fields are authenticated as AAD
+- **Replay and Fragment Protection**: Per-direction packet sequences and a sliding replay window reject duplicate or stale packets while permitting bounded reordering; oversized payloads use bounded fragments that are each authenticated independently
+- **Stable TCP Security Path**: TCP targets retain the original framed PPAASS Auth/Connect/Data encryption; TCP-mode UDP retains the existing TCP/Yamux business-stream protocol
 - **Timestamp Validation**: Prevents replay attacks (5-minute tolerance)
 - **Secure Key Storage**: Private keys stored securely on disk
 - **Per-User Authentication**: Each user has unique credentials
@@ -106,8 +126,9 @@ users_path = "config/users.toml"          # Users configuration file
 ## Performance
 
 - **Async I/O**: Built on tokio for high concurrency
-- **Direct TCP Relay**: TCP targets use independent framed TCP connections to avoid Yamux head-of-line blocking
-- **UDP Multiplexing**: UDP relay keeps encrypted PPAASS substreams over raw Yamux connections
+- **Native UDP Session Pool**: In UDP mode, proxied UDP flows are mapped stably across 1–8 stateful UDP sessions; the outer transport adds no reliable ordering or retransmission
+- **Stable TCP Path**: HTTP, SOCKS5 TCP, and TUN TCP targets always retain independent framed TCP connections
+- **Full-TCP Option**: UDP relay uses raw TCP/Yamux when `transport_mode = "tcp"`, so both TCP and UDP traffic are carried over TCP
 - **Zero-Copy**: Efficient buffer management with bytes crate
 
 ### Performance Testing
@@ -191,7 +212,7 @@ cargo audit
 
 ### Performance Issues
 
-1. Increase pool size in agent configuration
+1. Increase `udp_session_pool_size` for native UDP mode, or adjust UDP Yamux sessions for TCP mode
 2. Check Yamux session and stream settings
 3. Review network latency
 

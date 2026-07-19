@@ -72,11 +72,10 @@ impl ServerConnection {
             .ok_or_else(|| ProxyError::Authentication("No pending auth request".to_string()))?;
 
         debug!(
-            "[认证请求] 正在处理：username={}, timestamp={}, encrypted_aes_key_len={}, encrypted_aes_key_hex={}",
+            "[认证请求] 正在处理：username={}, timestamp={}, encrypted_aes_key_len={}",
             auth_request.username,
             auth_request.timestamp,
-            auth_request.encrypted_aes_key.len(),
-            hex::encode(&auth_request.encrypted_aes_key)
+            auth_request.encrypted_aes_key.len()
         );
 
         // 校验用户名是否匹配：TOML 表键、UserConfig.username、AuthRequest.username
@@ -116,11 +115,7 @@ impl ServerConnection {
             ProxyError::Authentication(format!("Failed to decrypt AES key: {}", e))
         })?;
 
-        debug!(
-            "[认证请求] 已解密 AES key_len={}, aes_key_hex={}",
-            aes_key_bytes.len(),
-            hex::encode(&aes_key_bytes)
-        );
+        debug!("[认证请求] 已验证会话密钥，长度={}", aes_key_bytes.len());
 
         // 转换为固定长度数组
         let aes_key: [u8; 32] = aes_key_bytes

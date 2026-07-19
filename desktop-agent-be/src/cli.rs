@@ -31,7 +31,7 @@ pub struct CliArgs {
     #[arg(long)]
     pub log_file: Option<String>,
 
-    /// 覆盖 Agent -> proxy 消息压缩模式（none、lz4、gzip、zstd），适用于 TUN/SOCKS5/HTTP 代理路径
+    /// 覆盖 framed TCP/TCP-Yamux 消息压缩模式（none、lz4、gzip、zstd）；原生 UDP 不压缩
     #[arg(long)]
     pub compression_mode: Option<String>,
 

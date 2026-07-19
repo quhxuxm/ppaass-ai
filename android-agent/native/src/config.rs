@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, QuicPolicy, YamuxConfig};
+use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
@@ -11,10 +11,19 @@ use crate::error::{AndroidAgentError, Result};
 pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_pem: String,
+
+    #[serde(default)]
+    pub transport_mode: TransportMode,
+
+    /// UDP manager 维护的原生加密 UDP 会话数。每个会话拥有独立
+    /// UDP socket、发送序号和重放窗口；TCP 始终使用 direct framed TCP。
+    #[serde(default = "default_udp_session_pool_size")]
+    pub udp_session_pool_size: usize,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -98,6 +107,11 @@ impl AndroidAgentConfig {
         }
         Ok(())
     }
+
+    /// 限制 UDP 会话池的 socket/内存开销，同时避免错误配置 0。
+    pub fn effective_udp_session_pool_size(&self) -> usize {
+        self.udp_session_pool_size.clamp(1, 8)
+    }
 }
 
 impl ClientConnectionConfig for AndroidAgentConfig {
@@ -132,14 +146,41 @@ impl ClientConnectionConfig for AndroidAgentConfig {
         crate::socket_protector::protect_fd(socket.as_raw_fd())
     }
 
+    #[cfg(unix)]
+    fn protect_udp_socket(
+        &self,
+        socket: &Socket,
+        _dst: std::net::SocketAddr,
+    ) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+
+        crate::socket_protector::protect_fd_required(socket.as_raw_fd())
+    }
+
     #[cfg(not(unix))]
     fn protect_socket(&self, _socket: &Socket, _dst: std::net::SocketAddr) -> std::io::Result<()> {
         Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn protect_udp_socket(
+        &self,
+        _socket: &Socket,
+        _dst: std::net::SocketAddr,
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "native UDP VPN socket protection is unavailable on this platform",
+        ))
     }
 }
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_udp_session_pool_size() -> usize {
+    4
 }
 
 fn default_http_proxy_max_concurrent_connects() -> usize {
@@ -183,6 +224,63 @@ mod tests {
         let config = AndroidTunConfig::default();
 
         assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
+    }
+
+    #[test]
+    fn agent_transport_defaults_to_udp() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Udp);
+    }
+
+    #[test]
+    fn agent_transport_accepts_auto() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.transport_mode, TransportMode::Auto);
+    }
+
+    #[test]
+    fn udp_session_pool_defaults_to_four_and_is_bounded() {
+        let default_config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
+        )
+        .unwrap();
+        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
+
+        let disabled: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":0}"#,
+        )
+        .unwrap();
+        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
+
+        let excessive: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":64}"#,
+        )
+        .unwrap();
+        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
+    }
+
+    #[test]
+    fn rejects_removed_quic_transport_mode() {
+        let result = serde_json::from_str::<AndroidAgentConfig>(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"quic"}"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_removed_quic_connection_pool_field() {
+        let result = serde_json::from_str::<AndroidAgentConfig>(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"udp","quic_connection_pool_size":4}"#,
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuicPolicy {
-    /// 默认策略：UDP/443 与普通 UDP 一样按 direct_access 决定直连或代理。
+    /// 默认策略：不主动全局阻断，由平台结合 direct_access 与 UDP 代理传输决定路径。
     #[default]
     Allow,
     /// 强制阻断所有 UDP/443，不区分直连或代理路径。
@@ -31,7 +31,7 @@ impl QuicPolicy {
     /// 面向日志的中文说明，启动时打印一次即可，不参与协议逻辑。
     pub fn description_zh(self) -> &'static str {
         match self {
-            Self::Allow => "允许 UDP/443 QUIC 按 direct_access 走直连或 UDP relay",
+            Self::Allow => "允许 UDP/443 QUIC 进入 direct_access 与 UDP 代理传输分流",
             Self::Block => "阻断全部 UDP/443 QUIC，促使应用回退 TCP/TLS",
         }
     }

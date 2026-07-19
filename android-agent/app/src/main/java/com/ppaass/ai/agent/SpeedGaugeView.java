@@ -12,13 +12,13 @@ import android.view.View;
 
 // 状态页的速度仪表盘，只负责绘制，不参与业务状态计算。
 final class SpeedGaugeView extends View {
-    private static final int COLOR_TRACK = Color.rgb(225, 229, 239);
-    private static final int COLOR_TEXT = Color.rgb(35, 41, 53);
-    private static final int COLOR_MUTED = Color.rgb(105, 113, 130);
-    private static final int COLOR_DOWNLOAD_A = Color.rgb(242, 193, 0);
-    private static final int COLOR_DOWNLOAD_B = Color.rgb(229, 22, 112);
-    private static final int COLOR_UPLOAD_A = Color.rgb(21, 94, 232);
-    private static final int COLOR_UPLOAD_B = Color.rgb(217, 91, 135);
+    private final int COLOR_TRACK = UiPalette.CHART_TRACK;
+    private final int COLOR_TEXT = UiPalette.TEXT;
+    private final int COLOR_MUTED = UiPalette.MUTED;
+    private final int COLOR_DOWNLOAD_A = UiPalette.ACTION_START;
+    private final int COLOR_DOWNLOAD_B = UiPalette.ACTION_WARN;
+    private final int COLOR_UPLOAD_A = UiPalette.STATUS_RUNNING;
+    private final int COLOR_UPLOAD_B = UiPalette.ACTION_INFO;
 
     private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint progressPaint = new Paint(Paint.ANTI_ALIAS_FLAG);

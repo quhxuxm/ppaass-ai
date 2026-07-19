@@ -1,6 +1,6 @@
 //! 已连接目标的统一流类型。
 
-use common::{ClientStream, YamuxClientStream};
+use common::{ClientStream, UdpClientStream, YamuxClientStream};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -16,6 +16,10 @@ pub enum YamuxTargetStream {
         stream: YamuxClientStream,
         stream_id: String,
     },
+    Udp {
+        stream: UdpClientStream,
+        stream_id: String,
+    },
 }
 
 impl YamuxTargetStream {
@@ -27,10 +31,15 @@ impl YamuxTargetStream {
         Self::Yamux { stream, stream_id }
     }
 
+    pub fn new_udp(stream: UdpClientStream, stream_id: String) -> Self {
+        Self::Udp { stream, stream_id }
+    }
+
     pub fn stream_id(&self) -> &str {
         match self {
             Self::Direct { stream_id, .. } => stream_id,
             Self::Yamux { stream_id, .. } => stream_id,
+            Self::Udp { stream_id, .. } => stream_id,
         }
     }
 
@@ -38,6 +47,7 @@ impl YamuxTargetStream {
         match self {
             Self::Direct { stream, .. } => YamuxTargetIo::Direct(stream),
             Self::Yamux { stream, .. } => YamuxTargetIo::Yamux(stream),
+            Self::Udp { stream, .. } => YamuxTargetIo::Udp(stream),
         }
     }
 }
@@ -45,6 +55,7 @@ impl YamuxTargetStream {
 pub enum YamuxTargetIo {
     Direct(ClientStream<TcpStream>),
     Yamux(YamuxClientStream),
+    Udp(UdpClientStream),
 }
 
 impl AsyncRead for YamuxTargetIo {
@@ -56,6 +67,7 @@ impl AsyncRead for YamuxTargetIo {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Udp(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -69,6 +81,7 @@ impl AsyncWrite for YamuxTargetIo {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Yamux(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Udp(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -76,6 +89,7 @@ impl AsyncWrite for YamuxTargetIo {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_flush(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Udp(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -83,6 +97,7 @@ impl AsyncWrite for YamuxTargetIo {
         match &mut *self {
             Self::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Yamux(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Udp(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }

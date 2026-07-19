@@ -1,5 +1,11 @@
 flowchart LR
-    Vue["Vue 页面"] -->|"invoke"| TauriCmd["Tauri commands"]
+    Vue["Vue 页面"] --> Transport["UDP transport: udp / tcp"]
+    Transport -->|"udp"| SessionCount["显示 udp_session_pool_size 1-8"]
+    Transport -->|"tcp"| YamuxConfig["隐藏原生 UDP session 数<br/>使用 UDP Yamux 配置"]
+    RuntimeState{"Agent 正在运行?"} -->|"是"| Locked["锁定 transport_mode"]
+    RuntimeState -->|"否"| Editable["允许修改并保存"]
+    Vue --> RuntimeState
+    Vue -->|"invoke"| TauriCmd["Tauri commands"]
     TauriCmd --> Config["读写 agent.toml"]
     TauriCmd --> Runtime["AgentRuntime"]
     Runtime --> Thread["后台线程"]

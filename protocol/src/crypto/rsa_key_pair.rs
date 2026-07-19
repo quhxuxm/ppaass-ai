@@ -1,8 +1,9 @@
 use crate::error::{ProtocolError, Result};
 use rsa::{
-    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
+    Oaep, Pkcs1v15Encrypt, Pss, RsaPrivateKey, RsaPublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::OsRng,
+    sha2::{Digest, Sha256},
 };
 
 pub struct RsaKeyPair {
@@ -61,6 +62,25 @@ impl RsaKeyPair {
     pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         self.private_key
             .decrypt(Pkcs1v15Encrypt, data)
+            .map_err(|e| ProtocolError::Decryption(e.to_string()))
+    }
+
+    /// Sign a message using RSASSA-PSS with SHA-256 and the standard 32-byte
+    /// salt length. This API is intentionally separate from the legacy raw
+    /// private-key operation used by the original TCP authentication protocol.
+    pub fn sign_pss_sha256(&self, message: &[u8]) -> Result<Vec<u8>> {
+        let digest = Sha256::digest(message);
+        let mut rng = OsRng;
+        self.private_key
+            .sign_with_rng(&mut rng, Pss::new::<Sha256>(), &digest)
+            .map_err(|e| ProtocolError::Encryption(e.to_string()))
+    }
+
+    /// Decrypt a ciphertext using RSAES-OAEP with SHA-256 for both OAEP and
+    /// MGF1. The original PKCS#1 v1.5 `decrypt` method remains unchanged.
+    pub fn decrypt_oaep_sha256(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        self.private_key
+            .decrypt(Oaep::new::<Sha256>(), ciphertext)
             .map_err(|e| ProtocolError::Decryption(e.to_string()))
     }
 

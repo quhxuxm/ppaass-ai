@@ -1,10 +1,15 @@
-# Local direct-TCP / UDP-Yamux smoke-test desktop agent.
+# Local native-UDP plus TCP-mode smoke-test desktop agent.
 
 listen_addr = "127.0.0.1:11080"
 proxy_addrs = ["127.0.0.1:18080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+# auto 按 UDP session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池。
+udp_session_pool_size = 4
 connect_timeout_secs = 20
+# 仅 framed TCP/TCP-Yamux 使用此压缩设置；原生加密 UDP 不压缩。
 compression_mode = "none"
 log_level = "info"
 log_dir = "logs"
@@ -24,7 +29,9 @@ stream_window_size_kb = 8192
 enabled = false
 name = "ppaass-tun"
 ipv4 = "10.10.10.1/24"
+# transport_mode=udp 时运行时最多使用 1280，避免内层 UDP/QUIC 被 PUDP 再分片。
 mtu = 1500
+proxy_udp = true
 proxy_dns = false
 quic_policy = "allow"
 

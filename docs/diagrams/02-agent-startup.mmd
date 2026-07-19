@@ -6,7 +6,7 @@ flowchart TD
     E --> F["构建 Tokio runtime"]
     F --> G["AgentServer::new"]
     G --> H["创建 DirectAccessChecker"]
-    H --> I["创建 TCP/UDP 目标流管理器"]
+    H --> I["创建 TCP/UDP 传输管理器"]
     I --> J["AgentServer::run"]
     J --> K["绑定 listen_addr"]
     K --> L{"tun.enabled?"}

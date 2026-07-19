@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
+
+use protocol::udp_transport::UDP_NATIVE_MAX_TUN_MTU;
 
 use crate::config::AndroidAgentConfig;
 use crate::direct_access::DirectAccessChecker;
@@ -50,17 +52,40 @@ pub async fn run_android_agent(
         .map(parse_cidr_v6)
         .transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6);
-    let mtu = config.tun.mtu as usize;
     let proxy_dns = config.tun.proxy_dns;
     let quic_policy = config.tun.effective_quic_policy();
+    let native_udp = config
+        .transport_mode
+        .uses_native_udp_for(protocol::TransportProtocol::Udp);
+    let configured_mtu = config.tun.mtu;
+    let effective_mtu = if native_udp {
+        configured_mtu.min(UDP_NATIVE_MAX_TUN_MTU)
+    } else {
+        configured_mtu
+    };
+    if effective_mtu != configured_mtu {
+        warn!(
+            configured_mtu,
+            effective_mtu,
+            "limiting Android TUN MTU in native encrypted UDP mode to avoid outer fragmentation"
+        );
+    }
+    let mtu = usize::from(effective_mtu);
+    let udp_transport = if native_udp {
+        "native-encrypted-udp"
+    } else {
+        "tcp-yamux"
+    };
 
     info!(
-        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, tcp=direct-framed, udp_yamux_sessions={}",
+        "starting Android TUN agent: ipv4={}, ipv6={:?}, mtu={}, proxy_dns={}, quic_policy={:?}, transport_mode={} (UDP only), tcp_transport=direct-framed-tcp, udp_transport={}, udp_yamux_sessions={}",
         config.tun.ipv4,
         config.tun.ipv6,
         mtu,
         proxy_dns,
         quic_policy,
+        config.transport_mode.as_str(),
+        udp_transport,
         config.yamux.udp_session_count()
     );
     info!(

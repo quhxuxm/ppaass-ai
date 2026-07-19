@@ -243,6 +243,37 @@ jobs:
           test -f ./proxy.toml
           test -f ./users.toml
 
+          PROXY_LISTEN_ADDR="$(
+            awk -F '"' '
+              /^[[:space:]]*listen_addr[[:space:]]*=/ { print $2; exit }
+            ' ./proxy.toml
+          )"
+          PROXY_LISTEN_PORT="${PROXY_LISTEN_ADDR##*:}"
+          case "$PROXY_LISTEN_PORT" in
+            ''|*[!0-9]*)
+              echo "Invalid listen_addr in proxy.toml: $PROXY_LISTEN_ADDR" >&2
+              exit 1
+              ;;
+          esac
+
+          # QUIC 与兼容 TCP 传输共用端口号，但分别使用 UDP 和 TCP。
+          # 部署时同步维护主机防火墙，避免服务已监听 UDP、入站规则却只开放 TCP。
+          if [ "$(id -u)" -eq 0 ]; then
+            if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+              ufw allow "$PROXY_LISTEN_PORT/tcp"
+              ufw allow "$PROXY_LISTEN_PORT/udp"
+            fi
+
+            if command -v firewall-cmd >/dev/null 2>&1 \
+              && firewall-cmd --state >/dev/null 2>&1; then
+              firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/tcp"
+              firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/udp"
+              firewall-cmd --reload
+            fi
+          else
+            echo "Remote user is not root; skipping host firewall configuration"
+          fi
+
           if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
           cat > /etc/systemd/system/ppaass-proxy.service <<EOF
           [Unit]
@@ -278,5 +309,17 @@ jobs:
           else
             ./start-proxy.sh restart
             ./start-proxy.sh status
+          fi
+
+          if command -v ss >/dev/null 2>&1; then
+            if ! ss -H -lnt "sport = :$PROXY_LISTEN_PORT" | grep -q .; then
+              echo "Proxy is not listening on TCP/$PROXY_LISTEN_PORT" >&2
+              exit 1
+            fi
+            if ! ss -H -lnu "sport = :$PROXY_LISTEN_PORT" | grep -q .; then
+              echo "Proxy is not listening on UDP/$PROXY_LISTEN_PORT for QUIC" >&2
+              exit 1
+            fi
+            echo "Verified proxy listeners on TCP/$PROXY_LISTEN_PORT and UDP/$PROXY_LISTEN_PORT"
           fi
           REMOTE_SCRIPT

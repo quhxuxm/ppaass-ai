@@ -39,6 +39,7 @@ def rustTargets = [
 ]
 
 def skipRustBuild = providers.gradleProperty('skipRustBuild').map { it.toBoolean() }.orElse(false)
+def cargoJobs = providers.environmentVariable('PPAASS_ANDROID_CARGO_JOBS').orElse('1')
 
 tasks.register('cargoBuildAndroid') {
     group = 'build'
@@ -50,18 +51,29 @@ tasks.register('cargoBuildAndroid') {
         def manifest = layout.projectDirectory.file('../native/Cargo.toml').asFile.absolutePath
 
         rustTargets.keySet().each { abi ->
-            providers.exec {
-                commandLine 'cargo',
-                        'ndk',
-                        '-t',
-                        abi,
-                        '-o',
-                        outputDir,
-                        'build',
-                        '--manifest-path',
-                        manifest,
-                        '--release'
-            }.result.get().assertNormalExitValue()
+            def command = [
+                    'cargo',
+                    'ndk',
+                    '-t',
+                    abi,
+                    '-o',
+                    outputDir,
+                    'build',
+                    '--manifest-path',
+                    manifest,
+                    '--release',
+                    '--jobs',
+                    cargoJobs.get()
+            ]
+            println "Running: ${command.join(' ')}"
+            def exitCode = new ProcessBuilder(command)
+                    .directory(rootProject.projectDir)
+                    .inheritIO()
+                    .start()
+                    .waitFor()
+            if (exitCode != 0) {
+                throw new GradleException("cargo-ndk failed for ${abi} with exit code ${exitCode}")
+            }
         }
     }
 }

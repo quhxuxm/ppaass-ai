@@ -28,6 +28,10 @@ pub(crate) fn run_connectivity_tests_blocking(
     let listen_addr = summary.listen_addr.clone();
     let tun_enabled = summary.tun_enabled;
     let tun_name = summary.tun_name.clone();
+    let quic_attempt_timeout = quic_attempt_timeout(
+        &summary.transport_mode,
+        summary.connect_timeout_secs,
+    );
     let agent_reachable = connect_addr(&listen_addr)
         .map(|addr| tcp_connect_timeout(addr, Duration::from_millis(900)))
         .unwrap_or(false);
@@ -72,22 +76,22 @@ pub(crate) fn run_connectivity_tests_blocking(
     if tun_enabled {
         let tun_route = format!("tun://{tun_name}");
         if tun_ready {
-            let mut tun_jobs = Vec::new();
-            for &(target, url, quic_host) in &targets {
-                let tun_target = target.to_string();
-                let url = url.to_string();
-                let tun_route_for_http = tun_route.clone();
-                tun_jobs.push(thread::spawn(move || {
-                    run_curl_check(&tun_target, "TUN", &url, None, &tun_route_for_http)
-                }));
-                let quic_target = target.to_string();
-                let quic_host = quic_host.to_string();
-                let tun_route_for_quic = tun_route.clone();
-                tun_jobs.push(thread::spawn(move || {
-                    run_quic_check(&quic_target, &quic_host, &tun_route_for_quic)
-                }));
+            // Run HTTPS checks before QUIC probes. Native UDP mode has to establish and
+            // authenticate its outer session on the first UDP flow; starting two 1200-byte
+            // QUIC probes alongside both HTTPS checks can temporarily starve the TUN netstack
+            // and make otherwise healthy TCP checks fail. Diagnostics should observe the path,
+            // not create an artificial cold-start burst on it.
+            for &(target, url, _) in &targets {
+                tun_results.push(run_curl_check(target, "TUN", url, None, &tun_route));
             }
-            tun_results = collect_connectivity_checks(tun_jobs);
+            for &(target, _, quic_host) in &targets {
+                tun_results.push(run_quic_check(
+                    target,
+                    quic_host,
+                    &tun_route,
+                    quic_attempt_timeout,
+                ));
+            }
         } else {
             for (target, url, quic_host) in targets.iter().copied() {
                 tun_results.push(failed_connectivity_check(
@@ -121,6 +125,19 @@ pub(crate) fn run_connectivity_tests_blocking(
     })
 }
 
+fn quic_attempt_timeout(transport_mode: &str, connect_timeout_secs: u64) -> Duration {
+    if transport_mode != "auto" {
+        return Duration::from_secs(3);
+    }
+
+    // Auto mode cannot use TCP/Yamux until the native UDP handshake reaches its configured
+    // timeout. Split that wait, plus a small allowance for establishing the fallback stream,
+    // across the three QUIC attempts so diagnostics observes the fallback instead of reporting
+    // failure before it can happen.
+    let total_secs = connect_timeout_secs.max(1).saturating_add(6);
+    Duration::from_secs(total_secs.div_ceil(3).max(3))
+}
+
 fn collect_connectivity_checks(jobs: Vec<JoinHandle<ConnectivityCheck>>) -> Vec<ConnectivityCheck> {
     jobs.into_iter().filter_map(|job| job.join().ok()).collect()
 }
@@ -135,4 +152,21 @@ fn tcp_connect_timeout(addr: std::net::SocketAddr, duration: Duration) -> bool {
     };
     runtime
         .block_on(async { matches!(timeout(duration, TcpStream::connect(addr)).await, Ok(Ok(_))) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_quic_probe_covers_native_udp_fallback_deadline() {
+        let timeout = quic_attempt_timeout("auto", 20);
+        assert!(timeout * 3 >= Duration::from_secs(26));
+    }
+
+    #[test]
+    fn non_auto_quic_probe_keeps_short_timeout() {
+        assert_eq!(quic_attempt_timeout("udp", 20), Duration::from_secs(3));
+        assert_eq!(quic_attempt_timeout("tcp", 20), Duration::from_secs(3));
+    }
 }

@@ -32,7 +32,7 @@ protected void buildDirectAccessSection(LinearLayout root) {
                 prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
 
         LinearLayout section = configSection(root, "直连策略");
-        TextView subtitle = mutedText("HTTP / SOCKS5 与 TUN 共用的直连规则", 13f);
+        TextView subtitle = mutedText("HTTP/SOCKS5 与 TUN 共用", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, 0, 0, dp(8));
         section.addView(subtitle, subtitleParams);
@@ -105,18 +105,24 @@ protected TextView addPolicyFact(LinearLayout row, String label, String value) {
         tile.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
 
         TextView labelView = mutedText(label, 10f);
-        labelView.setSingleLine(true);
-        labelView.setEllipsize(TextUtils.TruncateAt.END);
+        labelView.setSingleLine(false);
+        labelView.setMaxLines(2);
+        labelView.setEllipsize(null);
         tile.addView(labelView, matchWrap());
 
         TextView valueView = titleText(value, 12f);
-        valueView.setSingleLine(true);
-        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        valueView.setSingleLine(false);
+        valueView.setMaxLines(2);
+        valueView.setEllipsize(null);
         LinearLayout.LayoutParams valueParams = matchWrap();
         valueParams.setMargins(0, dp(3), 0, 0);
         tile.addView(valueView, valueParams);
 
-        LinearLayout.LayoutParams tileParams = new LinearLayout.LayoutParams(0, dp(70), 1f);
+        LinearLayout.LayoutParams tileParams = new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f);
+        tile.setMinimumHeight(dp(70));
         if (row.getChildCount() > 0) {
             tileParams.setMargins(dp(8), 0, 0, 0);
         }
@@ -293,9 +299,8 @@ protected void addDirectRuleManager(LinearLayout root) {
         directRuleDraft.setSingleLine(true);
         directRuleDraft.setImeOptions(EditorInfo.IME_ACTION_DONE);
         directRuleDraft.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        directRuleDraft.setTextColor(COLOR_TEXT);
         directRuleDraft.setTextSize(15f);
-        directRuleDraft.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        styleInput(directRuleDraft);
         directRuleDraft.setPadding(dp(12), 0, dp(12), 0);
         directRuleDraft.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_DONE) {

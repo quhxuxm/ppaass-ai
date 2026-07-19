@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tauri::path::BaseDirectory;
 use tauri::Manager;
+use tauri::path::BaseDirectory;
 use toml::Value;
 
 use crate::logging::UiLogBuffer;
@@ -21,6 +21,8 @@ const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
 
 // UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
 const DEFAULT_UDP_YAMUX_SESSIONS: u64 = 5;
+const DEFAULT_UDP_SESSION_POOL_SIZE: u64 = 4;
+const MAX_UDP_SESSION_POOL_SIZE: u64 = 8;
 
 static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -171,6 +173,13 @@ pub(crate) fn install_bundled_agent_assets(
 
 pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
     let value = toml::from_str::<Value>(raw).map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    if value_at(&value, &["quic_connection_pool_size"]).is_some() {
+        return Err(
+            "配置字段 quic_connection_pool_size 已移除，请使用 udp_session_pool_size".to_string(),
+        );
+    }
+    let transport_mode =
+        normalize_transport_mode(str_at(&value, &["transport_mode"]).unwrap_or("udp"))?;
     let tun_quic_policy = normalize_quic_policy(
         string_at(&value, &["tun", "quic_policy"])
             .as_deref()
@@ -185,6 +194,10 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         proxy_addrs: string_array_at(&value, &["proxy_addrs"]),
         username: string_or(&value, &["username"], "user1"),
         private_key_path: string_or(&value, &["private_key_path"], "keys/user1.pem"),
+        transport_mode,
+        udp_session_pool_size: int_at(&value, &["udp_session_pool_size"])
+            .unwrap_or(DEFAULT_UDP_SESSION_POOL_SIZE)
+            .clamp(1, MAX_UDP_SESSION_POOL_SIZE) as usize,
         connect_timeout_secs: int_at(&value, &["connect_timeout_secs"]).unwrap_or(30),
         compression_mode: string_or(&value, &["compression_mode"], "none"),
         log_level: string_or(&value, &["log_level"], "info"),
@@ -220,6 +233,7 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
         tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
+        tun_proxy_udp: bool_at(&value, &["tun", "proxy_udp"]).unwrap_or(true),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
         tun_quic_policy,
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
@@ -411,11 +425,7 @@ fn string_or(value: &Value, path: &[&str], default: &str) -> String {
 
 fn int_at(value: &Value, path: &[&str]) -> Option<u64> {
     let value = value_at(value, path)?.as_integer()?;
-    if value >= 0 {
-        Some(value as u64)
-    } else {
-        None
-    }
+    if value >= 0 { Some(value as u64) } else { None }
 }
 
 fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
@@ -437,6 +447,15 @@ fn normalize_quic_policy(value: &str) -> String {
     match value {
         "allow" | "block" => value.to_string(),
         _ => "allow".to_string(),
+    }
+}
+
+fn normalize_transport_mode(value: &str) -> Result<String, String> {
+    match value {
+        "auto" | "udp" | "tcp" => Ok(value.to_string()),
+        _ => Err(format!(
+            "transport_mode 只支持 auto、udp 或 tcp，当前值为 {value:?}"
+        )),
     }
 }
 
@@ -541,15 +560,19 @@ mod tests {
 
         let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
         assert!(loaded.summary.tun_enabled);
-        assert!(fs::read_to_string(&path)
-            .unwrap()
-            .contains("enabled = true"));
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("enabled = true")
+        );
 
         let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
         assert!(!loaded.summary.tun_enabled);
-        assert!(fs::read_to_string(&path)
-            .unwrap()
-            .contains("enabled = false"));
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("enabled = false")
+        );
     }
 
     #[test]
@@ -581,6 +604,53 @@ stream_window_size_kb = 1024
     }
 
     #[test]
+    fn summarize_config_defaults_to_udp_and_clamps_udp_session_pool_size() {
+        let base = r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#;
+
+        let default_summary = summarize_config(base).unwrap();
+        assert_eq!(default_summary.transport_mode, "udp");
+        assert_eq!(
+            summarize_config(&format!("{base}transport_mode = \"auto\"\n"))
+                .unwrap()
+                .transport_mode,
+            "auto"
+        );
+        assert_eq!(default_summary.udp_session_pool_size, 4);
+        assert_eq!(
+            summarize_config(&format!("{base}udp_session_pool_size = 0\n"))
+                .unwrap()
+                .udp_session_pool_size,
+            1
+        );
+        assert_eq!(
+            summarize_config(&format!("{base}udp_session_pool_size = 64\n"))
+                .unwrap()
+                .udp_session_pool_size,
+            8
+        );
+        assert_eq!(
+            summarize_config(&format!("{base}udp_session_pool_size = 6\n"))
+                .unwrap()
+                .udp_session_pool_size,
+            6
+        );
+    }
+
+    #[test]
+    fn summarize_config_rejects_removed_quic_transport_configuration() {
+        let removed_mode = summarize_config("transport_mode = \"quic\"\n");
+        assert!(removed_mode.is_err());
+
+        let removed_pool = summarize_config("quic_connection_pool_size = 4\n");
+        assert!(removed_pool.is_err());
+    }
+
+    #[test]
     fn summarize_config_allows_tun_quic_by_default() {
         let summary = summarize_config(
             r#"
@@ -593,6 +663,39 @@ private_key_path = "keys/user1.pem"
         .unwrap();
 
         assert_eq!(summary.tun_quic_policy, "allow");
+    }
+
+    #[test]
+    fn summarize_config_proxies_tun_udp_by_default() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#,
+        )
+        .unwrap();
+
+        assert!(summary.tun_proxy_udp);
+    }
+
+    #[test]
+    fn summarize_config_reads_disabled_tun_udp_proxy() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+
+[tun]
+proxy_udp = false
+"#,
+        )
+        .unwrap();
+
+        assert!(!summary.tun_proxy_udp);
     }
 
     #[test]

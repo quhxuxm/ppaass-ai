@@ -21,6 +21,7 @@ protocol = { path = "../protocol" }
 hex.workspace = true
 hickory-proto.workspace = true
 socket2.workspace = true
+rand.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

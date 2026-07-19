@@ -7,6 +7,7 @@
 mod config;
 mod connection;
 mod error;
+mod native_udp;
 mod server;
 mod user_manager;
 

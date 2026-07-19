@@ -4,6 +4,7 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import ToggleSwitch from "primevue/toggleswitch";
+import AppIcon from "../components/AppIcon";
 import { quicPolicyOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
@@ -39,7 +40,7 @@ const emit = defineEmits<{
               <div class="method-fact"><span>监听状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
             </div>
             <label class="field">
-              <span><i class="pi pi-wifi"></i>监听地址</span>
+              <span><AppIcon name="radio-tower" />监听地址</span>
               <InputText :model-value="summary.listen_addr" :disabled="configLocked" @update:model-value="emit('set-field', 'listen_addr', $event)" />
             </label>
           </template>
@@ -81,7 +82,7 @@ const emit = defineEmits<{
               <div class="method-fact"><span>当前状态</span><strong>{{ tunModeLabel }}</strong></div>
             </div>
             <label class="field">
-              <span><i class="pi pi-desktop"></i>名称</span>
+              <span><AppIcon name="monitor" />名称</span>
               <InputText :model-value="summary.tun_name" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_name', $event)" />
             </label>
           </template>
@@ -92,12 +93,18 @@ const emit = defineEmits<{
           <template #content>
             <div class="toggle-list">
               <div class="switch-row">
-              <span>代理 DNS</span>
+                <span>代理普通 UDP</span>
+                <ToggleSwitch :model-value="summary.tun_proxy_udp" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_udp', $event)" />
+              </div>
+              <small class="field-help">关闭后普通 UDP 直连；DNS 与 QUIC 单独分流。</small>
+              <div class="switch-row">
+                <span>DNS 经 Proxy</span>
                 <ToggleSwitch :model-value="summary.tun_proxy_dns" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_proxy_dns', $event)" />
               </div>
+              <small class="field-help">仅控制传统 DNS（53 端口）。</small>
             </div>
             <label class="field">
-              <span><i class="pi pi-bolt"></i>QUIC 策略</span>
+              <span><AppIcon name="zap" />QUIC（UDP/443）策略</span>
               <Select
                 :model-value="summary.tun_quic_policy"
                 :options="quicPolicyOptions"
@@ -106,7 +113,9 @@ const emit = defineEmits<{
                 :disabled="configLocked"
                 @update:model-value="emit('set-field', 'tun_quic_policy', $event)"
               />
-              <small class="field-help">没有匹配直连规则的 QUIC 会通过代理转发。</small>
+              <small class="field-help">
+                允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。
+              </small>
             </label>
           </template>
         </Card>

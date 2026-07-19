@@ -137,6 +137,19 @@ fn main() -> Result<()> {
         info!("监听地址：    {}", config.listen_addr);
         info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
         info!("用户名：      {}", config.username);
+        info!(
+            "UDP 传输模式：{}（TCP 数据始终使用 TCP）",
+            config.transport_mode.as_str()
+        );
+        if config
+            .transport_mode
+            .uses_native_udp_for(protocol::TransportProtocol::Udp)
+        {
+            info!(
+                "原生加密 UDP 会话池：{} 条",
+                config.effective_udp_session_pool_size()
+            );
+        }
         info!("压缩模式：    {}", config.get_compression_mode());
         info!("日志级别：    {}", config.log_level);
         info!(

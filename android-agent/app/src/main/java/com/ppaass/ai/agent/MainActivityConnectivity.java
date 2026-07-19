@@ -267,8 +267,9 @@ protected void addConnectivityResultRow(ConnectivityCheckResult result) {
 
         LinearLayout heading = horizontalRow();
         TextView name = titleText(result.target + " " + result.protocol, 14f);
-        name.setSingleLine(true);
-        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setSingleLine(false);
+        name.setMaxLines(2);
+        name.setEllipsize(null);
         heading.addView(name, new LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -281,8 +282,8 @@ protected void addConnectivityResultRow(ConnectivityCheckResult result) {
         row.addView(heading, matchWrap());
 
         TextView detail = mutedText(result.detail, 12f);
-        detail.setMaxLines(2);
-        detail.setEllipsize(TextUtils.TruncateAt.END);
+        detail.setMaxLines(4);
+        detail.setEllipsize(null);
         LinearLayout.LayoutParams detailParams = matchWrap();
         detailParams.setMargins(0, dp(4), 0, 0);
         row.addView(detail, detailParams);

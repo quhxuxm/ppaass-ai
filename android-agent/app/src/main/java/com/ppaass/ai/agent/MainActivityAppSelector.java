@@ -41,10 +41,14 @@ protected void showAppSelector() {
         ListView list = new ListView(this);
         list.setAdapter(adapter);
         list.setFastScrollEnabled(true);
-        list.setDivider(null);
-        list.setDividerHeight(0);
+        // 项目卡片直接作为 ListView 行根视图，行间距由透明分隔线提供。
+        list.setDivider(new ColorDrawable(Color.TRANSPARENT));
+        list.setDividerHeight(dp(4));
         list.setCacheColorHint(Color.TRANSPARENT);
-        list.setSelector(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        list.setSelector(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 118),
+                COLOR_ACCENT));
 
         TextView selectionSummary = chip(appSelectionSummary(checked), COLOR_STATUS_STOPPED);
         list.setOnItemClickListener((parent, view, position, id) -> {
@@ -56,6 +60,7 @@ protected void showAppSelector() {
         LinearLayout dialogContent = new LinearLayout(this);
         dialogContent.setOrientation(LinearLayout.VERTICAL);
         dialogContent.setPadding(dp(18), dp(16), dp(18), 0);
+        dialogContent.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
 
         LinearLayout titleRow = horizontalRow();
         TextView dialogTitle = titleText("VPN 应用", 20f);
@@ -75,7 +80,9 @@ protected void showAppSelector() {
 
         LinearLayout listShell = new LinearLayout(this);
         listShell.setOrientation(LinearLayout.VERTICAL);
-        listShell.setPadding(dp(4), dp(4), dp(4), dp(4));
+        // 列表项自身已有完整的圆角边框，外壳只保留上下留白，
+        // 避免左右 padding 让应用项看起来没有铺满列表。
+        listShell.setPadding(0, dp(4), 0, dp(4));
         listShell.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
         listShell.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -99,6 +106,10 @@ protected void showAppSelector() {
                 .create();
         appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
         appSelectorDialog.setOnShowListener(dialog -> {
+            Window window = appSelectorDialog.getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+            }
             appSelectorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT_DARK);
             appSelectorDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_MUTED);
             Button clearButton = appSelectorDialog.getButton(AlertDialog.BUTTON_NEUTRAL);

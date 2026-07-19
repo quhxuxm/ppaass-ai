@@ -26,9 +26,6 @@ where
     pub reader: FramedReader<S>,
     // shutdown 只能发送一次空 end 包。
     pub end_sent: bool,
-    // framed sink 的 start_send 只把 DataPacket 放进编码缓冲；这里记录一次尚未
-    // flush 完成的写入，避免 copy_bidirectional 认为小包已经真正发到 proxy。
-    pub pending_write_len: Option<usize>,
     // 与 ConnectRequest.request_id 相同，用于区分目标流。
     pub stream_id: String,
     pub read_buf: Vec<u8>,
@@ -110,20 +107,6 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        if let Some(len) = self.pending_write_len {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Ok(len));
-                }
-                Poll::Ready(Err(e)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(std::io::Error::other(e)));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
@@ -136,23 +119,9 @@ where
                     is_end: false,
                 };
                 match Pin::new(&mut self.writer).start_send(ProxyRequest::Data(packet)) {
-                    Ok(()) => {
-                        // DataPacket 代表隧道里的一个裸字节块。对真实 TcpStream 来说
-                        // flush 基本是 no-op；但这里底层是 framed sink，不 flush 会让
-                        // 小请求/小响应滞留到 copy 缓冲填满或 EOF，浏览器就可能重试小分片。
-                        self.pending_write_len = Some(buf.len());
-                        match Pin::new(&mut self.writer).poll_flush(cx) {
-                            Poll::Ready(Ok(())) => {
-                                self.pending_write_len = None;
-                                Poll::Ready(Ok(buf.len()))
-                            }
-                            Poll::Ready(Err(e)) => {
-                                self.pending_write_len = None;
-                                Poll::Ready(Err(std::io::Error::other(e)))
-                            }
-                            Poll::Pending => Poll::Pending,
-                        }
-                    }
+                    // 让连续 DataPacket 留在 Framed 写缓冲区中一起发送。调用者
+                    // 在读取 Pending、EOF 或关闭时会通过 poll_flush 提交它们。
+                    Ok(()) => Poll::Ready(Ok(buf.len())),
                     Err(e) => Poll::Ready(Err(std::io::Error::other(e))),
                 }
             }
@@ -162,17 +131,6 @@ where
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        if self.pending_write_len.is_some() {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => self.pending_write_len = None,
-                Poll::Ready(Err(e)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(std::io::Error::other(e)));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
         match Pin::new(&mut self.writer).poll_flush(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),
@@ -181,17 +139,6 @@ where
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        if self.pending_write_len.is_some() {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => self.pending_write_len = None,
-                Poll::Ready(Err(e)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(std::io::Error::other(e)));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
         if !self.end_sent {
             // 发送流结束数据包
             let end_packet = protocol::DataPacket {
@@ -224,3 +171,73 @@ where
 
 // 实现 Unpin 以允许在需要 Unpin 的上下文中使用
 impl<S> Unpin for ClientStream<S> where S: AsyncRead + AsyncWrite + Unpin {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::{FutureExt, StreamExt};
+    use protocol::{DataPacket, ProxyCodec};
+    use tokio::io::{AsyncWriteExt, DuplexStream};
+
+    fn stream_pair() -> (ClientStream<DuplexStream>, Framed<DuplexStream, ProxyCodec>) {
+        let (client_io, proxy_io) = tokio::io::duplex(4096);
+        let (writer, reader) = Framed::new(client_io, AgentCodec::new(None)).split();
+        let client = ClientStream {
+            writer,
+            reader,
+            end_sent: false,
+            stream_id: "test-stream".to_string(),
+            read_buf: Vec::new(),
+            read_pos: 0,
+        };
+        let proxy = Framed::new(proxy_io, ProxyCodec::new(None));
+        (client, proxy)
+    }
+
+    async fn next_data(proxy: &mut Framed<DuplexStream, ProxyCodec>) -> DataPacket {
+        match proxy.next().await.unwrap().unwrap() {
+            ProxyRequest::Data(packet) => packet,
+            _ => panic!("expected data packet"),
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_are_buffered_until_explicit_flush() {
+        let (mut client, mut proxy) = stream_pair();
+
+        client.write_all(b"first").await.unwrap();
+        client.write_all(b"second").await.unwrap();
+
+        assert!(proxy.next().now_or_never().is_none());
+
+        client.flush().await.unwrap();
+        let first = next_data(&mut proxy).await;
+        let second = next_data(&mut proxy).await;
+        assert_eq!(first.stream_id, "test-stream");
+        assert_eq!(first.data, b"first");
+        assert!(!first.is_end);
+        assert_eq!(second.stream_id, "test-stream");
+        assert_eq!(second.data, b"second");
+        assert!(!second.is_end);
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_buffered_data_and_sends_one_end_packet() {
+        let (mut client, mut proxy) = stream_pair();
+
+        client.write_all(b"payload").await.unwrap();
+        assert!(proxy.next().now_or_never().is_none());
+
+        client.shutdown().await.unwrap();
+        let data = next_data(&mut proxy).await;
+        let end = next_data(&mut proxy).await;
+        assert_eq!(data.data, b"payload");
+        assert!(!data.is_end);
+        assert_eq!(end.stream_id, "test-stream");
+        assert!(end.data.is_empty());
+        assert!(end.is_end);
+
+        client.shutdown().await.unwrap();
+        assert!(proxy.next().now_or_never().is_none());
+    }
+}

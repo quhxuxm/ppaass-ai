@@ -39,6 +39,7 @@ pub(super) async fn handle_tun_tcp(
         direct_domain_cache,
         tun_networks,
         proxy_dns,
+        proxy_udp: _,
         direct_egress,
     } = context;
 
@@ -270,7 +271,7 @@ async fn connect_direct_tcp_with_refresh(
         udp_sessions,
         tun_networks,
     } = context;
-    let initial_bind_interface = direct_egress.bind_interface();
+    let initial_bind_interface = direct_egress.bind_interface(target.ip());
     match connect_direct_tcp(target, initial_bind_interface.as_ref()).await {
         Ok(stream) => Ok(stream),
         Err(first_err) => {

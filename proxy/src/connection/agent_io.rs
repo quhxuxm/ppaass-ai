@@ -8,8 +8,6 @@ pub struct AgentIo<R, W> {
     pub reader: R,
     /// 写回 agent 方向的数据流。
     pub writer: W,
-    /// writer 是 framed sink 时，poll_write 只 start_send；这里记录待 flush 的写入。
-    pub pending_write_len: Option<usize>,
 }
 
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncRead for AgentIo<R, W> {
@@ -29,75 +27,91 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for AgentIo<R, W> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if let Some(len) = self.pending_write_len {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Ok(len));
-                }
-                Poll::Ready(Err(err)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(err));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
-        // 写操作全部委托给包装的 writer。
-        let written = match Pin::new(&mut self.writer).poll_write(cx, buf) {
-            Poll::Ready(Ok(written)) => written,
-            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-            Poll::Pending => return Poll::Pending,
-        };
-        if written == 0 {
-            return Poll::Ready(Ok(0));
-        }
-
-        // 对 proxy 协议层来说，写入目标响应后必须尽快 flush。
-        // 否则小 HLS 分片响应可能停在 Framed/SinkWriter 内部，浏览器端看起来像分片停住。
-        self.pending_write_len = Some(written);
-        match Pin::new(&mut self.writer).poll_flush(cx) {
-            Poll::Ready(Ok(())) => {
-                self.pending_write_len = None;
-                Poll::Ready(Ok(written))
-            }
-            Poll::Ready(Err(err)) => {
-                self.pending_write_len = None;
-                Poll::Ready(Err(err))
-            }
-            Poll::Pending => Poll::Pending,
-        }
+        // SinkWriter::poll_write 只把帧放入编码缓冲区。在每次写入后强制
+        // flush 会让 64KB 的中继块立即单独发送，增加外层 TCP 的小写入和调度开销。
+        // 上层 copy/copy_bidirectional 会在读取 Pending、EOF 或关闭时显式 flush。
+        Pin::new(&mut self.writer).poll_write(cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.pending_write_len.is_some() {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => self.pending_write_len = None,
-                Poll::Ready(Err(err)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(err));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
-        // flush 也必须透传，否则 agent 侧可能看不到及时写出的响应。
+        // 显式 flush 仍完整透传。
         Pin::new(&mut self.writer).poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.pending_write_len.is_some() {
-            match Pin::new(&mut self.writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => self.pending_write_len = None,
-                Poll::Ready(Err(err)) => {
-                    self.pending_write_len = None;
-                    return Poll::Ready(Err(err));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
         // shutdown 关闭写半边，用于中继结束时通知对端。
         Pin::new(&mut self.writer).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        buffered: Vec<u8>,
+        committed: Vec<Vec<u8>>,
+        flush_count: usize,
+        shutdown_count: usize,
+    }
+
+    impl RecordingWriter {
+        fn commit(&mut self) {
+            if !self.buffered.is_empty() {
+                self.committed.push(std::mem::take(&mut self.buffered));
+            }
+        }
+    }
+
+    impl AsyncWrite for RecordingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.buffered.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flush_count += 1;
+            self.commit();
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.shutdown_count += 1;
+            self.commit();
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn batches_writes_until_flush_and_delegates_shutdown() {
+        let mut io = AgentIo {
+            reader: tokio::io::empty(),
+            writer: RecordingWriter::default(),
+        };
+
+        io.write_all(b"first").await.unwrap();
+        io.write_all(b"-second").await.unwrap();
+
+        assert_eq!(io.writer.buffered, b"first-second");
+        assert!(io.writer.committed.is_empty());
+        assert_eq!(io.writer.flush_count, 0);
+
+        io.flush().await.unwrap();
+        assert_eq!(io.writer.committed, [b"first-second".to_vec()]);
+        assert_eq!(io.writer.flush_count, 1);
+
+        io.write_all(b"tail").await.unwrap();
+        io.shutdown().await.unwrap();
+        assert_eq!(
+            io.writer.committed,
+            [b"first-second".to_vec(), b"tail".to_vec()]
+        );
+        assert_eq!(io.writer.shutdown_count, 1);
     }
 }

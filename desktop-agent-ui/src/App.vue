@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import ProgressSpinner from "primevue/progressspinner";
 import AppSidebar from "./components/AppSidebar.vue";
+import AppIcon from "./components/AppIcon";
 import AppTopbar from "./components/AppTopbar.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useDesktopAgent } from "./composables/useDesktopAgent";
@@ -12,6 +13,7 @@ import LogsView from "./views/LogsView.vue";
 import OverviewView from "./views/OverviewView.vue";
 import RoutingView from "./views/RoutingView.vue";
 import TomlView from "./views/TomlView.vue";
+import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
 
 const {
   activeForwardingLabel,
@@ -49,6 +51,12 @@ const {
 } = useDesktopAgent();
 
 const sidebarCollapsed = ref(false);
+const colorTheme = ref<ColorTheme>(loadColorTheme());
+
+function setColorTheme(theme: ColorTheme) {
+  colorTheme.value = theme;
+  applyColorTheme(theme);
+}
 </script>
 
 <template>
@@ -80,11 +88,14 @@ const sidebarCollapsed = ref(false);
           :config-available="Boolean(state.config)"
           :dirty="state.dirty"
           :busy="state.busy"
+          :color-theme="colorTheme"
+          :color-themes="colorThemes"
           @reload="reloadAll"
           @restore-default-config="restoreDefaultConfig"
           @save="saveConfig"
           @start="startAgent"
           @stop="stopAgent"
+          @update:color-theme="setColorTheme"
         />
 
         <section v-if="state.loading" class="loading">
@@ -93,7 +104,7 @@ const sidebarCollapsed = ref(false);
         </section>
 
         <section v-else-if="!state.config" class="empty-state">
-          <i class="pi pi-exclamation-triangle"></i>
+          <AppIcon class="semantic-warning" name="triangle-alert" />
           <h2>未载入配置</h2>
         </section>
 

@@ -31,9 +31,10 @@ protected void buildStatusScreen(LinearLayout root) {
 
         ImageView appIcon = new ImageView(this);
         appIcon.setImageResource(R.drawable.ic_vpn);
-        appIcon.setColorFilter(COLOR_ACTION_INFO);
-        appIcon.setBackground(iconPlateBackground(COLOR_ACTION_INFO));
+        appIcon.setColorFilter(COLOR_ACCENT);
+        appIcon.setBackground(iconPlateBackground(COLOR_ACCENT));
         appIcon.setPadding(dp(10), dp(10), dp(10), dp(10));
+        appIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         iconParams.setMargins(0, 0, dp(12), 0);
         headerRow.addView(appIcon, iconParams);
@@ -73,12 +74,17 @@ protected void buildStatusScreen(LinearLayout root) {
         selectAppsButton.setAllCaps(false);
         selectAppsButton.setTextSize(14f);
         selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
-        selectAppsButton.setTextColor(COLOR_ACCENT_DARK);
+        selectAppsButton.setTextColor(interactiveTextColors(
+                COLOR_ACCENT_DARK,
+                Color.rgb(245, 246, 255)));
         selectAppsButton.setSingleLine(true);
         selectAppsButton.setMinHeight(0);
         selectAppsButton.setMinWidth(0);
         selectAppsButton.setPadding(dp(14), 0, dp(14), 0);
-        selectAppsButton.setBackground(rounded(COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT));
+        selectAppsButton.setBackground(interactiveRounded(
+                COLOR_ACCENT_SOFT,
+                alphaColor(COLOR_ACCENT, 112),
+                COLOR_ACCENT));
         flattenButton(selectAppsButton);
         selectAppsButton.setOnClickListener(view -> showAppSelector());
         trackEditable(selectAppsButton);
@@ -129,7 +135,7 @@ protected void buildStatusScreen(LinearLayout root) {
 
         LinearLayout dnsPanel = panel(root);
         sectionTitle(dnsPanel, "代理 DNS 记录");
-        TextView dnsSubtitle = mutedText("最近 80 条由代理处理的 DNS 解析", 13f);
+        TextView dnsSubtitle = mutedText("最近 80 条 DNS", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
@@ -153,7 +159,7 @@ protected void buildStatusScreen(LinearLayout root) {
 protected void buildHttpProxyPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
         sectionTitle(panel, "HTTP / SOCKS5 代理");
-        TextView subtitle = mutedText("同一端口同时接受 HTTP 与 SOCKS5 连接，协议由客户端自动握手区分", 13f);
+        TextView subtitle = mutedText("同端口支持 HTTP 与 SOCKS5", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);
@@ -184,7 +190,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         panel.addView(endpointBox, matchWrap());
         updateHttpProxyEndpoint();
 
-        TextView hint = mutedText("同一 Wi-Fi 或手机热点下，HTTP 与 SOCKS5 可同时使用上方同一个地址", 12f);
+        TextView hint = mutedText("同一网络使用上方地址", 12f);
         LinearLayout.LayoutParams hintParams = matchWrap();
         hintParams.setMargins(0, dp(6), 0, 0);
         panel.addView(hint, hintParams);
@@ -263,20 +269,23 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         bluetoothBox.addView(bluetoothScroll, matchWrap());
         panel.addView(bluetoothBox, matchWrap());
 
-        LinearLayout bluetoothActionRow = horizontalRow();
+        LinearLayout bluetoothActionBlock = new LinearLayout(this);
+        bluetoothActionBlock.setOrientation(LinearLayout.VERTICAL);
         httpProxyBluetoothHint = mutedText("", 12f);
-        bluetoothActionRow.addView(httpProxyBluetoothHint, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f));
+        bluetoothActionBlock.addView(httpProxyBluetoothHint, matchWrap());
+
+        LinearLayout bluetoothButtonRow = horizontalRow();
+        bluetoothButtonRow.setGravity(Gravity.END);
         httpProxyBluetoothActionButton = secondaryButton("打开设置");
         httpProxyBluetoothActionButton.setOnClickListener(view -> handleHttpProxyBluetoothAction());
         LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(104), dp(38));
-        bluetoothCopyParams.setMargins(dp(8), 0, 0, 0);
-        bluetoothActionRow.addView(httpProxyBluetoothActionButton, bluetoothCopyParams);
+        bluetoothButtonRow.addView(httpProxyBluetoothActionButton, bluetoothCopyParams);
+        LinearLayout.LayoutParams bluetoothButtonParams = matchWrap();
+        bluetoothButtonParams.setMargins(0, dp(6), 0, 0);
+        bluetoothActionBlock.addView(bluetoothButtonRow, bluetoothButtonParams);
         LinearLayout.LayoutParams bluetoothActionParams = matchWrap();
         bluetoothActionParams.setMargins(0, dp(6), 0, 0);
-        panel.addView(bluetoothActionRow, bluetoothActionParams);
+        panel.addView(bluetoothActionBlock, bluetoothActionParams);
         updateHttpProxyBluetoothAccess();
 
         LinearLayout buttonRow = horizontalRow();
@@ -304,7 +313,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
 protected void buildConnectivityPanel(LinearLayout root) {
         LinearLayout panel = panel(root);
         sectionTitle(panel, "VPN 连通性");
-        TextView subtitle = mutedText("通过 VPN 路径测试 HTTPS 与 QUIC", 13f);
+        TextView subtitle = mutedText("测试 VPN 的 HTTPS 与 QUIC", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         panel.addView(subtitle, subtitleParams);

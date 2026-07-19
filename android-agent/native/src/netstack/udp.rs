@@ -32,6 +32,13 @@ type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
 
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UdpRoute {
+    Direct,
+    Proxy,
+    Block,
+}
+
 #[derive(Clone)]
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
@@ -123,26 +130,32 @@ pub(super) fn spawn_udp_sessions(
                         }
                     }
 
-                    if target.port() == 443 && quic_policy.should_block_udp443() {
-                        quic_stats.record_blocked();
-                        debug!(
-                            "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
-                            quic_policy,
-                            target
-                        );
-                        continue;
-                    }
-
-                    if !direct_match {
-                        if target.port() == 443 {
-                            quic_stats.record_proxied();
+                    match classify_udp_route(
+                        target.port(),
+                        quic_policy,
+                        direct_match,
+                    ) {
+                        UdpRoute::Block => {
+                            quic_stats.record_blocked();
+                            debug!(
+                                "Android TUN UDP/443 QUIC blocked by explicit policy {:?} -> {}; waiting for TCP/TLS fallback",
+                                quic_policy,
+                                target
+                            );
+                            continue;
                         }
-                        udp_relay.send(source, target, proxy_address, data);
-                        continue;
-                    }
-
-                    if target.port() == 443 {
-                        quic_stats.record_direct();
+                        UdpRoute::Proxy => {
+                            if target.port() == 443 {
+                                quic_stats.record_proxied();
+                            }
+                            udp_relay.send(source, target, proxy_address, data);
+                            continue;
+                        }
+                        UdpRoute::Direct => {
+                            if target.port() == 443 {
+                                quic_stats.record_direct();
+                            }
+                        }
                     }
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
                     sessions.insert(key, tx.clone());
@@ -271,16 +284,19 @@ pub(super) async fn handle_tun_udp(
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
-    if !proxy_dns_request && target.port() == 443 && quic_policy.should_block_udp443() {
+    let route = classify_udp_route(target.port(), quic_policy, direct_target.is_some());
+    if route == UdpRoute::Block {
         debug!(
-            "Android TUN UDP/443 QUIC dropped by policy {:?} -> {}",
+            "Android TUN UDP/443 QUIC blocked by explicit policy {:?} -> {}; waiting for TCP/TLS fallback",
             quic_policy, target_label
         );
         drain_dropped_udp(rx, shutdown).await;
         return Ok(());
     }
 
-    if let Some(connect_target) = direct_target {
+    if route == UdpRoute::Direct
+        && let Some(connect_target) = direct_target
+    {
         let target_str = address_to_string(&address);
         debug!("Android TUN UDP direct -> {}", target_str);
         android_log::info(format!(
@@ -375,6 +391,26 @@ pub(super) async fn handle_tun_udp(
     }
 
     Ok(())
+}
+
+fn classify_udp_route(
+    target_port: u16,
+    quic_policy: QuicPolicy,
+    direct_access_match: bool,
+) -> UdpRoute {
+    if target_port == 443 {
+        if quic_policy.should_block_udp443() {
+            UdpRoute::Block
+        } else if direct_access_match {
+            UdpRoute::Direct
+        } else {
+            UdpRoute::Proxy
+        }
+    } else if direct_access_match {
+        UdpRoute::Direct
+    } else {
+        UdpRoute::Proxy
+    }
 }
 
 async fn relay_direct_udp(
@@ -496,5 +532,45 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("{reason}, original {target_label}"),
         None => target_label.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::{UdpRoute, classify_udp_route};
+    use common::QuicPolicy;
+
+    #[test]
+    fn ordinary_udp_preserves_direct_and_proxy_routing() {
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Allow, false),
+            UdpRoute::Proxy
+        );
+        assert_eq!(
+            classify_udp_route(3478, QuicPolicy::Allow, true),
+            UdpRoute::Direct
+        );
+    }
+
+    #[test]
+    fn quic_allow_routes_udp443_by_direct_access_rules() {
+        assert_eq!(
+            classify_udp_route(443, QuicPolicy::Allow, false),
+            UdpRoute::Proxy
+        );
+        assert_eq!(
+            classify_udp_route(443, QuicPolicy::Allow, true),
+            UdpRoute::Direct
+        );
+    }
+
+    #[test]
+    fn explicit_quic_block_overrides_direct_access_routing() {
+        for direct_access_match in [false, true] {
+            assert_eq!(
+                classify_udp_route(443, QuicPolicy::Block, direct_access_match),
+                UdpRoute::Block
+            );
+        }
     }
 }

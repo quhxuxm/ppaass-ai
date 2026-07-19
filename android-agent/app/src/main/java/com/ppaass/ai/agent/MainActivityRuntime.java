@@ -38,7 +38,9 @@ protected void updateVpnToggle() {
             vpnStatus.setText(systemManaged ? "始终开启 VPN" : running ? "已连接" : "未连接");
             int statusColor = running ? COLOR_STATUS_RUNNING : COLOR_STATUS_STOPPED;
             vpnStatus.setTextColor(chipText(statusColor));
-            vpnStatus.setBackground(rounded(chipFill(statusColor), chipFill(statusColor)));
+            vpnStatus.setBackground(rounded(
+                    chipFill(statusColor),
+                    alphaColor(statusColor, 112)));
         }
         updateConfigEditability(!running && !isHttpProxyRunning());
         updateConnectivityButton();
@@ -59,25 +61,10 @@ protected void updateHttpProxyToggle() {
     }
 
 protected void updateFlipButton(String label, int color, boolean enabled) {
-        boolean shouldFlip = lastVpnToggleLabel != null && !label.equals(lastVpnToggleLabel);
-        lastVpnToggleLabel = label;
-        if (!shouldFlip) {
-            vpnToggle.animate().cancel();
-            vpnToggle.setRotationY(0f);
-            applyToggleButtonState(label, color, enabled);
-            return;
-        }
-
-        vpnToggle.animate()
-                .rotationY(90f)
-                .setDuration(110)
-                .withEndAction(() -> {
-                    applyToggleButtonState(label, color, enabled);
-                    vpnToggle.setRotationY(-90f);
-                    vpnToggle.animate().rotationY(0f).setDuration(110).start();
-                })
-                .start();
-    }
+        vpnToggle.animate().cancel();
+        vpnToggle.setRotationY(0f);
+        applyToggleButtonState(label, color, enabled);
+}
 
 protected void applyToggleButtonState(String label, int color, boolean enabled) {
         vpnToggle.setText(label);

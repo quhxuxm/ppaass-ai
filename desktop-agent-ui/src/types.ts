@@ -1,10 +1,15 @@
+import type { AppIconName } from "./components/AppIcon";
+
 export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
+export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
   listen_addr: string;
   proxy_addrs: string[];
   username: string;
   private_key_path: string;
+  transport_mode: AgentTransportMode;
+  udp_session_pool_size: number;
   connect_timeout_secs: number;
   compression_mode: string;
   log_level: string;
@@ -22,6 +27,7 @@ export type AgentConfigSummary = {
   tun_name: string;
   tun_ipv4: string;
   tun_mtu: number;
+  tun_proxy_udp: boolean;
   tun_proxy_dns: boolean;
   tun_quic_policy: string;
   direct_mode: string;
@@ -116,7 +122,7 @@ export type ToastKind = "info" | "success" | "error";
 export type DirectRuleGroup = {
   key: string;
   label: string;
-  icon: string;
+  icon: AppIconName;
   /** 当前规则类型在哪些入口或模式下可用，用于直连规则页给用户做配置提示。 */
   modes: string[];
   items: Array<{ rule: string; index: number }>;

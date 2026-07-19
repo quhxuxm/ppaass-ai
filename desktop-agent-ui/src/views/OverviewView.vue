@@ -4,6 +4,7 @@ import Badge from "primevue/badge";
 import Card from "primevue/card";
 import Knob from "primevue/knob";
 import Tag from "primevue/tag";
+import AppIcon from "../components/AppIcon";
 import {
   dnsAnswerLabel,
   dnsAnswers,
@@ -60,6 +61,10 @@ const overviewCards = computed(() => buildOverviewCards(overviewCardOrder.value)
 const speedGaugeMax = computed(() => Math.max(256 * 1024, props.traffic.download_bps, props.traffic.upload_bps) * 1.25);
 const downloadGaugeValue = computed(() => Math.round((props.traffic.download_bps / speedGaugeMax.value) * 100));
 const uploadGaugeValue = computed(() => Math.round((props.traffic.upload_bps / speedGaugeMax.value) * 100));
+const transportModeLabel = computed(() => {
+  if (props.summary.transport_mode === "auto") return "自动：加密 UDP → TCP";
+  return props.summary.transport_mode === "udp" ? "TCP + 加密 UDP" : "全 TCP";
+});
 const hourlyTrafficMax = computed(() =>
   Math.max(
     1,
@@ -240,7 +245,7 @@ function hourlyBarHeight(bytes: number) {
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
             <Tag
               v-else-if="card.key === 'egress'"
-              value="TCP / UDP"
+              :value="transportModeLabel"
               severity="info"
             />
             <Tag v-else-if="card.key === 'speed'" value="系统" severity="info" />
@@ -258,7 +263,7 @@ function hourlyBarHeight(bytes: number) {
               aria-label="拖动调整顺序"
               title="拖动调整顺序"
             >
-              <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+              <AppIcon name="move" />
             </button>
           </div>
         </div>
@@ -266,32 +271,32 @@ function hourlyBarHeight(bytes: number) {
       <template #content>
         <div v-if="card.key === 'status'" class="status-board">
           <div class="metric-tile">
-            <i class="pi pi-sitemap"></i>
+            <AppIcon name="network" />
             <span>当前转发</span>
             <strong>{{ activeForwardingLabel }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-globe"></i>
+            <AppIcon name="globe" />
             <span>代理入口</span>
             <strong>{{ summary.listen_addr }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>公共出口</span>
             <strong>{{ summary.proxy_addrs.length }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-wave-pulse"></i>
-            <span>UDP Yamux</span>
-            <strong>{{ summary.udp_yamux_sessions }}</strong>
+            <AppIcon name="activity" />
+            <span>传输策略</span>
+            <strong>{{ transportModeLabel }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-box"></i>
+            <AppIcon name="package" />
             <span>压缩</span>
             <strong>{{ summary.compression_mode }}</strong>
           </div>
           <div class="metric-tile">
-            <i class="pi pi-chart-line"></i>
+            <AppIcon name="scroll-text" />
             <span>日志</span>
             <strong>{{ summary.log_level }}</strong>
           </div>
@@ -303,11 +308,11 @@ function hourlyBarHeight(bytes: number) {
         </div>
         <div v-else-if="card.key === 'egress'" class="endpoint-list">
           <div v-for="proxy in summary.proxy_addrs" :key="proxy" class="endpoint-row">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>{{ proxy }}</span>
           </div>
           <div v-if="!summary.proxy_addrs.length" class="endpoint-row muted">
-            <i class="pi pi-server"></i>
+            <AppIcon name="server" />
             <span>未配置</span>
           </div>
         </div>
@@ -317,9 +322,9 @@ function hourlyBarHeight(bytes: number) {
               :model-value="downloadGaugeValue"
               :size="132"
               readonly
-              value-color="#f00673"
-              range-color="#ffbdd9"
-              text-color="#1e293b"
+              value-color="var(--gauge-download)"
+              range-color="var(--gauge-download-track)"
+              text-color="var(--app-text-strong)"
             />
             <span>下载</span>
             <strong>{{ formatRate(traffic.download_bps) }}</strong>
@@ -329,9 +334,9 @@ function hourlyBarHeight(bytes: number) {
               :model-value="uploadGaugeValue"
               :size="132"
               readonly
-              value-color="#0b63ff"
-              range-color="#c7d8ff"
-              text-color="#1e293b"
+              value-color="var(--gauge-upload)"
+              range-color="var(--gauge-upload-track)"
+              text-color="var(--app-text-strong)"
             />
             <span>上传</span>
             <strong>{{ formatRate(traffic.upload_bps) }}</strong>
@@ -359,11 +364,11 @@ function hourlyBarHeight(bytes: number) {
         </div>
         <div v-else-if="card.key === 'dns'" class="dns-records">
           <div v-if="!summary.tun_proxy_dns" class="dns-empty">
-            <i class="pi pi-info-circle"></i>
+            <AppIcon name="info" />
             <span>代理 DNS 未启用</span>
           </div>
           <div v-else-if="!recentDnsRecords.length" class="dns-empty">
-            <i class="pi pi-globe"></i>
+            <AppIcon name="globe" />
             <span>等待经过代理的 DNS 请求</span>
           </div>
           <div v-else class="dns-record-list">
@@ -404,8 +409,13 @@ function hourlyBarHeight(bytes: number) {
         <div v-else-if="card.key === 'tun'" class="kv-list">
           <div class="kv-row"><span>设备</span><strong>{{ summary.tun_name }}</strong></div>
           <div class="kv-row"><span>地址</span><strong>{{ summary.tun_ipv4 }}</strong></div>
-          <div class="kv-row"><span>MTU</span><strong>{{ summary.tun_mtu }}</strong></div>
-          <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "代理解析" : "系统解析" }}</strong></div>
+          <div class="kv-row">
+            <span>MTU</span>
+            <strong>{{ summary.tun_mtu }}</strong>
+          </div>
+          <div class="kv-row"><span>普通 UDP</span><strong>{{ summary.tun_proxy_udp ? "按规则分流" : "Agent 直连" }}</strong></div>
+          <div class="kv-row"><span>QUIC 应用流量</span><strong>{{ summary.tun_quic_policy === "block" ? "全部阻断" : summary.transport_mode === "auto" ? "直连或自动回退代理" : summary.transport_mode === "udp" ? "直连或经加密 UDP 代理" : "直连或经 TCP 代理" }}</strong></div>
+          <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "经 Proxy 解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">
           <div class="kv-row"><span>配置段</span><strong>direct_access</strong></div>
@@ -427,7 +437,7 @@ function hourlyBarHeight(bytes: number) {
     >
       <div class="overview-drag-ghost-heading">
         <strong>{{ overviewCardTitle(draggingOverviewCard) }}</strong>
-        <i class="pi pi-arrows-alt" aria-hidden="true"></i>
+        <AppIcon name="move" />
       </div>
       <div class="overview-drag-ghost-lines" aria-hidden="true">
         <span></span>

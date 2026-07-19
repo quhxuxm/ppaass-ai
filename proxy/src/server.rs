@@ -1,8 +1,7 @@
 //! proxy 入站服务层。
 //!
-//! 这一层只关心 agent 到 proxy 的入站 TCP 连接：直接 framed TCP 连接会作为一条
-//! 独立的加密 PPAASS 连接处理；Yamux 外层连接会拆出子 stream 后交给同一套
-//! `ServerConnection` 认证、CONNECT 和 relay。
+//! TCP 目标继续使用 framed TCP/Yamux 入站；UDP 目标使用同端口的
+//! PPAASS 原生加密 UDP 入站，两条路径共享用户表和出站状态。
 
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
@@ -18,7 +17,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -62,12 +61,24 @@ impl ProxyServer {
 
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
-        // 启动代理服务器
+        // TCP 与原生 UDP 共用同一个端口号。TCP listener 保持原有 framed
+        // TCP/Yamux 入站，UDP socket 只接受通过 PPAASS 认证和 AEAD 的数据报。
         let listener = bind_tcp_listener_with_backlog(
             self.config.listen_addr.as_str(),
             DEFAULT_TCP_LISTEN_BACKLOG,
         )?;
-        info!("代理服务器正在监听 {}", self.config.listen_addr);
+        let udp_socket = Arc::new(UdpSocket::bind(&self.config.listen_addr).await?);
+        let udp_listener = crate::native_udp::run_listener(
+            udp_socket,
+            self.config.clone(),
+            self.user_manager.clone(),
+            self.egress_state.clone(),
+        );
+        tokio::pin!(udp_listener);
+        info!(
+            "代理服务器正在监听 {}（TCP + 原生加密 UDP）",
+            self.config.listen_addr
+        );
 
         loop {
             // 同时等待新连接和 Ctrl-C。收到关闭信号后退出 accept loop，
@@ -94,6 +105,9 @@ impl ProxyServer {
                             error!("接受连接失败：{}", e);
                         }
                     }
+                }
+                result = &mut udp_listener => {
+                    return result;
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("收到关闭信号");

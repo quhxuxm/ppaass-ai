@@ -1,4 +1,4 @@
-import type { AgentConfigSummary } from "./types";
+import type { AgentConfigSummary, AgentTransportMode } from "./types";
 import fallbackRawConfigSource from "../../config/local/agent.toml?raw";
 
 export const fallbackRawConfig = fallbackRawConfigSource;
@@ -8,6 +8,8 @@ const defaultFieldValues = {
   proxy_addrs: ["127.0.0.1:8080"],
   username: "user1",
   private_key_path: "keys/user1.pem",
+  transport_mode: "udp",
+  udp_session_pool_size: 4,
   connect_timeout_secs: 30,
   compression_mode: "none",
   log_level: "info",
@@ -23,6 +25,7 @@ const defaultFieldValues = {
   tun_name: "ppaass-tun",
   tun_ipv4: "10.10.10.1/24",
   tun_mtu: 1500,
+  tun_proxy_udp: true,
   tun_proxy_dns: false,
   tun_quic_policy: "allow",
   direct_mode: "proxy_all",
@@ -42,9 +45,13 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
   if (field === "tun_quic_policy") {
     return normalizeQuicPolicy(String(value ?? ""));
   }
+  if (field === "transport_mode") {
+    return normalizeTransportMode(String(value ?? ""));
+  }
   if (
     [
       "connect_timeout_secs",
+      "udp_session_pool_size",
       "udp_yamux_sessions",
       "udp_yamux_max_streams_per_session",
       "udp_yamux_open_stream_timeout_secs",
@@ -60,7 +67,8 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
       return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
     }
     const minimum = minimumNumberForField(field);
-    return Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
+    const normalized = Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
+    return field === "udp_session_pool_size" ? Math.min(8, normalized) : normalized;
   }
   if (field === "proxy_addrs" || field === "direct_rules") {
     return String(value)
@@ -77,6 +85,8 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     proxy_addrs: { section: null, key: "proxy_addrs", kind: "array" },
     username: { section: null, key: "username", kind: "string" },
     private_key_path: { section: null, key: "private_key_path", kind: "string" },
+    transport_mode: { section: null, key: "transport_mode", kind: "string" },
+    udp_session_pool_size: { section: null, key: "udp_session_pool_size", kind: "number" },
     connect_timeout_secs: { section: null, key: "connect_timeout_secs", kind: "number" },
     compression_mode: { section: null, key: "compression_mode", kind: "string" },
     log_level: { section: null, key: "log_level", kind: "string" },
@@ -91,6 +101,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     tun_name: { section: "tun", key: "name", kind: "string" },
     tun_ipv4: { section: "tun", key: "ipv4", kind: "string" },
     tun_mtu: { section: "tun", key: "mtu", kind: "number" },
+    tun_proxy_udp: { section: "tun", key: "proxy_udp", kind: "bool" },
     tun_proxy_dns: { section: "tun", key: "proxy_dns", kind: "bool" },
     tun_quic_policy: { section: "tun", key: "quic_policy", kind: "string" },
     direct_mode: { section: "direct_access", key: "mode", kind: "string" },
@@ -113,6 +124,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
 }
 
 export function summarizeRaw(raw: string): AgentConfigSummary {
+  rejectRemovedDesktopTransportFields(raw);
   const runtimeThreads = normalizeRuntimeThreads(matchNumber(raw, null, "runtime_threads"));
   const tunQuicPolicy = normalizeQuicPolicy(matchString(raw, "tun", "quic_policy") ?? "allow");
   return {
@@ -120,6 +132,8 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
     username: stringOrDefault(matchString(raw, null, "username"), "username"),
     private_key_path: stringOrDefault(matchString(raw, null, "private_key_path"), "private_key_path"),
+    transport_mode: normalizeTransportMode(matchString(raw, null, "transport_mode") ?? "udp"),
+    udp_session_pool_size: normalizeUdpSessionPoolSize(matchNumber(raw, null, "udp_session_pool_size")),
     connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
     compression_mode: stringOrDefault(matchString(raw, null, "compression_mode"), "compression_mode"),
     log_level: stringOrDefault(matchString(raw, null, "log_level"), "log_level"),
@@ -137,6 +151,7 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     tun_name: stringOrDefault(matchString(raw, "tun", "name"), "tun_name"),
     tun_ipv4: stringOrDefault(matchString(raw, "tun", "ipv4"), "tun_ipv4"),
     tun_mtu: matchNumber(raw, "tun", "mtu") ?? defaultValueForField<number>("tun_mtu"),
+    tun_proxy_udp: matchBool(raw, "tun", "proxy_udp") ?? defaultValueForField<boolean>("tun_proxy_udp"),
     tun_proxy_dns: matchBool(raw, "tun", "proxy_dns") ?? defaultValueForField<boolean>("tun_proxy_dns"),
     tun_quic_policy: tunQuicPolicy,
     direct_mode: stringOrDefault(matchString(raw, "direct_access", "mode"), "direct_mode"),
@@ -245,6 +260,7 @@ function arrayOrDefault(value: string[], field: keyof AgentConfigSummary) {
 
 function minimumNumberForField(field: keyof AgentConfigSummary) {
   if (
+    field === "udp_session_pool_size" ||
     field === "udp_yamux_sessions" ||
     field === "udp_yamux_max_streams_per_session" ||
     field === "udp_yamux_open_stream_timeout_secs" ||
@@ -258,8 +274,25 @@ function minimumNumberForField(field: keyof AgentConfigSummary) {
   return 0;
 }
 
+function normalizeUdpSessionPoolSize(value: number | undefined) {
+  return Math.min(8, Math.max(1, value ?? defaultValueForField<number>("udp_session_pool_size")));
+}
+
 function normalizeQuicPolicy(value: string) {
   return ["allow", "block"].includes(value) ? value : defaultValueForField<string>("tun_quic_policy");
+}
+
+function normalizeTransportMode(value: string): AgentTransportMode {
+  if (value === "auto" || value === "udp" || value === "tcp") {
+    return value;
+  }
+  throw new Error(`transport_mode 只支持 auto、udp 或 tcp，当前值为 ${JSON.stringify(value)}`);
+}
+
+function rejectRemovedDesktopTransportFields(raw: string) {
+  if (hasAssignment(raw, null, "quic_connection_pool_size")) {
+    throw new Error("配置字段 quic_connection_pool_size 已移除，请使用 udp_session_pool_size");
+  }
 }
 
 function matchString(raw: string, section: string | null, key: string) {
@@ -278,6 +311,11 @@ function matchBool(raw: string, section: string | null, key: string) {
   const body = sectionBody(raw, section);
   const match = body.match(new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(true|false)`, "m"));
   return match ? match[1] === "true" : undefined;
+}
+
+function hasAssignment(raw: string, section: string | null, key: string) {
+  const body = sectionBody(raw, section);
+  return new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`, "m").test(body);
 }
 
 function matchStringArray(raw: string, key: string, section: string | null = null) {

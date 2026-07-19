@@ -31,6 +31,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
+where rustup >nul 2>&1
+if errorlevel 1 (
+  echo Error: rustup was not found in PATH.
+  exit /b 1
+)
+
+echo Ensuring Rust Android targets are installed...
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+if errorlevel 1 (
+  echo Error: failed to install the required Rust Android targets.
+  exit /b 1
+)
+
 set "ZIPALIGN="
 for /f "delims=" %%T in ('dir /b /s "%ANDROID_HOME%\build-tools\zipalign.exe" 2^>nul') do set "ZIPALIGN=%%T"
 if not defined ZIPALIGN (

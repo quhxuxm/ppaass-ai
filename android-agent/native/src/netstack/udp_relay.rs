@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use common::spawn_guarded;
 use futures::SinkExt;
-use protocol::{Address, TransportProtocol, UdpRelayPacket};
+use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio_util::sync::CancellationToken;
@@ -277,7 +277,6 @@ async fn run_udp_relay(
                 continue;
             }
         };
-
         debug!("Android TUN UDP relay connected");
         let (mut reader, mut writer) = tokio::io::split(proxy_io);
         let mut cleanup = tokio::time::interval(Duration::from_secs(60));
@@ -285,7 +284,9 @@ async fn run_udp_relay(
         let idle_sleep = tokio::time::sleep(UDP_RELAY_CONNECTION_IDLE);
         tokio::pin!(idle_sleep);
         retry_request = Some(first_request);
-        let mut response_buf = vec![0u8; 65535];
+        // UdpRelayPacket adds flow/address metadata to the original UDP payload.
+        // Keep one complete native-UDP message in a single AsyncRead call.
+        let mut response_buf = vec![0u8; UDP_MAX_MESSAGE_SIZE];
 
         loop {
             if let Some(request) = retry_request.take() {

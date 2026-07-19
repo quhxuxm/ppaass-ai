@@ -6,9 +6,13 @@ proxy_addrs = ["140.82.30.214:80"]
 # proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
+# UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。
+udp_session_pool_size = 4
 connect_timeout_secs = 20
-# Agent -> proxy 消息压缩模式：none、lz4、gzip、zstd。
-# 适用于 TUN、SOCKS5、HTTP/CONNECT 中所有走 proxy 的流量。
+# Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+# 仅适用于 TCP 目标和 transport_mode=tcp 的 UDP relay；原生加密 UDP 数据报不压缩。
 # TUN 看视频/HTTPS 时，负载通常已经压缩或加密，二次压缩收益很低，还会增加 CPU 和调度抖动；
 # 本地示例默认关闭压缩，把 CPU 留给 relay 和浏览器解码。
 compression_mode = "none"
@@ -70,15 +74,21 @@ enabled = true
 name = "utun8"         # Windows 如 "ppaass-tun"，macOS 如 "utun8"，Linux 如 "tun0"
 ipv4 = "10.10.10.1/24"
 # ipv6 = "fd00:dead:beef::1/64"
+# UDP 传输模式下运行时最多使用 1280，确保浏览器 QUIC 数据报不会被加密外层再分片；
+# TCP 传输模式保留此配置值。
 mtu = 1500
+# 普通 UDP 转发开关：
+#   true  - 保持原有行为，按 direct_access 分流，未命中直连规则的 UDP 通过 proxy relay。
+#   false - 除代理 DNS 与 UDP/443 QUIC 外，其余 UDP 由 agent 绑定物理出口直连。
+# 旧配置未填写时默认为 true；DNS 与 UDP/443 QUIC 分别由独立策略控制。
+proxy_udp = true
 # DNS 请求交给 proxy 端默认 DNS 处理；不修改系统 DNS。
 # agent 会捕获发往当前系统 DNS 的 UDP/TCP 53 流量并转给 proxy 解析。
 proxy_dns = true
-# 默认不阻断 QUIC：TUN 捕获 UDP/443 后会按 direct_access 决定直连或代理到 proxy，
-# 再由 proxy 端使用真实 UDP/QUIC 访问目标 CDN。只有需要强制浏览器回退
-# TCP/TLS 时，才临时启用阻断策略。
+# 默认允许 QUIC：命中 direct_access 的目标保持直连，未命中目标通过 proxy UDP
+# relay；原生 UDP 模式使用加密 UDP，全 TCP 模式使用 TCP/Yamux。
 # QUIC 策略：
-#   allow - 按照规则直接发送 QUIC 到目标；没有匹配直连规则的通过 proxy 转发 QUIC。
+#   allow - 允许直连 QUIC；未命中的流量按 UDP 传输模式通过 proxy relay。
 #   block - 所有 UDP/443 都阻断；适合确认浏览器完全不用 QUIC 的排障场景。
 quic_policy = "allow"
 # Windows TUN 模式需要 wintun.dll。默认会检查 desktop-agent.exe 同目录、当前目录和 PATH；

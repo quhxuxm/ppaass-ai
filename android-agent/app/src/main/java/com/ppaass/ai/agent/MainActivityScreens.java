@@ -32,11 +32,13 @@ protected void buildUi() {
         screenSwitchAnimating = false;
         configTabButtons.clear();
         configTabPages.clear();
+        transportModeButtons.clear();
+        udpSessionPoolConfig = null;
+        udpYamuxConfig = null;
         directModeButtons.clear();
         directRuleValues.clear();
         directRulesConfig = null;
         directRuleCountFact = null;
-        lastVpnToggleLabel = null;
         lastRxBytes = -1;
         lastTxBytes = -1;
         lastTrafficSampleMs = 0;

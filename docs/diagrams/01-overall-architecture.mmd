@@ -12,24 +12,36 @@ flowchart LR
     TunRouter --> DirectCheck
     AndroidNetstack --> AndroidDirect{"direct_access 命中?"}
 
-    DirectCheck -->|"是"| LocalTarget["本机直连目标"]
-    AndroidDirect -->|"是"| AndroidDirectSocket["受 protect 的直连 socket"]
+    DirectCheck -->|"是"| LocalTarget["本地直连 TCP/UDP socket<br/>UDP 不经过 PPAASS 封装"]
+    AndroidDirect -->|"是"| AndroidDirectSocket["受 protect 的直连 TCP/UDP socket<br/>UDP 不经过 PPAASS 封装"]
 
-    DirectCheck -->|"否"| AgentStreams["Agent 目标流管理"]
-    AndroidDirect -->|"否"| AndroidStreams["Android 目标流管理"]
+    DirectCheck -->|"否"| AgentTransport["Agent 目标传输管理"]
+    AndroidDirect -->|"否"| AndroidTransport["Android 目标传输管理"]
 
-    AgentStreams -->|"TCP: direct framed PPAASS"| ProxyInbound["Proxy 入站 TCP"]
-    AgentStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
-    AndroidStreams -->|"TCP: direct framed PPAASS"| ProxyInbound
-    AndroidStreams -->|"UDP relay: raw Yamux + 子流"| ProxyInbound
+    AgentTransport -->|"TCP: direct framed PPAASS"| ProxyTcp["Proxy 入站 TCP"]
+    AgentTransport -->|"UDP + tcp 模式: raw Yamux"| ProxyTcp
+    AgentTransport -->|"UDP + udp 模式: raw UDP datagram"| ProxyUdp["Proxy 入站 raw UDP"]
+    AndroidTransport -->|"TCP: direct framed PPAASS"| ProxyTcp
+    AndroidTransport -->|"UDP + tcp 模式: raw Yamux"| ProxyTcp
+    AndroidTransport -->|"UDP + udp 模式: raw UDP datagram"| ProxyUdp
 
-    ProxyInbound --> Peek{"首包像 Yamux?"}
+    ProxyTcp --> Peek{"首包像 Yamux?"}
     Peek -->|"否"| DirectFramed["direct framed PPAASS 连接"]
     Peek -->|"是"| YamuxAccept["raw Yamux session"]
     YamuxAccept --> Substream["accept 子流"]
-    DirectFramed --> Auth["Auth/Connect/Data"]
-    Substream --> Auth
-    Auth --> ConnectDispatch["Connect 分流"]
+    DirectFramed --> StreamAuth["流式 Auth/Connect/Data"]
+    Substream --> StreamAuth
+
+    ProxyUdp --> UdpSession["按 session ID 分发"]
+    UdpSession --> UdpHandshake["RSA 身份认证/会话建立<br/>HKDF 双向密钥"]
+    UdpSession --> UdpVerify["逐包 AES-256-GCM + AAD<br/>序号/防重放/有界重组"]
+    UdpHandshake --> UdpSession
+    UdpVerify --> UdpMessages["Connect/Data/Close by flow_id"]
+
+    StreamAuth --> ConnectDispatch["Connect 分流"]
+    UdpMessages --> UdpDispatch["UDP flow 分流"]
     ConnectDispatch -->|"普通 TCP/UDP"| Target["目标服务器"]
     ConnectDispatch -->|"Address::UdpRelay"| UdpRelay["共享 UDP relay"]
     ConnectDispatch -->|"forward_mode"| Upstream["上游 PPAASS Proxy"]
+    UdpDispatch --> Target
+    UdpDispatch --> UdpRelay

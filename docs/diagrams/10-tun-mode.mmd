@@ -15,6 +15,7 @@ flowchart TD
 
     I --> O{"UDP/53 且 proxy_dns 且确认为 DNS 包?"}
     O -->|"是"| P["DnsProxy -> Address::ProxyDns"]
-    O -->|"否"| Q{"direct_access 或 DNS 缓存命中?"}
-    Q -->|"是"| R["绑定物理接口直连 UDP"]
-    Q -->|"否"| S["udp_sessions / 共享 Address::UdpRelay"]
+    O -->|"否"| Q{"普通 UDP: proxy_udp + direct_access + transport_mode<br/>应用 UDP/443: quic_policy + direct_access + transport_mode"}
+    Q -->|"直连"| R["绑定物理接口直连 UDP<br/>不经过 PPAASS 封装"]
+    Q -->|"允许且未直连"| S["代理 UDP: 原生加密 UDP<br/>或 TCP/Yamux"]
+    Q -->|"显式阻断 UDP/443"| T["丢弃 UDP/443，应用回退 TCP/TLS"]
