@@ -24,13 +24,6 @@ import java.util.*;
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
 abstract class MainActivityUiKit extends MainActivityState {
 
-private static final int[] CARD_ACCENTS = {
-        COLOR_ACTION_WARN,
-        COLOR_ACTION_START,
-        COLOR_STATUS_RUNNING,
-        COLOR_ACTION_INFO
-};
-
 protected Button secondaryButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -90,7 +83,7 @@ protected Drawable appBackground() {
                         0,
                         width,
                         height,
-                        Color.rgb(7, 11, 15),
+                        COLOR_SURFACE,
                         COLOR_BACKGROUND,
                         Shader.TileMode.CLAMP));
                 canvas.drawRect(bounds, paint);
@@ -130,7 +123,16 @@ protected Drawable appBackground() {
     }
 
 protected int cardAccent(int index) {
-        return CARD_ACCENTS[Math.floorMod(index, CARD_ACCENTS.length)];
+        switch (Math.floorMod(index, 4)) {
+            case 0:
+                return COLOR_ACTION_WARN;
+            case 1:
+                return COLOR_ACTION_START;
+            case 2:
+                return COLOR_STATUS_RUNNING;
+            default:
+                return COLOR_ACTION_INFO;
+        }
     }
 
 protected GradientDrawable iconPlateBackground(int color) {
@@ -563,8 +565,8 @@ private void updateScreenTabs(int selectedIndex) {
             boolean selected = i == selectedIndex;
             button.setSelected(selected);
             button.setTextColor(interactiveTextColors(
-                    selected ? Color.rgb(243, 244, 255) : COLOR_MUTED,
-                    Color.rgb(245, 246, 255)));
+                    selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
             button.setBackground(selected
                     ? interactiveRounded(
                             COLOR_ACCENT_SOFT,

@@ -25,6 +25,8 @@ import java.util.*;
 abstract class MainActivityConfigScreen extends MainActivityStatusScreen {
 
 protected void buildConfigScreen(LinearLayout root) {
+        buildAppearanceSection(root);
+
         LinearLayout actions = configSection(root, "配置");
         TextView actionsSubtitle = mutedText("恢复内置默认值", 13f);
         LinearLayout.LayoutParams actionsSubtitleParams = matchWrap();
@@ -189,6 +191,47 @@ protected void buildConfigScreen(LinearLayout root) {
         updateTransportModeSettingsVisibility();
 
         buildDirectAccessSection(root);
+    }
+
+protected void buildAppearanceSection(LinearLayout root) {
+        LinearLayout appearance = configSection(root, "外观");
+        appearance.addView(controlLabel("配色风格"), labelParams());
+
+        Spinner themeSpinner = new Spinner(this);
+        themeSpinner.setAdapter(spinnerAdapter(UiPalette.THEME_LABELS));
+        String selectedTheme = UiPalette.normalizeTheme(
+                prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
+        themeSpinner.setSelection(UiPalette.themeIndex(selectedTheme), false);
+        themeSpinner.setBackground(controlBackground());
+        themeSpinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+        themeSpinner.setPadding(dp(12), 0, dp(12), 0);
+        appearance.addView(themeSpinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+        addFieldHelp(appearance, "选择后立即应用，不影响代理配置和运行状态。");
+
+        themeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= UiPalette.THEME_KEYS.length) {
+                    return;
+                }
+                String theme = UiPalette.THEME_KEYS[position];
+                String current = UiPalette.normalizeTheme(
+                        prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
+                if (theme.equals(current)) {
+                    return;
+                }
+                prefs.edit().putString(UiPalette.PREF_COLOR_THEME, theme).apply();
+                UiPalette.apply(theme);
+                recreate();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // 保留当前配色。
+            }
+        });
     }
 
 }

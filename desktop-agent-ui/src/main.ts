@@ -3,8 +3,9 @@ import PrimeVue from "primevue/config";
 import Aura from "@primeuix/themes/aura";
 import "./styles.css";
 import App from "./App.vue";
+import { applyColorTheme, loadColorTheme } from "./colorThemes";
 
-document.documentElement.classList.add("app-dark");
+applyColorTheme(loadColorTheme());
 
 createApp(App)
   .use(PrimeVue, {

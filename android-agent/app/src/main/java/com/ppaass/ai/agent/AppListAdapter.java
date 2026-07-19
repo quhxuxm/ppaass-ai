@@ -22,15 +22,15 @@ import java.util.List;
 
 // VPN 应用选择列表只负责渲染，选中状态仍由 Activity 统一保存。
 final class AppListAdapter extends BaseAdapter {
-    private static final int COLOR_SURFACE = UiPalette.SURFACE;
-    private static final int COLOR_CONTROL = UiPalette.CONTROL;
-    private static final int COLOR_TEXT = UiPalette.TEXT;
-    private static final int COLOR_MUTED = UiPalette.MUTED;
-    private static final int COLOR_BORDER = UiPalette.BORDER;
-    private static final int COLOR_ACCENT = UiPalette.ACCENT;
-    private static final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
-    private static final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
-    private static final int COLOR_ACTION_START = UiPalette.ACTION_WARN;
+    private final int COLOR_SURFACE = UiPalette.SURFACE;
+    private final int COLOR_CONTROL = UiPalette.CONTROL;
+    private final int COLOR_TEXT = UiPalette.TEXT;
+    private final int COLOR_MUTED = UiPalette.MUTED;
+    private final int COLOR_BORDER = UiPalette.BORDER;
+    private final int COLOR_ACCENT = UiPalette.ACCENT;
+    private final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
+    private final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
+    private final int COLOR_ACTION_START = UiPalette.ACTION_WARN;
 
     private final Context context;
     private final List<AppEntry> apps;

@@ -34,15 +34,15 @@ import java.util.List;
 import java.util.Set;
 
 final class HttpProxyClientDialog {
-    private static final int COLOR_SURFACE = UiPalette.SURFACE;
-    private static final int COLOR_CONTROL = UiPalette.CONTROL;
-    private static final int COLOR_TEXT = UiPalette.TEXT;
-    private static final int COLOR_MUTED = UiPalette.MUTED;
-    private static final int COLOR_BORDER = UiPalette.BORDER;
-    private static final int COLOR_ACCENT = UiPalette.ACCENT;
-    private static final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
-    private static final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
-    private static final int COLOR_ACTION_STOP = UiPalette.ACTION_STOP;
+    private final int COLOR_SURFACE = UiPalette.SURFACE;
+    private final int COLOR_CONTROL = UiPalette.CONTROL;
+    private final int COLOR_TEXT = UiPalette.TEXT;
+    private final int COLOR_MUTED = UiPalette.MUTED;
+    private final int COLOR_BORDER = UiPalette.BORDER;
+    private final int COLOR_ACCENT = UiPalette.ACCENT;
+    private final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
+    private final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
+    private final int COLOR_ACTION_STOP = UiPalette.ACTION_STOP;
 
     private final Context context;
     private final SharedPreferences prefs;
@@ -354,8 +354,8 @@ final class HttpProxyClientDialog {
     private void styleTab(Button button, boolean selected) {
         button.setSelected(selected);
         button.setTextColor(interactiveTextColors(
-                selected ? Color.rgb(243, 244, 255) : COLOR_MUTED,
-                Color.rgb(245, 246, 255)));
+                selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                COLOR_ACCENT_DARK));
         int fill = selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
         button.setBackground(interactiveRounded(
                 fill,

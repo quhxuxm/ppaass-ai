@@ -13,6 +13,7 @@ import LogsView from "./views/LogsView.vue";
 import OverviewView from "./views/OverviewView.vue";
 import RoutingView from "./views/RoutingView.vue";
 import TomlView from "./views/TomlView.vue";
+import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
 
 const {
   activeForwardingLabel,
@@ -50,6 +51,12 @@ const {
 } = useDesktopAgent();
 
 const sidebarCollapsed = ref(false);
+const colorTheme = ref<ColorTheme>(loadColorTheme());
+
+function setColorTheme(theme: ColorTheme) {
+  colorTheme.value = theme;
+  applyColorTheme(theme);
+}
 </script>
 
 <template>
@@ -81,11 +88,14 @@ const sidebarCollapsed = ref(false);
           :config-available="Boolean(state.config)"
           :dirty="state.dirty"
           :busy="state.busy"
+          :color-theme="colorTheme"
+          :color-themes="colorThemes"
           @reload="reloadAll"
           @restore-default-config="restoreDefaultConfig"
           @save="saveConfig"
           @start="startAgent"
           @stop="stopAgent"
+          @update:color-theme="setColorTheme"
         />
 
         <section v-if="state.loading" class="loading">

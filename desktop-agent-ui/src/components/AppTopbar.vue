@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Button from "primevue/button";
 import AppIcon from "./AppIcon";
+import type { ColorTheme } from "../colorThemes";
 
 defineProps<{
   subtitle: string;
@@ -9,6 +10,8 @@ defineProps<{
   configAvailable: boolean;
   dirty: boolean;
   busy: boolean;
+  colorTheme: ColorTheme;
+  colorThemes: readonly { value: ColorTheme; label: string; mode: "dark" | "light" }[];
 }>();
 
 const emit = defineEmits<{
@@ -17,6 +20,7 @@ const emit = defineEmits<{
   save: [];
   start: [];
   stop: [];
+  "update:color-theme": [theme: ColorTheme];
 }>();
 </script>
 
@@ -27,6 +31,19 @@ const emit = defineEmits<{
       <p>{{ subtitle }}</p>
     </div>
     <div class="toolbar">
+      <label class="theme-picker" title="选择界面配色">
+        <span class="theme-picker-dot" aria-hidden="true"></span>
+        <span class="theme-picker-label">配色</span>
+        <select
+          :value="colorTheme"
+          aria-label="配色风格"
+          @change="emit('update:color-theme', ($event.target as HTMLSelectElement).value as ColorTheme)"
+        >
+          <option v-for="theme in colorThemes" :key="theme.value" :value="theme.value">
+            {{ theme.label }}
+          </option>
+        </select>
+      </label>
       <Button severity="secondary" outlined rounded aria-label="重新载入" @click="emit('reload')">
         <template #icon="slotProps"><AppIcon :class="slotProps.class" name="refresh" /></template>
       </Button>

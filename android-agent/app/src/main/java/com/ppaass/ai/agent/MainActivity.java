@@ -38,8 +38,10 @@ public class MainActivity extends MainActivityScreens {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        configureWindow();
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        UiPalette.apply(prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
+        reloadUiPalette();
+        configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
     }
@@ -90,7 +92,9 @@ public class MainActivity extends MainActivityScreens {
     private void configureWindow() {
         getWindow().setStatusBarColor(COLOR_BACKGROUND);
         getWindow().setNavigationBarColor(COLOR_SURFACE);
-        getWindow().getDecorView().setSystemUiVisibility(0);
+        getWindow().getDecorView().setSystemUiVisibility(UiPalette.IS_LIGHT
+                ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                : 0);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             getWindow().setNavigationBarDividerColor(COLOR_BORDER);
@@ -102,8 +106,10 @@ public class MainActivity extends MainActivityScreens {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
+                int lightBars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
                 controller.setSystemBarsAppearance(
-                        0,
+                        UiPalette.IS_LIGHT ? lightBars : 0,
                         WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
                                 | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
             }

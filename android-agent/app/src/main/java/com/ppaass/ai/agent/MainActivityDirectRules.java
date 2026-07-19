@@ -206,8 +206,8 @@ protected void updateDirectModeButtons() {
             boolean selected = selectedMode.equals(String.valueOf(button.getTag()));
             button.setSelected(selected);
             button.setTextColor(interactiveTextColors(
-                    selected ? Color.rgb(243, 244, 255) : COLOR_MUTED,
-                    Color.rgb(245, 246, 255)));
+                    selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
             int fill = selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
             int stroke = selected ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
             button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));

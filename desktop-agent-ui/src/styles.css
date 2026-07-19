@@ -6563,3 +6563,559 @@ html.app-dark .brand-mark img {
     grid-column: auto;
   }
 }
+
+/* User-selectable color styles. The existing midnight theme remains the default. */
+:root.app-theme-midnight {
+  --theme-primary: #8f9cff;
+  --theme-primary-strong: #d9ddff;
+  --theme-primary-rgb: 143, 156, 255;
+  --theme-secondary-rgb: 72, 232, 255;
+  --theme-bg-start: #010203;
+  --theme-bg-mid: #04070a;
+  --theme-bg-end: #020405;
+  --theme-surface: #0b1118;
+}
+
+:root.app-theme-ocean {
+  --theme-primary: #38bdf8;
+  --theme-primary-strong: #bae6fd;
+  --theme-primary-rgb: 56, 189, 248;
+  --theme-secondary-rgb: 45, 212, 191;
+  --theme-bg-start: #020617;
+  --theme-bg-mid: #062033;
+  --theme-bg-end: #02131f;
+  --theme-surface: #071a28;
+}
+
+:root.app-theme-forest {
+  --theme-primary: #4ade80;
+  --theme-primary-strong: #bbf7d0;
+  --theme-primary-rgb: 74, 222, 128;
+  --theme-secondary-rgb: 190, 242, 100;
+  --theme-bg-start: #020b07;
+  --theme-bg-mid: #071b12;
+  --theme-bg-end: #07110b;
+  --theme-surface: #0a1a12;
+}
+
+:root.app-theme-sunset {
+  --theme-primary: #fb923c;
+  --theme-primary-strong: #fed7aa;
+  --theme-primary-rgb: 251, 146, 60;
+  --theme-secondary-rgb: 244, 63, 94;
+  --theme-bg-start: #100605;
+  --theme-bg-mid: #24100b;
+  --theme-bg-end: #14070b;
+  --theme-surface: #21100c;
+}
+
+:root.app-theme-violet {
+  --theme-primary: #c084fc;
+  --theme-primary-strong: #e9d5ff;
+  --theme-primary-rgb: 192, 132, 252;
+  --theme-secondary-rgb: 244, 114, 182;
+  --theme-bg-start: #090311;
+  --theme-bg-mid: #1a0c2b;
+  --theme-bg-end: #0c0617;
+  --theme-surface: #190f25;
+}
+
+:root.app-theme-porcelain {
+  --theme-primary: #c26a32;
+  --theme-primary-strong: #8f421d;
+  --theme-primary-rgb: 194, 106, 50;
+  --theme-secondary-rgb: 217, 164, 65;
+  --theme-bg-start: #fffdf8;
+  --theme-bg-mid: #faf6ee;
+  --theme-bg-end: #fffaf3;
+  --theme-surface: #ffffff;
+  --theme-soft-surface: #f7f1e7;
+  --theme-text: #352b24;
+  --theme-text-muted: #7d6d62;
+}
+
+:root.app-theme-sky {
+  --theme-primary: #1677d2;
+  --theme-primary-strong: #0c4f96;
+  --theme-primary-rgb: 22, 119, 210;
+  --theme-secondary-rgb: 14, 165, 233;
+  --theme-bg-start: #fbfdff;
+  --theme-bg-mid: #eff8ff;
+  --theme-bg-end: #f7fbff;
+  --theme-surface: #ffffff;
+  --theme-soft-surface: #edf7ff;
+  --theme-text: #172b3d;
+  --theme-text-muted: #60778b;
+}
+
+:root.app-theme-mint {
+  --theme-primary: #078a68;
+  --theme-primary-strong: #056149;
+  --theme-primary-rgb: 7, 138, 104;
+  --theme-secondary-rgb: 45, 212, 191;
+  --theme-bg-start: #fbfffd;
+  --theme-bg-mid: #eefbf6;
+  --theme-bg-end: #f7fffb;
+  --theme-surface: #ffffff;
+  --theme-soft-surface: #eaf8f2;
+  --theme-text: #17342b;
+  --theme-text-muted: #607b72;
+}
+
+:root.app-theme-rose {
+  --theme-primary: #d64278;
+  --theme-primary-strong: #9f2854;
+  --theme-primary-rgb: 214, 66, 120;
+  --theme-secondary-rgb: 244, 114, 182;
+  --theme-bg-start: #fffdfd;
+  --theme-bg-mid: #fff1f5;
+  --theme-bg-end: #fff9fb;
+  --theme-surface: #ffffff;
+  --theme-soft-surface: #fff0f4;
+  --theme-text: #3d2530;
+  --theme-text-muted: #846875;
+}
+
+:root.app-dark[class*="app-theme-"],
+:root.app-dark[class*="app-theme-"] .app-frame {
+  --app-primary: var(--theme-primary);
+  --app-primary-strong: var(--theme-primary-strong);
+  --app-border: rgba(var(--theme-primary-rgb), 0.24);
+  --p-primary-color: var(--theme-primary) !important;
+  --p-primary-hover-color: var(--theme-primary-strong) !important;
+  --p-primary-active-color: var(--theme-primary) !important;
+  --p-primary-400: var(--theme-primary-strong) !important;
+  --p-primary-500: var(--theme-primary) !important;
+  --p-form-field-hover-border-color: rgba(var(--theme-primary-rgb), 0.62) !important;
+  --p-form-field-focus-border-color: var(--theme-primary) !important;
+  --p-button-text-primary-color: var(--theme-primary-strong) !important;
+  --p-button-outlined-primary-color: var(--theme-primary-strong) !important;
+  --p-button-outlined-primary-border-color: rgba(var(--theme-primary-rgb), 0.44) !important;
+}
+
+html.app-dark[class*="app-theme-"],
+html.app-dark[class*="app-theme-"] body,
+html.app-dark[class*="app-theme-"] .app-frame {
+  background:
+    radial-gradient(circle at 9% 4%, rgba(var(--theme-primary-rgb), 0.16), transparent 29%),
+    radial-gradient(circle at 78% 0%, rgba(var(--theme-secondary-rgb), 0.12), transparent 30%),
+    radial-gradient(circle at 88% 88%, rgba(var(--theme-primary-rgb), 0.08), transparent 28%),
+    linear-gradient(145deg, var(--theme-bg-start) 0%, var(--theme-bg-mid) 52%, var(--theme-bg-end) 100%);
+}
+
+html.app-dark[class*="app-theme-"] .sidebar {
+  border-right-color: rgba(var(--theme-primary-rgb), 0.16);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--theme-surface) 92%, black), var(--theme-bg-start));
+}
+
+html.app-dark[class*="app-theme-"] .topbar,
+html.app-dark[class*="app-theme-"] .topbar::before {
+  background:
+    linear-gradient(110deg, rgba(var(--theme-primary-rgb), 0.08), transparent 38%),
+    linear-gradient(280deg, rgba(var(--theme-secondary-rgb), 0.05), transparent 38%),
+    color-mix(in srgb, var(--theme-bg-start) 88%, transparent);
+}
+
+html.app-dark[class*="app-theme-"] .topbar,
+html.app-dark[class*="app-theme-"] .panel,
+html.app-dark[class*="app-theme-"] .overview-card,
+html.app-dark[class*="app-theme-"] .card-group {
+  border-color: rgba(var(--theme-primary-rgb), 0.2);
+}
+
+html.app-dark[class*="app-theme-"] .nav-button.p-button:hover,
+html.app-dark[class*="app-theme-"] .sidebar-toggle.p-button:hover,
+html.app-dark[class*="app-theme-"] .p-button.p-button-outlined:not(:disabled):hover {
+  border-color: rgba(var(--theme-primary-rgb), 0.48) !important;
+  background: rgba(var(--theme-primary-rgb), 0.14) !important;
+}
+
+html.app-dark[class*="app-theme-"] .nav-button.p-button.active,
+html.app-dark[class*="app-theme-"] .nav-button.p-button.active:hover {
+  border-color: rgba(var(--theme-primary-rgb), 0.56) !important;
+  background: rgba(var(--theme-primary-rgb), 0.19) !important;
+  box-shadow: inset 3px 0 0 var(--theme-primary), 0 0 24px rgba(var(--theme-primary-rgb), 0.16) !important;
+}
+
+html.app-dark[class*="app-theme-"] .field input:focus,
+html.app-dark[class*="app-theme-"] .field select:focus,
+html.app-dark[class*="app-theme-"] .field textarea:focus,
+html.app-dark[class*="app-theme-"] .field .p-inputtext:enabled:focus,
+html.app-dark[class*="app-theme-"] .field .p-select:not(.p-disabled).p-focus,
+html.app-dark[class*="app-theme-"] .toml-editor-shell:focus-within {
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(var(--theme-primary-rgb), 0.17), 0 0 24px rgba(var(--theme-primary-rgb), 0.13);
+}
+
+:root.app-light[class*="app-theme-"],
+:root.app-light[class*="app-theme-"] .app-frame {
+  color-scheme: light;
+  --app-bg: var(--theme-bg-mid);
+  --app-surface: rgba(255, 255, 255, 0.94);
+  --app-sidebar: rgba(255, 255, 255, 0.88);
+  --app-muted-surface: var(--theme-soft-surface);
+  --app-border: rgba(var(--theme-primary-rgb), 0.2);
+  --app-border-soft: rgba(var(--theme-primary-rgb), 0.12);
+  --app-text: var(--theme-text);
+  --app-text-strong: var(--theme-text);
+  --app-text-muted: var(--theme-text-muted);
+  --app-primary: var(--theme-primary);
+  --app-primary-strong: var(--theme-primary-strong);
+  --p-primary-color: var(--theme-primary) !important;
+  --p-primary-hover-color: var(--theme-primary-strong) !important;
+  --p-primary-active-color: var(--theme-primary-strong) !important;
+  --p-primary-500: var(--theme-primary) !important;
+  --p-content-background: #ffffff !important;
+  --p-content-hover-background: var(--theme-soft-surface) !important;
+  --p-content-border-color: rgba(var(--theme-primary-rgb), 0.2) !important;
+  --p-content-color: var(--theme-text) !important;
+  --p-text-color: var(--theme-text) !important;
+  --p-text-muted-color: var(--theme-text-muted) !important;
+  --p-form-field-focus-border-color: var(--theme-primary) !important;
+}
+
+html.app-light[class*="app-theme-"],
+html.app-light[class*="app-theme-"] body,
+html.app-light[class*="app-theme-"] .app-frame {
+  background:
+    radial-gradient(circle at 8% 3%, rgba(var(--theme-primary-rgb), 0.11), transparent 28%),
+    radial-gradient(circle at 82% 0%, rgba(var(--theme-secondary-rgb), 0.09), transparent 30%),
+    linear-gradient(145deg, var(--theme-bg-start), var(--theme-bg-mid) 52%, var(--theme-bg-end));
+  color: var(--theme-text);
+}
+
+html.app-light[class*="app-theme-"] .app-frame::before {
+  background-image:
+    linear-gradient(rgba(var(--theme-primary-rgb), 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--theme-primary-rgb), 0.045) 1px, transparent 1px);
+}
+
+html.app-light[class*="app-theme-"] .sidebar {
+  border-right-color: rgba(var(--theme-primary-rgb), 0.14);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 18px 0 46px rgba(var(--theme-primary-rgb), 0.08);
+}
+
+html.app-light[class*="app-theme-"] .topbar,
+html.app-light[class*="app-theme-"] .topbar::before {
+  background:
+    linear-gradient(110deg, rgba(var(--theme-primary-rgb), 0.075), transparent 38%),
+    rgba(255, 255, 255, 0.82);
+}
+
+html.app-light[class*="app-theme-"] .topbar,
+html.app-light[class*="app-theme-"] .panel,
+html.app-light[class*="app-theme-"] .overview-card,
+html.app-light[class*="app-theme-"] .card-group,
+html.app-light[class*="app-theme-"] .metric-tile,
+html.app-light[class*="app-theme-"] .endpoint-row {
+  border-color: rgba(var(--theme-primary-rgb), 0.17);
+  background-color: rgba(255, 255, 255, 0.88);
+}
+
+html.app-light[class*="app-theme-"] .nav-button.p-button:hover,
+html.app-light[class*="app-theme-"] .sidebar-toggle.p-button:hover {
+  background: rgba(var(--theme-primary-rgb), 0.09) !important;
+  color: var(--theme-primary-strong) !important;
+}
+
+html.app-light[class*="app-theme-"] .nav-button.p-button.active,
+html.app-light[class*="app-theme-"] .nav-button.p-button.active:hover {
+  border-color: rgba(var(--theme-primary-rgb), 0.28) !important;
+  background: linear-gradient(135deg, rgba(var(--theme-primary-rgb), 0.19), rgba(var(--theme-secondary-rgb), 0.11)) !important;
+  color: var(--theme-primary-strong) !important;
+  box-shadow: inset 3px 0 0 var(--theme-primary), 0 10px 24px rgba(var(--theme-primary-rgb), 0.12) !important;
+}
+
+html.app-light[class*="app-theme-"] .field input:focus,
+html.app-light[class*="app-theme-"] .field select:focus,
+html.app-light[class*="app-theme-"] .field textarea:focus,
+html.app-light[class*="app-theme-"] .field .p-inputtext:enabled:focus,
+html.app-light[class*="app-theme-"] .field .p-select:not(.p-disabled).p-focus,
+html.app-light[class*="app-theme-"] .toml-editor-shell:focus-within {
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(var(--theme-primary-rgb), 0.13);
+}
+
+html.app-light[class*="app-theme-"] ::selection {
+  background: rgba(var(--theme-primary-rgb), 0.22);
+}
+
+.theme-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 40px;
+  padding: 0 8px 0 11px;
+  border: 1px solid rgba(var(--theme-primary-rgb, 143, 156, 255), 0.3);
+  border-radius: 10px;
+  background: rgba(var(--theme-primary-rgb, 143, 156, 255), 0.08);
+  color: var(--app-text-muted);
+}
+
+.theme-picker-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--theme-primary, var(--app-primary));
+  box-shadow: 0 0 12px rgba(var(--theme-primary-rgb, 143, 156, 255), 0.7);
+}
+
+.theme-picker-label {
+  font-size: 12px;
+}
+
+.theme-picker select {
+  max-width: 100px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--app-text-strong);
+  cursor: pointer;
+}
+
+html.app-light .theme-picker select option {
+  background: #ffffff;
+  color: var(--theme-text);
+}
+
+/* Brand artwork and chart colors must work in both dark and light modes. */
+.brand-mark,
+html.app-dark .brand-mark,
+html.app-light .brand-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.brand-mark img,
+html.app-dark .brand-mark img,
+html.app-light .brand-mark img {
+  display: block;
+  width: 42px;
+  height: 42px;
+  max-width: 42px;
+  object-fit: contain;
+}
+
+:root {
+  --gauge-download: #d93b72;
+  --gauge-download-track: #f7dfe8;
+  --gauge-upload: #078a8f;
+  --gauge-upload-track: #d9eff0;
+}
+
+:root.app-dark {
+  --gauge-download: #ff5c91;
+  --gauge-download-track: #321522;
+  --gauge-upload: #48e8ff;
+  --gauge-upload-track: #102a31;
+}
+
+html.app-light .speed-gauge,
+html.app-light .speed-gauge:nth-child(2),
+html.app-light .hourly-bars {
+  border-color: rgba(var(--theme-primary-rgb), 0.14);
+  background: linear-gradient(145deg, #ffffff, var(--theme-soft-surface));
+}
+
+html.app-light .speed-gauge span,
+html.app-light .hourly-legend,
+html.app-light .hourly-column > span {
+  color: var(--theme-text-muted);
+}
+
+html.app-light .sidebar-status {
+  border-color: rgba(var(--theme-primary-rgb), 0.14);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 10px 24px rgba(var(--theme-primary-rgb), 0.07);
+}
+
+/* Complete light-mode treatment for configuration-heavy pages. */
+html.app-light .content-grid > .card-group {
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(var(--theme-primary-rgb), 0.13);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow: 0 14px 36px rgba(var(--theme-primary-rgb), 0.055);
+}
+
+html.app-light .card-group-heading {
+  padding: 0 2px;
+}
+
+html.app-light .card-group-heading p,
+html.app-light .panel-heading > p,
+html.app-light .field-help,
+html.app-light .method-fact span,
+html.app-light .policy-fact span,
+html.app-light .forwarding-method span,
+html.app-light .rule-scope-item p,
+html.app-light .section-heading span {
+  color: var(--theme-text-muted);
+}
+
+html.app-light .panel,
+html.app-light .panel.p-card {
+  border-color: rgba(var(--theme-primary-rgb), 0.15);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow:
+    0 12px 28px rgba(var(--theme-primary-rgb), 0.065),
+    inset 0 1px 0 #ffffff;
+}
+
+html.app-light .method-fact,
+html.app-light .policy-fact,
+html.app-light .forwarding-method,
+html.app-light .rule-scope-item,
+html.app-light .kv-row,
+html.app-light .switch-row {
+  border-color: rgba(var(--theme-primary-rgb), 0.12);
+  background: linear-gradient(145deg, #ffffff, var(--theme-soft-surface));
+}
+
+html.app-light .method-fact:hover,
+html.app-light .policy-fact:hover,
+html.app-light .forwarding-method:hover,
+html.app-light .rule-scope-item:hover,
+html.app-light .kv-row:hover,
+html.app-light .switch-row:hover {
+  border-color: rgba(var(--theme-primary-rgb), 0.28);
+  background: linear-gradient(145deg, #ffffff, rgba(var(--theme-primary-rgb), 0.07));
+}
+
+html.app-light .field input,
+html.app-light .field textarea,
+html.app-light .field .p-inputtext,
+html.app-light .field .p-inputnumber-input,
+html.app-light .field .p-select,
+html.app-light .toml-editor {
+  border-color: rgba(var(--theme-primary-rgb), 0.17);
+  background: #ffffff;
+  color: var(--theme-text);
+  box-shadow: inset 0 1px 2px rgba(var(--theme-primary-rgb), 0.025);
+}
+
+html.app-light .field input:disabled,
+html.app-light .field textarea:disabled,
+html.app-light .field .p-disabled {
+  background: var(--theme-soft-surface);
+  color: var(--theme-text-muted);
+  opacity: 0.78;
+}
+
+html.app-light .p-select-overlay,
+html.app-light .p-popover,
+html.app-light .p-tooltip-text {
+  border-color: rgba(var(--theme-primary-rgb), 0.18) !important;
+  background: #ffffff !important;
+  color: var(--theme-text) !important;
+  box-shadow: 0 18px 42px rgba(var(--theme-primary-rgb), 0.14) !important;
+}
+
+html.app-light .p-select-option {
+  color: var(--theme-text);
+}
+
+html.app-light .p-select-option:not(.p-select-option-selected):not(.p-disabled).p-focus {
+  background: rgba(var(--theme-primary-rgb), 0.07);
+  color: var(--theme-primary-strong);
+}
+
+html.app-light .p-select-option.p-select-option-selected {
+  background: rgba(var(--theme-primary-rgb), 0.12);
+  color: var(--theme-primary-strong);
+}
+
+html.app-light .p-selectbutton,
+html.app-light .segmented {
+  border-color: rgba(var(--theme-primary-rgb), 0.16);
+  background: var(--theme-soft-surface);
+}
+
+html.app-light .p-selectbutton .p-togglebutton,
+html.app-light .segmented button {
+  color: var(--theme-text-muted);
+}
+
+html.app-light .p-selectbutton .p-togglebutton.p-togglebutton-checked,
+html.app-light .segmented button.selected {
+  border: 1px solid rgba(var(--theme-primary-rgb), 0.25);
+  background: #ffffff;
+  color: var(--theme-primary-strong);
+  box-shadow:
+    inset 3px 0 0 var(--theme-primary),
+    0 5px 14px rgba(var(--theme-primary-rgb), 0.11);
+}
+
+html.app-light .p-toggleswitch .p-toggleswitch-slider {
+  border: 1px solid rgba(var(--theme-primary-rgb), 0.15);
+  background: #d9e0e4;
+}
+
+html.app-light .p-toggleswitch.p-toggleswitch-checked .p-toggleswitch-slider {
+  border-color: var(--theme-primary);
+  background: var(--theme-primary);
+  box-shadow: 0 0 0 3px rgba(var(--theme-primary-rgb), 0.1);
+}
+
+html.app-light .p-toggleswitch .p-toggleswitch-handle,
+html.app-light .p-toggleswitch.p-toggleswitch-checked .p-toggleswitch-handle {
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(31, 41, 55, 0.2);
+}
+
+html.app-light .rule-create,
+html.app-light .rule-inventory {
+  border-color: rgba(var(--theme-primary-rgb), 0.13);
+  background: var(--theme-soft-surface);
+}
+
+html.app-light .rule-create {
+  background: #ffffff;
+}
+
+html.app-light .rule-scope-note {
+  border-color: rgba(var(--theme-primary-rgb), 0.2);
+  background: rgba(var(--theme-primary-rgb), 0.065);
+  color: var(--theme-text);
+}
+
+html.app-light .rule-group {
+  border-color: rgba(var(--theme-primary-rgb), 0.15);
+  background: #ffffff;
+}
+
+html.app-light .rule-group-heading {
+  border-bottom-color: rgba(var(--theme-primary-rgb), 0.11);
+  background: var(--theme-soft-surface);
+}
+
+html.app-light .rule-group-heading > div:first-child span,
+html.app-light .rule-group-heading > strong {
+  color: var(--theme-text);
+}
+
+html.app-light .rule-chip {
+  border-color: rgba(var(--theme-primary-rgb), 0.2);
+  background: rgba(var(--theme-primary-rgb), 0.075);
+  color: var(--theme-primary-strong);
+}
+
+html.app-light .rule-chip-remove {
+  border-color: rgba(var(--theme-primary-rgb), 0.17);
+  color: var(--theme-primary-strong);
+}
+
+html.app-light .preset-list .p-button {
+  border-color: rgba(var(--theme-primary-rgb), 0.18) !important;
+  background: #ffffff !important;
+  color: var(--theme-primary-strong) !important;
+}

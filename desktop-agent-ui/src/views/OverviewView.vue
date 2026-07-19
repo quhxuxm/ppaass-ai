@@ -322,9 +322,9 @@ function hourlyBarHeight(bytes: number) {
               :model-value="downloadGaugeValue"
               :size="132"
               readonly
-              value-color="#ff5c91"
-              range-color="#321522"
-              text-color="#eefaff"
+              value-color="var(--gauge-download)"
+              range-color="var(--gauge-download-track)"
+              text-color="var(--app-text-strong)"
             />
             <span>下载</span>
             <strong>{{ formatRate(traffic.download_bps) }}</strong>
@@ -334,9 +334,9 @@ function hourlyBarHeight(bytes: number) {
               :model-value="uploadGaugeValue"
               :size="132"
               readonly
-              value-color="#48e8ff"
-              range-color="#102a31"
-              text-color="#eefaff"
+              value-color="var(--gauge-upload)"
+              range-color="var(--gauge-upload-track)"
+              text-color="var(--app-text-strong)"
             />
             <span>上传</span>
             <strong>{{ formatRate(traffic.upload_bps) }}</strong>

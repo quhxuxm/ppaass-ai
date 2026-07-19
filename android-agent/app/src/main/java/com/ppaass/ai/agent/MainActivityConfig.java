@@ -290,8 +290,8 @@ protected void updateTransportModeButtons() {
             String label = transportModeLabel(String.valueOf(button.getTag()));
             button.setText(active ? "✓ " + label : label);
             button.setTextColor(interactiveTextColors(
-                    active ? Color.rgb(243, 244, 255) : COLOR_MUTED,
-                    Color.rgb(245, 246, 255)));
+                    active ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
             int fill = active ? COLOR_ACCENT_SOFT : COLOR_CONTROL;
             int stroke = active ? alphaColor(COLOR_ACCENT, 138) : COLOR_CONTROL;
             button.setBackground(interactiveRounded(fill, stroke, COLOR_ACCENT));

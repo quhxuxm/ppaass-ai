@@ -9,18 +9,15 @@ import android.view.View;
 
 // 状态页的 24 小时流量柱状图，外部只需要喂入聚合后的小时数据。
 final class TrafficBarView extends View {
-    private static final int COLOR_CONTROL_A = UiPalette.CHART_IDLE;
-    private static final int COLOR_MUTED = UiPalette.MUTED;
-    private static final int COLOR_BORDER = UiPalette.BORDER;
-    private static final int COLOR_DOWNLOAD_A = UiPalette.ACTION_START;
-    private static final int COLOR_DOWNLOAD_B = UiPalette.ACTION_WARN;
-    private static final int COLOR_UPLOAD_A = UiPalette.STATUS_RUNNING;
-    private static final int COLOR_UPLOAD_B = UiPalette.ACTION_INFO;
-    private static final int[] COLOR_BAR_PALETTE = {
-            COLOR_DOWNLOAD_B,
-            COLOR_DOWNLOAD_A,
-            COLOR_UPLOAD_A,
-            COLOR_UPLOAD_B
+    private final int COLOR_CONTROL_A = UiPalette.CHART_IDLE;
+    private final int COLOR_MUTED = UiPalette.MUTED;
+    private final int COLOR_BORDER = UiPalette.BORDER;
+    private final int COLOR_DOWNLOAD_A = UiPalette.ACTION_START;
+    private final int COLOR_DOWNLOAD_B = UiPalette.ACTION_WARN;
+    private final int COLOR_UPLOAD_A = UiPalette.STATUS_RUNNING;
+    private final int COLOR_UPLOAD_B = UiPalette.ACTION_INFO;
+    private final int[] COLOR_BAR_PALETTE = {
+            COLOR_DOWNLOAD_B, COLOR_DOWNLOAD_A, COLOR_UPLOAD_A, COLOR_UPLOAD_B
     };
 
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
