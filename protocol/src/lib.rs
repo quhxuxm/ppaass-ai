@@ -1,3 +1,5 @@
+#![deny(clippy::expect_used)]
+
 pub mod codec;
 pub mod compression;
 pub mod crypto;

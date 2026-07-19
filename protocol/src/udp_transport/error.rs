@@ -55,6 +55,9 @@ pub enum UdpTransportError {
     #[error("UDP reassembly limit exceeded: {0}")]
     ReassemblyLimit(&'static str),
 
+    #[error("inconsistent UDP reassembly state: {0}")]
+    InconsistentReassemblyState(&'static str),
+
     #[error("UDP message serialization failed: {0}")]
     Serialization(String),
 
