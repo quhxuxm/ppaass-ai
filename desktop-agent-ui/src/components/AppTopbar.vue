@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Button from "primevue/button";
+import Select from "primevue/select";
 import AppIcon from "./AppIcon";
 import type { ColorTheme } from "../colorThemes";
 
@@ -34,15 +35,14 @@ const emit = defineEmits<{
       <label class="theme-picker" title="选择界面配色">
         <span class="theme-picker-dot" aria-hidden="true"></span>
         <span class="theme-picker-label">配色</span>
-        <select
-          :value="colorTheme"
+        <Select
+          :model-value="colorTheme"
+          :options="colorThemes"
+          option-label="label"
+          option-value="value"
           aria-label="配色风格"
-          @change="emit('update:color-theme', ($event.target as HTMLSelectElement).value as ColorTheme)"
-        >
-          <option v-for="theme in colorThemes" :key="theme.value" :value="theme.value">
-            {{ theme.label }}
-          </option>
-        </select>
+          @update:model-value="emit('update:color-theme', $event as ColorTheme)"
+        />
       </label>
       <Button severity="secondary" outlined rounded aria-label="重新载入" @click="emit('reload')">
         <template #icon="slotProps"><AppIcon :class="slotProps.class" name="refresh" /></template>

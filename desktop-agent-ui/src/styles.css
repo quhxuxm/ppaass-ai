@@ -6863,20 +6863,40 @@ html.app-light[class*="app-theme-"] ::selection {
 
 .theme-picker-label {
   font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.theme-picker select {
-  max-width: 100px;
+.theme-picker .p-select {
+  display: inline-flex;
+  align-items: center;
+  width: 108px;
+  height: 28px;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--app-text-strong);
   cursor: pointer;
+  box-shadow: none;
 }
 
-html.app-light .theme-picker select option {
-  background: #ffffff;
-  color: var(--theme-text);
+.theme-picker .p-select-label {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 4px 0 8px;
+  color: var(--app-text-strong);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.theme-picker .p-select-dropdown {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  color: var(--app-text-muted);
 }
 
 /* Brand artwork and chart colors must work in both dark and light modes. */
