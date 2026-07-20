@@ -1,4 +1,4 @@
-import type { DnsResolutionRecord } from "./types";
+import type { ConnectivityCheck, DnsResolutionRecord } from "./types";
 
 export function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -18,6 +18,13 @@ export function shortPath(path?: string | null) {
 
 export function shortProxyUrl(value: string) {
   return value.replace(/^https?:\/\//, "").replace(/^socks5h:\/\//, "socks5h ").replace(/^tun:\/\//, "tun ");
+}
+
+export function connectivityResultLabel(result: Pick<ConnectivityCheck, "http_code" | "success">) {
+  if (result.http_code != null) {
+    return String(result.http_code);
+  }
+  return result.success ? "通过" : "失败";
 }
 
 export function dnsAnswerLabel(record: DnsResolutionRecord) {

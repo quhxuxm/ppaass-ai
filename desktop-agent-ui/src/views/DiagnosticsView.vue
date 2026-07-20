@@ -2,7 +2,7 @@
 import Button from "primevue/button";
 import Card from "primevue/card";
 import AppIcon from "../components/AppIcon";
-import { formatTimestamp, shortProxyUrl } from "../formatters";
+import { connectivityResultLabel, formatTimestamp, shortProxyUrl } from "../formatters";
 import type { AgentConfigSummary, ConnectivityReport } from "../types";
 
 defineProps<{
@@ -123,7 +123,7 @@ const emit = defineEmits<{
               <span :title="item.proxy_url">{{ shortProxyUrl(item.proxy_url) }}</span>
             </div>
             <div class="diagnostic-result">
-              <strong>{{ item.http_code ?? "—" }}</strong>
+              <strong>{{ connectivityResultLabel(item) }}</strong>
               <span>{{ Math.max(1, Math.round(item.duration_ms)) }} ms</span>
             </div>
             <p v-if="item.error">{{ item.error }}</p>
@@ -134,7 +134,7 @@ const emit = defineEmits<{
               <span :title="item.proxy_url">{{ shortProxyUrl(item.proxy_url) }}</span>
             </div>
             <div class="diagnostic-result">
-              <strong>{{ item.http_code ?? "—" }}</strong>
+              <strong>{{ connectivityResultLabel(item) }}</strong>
               <span>{{ Math.max(1, Math.round(item.duration_ms)) }} ms</span>
             </div>
             <p v-if="item.error">{{ item.error }}</p>

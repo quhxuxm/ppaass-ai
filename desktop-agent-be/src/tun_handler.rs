@@ -36,6 +36,8 @@ use crate::yamux_session::YamuxSessionManager;
 use common::{
     TransportMode, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded,
 };
+#[cfg(windows)]
+use device::tun_ipv4_peer;
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
 use dns::DnsGuard;
@@ -410,6 +412,20 @@ pub async fn run_tun_mode(
     } else {
         install_route_guard(&config, ipv4, ipv4_prefix, tun_if_index, &proxy_addrs)
     };
+    #[cfg(windows)]
+    let dns_guard = if helper_managed_network {
+        None
+    } else {
+        install_windows_dns_guard(
+            proxy_dns,
+            proxy_bind_interface.as_ref(),
+            tun_if_index,
+            ipv4,
+            ipv4_prefix,
+            config.dns_state_file.as_deref(),
+        )
+    };
+    #[cfg(not(windows))]
     if !helper_managed_network {
         cleanup_stale_dns(config.dns_state_file.as_deref());
     }
@@ -422,6 +438,11 @@ pub async fn run_tun_mode(
     tcp_sessions.set_proxy_bind_interface(None);
     udp_sessions.set_proxy_bind_ip(None);
     udp_sessions.set_proxy_bind_interface(None);
+    // Windows DNS Client 会按接口发送查询，仅安装 DNS 服务器的 /32 TUN
+    // 路由无法可靠捕获这类流量。先恢复接口 DNS，再撤销 TUN 路由，避免
+    // 退出窗口内系统查询仍指向已经不可达的虚拟 DNS 地址。
+    #[cfg(windows)]
+    drop(dns_guard);
     drop(route_guard);
     #[cfg(target_os = "macos")]
     drop(system_guard);
@@ -434,10 +455,45 @@ pub async fn run_tun_mode(
     Ok(())
 }
 
+#[cfg(windows)]
+fn install_windows_dns_guard(
+    proxy_dns: bool,
+    proxy_bind_interface: Option<&common::BindInterface>,
+    tun_if_index: u32,
+    tun_ipv4: std::net::Ipv4Addr,
+    tun_ipv4_prefix: u8,
+    dns_state_file: Option<&str>,
+) -> Option<DnsGuard> {
+    let Some(tun_dns) = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix) else {
+        // install(false, ...) still restores a lease left by an interrupted older run.
+        cleanup_stale_dns(dns_state_file);
+        if proxy_dns {
+            warn!(
+                "TUN proxy_dns 已启用，但 {} 无可用虚拟 peer 地址；跳过 Windows 系统 DNS 接管",
+                format_args!("{tun_ipv4}/{tun_ipv4_prefix}")
+            );
+        }
+        return None;
+    };
+
+    if proxy_dns {
+        info!(
+            "Windows TUN proxy_dns 使用虚拟 DNS 地址：{tun_dns} (TUN={tun_ipv4}/{tun_ipv4_prefix})"
+        );
+    }
+    DnsGuard::install(
+        proxy_dns,
+        proxy_bind_interface,
+        tun_if_index,
+        tun_dns,
+        dns_state_file,
+    )
+}
+
 fn cleanup_stale_dns(dns_state_file: Option<&str>) {
-    // Current TUN mode never changes system DNS. This only restores DNS records
-    // left behind by older builds that did temporarily rewrite system DNS.
-    debug!("TUN 模式不会修改系统 DNS；仅检查并恢复旧版本遗留的 DNS 状态");
+    // Windows 正常生命周期由 install_windows_dns_guard 持有 guard；本函数用于
+    // proxy_dns 关闭、无可用虚拟 peer，以及其他平台清理异常退出遗留的状态。
+    debug!("检查并恢复旧版本或异常退出遗留的 DNS 状态");
     let _ = DnsGuard::install(
         false,
         None,

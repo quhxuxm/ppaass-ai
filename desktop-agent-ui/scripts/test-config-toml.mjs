@@ -10,6 +10,11 @@ const server = await createServer({
 try {
   const { applyFieldToToml, coerceField, summarizeRaw } = await server.ssrLoadModule("/src/configToml.ts");
   const { transportModeOptions } = await server.ssrLoadModule("/src/constants.ts");
+  const { connectivityResultLabel } = await server.ssrLoadModule("/src/formatters.ts");
+
+  assert.equal(connectivityResultLabel({ success: true, http_code: 204 }), "204");
+  assert.equal(connectivityResultLabel({ success: true, http_code: null }), "通过");
+  assert.equal(connectivityResultLabel({ success: false, http_code: null }), "失败");
 
   assert.deepEqual(transportModeOptions, [
     { label: "自动模式", value: "auto" },
