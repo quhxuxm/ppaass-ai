@@ -36,6 +36,7 @@ protected void buildUi() {
         udpSessionPoolConfig = null;
         udpYamuxConfig = null;
         directModeButtons.clear();
+        directRuleTypeButtons.clear();
         directRuleValues.clear();
         directRulesConfig = null;
         directRuleCountFact = null;

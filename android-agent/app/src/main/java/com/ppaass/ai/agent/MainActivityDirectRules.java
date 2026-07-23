@@ -47,6 +47,13 @@ protected void addDirectRules(List<String> rules) {
     }
 
 protected void removeDirectRule(int index) {
+        if (isVpnRunning() || isHttpProxyRunning()) {
+            Toast.makeText(
+                    this,
+                    "Agent 运行中，停止后才能删除直连规则",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (index < 0 || index >= directRuleValues.size()) {
             return;
         }
@@ -59,91 +66,64 @@ protected void renderDirectRuleList() {
             return;
         }
         directRuleGroupList.removeAllViews();
-        int groupCount = 0;
-        groupCount += addDirectRuleGroup(
-                "通配符",
-                "wildcard",
-                new String[]{"HTTP/SOCKS5", "TUN + DNS 缓存"});
-        groupCount += addDirectRuleGroup(
-                "IP / CIDR",
-                "network",
-                new String[]{"TUN", "已解析 IP"});
-        groupCount += addDirectRuleGroup(
-                "域名",
-                "domain",
-                new String[]{"HTTP/SOCKS5", "TUN + DNS 缓存"});
-        groupCount += addDirectRuleGroup(
-                "其他",
-                "other",
-                new String[]{"按规则值"});
-
-        if (directRuleValues.isEmpty()) {
-            TextView empty = mutedText("未配置", 14f);
-            empty.setGravity(Gravity.CENTER);
-            empty.setTypeface(Typeface.DEFAULT_BOLD);
-            empty.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
-            directRuleGroupList.addView(empty, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(64)));
-        }
+        updateDirectRuleTypeButtons();
+        String label = directRuleGroupLabel(selectedDirectRuleGroupKey);
+        String[] modes = directRuleGroupModes(selectedDirectRuleGroupKey);
+        int count = directRuleGroupCount(selectedDirectRuleGroupKey);
+        addActiveDirectRuleGroup(label, selectedDirectRuleGroupKey, modes, count);
 
         if (directRuleGroupSummary != null) {
-            directRuleGroupSummary.setText(groupCount + " 组");
+            directRuleGroupSummary.setText(populatedDirectRuleGroupCount()
+                    + " 组 · " + directRuleValues.size() + " 条");
         }
         updateDirectAccessSummary();
     }
 
-protected int addDirectRuleGroup(String label, String groupKey, String[] modes) {
-        int count = 0;
-        for (String rule : directRuleValues) {
-            if (groupKey.equals(ruleGroupKey(rule))) {
-                count++;
-            }
-        }
-        if (count == 0) {
-            return 0;
-        }
-
+protected void addActiveDirectRuleGroup(
+        String label,
+        String groupKey,
+        String[] modes,
+        int count) {
         LinearLayout group = new LinearLayout(this);
         group.setOrientation(LinearLayout.VERTICAL);
         group.setPadding(0, 0, 0, 0);
-        LinearLayout.LayoutParams groupParams = matchWrap();
-        if (directRuleGroupList.getChildCount() > 0) {
-            groupParams.setMargins(0, dp(8), 0, 0);
-        }
 
         LinearLayout heading = horizontalRow();
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        heading.setPadding(dp(4), 0, dp(4), 0);
-        TextView title = titleText(label, 12f);
+        heading.setPadding(dp(10), dp(8), dp(10), dp(8));
+        heading.setBackground(rounded(COLOR_ACCENT_SOFT, alphaColor(COLOR_ACCENT, 72)));
+        TextView title = titleText(label, 13f);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView countView = mutedText(String.valueOf(count), 11f);
+        TextView scope = mutedText(TextUtils.join(" · ", modes), 10.5f);
+        scope.setSingleLine(true);
+        scope.setEllipsize(TextUtils.TruncateAt.END);
+        heading.addView(scope, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        TextView countView = mutedText(count + " 条", 11f);
         countView.setTypeface(Typeface.DEFAULT_BOLD);
         heading.addView(countView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams headingParams = matchWrap();
-        group.addView(heading, headingParams);
-
-        LinearLayout modeRow = new LinearLayout(this);
-        modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setGravity(Gravity.START);
-        // 规则组标题区域宽度有限，模式标签单独占一行，避免 Wildcard 这类长标签被截断。
-        addModeChips(modeRow, modes);
-        LinearLayout.LayoutParams modeParams = matchWrap();
-        modeParams.setMargins(dp(4), dp(4), 0, dp(2));
-        group.addView(modeRow, modeParams);
+        group.addView(heading, matchWrap());
 
         for (int i = 0; i < directRuleValues.size(); i++) {
             String rule = directRuleValues.get(i);
             if (!groupKey.equals(ruleGroupKey(rule))) {
                 continue;
             }
-            addDirectRuleChip(group, rule, i);
+            addDirectRuleRow(group, rule, i, modes);
+        }
+        if (count == 0) {
+            TextView empty = mutedText("暂无" + label + "规则", 13f);
+            empty.setGravity(Gravity.CENTER);
+            group.addView(empty, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(180)));
         }
 
-        directRuleGroupList.addView(group, groupParams);
-        return 1;
+        directRuleGroupList.addView(group, matchWrap());
     }
 
 protected void addModeChips(LinearLayout root, String[] modes) {
@@ -162,16 +142,35 @@ protected void addModeChips(LinearLayout root, String[] modes) {
         }
     }
 
-protected void addDirectRuleChip(LinearLayout root, String rule, int index) {
+protected void addDirectRuleRow(
+        LinearLayout root,
+        String rule,
+        int index,
+        String[] modes) {
         LinearLayout row = horizontalRow();
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(8), dp(4), dp(5), dp(4));
-        row.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        row.setPadding(dp(11), dp(9), dp(7), dp(9));
+        row.setBackground(interactiveRounded(
+                COLOR_SURFACE,
+                COLOR_CONTROL,
+                COLOR_ACCENT));
 
-        TextView text = titleText(rule, 11.5f);
+        LinearLayout textColumn = new LinearLayout(this);
+        textColumn.setOrientation(LinearLayout.VERTICAL);
+        TextView text = titleText(rule, 12.5f);
         text.setSingleLine(true);
         text.setEllipsize(TextUtils.TruncateAt.END);
-        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        textColumn.addView(text, matchWrap());
+        TextView scope = mutedText(TextUtils.join(" / ", modes), 10f);
+        scope.setSingleLine(true);
+        scope.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams scopeParams = matchWrap();
+        scopeParams.setMargins(0, dp(2), 0, 0);
+        textColumn.addView(scope, scopeParams);
+        row.addView(textColumn, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
 
         ImageButton remove = new ImageButton(this);
         remove.setImageResource(R.drawable.ic_close_24);
@@ -190,13 +189,95 @@ protected void addDirectRuleChip(LinearLayout root, String rule, int index) {
         flattenButton(remove);
         remove.setOnClickListener(view -> removeDirectRule(index));
         trackEditable(remove);
-        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(28), dp(28));
-        removeParams.setMargins(dp(6), 0, 0, 0);
+        // 规则列表可能在 Agent 已运行后因切换类型或 DNS 批量添加而重新渲染。
+        // 新创建的按钮必须立即继承当前锁定状态，不能只依赖之前的 editableControls 刷新。
+        remove.setEnabled(!isVpnRunning() && !isHttpProxyRunning());
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(34), dp(34));
+        removeParams.setMargins(dp(8), 0, 0, 0);
         row.addView(remove, removeParams);
 
         LinearLayout.LayoutParams rowParams = matchWrap();
-        rowParams.setMargins(0, dp(5), 0, 0);
+        rowParams.setMargins(0, dp(7), 0, 0);
         root.addView(row, rowParams);
+    }
+
+protected void addDirectRuleTypeButton(
+        LinearLayout row,
+        String label,
+        String groupKey) {
+        Button button = secondaryButton(label);
+        button.setTag(groupKey);
+        button.setMinWidth(0);
+        button.setPadding(dp(12), 0, dp(12), 0);
+        button.setOnClickListener(view -> {
+            selectedDirectRuleGroupKey = groupKey;
+            renderDirectRuleList();
+        });
+        directRuleTypeButtons.add(button);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        if (row.getChildCount() > 0) {
+            params.setMargins(dp(7), 0, 0, 0);
+        }
+        row.addView(button, params);
+    }
+
+protected void updateDirectRuleTypeButtons() {
+        for (Button button : directRuleTypeButtons) {
+            String key = String.valueOf(button.getTag());
+            boolean selected = key.equals(selectedDirectRuleGroupKey);
+            button.setText(directRuleGroupLabel(key) + " " + directRuleGroupCount(key));
+            button.setTextColor(interactiveTextColors(
+                    selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
+                    COLOR_ACCENT_DARK));
+            button.setBackground(interactiveRounded(
+                    selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
+                    selected ? COLOR_ACCENT : COLOR_BORDER,
+                    COLOR_ACCENT));
+            button.setElevation(selected ? dp(1) : 0);
+        }
+    }
+
+protected int directRuleGroupCount(String groupKey) {
+        int count = 0;
+        for (String rule : directRuleValues) {
+            if (groupKey.equals(ruleGroupKey(rule))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+protected int populatedDirectRuleGroupCount() {
+        int count = 0;
+        for (String key : new String[]{"wildcard", "network", "domain", "other"}) {
+            if (directRuleGroupCount(key) > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+protected String directRuleGroupLabel(String groupKey) {
+        if ("network".equals(groupKey)) {
+            return "IP / CIDR";
+        }
+        if ("domain".equals(groupKey)) {
+            return "域名";
+        }
+        if ("other".equals(groupKey)) {
+            return "其他";
+        }
+        return "通配符";
+    }
+
+protected String[] directRuleGroupModes(String groupKey) {
+        if ("network".equals(groupKey)) {
+            return new String[]{"TUN", "已解析 IP"};
+        }
+        if ("domain".equals(groupKey) || "wildcard".equals(groupKey)) {
+            return new String[]{"HTTP/SOCKS5", "TUN + DNS 缓存"};
+        }
+        return new String[]{"按规则值"};
     }
 
 protected void updateDirectModeButtons() {

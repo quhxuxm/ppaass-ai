@@ -18,6 +18,7 @@ import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from ".
 const {
   activeForwardingLabel,
   addDirectRules,
+  addDirectRulesAndRestart,
   addDraftRules,
   configLocked,
   diagnosticsPassed,
@@ -118,6 +119,8 @@ function setColorTheme(theme: ColorTheme) {
           :active-forwarding-label="activeForwardingLabel"
           :direct-mode-label="directModeLabel"
           :dns-card-label="dnsCardLabel"
+          :agent-running="running"
+          @add-direct-rules="addDirectRulesAndRestart"
         />
 
         <ForwardingView

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import Badge from "primevue/badge";
+import Button from "primevue/button";
 import Card from "primevue/card";
 import Knob from "primevue/knob";
 import Tag from "primevue/tag";
@@ -24,6 +25,7 @@ import {
   readOverviewCardOrder,
   saveOverviewCardOrder
 } from "../overviewLayout";
+import { directRuleCoversDomain, domainsToDirectRules } from "../directRuleDomains";
 import type {
   AgentConfigSummary,
   AgentState,
@@ -50,12 +52,18 @@ const props = defineProps<{
   activeForwardingLabel: string;
   directModeLabel: string;
   dnsCardLabel: string;
+  agentRunning: boolean;
+}>();
+
+const emit = defineEmits<{
+  "add-direct-rules": [rules: string[]];
 }>();
 
 const overviewCardOrder = ref(readOverviewCardOrder());
 const draggingOverviewCard = ref<OverviewCardKey | null>(null);
 const dragOverOverviewCard = ref<OverviewCardKey | null>(null);
 const overviewDragGhost = ref<OverviewDragGhost | null>(null);
+const selectedDnsDomains = ref<string[]>([]);
 
 const overviewCards = computed(() => buildOverviewCards(overviewCardOrder.value));
 const speedGaugeMax = computed(() => Math.max(256 * 1024, props.traffic.download_bps, props.traffic.upload_bps) * 1.25);
@@ -71,6 +79,33 @@ const hourlyTrafficMax = computed(() =>
     ...props.traffic.hourly_buckets.map((bucket) => bucket.download_bytes + bucket.upload_bytes)
   )
 );
+const selectedDnsDomainKeys = computed(
+  () => new Set(selectedDnsDomains.value.map((domain) => domain.toLowerCase()))
+);
+const selectedDnsRules = computed(() => domainsToDirectRules(selectedDnsDomains.value));
+const selectableDnsDomains = computed(() => {
+  const domains = new Map<string, string>();
+  props.recentDnsRecords.forEach((record) => {
+    const domain = dnsRecordDomain(record);
+    const key = domain.toLowerCase();
+    if (domain && !dnsDomainIsDirect(record) && !domains.has(key)) {
+      domains.set(key, domain);
+    }
+  });
+  return [...domains.values()];
+});
+const allSelectableDnsSelected = computed(
+  () =>
+    selectableDnsDomains.value.length > 0 &&
+    selectableDnsDomains.value.every((domain) => selectedDnsDomainKeys.value.has(domain.toLowerCase()))
+);
+const selectedDnsActionLabel = computed(() => {
+  const count = selectedDnsRules.value.length;
+  if (props.agentRunning) {
+    return `加入 ${count} 条规则并重启 Agent`;
+  }
+  return `加入 ${count} 条直连规则`;
+});
 
 onBeforeUnmount(() => {
   resetOverviewMouseDrag();
@@ -210,6 +245,42 @@ function hourlyBarHeight(bytes: number) {
     return "3px";
   }
   return `${Math.max(5, (bytes / hourlyTrafficMax.value) * 100)}%`;
+}
+
+function dnsRecordDomain(record: DnsResolutionRecord) {
+  return record.query.trim().replace(/\.$/, "");
+}
+
+function dnsDomainIsDirect(record: DnsResolutionRecord) {
+  const domain = dnsRecordDomain(record);
+  return props.summary.direct_rules.some((rule) => directRuleCoversDomain(rule, domain));
+}
+
+function dnsDomainIsSelected(record: DnsResolutionRecord) {
+  return selectedDnsDomainKeys.value.has(dnsRecordDomain(record).toLowerCase());
+}
+
+function toggleDnsDomainSelection(record: DnsResolutionRecord) {
+  const domain = dnsRecordDomain(record);
+  const key = domain.toLowerCase();
+  if (!domain || dnsDomainIsDirect(record)) {
+    return;
+  }
+  selectedDnsDomains.value = selectedDnsDomainKeys.value.has(key)
+    ? selectedDnsDomains.value.filter((item) => item.toLowerCase() !== key)
+    : [...selectedDnsDomains.value, domain];
+}
+
+function toggleAllSelectableDnsDomains() {
+  selectedDnsDomains.value = allSelectableDnsSelected.value ? [] : [...selectableDnsDomains.value];
+}
+
+function addSelectedDnsDomainsToDirectRules() {
+  if (!selectedDnsRules.value.length) {
+    return;
+  }
+  emit("add-direct-rules", [...selectedDnsRules.value]);
+  selectedDnsDomains.value = [];
 }
 </script>
 
@@ -372,12 +443,65 @@ function hourlyBarHeight(bytes: number) {
             <span>等待经过代理的 DNS 请求</span>
           </div>
           <div v-else class="dns-record-list">
-            <div v-for="record in recentDnsRecords" :key="`${record.timestamp_ms}-${record.client}-${record.query}`" class="dns-record-row">
-              <div>
+            <div class="dns-selection-toolbar">
+              <Button
+                :label="allSelectableDnsSelected ? '清空选择' : '全选可添加项'"
+                severity="secondary"
+                text
+                size="small"
+                :disabled="!selectableDnsDomains.length"
+                @click="toggleAllSelectableDnsDomains"
+              />
+              <span>已选 {{ selectedDnsDomains.length }} 个域名，将添加 {{ selectedDnsRules.length }} 条规则</span>
+              <Button
+                :label="selectedDnsActionLabel"
+                size="small"
+                :disabled="!selectedDnsDomains.length"
+                @click="addSelectedDnsDomainsToDirectRules"
+              />
+            </div>
+            <div
+              v-for="record in recentDnsRecords"
+              :key="`${record.timestamp_ms}-${record.client}-${record.query}`"
+              :class="[
+                'dns-record-row',
+                'interactive',
+                {
+                  selected: dnsDomainIsSelected(record),
+                  direct: dnsDomainIsDirect(record)
+                }
+              ]"
+              role="checkbox"
+              :aria-checked="dnsDomainIsSelected(record)"
+              :aria-disabled="dnsDomainIsDirect(record)"
+              :tabindex="dnsDomainIsDirect(record) ? -1 : 0"
+              :title="dnsDomainIsDirect(record) ? '该域名已在直连规则中' : '点击选择该域名'"
+              @mousedown.stop
+              @click="toggleDnsDomainSelection(record)"
+              @keydown.enter.prevent="toggleDnsDomainSelection(record)"
+              @keydown.space.prevent="toggleDnsDomainSelection(record)"
+            >
+              <input
+                class="dns-record-checkbox"
+                type="checkbox"
+                :checked="dnsDomainIsSelected(record)"
+                :disabled="dnsDomainIsDirect(record)"
+                tabindex="-1"
+                aria-hidden="true"
+                @click.stop
+                @change="toggleDnsDomainSelection(record)"
+              />
+              <div class="dns-record-main">
                 <strong :title="record.query">{{ record.query }}</strong>
                 <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
               </div>
               <div class="dns-record-meta">
+                <Tag
+                  v-if="dnsDomainIsDirect(record)"
+                  value="已直连"
+                  severity="info"
+                  rounded
+                />
                 <Tag
                   v-if="isAgentDnsCacheRecord(record)"
                   value="缓存命中"

@@ -986,9 +986,29 @@ body.overview-dragging * {
   padding-right: 4px;
 }
 
+.dns-selection-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.dns-selection-toolbar > span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .dns-record-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 52px;
@@ -998,7 +1018,45 @@ body.overview-dragging * {
   background: var(--app-muted-surface);
 }
 
-.dns-record-row > div:first-child {
+.dns-record-row.interactive {
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.dns-record-row.interactive:hover,
+.dns-record-row.interactive:focus-visible {
+  border-color: var(--app-primary);
+  background: var(--app-surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-primary) 16%, transparent);
+}
+
+.dns-record-row.interactive.selected {
+  border-color: var(--app-primary);
+  background: color-mix(in srgb, var(--app-primary) 8%, var(--app-muted-surface));
+}
+
+.dns-record-row.interactive.direct {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.dns-record-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--app-primary);
+  cursor: pointer;
+}
+
+.dns-record-checkbox:disabled {
+  cursor: default;
+}
+
+.dns-record-main {
   display: grid;
   gap: 4px;
   min-width: 0;
@@ -1297,6 +1355,27 @@ body.overview-dragging * {
   min-height: 40px;
 }
 
+.preset-list.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rule-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.rule-presets {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
 .policy-section {
   display: grid;
   gap: 10px;
@@ -1530,6 +1609,197 @@ body.overview-dragging * {
   border: 1px solid var(--app-border-soft);
   border-radius: 8px;
   background: var(--app-muted-surface);
+}
+
+.rule-inventory {
+  min-height: 0;
+  overflow: visible;
+}
+
+.rule-type-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rule-type-tabs button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rule-type-tabs button:hover,
+.rule-type-tabs button.active {
+  border-color: color-mix(in srgb, var(--app-primary) 48%, var(--app-border-soft));
+  background: color-mix(in srgb, var(--app-primary) 9%, var(--app-surface));
+  color: var(--app-text-strong);
+}
+
+.rule-type-tabs button:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.rule-type-tabs svg {
+  width: 15px;
+  height: 15px;
+}
+
+.rule-type-tabs strong {
+  min-width: 21px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--app-control);
+  font-size: 10px;
+  text-align: center;
+}
+
+.rule-table {
+  height: clamp(300px, 46vh, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+  scrollbar-gutter: stable;
+}
+
+.rule-table-group + .rule-table-group {
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.rule-table-group-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 38px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: var(--app-muted-surface);
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.rule-table-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--app-text-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rule-table-group-title svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rule-table-group-title strong {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--app-control);
+  color: var(--app-text-muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+.rule-table-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.8fr) 42px;
+  align-items: center;
+  min-height: 44px;
+  padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.rule-table-row:last-child {
+  border-bottom: 0;
+}
+
+.rule-table-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  color: var(--app-text-muted);
+  font-size: 13px;
+}
+
+.rule-table-row:hover {
+  background: color-mix(in srgb, var(--app-primary) 5%, transparent);
+}
+
+.rule-table-scope {
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-table-row code {
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 12px;
+  color: var(--app-text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-table-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rule-table-remove {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--app-text-muted);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.rule-table-remove:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--app-primary) 48%, var(--app-border-soft));
+  background: color-mix(in srgb, var(--app-primary) 10%, transparent);
+  color: var(--app-primary-strong);
+}
+
+.rule-table-remove:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.rule-table-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .rule-create {
@@ -5203,8 +5473,30 @@ button > i,
   .policy-facts,
   .forwarding-methods,
   .rule-scope-grid,
-  .rule-compose {
+  .rule-compose,
+  .rule-editor-grid {
     grid-template-columns: 1fr;
+  }
+
+  .rule-inventory {
+    min-height: 0;
+  }
+
+  .rule-table {
+    height: min(52vh, 460px);
+  }
+
+  .rule-table-group-heading > span,
+  .rule-table-scope {
+    display: none;
+  }
+
+  .rule-table-row {
+    grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .rule-table-action {
+    grid-column: 2;
   }
 }
 

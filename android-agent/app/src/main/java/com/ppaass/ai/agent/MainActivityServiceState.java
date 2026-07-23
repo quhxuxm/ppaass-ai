@@ -96,6 +96,54 @@ protected void stopHttpProxyService() {
         updateHttpProxyToggle();
     }
 
+protected void restartRunningAgentsAfterRuleUpdate(
+        boolean restartVpn,
+        boolean restartHttpProxy) {
+        if (!restartVpn && !restartHttpProxy) {
+            Toast.makeText(this, "直连规则已添加", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (restartVpn) {
+            stopVpnService();
+        }
+        if (restartHttpProxy) {
+            stopHttpProxyService();
+        }
+        Toast.makeText(this, "直连规则已添加，正在重启", Toast.LENGTH_SHORT).show();
+
+        statusHandler.postDelayed(new Runnable() {
+            private int attempts;
+
+            @Override
+            public void run() {
+                boolean vpnStopped = !restartVpn || !isVpnRunning();
+                boolean httpProxyStopped = !restartHttpProxy || !isHttpProxyRunning();
+                if ((!vpnStopped || !httpProxyStopped) && attempts++ < 25) {
+                    statusHandler.postDelayed(this, 200);
+                    return;
+                }
+                if (!vpnStopped || !httpProxyStopped) {
+                    Toast.makeText(
+                            MainActivityServiceState.this,
+                            "规则已保存，服务停止超时，请手动重启",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (restartVpn) {
+                    startVpnService();
+                }
+                if (restartHttpProxy) {
+                    startHttpProxyService();
+                }
+                Toast.makeText(
+                        MainActivityServiceState.this,
+                        "直连规则已生效",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }, 200);
+    }
+
 protected void showHttpProxyClientsDialog() {
         new HttpProxyClientDialog(this, prefs).show();
     }

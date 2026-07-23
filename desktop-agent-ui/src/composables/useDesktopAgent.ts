@@ -381,6 +381,60 @@ export function useDesktopAgent() {
     showToast("success", "规则已更新");
   }
 
+  async function addDirectRulesAndRestart(rules: string[]) {
+    if (!state.config) {
+      return;
+    }
+    if (state.busy) {
+      showToast("info", "正在处理其他操作");
+      return;
+    }
+
+    const nextRules = normalizeRules([...state.config.summary.direct_rules, ...rules]);
+    if (nextRules.length === state.config.summary.direct_rules.length) {
+      showToast("info", "该域名已在直连规则中");
+      return;
+    }
+
+    const wasRunning = state.agent.running;
+    try {
+      state.busy = true;
+      updateDirectRules(nextRules, true);
+      await persistConfig();
+
+      if (!wasRunning) {
+        showToast("success", "直连规则已添加并保存");
+        return;
+      }
+
+      state.agent = await invokeOrFallback<AgentState>(
+        "stop_agent",
+        {},
+        () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
+      );
+      if (state.agent.running) {
+        throw new Error("直连规则已保存，但 Agent 停止失败");
+      }
+
+      state.agent = await invokeOrFallback<AgentState>(
+        "start_agent",
+        { configPath: state.config.path },
+        () => ({ ...fallbackAgentState(), running: true, managed: true, pid: 4242, config_path: state.config?.path })
+      );
+      await delay(1800);
+      await refreshAgentState();
+      if (!state.agent.running) {
+        throw new Error(latestAgentLog() ?? "直连规则已保存，但 Agent 重启失败");
+      }
+      showToast("success", "直连规则已添加，Agent 已重启");
+    } catch (error) {
+      await refreshAgentState();
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
   function addDraftRules() {
     if (ensureConfigEditable()) {
       addDirectRules(parseRuleInput(state.ruleDraft));
@@ -608,12 +662,19 @@ export function useDesktopAgent() {
     state.traffic.day_upload_bytes = store.buckets.reduce((total, bucket) => total + bucket.upload_bytes, 0);
   }
 
-  function updateDirectRules(rules: string[]) {
-    if (!state.config || !ensureConfigEditable(false)) {
+  function updateDirectRules(rules: string[], allowWhileRunning = false) {
+    if (!state.config || (!allowWhileRunning && !ensureConfigEditable(false))) {
       return;
     }
-    state.config.summary.direct_rules = normalizeRules(rules);
-    state.config.raw = applyFieldToToml(state.config.raw, "direct_rules", state.config.summary.direct_rules);
+    const directRules = normalizeRules(rules);
+    state.config = {
+      ...state.config,
+      raw: applyFieldToToml(state.config.raw, "direct_rules", directRules),
+      summary: {
+        ...state.config.summary,
+        direct_rules: directRules
+      }
+    };
     state.diagnostics = null;
     state.dirty = true;
   }
@@ -643,6 +704,7 @@ export function useDesktopAgent() {
   return {
     activeForwardingLabel,
     addDirectRules,
+    addDirectRulesAndRestart,
     addDraftRules,
     configLocked,
     diagnosticsPassed,
@@ -713,7 +775,7 @@ function buildDirectRuleGroups(rules: string[]) {
   rules.forEach((rule, index) => {
     byKey.get(ruleGroupKey(rule))?.items.push({ rule, index });
   });
-  return groups.filter((group) => group.items.length > 0);
+  return groups;
 }
 
 function bytesPerSecond(current: number, previous: number, elapsedSeconds: number) {

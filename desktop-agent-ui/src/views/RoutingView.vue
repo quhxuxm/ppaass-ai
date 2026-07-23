@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import Button from "primevue/button";
 import Card from "primevue/card";
 import AppIcon from "../components/AppIcon";
@@ -10,7 +11,7 @@ import Tag from "primevue/tag";
 import { directModeOptions, directRulePresets, logLevelOptions } from "../constants";
 import type { AgentConfigSummary, DirectRuleGroup } from "../types";
 
-defineProps<{
+const props = defineProps<{
   summary: AgentConfigSummary;
   configLocked: boolean;
   directModeLabel: string;
@@ -19,6 +20,17 @@ defineProps<{
   directRuleGroups: DirectRuleGroup[];
   ruleDraft: string;
 }>();
+
+const activeRuleGroupKey = ref("");
+const activeRuleGroup = computed(
+  () =>
+    props.directRuleGroups.find((group) => group.key === activeRuleGroupKey.value) ??
+    props.directRuleGroups[0] ??
+    null
+);
+const populatedRuleGroupCount = computed(
+  () => props.directRuleGroups.filter((group) => group.items.length > 0).length
+);
 
 const emit = defineEmits<{
   "set-field": [field: keyof AgentConfigSummary, value: unknown];
@@ -149,26 +161,7 @@ const emit = defineEmits<{
           </template>
         </Card>
 
-        <Card class="panel span-5">
-          <template #title><h2>快捷预设</h2></template>
-          <template #content>
-            <div class="preset-list">
-              <Button
-                v-for="preset in directRulePresets"
-                :key="preset.label"
-                :label="preset.label"
-                severity="secondary"
-                outlined
-                :disabled="configLocked"
-                @click="emit('add-direct-rules', preset.rules)"
-              >
-                <template #icon="slotProps"><AppIcon :class="slotProps.class" :name="preset.icon" /></template>
-              </Button>
-            </div>
-          </template>
-        </Card>
-
-        <Card class="panel span-7">
+        <Card class="panel span-12">
           <template #title>
             <div class="panel-heading inline">
               <h2>规则管理</h2>
@@ -177,60 +170,118 @@ const emit = defineEmits<{
           </template>
           <template #content>
             <div class="rule-manager">
-              <section class="rule-create">
-                <div class="section-heading">
-                  <span>添加规则</span>
-                  <strong>{{ directModeLabel }}</strong>
-                </div>
-                <div class="rule-scope-note">
-                  <AppIcon name="info" />
-                  <span>添加前先看入口：HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需要开启代理 DNS 并等待 DNS 缓存命中。</span>
-                </div>
-                <div class="rule-compose">
-                  <label class="field rule-input-field">
-                    <span><AppIcon name="circle-plus" />规则值</span>
-                    <InputText
-                      :model-value="ruleDraft"
-                      placeholder="example.com / *.example.com / 10.0.0.0/8"
+              <div class="rule-editor-grid">
+                <section class="rule-presets">
+                  <div class="section-heading">
+                    <span>快捷预设</span>
+                    <strong>{{ directRulePresets.length }} 项</strong>
+                  </div>
+                  <div class="preset-list compact">
+                    <Button
+                      v-for="preset in directRulePresets"
+                      :key="preset.label"
+                      :label="preset.label"
+                      severity="secondary"
+                      outlined
                       :disabled="configLocked"
-                      @keydown.enter.prevent="emit('add-draft-rules')"
-                      @update:model-value="emit('update:ruleDraft', String($event))"
-                    />
-                  </label>
-                  <Button label="添加" severity="primary" :disabled="configLocked" @click="emit('add-draft-rules')">
-                    <template #icon="slotProps"><AppIcon :class="slotProps.class" name="plus" /></template>
-                  </Button>
-                </div>
-              </section>
+                      @click="emit('add-direct-rules', preset.rules)"
+                    >
+                      <template #icon="slotProps"><AppIcon :class="slotProps.class" :name="preset.icon" /></template>
+                    </Button>
+                  </div>
+                </section>
+
+                <section class="rule-create">
+                  <div class="section-heading">
+                    <span>添加规则</span>
+                    <strong>{{ directModeLabel }}</strong>
+                  </div>
+                  <div class="rule-scope-note">
+                    <AppIcon name="info" />
+                    <span>HTTP / SOCKS5 可填域名；TUN 优先填 IP/CIDR；TUN 域名规则需开启代理 DNS。</span>
+                  </div>
+                  <div class="rule-compose">
+                    <label class="field rule-input-field">
+                      <span><AppIcon name="circle-plus" />规则值</span>
+                      <InputText
+                        :model-value="ruleDraft"
+                        placeholder="example.com / *.example.com / 10.0.0.0/8"
+                        :disabled="configLocked"
+                        @keydown.enter.prevent="emit('add-draft-rules')"
+                        @update:model-value="emit('update:ruleDraft', String($event))"
+                      />
+                    </label>
+                    <Button label="添加" severity="primary" :disabled="configLocked" @click="emit('add-draft-rules')">
+                      <template #icon="slotProps"><AppIcon :class="slotProps.class" name="plus" /></template>
+                    </Button>
+                  </div>
+                </section>
+              </div>
 
               <section class="rule-inventory">
                 <div class="section-heading">
                   <span>当前规则</span>
-                  <strong>{{ directRuleGroups.length }} 组</strong>
+                  <strong>{{ populatedRuleGroupCount }} 组 · {{ summary.direct_rules.length }} 条</strong>
                 </div>
                 <div v-if="!summary.direct_rules.length" class="empty-rules">未配置</div>
-                <div v-else class="rule-group-list">
-                  <section v-for="group in directRuleGroups" :key="group.key" class="rule-group">
-                    <div class="rule-group-heading">
-                      <div>
-                        <AppIcon :name="group.icon" />
-                        <span>{{ group.label }}</span>
-                      </div>
-                      <div class="rule-group-modes">
-                        <Tag v-for="mode in group.modes" :key="`${group.key}-${mode}`" :value="mode" severity="secondary" rounded />
-                      </div>
+                <template v-else>
+                  <div class="rule-type-tabs" role="tablist" aria-label="直连规则类型">
+                    <button
+                      v-for="group in directRuleGroups"
+                      :key="group.key"
+                      type="button"
+                      role="tab"
+                      :aria-selected="activeRuleGroup?.key === group.key"
+                      :class="{ active: activeRuleGroup?.key === group.key }"
+                      @click="activeRuleGroupKey = group.key"
+                    >
+                      <AppIcon :name="group.icon" />
+                      <span>{{ group.label }}</span>
                       <strong>{{ group.items.length }}</strong>
+                    </button>
+                  </div>
+                  <div
+                    v-if="activeRuleGroup"
+                    :key="activeRuleGroup.key"
+                    class="rule-table"
+                    role="table"
+                    :aria-label="`${activeRuleGroup.label}直连规则`"
+                  >
+                    <section class="rule-table-group" role="rowgroup">
+                    <div class="rule-table-group-heading">
+                      <div class="rule-table-group-title">
+                        <AppIcon :name="activeRuleGroup.icon" />
+                        <span>{{ activeRuleGroup.label }}</span>
+                        <strong>{{ activeRuleGroup.items.length }}</strong>
+                      </div>
+                      <span>{{ activeRuleGroup.modes.join(" · ") }}</span>
                     </div>
-                    <div class="rule-chip-list grouped">
-                      <div v-for="item in group.items" :key="`${group.key}-${item.rule}-${item.index}`" class="rule-chip">
-                        <span :title="item.rule">{{ item.rule }}</span>
-                        <button type="button" class="rule-chip-remove" aria-label="删除" :disabled="configLocked" @click="emit('remove-direct-rule', item.index)">
+                    <div v-if="!activeRuleGroup.items.length" class="rule-table-empty">
+                      暂无{{ activeRuleGroup.label }}规则
+                    </div>
+                    <div
+                      v-for="item in activeRuleGroup.items"
+                      :key="`${activeRuleGroup.key}-${item.rule}-${item.index}`"
+                      class="rule-table-row"
+                      role="row"
+                    >
+                      <code :title="item.rule" role="cell">{{ item.rule }}</code>
+                      <span class="rule-table-scope" role="cell">{{ activeRuleGroup.modes.join(" / ") }}</span>
+                      <div class="rule-table-action" role="cell">
+                        <button
+                          type="button"
+                          class="rule-table-remove"
+                          :aria-label="`删除规则 ${item.rule}`"
+                          :disabled="configLocked"
+                          @click="emit('remove-direct-rule', item.index)"
+                        >
                           <span class="rule-chip-remove-mark" aria-hidden="true"></span>
                         </button>
                       </div>
                     </div>
                   </section>
-                </div>
+                  </div>
+                </template>
               </section>
             </div>
           </template>

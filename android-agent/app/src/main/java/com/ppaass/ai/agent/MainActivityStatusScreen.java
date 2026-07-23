@@ -140,9 +140,30 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
 
+        dnsSelectionToolbar = horizontalRow();
+        dnsSelectionToolbar.setGravity(Gravity.CENTER_VERTICAL);
+        dnsSelectionToolbar.setPadding(dp(7), dp(6), dp(7), dp(6));
+        dnsSelectionToolbar.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        dnsSelectionToolbar.setVisibility(View.GONE);
+        LinearLayout.LayoutParams dnsToolbarParams = matchWrap();
+        dnsToolbarParams.setMargins(0, 0, 0, dp(7));
+        dnsPanel.addView(dnsSelectionToolbar, dnsToolbarParams);
+
         ScrollView dnsScroll = new ScrollView(this);
         dnsScroll.setVerticalScrollBarEnabled(true);
+        dnsScroll.setScrollbarFadingEnabled(false);
         dnsScroll.setClipToPadding(false);
+        dnsScroll.setFillViewport(false);
+        // 状态页本身位于外层 ScrollView 中。拖动 DNS 记录时由内层列表接管手势，
+        // 否则外层页面会抢走 MOVE 事件，表现为 DNS 列表无法滚动。
+        dnsScroll.setOnTouchListener((view, event) -> {
+            view.getParent().requestDisallowInterceptTouchEvent(true);
+            if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                view.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
         dnsScroll.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             dnsScroll.setNestedScrollingEnabled(true);
@@ -152,7 +173,7 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsRecordList.setPadding(dp(8), dp(8), dp(8), dp(8));
         dnsScroll.addView(dnsRecordList, matchWrap());
         LinearLayout.LayoutParams dnsScrollParams = matchWrap();
-        dnsScrollParams.height = dp(300);
+        dnsScrollParams.height = dp(440);
         dnsPanel.addView(dnsScroll, dnsScrollParams);
     }
 
