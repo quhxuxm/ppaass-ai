@@ -1,6 +1,7 @@
 package com.ppaass.ai.agent;
 
 import com.google.common.net.InternetDomainName;
+import com.google.common.net.InetAddresses;
 
 import java.util.*;
 
@@ -25,6 +26,17 @@ final class DirectRuleDomains {
             String rule = toDirectRule(domain);
             if (!rule.isEmpty()) {
                 rules.add(rule);
+            }
+        }
+        return new ArrayList<>(rules);
+    }
+
+    static List<String> toDirectRules(Collection<String> domains, Collection<String> addresses) {
+        LinkedHashSet<String> rules = new LinkedHashSet<>(toDirectRules(domains));
+        for (String value : addresses) {
+            String address = value == null ? "" : value.trim();
+            if (InetAddresses.isInetAddress(address)) {
+                rules.add(address);
             }
         }
         return new ArrayList<>(rules);

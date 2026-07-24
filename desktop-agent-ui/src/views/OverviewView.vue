@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import Badge from "primevue/badge";
 import Button from "primevue/button";
 import Card from "primevue/card";
@@ -25,7 +25,10 @@ import {
   readOverviewCardOrder,
   saveOverviewCardOrder
 } from "../overviewLayout";
-import { directRuleCoversDomain, domainsToDirectRules } from "../directRuleDomains";
+import {
+  directRuleCoversDomain,
+  domainsAndAddressesToDirectRules
+} from "../directRuleDomains";
 import type {
   AgentConfigSummary,
   AgentState,
@@ -64,6 +67,12 @@ const draggingOverviewCard = ref<OverviewCardKey | null>(null);
 const dragOverOverviewCard = ref<OverviewCardKey | null>(null);
 const overviewDragGhost = ref<OverviewDragGhost | null>(null);
 const selectedDnsDomains = ref<string[]>([]);
+const dnsRecordListElement = ref<HTMLElement | null>(null);
+const displayedDnsRecords = ref<DnsResolutionRecord[]>([]);
+const latestDnsRecords = ref<DnsResolutionRecord[]>([]);
+const pendingDnsRecordCount = ref(0);
+const dnsListHovered = ref(false);
+const dnsListFocused = ref(false);
 
 const overviewCards = computed(() => buildOverviewCards(overviewCardOrder.value));
 const speedGaugeMax = computed(() => Math.max(256 * 1024, props.traffic.download_bps, props.traffic.upload_bps) * 1.25);
@@ -82,10 +91,15 @@ const hourlyTrafficMax = computed(() =>
 const selectedDnsDomainKeys = computed(
   () => new Set(selectedDnsDomains.value.map((domain) => domain.toLowerCase()))
 );
-const selectedDnsRules = computed(() => domainsToDirectRules(selectedDnsDomains.value));
+const selectedDnsRules = computed(() => {
+  const addresses = displayedDnsRecords.value
+    .filter((record) => selectedDnsDomainKeys.value.has(dnsRecordDomain(record).toLowerCase()))
+    .flatMap(dnsAnswers);
+  return domainsAndAddressesToDirectRules(selectedDnsDomains.value, addresses);
+});
 const selectableDnsDomains = computed(() => {
   const domains = new Map<string, string>();
-  props.recentDnsRecords.forEach((record) => {
+  displayedDnsRecords.value.forEach((record) => {
     const domain = dnsRecordDomain(record);
     const key = domain.toLowerCase();
     if (domain && !dnsDomainIsDirect(record) && !domains.has(key)) {
@@ -106,6 +120,19 @@ const selectedDnsActionLabel = computed(() => {
   }
   return `加入 ${count} 条直连规则`;
 });
+
+watch(
+  () => props.recentDnsRecords,
+  (records) => {
+    latestDnsRecords.value = [...records];
+    if (shouldFreezeDnsRecords()) {
+      pendingDnsRecordCount.value = countNewDnsRecords(records, displayedDnsRecords.value);
+      return;
+    }
+    applyLatestDnsRecords();
+  },
+  { immediate: true }
+);
 
 onBeforeUnmount(() => {
   resetOverviewMouseDrag();
@@ -282,6 +309,56 @@ function addSelectedDnsDomainsToDirectRules() {
   emit("add-direct-rules", [...selectedDnsRules.value]);
   selectedDnsDomains.value = [];
 }
+
+function dnsRecordKey(record: DnsResolutionRecord) {
+  return `${record.timestamp_ms}-${record.client}-${record.query}-${record.record_type}`;
+}
+
+function countNewDnsRecords(incoming: DnsResolutionRecord[], displayed: DnsResolutionRecord[]) {
+  const displayedKeys = new Set(displayed.map(dnsRecordKey));
+  return incoming.filter((record) => !displayedKeys.has(dnsRecordKey(record))).length;
+}
+
+function shouldFreezeDnsRecords() {
+  return (
+    dnsListHovered.value ||
+    dnsListFocused.value ||
+    selectedDnsDomains.value.length > 0 ||
+    (dnsRecordListElement.value?.scrollTop ?? 0) > 4
+  );
+}
+
+function applyLatestDnsRecords() {
+  displayedDnsRecords.value = [...latestDnsRecords.value];
+  pendingDnsRecordCount.value = 0;
+}
+
+function maybeApplyLatestDnsRecords() {
+  if (!shouldFreezeDnsRecords()) {
+    applyLatestDnsRecords();
+  }
+}
+
+function onDnsListScroll() {
+  maybeApplyLatestDnsRecords();
+}
+
+function onDnsListMouseEnter() {
+  dnsListHovered.value = true;
+}
+
+function onDnsListMouseLeave() {
+  dnsListHovered.value = false;
+  maybeApplyLatestDnsRecords();
+}
+
+function onDnsListFocusOut(event: FocusEvent) {
+  const nextTarget = event.relatedTarget;
+  if (!(nextTarget instanceof Node) || !dnsRecordListElement.value?.contains(nextTarget)) {
+    dnsListFocused.value = false;
+    maybeApplyLatestDnsRecords();
+  }
+}
 </script>
 
 <template>
@@ -438,11 +515,20 @@ function addSelectedDnsDomainsToDirectRules() {
             <AppIcon name="info" />
             <span>代理 DNS 未启用</span>
           </div>
-          <div v-else-if="!recentDnsRecords.length" class="dns-empty">
+          <div v-else-if="!displayedDnsRecords.length" class="dns-empty">
             <AppIcon name="globe" />
             <span>等待经过代理的 DNS 请求</span>
           </div>
-          <div v-else class="dns-record-list">
+          <div
+            v-else
+            ref="dnsRecordListElement"
+            class="dns-record-list"
+            @scroll.passive="onDnsListScroll"
+            @mouseenter="onDnsListMouseEnter"
+            @mouseleave="onDnsListMouseLeave"
+            @focusin="dnsListFocused = true"
+            @focusout="onDnsListFocusOut"
+          >
             <div class="dns-selection-toolbar">
               <Button
                 :label="allSelectableDnsSelected ? '清空选择' : '全选可添加项'"
@@ -452,7 +538,10 @@ function addSelectedDnsDomainsToDirectRules() {
                 :disabled="!selectableDnsDomains.length"
                 @click="toggleAllSelectableDnsDomains"
               />
-              <span>已选 {{ selectedDnsDomains.length }} 个域名，将添加 {{ selectedDnsRules.length }} 条规则</span>
+              <span>
+                已选 {{ selectedDnsDomains.length }} 个域名，将添加 {{ selectedDnsRules.length }} 条规则
+                <em v-if="pendingDnsRecordCount"> · {{ pendingDnsRecordCount }} 条新记录待更新</em>
+              </span>
               <Button
                 :label="selectedDnsActionLabel"
                 size="small"
@@ -461,7 +550,7 @@ function addSelectedDnsDomainsToDirectRules() {
               />
             </div>
             <div
-              v-for="record in recentDnsRecords"
+              v-for="record in displayedDnsRecords"
               :key="`${record.timestamp_ms}-${record.client}-${record.query}`"
               :class="[
                 'dns-record-row',

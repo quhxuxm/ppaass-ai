@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import {
   directRuleCoversDomain,
+  domainsAndAddressesToDirectRules,
   domainsToDirectRules,
-  domainToDirectRule
+  domainToDirectRule,
+  isIpAddress
 } from "../src/directRuleDomains.ts";
 
 assert.equal(domainToDirectRule("api.example.com"), "*.example.com");
@@ -17,5 +19,16 @@ assert.deepEqual(
 assert.equal(directRuleCoversDomain("*.example.com", "api.example.com"), true);
 assert.equal(directRuleCoversDomain("*.example.com", "example.com"), false);
 assert.equal(directRuleCoversDomain("example.com", "EXAMPLE.COM."), true);
+assert.equal(isIpAddress("203.0.113.8"), true);
+assert.equal(isIpAddress("2001:db8::8"), true);
+assert.equal(isIpAddress("203.0.113.999"), false);
+assert.equal(isIpAddress("edge.example.com"), false);
+assert.deepEqual(
+  domainsAndAddressesToDirectRules(
+    ["api.example.com"],
+    ["203.0.113.8", "2001:db8::8", "alias.example.com", "203.0.113.8"]
+  ),
+  ["*.example.com", "203.0.113.8", "2001:db8::8"]
+);
 
 console.log("directRuleDomains tests passed");

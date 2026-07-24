@@ -17,6 +17,34 @@ export function domainsToDirectRules(domains: string[]) {
   return [...new Set(rules.filter(Boolean))];
 }
 
+export function domainsAndAddressesToDirectRules(domains: string[], addresses: string[]) {
+  const rules = domainsToDirectRules(domains);
+  for (const value of addresses) {
+    const address = value.trim();
+    if (isIpAddress(address) && !rules.includes(address)) {
+      rules.push(address);
+    }
+  }
+  return rules;
+}
+
+export function isIpAddress(value: string) {
+  const candidate = value.trim();
+  if (candidate.includes(":")) {
+    try {
+      return new URL(`http://[${candidate}]/`).hostname.length > 2;
+    } catch {
+      return false;
+    }
+  }
+
+  const octets = candidate.split(".");
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+  );
+}
+
 export function directRuleCoversDomain(rule: string, domain: string) {
   const normalizedRule = rule.trim().toLowerCase();
   const normalizedDomain = domain.trim().replace(/\.$/, "").toLowerCase();

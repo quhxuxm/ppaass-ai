@@ -28,4 +28,18 @@ public class DirectRuleDomainsTest {
         assertFalse(DirectRuleDomains.ruleCoversDomain("*.example.com", "example.com"));
         assertTrue(DirectRuleDomains.ruleCoversDomain("example.com", "EXAMPLE.COM."));
     }
+
+    @Test
+    public void includesOnlyValidResolvedIpAddresses() {
+        assertEquals(
+                Arrays.asList("*.example.com", "203.0.113.8", "2001:db8::8"),
+                DirectRuleDomains.toDirectRules(
+                        Arrays.asList("api.example.com"),
+                        Arrays.asList(
+                                "203.0.113.8",
+                                "2001:db8::8",
+                                "alias.example.com",
+                                "203.0.113.8",
+                                "203.0.113.999")));
+    }
 }

@@ -134,6 +134,7 @@ protected void buildStatusScreen(LinearLayout root) {
         dailyPanel.addView(trafficRow, matchWrap());
 
         LinearLayout dnsPanel = panel(root);
+        dnsPanel.setPadding(dp(10), dp(16), dp(10), dp(12));
         sectionTitle(dnsPanel, "代理 DNS 记录");
         TextView dnsSubtitle = mutedText("最近 80 条 DNS", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
@@ -142,38 +143,64 @@ protected void buildStatusScreen(LinearLayout root) {
 
         dnsSelectionToolbar = horizontalRow();
         dnsSelectionToolbar.setGravity(Gravity.CENTER_VERTICAL);
-        dnsSelectionToolbar.setPadding(dp(7), dp(6), dp(7), dp(6));
+        dnsSelectionToolbar.setPadding(dp(5), dp(5), dp(5), dp(5));
         dnsSelectionToolbar.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
         dnsSelectionToolbar.setVisibility(View.GONE);
         LinearLayout.LayoutParams dnsToolbarParams = matchWrap();
         dnsToolbarParams.setMargins(0, 0, 0, dp(7));
         dnsPanel.addView(dnsSelectionToolbar, dnsToolbarParams);
 
-        ScrollView dnsScroll = new ScrollView(this);
-        dnsScroll.setVerticalScrollBarEnabled(true);
-        dnsScroll.setScrollbarFadingEnabled(false);
-        dnsScroll.setClipToPadding(false);
+        MaxHeightScrollView dnsScroll = new MaxHeightScrollView(this, dp(440));
+        dnsScroll.setVerticalScrollBarEnabled(false);
+        dnsScroll.setPadding(0, 0, 0, 0);
+        dnsScroll.setClipToPadding(true);
+        dnsScroll.setClipToOutline(true);
         dnsScroll.setFillViewport(false);
         // 状态页本身位于外层 ScrollView 中。拖动 DNS 记录时由内层列表接管手势，
-        // 否则外层页面会抢走 MOVE 事件，表现为 DNS 列表无法滚动。
+        // 到达列表边界或内容不足时再把手势交还外层页面，避免页面卡住。
+        final float[] lastDnsTouchY = {0f};
         dnsScroll.setOnTouchListener((view, event) -> {
-            view.getParent().requestDisallowInterceptTouchEvent(true);
-            if (event.getAction() == MotionEvent.ACTION_UP
-                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                view.getParent().requestDisallowInterceptTouchEvent(false);
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    lastDnsTouchY[0] = event.getY();
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(-1) || view.canScrollVertically(1));
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float currentY = event.getY();
+                    int direction = currentY < lastDnsTouchY[0] ? 1 : -1;
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(direction));
+                    lastDnsTouchY[0] = currentY;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    break;
+                default:
+                    break;
             }
             return false;
         });
-        dnsScroll.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        GradientDrawable dnsListSurface = new GradientDrawable();
+        dnsListSurface.setColor(COLOR_SURFACE);
+        dnsListSurface.setCornerRadius(dp(10));
+        dnsScroll.setBackground(dnsListSurface);
+        GradientDrawable dnsListFrame = new GradientDrawable();
+        dnsListFrame.setColor(Color.TRANSPARENT);
+        dnsListFrame.setCornerRadius(dp(10));
+        dnsListFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
+        dnsScroll.setForegroundGravity(Gravity.FILL);
+        dnsScroll.setForeground(dnsListFrame);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             dnsScroll.setNestedScrollingEnabled(true);
         }
         dnsRecordList = new LinearLayout(this);
         dnsRecordList.setOrientation(LinearLayout.VERTICAL);
-        dnsRecordList.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dnsRecordList.setPadding(0, 0, 0, 0);
+        dnsRecordList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
         dnsScroll.addView(dnsRecordList, matchWrap());
         LinearLayout.LayoutParams dnsScrollParams = matchWrap();
-        dnsScrollParams.height = dp(440);
         dnsPanel.addView(dnsScroll, dnsScrollParams);
     }
 

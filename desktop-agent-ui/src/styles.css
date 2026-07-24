@@ -1006,6 +1006,12 @@ body.overview-dragging * {
   text-align: center;
 }
 
+.dns-selection-toolbar > span em {
+  color: var(--app-primary-strong);
+  font-style: normal;
+  font-weight: 700;
+}
+
 .dns-record-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

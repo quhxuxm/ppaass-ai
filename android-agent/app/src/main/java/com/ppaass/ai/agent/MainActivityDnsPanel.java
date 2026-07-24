@@ -75,14 +75,19 @@ protected void updateDnsRecords() {
     }
 
 protected boolean isAgentDnsRecord(JSONObject record) {
-        return "agent".equals(record.optString("resolver", ""));
+        String resolver = record.optString("resolver", "");
+        return resolver.isEmpty()
+                || "agent".equals(resolver)
+                || "agent-cache".equals(resolver)
+                || "agent-direct".equals(resolver)
+                || "system".equals(resolver);
     }
 
 protected void addDnsEmptyRow(String text) {
         TextView empty = mutedText(text, 14f);
         empty.setGravity(Gravity.CENTER);
         empty.setTypeface(Typeface.DEFAULT_BOLD);
-        empty.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        empty.setBackgroundColor(COLOR_SURFACE);
         dnsRecordList.addView(empty, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(72)));
@@ -95,11 +100,9 @@ protected void addDnsRecordRow(JSONObject record) {
 
         LinearLayout row = horizontalRow();
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(9), dp(6), dp(9), dp(6));
-        row.setMinimumHeight(dp(50));
-        row.setBackground(rounded(
-                selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
-                selected ? COLOR_ACCENT : COLOR_BORDER));
+        row.setPadding(dp(4), dp(5), dp(4), dp(5));
+        row.setMinimumHeight(dp(46));
+        row.setBackgroundColor(selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE);
         row.setEnabled(!direct);
         row.setClickable(!direct);
         row.setFocusable(!direct);
@@ -110,7 +113,7 @@ protected void addDnsRecordRow(JSONObject record) {
 
         TextView selector = new TextView(this);
         selector.setText(selected || direct ? "✓" : "");
-        selector.setTextSize(14f);
+        selector.setTextSize(11f);
         selector.setTypeface(Typeface.DEFAULT_BOLD);
         selector.setGravity(Gravity.CENTER);
         selector.setTextColor(direct ? COLOR_MUTED : COLOR_ACCENT_DARK);
@@ -118,8 +121,8 @@ protected void addDnsRecordRow(JSONObject record) {
         selector.setBackground(rounded(
                 selected || direct ? COLOR_ACCENT_SOFT : COLOR_CONTROL,
                 selected ? COLOR_ACCENT : COLOR_BORDER));
-        LinearLayout.LayoutParams selectorParams = new LinearLayout.LayoutParams(dp(23), dp(23));
-        selectorParams.setMargins(0, 0, dp(8), 0);
+        LinearLayout.LayoutParams selectorParams = new LinearLayout.LayoutParams(dp(18), dp(18));
+        selectorParams.setMargins(0, 0, dp(6), 0);
         row.addView(selector, selectorParams);
 
         LinearLayout textColumn = new LinearLayout(this);
@@ -177,26 +180,40 @@ protected void addDnsRecordRow(JSONObject record) {
         metaChipsParams.gravity = Gravity.END;
         meta.addView(metaChips, metaChipsParams);
 
-        String statusText = record.optString("status", "UNKNOWN") + " · "
+        String rawStatus = record.optString("status", "UNKNOWN");
+        String statusLabel;
+        if ("NOERROR".equals(rawStatus)) {
+            statusLabel = "成功";
+        } else if ("NXDOMAIN".equals(rawStatus)) {
+            statusLabel = "不存在";
+        } else if ("TIMEOUT".equals(rawStatus)) {
+            statusLabel = "超时";
+        } else {
+            statusLabel = rawStatus;
+        }
+        String statusText = statusLabel + " · "
                 + Math.max(1, record.optLong("duration_ms", 0)) + " ms";
         TextView status = mutedText(statusText, 10f);
-        status.setTextColor("NOERROR".equals(record.optString("status", ""))
+        status.setTextColor("NOERROR".equals(rawStatus)
                 ? COLOR_STATUS_RUNNING
                 : COLOR_ACTION_STOP);
         status.setTypeface(Typeface.DEFAULT_BOLD);
         status.setSingleLine(true);
-        LinearLayout.LayoutParams statusParams = matchWrap();
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusParams.gravity = Gravity.END;
         statusParams.setMargins(0, dp(2), 0, 0);
         meta.addView(status, statusParams);
         LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        metaParams.setMargins(dp(10), 0, 0, 0);
+        metaParams.setMargins(dp(4), 0, 0, 0);
         row.addView(meta, metaParams);
 
         LinearLayout.LayoutParams rowParams = matchWrap();
         if (dnsRecordList.getChildCount() > 0) {
-            rowParams.setMargins(0, dp(8), 0, 0);
+            rowParams.setMargins(0, dp(1), 0, 0);
         }
         dnsRecordList.addView(row, rowParams);
     }
@@ -217,7 +234,7 @@ protected void addDnsSelectionToolbar(List<JSONObject> records) {
         dnsSelectionToolbar.removeAllViews();
         dnsSelectionToolbar.setVisibility(View.VISIBLE);
 
-        List<String> rules = DirectRuleDomains.toDirectRules(selectedDnsDomains.values());
+        List<String> rules = selectedDnsRules(records);
         TextView summary = mutedText(
                 "已选 " + selectedDnsDomains.size() + " · 生成 " + rules.size() + " 条",
                 10.5f);
@@ -256,7 +273,7 @@ protected void addDnsSelectionToolbar(List<JSONObject> records) {
         add.setMinWidth(0);
         add.setPadding(dp(8), 0, dp(8), 0);
         add.setEnabled(!rules.isEmpty());
-        add.setOnClickListener(view -> addSelectedDnsRules());
+        add.setOnClickListener(view -> addSelectedDnsRules(records));
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
                 isVpnRunning() || isHttpProxyRunning() ? dp(94) : dp(64),
                 dp(34));
@@ -285,8 +302,8 @@ protected void toggleDnsDomainSelection(String domain) {
         refreshDnsSelectionUi();
     }
 
-protected void addSelectedDnsRules() {
-        List<String> rules = DirectRuleDomains.toDirectRules(selectedDnsDomains.values());
+protected void addSelectedDnsRules(List<JSONObject> records) {
+        List<String> rules = selectedDnsRules(records);
         if (rules.isEmpty()) {
             return;
         }
@@ -297,6 +314,24 @@ protected void addSelectedDnsRules() {
         selectedDnsDomains.clear();
         refreshDnsSelectionUi();
         restartRunningAgentsAfterRuleUpdate(restartVpn, restartHttpProxy);
+    }
+
+protected List<String> selectedDnsRules(List<JSONObject> records) {
+        List<String> addresses = new ArrayList<>();
+        for (JSONObject record : records) {
+            String domainKey = dnsRecordDomain(record).toLowerCase(Locale.US);
+            if (!selectedDnsDomains.containsKey(domainKey)) {
+                continue;
+            }
+            JSONArray answers = record.optJSONArray("answers");
+            if (answers == null) {
+                continue;
+            }
+            for (int index = 0; index < answers.length(); index++) {
+                addresses.add(answers.optString(index));
+            }
+        }
+        return DirectRuleDomains.toDirectRules(selectedDnsDomains.values(), addresses);
     }
 
 protected void refreshDnsSelectionUi() {
@@ -371,8 +406,8 @@ protected TextView dnsCacheChip(JSONObject record) {
         if ("system".equals(resolver)) {
             return chip("系统 DNS", COLOR_ACTION_STOP);
         }
-        if ("agent".equals(resolver) || "agent-direct".equals(resolver) || resolver.isEmpty()) {
-            return chip("缓存未命中", COLOR_STATUS_STOPPED);
+        if ("agent-direct".equals(resolver)) {
+            return chip("直连解析", COLOR_ACTION_INFO);
         }
         return null;
     }
