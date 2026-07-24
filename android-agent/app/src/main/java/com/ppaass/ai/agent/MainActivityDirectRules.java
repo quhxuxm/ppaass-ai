@@ -22,7 +22,7 @@ import java.text.*;
 import java.util.*;
 
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
-abstract class MainActivityDirectRules extends MainActivityAppSelector {
+abstract class MainActivityDirectRules extends MainActivityMockGeo {
 
 protected void addDraftDirectRules() {
         if (directRuleDraft == null) {

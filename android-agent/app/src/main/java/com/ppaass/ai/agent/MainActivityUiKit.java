@@ -187,6 +187,21 @@ protected Drawable controlBackground() {
         return background;
     }
 
+protected Drawable controlFillBackground() {
+        StateListDrawable background = new StateListDrawable();
+        background.addState(
+                new int[]{android.R.attr.state_focused},
+                roundedFill(COLOR_ACCENT_SOFT));
+        background.addState(
+                new int[]{android.R.attr.state_pressed},
+                roundedFill(COLOR_ACCENT_SOFT));
+        background.addState(
+                new int[]{-android.R.attr.state_enabled},
+                roundedFill(alphaColor(COLOR_CONTROL, 176)));
+        background.addState(new int[]{}, roundedFill(COLOR_CONTROL));
+        return background;
+    }
+
 protected void styleInput(EditText edit) {
         edit.setTextColor(COLOR_TEXT);
         edit.setHintTextColor(COLOR_MUTED);
@@ -200,6 +215,33 @@ protected void styleInput(EditText edit) {
                 edit.setTextCursorDrawable(cursor);
             }
         }
+    }
+
+protected <T> ArrayAdapter<T> spinnerAdapter(T[] values) {
+        return new ArrayAdapter<T>(this, android.R.layout.simple_spinner_item, values) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getView(position, convertView, parent), false);
+            }
+
+            @Override
+            public View getDropDownView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getDropDownView(position, convertView, parent), true);
+            }
+        };
+    }
+
+protected View styleSpinnerItem(View view, boolean dropdown) {
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            text.setTextColor(COLOR_TEXT);
+            text.setTextSize(15f);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setMinHeight(dp(48));
+            text.setPadding(dp(12), 0, dp(12), 0);
+            text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
+        }
+        return view;
     }
 
 protected ImageView iconPlate(int icon, int color) {

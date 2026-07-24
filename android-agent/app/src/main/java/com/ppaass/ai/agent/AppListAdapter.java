@@ -26,7 +26,6 @@ final class AppListAdapter extends BaseAdapter {
     private final int COLOR_CONTROL = UiPalette.CONTROL;
     private final int COLOR_TEXT = UiPalette.TEXT;
     private final int COLOR_MUTED = UiPalette.MUTED;
-    private final int COLOR_BORDER = UiPalette.BORDER;
     private final int COLOR_ACCENT = UiPalette.ACCENT;
     private final int COLOR_ACCENT_DARK = UiPalette.ACCENT_STRONG;
     private final int COLOR_ACCENT_SOFT = UiPalette.ACCENT_SOFT;
@@ -74,7 +73,7 @@ final class AppListAdapter extends BaseAdapter {
 
             ImageView icon = new ImageView(context);
             icon.setPadding(dp(4), dp(4), dp(4), dp(4));
-            icon.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+            icon.setBackground(rounded(COLOR_SURFACE));
             LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(44), dp(44));
             iconParams.setMargins(0, 0, dp(12), 0);
             container.addView(icon, iconParams);
@@ -126,8 +125,7 @@ final class AppListAdapter extends BaseAdapter {
         row.icon.setImageDrawable(app.icon);
         row.icon.setBackground(iconPlate(selected ? COLOR_ACCENT_DARK : COLOR_ACTION_START));
         row.item.setBackground(interactiveRounded(
-                selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE,
-                selected ? alphaColor(COLOR_ACCENT, 138) : COLOR_BORDER));
+                selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL));
         row.label.setText(app.label);
         row.label.setTextColor(selected ? COLOR_ACCENT_DARK : COLOR_TEXT);
         row.packageName.setText(app.packageName);
@@ -167,15 +165,14 @@ final class AppListAdapter extends BaseAdapter {
         badge.setTextColor(COLOR_MUTED);
         badge.setTypeface(Typeface.DEFAULT_BOLD);
         badge.setPadding(dp(8), dp(2), dp(8), dp(2));
-        badge.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        badge.setBackground(rounded(COLOR_SURFACE));
         return badge;
     }
 
-    private GradientDrawable rounded(int fill, int stroke) {
+    private GradientDrawable rounded(int fill) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill);
         drawable.setCornerRadius(dp(12));
-        drawable.setStroke(dp(1), stroke);
         return drawable;
     }
 
@@ -183,14 +180,13 @@ final class AppListAdapter extends BaseAdapter {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(alphaColor(color, 24));
         drawable.setCornerRadius(dp(12));
-        drawable.setStroke(dp(1), alphaColor(color, 108));
         return drawable;
     }
 
-    private Drawable interactiveRounded(int fill, int stroke) {
+    private Drawable interactiveRounded(int fill) {
         return new RippleDrawable(
                 ColorStateList.valueOf(alphaColor(COLOR_ACCENT, 74)),
-                rounded(fill, stroke),
+                rounded(fill),
                 null);
     }
 

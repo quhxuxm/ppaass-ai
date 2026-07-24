@@ -159,6 +159,8 @@ protected final Runnable statusRefresh = new Runnable() {
 
     protected abstract void updateHttpProxyToggle();
 
+    protected abstract void toggleVpn();
+
     protected abstract boolean isVpnRunning();
 
     protected abstract boolean isHttpProxyRunning();
@@ -209,6 +211,13 @@ protected final Runnable statusRefresh = new Runnable() {
         drawable.setColor(fill);
         drawable.setCornerRadius(dp(16));
         drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+    protected GradientDrawable roundedFill(int fill) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(16));
         return drawable;
     }
 

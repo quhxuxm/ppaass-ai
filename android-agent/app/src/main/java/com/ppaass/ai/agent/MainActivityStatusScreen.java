@@ -105,6 +105,7 @@ protected void buildStatusScreen(LinearLayout root) {
         appsRowParams.setMargins(0, dp(4), 0, 0);
         apps.addView(appsRow, appsRowParams);
 
+        buildMockGeoPanel(root);
         buildHttpProxyPanel(root);
         buildConnectivityPanel(root);
 

@@ -72,6 +72,15 @@ Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径
 - HTTP Proxy 监听端口和专属运行线程数。线程数只影响 Android HTTP Proxy 的 native Tokio runtime，VPN Agent 仍使用通用运行线程配置。
 - direct access mode 和 rules。规则支持精确域名、`*.example.com` 通配符、精确 IP 和 CIDR 网段；默认模式为 `proxy_all`，因此升级后不会自动旁路既有流量。
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
+- 模拟 GEO。可以选择内置城市或自定义经纬度；VPN 运行期间会同时更新 Android GPS、网络定位和 Google 融合定位，VPN 停止后恢复真实定位。首次使用需要开启系统定位、在 Android 开发者选项中把 PPAASS VPN 选为“模拟位置信息应用”，并授予定位权限。
+
+模拟 GEO 使用 Android 标准 mock-location 能力，因此有以下平台边界：
+
+- 模拟定位是设备级状态，Android 不支持普通 `VpnService` 只对 VPN allow-list 中的应用修改定位；未进入 VPN 的应用也可能收到同一模拟位置。
+- `Location.isMock()` 会标记该位置，目标应用可以识别或拒绝模拟位置。
+- 该功能模拟 Android 系统定位，不会改变 SIM、时区、语言、Wi-Fi/基站等旁路信号。
+- 公网 IP 的地理位置仍由所连接的 proxy 出口决定。要让 IP 属地与模拟坐标一致，必须连接部署在相应地区的 proxy 节点；客户端不能把单一固定出口变成任意地区。
+- Android 14+ 不允许仅持有“使用期间”定位权限的应用从后台启动定位前台服务。因此系统在开机或始终开启模式下后台恢复 VPN 时，会先保持 VPN 网络可用；用户打开 PPAASS VPN 后，App 会自动恢复模拟 GEO。没有静默请求后台定位权限。
 
 状态页的 VPN connectivity 面板可通过 VPN 路径测试 Google / YouTube 的 HTTPS 连通性，并通过 UDP/443 QUIC Version Negotiation 探测测试应用层 QUIC 协议路径。这个探测不是 Agent 到 Proxy 的外层传输协议。allow-list 模式下 App 会自动把自身加入 VPN 路径用于诊断；proxy 控制连接仍通过 `VpnService.protect()` 排除。
 

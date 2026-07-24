@@ -151,8 +151,16 @@ protected void restoreDefaultConfig() {
         updateDirectModeButtons();
         renderDirectRuleList();
         saveConfig();
+        MockGeoConfig.reset(prefs);
+        prefs.edit()
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .apply();
         prefs.edit().putStringSet("vpn_apps", Collections.emptySet()).apply();
         updateSelectedAppsSummary();
+        cleanupStaleMockGeoState();
+        refreshMockGeoUi();
         Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show();
     }
 
@@ -344,33 +352,6 @@ protected Spinner quicPolicySpinner(LinearLayout root, String title, String sele
         trackEditable(spinner);
         addFieldHelp(root, "允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。");
         return spinner;
-    }
-
-protected <T> ArrayAdapter<T> spinnerAdapter(T[] values) {
-        return new ArrayAdapter<T>(this, android.R.layout.simple_spinner_item, values) {
-            @Override
-            public View getView(int position, View convertView, ViewGroup parent) {
-                return styleSpinnerItem(super.getView(position, convertView, parent), false);
-            }
-
-            @Override
-            public View getDropDownView(int position, View convertView, ViewGroup parent) {
-                return styleSpinnerItem(super.getDropDownView(position, convertView, parent), true);
-            }
-        };
-    }
-
-protected View styleSpinnerItem(View view, boolean dropdown) {
-        if (view instanceof TextView) {
-            TextView text = (TextView) view;
-            text.setTextColor(COLOR_TEXT);
-            text.setTextSize(15f);
-            text.setGravity(Gravity.CENTER_VERTICAL);
-            text.setMinHeight(dp(48));
-            text.setPadding(dp(12), 0, dp(12), 0);
-            text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
-        }
-        return view;
     }
 
 protected String selectedTransportMode() {

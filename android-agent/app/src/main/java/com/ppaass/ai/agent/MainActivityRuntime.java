@@ -44,6 +44,7 @@ protected void updateVpnToggle() {
         }
         updateConfigEditability(!running && !isHttpProxyRunning());
         updateConnectivityButton();
+        refreshMockGeoUi();
     }
 
 protected void updateHttpProxyToggle() {

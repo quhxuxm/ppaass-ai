@@ -30,6 +30,9 @@ protected void toggleVpn() {
             return;
         }
 
+        if (!ensureMockGeoReadyForVpnStart()) {
+            return;
+        }
         saveConfig();
         Intent permissionIntent = VpnService.prepare(this);
         if (permissionIntent != null) {
@@ -151,10 +154,15 @@ protected void showHttpProxyClientsDialog() {
 protected boolean isVpnRunning() {
         boolean running = prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false);
         if (running && !PpaassVpnService.isRunningInProcess()) {
-            prefs.edit()
+            SharedPreferences.Editor editor = prefs.edit()
                     .putBoolean(PpaassVpnService.PREF_RUNNING, false)
                     .putBoolean(PpaassVpnService.PREF_SYSTEM_MANAGED, false)
-                    .apply();
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                    .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND);
+            if (!prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)) {
+                editor.remove(PpaassVpnService.PREF_MOCK_GEO_ERROR);
+            }
+            editor.apply();
             return false;
         }
         return running;
