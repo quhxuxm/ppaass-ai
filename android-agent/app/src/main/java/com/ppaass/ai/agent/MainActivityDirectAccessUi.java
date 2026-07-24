@@ -94,7 +94,6 @@ protected void addDirectPolicyFacts(LinearLayout root) {
         directModeSummary = addPolicyFact(row, "当前模式", directModeLabel(directAccessModeValue));
         directRuleCountSummary = addPolicyFact(row, "规则数量", directRuleCountLabel());
         directRuleCountFact = directRuleCountSummary == null ? null : (View) directRuleCountSummary.getParent();
-        addPolicyFact(row, "配置段", "direct_access");
         root.addView(row, rowParams);
     }
 
@@ -344,18 +343,38 @@ protected void addDirectRuleManager(LinearLayout root) {
 
         directRuleGroupList = new LinearLayout(this);
         directRuleGroupList.setOrientation(LinearLayout.VERTICAL);
+        directRuleGroupList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
 
-        ScrollView ruleScroll = new ScrollView(this);
-        ruleScroll.setPadding(dp(8), dp(8), dp(8), dp(8));
-        ruleScroll.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        MaxHeightScrollView ruleScroll = new MaxHeightScrollView(this, dp(340));
+        ruleScroll.setPadding(0, 0, 0, 0);
         ruleScroll.setVerticalScrollBarEnabled(true);
         ruleScroll.setScrollbarFadingEnabled(true);
-        ruleScroll.setClipToPadding(false);
+        ruleScroll.setScrollBarFadeDuration(450);
+        ruleScroll.setScrollBarDefaultDelayBeforeFade(700);
+        ruleScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        ruleScroll.setClipToPadding(true);
+        ruleScroll.setFillViewport(false);
+        final float[] lastRuleTouchY = {0f};
         ruleScroll.setOnTouchListener((view, event) -> {
-            view.getParent().requestDisallowInterceptTouchEvent(true);
-            if (event.getAction() == MotionEvent.ACTION_UP
-                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                view.getParent().requestDisallowInterceptTouchEvent(false);
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    lastRuleTouchY[0] = event.getY();
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(-1) || view.canScrollVertically(1));
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float currentY = event.getY();
+                    int direction = currentY < lastRuleTouchY[0] ? 1 : -1;
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(direction));
+                    lastRuleTouchY[0] = currentY;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    break;
+                default:
+                    break;
             }
             return false;
         });
@@ -365,11 +384,26 @@ protected void addDirectRuleManager(LinearLayout root) {
         ruleScroll.addView(directRuleGroupList, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+
+        FrameLayout ruleListContainer = new FrameLayout(this);
+        ruleListContainer.setClipChildren(true);
+        ruleListContainer.setClipToOutline(true);
+        GradientDrawable ruleListSurface = new GradientDrawable();
+        ruleListSurface.setColor(COLOR_SURFACE);
+        ruleListSurface.setCornerRadius(dp(10));
+        ruleListContainer.setBackground(ruleListSurface);
+        GradientDrawable ruleListFrame = new GradientDrawable();
+        ruleListFrame.setColor(Color.TRANSPARENT);
+        ruleListFrame.setCornerRadius(dp(10));
+        ruleListFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
+        ruleListContainer.setForegroundGravity(Gravity.FILL);
+        ruleListContainer.setForeground(ruleListFrame);
+        ruleListContainer.addView(ruleScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(340));
-        scrollParams.setMargins(0, dp(8), 0, 0);
-        ruleBrowser.addView(ruleScroll, scrollParams);
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams listContainerParams = matchWrap();
+        listContainerParams.setMargins(0, dp(8), 0, 0);
+        ruleBrowser.addView(ruleListContainer, listContainerParams);
         root.addView(ruleBrowser, matchWrap());
     }
 

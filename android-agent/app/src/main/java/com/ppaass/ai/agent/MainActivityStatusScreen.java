@@ -154,7 +154,7 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsScroll.setVerticalScrollBarEnabled(false);
         dnsScroll.setPadding(0, 0, 0, 0);
         dnsScroll.setClipToPadding(true);
-        dnsScroll.setClipToOutline(true);
+        dnsScroll.setClipToOutline(false);
         dnsScroll.setFillViewport(false);
         // 状态页本身位于外层 ScrollView 中。拖动 DNS 记录时由内层列表接管手势，
         // 到达列表边界或内容不足时再把手势交还外层页面，避免页面卡住。
@@ -182,16 +182,19 @@ protected void buildStatusScreen(LinearLayout root) {
             }
             return false;
         });
+        FrameLayout dnsListContainer = new FrameLayout(this);
+        dnsListContainer.setClipChildren(true);
+        dnsListContainer.setClipToOutline(true);
         GradientDrawable dnsListSurface = new GradientDrawable();
         dnsListSurface.setColor(COLOR_SURFACE);
         dnsListSurface.setCornerRadius(dp(10));
-        dnsScroll.setBackground(dnsListSurface);
+        dnsListContainer.setBackground(dnsListSurface);
         GradientDrawable dnsListFrame = new GradientDrawable();
         dnsListFrame.setColor(Color.TRANSPARENT);
         dnsListFrame.setCornerRadius(dp(10));
         dnsListFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
-        dnsScroll.setForegroundGravity(Gravity.FILL);
-        dnsScroll.setForeground(dnsListFrame);
+        dnsListContainer.setForegroundGravity(Gravity.FILL);
+        dnsListContainer.setForeground(dnsListFrame);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             dnsScroll.setNestedScrollingEnabled(true);
         }
@@ -200,8 +203,10 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsRecordList.setPadding(0, 0, 0, 0);
         dnsRecordList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
         dnsScroll.addView(dnsRecordList, matchWrap());
-        LinearLayout.LayoutParams dnsScrollParams = matchWrap();
-        dnsPanel.addView(dnsScroll, dnsScrollParams);
+        dnsListContainer.addView(dnsScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        dnsPanel.addView(dnsListContainer, matchWrap());
     }
 
 protected void buildHttpProxyPanel(LinearLayout root) {

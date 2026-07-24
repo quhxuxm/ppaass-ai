@@ -74,7 +74,6 @@ const emit = defineEmits<{
       <div class="card-group-heading">
         <div>
           <h2>流量策略</h2>
-          <p>direct_access</p>
         </div>
         <Tag :value="directModeLabel" severity="info" />
       </div>
@@ -103,7 +102,6 @@ const emit = defineEmits<{
               <div class="policy-facts">
                 <div class="policy-fact"><span>当前转发</span><strong>{{ activeForwardingLabel }}</strong></div>
                 <div class="policy-fact"><span>规则数量</span><strong>{{ summary.direct_rules.length }} 条</strong></div>
-                <div class="policy-fact"><span>配置段</span><strong>direct_access</strong></div>
               </div>
             </div>
             <div class="forwarding-methods">

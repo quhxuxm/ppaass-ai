@@ -13,7 +13,7 @@ import {
   formatRate,
   hourLabel,
   isAgentDnsCacheRecord,
-  isAgentDnsCacheMissRecord,
+  isAgentDirectDnsRecord,
   isSystemDnsRecord,
   localDateKey,
   shortPath
@@ -114,11 +114,7 @@ const allSelectableDnsSelected = computed(
     selectableDnsDomains.value.every((domain) => selectedDnsDomainKeys.value.has(domain.toLowerCase()))
 );
 const selectedDnsActionLabel = computed(() => {
-  const count = selectedDnsRules.value.length;
-  if (props.agentRunning) {
-    return `加入 ${count} 条规则并重启 Agent`;
-  }
-  return `加入 ${count} 条直连规则`;
+  return props.agentRunning ? "添加并重启" : "添加";
 });
 
 watch(
@@ -312,6 +308,13 @@ function addSelectedDnsDomainsToDirectRules() {
 
 function dnsRecordKey(record: DnsResolutionRecord) {
   return `${record.timestamp_ms}-${record.client}-${record.query}-${record.record_type}`;
+}
+
+function dnsStatusLabel(status: string) {
+  if (status === "NOERROR") return "成功";
+  if (status === "NXDOMAIN") return "不存在";
+  if (status === "TIMEOUT") return "超时";
+  return status;
 }
 
 function countNewDnsRecords(incoming: DnsResolutionRecord[], displayed: DnsResolutionRecord[]) {
@@ -519,29 +522,19 @@ function onDnsListFocusOut(event: FocusEvent) {
             <AppIcon name="globe" />
             <span>等待经过代理的 DNS 请求</span>
           </div>
-          <div
-            v-else
-            ref="dnsRecordListElement"
-            class="dns-record-list"
-            @scroll.passive="onDnsListScroll"
-            @mouseenter="onDnsListMouseEnter"
-            @mouseleave="onDnsListMouseLeave"
-            @focusin="dnsListFocused = true"
-            @focusout="onDnsListFocusOut"
-          >
+          <div v-else class="dns-record-content">
             <div class="dns-selection-toolbar">
+              <span>
+                已选 {{ selectedDnsDomains.length }} · 生成 {{ selectedDnsRules.length }} 条
+                <em v-if="pendingDnsRecordCount"> · {{ pendingDnsRecordCount }} 条新记录待更新</em>
+              </span>
               <Button
-                :label="allSelectableDnsSelected ? '清空选择' : '全选可添加项'"
+                :label="allSelectableDnsSelected ? '清空' : '全选'"
                 severity="secondary"
-                text
                 size="small"
                 :disabled="!selectableDnsDomains.length"
                 @click="toggleAllSelectableDnsDomains"
               />
-              <span>
-                已选 {{ selectedDnsDomains.length }} 个域名，将添加 {{ selectedDnsRules.length }} 条规则
-                <em v-if="pendingDnsRecordCount"> · {{ pendingDnsRecordCount }} 条新记录待更新</em>
-              </span>
               <Button
                 :label="selectedDnsActionLabel"
                 size="small"
@@ -549,72 +542,87 @@ function onDnsListFocusOut(event: FocusEvent) {
                 @click="addSelectedDnsDomainsToDirectRules"
               />
             </div>
-            <div
-              v-for="record in displayedDnsRecords"
-              :key="`${record.timestamp_ms}-${record.client}-${record.query}`"
-              :class="[
-                'dns-record-row',
-                'interactive',
-                {
-                  selected: dnsDomainIsSelected(record),
-                  direct: dnsDomainIsDirect(record)
-                }
-              ]"
-              role="checkbox"
-              :aria-checked="dnsDomainIsSelected(record)"
-              :aria-disabled="dnsDomainIsDirect(record)"
-              :tabindex="dnsDomainIsDirect(record) ? -1 : 0"
-              :title="dnsDomainIsDirect(record) ? '该域名已在直连规则中' : '点击选择该域名'"
-              @mousedown.stop
-              @click="toggleDnsDomainSelection(record)"
-              @keydown.enter.prevent="toggleDnsDomainSelection(record)"
-              @keydown.space.prevent="toggleDnsDomainSelection(record)"
-            >
-              <input
-                class="dns-record-checkbox"
-                type="checkbox"
-                :checked="dnsDomainIsSelected(record)"
-                :disabled="dnsDomainIsDirect(record)"
-                tabindex="-1"
-                aria-hidden="true"
-                @click.stop
-                @change="toggleDnsDomainSelection(record)"
-              />
-              <div class="dns-record-main">
-                <strong :title="record.query">{{ record.query }}</strong>
-                <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
-              </div>
-              <div class="dns-record-meta">
-                <Tag
-                  v-if="dnsDomainIsDirect(record)"
-                  value="已直连"
-                  severity="info"
-                  rounded
-                />
-                <Tag
-                  v-if="isAgentDnsCacheRecord(record)"
-                  value="缓存命中"
-                  severity="success"
-                  rounded
-                  title="该 DNS 响应来自代理内部 DNS cache，未重新请求上游 DNS"
-                />
-                <Tag
-                  v-else-if="isAgentDnsCacheMissRecord(record)"
-                  value="缓存未命中"
-                  severity="secondary"
-                  rounded
-                  title="该 DNS 请求由代理内部 DNS 处理，但没有命中代理 DNS cache"
-                />
-                <Tag
-                  v-if="isSystemDnsRecord(record)"
-                  value="系统解析"
-                  severity="warn"
-                  rounded
-                  title="该请求绕过了代理内部 DNS，由代理所在机器的系统解析"
-                />
-                <Tag :value="record.record_type" severity="secondary" rounded />
-                <span :class="['dns-status', record.status === 'NOERROR' ? 'ok' : 'warn']">{{ record.status }}</span>
-                <span>{{ Math.max(1, Math.round(record.duration_ms)) }} ms</span>
+            <div class="dns-record-frame">
+              <div
+                ref="dnsRecordListElement"
+                class="dns-record-list"
+                @scroll.passive="onDnsListScroll"
+                @mouseenter="onDnsListMouseEnter"
+                @mouseleave="onDnsListMouseLeave"
+                @focusin="dnsListFocused = true"
+                @focusout="onDnsListFocusOut"
+              >
+                <div
+                  v-for="record in displayedDnsRecords"
+                  :key="`${record.timestamp_ms}-${record.client}-${record.query}`"
+                  :class="[
+                    'dns-record-row',
+                    'interactive',
+                    {
+                      selected: dnsDomainIsSelected(record),
+                      direct: dnsDomainIsDirect(record)
+                    }
+                  ]"
+                  role="checkbox"
+                  :aria-checked="dnsDomainIsSelected(record)"
+                  :aria-disabled="dnsDomainIsDirect(record)"
+                  :tabindex="dnsDomainIsDirect(record) ? -1 : 0"
+                  :title="dnsDomainIsDirect(record) ? '该域名已在直连规则中' : '点击选择该域名'"
+                  @mousedown.stop
+                  @click="toggleDnsDomainSelection(record)"
+                  @keydown.enter.prevent="toggleDnsDomainSelection(record)"
+                  @keydown.space.prevent="toggleDnsDomainSelection(record)"
+                >
+                  <input
+                    class="dns-record-checkbox"
+                    type="checkbox"
+                    :checked="dnsDomainIsSelected(record)"
+                    :disabled="dnsDomainIsDirect(record)"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    @click.stop
+                    @change="toggleDnsDomainSelection(record)"
+                  />
+                  <div class="dns-record-main">
+                    <strong :title="record.query">{{ record.query }}</strong>
+                    <span :title="dnsAnswers(record).join(', ')">{{ dnsAnswerLabel(record) }}</span>
+                  </div>
+                  <div class="dns-record-meta">
+                    <div class="dns-record-tags">
+                      <Tag
+                        v-if="dnsDomainIsDirect(record)"
+                        value="已直连"
+                        severity="info"
+                        rounded
+                      />
+                      <Tag
+                        v-if="isAgentDnsCacheRecord(record)"
+                        value="缓存命中"
+                        severity="success"
+                        rounded
+                        title="该 DNS 响应来自代理内部 DNS cache，未重新请求上游 DNS"
+                      />
+                      <Tag
+                        v-if="isAgentDirectDnsRecord(record)"
+                        value="直连解析"
+                        severity="info"
+                        rounded
+                      />
+                      <Tag
+                        v-if="isSystemDnsRecord(record)"
+                        value="系统 DNS"
+                        severity="warn"
+                        rounded
+                        title="该请求绕过了代理内部 DNS，由代理所在机器的系统解析"
+                      />
+                      <Tag :value="record.record_type" severity="secondary" rounded />
+                    </div>
+                    <div class="dns-record-result">
+                      <span :class="['dns-status', record.status === 'NOERROR' ? 'ok' : 'warn']">{{ dnsStatusLabel(record.status) }}</span>
+                      <span>· {{ Math.max(1, Math.round(record.duration_ms)) }} ms</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -631,7 +639,6 @@ function onDnsListFocusOut(event: FocusEvent) {
           <div class="kv-row"><span>DNS</span><strong>{{ summary.tun_proxy_dns ? "经 Proxy 解析" : "系统解析" }}</strong></div>
         </div>
         <div v-else-if="card.key === 'policy'" class="kv-list">
-          <div class="kv-row"><span>配置段</span><strong>direct_access</strong></div>
           <div class="kv-row"><span>服务对象</span><strong>代理入口与 TUN 模式</strong></div>
           <div class="kv-row"><span>规则</span><strong>{{ summary.direct_rules.length }} 条</strong></div>
         </div>

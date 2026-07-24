@@ -91,7 +91,7 @@ protected void addActiveDirectRuleGroup(
         LinearLayout heading = horizontalRow();
         heading.setGravity(Gravity.CENTER_VERTICAL);
         heading.setPadding(dp(10), dp(8), dp(10), dp(8));
-        heading.setBackground(rounded(COLOR_ACCENT_SOFT, alphaColor(COLOR_ACCENT, 72)));
+        heading.setBackgroundColor(COLOR_ACCENT_SOFT);
         TextView title = titleText(label, 13f);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView scope = mutedText(TextUtils.join(" · ", modes), 10.5f);
@@ -150,10 +150,7 @@ protected void addDirectRuleRow(
         LinearLayout row = horizontalRow();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(11), dp(9), dp(7), dp(9));
-        row.setBackground(interactiveRounded(
-                COLOR_SURFACE,
-                COLOR_CONTROL,
-                COLOR_ACCENT));
+        row.setBackgroundColor(COLOR_SURFACE);
 
         LinearLayout textColumn = new LinearLayout(this);
         textColumn.setOrientation(LinearLayout.VERTICAL);
@@ -181,7 +178,7 @@ protected void addDirectRuleRow(
         remove.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         remove.setMinimumHeight(0);
         remove.setMinimumWidth(0);
-        remove.setPadding(dp(4), dp(4), dp(4), dp(4));
+        remove.setPadding(dp(6), dp(6), dp(6), dp(6));
         remove.setBackground(interactiveRounded(
                 COLOR_SURFACE,
                 alphaColor(COLOR_ACTION_STOP, 92),
@@ -192,12 +189,12 @@ protected void addDirectRuleRow(
         // 规则列表可能在 Agent 已运行后因切换类型或 DNS 批量添加而重新渲染。
         // 新创建的按钮必须立即继承当前锁定状态，不能只依赖之前的 editableControls 刷新。
         remove.setEnabled(!isVpnRunning() && !isHttpProxyRunning());
-        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(34), dp(34));
-        removeParams.setMargins(dp(8), 0, 0, 0);
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(30), dp(30));
+        removeParams.setMargins(dp(6), 0, 0, 0);
         row.addView(remove, removeParams);
 
         LinearLayout.LayoutParams rowParams = matchWrap();
-        rowParams.setMargins(0, dp(7), 0, 0);
+        rowParams.setMargins(0, dp(1), 0, 0);
         root.addView(row, rowParams);
     }
 
