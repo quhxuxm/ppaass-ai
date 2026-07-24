@@ -29,12 +29,18 @@ import java.util.UUID;
 public class PpaassVpnService extends VpnService {
     public static final String ACTION_START = "com.ppaass.ai.agent.START";
     public static final String ACTION_STOP = "com.ppaass.ai.agent.STOP";
+    public static final String ACTION_START_MOCK_GEO =
+            "com.ppaass.ai.agent.START_MOCK_GEO";
+    public static final String ACTION_STOP_MOCK_GEO =
+            "com.ppaass.ai.agent.STOP_MOCK_GEO";
     public static final String ACTION_UPDATE_MOCK_GEO = "com.ppaass.ai.agent.UPDATE_MOCK_GEO";
     public static final String EXTRA_STARTED_BY_APP = "com.ppaass.ai.agent.STARTED_BY_APP";
     public static final String EXTRA_USER_VISIBLE = "com.ppaass.ai.agent.USER_VISIBLE";
     public static final String PREF_RUNNING = "vpn_running";
     public static final String PREF_SYSTEM_MANAGED = "vpn_system_managed";
+    public static final String PREF_MOCK_GEO_REQUESTED = "mock_geo_requested";
     public static final String PREF_MOCK_GEO_ACTIVE = "mock_geo_active";
+    public static final String PREF_MOCK_GEO_STOPPING = "mock_geo_stopping";
     public static final String PREF_MOCK_GEO_ERROR = "mock_geo_error";
     public static final String PREF_MOCK_GEO_WAITING_FOR_FOREGROUND =
             "mock_geo_waiting_for_foreground";
@@ -49,11 +55,20 @@ public class PpaassVpnService extends VpnService {
     private static final long HEALTH_CHECK_INTERVAL_MS = 2_000L;
 
     private static volatile boolean runningInProcess;
+    private static volatile boolean mockGeoRunningInProcess;
 
     private long nativeHandle;
     private ParcelFileDescriptor tun;
     private MockLocationController mockLocationController;
     private int activeForegroundServiceTypes;
+    private int latestStartId;
+    private boolean vpnStarting;
+    private boolean mockGeoStarting;
+    private boolean mockGeoCleanupInFlight;
+    private boolean mockGeoCleanupLocationForegroundAllowed;
+    private boolean restartMockGeoAfterCleanup;
+    private boolean foregroundStarted;
+    private boolean destroying;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable nativeHealthCheck = new Runnable() {
         @Override
@@ -74,56 +89,126 @@ public class PpaassVpnService extends VpnService {
         return runningInProcess;
     }
 
+    static boolean isMockGeoRunningInProcess() {
+        return mockGeoRunningInProcess;
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        latestStartId = startId;
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopAgent();
-            return START_NOT_STICKY;
+            return startModeForCurrentOwners();
+        } else if (intent != null && ACTION_START_MOCK_GEO.equals(intent.getAction())) {
+            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, true)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .remove(PREF_MOCK_GEO_ERROR)
+                    .apply();
+            applyMockGeoConfig(intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
+            return startModeForCurrentOwners();
+        } else if (intent != null && ACTION_STOP_MOCK_GEO.equals(intent.getAction())) {
+            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, true)
+                    .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .remove(PREF_MOCK_GEO_ERROR)
+                    .apply();
+            restartMockGeoAfterCleanup = false;
+            stopMockLocation(
+                    false,
+                    "",
+                    intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
+            return startModeForCurrentOwners();
         } else if (intent != null && ACTION_UPDATE_MOCK_GEO.equals(intent.getAction())) {
-            if (nativeHandle != 0) {
+            if (getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                    .getBoolean(PREF_MOCK_GEO_REQUESTED, false)) {
                 applyMockGeoConfig(intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
-                return START_STICKY;
+            } else if (mockLocationController != null
+                    || getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                    .getBoolean(PREF_MOCK_GEO_DIRTY, false)) {
+                stopMockLocation(false, "");
             }
-            return START_NOT_STICKY;
+            reconcileForegroundAndLifetime();
+            return startModeForCurrentOwners();
         } else {
             boolean startedByApp = intent != null
                     && intent.getBooleanExtra(EXTRA_STARTED_BY_APP, false);
-            startAgent(!startedByApp || isAlwaysOnVpn(), startedByApp);
-            return START_STICKY;
+            boolean vpnStarted = startAgent(!startedByApp || isAlwaysOnVpn());
+            SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+            boolean requested = prefs.getBoolean(PREF_MOCK_GEO_REQUESTED, false);
+            boolean staleMockGeo = mockLocationController == null
+                    && !mockGeoStarting
+                    && !mockGeoCleanupInFlight
+                    && (prefs.getBoolean(PREF_MOCK_GEO_DIRTY, false)
+                    || prefs.getBoolean(PREF_MOCK_GEO_ACTIVE, false));
+            if (vpnStarted && !startedByApp && staleMockGeo) {
+                // A system/always-on restart can arrive with a non-null VpnService intent.
+                // Clear any provider state left by the old process, but do not restore GEO
+                // until a visible Activity can legally start the location foreground role.
+                stopMockLocation(requested, "", false);
+            } else if (vpnStarted && intent == null && requested) {
+                setMockGeoState(false, "", true);
+            }
+            return startModeForCurrentOwners();
         }
     }
 
     @Override
     public void onDestroy() {
-        stopAgent();
+        destroying = true;
+        stopVpnComponents();
+        SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        boolean resumeWhenForeground =
+                prefs.getBoolean(PREF_MOCK_GEO_REQUESTED, false);
+        if (mockLocationController != null
+                || prefs.getBoolean(PREF_MOCK_GEO_DIRTY, false)
+                || prefs.getBoolean(PREF_MOCK_GEO_ACTIVE, false)) {
+            stopMockLocation(resumeWhenForeground, "");
+        } else {
+            mockGeoRunningInProcess = false;
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        foregroundStarted = false;
+        activeForegroundServiceTypes = 0;
+        runningInProcess = false;
+        mockGeoRunningInProcess = false;
         super.onDestroy();
     }
 
     @Override
     public void onRevoke() {
         Log.w(TAG, "VPN permission revoked by the system");
-        stopAgent();
-        super.onRevoke();
+        // VpnService.onRevoke() may run off the main thread and its default implementation
+        // calls stopSelf(), which would incorrectly terminate an independently running GEO.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopAgent();
+        } else {
+            mainHandler.post(this::stopAgent);
+        }
     }
 
     public boolean protectSocket(int socketFd) {
         return protect(socketFd);
     }
 
-    private void startAgent(boolean systemManaged, boolean userVisible) {
+    private boolean startAgent(boolean systemManaged) {
         if (nativeHandle != 0) {
             runningInProcess = true;
             startNativeHealthChecks();
             setRunning(true);
             setSystemManaged(systemManaged);
-            applyMockGeoConfig(userVisible);
-            return;
+            reconcileForegroundAndLifetime();
+            return true;
         }
 
-        startVpnForeground(false);
-
         int rawFd = -1;
+        vpnStarting = true;
         try {
+            reconcileForegroundAndLifetime();
             JSONObject config = buildConfigJson();
             JSONObject tunConfig = config.getJSONObject("tun");
             Cidr ipv4 = parseCidr(tunConfig.getString("ipv4"));
@@ -160,21 +245,29 @@ public class PpaassVpnService extends VpnService {
                 throw new IllegalStateException("Native agent returned an empty handle");
             }
             nativeHandle = handle;
+            vpnStarting = false;
             runningInProcess = true;
             startNativeHealthChecks();
             setRunning(true);
             setSystemManaged(systemManaged);
-            applyMockGeoConfig(userVisible);
+            reconcileForegroundAndLifetime();
+            return true;
         } catch (RuntimeException | JSONException error) {
             closeDetachedFd(rawFd);
             stopAgent();
-            throw new IllegalStateException("Failed to start PPAASS VPN", error);
+            Log.e(TAG, "Failed to start PPAASS VPN", error);
+            return false;
         }
     }
 
     private void stopAgent() {
+        stopVpnComponents();
+        reconcileForegroundAndLifetime();
+    }
+
+    private void stopVpnComponents() {
+        vpnStarting = false;
         stopNativeHealthChecks();
-        stopMockLocation(false, "");
         if (nativeHandle != 0) {
             NativeAgent.stop(nativeHandle);
             nativeHandle = 0;
@@ -186,56 +279,107 @@ public class PpaassVpnService extends VpnService {
             }
             tun = null;
         }
-        stopForeground(STOP_FOREGROUND_REMOVE);
-        activeForegroundServiceTypes = 0;
         runningInProcess = false;
         setRunning(false);
         setSystemManaged(false);
-        stopSelf();
     }
 
     private void applyMockGeoConfig(boolean userVisible) {
-        MockGeoConfig.Selection selection = MockGeoConfig.load(
-                getSharedPreferences("ppaass_agent", MODE_PRIVATE));
-        if (!selection.enabled()) {
+        SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
+        boolean requested = prefs.getBoolean(PREF_MOCK_GEO_REQUESTED, false);
+        if (!requested || !selection.enabled()) {
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING,
+                            mockLocationController != null
+                                    || prefs.getBoolean(PREF_MOCK_GEO_DIRTY, false))
+                    .apply();
             stopMockLocation(false, "");
             return;
         }
 
-        if (!userVisible) {
-            stopMockLocation(true, "");
+        if (!userVisible && mockLocationController == null) {
+            setMockGeoState(false, "", true);
+            reconcileForegroundAndLifetime();
             return;
         }
 
-        setMockGeoState(false, "");
+        if (mockGeoCleanupInFlight) {
+            restartMockGeoAfterCleanup = true;
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .apply();
+            return;
+        }
+
+        boolean starting = mockLocationController == null;
         try {
             ensureMockGeoForegroundReady();
+            if (starting) {
+                mockGeoStarting = true;
+                mockGeoRunningInProcess = true;
+                setMockGeoState(false, "");
+                reconcileForegroundAndLifetime();
+            }
         } catch (RuntimeException error) {
             String message = "模拟 GEO 未生效：" + readableMessage(error);
-            stopMockLocation(false, message);
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .apply();
+            mockGeoStarting = false;
+            if (foregroundStarted) {
+                stopMockLocation(false, message);
+            } else {
+                // The service was launched with startForegroundService(), but promotion
+                // failed before any foreground owner existed. Do not wait on an async
+                // cleanup here: retain DIRTY for the visible Activity and stop promptly.
+                mockGeoRunningInProcess = false;
+                setMockGeoState(false, message, false);
+                reconcileForegroundAndLifetime();
+            }
             Log.e(TAG, message, error);
             return;
         }
 
-        if (!markMockGeoSessionDirty()) {
+        if (starting && !markMockGeoSessionDirty()) {
             String message = "模拟 GEO 未生效：无法持久化模拟定位会话状态";
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .apply();
+            mockGeoStarting = false;
             stopMockLocation(false, message);
             Log.e(TAG, message);
             return;
         }
-        boolean starting = mockLocationController == null;
+
         if (starting) {
             mockLocationController = new MockLocationController(
                     this,
                     new MockLocationController.Listener() {
                         @Override
                         public void onMockLocationActive() {
+                            mockGeoStarting = false;
+                            mockGeoRunningInProcess = true;
+                            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                                    .edit()
+                                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                                    .apply();
                             setMockGeoState(true, "");
-                            refreshVpnNotification();
+                            reconcileForegroundAndLifetime();
                         }
 
                         @Override
                         public void onMockLocationError(String message) {
+                            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                                    .edit()
+                                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                                    .apply();
+                            mockGeoStarting = false;
                             stopMockLocation(false, message);
                             Log.e(TAG, message);
                         }
@@ -247,14 +391,30 @@ public class PpaassVpnService extends VpnService {
             } else {
                 mockLocationController.update(selection);
             }
+            mockGeoStarting = false;
+            mockGeoRunningInProcess = mockLocationController != null;
+            reconcileForegroundAndLifetime();
         } catch (RuntimeException error) {
             String message = "模拟 GEO 未生效：" + readableMessage(error);
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .apply();
+            mockGeoStarting = false;
             stopMockLocation(false, message);
             Log.e(TAG, message, error);
         }
     }
 
     private void stopMockLocation(boolean waitingForForeground, String errorAfterCleanup) {
+        stopMockLocation(waitingForForeground, errorAfterCleanup, false);
+    }
+
+    private void stopMockLocation(
+            boolean waitingForForeground,
+            String errorAfterCleanup,
+            boolean userVisible) {
+        mockGeoStarting = false;
         Task<Void> fusedCleanup = stopMockLocationController();
         SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
         boolean cleanupRequired = prefs.getBoolean(PREF_MOCK_GEO_DIRTY, false)
@@ -262,9 +422,25 @@ public class PpaassVpnService extends VpnService {
         boolean googleFusedCleanupRequired = prefs.getBoolean(
                 PREF_MOCK_GEO_GOOGLE_FUSED_USED,
                 cleanupRequired);
+        if (!cleanupRequired && fusedCleanup == null) {
+            mockGeoCleanupInFlight = false;
+            mockGeoCleanupLocationForegroundAllowed = false;
+            mockGeoRunningInProcess = false;
+            prefs.edit()
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .putBoolean(PREF_MOCK_GEO_DIRTY, false)
+                    .remove(PREF_MOCK_GEO_GOOGLE_FUSED_USED)
+                    .remove(PREF_MOCK_GEO_SESSION_TOKEN)
+                    .apply();
+            setMockGeoState(false, errorAfterCleanup, waitingForForeground);
+            reconcileForegroundAndLifetime();
+            return;
+        }
+
         String cleanupToken = UUID.randomUUID().toString();
         SharedPreferences.Editor cleanupEditor = prefs.edit()
-                .putString(PREF_MOCK_GEO_SESSION_TOKEN, cleanupToken);
+                .putString(PREF_MOCK_GEO_SESSION_TOKEN, cleanupToken)
+                .putBoolean(PREF_MOCK_GEO_STOPPING, true);
         if (cleanupRequired) {
             cleanupEditor.putBoolean(PREF_MOCK_GEO_DIRTY, true);
         }
@@ -272,7 +448,14 @@ public class PpaassVpnService extends VpnService {
             Log.w(TAG, "Failed to persist mock-location cleanup token");
         }
 
+        mockGeoCleanupInFlight = true;
+        mockGeoCleanupLocationForegroundAllowed = userVisible
+                || (foregroundStarted
+                && (activeForegroundServiceTypes
+                & ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0);
+        mockGeoRunningInProcess = true;
         setMockGeoState(false, errorAfterCleanup, waitingForForeground);
+        reconcileForegroundAndLifetime();
         MockLocationController.cleanupResidualState(
                 this,
                 cleanupRequired,
@@ -286,10 +469,12 @@ public class PpaassVpnService extends VpnService {
                             PREF_MOCK_GEO_SESSION_TOKEN,
                             "");
                     if (!cleanupToken.equals(currentToken)) {
+                        // A newer cleanup owns the process-level flags and service lifetime.
                         return;
                     }
 
-                    SharedPreferences.Editor editor = currentPrefs.edit();
+                    SharedPreferences.Editor editor = currentPrefs.edit()
+                            .putBoolean(PREF_MOCK_GEO_STOPPING, false);
                     if (success) {
                         editor.putBoolean(PREF_MOCK_GEO_DIRTY, false)
                                 .remove(PREF_MOCK_GEO_GOOGLE_FUSED_USED)
@@ -308,7 +493,20 @@ public class PpaassVpnService extends VpnService {
                                 : cleanupMessage.trim();
                         setMockGeoState(false, message, false);
                     }
-                    refreshVpnNotification();
+
+                    mockGeoCleanupInFlight = false;
+                    mockGeoCleanupLocationForegroundAllowed = false;
+                    mockGeoRunningInProcess =
+                            mockGeoStarting || mockLocationController != null;
+                    boolean restart = restartMockGeoAfterCleanup
+                            && success
+                            && currentPrefs.getBoolean(PREF_MOCK_GEO_REQUESTED, false);
+                    restartMockGeoAfterCleanup = false;
+                    if (restart && !destroying) {
+                        applyMockGeoConfig(true);
+                    } else {
+                        reconcileForegroundAndLifetime();
+                    }
                 });
     }
 
@@ -365,12 +563,13 @@ public class PpaassVpnService extends VpnService {
         return message.trim();
     }
 
-    private void refreshVpnNotification() {
-        if (nativeHandle != 0 || runningInProcess) {
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.notify(NOTIFICATION_ID, notification());
-            }
+    private void refreshNotification() {
+        if (!foregroundStarted) {
+            return;
+        }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, notification());
         }
     }
 
@@ -384,31 +583,103 @@ public class PpaassVpnService extends VpnService {
         if (!MockLocationController.isSelectedMockLocationApp(this)) {
             throw new SecurityException("请在开发者选项中将 PPAASS VPN 设为模拟位置信息应用");
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-                && (activeForegroundServiceTypes
-                & ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) == 0) {
-            startVpnForeground(true);
-        }
     }
 
-    private void startVpnForeground(boolean includeLocation) {
-        Notification currentNotification = notification();
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, currentNotification);
+    private int startModeForCurrentOwners() {
+        return vpnStarting || nativeHandle != 0 || tun != null
+                ? START_STICKY
+                : START_NOT_STICKY;
+    }
+
+    private void reconcileForegroundAndLifetime() {
+        if (destroying) {
             return;
         }
 
-        int requestedTypes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-                : ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE;
-        if (includeLocation) {
+        boolean vpnWork = vpnStarting || nativeHandle != 0 || tun != null;
+        boolean geoLocationWork = mockGeoStarting || mockLocationController != null;
+        boolean serviceWork = vpnWork || geoLocationWork || mockGeoCleanupInFlight;
+        if (!serviceWork) {
+            if (foregroundStarted) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                foregroundStarted = false;
+            }
+            activeForegroundServiceTypes = 0;
+            if (latestStartId > 0) {
+                stopSelfResult(latestStartId);
+            } else {
+                stopSelf();
+            }
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (!foregroundStarted) {
+                startForeground(NOTIFICATION_ID, notification());
+                foregroundStarted = true;
+            } else {
+                refreshNotification();
+            }
+            return;
+        }
+
+        int requestedTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && vpnWork) {
+            requestedTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED;
+        }
+        if (geoLocationWork) {
             requestedTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
         }
-        activeForegroundServiceTypes |= requestedTypes;
-        startForeground(
-                NOTIFICATION_ID,
-                currentNotification,
-                activeForegroundServiceTypes);
+        if (mockGeoCleanupInFlight && !geoLocationWork) {
+            boolean activeLocationType = foregroundStarted
+                    && (activeForegroundServiceTypes
+                    & ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0;
+            if (activeLocationType
+                    && !MockLocationController.hasLocationPermission(this)) {
+                // Keep an already-active location role without revalidating a permission
+                // which may have been revoked while cleanup was beginning.
+                requestedTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+            } else if (mockGeoCleanupLocationForegroundAllowed
+                    && MockLocationController.hasLocationPermission(this)) {
+                requestedTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                && requestedTypes == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+            // Cleanup can fail synchronously after the location permission is revoked.
+            // It was started with startService(), so keep it as a short regular service
+            // instead of crashing with an invalid type=NONE foreground promotion.
+            if (foregroundStarted) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                foregroundStarted = false;
+                activeForegroundServiceTypes = 0;
+            }
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                && foregroundStarted
+                && !vpnWork
+                && (activeForegroundServiceTypes
+                & ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED) != 0
+                && requestedTypes == ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                && !MockLocationController.hasLocationPermission(this)) {
+            // Dropping SYSTEM_EXEMPTED would require reissuing startForeground() with a
+            // location type that can no longer pass its runtime permission check.
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            foregroundStarted = false;
+            activeForegroundServiceTypes = 0;
+            return;
+        }
+
+        if (!foregroundStarted || requestedTypes != activeForegroundServiceTypes) {
+            startForeground(NOTIFICATION_ID, notification(), requestedTypes);
+            foregroundStarted = true;
+            activeForegroundServiceTypes = requestedTypes;
+        } else {
+            refreshNotification();
+        }
     }
 
     private void startNativeHealthChecks() {
@@ -502,7 +773,12 @@ public class PpaassVpnService extends VpnService {
         SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
         MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
         String mockGeoError = MockGeoConfig.readString(prefs, PREF_MOCK_GEO_ERROR, "");
+        boolean vpnActive = vpnStarting
+                || nativeHandle != 0
+                || prefs.getBoolean(PREF_RUNNING, false);
+        boolean mockGeoRequested = prefs.getBoolean(PREF_MOCK_GEO_REQUESTED, false);
         boolean mockGeoActive = prefs.getBoolean(PREF_MOCK_GEO_ACTIVE, false);
+        boolean mockGeoStopping = prefs.getBoolean(PREF_MOCK_GEO_STOPPING, false);
         boolean mockGeoWaiting =
                 prefs.getBoolean(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND, false);
         Intent openApp = new Intent(this, MainActivity.class)
@@ -513,16 +789,28 @@ public class PpaassVpnService extends VpnService {
                 openApp,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         String contentText;
-        if (!selection.enabled()) {
-            contentText = "运行中";
+        if (vpnActive && mockGeoActive) {
+            contentText = "VPN 与模拟 GEO（" + selection.label + "）运行中";
+        } else if (vpnActive && mockGeoStopping) {
+            contentText = "VPN 运行中 · 正在停止模拟 GEO";
+        } else if (vpnActive && mockGeoRequested) {
+            contentText = mockGeoWaiting
+                    ? "VPN 运行中 · 打开应用后恢复模拟 GEO"
+                    : "VPN 运行中 · 模拟 GEO 启动中";
+        } else if (vpnActive) {
+            contentText = "VPN 运行中";
         } else if (mockGeoActive) {
-            contentText = "运行中 · 模拟 GEO：" + selection.label;
+            contentText = "模拟 GEO：" + selection.label;
+        } else if (mockGeoStopping) {
+            contentText = "正在停止模拟 GEO";
         } else if (mockGeoWaiting) {
-            contentText = "运行中 · 打开应用后恢复模拟 GEO";
+            contentText = "打开应用后恢复模拟 GEO";
+        } else if (mockGeoRequested) {
+            contentText = "正在启动模拟 GEO：" + selection.label;
         } else if (mockGeoError != null && !mockGeoError.trim().isEmpty()) {
-            contentText = "运行中 · 模拟 GEO 未生效";
+            contentText = "模拟 GEO 未生效";
         } else {
-            contentText = "运行中 · 模拟 GEO 启动中";
+            contentText = "后台服务运行中";
         }
 
         return builder

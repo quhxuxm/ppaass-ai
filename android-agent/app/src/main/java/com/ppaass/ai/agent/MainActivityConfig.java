@@ -151,12 +151,24 @@ protected void restoreDefaultConfig() {
         updateDirectModeButtons();
         renderDirectRuleList();
         saveConfig();
+        boolean stopMockGeo = prefs.getBoolean(
+                PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false);
+        if (stopMockGeo) {
+            stopMockGeoService();
+        }
         MockGeoConfig.reset(prefs);
-        prefs.edit()
-                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
-                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
-                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
-                .apply();
+        if (!stopMockGeo) {
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                    .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                    .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .apply();
+        }
         prefs.edit().putStringSet("vpn_apps", Collections.emptySet()).apply();
         updateSelectedAppsSummary();
         cleanupStaleMockGeoState();

@@ -106,7 +106,8 @@ protected void showAppSelector() {
         appSelectorDialog.setOnShowListener(dialog -> {
             Window window = appSelectorDialog.getWindow();
             if (window != null) {
-                window.setBackgroundDrawable(roundedFill(COLOR_SURFACE));
+                // 只勾勒对话框最外层；列表内部保持无描边，避免多层圆角框嵌套。
+                window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
             }
             appSelectorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT_DARK);
             appSelectorDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_MUTED);

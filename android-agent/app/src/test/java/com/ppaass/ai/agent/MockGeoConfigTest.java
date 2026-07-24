@@ -62,7 +62,7 @@ public class MockGeoConfigTest {
                 "invalid");
 
         assertFalse(selection.enabled());
-        assertEquals("关闭", selection.summary());
+        assertEquals("未选择地点", selection.summary());
     }
 
     @Test

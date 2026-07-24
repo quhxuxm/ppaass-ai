@@ -28,51 +28,57 @@ import java.util.UUID;
  */
 abstract class MainActivityMockGeo extends MainActivityAppSelector {
     protected static final int MOCK_GEO_LOCATION_PERMISSION_REQUEST = 1002;
-    private static final String STATE_START_VPN_AFTER_LOCATION_PERMISSION =
-            "start_vpn_after_mock_geo_location_permission";
-    private static final String STATE_START_VPN_AFTER_STALE_CLEANUP =
-            "start_vpn_after_mock_geo_stale_cleanup";
+    private static final String STATE_START_GEO_AFTER_LOCATION_PERMISSION =
+            "start_geo_after_location_permission";
+    private static final String STATE_START_GEO_AFTER_STALE_CLEANUP =
+            "start_geo_after_stale_cleanup";
 
     private TextView mockGeoSummary;
     private TextView mockGeoStatus;
     private TextView mockGeoDetail;
     private Button mockGeoSettingsButton;
+    private Button mockGeoToggleButton;
     private AlertDialog mockGeoDialog;
     private AlertDialog mockGeoSetupDialog;
-    private boolean startVpnAfterLocationPermission;
-    private boolean startVpnAfterStaleCleanup;
+    private boolean startMockGeoAfterLocationPermission;
+    private boolean startMockGeoAfterStaleCleanup;
     private boolean mockGeoCleanupInFlight;
 
     protected void restoreMockGeoInstanceState(Bundle savedInstanceState) {
         if (savedInstanceState != null) {
-            startVpnAfterLocationPermission = savedInstanceState.getBoolean(
-                    STATE_START_VPN_AFTER_LOCATION_PERMISSION,
+            startMockGeoAfterLocationPermission = savedInstanceState.getBoolean(
+                    STATE_START_GEO_AFTER_LOCATION_PERMISSION,
                     false);
-            startVpnAfterStaleCleanup = savedInstanceState.getBoolean(
-                    STATE_START_VPN_AFTER_STALE_CLEANUP,
+            startMockGeoAfterStaleCleanup = savedInstanceState.getBoolean(
+                    STATE_START_GEO_AFTER_STALE_CLEANUP,
                     false);
         }
     }
 
     protected void saveMockGeoInstanceState(Bundle outState) {
         outState.putBoolean(
-                STATE_START_VPN_AFTER_LOCATION_PERMISSION,
-                startVpnAfterLocationPermission);
+                STATE_START_GEO_AFTER_LOCATION_PERMISSION,
+                startMockGeoAfterLocationPermission);
         outState.putBoolean(
-                STATE_START_VPN_AFTER_STALE_CLEANUP,
-                startVpnAfterStaleCleanup);
+                STATE_START_GEO_AFTER_STALE_CLEANUP,
+                startMockGeoAfterStaleCleanup);
     }
 
     protected void cleanupStaleMockGeoState() {
         if (prefs == null
                 || mockGeoCleanupInFlight
-                || PpaassVpnService.isRunningInProcess()) {
+                || PpaassVpnService.isMockGeoRunningInProcess()) {
             return;
         }
         boolean cleanupRequired =
                 prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)
                         || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
         if (!cleanupRequired) {
+            if (prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)) {
+                prefs.edit()
+                        .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                        .apply();
+            }
             return;
         }
 
@@ -84,12 +90,14 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         boolean cleanupMarkerStored = prefs.edit()
                 .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
                 .putBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, true)
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, true)
                 .putString(PpaassVpnService.PREF_MOCK_GEO_SESSION_TOKEN, cleanupToken)
                 .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
                 .commit();
         if (!cleanupMarkerStored) {
             mockGeoCleanupInFlight = false;
             prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
                     .putString(
                             PpaassVpnService.PREF_MOCK_GEO_ERROR,
                             "无法持久化模拟定位清理状态，请重试或重启设备")
@@ -108,28 +116,40 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
                             PpaassVpnService.PREF_MOCK_GEO_SESSION_TOKEN,
                             "");
                     if (!cleanupToken.equals(currentToken)) {
-                        startVpnAfterStaleCleanup = false;
+                        startMockGeoAfterStaleCleanup = false;
                         return;
                     }
 
                     if (success) {
                         prefs.edit()
+                                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
                                 .putBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)
                                 .remove(PpaassVpnService.PREF_MOCK_GEO_GOOGLE_FUSED_USED)
                                 .remove(PpaassVpnService.PREF_MOCK_GEO_SESSION_TOKEN)
                                 .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
                                 .apply();
-                        boolean shouldStartVpn = startVpnAfterStaleCleanup;
-                        startVpnAfterStaleCleanup = false;
-                        if (shouldStartVpn && !isVpnRunning()) {
-                            toggleVpn();
+                        boolean shouldStartGeo = startMockGeoAfterStaleCleanup
+                                || prefs.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                                false);
+                        startMockGeoAfterStaleCleanup = false;
+                        if (shouldStartGeo && activityResumed) {
+                            continuePendingMockGeoStart();
+                        } else if (shouldStartGeo) {
+                            prefs.edit()
+                                    .putBoolean(
+                                            PpaassVpnService
+                                                    .PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                                            true)
+                                    .apply();
                         }
                     } else {
-                        startVpnAfterStaleCleanup = false;
+                        startMockGeoAfterStaleCleanup = false;
                         String cleanupMessage = message == null || message.trim().isEmpty()
                                 ? "上次模拟定位未能完全清理，请重新授权后重试或重启设备"
                                 : message.trim();
                         prefs.edit()
+                                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
                                 .putBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, true)
                                 .putString(
                                         PpaassVpnService.PREF_MOCK_GEO_ERROR,
@@ -144,7 +164,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         LinearLayout geo = panel(root);
         sectionTitle(geo, "模拟 GEO");
 
-        TextView subtitle = mutedText("VPN 运行期间模拟 Android 系统定位", 13f);
+        TextView subtitle = mutedText("独立模拟 Android 系统定位，不依赖 VPN", 13f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(2), 0, dp(10));
         geo.addView(subtitle, subtitleParams);
@@ -161,7 +181,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f));
 
-        Button selectButton = secondaryButton("选择");
+        Button selectButton = secondaryButton("选择地点");
         selectButton.setOnClickListener(view -> showMockGeoDialog());
         LinearLayout.LayoutParams selectParams = new LinearLayout.LayoutParams(dp(104), dp(42));
         selectParams.setMargins(dp(10), 0, 0, 0);
@@ -174,6 +194,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         stateRow.addView(mockGeoStatus, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+        stateRow.addView(new View(this), new LinearLayout.LayoutParams(
+                0,
+                1,
+                1f));
 
         mockGeoSettingsButton = secondaryButton("开发者选项");
         mockGeoSettingsButton.setOnClickListener(view -> handleMockGeoSetupAction());
@@ -189,39 +213,131 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         detailParams.setMargins(0, dp(8), 0, 0);
         geo.addView(mockGeoDetail, detailParams);
 
+        mockGeoToggleButton = actionButton("启动 GEO", COLOR_ACTION_START);
+        mockGeoToggleButton.setOnClickListener(view -> toggleMockGeo());
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48));
+        toggleParams.setMargins(0, dp(12), 0, 0);
+        geo.addView(mockGeoToggleButton, toggleParams);
+
         TextView limitation = mutedText(
                 "模拟定位是 Android 设备级能力，无法只限制到 VPN 应用列表，且应用可识别模拟标志。"
                         + "出口 IP 地区仍由所连接的代理节点决定。",
                 12f);
         LinearLayout.LayoutParams limitationParams = matchWrap();
-        limitationParams.setMargins(0, dp(8), 0, 0);
+        limitationParams.setMargins(0, dp(10), 0, 0);
         geo.addView(limitation, limitationParams);
 
         refreshMockGeoUi();
     }
 
-    protected boolean ensureMockGeoReadyForVpnStart() {
+    private void toggleMockGeo() {
+        boolean stopping =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false);
+        if (stopping) {
+            return;
+        }
+        boolean requested =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false);
+        boolean active =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
+        if (requested || active) {
+            startMockGeoAfterLocationPermission = false;
+            startMockGeoAfterStaleCleanup = false;
+            stopMockGeoService();
+            return;
+        }
+        beginMockGeoStart();
+    }
+
+    private void beginMockGeoStart() {
         MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
         if (!selection.enabled()) {
-            return true;
+            startMockGeoAfterLocationPermission = false;
+            Toast.makeText(this, "请先选择一个模拟地点", Toast.LENGTH_SHORT).show();
+            showMockGeoDialog();
+            return;
+        }
+
+        prefs.edit()
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, true)
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .apply();
+        startMockGeoAfterLocationPermission = true;
+
+        if (prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)
+                && !PpaassVpnService.isMockGeoRunningInProcess()) {
+            startMockGeoAfterStaleCleanup = true;
+            cleanupStaleMockGeoState();
+            refreshMockGeoUi();
+            return;
         }
         if (!MockLocationController.isSystemLocationEnabled(this)) {
-            startVpnAfterLocationPermission = false;
             showSystemLocationSetupDialog();
-            return false;
+            refreshMockGeoUi();
+            return;
         }
         if (!MockLocationController.isSelectedMockLocationApp(this)) {
-            startVpnAfterLocationPermission = false;
             showMockLocationSetupDialog();
-            return false;
+            refreshMockGeoUi();
+            return;
         }
         if (MockLocationController.needsLocationPermission(this)
                 && !MockLocationController.hasLocationPermission(this)) {
-            startVpnAfterLocationPermission = true;
             requestMockGeoLocationPermission();
-            return false;
+            refreshMockGeoUi();
+            return;
         }
-        return true;
+        startMockGeoAfterLocationPermission = false;
+        startMockGeoService();
+    }
+
+    private void continuePendingMockGeoStart() {
+        if (!prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)) {
+            startMockGeoAfterLocationPermission = false;
+            return;
+        }
+        if (!activityResumed) {
+            prefs.edit()
+                    .putBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                            true)
+                    .apply();
+            return;
+        }
+        MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
+        if (!selection.enabled()) {
+            startMockGeoAfterLocationPermission = false;
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                    .apply();
+            refreshMockGeoUi();
+            return;
+        }
+        if (prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)
+                && !PpaassVpnService.isMockGeoRunningInProcess()) {
+            startMockGeoAfterStaleCleanup = true;
+            cleanupStaleMockGeoState();
+            return;
+        }
+        if (!MockLocationController.isSystemLocationEnabled(this)
+                || !MockLocationController.isSelectedMockLocationApp(this)) {
+            refreshMockGeoUi();
+            return;
+        }
+        if (MockLocationController.needsLocationPermission(this)
+                && !MockLocationController.hasLocationPermission(this)) {
+            if (startMockGeoAfterLocationPermission) {
+                requestMockGeoLocationPermission();
+            }
+            refreshMockGeoUi();
+            return;
+        }
+        startMockGeoAfterLocationPermission = false;
+        startMockGeoService();
     }
 
     protected boolean handleMockGeoPermissionResult(
@@ -238,7 +354,11 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             }
         }
         if (!granted) {
-            startVpnAfterLocationPermission = false;
+            startMockGeoAfterLocationPermission = false;
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                    .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .apply();
             if (isMockGeoLocationPermissionPermanentlyDenied()) {
                 showLocationPermissionSettingsDialog();
             } else {
@@ -251,16 +371,15 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             return true;
         }
 
-        boolean shouldStartVpn = startVpnAfterLocationPermission;
-        startVpnAfterLocationPermission = false;
+        boolean shouldStartGeo = startMockGeoAfterLocationPermission
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false);
+        startMockGeoAfterLocationPermission = false;
         if (prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)
-                && !isVpnRunning()) {
-            startVpnAfterStaleCleanup = shouldStartVpn;
+                && !PpaassVpnService.isMockGeoRunningInProcess()) {
+            startMockGeoAfterStaleCleanup = shouldStartGeo;
             cleanupStaleMockGeoState();
-        } else if (shouldStartVpn && !isVpnRunning()) {
-            toggleVpn();
-        } else {
-            requestRunningMockGeoRefresh();
+        } else if (shouldStartGeo) {
+            startMockGeoService();
         }
         refreshMockGeoUi();
         return true;
@@ -268,15 +387,17 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
 
     protected void syncMockGeoAfterResume() {
         refreshMockGeoUi();
-        MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
-        if (selection.enabled()
-                && isVpnRunning()
-                && MockLocationController.isSystemLocationEnabled(this)
-                && MockLocationController.isSelectedMockLocationApp(this)
-                && (!MockLocationController.needsLocationPermission(this)
-                        || MockLocationController.hasLocationPermission(this))
-                && !prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)) {
-            requestRunningMockGeoRefresh();
+        boolean requested =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false);
+        boolean active =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
+        boolean stopping =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false);
+        if (requested
+                && !active
+                && !stopping
+                && !PpaassVpnService.isMockGeoRunningInProcess()) {
+            continuePendingMockGeoStart();
         }
     }
 
@@ -292,9 +413,27 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         int statusColor;
         boolean needsAction = false;
         String actionLabel = "";
-        boolean cleanupPending =
-                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false);
-        if (cleanupPending && !isVpnRunning()) {
+        boolean requested =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false);
+        boolean active =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
+        boolean stopping =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false);
+        boolean waitingForForeground = prefs.getBoolean(
+                PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                false);
+        boolean dirty = prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false);
+        boolean cleanupPending = dirty && !PpaassVpnService.isMockGeoRunningInProcess();
+        String error = MockGeoConfig.readString(
+                prefs,
+                PpaassVpnService.PREF_MOCK_GEO_ERROR,
+                "");
+
+        if (stopping || mockGeoCleanupInFlight) {
+            status = "停止中";
+            statusColor = COLOR_ACTION_INFO;
+            detail = "正在移除模拟定位并恢复设备真实定位";
+        } else if (cleanupPending) {
             status = "需要清理";
             statusColor = COLOR_ACTION_WARN;
             needsAction = true;
@@ -305,62 +444,53 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             } else {
                 actionLabel = "重试清理";
             }
-            String cleanupError = MockGeoConfig.readString(
-                    prefs,
-                    PpaassVpnService.PREF_MOCK_GEO_ERROR,
-                    "");
-            detail = cleanupError == null || cleanupError.trim().isEmpty()
+            detail = error == null || error.trim().isEmpty()
                     ? "正在清理由异常退出遗留的模拟定位"
-                    : cleanupError.trim();
+                    : error.trim();
         } else if (!selection.enabled()) {
-            status = "已关闭";
+            status = "未选择地点";
             statusColor = COLOR_STATUS_STOPPED;
-            detail = "使用设备真实定位";
-        } else if (!MockLocationController.isSystemLocationEnabled(this)) {
+            detail = "请选择一个地点后再启动模拟 GEO";
+        } else if (requested && !MockLocationController.isSystemLocationEnabled(this)) {
             status = "系统定位已关闭";
             statusColor = COLOR_ACTION_WARN;
             needsAction = true;
             actionLabel = "定位设置";
             detail = "需要先开启 Android 系统定位";
-        } else if (!MockLocationController.isSelectedMockLocationApp(this)) {
+        } else if (requested && !MockLocationController.isSelectedMockLocationApp(this)) {
             status = "需要系统授权";
             statusColor = COLOR_ACTION_WARN;
             needsAction = true;
             actionLabel = "开发者选项";
             detail = "开发者选项 → 选择模拟位置信息应用 → PPAASS VPN";
-        } else if (MockLocationController.needsLocationPermission(this)
+        } else if (requested
+                && MockLocationController.needsLocationPermission(this)
                 && !MockLocationController.hasLocationPermission(this)) {
             status = "需要定位权限";
             statusColor = COLOR_ACTION_WARN;
             needsAction = true;
             actionLabel = "授予权限";
             detail = "Android 要求定位前台服务持有定位权限";
+        } else if (active) {
+            status = "模拟中";
+            statusColor = COLOR_STATUS_RUNNING;
+            detail = "GPS、网络定位和融合定位正在使用所选地点";
+        } else if (requested && waitingForForeground) {
+            status = "等待恢复";
+            statusColor = COLOR_ACTION_INFO;
+            detail = "打开应用后正在恢复模拟 GEO";
+        } else if (requested) {
+            status = "启动中";
+            statusColor = COLOR_ACTION_INFO;
+            detail = "正在接管 GPS、网络定位和融合定位";
+        } else if (error != null && !error.trim().isEmpty()) {
+            status = "启动失败";
+            statusColor = COLOR_ACTION_STOP;
+            detail = error.trim();
         } else {
-            String error = MockGeoConfig.readString(
-                    prefs,
-                    PpaassVpnService.PREF_MOCK_GEO_ERROR,
-                    "");
-            boolean active = prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
-            boolean waitingForForeground = prefs.getBoolean(
-                    PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
-                    false);
-            if (isVpnRunning() && active) {
-                status = "模拟中";
-                statusColor = COLOR_STATUS_RUNNING;
-                detail = "GPS、网络定位和融合定位正在使用所选坐标";
-            } else if (isVpnRunning() && waitingForForeground) {
-                status = "正在恢复";
-                statusColor = COLOR_ACTION_INFO;
-                detail = "Android 在后台恢复了 VPN；打开应用后正在恢复模拟定位";
-            } else if (isVpnRunning() && error != null && !error.trim().isEmpty()) {
-                status = "启动失败";
-                statusColor = COLOR_ACTION_STOP;
-                detail = error.trim();
-            } else {
-                status = "等待 VPN";
-                statusColor = COLOR_ACTION_INFO;
-                detail = "启动 VPN 后自动生效";
-            }
+            status = "已停止";
+            statusColor = COLOR_STATUS_STOPPED;
+            detail = "当前使用设备真实定位；已保留：" + selection.label;
         }
 
         mockGeoStatus.setText(status);
@@ -375,6 +505,21 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             mockGeoSettingsButton.setText(actionLabel);
             mockGeoSettingsButton.setVisibility(needsAction ? View.VISIBLE : View.GONE);
         }
+        if (mockGeoToggleButton != null) {
+            if (stopping || mockGeoCleanupInFlight) {
+                mockGeoToggleButton.setText("停止中…");
+                applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_INFO);
+                mockGeoToggleButton.setEnabled(false);
+            } else if (requested || active) {
+                mockGeoToggleButton.setText("停止 GEO");
+                applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_STOP);
+                mockGeoToggleButton.setEnabled(true);
+            } else {
+                mockGeoToggleButton.setText("启动 GEO");
+                applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_START);
+                mockGeoToggleButton.setEnabled(true);
+            }
+        }
     }
 
     protected void dismissMockGeoDialogs() {
@@ -388,14 +533,134 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         }
     }
 
-    protected void requestRunningMockGeoRefresh() {
-        if (!isVpnRunning()) {
+    private void startMockGeoService() {
+        MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
+        if (!selection.enabled()) {
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                    .apply();
+            refreshMockGeoUi();
             return;
         }
+        if (PpaassVpnService.isMockGeoRunningInProcess()) {
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, true)
+                    .apply();
+            sendMockGeoUpdate();
+            return;
+        }
+        if (deferMockGeoStartUntilCleanupCompletes()) {
+            return;
+        }
+        if (!activityResumed) {
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, true)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                    .putBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                            true)
+                    .apply();
+            refreshMockGeoUi();
+            return;
+        }
+        prefs.edit()
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, true)
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                .apply();
+        Intent intent = new Intent(this, PpaassVpnService.class);
+        intent.setAction(PpaassVpnService.ACTION_START_MOCK_GEO);
+        intent.putExtra(PpaassVpnService.EXTRA_USER_VISIBLE, true);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (RuntimeException error) {
+            String message = error.getMessage();
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                    .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .putString(
+                            PpaassVpnService.PREF_MOCK_GEO_ERROR,
+                            message == null || message.trim().isEmpty()
+                                    ? "系统暂时不允许启动模拟 GEO，请重试"
+                                    : "模拟 GEO 启动失败：" + message.trim())
+                    .apply();
+        }
+        refreshMockGeoUi();
+    }
+
+    protected void stopMockGeoService() {
+        prefs.edit()
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, true)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                .apply();
+        Intent intent = new Intent(this, PpaassVpnService.class);
+        intent.setAction(PpaassVpnService.ACTION_STOP_MOCK_GEO);
+        intent.putExtra(PpaassVpnService.EXTRA_USER_VISIBLE, true);
+        startService(intent);
+        refreshMockGeoUi();
+    }
+
+    protected void requestRunningMockGeoRefresh() {
+        if (!prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)) {
+            return;
+        }
+        if (PpaassVpnService.isMockGeoRunningInProcess()) {
+            sendMockGeoUpdate();
+            return;
+        }
+        if (deferMockGeoStartUntilCleanupCompletes()) {
+            return;
+        }
+        startMockGeoService();
+    }
+
+    private void sendMockGeoUpdate() {
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_UPDATE_MOCK_GEO);
         intent.putExtra(PpaassVpnService.EXTRA_USER_VISIBLE, true);
         startService(intent);
+    }
+
+    private boolean deferMockGeoStartUntilCleanupCompletes() {
+        boolean dirty = prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false);
+        boolean active = prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false);
+        boolean stopping =
+                prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false);
+        if (!mockGeoCleanupInFlight && stopping && !dirty && !active) {
+            // Normalize a marker left by a process which died after cleanup completed.
+            prefs.edit()
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                    .apply();
+            stopping = false;
+        }
+        if (!mockGeoCleanupInFlight && !dirty && !active && !stopping) {
+            return false;
+        }
+
+        startMockGeoAfterStaleCleanup = true;
+        prefs.edit()
+                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, true)
+                .putBoolean(
+                        PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                        true)
+                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                .apply();
+        if (!mockGeoCleanupInFlight && !PpaassVpnService.isMockGeoRunningInProcess()) {
+            cleanupStaleMockGeoState();
+        }
+        refreshMockGeoUi();
+        return true;
     }
 
     private void showMockGeoDialog() {
@@ -510,7 +775,8 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         mockGeoDialog.setOnShowListener(dialog -> {
             Window window = mockGeoDialog.getWindow();
             if (window != null) {
-                window.setBackgroundDrawable(roundedFill(COLOR_SURFACE));
+                // 只勾勒对话框最外层；表单内部保持无额外容器描边。
+                window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
             }
             Button positive = mockGeoDialog.getButton(AlertDialog.BUTTON_POSITIVE);
             positive.setTextColor(COLOR_ACCENT_DARK);
@@ -529,30 +795,51 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
                 }
 
                 MockGeoConfig.save(prefs, selection);
-                prefs.edit()
-                        .putBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
-                        .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
-                        .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
-                        .apply();
-                requestRunningMockGeoRefresh();
-                refreshMockGeoUi();
                 mockGeoDialog.dismiss();
 
                 if (!selection.enabled()) {
-                    Toast.makeText(this, "已关闭模拟 GEO", Toast.LENGTH_SHORT).show();
-                } else if (!MockLocationController.isSystemLocationEnabled(this)) {
-                    showSystemLocationSetupDialog();
-                } else if (!MockLocationController.isSelectedMockLocationApp(this)) {
-                    showMockLocationSetupDialog();
-                } else if (MockLocationController.needsLocationPermission(this)
-                        && !MockLocationController.hasLocationPermission(this)) {
-                    startVpnAfterLocationPermission = false;
-                    requestMockGeoLocationPermission();
+                    startMockGeoAfterLocationPermission = false;
+                    startMockGeoAfterStaleCleanup = false;
+                    boolean needsStop = prefs.getBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                            false)
+                            || prefs.getBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_ACTIVE,
+                            false)
+                            || prefs.getBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_DIRTY,
+                            false);
+                    if (needsStop) {
+                        if (!prefs.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_STOPPING,
+                                false)
+                                && !mockGeoCleanupInFlight) {
+                            stopMockGeoService();
+                        } else {
+                            refreshMockGeoUi();
+                        }
+                    } else {
+                        prefs.edit()
+                                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                                .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                                .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                                .remove(PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                                .apply();
+                        refreshMockGeoUi();
+                    }
+                    Toast.makeText(this, "已清除模拟地点", Toast.LENGTH_SHORT).show();
+                } else if (prefs.getBoolean(
+                        PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                        false)) {
+                    requestRunningMockGeoRefresh();
+                    Toast.makeText(this, "正在切换模拟地点", Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(
-                            this,
-                            isVpnRunning() ? "正在应用模拟 GEO" : "启动 VPN 后生效",
-                            Toast.LENGTH_SHORT).show();
+                    prefs.edit()
+                            .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
+                            .apply();
+                    refreshMockGeoUi();
+                    Toast.makeText(this, "地点已保存，点击“启动 GEO”后生效", Toast.LENGTH_SHORT)
+                            .show();
                 }
             });
             mockGeoDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_MUTED);
@@ -651,7 +938,9 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             if (!MockLocationController.isSelectedMockLocationApp(this)) {
                 showMockLocationSetupDialog();
             } else if (!MockLocationController.hasLocationPermission(this)) {
-                startVpnAfterLocationPermission = false;
+                startMockGeoAfterLocationPermission = prefs.getBoolean(
+                        PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                        false);
                 requestMockGeoLocationPermission();
             } else {
                 cleanupStaleMockGeoState();
@@ -664,7 +953,9 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             showMockLocationSetupDialog();
         } else if (MockLocationController.needsLocationPermission(this)
                 && !MockLocationController.hasLocationPermission(this)) {
-            startVpnAfterLocationPermission = false;
+            startMockGeoAfterLocationPermission = prefs.getBoolean(
+                    PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                    false);
             requestMockGeoLocationPermission();
         }
     }

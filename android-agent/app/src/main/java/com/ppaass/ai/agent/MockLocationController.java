@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Injects a stationary Android test location while the VPN service is running.
+ * Injects a stationary Android test location while the owning foreground service is running.
  *
  * <p>Location providers are device-wide. Android does not expose a way for a regular
  * {@code VpnService} to limit mock locations to the packages in its VPN allow-list.</p>

@@ -136,12 +136,12 @@ final class MockGeoConfig {
     }
 
     static Selection disabled() {
-        return new Selection(MODE_OFF, "关闭", 0.0, 0.0, DEFAULT_ACCURACY_METERS);
+        return new Selection(MODE_OFF, "未选择", 0.0, 0.0, DEFAULT_ACCURACY_METERS);
     }
 
     static String[] optionLabels() {
         String[] labels = new String[PRESETS.length + 2];
-        labels[0] = "关闭（使用真实定位）";
+        labels[0] = "未选择地点（使用真实定位）";
         for (int i = 0; i < PRESETS.length; i++) {
             labels[i + 1] = PRESETS[i].label;
         }
@@ -289,7 +289,7 @@ final class MockGeoConfig {
 
         String summary() {
             if (!enabled()) {
-                return "关闭";
+                return "未选择地点";
             }
             return label;
         }

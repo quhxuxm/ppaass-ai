@@ -61,6 +61,7 @@ protected static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
 protected static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
 protected static final int QUIC_RESERVED_VERSION = 0x0a0a0a0a;
 protected SharedPreferences prefs;
+protected boolean activityResumed;
 protected EditText proxyAddrs;
 protected EditText httpProxyPort;
 protected EditText httpProxyThreads;
