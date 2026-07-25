@@ -16,7 +16,7 @@ Rust 库负责数据包和协议层：
 - `netstack-smoltcp` 将 IP 包转换为 TCP stream 和 UDP payload session。
 - TCP 和 UDP 流量会通过 `common` 和 `protocol` crate 转发到现有的 PPAASS proxy 协议。
 - Android 的应用 allow-list 决定哪些应用进入 VPN。
-- `direct_access` 支持与 desktop agent 一致的 `proxy_all`、`direct_all`、`rules` 三种模式；命中规则的 TCP/UDP 目标会使用受 `VpnService.protect()` 保护的本地 socket 直连，避免再次绕回 VPN。
+- `direct_access` 支持与 desktop agent 一致的 `proxy_all`、`direct_all`、`rules` 三种模式。Android 13+ 会把 `direct_all` 和规则中的固定 IP/CIDR 编译成 VPN 排除路由，使流量直接走系统网络、跳过用户态 TUN 转发；域名规则以及旧版 Android 仍使用受 `VpnService.protect()` 保护的本地 socket 直连，避免再次绕回 VPN。
 - DNS 通过 VPN 路径进入 Rust；命中 `direct_access` 域名规则的 UDP 53 查询会用受保护 socket 直连上游 DNS，未命中规则的查询会映射到 proxy 侧 DNS 路径。
 - 应用层 UDP/443 QUIC 命中 direct 规则时使用受保护 UDP socket 直连，不经过 PPAASS 原生 UDP 封装；未命中时通过 proxy UDP relay，UDP 模式使用原生加密 UDP，TCP 模式使用 TCP/Yamux。只有选择“阻断 UDP/443”时才会强制应用回退 TCP/TLS。
 

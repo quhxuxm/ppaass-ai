@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.net.IpPrefix;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Handler;
@@ -17,12 +18,15 @@ import android.util.Log;
 
 import com.google.android.gms.tasks.Task;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -53,6 +57,9 @@ public class PpaassVpnService extends VpnService {
     private static final String CHANNEL_ID = "ppaass_vpn";
     private static final int NOTIFICATION_ID = 7001;
     private static final long HEALTH_CHECK_INTERVAL_MS = 2_000L;
+    // ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE 的值也是 0，但该常量从 API 35
+    // 起已弃用。这里保留明确命名的内部哨兵，避免弃用 API，同时继续把类型按位组合。
+    private static final int NO_FOREGROUND_SERVICE_TYPE = 0;
 
     private static volatile boolean runningInProcess;
     private static volatile boolean mockGeoRunningInProcess;
@@ -228,6 +235,10 @@ public class PpaassVpnService extends VpnService {
                 builder.addRoute("::", 0);
             }
 
+            applyDirectRouteExclusions(
+                    builder,
+                    config.getJSONObject("direct_access"),
+                    !ipv6.isEmpty());
             builder.addDnsServer("8.8.8.8");
 
             applyAppSelection(builder);
@@ -257,6 +268,46 @@ public class PpaassVpnService extends VpnService {
             stopAgent();
             Log.e(TAG, "Failed to start PPAASS VPN", error);
             return false;
+        }
+    }
+
+    private void applyDirectRouteExclusions(
+            Builder builder,
+            JSONObject directAccess,
+            boolean ipv6Enabled) throws JSONException {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+
+        JSONArray jsonRules = directAccess.optJSONArray("rules");
+        List<String> rules = new ArrayList<>();
+        if (jsonRules != null) {
+            for (int index = 0; index < jsonRules.length(); index++) {
+                String rule = jsonRules.optString(index, "").trim();
+                if (!rule.isEmpty()) {
+                    rules.add(rule);
+                }
+            }
+        }
+
+        List<DirectRouteExclusions.Prefix> exclusions = DirectRouteExclusions.from(
+                directAccess.optString("mode", "proxy_all"),
+                rules,
+                ipv6Enabled);
+        int appliedExclusions = 0;
+        for (DirectRouteExclusions.Prefix exclusion : exclusions) {
+            try {
+                builder.excludeRoute(new IpPrefix(exclusion.address, exclusion.length));
+                appliedExclusions++;
+            } catch (IllegalArgumentException error) {
+                // 排除路由只是直连快速路径。OEM 若拒绝某个合法前缀，继续建立 VPN，
+                // 让该目标回退到 native direct_access 的 protect socket 路径。
+                Log.w(TAG, "Skipping unsupported direct route exclusion " + exclusion, error);
+            }
+        }
+        if (appliedExclusions > 0) {
+            Log.i(TAG, "Direct route fast path enabled for " + appliedExclusions
+                    + " IP prefix(es)");
         }
     }
 
@@ -623,7 +674,7 @@ public class PpaassVpnService extends VpnService {
             return;
         }
 
-        int requestedTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE;
+        int requestedTypes = NO_FOREGROUND_SERVICE_TYPE;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && vpnWork) {
             requestedTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED;
         }
@@ -646,7 +697,7 @@ public class PpaassVpnService extends VpnService {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                && requestedTypes == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+                && requestedTypes == NO_FOREGROUND_SERVICE_TYPE) {
             // Cleanup can fail synchronously after the location permission is revoked.
             // It was started with startService(), so keep it as a short regular service
             // instead of crashing with an invalid type=NONE foreground promotion.

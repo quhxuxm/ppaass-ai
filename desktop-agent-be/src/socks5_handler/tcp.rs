@@ -25,7 +25,7 @@ pub(super) async fn handle_tcp_connect(
         let target_str = address_to_string(&address);
         info!("SOCKS5 CONNECT 使用直连连接到 {}", target_str);
 
-        match TcpStream::connect(&target_str).await {
+        match common::connect_tcp_happy_eyeballs(&target_str, |_, _| Ok(())).await {
             Ok(mut target_stream) => {
                 // SOCKS5 直连隧道也关闭 Nagle，避免本地代理模式下小控制帧被延迟合并。
                 if let Err(err) = target_stream.set_nodelay(true) {
@@ -163,7 +163,7 @@ pub(super) async fn handle_tcp_bind(
                 let target_str = address_to_string(&address);
                 info!("SOCKS5 BIND 使用直连连接到 {}", target_str);
 
-                match TcpStream::connect(&target_str).await {
+                match common::connect_tcp_happy_eyeballs(&target_str, |_, _| Ok(())).await {
                     Ok(mut target_stream) => {
                         // BIND 直连同样关闭 Nagle，保持与 CONNECT 直连一致的小包时延。
                         if let Err(err) = target_stream.set_nodelay(true) {

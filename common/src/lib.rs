@@ -1,4 +1,5 @@
 pub mod client_connection;
+pub mod direct_tcp;
 pub mod dns;
 pub mod error;
 pub mod quic;
@@ -15,6 +16,7 @@ pub use client_connection::{
     YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
     YamuxClientConnection, YamuxClientStream, bind_socket_to_interface,
 };
+pub use direct_tcp::connect_tcp_happy_eyeballs;
 pub use error::{CommonError, Result};
 pub use quic::{QuicPolicy, QuicUdpStats, QuicUdpStatsSnapshot};
 pub use task_guard::{install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded};

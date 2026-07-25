@@ -137,7 +137,7 @@ async fn handle_connect(
         // 一旦后续远端连接失败或建立过慢，这个已经成功的 CONNECT 会表现成异常 TCP/TLS
         // 连接，而不是一次可重试的代理建连失败。视频分片场景下这会让播放器状态机很难判断
         // 当前分片到底是网络失败、解析失败还是响应中断。
-        let target_stream = match TcpStream::connect(&target).await {
+        let target_stream = match common::connect_tcp_happy_eyeballs(&target, |_, _| Ok(())).await {
             Ok(stream) => stream,
             Err(err) => {
                 error!("HTTP CONNECT 直连到 {} 失败: {}", target, err);
@@ -354,7 +354,7 @@ async fn handle_regular_request(
         let target = address_to_string(&address);
         debug!("HTTP 请求使用直连连接到 {}", target);
 
-        let target_stream = match TcpStream::connect(&target).await {
+        let target_stream = match common::connect_tcp_happy_eyeballs(&target, |_, _| Ok(())).await {
             Ok(s) => {
                 if let Err(err) = s.set_nodelay(true) {
                     debug!("HTTP 普通请求直连目标 TCP_NODELAY 设置失败，继续使用默认行为：{err}");
