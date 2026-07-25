@@ -83,11 +83,12 @@ const transportModeLabel = computed(() => {
   return props.summary.transport_mode === "udp" ? "TCP + 加密 UDP" : "全 TCP";
 });
 const hourlyTrafficMax = computed(() =>
-  Math.max(
-    1,
-    ...props.traffic.hourly_buckets.map((bucket) => bucket.download_bytes + bucket.upload_bytes)
-  )
+  Math.max(1, ...props.traffic.hourly_buckets.flatMap((bucket) => [bucket.download_bytes, bucket.upload_bytes]))
 );
+const downloadTrendPoints = computed(() => hourlyTrendPoints("download_bytes"));
+const uploadTrendPoints = computed(() => hourlyTrendPoints("upload_bytes"));
+const downloadAreaPath = computed(() => hourlyAreaPath(downloadTrendPoints.value));
+const uploadAreaPath = computed(() => hourlyAreaPath(uploadTrendPoints.value));
 const selectedDnsDomainKeys = computed(
   () => new Set(selectedDnsDomains.value.map((domain) => domain.toLowerCase()))
 );
@@ -263,11 +264,17 @@ function moveOverviewCard(source: OverviewCardKey, target: OverviewCardKey, plac
   saveOverviewCardOrder(overviewCardOrder.value);
 }
 
-function hourlyBarHeight(bytes: number) {
-  if (bytes <= 0) {
-    return "3px";
-  }
-  return `${Math.max(5, (bytes / hourlyTrafficMax.value) * 100)}%`;
+function hourlyTrendPoints(field: "download_bytes" | "upload_bytes") {
+  return props.traffic.hourly_buckets.map((bucket, index) => ({
+    x: 18 + (index / 23) * 684,
+    y: 154 - (bucket[field] / hourlyTrafficMax.value) * 132,
+    bucket
+  }));
+}
+
+function hourlyAreaPath(points: Array<{ x: number; y: number }>) {
+  if (!points.length) return "";
+  return `M ${points[0].x} 154 L ${points.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${points.at(-1)?.x ?? 702} 154 Z`;
 }
 
 function dnsRecordDomain(record: DnsResolutionRecord) {
@@ -499,18 +506,40 @@ function onDnsListFocusOut(event: FocusEvent) {
             <Tag :value="`上传 ${formatBytes(traffic.day_upload_bytes)}`" severity="success" rounded />
           </div>
 
-          <div class="hourly-bars">
-            <div v-for="bucket in traffic.hourly_buckets" :key="bucket.hour" class="hourly-column">
-              <div class="hourly-stack" :title="`${bucket.hour}:00 下载 ${formatBytes(bucket.download_bytes)} / 上传 ${formatBytes(bucket.upload_bytes)}`">
-                <div class="hourly-segment total" :style="{ height: hourlyBarHeight(bucket.download_bytes + bucket.upload_bytes) }"></div>
-              </div>
-              <span>{{ hourLabel(bucket.hour) }}</span>
-            </div>
+          <div class="traffic-trend">
+            <svg viewBox="0 0 720 180" role="img" aria-label="今日每小时上传与下载流量趋势">
+              <line v-for="y in [22, 66, 110, 154]" :key="y" x1="18" :y1="y" x2="702" :y2="y" class="traffic-grid-line" />
+              <path :d="downloadAreaPath" class="traffic-area download" />
+              <path :d="uploadAreaPath" class="traffic-area upload" />
+              <polyline :points="downloadTrendPoints.map((point) => `${point.x},${point.y}`).join(' ')" class="traffic-line download" />
+              <polyline :points="uploadTrendPoints.map((point) => `${point.x},${point.y}`).join(' ')" class="traffic-line upload" />
+              <circle
+                v-for="point in downloadTrendPoints"
+                :key="`download-${point.bucket.hour}`"
+                :cx="point.x"
+                :cy="point.y"
+                r="8"
+                class="traffic-hit-target"
+              >
+                <title>{{ `${point.bucket.hour}:00 下载 ${formatBytes(point.bucket.download_bytes)}` }}</title>
+              </circle>
+              <circle
+                v-for="point in uploadTrendPoints"
+                :key="`upload-${point.bucket.hour}`"
+                :cx="point.x"
+                :cy="point.y"
+                r="8"
+                class="traffic-hit-target"
+              >
+                <title>{{ `${point.bucket.hour}:00 上传 ${formatBytes(point.bucket.upload_bytes)}` }}</title>
+              </circle>
+              <text v-for="hour in [0, 6, 12, 18, 23]" :key="hour" :x="18 + (hour / 23) * 684" y="176" class="traffic-axis-label">{{ hourLabel(hour) }}</text>
+            </svg>
           </div>
 
           <div class="hourly-legend">
-            <span><i class="legend-dot total"></i>每小时合计</span>
-            <span><i class="legend-dot idle"></i>空闲小时</span>
+            <span><i class="legend-dot download"></i>每小时下载</span>
+            <span><i class="legend-dot upload"></i>每小时上传</span>
           </div>
         </div>
         <div v-else-if="card.key === 'dns'" class="dns-records">

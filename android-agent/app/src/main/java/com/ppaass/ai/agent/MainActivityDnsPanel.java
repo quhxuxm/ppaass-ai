@@ -29,6 +29,7 @@ protected void updateDnsRecords() {
             return;
         }
 
+        int scrollY = mainScrollView == null ? 0 : mainScrollView.getScrollY();
         boolean running = isVpnRunning();
         JSONArray records;
         String recordsJson;
@@ -44,6 +45,7 @@ protected void updateDnsRecords() {
             hideDnsSelectionToolbar();
             dnsRecordList.removeAllViews();
             addDnsEmptyRow("DNS 记录不可用");
+            stabilizeMainScroll(scrollY);
             return;
         }
 
@@ -51,6 +53,7 @@ protected void updateDnsRecords() {
         if (records.length() == 0) {
             hideDnsSelectionToolbar();
             addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
+            stabilizeMainScroll(scrollY);
             return;
         }
 
@@ -64,6 +67,7 @@ protected void updateDnsRecords() {
         if (agentRecords.isEmpty()) {
             hideDnsSelectionToolbar();
             addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
+            stabilizeMainScroll(scrollY);
             return;
         }
 
@@ -72,6 +76,24 @@ protected void updateDnsRecords() {
         for (JSONObject record : agentRecords) {
             addDnsRecordRow(record);
         }
+        stabilizeMainScroll(scrollY);
+    }
+
+protected void stabilizeMainScroll(int scrollY) {
+        if (mainScrollView == null || !mainScrollView.isLaidOut()) {
+            return;
+        }
+        ViewTreeObserver observer = mainScrollView.getViewTreeObserver();
+        observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                if (observer.isAlive()) {
+                    observer.removeOnPreDrawListener(this);
+                }
+                mainScrollView.scrollTo(0, scrollY);
+                return true;
+            }
+        });
     }
 
 protected boolean isAgentDnsRecord(JSONObject record) {
@@ -105,7 +127,7 @@ protected void addDnsRecordRow(JSONObject record) {
         row.setBackgroundColor(selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE);
         row.setEnabled(!direct);
         row.setClickable(!direct);
-        row.setFocusable(!direct);
+        row.setFocusable(false);
         row.setContentDescription(direct
                 ? domain + "，已在直连规则中"
                 : domain + (selected ? "，已选择" : "，未选择"));

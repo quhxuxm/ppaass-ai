@@ -97,6 +97,7 @@ public class MainActivity extends MainActivityScreens {
         configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
+        UiLanguage.watch(this);
     }
 
     @Override

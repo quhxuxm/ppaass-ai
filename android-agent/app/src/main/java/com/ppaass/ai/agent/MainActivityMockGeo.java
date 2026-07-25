@@ -183,7 +183,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
 
         Button selectButton = secondaryButton("选择地点");
         selectButton.setOnClickListener(view -> showMockGeoDialog());
-        LinearLayout.LayoutParams selectParams = new LinearLayout.LayoutParams(dp(104), dp(42));
+        LinearLayout.LayoutParams selectParams = new LinearLayout.LayoutParams(dp(132), dp(42));
         selectParams.setMargins(dp(10), 0, 0, 0);
         summaryRow.addView(selectButton, selectParams);
         geo.addView(summaryRow, matchWrap());
@@ -201,7 +201,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
 
         mockGeoSettingsButton = secondaryButton("开发者选项");
         mockGeoSettingsButton.setOnClickListener(view -> handleMockGeoSetupAction());
-        LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(dp(120), dp(38));
+        LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(dp(150), dp(38));
         settingsParams.setMargins(dp(8), 0, 0, 0);
         stateRow.addView(mockGeoSettingsButton, settingsParams);
         LinearLayout.LayoutParams stateRowParams = matchWrap();
@@ -255,7 +255,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
         if (!selection.enabled()) {
             startMockGeoAfterLocationPermission = false;
-            Toast.makeText(this, "请先选择一个模拟地点", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("请先选择一个模拟地点"), Toast.LENGTH_SHORT).show();
             showMockGeoDialog();
             return;
         }
@@ -364,7 +364,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             } else {
                 Toast.makeText(
                         this,
-                        "未获得定位权限，无法持续模拟 Android 定位",
+                        tr("未获得定位权限，无法持续模拟 Android 定位"),
                         Toast.LENGTH_LONG).show();
             }
             refreshMockGeoUi();
@@ -406,7 +406,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             return;
         }
         MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
-        mockGeoSummary.setText(selection.summary());
+        mockGeoSummary.setText(tr(selection.summary()));
 
         String detail;
         String status;
@@ -493,29 +493,29 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             detail = "当前使用设备真实定位；已保留：" + selection.label;
         }
 
-        mockGeoStatus.setText(status);
+        mockGeoStatus.setText(tr(status));
         mockGeoStatus.setTextColor(chipText(statusColor));
         mockGeoStatus.setBackground(rounded(
                 chipFill(statusColor),
                 alphaColor(statusColor, 112)));
         if (mockGeoDetail != null) {
-            mockGeoDetail.setText(detail);
+            mockGeoDetail.setText(tr(detail));
         }
         if (mockGeoSettingsButton != null) {
-            mockGeoSettingsButton.setText(actionLabel);
+            mockGeoSettingsButton.setText(tr(actionLabel));
             mockGeoSettingsButton.setVisibility(needsAction ? View.VISIBLE : View.GONE);
         }
         if (mockGeoToggleButton != null) {
             if (stopping || mockGeoCleanupInFlight) {
-                mockGeoToggleButton.setText("停止中…");
+                mockGeoToggleButton.setText(tr("停止中…"));
                 applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_INFO);
                 mockGeoToggleButton.setEnabled(false);
             } else if (requested || active) {
-                mockGeoToggleButton.setText("停止 GEO");
+                mockGeoToggleButton.setText(tr("停止 GEO"));
                 applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_STOP);
                 mockGeoToggleButton.setEnabled(true);
             } else {
-                mockGeoToggleButton.setText("启动 GEO");
+                mockGeoToggleButton.setText(tr("启动 GEO"));
                 applyActionButtonStyle(mockGeoToggleButton, COLOR_ACTION_START);
                 mockGeoToggleButton.setEnabled(true);
             }
@@ -768,8 +768,8 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
         scroll.addView(content);
         mockGeoDialog = new AlertDialog.Builder(this)
                 .setView(scroll)
-                .setPositiveButton("应用", null)
-                .setNegativeButton("取消", null)
+                .setPositiveButton(tr("应用"), null)
+                .setNegativeButton(tr("取消"), null)
                 .create();
         mockGeoDialog.setOnDismissListener(dialog -> mockGeoDialog = null);
         mockGeoDialog.setOnShowListener(dialog -> {
@@ -790,7 +790,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
                             longitude.getText().toString(),
                             accuracy.getText().toString());
                 } catch (IllegalArgumentException error) {
-                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, tr(error.getMessage()), Toast.LENGTH_LONG).show();
                     return;
                 }
 
@@ -827,18 +827,18 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
                                 .apply();
                         refreshMockGeoUi();
                     }
-                    Toast.makeText(this, "已清除模拟地点", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, tr("已清除模拟地点"), Toast.LENGTH_SHORT).show();
                 } else if (prefs.getBoolean(
                         PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
                         false)) {
                     requestRunningMockGeoRefresh();
-                    Toast.makeText(this, "正在切换模拟地点", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, tr("正在切换模拟地点"), Toast.LENGTH_SHORT).show();
                 } else {
                     prefs.edit()
                             .remove(PpaassVpnService.PREF_MOCK_GEO_ERROR)
                             .apply();
                     refreshMockGeoUi();
-                    Toast.makeText(this, "地点已保存，点击“启动 GEO”后生效", Toast.LENGTH_SHORT)
+                    Toast.makeText(this, tr("地点已保存，点击“启动 GEO”后生效"), Toast.LENGTH_SHORT)
                             .show();
                 }
             });
@@ -892,10 +892,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             return;
         }
         mockGeoSetupDialog = new AlertDialog.Builder(this)
-                .setTitle("允许定位权限")
-                .setMessage("定位权限已被系统设为不再询问。请在应用设置的“权限”中允许定位。")
-                .setPositiveButton("打开应用设置", (dialog, which) -> openAppSettings())
-                .setNegativeButton("稍后", null)
+                .setTitle(tr("允许定位权限"))
+                .setMessage(tr("定位权限已被系统设为不再询问。请在应用设置的“权限”中允许定位。"))
+                .setPositiveButton(tr("打开应用设置"), (dialog, which) -> openAppSettings())
+                .setNegativeButton(tr("稍后"), null)
                 .create();
         mockGeoSetupDialog.setOnDismissListener(dialog -> mockGeoSetupDialog = null);
         mockGeoSetupDialog.show();
@@ -906,14 +906,14 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             return;
         }
         mockGeoSetupDialog = new AlertDialog.Builder(this)
-                .setTitle("启用 Android 模拟定位")
-                .setMessage(
+                .setTitle(tr("启用 Android 模拟定位"))
+                .setMessage(tr(
                         "1. 打开开发者选项\n"
                                 + "2. 进入“选择模拟位置信息应用”\n"
                                 + "3. 选择 PPAASS VPN\n\n"
-                                + "这是 Android 的系统限制，应用不能代替你完成授权。")
-                .setPositiveButton("打开开发者选项", (dialog, which) -> openDeveloperOptions())
-                .setNegativeButton("稍后", null)
+                                + "这是 Android 的系统限制，应用不能代替你完成授权。"))
+                .setPositiveButton(tr("打开开发者选项"), (dialog, which) -> openDeveloperOptions())
+                .setNegativeButton(tr("稍后"), null)
                 .create();
         mockGeoSetupDialog.setOnDismissListener(dialog -> mockGeoSetupDialog = null);
         mockGeoSetupDialog.show();
@@ -924,10 +924,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             return;
         }
         mockGeoSetupDialog = new AlertDialog.Builder(this)
-                .setTitle("开启系统定位")
-                .setMessage("Android 的系统定位当前已关闭，开启后才能向应用提供模拟坐标。")
-                .setPositiveButton("打开定位设置", (dialog, which) -> openLocationSettings())
-                .setNegativeButton("稍后", null)
+                .setTitle(tr("开启系统定位"))
+                .setMessage(tr("Android 的系统定位当前已关闭，开启后才能向应用提供模拟坐标。"))
+                .setPositiveButton(tr("打开定位设置"), (dialog, which) -> openLocationSettings())
+                .setNegativeButton(tr("稍后"), null)
                 .create();
         mockGeoSetupDialog.setOnDismissListener(dialog -> mockGeoSetupDialog = null);
         mockGeoSetupDialog.show();
@@ -967,7 +967,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             try {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
             } catch (RuntimeException ignored) {
-                Toast.makeText(this, "无法打开定位设置", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, tr("无法打开定位设置"), Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -980,7 +980,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             try {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
             } catch (RuntimeException ignored) {
-                Toast.makeText(this, "无法打开系统设置", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, tr("无法打开系统设置"), Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -995,7 +995,7 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
             try {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
             } catch (RuntimeException ignored) {
-                Toast.makeText(this, "无法打开应用设置", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, tr("无法打开应用设置"), Toast.LENGTH_LONG).show();
             }
         }
     }

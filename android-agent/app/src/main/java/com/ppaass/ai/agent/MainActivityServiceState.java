@@ -100,7 +100,7 @@ protected void restartRunningAgentsAfterRuleUpdate(
         boolean restartVpn,
         boolean restartHttpProxy) {
         if (!restartVpn && !restartHttpProxy) {
-            Toast.makeText(this, "直连规则已添加", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("直连规则已添加"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -110,7 +110,7 @@ protected void restartRunningAgentsAfterRuleUpdate(
         if (restartHttpProxy) {
             stopHttpProxyService();
         }
-        Toast.makeText(this, "直连规则已添加，正在重启", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, tr("直连规则已添加，正在重启"), Toast.LENGTH_SHORT).show();
 
         statusHandler.postDelayed(new Runnable() {
             private int attempts;
@@ -126,7 +126,7 @@ protected void restartRunningAgentsAfterRuleUpdate(
                 if (!vpnStopped || !httpProxyStopped) {
                     Toast.makeText(
                             MainActivityServiceState.this,
-                            "规则已保存，服务停止超时，请手动重启",
+                            tr("规则已保存，服务停止超时，请手动重启"),
                             Toast.LENGTH_LONG).show();
                     return;
                 }
@@ -138,7 +138,7 @@ protected void restartRunningAgentsAfterRuleUpdate(
                 }
                 Toast.makeText(
                         MainActivityServiceState.this,
-                        "直连规则已生效",
+                        tr("直连规则已生效"),
                         Toast.LENGTH_SHORT).show();
             }
         }, 200);

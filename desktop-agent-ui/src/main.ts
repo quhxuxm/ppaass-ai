@@ -4,6 +4,7 @@ import Aura from "@primeuix/themes/aura";
 import "./styles.css";
 import App from "./App.vue";
 import { applyColorTheme, loadColorTheme } from "./colorThemes";
+import { installDomI18n } from "./i18n";
 
 applyColorTheme(loadColorTheme());
 
@@ -17,3 +18,5 @@ createApp(App)
     }
   })
   .mount("#app");
+
+installDomI18n();

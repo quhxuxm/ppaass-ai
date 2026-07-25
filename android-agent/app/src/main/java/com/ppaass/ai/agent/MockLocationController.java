@@ -218,6 +218,7 @@ final class MockLocationController {
         return fusedCleanupTask;
     }
 
+    @SuppressWarnings("deprecation")
     static boolean isSelectedMockLocationApp(Context context) {
         AppOpsManager appOps = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
         if (appOps == null) {
@@ -253,6 +254,7 @@ final class MockLocationController {
         return true;
     }
 
+    @SuppressWarnings("deprecation")
     static boolean isSystemLocationEnabled(Context context) {
         LocationManager manager =
                 (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);

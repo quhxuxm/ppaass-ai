@@ -9,6 +9,7 @@ import android.graphics.drawable.*;
 import android.net.*;
 import android.os.*;
 import android.text.*;
+import android.util.TypedValue;
 import android.view.*;
 import android.view.inputmethod.*;
 import android.widget.*;
@@ -118,6 +119,7 @@ protected TextView downloadSpeed;
 protected TextView uploadSpeed;
 protected TextView trafficDownload;
 protected TextView trafficUpload;
+protected ScrollView mainScrollView;
 protected LinearLayout dnsSelectionToolbar;
 protected LinearLayout dnsRecordList;
 protected Button connectivityTestButton;
@@ -223,6 +225,22 @@ protected final Runnable statusRefresh = new Runnable() {
     }
 
     protected void flattenButton(View view) {
+        if (view instanceof Button) {
+            Button button = (Button) view;
+            float oneSpPx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    1f,
+                    getResources().getDisplayMetrics());
+            int currentSizeSp = Math.max(8, Math.round(button.getTextSize() / oneSpPx));
+            button.setSingleLine(true);
+            button.setMaxLines(1);
+            button.setEllipsize(null);
+            button.setAutoSizeTextTypeUniformWithConfiguration(
+                    Math.min(8, currentSizeSp),
+                    currentSizeSp,
+                    1,
+                    TypedValue.COMPLEX_UNIT_SP);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             view.setStateListAnimator(null);
             view.setElevation(0f);
@@ -242,6 +260,10 @@ protected final Runnable statusRefresh = new Runnable() {
 
     protected int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density);
+    }
+
+    protected String tr(String source) {
+        return UiLanguage.tr(this, source);
     }
 
 }

@@ -809,7 +809,7 @@ public class PpaassVpnService extends VpnService {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    getString(R.string.vpn_channel_name),
+                    UiLanguage.tr(this, getString(R.string.vpn_channel_name)),
                     NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
@@ -867,7 +867,7 @@ public class PpaassVpnService extends VpnService {
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
                 .setContentTitle(getString(R.string.app_name))
-                .setContentText(contentText)
+                .setContentText(UiLanguage.tr(this, contentText))
                 .setContentIntent(openAppIntent)
                 .setOngoing(true)
                 .build();

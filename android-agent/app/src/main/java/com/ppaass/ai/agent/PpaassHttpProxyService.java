@@ -223,7 +223,7 @@ public class PpaassHttpProxyService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    getString(R.string.http_proxy_channel_name),
+                    UiLanguage.tr(this, getString(R.string.http_proxy_channel_name)),
                     NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
@@ -237,8 +237,8 @@ public class PpaassHttpProxyService extends Service {
 
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
-                .setContentTitle("PPAASS HTTP / SOCKS5 代理")
-                .setContentText("HTTP 与 SOCKS5 监听 0.0.0.0:" + listenPort)
+                .setContentTitle(UiLanguage.tr(this, "PPAASS HTTP / SOCKS5 代理"))
+                .setContentText(UiLanguage.tr(this, "HTTP 与 SOCKS5 监听 0.0.0.0:") + listenPort)
                 .setOngoing(true)
                 .build();
     }

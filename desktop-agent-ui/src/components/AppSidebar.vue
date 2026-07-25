@@ -1,19 +1,12 @@
 <script setup lang="ts">
 import Button from "primevue/button";
-import Tag from "primevue/tag";
 import AppIcon, { type AppIconName } from "./AppIcon";
-import { shortPath } from "../formatters";
 import type { TabKey } from "../types";
 
 defineProps<{
   tabs: Array<{ key: TabKey; label: string; icon: AppIconName }>;
   activeTab: TabKey;
   collapsed: boolean;
-  running: boolean;
-  runningLabel: string;
-  runningSeverity: string;
-  pid?: number | null;
-  configPath?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -61,17 +54,5 @@ const emit = defineEmits<{
         </template>
       </Button>
     </nav>
-
-    <div class="sidebar-status">
-      <Tag :severity="runningSeverity" :value="runningLabel" rounded />
-      <div class="sidebar-meta">
-        <span>PID</span>
-        <strong>{{ running && pid ? pid : "—" }}</strong>
-      </div>
-      <div class="sidebar-meta">
-        <span>配置</span>
-        <strong :title="configPath ?? ''">{{ shortPath(configPath) }}</strong>
-      </div>
-    </div>
   </aside>
 </template>

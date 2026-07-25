@@ -46,8 +46,11 @@ protected void buildUi() {
         loadHourlyTrafficState();
 
         ScrollView scroll = new ScrollView(this);
+        mainScrollView = scroll;
         scroll.setClipToPadding(false);
         scroll.setFillViewport(true);
+        scroll.setFocusable(true);
+        scroll.setFocusableInTouchMode(true);
         scroll.setBackground(appBackground());
 
         LinearLayout root = new LinearLayout(this);
@@ -81,6 +84,8 @@ protected void buildUi() {
         updateStatusMetrics();
 
         setContentView(scroll);
+        scroll.requestFocus();
+        scroll.scrollTo(0, 0);
         root.requestApplyInsets();
     }
 

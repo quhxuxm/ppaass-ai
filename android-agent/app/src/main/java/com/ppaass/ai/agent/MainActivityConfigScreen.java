@@ -195,6 +195,39 @@ protected void buildConfigScreen(LinearLayout root) {
 
 protected void buildAppearanceSection(LinearLayout root) {
         LinearLayout appearance = configSection(root, "外观");
+        appearance.addView(controlLabel("界面语言"), labelParams());
+
+        Spinner languageSpinner = new Spinner(this);
+        languageSpinner.setAdapter(spinnerAdapter(UiLanguage.LANGUAGE_LABELS));
+        languageSpinner.setSelection(UiLanguage.languageIndex(this), false);
+        languageSpinner.setBackground(controlBackground());
+        languageSpinner.setPopupBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
+        languageSpinner.setPadding(dp(12), 0, dp(12), 0);
+        appearance.addView(languageSpinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(48)));
+        addFieldHelp(appearance, "选择后立即应用，不影响代理配置和运行状态。");
+
+        languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= UiLanguage.LANGUAGE_KEYS.length) {
+                    return;
+                }
+                String language = UiLanguage.LANGUAGE_KEYS[position];
+                if (language.equals(UiLanguage.current(MainActivityConfigScreen.this))) {
+                    return;
+                }
+                prefs.edit().putString(UiLanguage.PREF_LANGUAGE, language).apply();
+                recreate();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                // Keep the current UI language.
+            }
+        });
+
         appearance.addView(controlLabel("配色风格"), labelParams());
 
         Spinner themeSpinner = new Spinner(this);

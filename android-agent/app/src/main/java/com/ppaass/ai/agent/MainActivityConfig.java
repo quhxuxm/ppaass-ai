@@ -118,7 +118,7 @@ protected void saveConfig() {
 
 protected void restoreDefaultConfig() {
         if (isVpnRunning() || isHttpProxyRunning()) {
-            Toast.makeText(this, "修改配置前请先停止 VPN 和 HTTP / SOCKS5 代理", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("修改配置前请先停止 VPN 和 HTTP / SOCKS5 代理"), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -173,7 +173,7 @@ protected void restoreDefaultConfig() {
         updateSelectedAppsSummary();
         cleanupStaleMockGeoState();
         refreshMockGeoUi();
-        Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, tr("已恢复默认配置"), Toast.LENGTH_SHORT).show();
     }
 
 protected void setSpinnerValue(Spinner spinner, String value) {
@@ -264,7 +264,7 @@ protected void addTransportModeButton(LinearLayout row, String label, String val
             if (isVpnRunning() || isHttpProxyRunning()) {
                 Toast.makeText(
                         this,
-                        "修改传输模式前请先停止 VPN 和 HTTP / SOCKS5 代理",
+                        tr("修改传输模式前请先停止 VPN 和 HTTP / SOCKS5 代理"),
                         Toast.LENGTH_SHORT).show();
                 return;
             }
@@ -308,7 +308,7 @@ protected void updateTransportModeButtons() {
             boolean active = selected.equals(String.valueOf(button.getTag()));
             button.setSelected(active);
             String label = transportModeLabel(String.valueOf(button.getTag()));
-            button.setText(active ? "✓ " + label : label);
+            button.setText(tr(active ? "✓ " + label : label));
             button.setTextColor(interactiveTextColors(
                     active ? COLOR_ACCENT_DARK : COLOR_MUTED,
                     COLOR_ACCENT_DARK));

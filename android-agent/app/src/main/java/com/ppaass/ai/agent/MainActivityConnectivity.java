@@ -30,12 +30,12 @@ protected void updateConnectivityButton() {
         }
         boolean running = isVpnRunning();
         connectivityTestButton.setEnabled(running && !connectivityTestsRunning);
-        connectivityTestButton.setText(connectivityTestsRunning ? "测试中" : "测试");
+        connectivityTestButton.setText(tr(connectivityTestsRunning ? "测试中" : "测试"));
         applyActionButtonStyle(
                 connectivityTestButton,
                 running ? COLOR_ACTION_INFO : COLOR_STATUS_STOPPED);
         if (connectivitySummary != null && !running && !connectivityTestsRunning) {
-            connectivitySummary.setText("启动 VPN 后运行测试");
+            connectivitySummary.setText(tr("启动 VPN 后运行测试"));
         }
     }
 
@@ -44,7 +44,7 @@ protected void runConnectivityTests() {
             return;
         }
         if (!isVpnRunning()) {
-            Toast.makeText(this, "请先启动 VPN 再运行测试", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("请先启动 VPN 再运行测试"), Toast.LENGTH_SHORT).show();
             updateConnectivityButton();
             return;
         }
@@ -52,7 +52,7 @@ protected void runConnectivityTests() {
         connectivityTestsRunning = true;
         updateConnectivityButton();
         if (connectivitySummary != null) {
-            connectivitySummary.setText("正在测试 Google 和 YouTube");
+            connectivitySummary.setText(tr("正在测试 Google 和 YouTube"));
         }
         if (connectivityResultList != null) {
             connectivityResultList.removeAllViews();

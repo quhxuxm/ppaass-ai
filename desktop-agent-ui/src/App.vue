@@ -14,6 +14,7 @@ import OverviewView from "./views/OverviewView.vue";
 import RoutingView from "./views/RoutingView.vue";
 import TomlView from "./views/TomlView.vue";
 import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
+import { languageOptions, useI18n, type AppLocale } from "./i18n";
 
 const {
   activeForwardingLabel,
@@ -36,8 +37,6 @@ const {
   restoreDefaultConfig,
   runDiagnostics,
   running,
-  runningLabel,
-  runningSeverity,
   sanitizeIntegerInput,
   saveConfig,
   setField,
@@ -53,10 +52,15 @@ const {
 
 const sidebarCollapsed = ref(false);
 const colorTheme = ref<ColorTheme>(loadColorTheme());
+const { locale, setLocale } = useI18n();
 
 function setColorTheme(theme: ColorTheme) {
   colorTheme.value = theme;
   applyColorTheme(theme);
+}
+
+function setLanguage(language: AppLocale) {
+  setLocale(language);
 }
 </script>
 
@@ -72,11 +76,6 @@ function setColorTheme(theme: ColorTheme) {
         :tabs="tabs"
         :active-tab="state.activeTab"
         :collapsed="sidebarCollapsed"
-        :running="running"
-        :running-label="runningLabel"
-        :running-severity="runningSeverity"
-        :pid="state.agent.pid"
-        :config-path="state.config?.path"
         @update:active-tab="state.activeTab = $event"
         @update:collapsed="sidebarCollapsed = $event"
       />
@@ -91,12 +90,17 @@ function setColorTheme(theme: ColorTheme) {
           :busy="state.busy"
           :color-theme="colorTheme"
           :color-themes="colorThemes"
+          :language="locale"
+          :languages="languageOptions"
+          :pid="state.agent.pid"
+          :config-path="state.config?.path"
           @reload="reloadAll"
           @restore-default-config="restoreDefaultConfig"
           @save="saveConfig"
           @start="startAgent"
           @stop="stopAgent"
           @update:color-theme="setColorTheme"
+          @update:language="setLanguage"
         />
 
         <section v-if="state.loading" class="loading">

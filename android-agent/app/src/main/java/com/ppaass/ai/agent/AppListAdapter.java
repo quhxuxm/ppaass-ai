@@ -160,7 +160,7 @@ final class AppListAdapter extends BaseAdapter {
 
     private TextView systemBadge() {
         TextView badge = new TextView(context);
-        badge.setText("系统");
+        badge.setText(UiLanguage.tr(context, "系统"));
         badge.setTextSize(11f);
         badge.setTextColor(COLOR_MUTED);
         badge.setTypeface(Typeface.DEFAULT_BOLD);

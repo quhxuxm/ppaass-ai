@@ -70,7 +70,7 @@ protected void buildStatusScreen(LinearLayout root) {
         sectionTitle(apps, "VPN 应用");
 
         selectAppsButton = new Button(this);
-        selectAppsButton.setText("选择");
+        selectAppsButton.setText(tr("选择"));
         selectAppsButton.setAllCaps(false);
         selectAppsButton.setTextSize(14f);
         selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
@@ -283,11 +283,11 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         usbButtonRow.setGravity(Gravity.END);
         httpProxyUsbSettingsButton = secondaryButton("打开设置");
         httpProxyUsbSettingsButton.setOnClickListener(view -> openUsbTetherSettings());
-        LinearLayout.LayoutParams usbSettingsParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        LinearLayout.LayoutParams usbSettingsParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         usbButtonRow.addView(httpProxyUsbSettingsButton, usbSettingsParams);
         httpProxyUsbActionButton = secondaryButton("复制命令");
         httpProxyUsbActionButton.setOnClickListener(view -> handleHttpProxyUsbAction());
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         copyParams.setMargins(dp(6), 0, 0, 0);
         usbButtonRow.addView(httpProxyUsbActionButton, copyParams);
         LinearLayout.LayoutParams usbButtonParams = matchWrap();
@@ -332,7 +332,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         bluetoothButtonRow.setGravity(Gravity.END);
         httpProxyBluetoothActionButton = secondaryButton("打开设置");
         httpProxyBluetoothActionButton.setOnClickListener(view -> handleHttpProxyBluetoothAction());
-        LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(104), dp(38));
+        LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         bluetoothButtonRow.addView(httpProxyBluetoothActionButton, bluetoothCopyParams);
         LinearLayout.LayoutParams bluetoothButtonParams = matchWrap();
         bluetoothButtonParams.setMargins(0, dp(6), 0, 0);

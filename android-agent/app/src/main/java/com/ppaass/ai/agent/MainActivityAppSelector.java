@@ -89,7 +89,7 @@ protected void showAppSelector() {
 
         appSelectorDialog = new AlertDialog.Builder(this)
                 .setView(dialogContent)
-                .setPositiveButton("确定", (dialog, which) -> {
+                .setPositiveButton(tr("确定"), (dialog, which) -> {
                     Set<String> next = new HashSet<>();
                     for (int i = 0; i < apps.size(); i++) {
                         if (checked[i]) {
@@ -99,8 +99,8 @@ protected void showAppSelector() {
                     prefs.edit().putStringSet("vpn_apps", next).apply();
                     updateSelectedAppsSummary();
                 })
-                .setNegativeButton("取消", null)
-                .setNeutralButton("清空", null)
+                .setNegativeButton(tr("取消"), null)
+                .setNeutralButton(tr("清空"), null)
                 .create();
         appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
         appSelectorDialog.setOnShowListener(dialog -> {
@@ -199,11 +199,11 @@ protected void updateSelectedAppsSummary() {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("所有应用");
+            selectedAppsSummary.setText(tr("所有应用"));
             return;
         }
 
-        selectedAppsSummary.setText("已选择 " + selected.size() + " 个");
+        selectedAppsSummary.setText(tr("已选择 " + selected.size() + " 个"));
     }
 
 }

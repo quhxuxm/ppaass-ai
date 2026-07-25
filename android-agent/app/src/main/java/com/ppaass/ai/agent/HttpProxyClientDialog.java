@@ -12,6 +12,7 @@ import android.graphics.drawable.RippleDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -164,10 +165,10 @@ final class HttpProxyClientDialog {
 
     private void updateHeader(int activeCount, int blockedCount) {
         if (summary != null) {
-            summary.setText(activeCount + " 个活动 · " + blockedCount + " 个已禁止");
+            summary.setText(UiLanguage.tr(context, activeCount + " 个活动 · " + blockedCount + " 个已禁止"));
         }
-        activeTab.setText("活动 " + activeCount);
-        blockedTab.setText("已禁止 " + blockedCount);
+        activeTab.setText(UiLanguage.tr(context, "活动 " + activeCount));
+        blockedTab.setText(UiLanguage.tr(context, "已禁止 " + blockedCount));
         styleTab(activeTab, !showingBlocked);
         styleTab(blockedTab, showingBlocked);
     }
@@ -285,7 +286,7 @@ final class HttpProxyClientDialog {
         blocked.add(normalized);
         saveBlockedClients(blocked);
         NativeAgent.blockHttpProxyClient(normalized);
-        Toast.makeText(context, "已断开并禁止 " + normalized, Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, UiLanguage.tr(context, "已断开并禁止 " + normalized), Toast.LENGTH_SHORT).show();
     }
 
     private void unblockClient(String ip) {
@@ -297,7 +298,7 @@ final class HttpProxyClientDialog {
         blocked.remove(normalized);
         saveBlockedClients(blocked);
         NativeAgent.unblockHttpProxyClient(normalized);
-        Toast.makeText(context, "已恢复 " + normalized, Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, UiLanguage.tr(context, "已恢复 " + normalized), Toast.LENGTH_SHORT).show();
     }
 
     private Set<String> blockedClients() {
@@ -340,7 +341,7 @@ final class HttpProxyClientDialog {
 
     private Button tabButton(String text) {
         Button button = new Button(context);
-        button.setText(text);
+        button.setText(UiLanguage.tr(context, text));
         button.setTextSize(13f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
@@ -430,6 +431,22 @@ final class HttpProxyClientDialog {
     }
 
     private void flattenButton(View view) {
+        if (view instanceof Button) {
+            Button button = (Button) view;
+            float oneSpPx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    1f,
+                    context.getResources().getDisplayMetrics());
+            int currentSizeSp = Math.max(8, Math.round(button.getTextSize() / oneSpPx));
+            button.setSingleLine(true);
+            button.setMaxLines(1);
+            button.setEllipsize(null);
+            button.setAutoSizeTextTypeUniformWithConfiguration(
+                    Math.min(8, currentSizeSp),
+                    currentSizeSp,
+                    1,
+                    TypedValue.COMPLEX_UNIT_SP);
+        }
         view.setStateListAnimator(null);
         view.setElevation(0f);
         view.setTranslationZ(0f);
@@ -444,7 +461,7 @@ final class HttpProxyClientDialog {
 
     private TextView titleText(String text, float size) {
         TextView view = new TextView(context);
-        view.setText(text);
+        view.setText(UiLanguage.tr(context, text));
         view.setTextColor(COLOR_TEXT);
         view.setTextSize(size);
         view.setTypeface(Typeface.DEFAULT_BOLD);
@@ -453,7 +470,7 @@ final class HttpProxyClientDialog {
 
     private TextView mutedText(String text, float size) {
         TextView view = new TextView(context);
-        view.setText(text);
+        view.setText(UiLanguage.tr(context, text));
         view.setTextColor(COLOR_MUTED);
         view.setTextSize(size);
         return view;

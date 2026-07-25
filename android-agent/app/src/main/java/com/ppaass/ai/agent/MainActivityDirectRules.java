@@ -50,7 +50,7 @@ protected void removeDirectRule(int index) {
         if (isVpnRunning() || isHttpProxyRunning()) {
             Toast.makeText(
                     this,
-                    "Agent 运行中，停止后才能删除直连规则",
+                    tr("Agent 运行中，停止后才能删除直连规则"),
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -73,8 +73,8 @@ protected void renderDirectRuleList() {
         addActiveDirectRuleGroup(label, selectedDirectRuleGroupKey, modes, count);
 
         if (directRuleGroupSummary != null) {
-            directRuleGroupSummary.setText(populatedDirectRuleGroupCount()
-                    + " 组 · " + directRuleValues.size() + " 条");
+            directRuleGroupSummary.setText(tr(populatedDirectRuleGroupCount()
+                    + " 组 · " + directRuleValues.size() + " 条"));
         }
         updateDirectAccessSummary();
     }
@@ -222,7 +222,7 @@ protected void updateDirectRuleTypeButtons() {
         for (Button button : directRuleTypeButtons) {
             String key = String.valueOf(button.getTag());
             boolean selected = key.equals(selectedDirectRuleGroupKey);
-            button.setText(directRuleGroupLabel(key) + " " + directRuleGroupCount(key));
+            button.setText(tr(directRuleGroupLabel(key) + " " + directRuleGroupCount(key)));
             button.setTextColor(interactiveTextColors(
                     selected ? COLOR_ACCENT_DARK : COLOR_MUTED,
                     COLOR_ACCENT_DARK));
@@ -296,10 +296,10 @@ protected void updateDirectModeButtons() {
 
 protected void updateDirectAccessSummary() {
         if (directModeSummary != null) {
-            directModeSummary.setText(directModeLabel(directAccessModeValue));
+            directModeSummary.setText(tr(directModeLabel(directAccessModeValue)));
         }
         if (directRuleCountSummary != null) {
-            directRuleCountSummary.setText(directRuleCountLabel());
+            directRuleCountSummary.setText(tr(directRuleCountLabel()));
         }
     }
 
