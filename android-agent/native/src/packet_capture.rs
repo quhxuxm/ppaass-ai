@@ -283,7 +283,7 @@ fn read_report(path: &Path, limit: usize) -> Result<CaptureReport, String> {
     reader
         .read_exact(&mut global)
         .map_err(|_| "PCAP header is incomplete".to_string())?;
-    if &global[..4] != [0xd4, 0xc3, 0xb2, 0xa1]
+    if global[..4] != [0xd4, 0xc3, 0xb2, 0xa1]
         || u32::from_le_bytes(global[20..24].try_into().unwrap()) != DLT_RAW
     {
         return Err("Unsupported PCAP format".to_string());
@@ -354,8 +354,10 @@ fn parse_ip_packet(
                 timestamp_ms,
                 4,
                 packet[9],
-                Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]).to_string(),
-                Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]).to_string(),
+                (
+                    Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]).to_string(),
+                    Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]).to_string(),
+                ),
                 length,
                 packet.get(header_len..)?,
             )
@@ -365,8 +367,10 @@ fn parse_ip_packet(
             timestamp_ms,
             6,
             packet[6],
-            Ipv6Addr::from(<[u8; 16]>::try_from(&packet[8..24]).ok()?).to_string(),
-            Ipv6Addr::from(<[u8; 16]>::try_from(&packet[24..40]).ok()?).to_string(),
+            (
+                Ipv6Addr::from(<[u8; 16]>::try_from(&packet[8..24]).ok()?).to_string(),
+                Ipv6Addr::from(<[u8; 16]>::try_from(&packet[24..40]).ok()?).to_string(),
+            ),
             length,
             &packet[40..],
         ),
@@ -379,11 +383,11 @@ fn build_packet(
     timestamp_ms: u64,
     ip_version: u8,
     protocol_number: u8,
-    source: String,
-    destination: String,
+    addresses: (String, String),
     length: usize,
     transport: &[u8],
 ) -> Option<CapturedPacket> {
+    let (source, destination) = addresses;
     let (protocol, source_port, destination_port, summary, payload, tcp_sequence, transport_fields) =
         match protocol_number {
             6 if transport.len() >= 20 => {
