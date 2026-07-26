@@ -9,6 +9,7 @@ mod http_proxy_clients;
 mod http_proxy_io;
 mod jni_api;
 mod netstack;
+mod packet_capture;
 mod socket_protector;
 mod socks5_proxy;
 mod tcp_relay;

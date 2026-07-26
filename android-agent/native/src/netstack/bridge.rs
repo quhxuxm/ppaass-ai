@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::fd_device::AndroidTunDevice;
+use crate::packet_capture;
 use crate::traffic_stats;
 
 pub(super) fn spawn_packet_bridge(
@@ -30,6 +31,7 @@ pub(super) fn spawn_packet_bridge(
                     match read {
                         Ok(n) if n > 0 => {
                             traffic_stats::record_upload(n);
+                            packet_capture::record(&buf[..n]);
                             if let Err(e) = stack_sink.send(buf[..n].to_vec()).await {
                                 warn!("failed to push packet into netstack: {e}");
                                 break;
@@ -61,6 +63,7 @@ pub(super) fn spawn_packet_bridge(
                 packet = stack_stream.next() => {
                     match packet {
                         Some(Ok(packet)) => {
+                            packet_capture::record(&packet);
                             if let Err(e) = device.send(&packet).await {
                                 warn!("failed to write packet to Android VPN fd: {e}; stopping agent");
                                 output_fatal_shutdown.cancel();

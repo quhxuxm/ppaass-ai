@@ -22,7 +22,7 @@ import java.text.*;
 import java.util.*;
 
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
-abstract class MainActivityScreens extends MainActivityConfigScreen {
+abstract class MainActivityScreens extends MainActivityPacketCapture {
 
 protected void buildUi() {
         editableControls.clear();
@@ -71,11 +71,14 @@ protected void buildUi() {
 
         FrameLayout pages = screenPageHost(root);
         LinearLayout statusScreen = screenPage(pages);
+        LinearLayout captureScreen = screenPage(pages);
         LinearLayout configScreen = screenPage(pages);
         addScreenTab(screenTabs, "状态", statusScreen);
+        addScreenTab(screenTabs, "抓包", captureScreen);
         addScreenTab(screenTabs, "配置", configScreen);
 
         buildStatusScreen(statusScreen);
+        buildPacketCaptureScreen(captureScreen);
         buildConfigScreen(configScreen);
 
         selectScreen(0);

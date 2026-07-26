@@ -2,6 +2,7 @@ use jni::objects::{JClass, JObject, JString};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{Env, EnvUnowned};
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::AndroidAgentConfig;
@@ -11,6 +12,7 @@ use crate::http_proxy_clients::{
     block_http_proxy_client, http_proxy_clients_json, unblock_http_proxy_client,
 };
 use crate::netstack::run_android_agent;
+use crate::packet_capture;
 use crate::socket_protector;
 use crate::traffic_stats;
 
@@ -241,6 +243,69 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_vpnUploadBytes<'loca
     _class: JClass<'local>,
 ) -> jlong {
     traffic_stats::upload_bytes().min(jlong::MAX as u64) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_packetCaptureEnabled<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    packet_capture::is_enabled()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_setPacketCaptureEnabled<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    file: JString<'local>,
+    enabled: jboolean,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let path = PathBuf::from(file.try_to_string(env)?);
+        match packet_capture::set_enabled(path, enabled) {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                throw(env, format!("failed to toggle packet capture: {error}"));
+                Ok(false)
+            }
+        }
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_clearPacketCapture<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    file: JString<'local>,
+) -> jboolean {
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let path = PathBuf::from(file.try_to_string(env)?);
+        match packet_capture::clear(path) {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                throw(env, format!("failed to clear packet capture: {error}"));
+                Ok(false)
+            }
+        }
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_packetCaptureReportJson<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    file: JString<'local>,
+    limit: jint,
+) -> jstring {
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        let path = PathBuf::from(file.try_to_string(env)?);
+        let json = packet_capture::report_json(&path, usize::try_from(limit.max(1)).unwrap_or(1))
+            .unwrap_or_else(|error| format!("{{\"error\":{}}}", serde_json::Value::String(error)));
+        Ok(env.new_string(json)?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
 #[unsafe(no_mangle)]
