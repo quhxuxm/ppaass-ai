@@ -9,7 +9,7 @@ use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
-use crate::tun_handler::run_tun_mode;
+use crate::tun_handler::{PacketCaptureController, run_tun_mode};
 use crate::yamux_session::YamuxSessionManager;
 use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use std::sync::Arc;
@@ -30,11 +30,12 @@ pub struct AgentServer {
     udp_sessions: Arc<YamuxSessionManager>,
     // 直连规则：命中后绕过 proxy，直接使用本机网络出口连接目标。
     direct_access_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 }
 
 impl AgentServer {
-    #[instrument(skip(config))]
-    pub async fn new(config: AgentConfig) -> Result<Self> {
+    #[instrument(skip(config, packet_capture))]
+    pub async fn new(config: AgentConfig, packet_capture: PacketCaptureController) -> Result<Self> {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
@@ -48,6 +49,7 @@ impl AgentServer {
             tcp_sessions,
             udp_sessions,
             direct_access_checker,
+            packet_capture,
         })
     }
 
@@ -74,6 +76,7 @@ impl AgentServer {
             let tcp_sessions = self.tcp_sessions.clone();
             let udp_sessions = self.udp_sessions.clone();
             let direct_access_checker = self.direct_access_checker.clone();
+            let packet_capture = self.packet_capture.clone();
             let tun_shutdown = shutdown.clone();
             tun_tasks.spawn(run_tun_mode(
                 tun_cfg,
@@ -82,6 +85,7 @@ impl AgentServer {
                 tcp_sessions,
                 udp_sessions,
                 direct_access_checker,
+                packet_capture,
                 tun_shutdown,
             ));
             tun_task_running = true;

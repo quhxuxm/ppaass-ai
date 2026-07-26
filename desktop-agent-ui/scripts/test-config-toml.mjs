@@ -36,6 +36,7 @@ try {
   assert.equal(summarizeRaw("udp_session_pool_size = 99\n").udp_session_pool_size, 8);
   assert.equal(coerceField("udp_session_pool_size", 0), 1);
   assert.equal(coerceField("udp_session_pool_size", 99), 8);
+  assert.equal(udpSummary.tun_packet_capture_file, "captures/ppaass-tun.pcap");
 
   const updated = applyFieldToToml(
     'transport_mode = "udp"\n',
@@ -44,6 +45,9 @@ try {
   );
   assert.match(updated, /^udp_session_pool_size = 6$/m);
   assert.equal(summarizeRaw(updated).udp_session_pool_size, 6);
+
+  const captureUpdated = applyFieldToToml(updated, "tun_packet_capture_file", "captures/debug.pcap");
+  assert.equal(summarizeRaw(captureUpdated).tun_packet_capture_file, "captures/debug.pcap");
 } finally {
   await server.close();
 }

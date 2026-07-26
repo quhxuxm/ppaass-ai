@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agent::{
-    apply_ui_log_level, get_agent_state_inner, start_agent_command, stop_agent_inner_command,
+    apply_ui_log_level, clear_packet_capture_runtime, get_agent_state_inner,
+    packet_capture_runtime_status, resolve_agent_output_path, set_packet_capture_runtime_enabled,
+    start_agent_command, stop_agent_inner_command,
 };
 use crate::config::{
     install_bundled_agent_assets, load_config_from_path, load_default_config, locate_config_path,
@@ -17,7 +19,11 @@ use crate::macos_helper::{
 };
 #[cfg(windows)]
 use crate::models::ServiceRequest;
-use crate::models::{AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot};
+use crate::models::{
+    AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
+    PacketCaptureRuntimeStatus,
+};
+use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
 use crate::runtime::AgentRuntime;
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
@@ -120,6 +126,59 @@ async fn get_network_traffic_snapshot() -> Result<NetworkTrafficSnapshot, String
 async fn get_dns_resolution_records(
 ) -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
     run_blocking("读取 DNS 解析记录", get_dns_resolution_records_inner).await
+}
+
+#[tauri::command]
+async fn get_packet_capture(
+    config_path: Option<String>,
+    limit: Option<usize>,
+) -> Result<PacketCaptureReport, String> {
+    run_blocking("读取抓包结果", move || {
+        let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
+            Some(value) => PathBuf::from(value),
+            None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
+        };
+        let config = desktop_agent_be::config::AgentConfig::load(&config_path)
+            .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;
+        let capture_path = resolve_agent_output_path(&config_path, &config.tun.packet_capture.file);
+        read_packet_capture(&capture_path, limit)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_packet_capture_runtime_status(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("读取抓包运行状态", move || {
+        packet_capture_runtime_status(&runtime)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_packet_capture_enabled(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+    enabled: bool,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("切换抓包运行状态", move || {
+        set_packet_capture_runtime_enabled(&runtime, enabled)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn clear_packet_capture(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+    config_path: Option<String>,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let runtime = runtime.inner().clone();
+    run_blocking("清空抓包文件", move || {
+        clear_packet_capture_runtime(&runtime, config_path)
+    })
+    .await
 }
 
 fn load_agent_config_inner(
@@ -248,7 +307,11 @@ pub(crate) fn run() {
             stop_agent,
             run_connectivity_tests,
             get_network_traffic_snapshot,
-            get_dns_resolution_records
+            get_dns_resolution_records,
+            get_packet_capture,
+            get_packet_capture_runtime_status,
+            set_packet_capture_enabled,
+            clear_packet_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PPAASS Desktop Agent UI");

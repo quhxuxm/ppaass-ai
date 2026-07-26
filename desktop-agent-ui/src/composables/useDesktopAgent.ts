@@ -21,6 +21,7 @@ import type {
   DnsResolutionRecord,
   LoadedAgentConfig,
   NetworkTrafficSnapshot,
+  PacketCaptureRuntimeStatus,
   TabKey,
   TrafficBaseline,
   ToastKind
@@ -46,6 +47,12 @@ export function useDesktopAgent() {
       logs: []
     } as AgentState,
     diagnostics: null as ConnectivityReport | null,
+    packetCapture: {
+      available: false,
+      enabled: false,
+      file: null
+    } as PacketCaptureRuntimeStatus,
+    packetCaptureRefreshToken: 0,
     traffic: {
       snapshot: null as NetworkTrafficSnapshot | null,
       previous: null as NetworkTrafficSnapshot | null,
@@ -300,9 +307,58 @@ export function useDesktopAgent() {
         {},
         () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
       );
+      if (!state.agent.running) {
+        state.packetCapture = { available: false, enabled: false, file: null };
+      }
       showToast(state.agent.running ? "error" : "success", state.agent.running ? "代理仍在运行" : "代理已停止");
     } catch (error) {
       await refreshAgentState();
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function togglePacketCapture(enabled: boolean) {
+    if (state.busy || state.packetCapture.enabled === enabled) {
+      return;
+    }
+
+    if (!state.agent.running) {
+      showToast("error", "Agent 未运行，请先启动 Agent");
+      return;
+    }
+
+    try {
+      state.busy = true;
+      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
+        "set_packet_capture_enabled",
+        { enabled },
+        () => ({ available: true, enabled, file: state.packetCapture.file })
+      );
+      state.packetCaptureRefreshToken += 1;
+      showToast("success", enabled ? "抓包已开启，无需重启 Agent" : "抓包已关闭，无需重启 Agent");
+    } catch (error) {
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function clearPacketCapture() {
+    if (!state.config || state.busy) {
+      return;
+    }
+    try {
+      state.busy = true;
+      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
+        "clear_packet_capture",
+        { configPath: state.config.path },
+        () => ({ ...state.packetCapture })
+      );
+      state.packetCaptureRefreshToken += 1;
+      showToast("success", "抓包文件已清空");
+    } catch (error) {
       showToast("error", getErrorMessage(error));
     } finally {
       state.busy = false;
@@ -338,6 +394,13 @@ export function useDesktopAgent() {
     agentRefreshInFlight = true;
     try {
       state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, () => state.agent);
+      state.packetCapture = state.agent.running
+        ? await invokeOrFallback<PacketCaptureRuntimeStatus>(
+            "get_packet_capture_runtime_status",
+            {},
+            () => state.packetCapture
+          )
+        : { available: false, enabled: false, file: null };
     } catch {
       // Keep the last visible agent state if the runtime status read fails.
     } finally {
@@ -706,6 +769,7 @@ export function useDesktopAgent() {
     addDirectRules,
     addDirectRulesAndRestart,
     addDraftRules,
+    clearPacketCapture,
     configLocked,
     diagnosticsPassed,
     diagnosticsTotal,
@@ -730,6 +794,7 @@ export function useDesktopAgent() {
     startAgent,
     state,
     stopAgent,
+    togglePacketCapture,
     summary,
     tabs,
     tunDiagnosticsLabel,

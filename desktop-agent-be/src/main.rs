@@ -21,10 +21,12 @@ mod yamux_session;
 use crate::cli::CliArgs;
 use crate::config::AgentConfig;
 use crate::server::AgentServer;
+use crate::tun_handler::PacketCaptureController;
 use anyhow::Result;
 use clap::Parser;
 #[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -167,7 +169,9 @@ fn main() -> Result<()> {
         // 关闭信号只触发取消，真正的资源清理由各任务在收到 token 后完成。
         setup_shutdown_signals(&shutdown);
 
-        match AgentServer::new(config).await {
+        let packet_capture =
+            PacketCaptureController::new(PathBuf::from(&config.tun.packet_capture.file));
+        match AgentServer::new(config, packet_capture).await {
             Ok(server) => {
                 // AgentServer::run 会根据模式启动 SOCKS/HTTP 或 TUN 转发器。
                 if let Err(err) = server.run(shutdown).await {

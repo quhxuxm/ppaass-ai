@@ -12,6 +12,7 @@ import ForwardingView from "./views/ForwardingView.vue";
 import LogsView from "./views/LogsView.vue";
 import OverviewView from "./views/OverviewView.vue";
 import RoutingView from "./views/RoutingView.vue";
+import PacketCaptureView from "./views/PacketCaptureView.vue";
 import TomlView from "./views/TomlView.vue";
 import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
 import { languageOptions, useI18n, type AppLocale } from "./i18n";
@@ -21,6 +22,7 @@ const {
   addDirectRules,
   addDirectRulesAndRestart,
   addDraftRules,
+  clearPacketCapture,
   configLocked,
   diagnosticsPassed,
   diagnosticsTotal,
@@ -44,6 +46,7 @@ const {
   startAgent,
   state,
   stopAgent,
+  togglePacketCapture,
   summary,
   tabs,
   tunDiagnosticsLabel,
@@ -169,6 +172,18 @@ function setLanguage(language: AppLocale) {
           :diagnostics-passed="diagnosticsPassed"
           :diagnostics-total="diagnosticsTotal"
           @run="runDiagnostics"
+        />
+
+        <PacketCaptureView
+          v-else-if="state.activeTab === 'capture'"
+          :summary="summary"
+          :config-path="state.config.path"
+          :agent-running="running"
+          :capture-enabled="state.packetCapture.enabled"
+          :refresh-token="state.packetCaptureRefreshToken"
+          :busy="state.busy"
+          @toggle-capture="togglePacketCapture"
+          @clear-capture="clearPacketCapture"
         />
 
         <LogsView

@@ -16,8 +16,11 @@ mod yamux_session;
 use crate::config::AgentConfig;
 use crate::server::AgentServer;
 use anyhow::Result;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
+
+pub use tun_handler::PacketCaptureController;
 
 #[cfg(target_os = "macos")]
 pub fn run_tun_helper_service(
@@ -29,6 +32,16 @@ pub fn run_tun_helper_service(
 }
 
 pub async fn run_agent(config: AgentConfig, shutdown: CancellationToken) -> Result<()> {
+    let packet_capture =
+        PacketCaptureController::new(PathBuf::from(&config.tun.packet_capture.file));
+    run_agent_with_packet_capture(config, shutdown, packet_capture).await
+}
+
+pub async fn run_agent_with_packet_capture(
+    config: AgentConfig,
+    shutdown: CancellationToken,
+    packet_capture: PacketCaptureController,
+) -> Result<()> {
     info!("PPAASS Desktop Agent 启动中");
     info!("监听地址：    {}", config.listen_addr);
     info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
@@ -46,7 +59,7 @@ pub async fn run_agent(config: AgentConfig, shutdown: CancellationToken) -> Resu
         );
     }
 
-    match AgentServer::new(config).await {
+    match AgentServer::new(config, packet_capture).await {
         Ok(server) => {
             if let Err(err) = server.run(shutdown).await {
                 error!("Agent 服务器异常停止：{}", err);

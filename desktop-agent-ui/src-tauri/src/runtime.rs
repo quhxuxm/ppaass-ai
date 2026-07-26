@@ -17,6 +17,7 @@ pub(crate) struct AgentRuntime {
 pub(crate) struct EmbeddedAgent {
     pub(crate) shutdown: CancellationToken,
     pub(crate) join: Option<JoinHandle<()>>,
+    pub(crate) packet_capture: desktop_agent_be::PacketCaptureController,
 }
 
 impl AgentRuntime {

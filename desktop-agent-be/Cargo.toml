@@ -39,6 +39,7 @@ deadpool.workspace = true
 toml.workspace = true
 async-trait.workspace = true
 parking_lot.workspace = true
+arc-swap.workspace = true
 dashmap.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true

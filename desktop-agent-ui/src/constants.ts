@@ -6,6 +6,7 @@ export const tabs: Array<{ key: TabKey; label: string; icon: AppIconName }> = [
   { key: "forwarding", label: "转发", icon: "network" },
   { key: "egress", label: "出口", icon: "waypoints" },
   { key: "routing", label: "系统", icon: "settings" },
+  { key: "capture", label: "抓包", icon: "file-down" },
   { key: "diagnostics", label: "诊断", icon: "activity" },
   { key: "logs", label: "日志", icon: "scroll-text" },
   { key: "toml", label: "TOML", icon: "code" }

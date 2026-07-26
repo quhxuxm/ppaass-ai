@@ -103,6 +103,12 @@ macos_helper_enabled = true
 macos_helper_socket = "/var/run/ppaass-ai/tun-helper.sock"
 macos_helper_fallback_to_privilege = true
 
+# TUN 双向明文抓包输出路径。抓包默认关闭，在桌面 UI 的“抓包”页运行时开启；
+# 开启后记录 Client 加密前的上行 IP 包，以及代理解密后写回 Client 的下行
+# IP 包。输出为 Wireshark 可直接打开的 DLT_RAW PCAP，仅作用于 TUN 流量。
+[tun.packet_capture]
+file = "captures/ppaass-tun.pcap"
+
 # 直连访问配置
 #
 # mode 选项：

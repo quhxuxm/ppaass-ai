@@ -15,6 +15,8 @@ mod dns_proxy;
 pub(crate) mod helper_service;
 mod netstack;
 mod network;
+mod packet_capture;
+pub use packet_capture::PacketCaptureController;
 mod proxy_routing;
 mod route;
 mod tasks;
@@ -54,7 +56,7 @@ use route::{
 use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
@@ -302,7 +304,13 @@ impl TunDirectEgress {
 }
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(tcp_sessions, udp_sessions, direct_access_checker, shutdown))]
+#[instrument(skip(
+    tcp_sessions,
+    udp_sessions,
+    direct_access_checker,
+    packet_capture,
+    shutdown
+))]
 pub async fn run_tun_mode(
     config: TunConfig,
     transport_mode: TransportMode,
@@ -310,6 +318,7 @@ pub async fn run_tun_mode(
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     direct_access_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
     shutdown: CancellationToken,
 ) -> Result<()> {
     let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
@@ -383,6 +392,10 @@ pub async fn run_tun_mode(
         "TUN 设备已创建：名称={} if_index={} helper_managed={}",
         tun_name, tun_if_index, helper_managed_network
     );
+    info!(
+        "TUN 明文抓包运行时控制已就绪：默认关闭，文件={}",
+        packet_capture.file().display()
+    );
 
     let direct_egress = Arc::new(TunDirectEgress::new(
         proxy_addrs.clone(),
@@ -405,6 +418,7 @@ pub async fn run_tun_mode(
         config.mtu as usize,
         forward_context,
         quic_policy,
+        packet_capture,
         shutdown.clone(),
     )?;
     let route_guard = if helper_managed_network {

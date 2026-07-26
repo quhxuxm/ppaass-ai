@@ -16,6 +16,7 @@ import {
   Cpu,
   Database,
   Ellipsis,
+  FileDown,
   Globe2,
   Hash,
   HeartPulse,
@@ -37,6 +38,7 @@ import {
   RotateCcw,
   Route,
   Save,
+  Search,
   ScrollText,
   Send,
   Server,
@@ -45,9 +47,11 @@ import {
   ShieldCheck,
   Square,
   Timer,
+  Trash2,
   TriangleAlert,
   UserRound,
   Waypoints,
+  X,
   Zap,
   type LucideIcon
 } from "@lucide/vue";
@@ -69,6 +73,7 @@ export const appIconNodes = {
   cpu: Cpu,
   database: Database,
   ellipsis: Ellipsis,
+  "file-down": FileDown,
   globe: Globe2,
   hash: Hash,
   "heart-pulse": HeartPulse,
@@ -90,6 +95,7 @@ export const appIconNodes = {
   restore: RotateCcw,
   route: Route,
   save: Save,
+  search: Search,
   "scroll-text": ScrollText,
   send: Send,
   server: Server,
@@ -98,9 +104,11 @@ export const appIconNodes = {
   "shield-check": ShieldCheck,
   stop: Square,
   timer: Timer,
+  trash: Trash2,
   "triangle-alert": TriangleAlert,
   user: UserRound,
   waypoints: Waypoints,
+  close: X,
   zap: Zap
 } as const satisfies Record<string, LucideIcon>;
 
@@ -125,6 +133,7 @@ const appIconTones: Record<AppIconName, AppIconTone> = {
   cpu: "amber",
   database: "sky",
   ellipsis: "violet",
+  "file-down": "sky",
   globe: "sky",
   hash: "amber",
   "heart-pulse": "rose",
@@ -146,6 +155,7 @@ const appIconTones: Record<AppIconName, AppIconTone> = {
   restore: "amber",
   route: "mint",
   save: "violet",
+  search: "sky",
   "scroll-text": "rose",
   send: "mint",
   server: "sky",
@@ -154,9 +164,11 @@ const appIconTones: Record<AppIconName, AppIconTone> = {
   "shield-check": "mint",
   stop: "rose",
   timer: "amber",
+  trash: "rose",
   "triangle-alert": "amber",
   user: "rose",
   waypoints: "mint",
+  close: "rose",
   zap: "amber"
 };
 

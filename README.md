@@ -94,7 +94,14 @@ max_streams_per_session = 128        # UDP relay substreams per session
 proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and application-layer QUIC policy stay independent
 proxy_dns = false                    # DNS proxying remains independently configurable
 quic_policy = "allow"               # application UDP/443 policy: allow direct/proxied QUIC; block forces application TCP/TLS fallback
+
+[tun.packet_capture]
+file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
 ```
+
+Packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It applies to TUN traffic and includes both IPv4 and IPv6 in both directions. The output opens directly in Wireshark. It captures the plaintext at the PPAASS tunnel boundary; application-level encryption such as TLS remains encrypted.
+PCAP writes run on a dedicated buffered writer thread. The packet path uses a bounded non-blocking queue; if storage cannot keep up, capture copies are dropped instead of slowing proxy traffic.
+The desktop app's dedicated **Packet Capture** page shows direction, protocol, endpoints, byte counts, packet summaries, filters, and a short payload preview while retaining the PCAP as the source of truth.
 
 The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 

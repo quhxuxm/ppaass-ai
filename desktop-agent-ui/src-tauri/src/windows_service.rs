@@ -26,7 +26,10 @@ use windows_service::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 
-use crate::agent::{agent_state, start_agent_inner, stop_embedded_agent};
+use crate::agent::{
+    agent_state, clear_packet_capture_runtime, packet_capture_runtime_status,
+    set_packet_capture_runtime_enabled, start_agent_inner, stop_embedded_agent,
+};
 use crate::logging::UiLogBuffer;
 use crate::models::{AgentState, ServiceRequest, ServiceResponse};
 use crate::runtime::AgentRuntime;
@@ -465,6 +468,7 @@ async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) 
             state: None,
             traffic: Some(agent_traffic_snapshot()),
             dns_records: None,
+            packet_capture: None,
             error: None,
         },
         ServiceRequest::DnsRecords => ServiceResponse {
@@ -472,6 +476,7 @@ async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) 
             state: None,
             traffic: None,
             dns_records: Some(desktop_agent_be::telemetry::dns_resolution_records()),
+            packet_capture: None,
             error: None,
         },
         ServiceRequest::SetLogLevel { log_level } => match runtime.logs.set_log_level(&log_level) {
@@ -481,6 +486,31 @@ async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) 
             },
             Err(err) => service_error(err),
         },
+        ServiceRequest::PacketCaptureStatus => {
+            service_packet_capture_result(packet_capture_runtime_status(runtime))
+        }
+        ServiceRequest::SetPacketCapture { enabled } => {
+            service_packet_capture_result(set_packet_capture_runtime_enabled(runtime, enabled))
+        }
+        ServiceRequest::ClearPacketCapture { config_path } => {
+            service_packet_capture_result(clear_packet_capture_runtime(runtime, config_path))
+        }
+    }
+}
+
+fn service_packet_capture_result(
+    result: Result<crate::models::PacketCaptureRuntimeStatus, String>,
+) -> ServiceResponse {
+    match result {
+        Ok(status) => ServiceResponse {
+            ok: true,
+            state: None,
+            traffic: None,
+            dns_records: None,
+            packet_capture: Some(status),
+            error: None,
+        },
+        Err(error) => service_error(error),
     }
 }
 
@@ -490,6 +520,7 @@ fn service_state_ok(state: AgentState) -> ServiceResponse {
         state: Some(state),
         traffic: None,
         dns_records: None,
+        packet_capture: None,
         error: None,
     }
 }
@@ -500,6 +531,7 @@ fn service_error(error: String) -> ServiceResponse {
         state: None,
         traffic: None,
         dns_records: None,
+        packet_capture: None,
         error: Some(error),
     }
 }

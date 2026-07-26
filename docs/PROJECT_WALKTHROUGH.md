@@ -274,6 +274,7 @@ TUN 模式里的关键细节：
 - UDP/443 命中直连规则时由 Agent 的绑定/保护 UDP socket 直接到目标，完全不经过 PPAASS 原生 UDP 封装；未命中时使用共享 UDP relay，并按 `transport_mode` 选择原生加密 UDP 或 TCP/Yamux。
 - `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
 - `quic_policy` 只控制应用层 UDP/443 QUIC：默认允许命中 `direct_access` 的流量直连，未命中时按所选 UDP transport 代理。只有显式开启阻断时，才会丢弃 UDP/443 并强制应用回退 TCP/TLS。这里的 QUIC 与 Agent→Proxy 外层协议无关。
+- `[tun.packet_capture]` 只配置 PCAP 输出路径；抓包由桌面 UI 在运行时控制且默认关闭，开启、关闭和清空都不重启 Agent。它将 TUN 包桥两侧的双向明文 IP 包写入 DLT_RAW PCAP：Client → 目标方向在 PPAASS 加密前记录，目标 → Client 方向在 PPAASS 解密后记录；Client 自身的 TLS/QUIC 加密不会被解除。写盘由独立线程批量完成，网络热路径只尝试写入有界队列；磁盘跟不上时丢弃抓包副本而不阻塞代理流量。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
