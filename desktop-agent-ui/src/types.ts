@@ -92,14 +92,26 @@ export type CapturedPacket = {
   direction: "upload" | "download";
   ip_version: number;
   protocol: string;
+  sub_protocol?: string | null;
   source: string;
   source_port?: number | null;
   destination: string;
   destination_port?: number | null;
   length: number;
   summary: string;
+  payload_length: number;
   payload_hex: string;
   payload_text: string;
+  protocol_layers: ProtocolLayer[];
+};
+
+export type ProtocolLayer = {
+  name: string;
+  summary: string;
+  fields: Array<{
+    name: string;
+    value: string;
+  }>;
 };
 
 export type PacketCaptureReport = {

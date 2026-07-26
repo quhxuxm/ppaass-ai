@@ -8481,6 +8481,18 @@ html.app-dark .dns-record-frame .dns-record-row {
   color: #047857;
 }
 
+.capture-protocol-stack {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.capture-protocol-stack > span:not(.p-tag) {
+  color: var(--text-muted, #64748b);
+  font-size: 0.72rem;
+}
+
 .capture-empty {
   display: grid;
   justify-items: center;
@@ -8501,11 +8513,13 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-packet-dialog {
-  width: min(760px, calc(100vw - 32px));
+  width: min(900px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
 }
 
 .capture-packet-dialog .p-dialog-content {
   padding-top: 0;
+  overflow: auto;
 }
 
 .capture-dialog-subtitle {
@@ -8525,6 +8539,11 @@ html.app-dark .dns-record-frame .dns-record-row {
   background: rgba(148, 163, 184, 0.06);
 }
 
+.capture-payload > div {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+}
+
 .capture-detail-grid span,
 .capture-payload span {
   color: var(--text-muted, #64748b);
@@ -8538,20 +8557,76 @@ html.app-dark .dns-record-frame .dns-record-row {
   text-overflow: ellipsis;
 }
 
+.capture-protocol-analysis {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.capture-protocol-analysis h3 {
+  margin: 0 0 2px;
+  font-size: 0.84rem;
+}
+
+.capture-protocol-analysis details {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.capture-protocol-analysis summary {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.capture-protocol-analysis summary span {
+  overflow: hidden;
+  color: var(--text-muted, #64748b);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-protocol-analysis dl {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
+  margin: 0;
+  padding: 4px 10px 9px 30px;
+  font: 0.75rem/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.capture-protocol-analysis dt {
+  color: var(--text-muted, #64748b);
+}
+
+.capture-protocol-analysis dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .capture-payload {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
   gap: 12px;
   margin-top: 12px;
 }
 
 .capture-payload pre {
+  align-self: start;
+  width: 100%;
+  max-height: 360px;
   margin: 0;
   overflow: auto;
   color: var(--text-primary, #1e293b);
   font: 0.8rem/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 @media (max-width: 1050px) {

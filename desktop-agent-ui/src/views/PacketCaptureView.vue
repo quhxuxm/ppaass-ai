@@ -75,7 +75,13 @@ const sortColumns: Array<{ key: SortKey; label: string }> = [
 
 const protocolOptions = computed(() => [
   { label: "全部协议", value: "all" },
-  ...Array.from(new Set((state.report?.packets ?? []).map((packet) => packet.protocol)))
+  ...Array.from(
+    new Set(
+      (state.report?.packets ?? []).flatMap((packet) =>
+        packet.sub_protocol ? [packet.protocol, packet.sub_protocol] : [packet.protocol]
+      )
+    )
+  )
     .sort()
     .map((value) => ({ label: value, value }))
 ]);
@@ -93,7 +99,6 @@ watch(
 watch(
   () => props.refreshToken,
   () => {
-    selectedPacket.value = null;
     void refresh();
   }
 );
@@ -109,7 +114,12 @@ const filteredPackets = computed(() => {
     : "all";
   const packets = [...(state.report?.packets ?? [])]
     .filter((packet) => selectedDirection === "all" || packet.direction === selectedDirection)
-    .filter((packet) => selectedProtocol === "all" || packet.protocol === selectedProtocol)
+    .filter(
+      (packet) =>
+        selectedProtocol === "all" ||
+        packet.protocol === selectedProtocol ||
+        packet.sub_protocol === selectedProtocol
+    )
     .filter((packet) => packet.length > minimumPacketSizeBytes)
     .filter((packet) => {
       if (!normalizedQuery) {
@@ -121,6 +131,7 @@ const filteredPackets = computed(() => {
         packet.source_port,
         packet.destination_port,
         packet.protocol,
+        packet.sub_protocol,
         packet.summary,
         packet.payload_text,
         packet.payload_hex
@@ -174,12 +185,6 @@ async function refresh(showLoading = true) {
       limit: 2000
     });
     state.error = "";
-    if (
-      selectedPacket.value &&
-      !state.report.packets.some((packet) => packet.number === selectedPacket.value?.number)
-    ) {
-      selectedPacket.value = null;
-    }
   } catch (error) {
     state.error = String(error);
   } finally {
@@ -208,6 +213,12 @@ function directionLabel(value: CapturedPacket["direction"]) {
   return value === "upload" ? "Client → 目标" : "目标 → Client";
 }
 
+function confirmClearCapture() {
+  clearConfirmationVisible.value = false;
+  selectedPacket.value = null;
+  emit("clear-capture");
+}
+
 function comparePackets(left: CapturedPacket, right: CapturedPacket) {
   const leftValue = packetSortValue(left, sortKey.value);
   const rightValue = packetSortValue(right, sortKey.value);
@@ -233,7 +244,7 @@ function packetSortValue(packet: CapturedPacket, key: SortKey): number | string 
     case "direction":
       return directionLabel(packet.direction);
     case "protocol":
-      return packet.protocol;
+      return [packet.protocol, packet.sub_protocol].filter(Boolean).join(" / ");
     case "source":
       return endpoint(packet.source, packet.source_port);
     case "destination":
@@ -444,7 +455,17 @@ function hasTauri() {
                     {{ directionLabel(packet.direction) }}
                   </span>
                 </td>
-                <td><Tag :value="packet.protocol" severity="info" /></td>
+                <td>
+                  <div class="capture-protocol-stack">
+                    <Tag :value="packet.protocol" severity="info" />
+                    <span v-if="packet.sub_protocol">/</span>
+                    <Tag
+                      v-if="packet.sub_protocol"
+                      :value="packet.sub_protocol"
+                      severity="warn"
+                    />
+                  </div>
+                </td>
                 <td><code>{{ endpoint(packet.source, packet.source_port) }}</code></td>
                 <td><code>{{ endpoint(packet.destination, packet.destination_port) }}</code></td>
                 <td>{{ packet.length }} B</td>
@@ -472,7 +493,8 @@ function hasTauri() {
       <template v-if="selectedPacket">
         <p class="capture-dialog-subtitle">
           {{ directionLabel(selectedPacket.direction) }} · IPv{{ selectedPacket.ip_version }} ·
-          {{ selectedPacket.protocol }}
+          {{ selectedPacket.protocol
+          }}{{ selectedPacket.sub_protocol ? ` / ${selectedPacket.sub_protocol}` : "" }}
         </p>
         <div class="capture-detail-grid">
           <div><span>源地址</span><code>{{ endpoint(selectedPacket.source, selectedPacket.source_port) }}</code></div>
@@ -480,9 +502,28 @@ function hasTauri() {
           <div><span>时间</span><strong>{{ packetTime(selectedPacket.timestamp_ms) }}</strong></div>
           <div><span>包长度</span><strong>{{ selectedPacket.length }} B</strong></div>
         </div>
+        <section class="capture-protocol-analysis">
+          <h3>协议分析</h3>
+          <details
+            v-for="(layer, index) in selectedPacket.protocol_layers"
+            :key="`${layer.name}-${index}`"
+            open
+          >
+            <summary>
+              <strong>{{ layer.name }}</strong>
+              <span>{{ layer.summary }}</span>
+            </summary>
+            <dl>
+              <template v-for="field in layer.fields" :key="`${field.name}-${field.value}`">
+                <dt>{{ field.name }}</dt>
+                <dd>{{ field.value }}</dd>
+              </template>
+            </dl>
+          </details>
+        </section>
         <div class="capture-payload">
           <div>
-            <span>Payload Hex（前 48 字节）</span>
+            <span>Payload Hex（完整 {{ selectedPacket.payload_length }} 字节）</span>
             <pre>{{ selectedPacket.payload_hex || "无 Payload" }}</pre>
           </div>
           <div>
@@ -506,10 +547,7 @@ function hasTauri() {
           label="确认清空"
           severity="danger"
           :loading="busy"
-          @click="
-            clearConfirmationVisible = false;
-            emit('clear-capture');
-          "
+          @click="confirmClearCapture"
         />
       </template>
     </Dialog>
