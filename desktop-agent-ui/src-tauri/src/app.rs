@@ -141,7 +141,11 @@ async fn get_packet_capture(
         let config = desktop_agent_be::config::AgentConfig::load(&config_path)
             .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;
         let capture_path = resolve_agent_output_path(&config_path, &config.tun.packet_capture.file);
-        read_packet_capture(&capture_path, limit)
+        let proxy_listen_port = config
+            .listen_addr
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.trim().parse::<u16>().ok());
+        read_packet_capture(&capture_path, limit, proxy_listen_port)
     })
     .await
 }

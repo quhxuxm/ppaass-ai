@@ -3,6 +3,7 @@ package com.ppaass.ai.agent;
 import static org.junit.Assert.*;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 import org.junit.Test;
 
@@ -41,5 +42,34 @@ public class DirectRuleDomainsTest {
                                 "alias.example.com",
                                 "203.0.113.8",
                                 "203.0.113.999")));
+    }
+
+    @Test
+    public void canonicalizesAndDeduplicatesEquivalentIpv6Addresses() {
+        assertEquals(
+                Arrays.asList("2001:db8::8"),
+                DirectRuleDomains.toDirectRules(
+                        Collections.emptyList(),
+                        Arrays.asList(
+                                "2001:0DB8:0:0:0:0:0:8",
+                                "2001:db8::8")));
+    }
+
+    @Test
+    public void findsExistingRulesCoveredBySelectedDomainsAndAddresses() {
+        assertEquals(
+                Arrays.asList(
+                        "*.example.com",
+                        "203.0.113.8",
+                        "2001:0DB8:0:0:0:0:0:8"),
+                DirectRuleDomains.directRulesMatchingDomainsAndAddresses(
+                        Arrays.asList(
+                                "*.example.com",
+                                "example.net",
+                                "203.0.113.8",
+                                "2001:0DB8:0:0:0:0:0:8",
+                                "192.0.2.0/24"),
+                        Arrays.asList("API.EXAMPLE.COM.", "unmatched.test"),
+                        Arrays.asList("203.0.113.8", "2001:db8::8", "not-an-ip")));
     }
 }

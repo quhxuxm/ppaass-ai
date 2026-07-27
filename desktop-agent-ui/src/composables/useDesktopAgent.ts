@@ -448,25 +448,62 @@ export function useDesktopAgent() {
     if (!state.config) {
       return;
     }
+    const nextRules = normalizeRules([...state.config.summary.direct_rules, ...rules]);
+    await applyDirectRulesAndRestart(nextRules, {
+      unchanged: "所选 DNS 没有可添加的直连规则",
+      saved: "直连规则已添加并保存",
+      restarted: "直连规则已添加，Agent 已重启"
+    });
+  }
+
+  async function removeDirectRulesAndRestart(rules: string[]) {
+    if (!state.config) {
+      return;
+    }
+
+    const removeRuleKeys = new Set(
+      normalizeRules(rules).map((rule) => rule.toLowerCase())
+    );
+    const nextRules = normalizeRules(state.config.summary.direct_rules).filter(
+      (rule) => !removeRuleKeys.has(rule.toLowerCase())
+    );
+    await applyDirectRulesAndRestart(nextRules, {
+      unchanged: "所选 DNS 没有可移出的直连规则",
+      saved: "直连规则已移出并保存",
+      restarted: "直连规则已移出，Agent 已重启"
+    });
+  }
+
+  async function applyDirectRulesAndRestart(
+    nextRules: string[],
+    messages: { unchanged: string; saved: string; restarted: string }
+  ) {
+    if (!state.config) {
+      return;
+    }
     if (state.busy) {
       showToast("info", "正在处理其他操作");
       return;
     }
 
-    const nextRules = normalizeRules([...state.config.summary.direct_rules, ...rules]);
-    if (nextRules.length === state.config.summary.direct_rules.length) {
-      showToast("info", "该域名已在直连规则中");
+    const currentRules = normalizeRules(state.config.summary.direct_rules);
+    const normalizedNextRules = normalizeRules(nextRules);
+    if (
+      normalizedNextRules.length === currentRules.length &&
+      normalizedNextRules.every((rule, index) => rule.toLowerCase() === currentRules[index]?.toLowerCase())
+    ) {
+      showToast("info", messages.unchanged);
       return;
     }
 
     const wasRunning = state.agent.running;
     try {
       state.busy = true;
-      updateDirectRules(nextRules, true);
+      updateDirectRules(normalizedNextRules, true);
       await persistConfig();
 
       if (!wasRunning) {
-        showToast("success", "直连规则已添加并保存");
+        showToast("success", messages.saved);
         return;
       }
 
@@ -489,7 +526,7 @@ export function useDesktopAgent() {
       if (!state.agent.running) {
         throw new Error(latestAgentLog() ?? "直连规则已保存，但 Agent 重启失败");
       }
-      showToast("success", "直连规则已添加，Agent 已重启");
+      showToast("success", messages.restarted);
     } catch (error) {
       await refreshAgentState();
       showToast("error", getErrorMessage(error));
@@ -782,6 +819,7 @@ export function useDesktopAgent() {
     refreshAgentState,
     reloadAll,
     removeDirectRule,
+    removeDirectRulesAndRestart,
     restoreDefaultConfig,
     runDiagnostics,
     running,

@@ -26,7 +26,7 @@ final class NativeAgent {
 
     static native boolean clearPacketCapture(String file);
 
-    static native String packetCaptureReportJson(String file, int limit);
+    static native String packetCaptureReportJson(String file, int limit, int proxyListenPort);
 
     static native String dnsResolutionRecordsJson();
 

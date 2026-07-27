@@ -52,14 +52,25 @@ const messages: Record<string, string> = {
   "今日每小时上传与下载流量趋势": "Today's hourly upload and download traffic trend",
   "空闲小时": "Idle hour", "代理 DNS 未启用": "Proxy DNS is disabled",
   "等待经过代理的 DNS 请求": "Waiting for proxied DNS requests",
-  "清空": "Clear", "全选": "Select all",
+  "清空": "Clear", "全选": "Select all", "移出": "Remove", "移出并重启": "Remove and restart",
+  "全选结果": "Select results", "取消结果": "Deselect results", "显示": "Showing",
+  "过滤代理 DNS 记录": "Filter proxy DNS records",
+  "过滤域名、IP、客户端或状态": "Filter by domain, IP, client, or status",
+  "没有符合过滤条件的 DNS 记录": "No DNS records match the filter",
+  "已选": "Selected", "待添加": "to add", "待移出": "to remove",
+  "条新记录待更新": "new records pending",
   "该域名已在直连规则中": "This domain is already in direct rules",
+  "该域名已在直连规则中，点击选择后可移出": "This domain is in direct rules; select it to remove",
   "点击选择该域名": "Click to select this domain", "已直连": "Direct",
   "缓存命中": "Cache hit", "直连解析": "Direct resolution", "系统 DNS": "System DNS",
   "TUN + DNS 缓存": "TUN + DNS cache",
   "该 DNS 响应来自代理内部 DNS cache，未重新请求上游 DNS": "This response came from the proxy DNS cache without a new upstream request",
   "该请求绕过了代理内部 DNS，由代理所在机器的系统解析": "This request bypassed proxy DNS and used the agent host resolver",
   "设备": "Device", "地址": "Address", "普通 UDP": "Regular UDP",
+  "Client → Agent / 目标": "Client → Agent / target",
+  "Agent / 目标 → Client": "Agent / target → Client",
+  "尚未生成抓包文件。启动 Agent 并产生 TUN、HTTP 或 SOCKS5 流量后会自动显示。": "No capture file yet. Start the Agent and generate TUN, HTTP, or SOCKS5 traffic.",
+  "产生 TUN、HTTP 或 SOCKS5 流量，或调整筛选条件后再查看。": "Generate TUN, HTTP, or SOCKS5 traffic, or adjust the filters.",
   "按规则分流": "Route by rules", "Agent 直连": "Agent direct",
   "QUIC 应用流量": "QUIC app traffic",
   "直连或自动回退代理": "Direct or auto fallback proxy",
@@ -131,9 +142,13 @@ const messages: Record<string, string> = {
   "代理已启动": "Agent started", "代理启动失败": "Agent failed to start",
   "代理已停止": "Agent stopped", "代理仍在运行": "Agent is still running",
   "规则已更新": "Rules updated", "直连规则已添加并保存": "Direct rules added and saved",
+  "直连规则已移出并保存": "Direct rules removed and saved",
   "直连规则已保存，但 Agent 停止失败": "Direct rules were saved, but the agent failed to stop",
   "直连规则已保存，但 Agent 重启失败": "Direct rules were saved, but the agent failed to restart",
   "直连规则已添加，Agent 已重启": "Direct rules added; agent restarted",
+  "直连规则已移出，Agent 已重启": "Direct rules removed; agent restarted",
+  "所选 DNS 没有可添加的直连规则": "The selected DNS entries have no direct rules to add",
+  "所选 DNS 没有可移出的直连规则": "The selected DNS entries have no direct rules to remove",
   "拖动调整顺序": "Drag to reorder"
 };
 
@@ -165,6 +180,7 @@ export function t(source: string) {
   }
   return result
     .replace(/(\d+) 条/g, "$1 items")
+    .replace(/(\d+) 包/g, "$1 packets")
     .replace(/(\d+) 个节点/g, "$1 nodes")
     .replace(/\s{2,}/g, " ");
 }

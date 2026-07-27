@@ -14,6 +14,7 @@ const PCAP_RECORD_HEADER_LEN: usize = 16;
 const DLT_RAW: u32 = 101;
 const MAX_RETURNED_PACKETS: usize = 5_000;
 const DEFAULT_RETURNED_PACKETS: usize = 1_000;
+const PROXY_HANDSHAKE_PREFIX_LEN: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PacketCaptureReport {
@@ -37,6 +38,7 @@ struct CachedPacketCapture {
     file_size: u64,
     modified_at_ms: Option<u128>,
     limit: usize,
+    proxy_listen_port: Option<u16>,
     report: PacketCaptureReport,
 }
 
@@ -50,6 +52,7 @@ pub(crate) struct CapturedPacket {
     pub(crate) ip_version: u8,
     pub(crate) protocol: String,
     pub(crate) sub_protocol: Option<String>,
+    pub(crate) proxy_protocol: Option<String>,
     pub(crate) source: String,
     pub(crate) source_port: Option<u16>,
     pub(crate) destination: String,
@@ -82,6 +85,7 @@ pub(crate) struct ProtocolField {
 pub(crate) fn read_packet_capture(
     path: &Path,
     limit: Option<usize>,
+    proxy_listen_port: Option<u16>,
 ) -> Result<PacketCaptureReport, String> {
     let file_label = path.to_string_lossy().to_string();
     let packet_limit = limit
@@ -119,6 +123,7 @@ pub(crate) fn read_packet_capture(
                     && cached.file_size == metadata.len()
                     && cached.modified_at_ms == modified_at_ms
                     && cached.limit == packet_limit
+                    && cached.proxy_listen_port == proxy_listen_port
             })
             .map(|cached| cached.report.clone())
     });
@@ -128,7 +133,7 @@ pub(crate) fn read_packet_capture(
     }
 
     let file = fs::File::open(path).map_err(|error| format!("打开抓包文件失败：{error}"))?;
-    let mut report = parse_pcap_reader(BufReader::new(file), packet_limit)?;
+    let mut report = parse_pcap_reader(BufReader::new(file), packet_limit, proxy_listen_port)?;
     report.file = file_label;
     report.exists = true;
     report.file_size = metadata.len();
@@ -139,6 +144,7 @@ pub(crate) fn read_packet_capture(
             file_size: report.file_size,
             modified_at_ms,
             limit: packet_limit,
+            proxy_listen_port,
             report: report.clone(),
         });
     }
@@ -153,10 +159,23 @@ enum ByteOrder {
 
 #[cfg(test)]
 fn parse_pcap(bytes: &[u8], limit: usize) -> Result<PacketCaptureReport, String> {
-    parse_pcap_reader(Cursor::new(bytes), limit)
+    parse_pcap_reader(Cursor::new(bytes), limit, None)
 }
 
-fn parse_pcap_reader<R: Read>(mut reader: R, limit: usize) -> Result<PacketCaptureReport, String> {
+#[cfg(test)]
+fn parse_pcap_for_proxy(
+    bytes: &[u8],
+    limit: usize,
+    proxy_listen_port: u16,
+) -> Result<PacketCaptureReport, String> {
+    parse_pcap_reader(Cursor::new(bytes), limit, Some(proxy_listen_port))
+}
+
+fn parse_pcap_reader<R: Read>(
+    mut reader: R,
+    limit: usize,
+    proxy_listen_port: Option<u16>,
+) -> Result<PacketCaptureReport, String> {
     let mut global_header = [0u8; PCAP_HEADER_LEN];
     reader
         .read_exact(&mut global_header)
@@ -169,12 +188,13 @@ fn parse_pcap_reader<R: Read>(mut reader: R, limit: usize) -> Result<PacketCaptu
         _ => return Err("不支持的抓包文件格式：仅支持 PCAP".to_string()),
     };
     if read_u32(&global_header[20..24], order) != DLT_RAW {
-        return Err("抓包文件链路类型不是 DLT_RAW，无法展示 TUN IP 包".to_string());
+        return Err("抓包文件链路类型不是 DLT_RAW，无法展示原始 IP 包".to_string());
     }
 
     let mut total_packets = 0usize;
     let mut packets = VecDeque::with_capacity(limit);
     let mut directions = HashMap::<String, String>::new();
+    let mut proxy_flows = ProxyFlowTracker::new(proxy_listen_port);
     let mut upload_packets = 0usize;
     let mut upload_bytes = 0u64;
     let mut download_packets = 0usize;
@@ -214,16 +234,24 @@ fn parse_pcap_reader<R: Read>(mut reader: R, limit: usize) -> Result<PacketCaptu
             original_len.max(captured_len),
             &captured,
         ) {
+            restrict_socks5_tcp_detection(&mut packet, proxy_listen_port);
             let flow_key = flow_key(&packet);
-            let source_endpoint = endpoint(&packet.source, packet.source_port);
-            let first_source = directions
-                .entry(flow_key)
-                .or_insert_with(|| source_endpoint.clone());
-            packet.direction = if *first_source == source_endpoint {
-                "upload"
-            } else {
-                "download"
-            };
+            packet.proxy_protocol = proxy_flows.observe(&packet, &flow_key);
+            suppress_conflicting_socks5_detection(&mut packet);
+            packet.direction =
+                if let Some(direction) = explicit_proxy_direction(&packet, proxy_listen_port) {
+                    direction
+                } else {
+                    let source_endpoint = endpoint(&packet.source, packet.source_port);
+                    let first_source = directions
+                        .entry(flow_key)
+                        .or_insert_with(|| source_endpoint.clone());
+                    if *first_source == source_endpoint {
+                        "upload"
+                    } else {
+                        "download"
+                    }
+                };
             if packet.direction == "upload" {
                 upload_packets += 1;
                 upload_bytes = upload_bytes.saturating_add(packet.length as u64);
@@ -240,6 +268,10 @@ fn parse_pcap_reader<R: Read>(mut reader: R, limit: usize) -> Result<PacketCaptu
 
     let mut packets: Vec<_> = packets.into();
     analyze_reassembled_tcp_streams(&mut packets);
+    for packet in &mut packets {
+        restrict_socks5_tcp_detection(packet, proxy_listen_port);
+        suppress_conflicting_socks5_detection(packet);
+    }
     Ok(PacketCaptureReport {
         file: String::new(),
         exists: true,
@@ -503,6 +535,7 @@ fn build_packet(
         ip_version,
         protocol,
         sub_protocol,
+        proxy_protocol: None,
         source,
         source_port,
         destination,
@@ -532,23 +565,44 @@ fn build_packet(
 }
 
 fn analyze_reassembled_tcp_streams(packets: &mut [CapturedPacket]) {
-    let mut streams = HashMap::<String, Vec<usize>>::new();
+    let mut streams = HashMap::<String, Vec<Vec<usize>>>::new();
     for (index, packet) in packets.iter().enumerate() {
-        if packet.tcp_sequence.is_some() && !packet.payload_bytes.is_empty() {
-            streams
-                .entry(format!(
-                    "{}:{}>{}:{}",
-                    packet.source,
-                    packet.source_port.unwrap_or_default(),
-                    packet.destination,
-                    packet.destination_port.unwrap_or_default()
-                ))
-                .or_default()
-                .push(index);
+        let Some(sequence) = packet
+            .tcp_sequence
+            .filter(|_| !packet.payload_bytes.is_empty())
+        else {
+            continue;
+        };
+        let sessions = streams
+            .entry(format!(
+                "{}:{}>{}:{}",
+                packet.source,
+                packet.source_port.unwrap_or_default(),
+                packet.destination,
+                packet.destination_port.unwrap_or_default()
+            ))
+            .or_default();
+        let starts_new_session = sessions
+            .last()
+            .and_then(|session| session.last())
+            .is_some_and(|previous_index| {
+                let previous = &packets[*previous_index];
+                let previous_end = previous
+                    .tcp_sequence
+                    .unwrap_or_default()
+                    .wrapping_add(previous.payload_length as u32);
+                sequence < previous_end
+            });
+        if sessions.is_empty() || starts_new_session {
+            sessions.push(Vec::new());
         }
+        sessions
+            .last_mut()
+            .expect("a TCP stream session was just created")
+            .push(index);
     }
 
-    for mut indices in streams.into_values() {
+    for mut indices in streams.into_values().flatten() {
         indices.sort_by_key(|index| packets[*index].tcp_sequence.unwrap_or_default());
         let Some(start_sequence) = indices
             .first()
@@ -698,6 +752,14 @@ fn analyze_application_protocol(
     if payload.len() >= 5 && matches!(payload[0], 20..=23) && payload[1] == 3 {
         return Some(analyze_tls(payload));
     }
+    if protocol == "TCP" && payload.first() == Some(&5) {
+        return Some(analyze_socks5_tcp(payload));
+    }
+    if protocol == "UDP" {
+        if let Some(header_len) = socks5_udp_header_len(payload) {
+            return Some(analyze_socks5_udp(payload, header_len));
+        }
+    }
     let first_line = payload
         .split(|byte| *byte == b'\n')
         .next()
@@ -706,7 +768,8 @@ fn analyze_application_protocol(
     if let Some(line) = first_line.filter(|line| {
         line.starts_with("HTTP/")
             || [
-                "GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS ",
+                "GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS ", "CONNECT ",
+                "TRACE ",
             ]
             .iter()
             .any(|method| line.starts_with(method))
@@ -714,6 +777,102 @@ fn analyze_application_protocol(
         return Some(analyze_http(payload, line));
     }
     None
+}
+
+fn analyze_socks5_tcp(payload: &[u8]) -> ProtocolLayer {
+    let mut fields = vec![
+        ("Version".to_string(), "5".to_string()),
+        (
+            "Captured length".to_string(),
+            format!("{} bytes", payload.len()),
+        ),
+    ];
+    let summary = if payload.len() >= 4
+        && payload[2] == 0
+        && matches!(payload[1], 1..=3)
+        && matches!(payload[3], 1 | 3 | 4)
+    {
+        let command = match payload[1] {
+            1 => "CONNECT",
+            2 => "BIND",
+            3 => "UDP ASSOCIATE",
+            _ => "Unknown",
+        };
+        let address_type = socks5_address_type(payload[3]);
+        fields.push(("Message type".to_string(), "Command request".to_string()));
+        fields.push(("Command".to_string(), command.to_string()));
+        fields.push(("Address type".to_string(), address_type.to_string()));
+        format!("{command} · {address_type}")
+    } else if payload.len() >= 2 && payload[1] > 0 && payload.len() >= 2 + usize::from(payload[1]) {
+        let method_count = payload[1];
+        fields.push((
+            "Message type".to_string(),
+            "Authentication method negotiation".to_string(),
+        ));
+        fields.push(("Method count".to_string(), method_count.to_string()));
+        format!("{method_count} authentication method(s)")
+    } else {
+        let method_or_status = payload.get(1).copied().unwrap_or_default();
+        fields.push((
+            "Message type".to_string(),
+            "Server response or partial message".to_string(),
+        ));
+        fields.push((
+            "Method / status".to_string(),
+            format!("0x{method_or_status:02x}"),
+        ));
+        "Server response or partial message".to_string()
+    };
+    protocol_layer("SOCKS Version 5", summary, fields)
+}
+
+fn socks5_udp_header_len(payload: &[u8]) -> Option<usize> {
+    if payload.len() < 4 || payload[0] != 0 || payload[1] != 0 {
+        return None;
+    }
+    match payload[3] {
+        1 if payload.len() >= 10 => Some(10),
+        3 if payload.len() >= 7 => {
+            let host_len = usize::from(payload[4]);
+            let header_len = 7 + host_len;
+            (payload.len() >= header_len).then_some(header_len)
+        }
+        4 if payload.len() >= 22 => Some(22),
+        _ => None,
+    }
+}
+
+fn analyze_socks5_udp(payload: &[u8], header_len: usize) -> ProtocolLayer {
+    let address_type = socks5_address_type(payload[3]);
+    protocol_layer(
+        "SOCKS Version 5 UDP Datagram",
+        format!(
+            "{address_type} · {} bytes",
+            payload.len().saturating_sub(header_len)
+        ),
+        [
+            (
+                "Reserved",
+                format!("0x{:02x}{:02x}", payload[0], payload[1]),
+            ),
+            ("Fragment", payload[2].to_string()),
+            ("Address type", address_type.to_string()),
+            ("Header length", format!("{header_len} bytes")),
+            (
+                "Data length",
+                format!("{} bytes", payload.len().saturating_sub(header_len)),
+            ),
+        ],
+    )
+}
+
+fn socks5_address_type(value: u8) -> &'static str {
+    match value {
+        1 => "IPv4",
+        3 => "Domain",
+        4 => "IPv6",
+        _ => "Unknown",
+    }
 }
 
 fn analyze_dns(protocol: &str, payload: &[u8]) -> Option<ProtocolLayer> {
@@ -951,8 +1110,7 @@ fn analyze_http(payload: &[u8], first_line: &str) -> ProtocolLayer {
                 .position(|window| window == b"\n\n")
                 .map(|position| position + 2)
         });
-    if let Some(headers) = std::str::from_utf8(&payload[..header_end.unwrap_or(payload.len())]).ok()
-    {
+    if let Ok(headers) = std::str::from_utf8(&payload[..header_end.unwrap_or(payload.len())]) {
         for line in headers.lines().skip(1).take(100) {
             if let Some((name, value)) = line.trim_end_matches('\r').split_once(':') {
                 fields.push((format!("Header: {}", name.trim()), value.trim().to_string()));
@@ -1289,6 +1447,7 @@ fn application_protocol_name(layer: &ProtocolLayer) -> String {
         "Domain Name System" => "DNS",
         "Transport Layer Security" => "TLS",
         "Hypertext Transfer Protocol" => "HTTP",
+        "SOCKS Version 5" | "SOCKS Version 5 UDP Datagram" => "SOCKS5",
         name => name,
     }
     .to_string()
@@ -1321,6 +1480,147 @@ fn endpoint(address: &str, port: Option<u16>) -> String {
     match port {
         Some(port) => format!("{address}:{port}"),
         None => address.to_string(),
+    }
+}
+
+fn explicit_proxy_direction(
+    packet: &CapturedPacket,
+    listen_port: Option<u16>,
+) -> Option<&'static str> {
+    let listen_port = listen_port?;
+    if packet.protocol != "TCP" {
+        return None;
+    }
+    if packet.destination_port == Some(listen_port) {
+        Some("upload")
+    } else if packet.source_port == Some(listen_port) {
+        Some("download")
+    } else {
+        None
+    }
+}
+
+#[derive(Default)]
+struct ProxyFlowState {
+    protocol: Option<String>,
+    next_sequences: HashMap<String, u32>,
+    payload_prefixes: HashMap<String, Vec<u8>>,
+}
+
+struct ProxyFlowTracker {
+    listen_port: Option<u16>,
+    flows: HashMap<String, ProxyFlowState>,
+}
+
+impl ProxyFlowTracker {
+    fn new(listen_port: Option<u16>) -> Self {
+        Self {
+            listen_port,
+            flows: HashMap::new(),
+        }
+    }
+
+    fn observe(&mut self, packet: &CapturedPacket, flow_key: &str) -> Option<String> {
+        let listen_port = self.listen_port?;
+        if !packet_is_proxy_entry(packet, listen_port) {
+            return None;
+        }
+
+        let state = self.flows.entry(flow_key.to_string()).or_default();
+        let mut stream_protocol = None;
+        if let Some(sequence) = packet.tcp_sequence.filter(|_| packet.payload_length > 0) {
+            let direction = endpoint(&packet.source, packet.source_port);
+            if state
+                .next_sequences
+                .get(&direction)
+                .is_some_and(|next_sequence| sequence < *next_sequence)
+            {
+                *state = ProxyFlowState::default();
+            }
+            let expected_sequence = state.next_sequences.get(&direction).copied();
+            let payload_prefix = state.payload_prefixes.entry(direction.clone()).or_default();
+            if expected_sequence.is_some_and(|expected| sequence != expected) {
+                payload_prefix.clear();
+            }
+            let remaining = PROXY_HANDSHAKE_PREFIX_LEN.saturating_sub(payload_prefix.len());
+            payload_prefix.extend_from_slice(
+                &packet.payload_bytes[..packet.payload_bytes.len().min(remaining)],
+            );
+            if state.protocol.is_none() {
+                stream_protocol = detected_proxy_protocol_in_payload(packet, payload_prefix);
+            }
+            state.next_sequences.insert(
+                direction,
+                sequence.wrapping_add(packet.payload_length as u32),
+            );
+        }
+
+        if state.protocol.is_none() {
+            state.protocol = detected_proxy_protocol(packet)
+                .or(stream_protocol)
+                .map(str::to_string);
+        }
+        if state.protocol.is_some() {
+            state.payload_prefixes.clear();
+        }
+        state.protocol.clone()
+    }
+}
+
+fn packet_uses_port(packet: &CapturedPacket, port: u16) -> bool {
+    packet.source_port == Some(port) || packet.destination_port == Some(port)
+}
+
+fn packet_is_proxy_entry(packet: &CapturedPacket, listen_port: u16) -> bool {
+    packet_uses_port(packet, listen_port)
+        || (packet.protocol == "UDP" && packet.sub_protocol.as_deref() == Some("SOCKS5"))
+}
+
+fn restrict_socks5_tcp_detection(packet: &mut CapturedPacket, listen_port: Option<u16>) {
+    if packet.protocol != "TCP" || packet.sub_protocol.as_deref() != Some("SOCKS5") {
+        return;
+    }
+    if listen_port.is_some_and(|port| packet_uses_port(packet, port)) {
+        return;
+    }
+    clear_socks5_detection(packet);
+}
+
+fn suppress_conflicting_socks5_detection(packet: &mut CapturedPacket) {
+    if packet.sub_protocol.as_deref() == Some("SOCKS5")
+        && packet
+            .proxy_protocol
+            .as_deref()
+            .is_some_and(|protocol| protocol != "SOCKS5")
+    {
+        clear_socks5_detection(packet);
+    }
+}
+
+fn clear_socks5_detection(packet: &mut CapturedPacket) {
+    packet.sub_protocol = None;
+    packet.protocol_layers.retain(|layer| {
+        layer.name != "SOCKS Version 5" && layer.name != "SOCKS Version 5 UDP Datagram"
+    });
+}
+
+fn detected_proxy_protocol(packet: &CapturedPacket) -> Option<&str> {
+    match packet.sub_protocol.as_deref() {
+        Some(protocol @ ("HTTP" | "SOCKS5")) => Some(protocol),
+        _ => None,
+    }
+}
+
+fn detected_proxy_protocol_in_payload(
+    packet: &CapturedPacket,
+    payload: &[u8],
+) -> Option<&'static str> {
+    let layer =
+        analyze_application_protocol("TCP", packet.source_port, packet.destination_port, payload)?;
+    match layer.name.as_str() {
+        "Hypertext Transfer Protocol" => Some("HTTP"),
+        "SOCKS Version 5" => Some("SOCKS5"),
+        _ => None,
     }
 }
 
@@ -1371,6 +1671,364 @@ mod tests {
         assert_eq!(report.returned_packets, 2);
         assert!(report.truncated);
         assert_eq!(report.packets[0].number, 2);
+    }
+
+    #[test]
+    fn keeps_proxy_protocol_on_later_tunnel_packets_after_handshake_is_truncated() {
+        let http_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_000,
+            10_080,
+            1,
+            b"CONNECT example.com:443 HTTP/1.1\r\n\r\n",
+        );
+        let socks_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_001,
+            10_080,
+            1,
+            &[5, 1, 0],
+        );
+        let http_tunnel_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_000,
+            10_080,
+            41,
+            &[1, 2, 3, 4],
+        );
+        let socks_tunnel_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_001,
+            10_080,
+            4,
+            &[6, 7, 8, 9],
+        );
+        let pcap = pcap_with_packets(&[
+            http_handshake,
+            socks_handshake,
+            http_tunnel_data,
+            socks_tunnel_data,
+        ]);
+
+        let report = parse_pcap_for_proxy(&pcap, 2, 10_080).unwrap();
+
+        assert_eq!(report.packets[0].number, 3);
+        assert_eq!(report.packets[0].sub_protocol, None);
+        assert_eq!(report.packets[0].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[1].number, 4);
+        assert_eq!(report.packets[1].sub_protocol, None);
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("SOCKS5"));
+    }
+
+    #[test]
+    fn keeps_reassembled_proxy_protocol_after_all_handshake_segments_are_truncated() {
+        let first_payload = b"CONNEC";
+        let first = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_002,
+            10_080,
+            1,
+            first_payload,
+        );
+        let second_payload = b"T example.com:443 HTTP/1.1\r\n\r\n";
+        let second = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_002,
+            10_080,
+            1 + first_payload.len() as u32,
+            second_payload,
+        );
+        let tunnel_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            51_002,
+            10_080,
+            1 + first_payload.len() as u32 + second_payload.len() as u32,
+            &[1, 2, 3, 4],
+        );
+        let pcap = pcap_with_packets(&[first, second, tunnel_data]);
+
+        let report = parse_pcap_for_proxy(&pcap, 1, 10_080).unwrap();
+
+        assert_eq!(report.packets[0].number, 3);
+        assert_eq!(report.packets[0].sub_protocol, None);
+        assert_eq!(report.packets[0].proxy_protocol.as_deref(), Some("HTTP"));
+    }
+
+    #[test]
+    fn proxy_protocol_does_not_label_unrelated_http_or_socks_like_tcp() {
+        let ordinary_http = ipv4_tcp_payload_packet(
+            [10, 0, 0, 2],
+            [203, 0, 113, 8],
+            52_000,
+            80,
+            1,
+            b"GET / HTTP/1.1\r\n\r\n",
+        );
+        let socks_like_payload =
+            ipv4_tcp_payload_packet([10, 0, 0, 2], [203, 0, 113, 9], 52_001, 443, 1, &[5, 1, 0]);
+        let pcap = pcap_with_packets(&[ordinary_http, socks_like_payload]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[0].sub_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[0].proxy_protocol, None);
+        assert_eq!(report.packets[1].sub_protocol, None);
+        assert_eq!(report.packets[1].proxy_protocol, None);
+    }
+
+    #[test]
+    fn proxy_protocol_resets_when_a_tcp_tuple_is_reused() {
+        let http_request = b"CONNECT example.com:443 HTTP/1.1\r\n\r\n";
+        let http_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_000,
+            10_080,
+            1,
+            http_request,
+        );
+        let http_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_000,
+            10_080,
+            1 + http_request.len() as u32,
+            &[1, 2, 3],
+        );
+        let socks_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_000,
+            10_080,
+            1,
+            &[5, 1, 0],
+        );
+        let socks_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_000,
+            10_080,
+            4,
+            &[6, 7, 8],
+        );
+        let pcap = pcap_with_packets(&[http_handshake, http_data, socks_handshake, socks_data]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[0].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[2].proxy_protocol.as_deref(), Some("SOCKS5"));
+        assert_eq!(report.packets[3].proxy_protocol.as_deref(), Some("SOCKS5"));
+    }
+
+    #[test]
+    fn reused_tcp_tuple_does_not_inherit_an_old_proxy_protocol() {
+        let first_payload = b"CONNEC";
+        let second_payload = b"T example.com:443 HTTP/1.1\r\n\r\n";
+        let old_http_first = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_001,
+            10_080,
+            1,
+            first_payload,
+        );
+        let old_http_second = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_001,
+            10_080,
+            1 + first_payload.len() as u32,
+            second_payload,
+        );
+        let new_unknown = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_001,
+            10_080,
+            1,
+            &[1, 2, 3, 4],
+        );
+        let new_response = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            10_080,
+            53_001,
+            1,
+            &[6, 7, 8, 9],
+        );
+        let pcap = pcap_with_packets(&[old_http_first, old_http_second, new_unknown, new_response]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[2].proxy_protocol, None);
+        assert_eq!(report.packets[2].sub_protocol, None);
+        assert_eq!(report.packets[3].proxy_protocol, None);
+        assert_eq!(report.packets[3].sub_protocol, None);
+    }
+
+    #[test]
+    fn known_http_tunnel_does_not_show_a_spurious_socks5_inner_protocol() {
+        let http_request = b"CONNECT example.com:443 HTTP/1.1\r\n\r\n";
+        let http_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_002,
+            10_080,
+            1,
+            http_request,
+        );
+        let socks_like_tunnel_data = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_002,
+            10_080,
+            1 + http_request.len() as u32,
+            &[5, 1, 0],
+        );
+        let pcap = pcap_with_packets(&[http_handshake, socks_like_tunnel_data]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_ne!(report.packets[1].sub_protocol.as_deref(), Some("SOCKS5"));
+        assert!(report.packets[1]
+            .protocol_layers
+            .iter()
+            .all(|layer| layer.name != "SOCKS Version 5"));
+    }
+
+    #[test]
+    fn reassembled_http_tunnel_data_does_not_restore_a_spurious_socks5_protocol() {
+        let http_request = b"CONNECT example.com:443 HTTP/1.1\r\n\r\n";
+        let http_handshake = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_004,
+            10_080,
+            1,
+            http_request,
+        );
+        let tunnel_first = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_004,
+            10_080,
+            1 + http_request.len() as u32,
+            &[5],
+        );
+        let tunnel_second = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_004,
+            10_080,
+            2 + http_request.len() as u32,
+            &[1, 0],
+        );
+        let pcap = pcap_with_packets(&[http_handshake, tunnel_first, tunnel_second]);
+
+        let report = parse_pcap_for_proxy(&pcap, 2, 10_080).unwrap();
+
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_ne!(report.packets[1].sub_protocol.as_deref(), Some("SOCKS5"));
+        assert!(report.packets[1]
+            .protocol_layers
+            .iter()
+            .all(|layer| layer.name != "SOCKS Version 5"));
+    }
+
+    #[test]
+    fn reassembled_socks_like_bytes_off_the_proxy_port_are_not_labeled_socks5() {
+        let first = ipv4_tcp_payload_packet([10, 0, 0, 2], [203, 0, 113, 9], 53_005, 443, 1, &[5]);
+        let second =
+            ipv4_tcp_payload_packet([10, 0, 0, 2], [203, 0, 113, 9], 53_005, 443, 2, &[1, 0]);
+        let pcap = pcap_with_packets(&[first, second]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert!(report
+            .packets
+            .iter()
+            .all(|packet| packet.sub_protocol.as_deref() != Some("SOCKS5")));
+        assert!(report.packets.iter().all(|packet| {
+            packet
+                .protocol_layers
+                .iter()
+                .all(|layer| layer.name != "SOCKS Version 5")
+        }));
+    }
+
+    #[test]
+    fn explicit_proxy_direction_uses_the_listen_port_even_when_response_is_first() {
+        let response = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            10_080,
+            53_003,
+            1,
+            b"HTTP/1.1 200 Connection established\r\n\r\n",
+        );
+        let request = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            53_003,
+            10_080,
+            1,
+            b"CONNECT example.com:443 HTTP/1.1\r\n\r\n",
+        );
+        let pcap = pcap_with_packets(&[response, request]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[0].direction, "download");
+        assert_eq!(report.packets[1].direction, "upload");
+        assert_eq!(report.download_packets, 1);
+        assert_eq!(report.upload_packets, 1);
+    }
+
+    #[test]
+    fn reassembled_connect_marks_the_following_proxy_response() {
+        let first_payload = b"CONNEC";
+        let second_payload = b"T example.com:443 HTTP/1.1\r\n\r\n";
+        let first = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            54_000,
+            10_080,
+            1,
+            first_payload,
+        );
+        let second = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            54_000,
+            10_080,
+            1 + first_payload.len() as u32,
+            second_payload,
+        );
+        let response = ipv4_tcp_payload_packet(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            10_080,
+            54_000,
+            1,
+            &[1, 2, 3],
+        );
+        let pcap = pcap_with_packets(&[first, second, response]);
+
+        let report = parse_pcap_for_proxy(&pcap, 10, 10_080).unwrap();
+
+        assert_eq!(report.packets[1].sub_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[1].proxy_protocol.as_deref(), Some("HTTP"));
+        assert_eq!(report.packets[2].proxy_protocol.as_deref(), Some("HTTP"));
     }
 
     #[test]
@@ -1505,6 +2163,39 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn identifies_http_connect_proxy_handshake() {
+        let request = b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n";
+
+        let layer = analyze_application_protocol("TCP", Some(51_000), Some(1080), request).unwrap();
+
+        assert_eq!(layer.name, "Hypertext Transfer Protocol");
+        assert_eq!(application_protocol_name(&layer), "HTTP");
+        assert!(layer
+            .fields
+            .iter()
+            .any(|field| field.name == "Method" && field.value == "CONNECT"));
+    }
+
+    #[test]
+    fn identifies_socks5_tcp_and_udp_messages() {
+        let greeting = [5, 1, 0];
+        let tcp_layer =
+            analyze_application_protocol("TCP", Some(51_000), Some(1080), &greeting).unwrap();
+        assert_eq!(tcp_layer.name, "SOCKS Version 5");
+        assert_eq!(application_protocol_name(&tcp_layer), "SOCKS5");
+
+        let udp_datagram = [0, 0, 0, 1, 203, 0, 113, 8, 0, 53, 1, 2, 3];
+        let udp_layer =
+            analyze_application_protocol("UDP", Some(51_001), Some(1081), &udp_datagram).unwrap();
+        assert_eq!(udp_layer.name, "SOCKS Version 5 UDP Datagram");
+        assert_eq!(application_protocol_name(&udp_layer), "SOCKS5");
+        assert!(udp_layer
+            .fields
+            .iter()
+            .any(|field| field.name == "Data length" && field.value == "3 bytes"));
+    }
+
     fn pcap_with_packets(packets: &[Vec<u8>]) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0xa1b2c3d4_u32.to_le_bytes());
@@ -1541,6 +2232,30 @@ mod tests {
         packet[22..24].copy_from_slice(&destination_port.to_be_bytes());
         packet[32] = 5 << 4;
         packet[33] = flags;
+        packet
+    }
+
+    fn ipv4_tcp_payload_packet(
+        source: [u8; 4],
+        destination: [u8; 4],
+        source_port: u16,
+        destination_port: u16,
+        sequence: u32,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let mut packet = vec![0u8; 40 + payload.len()];
+        let total_length = packet.len() as u16;
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&total_length.to_be_bytes());
+        packet[9] = 6;
+        packet[12..16].copy_from_slice(&source);
+        packet[16..20].copy_from_slice(&destination);
+        packet[20..22].copy_from_slice(&source_port.to_be_bytes());
+        packet[22..24].copy_from_slice(&destination_port.to_be_bytes());
+        packet[24..28].copy_from_slice(&sequence.to_be_bytes());
+        packet[32] = 5 << 4;
+        packet[33] = 0x18;
+        packet[40..].copy_from_slice(payload);
         packet
     }
 }

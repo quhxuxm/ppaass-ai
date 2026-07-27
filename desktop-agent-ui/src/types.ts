@@ -93,6 +93,7 @@ export type CapturedPacket = {
   ip_version: number;
   protocol: string;
   sub_protocol?: string | null;
+  proxy_protocol?: string | null;
   source: string;
   source_port?: number | null;
   destination: string;

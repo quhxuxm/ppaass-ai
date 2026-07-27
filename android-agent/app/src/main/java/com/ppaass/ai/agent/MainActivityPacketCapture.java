@@ -11,28 +11,96 @@ import android.widget.*;
 import org.json.*;
 
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.text.*;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
-    private static final int CAPTURE_LIMIT = 2000;
+    private static final int CAPTURE_LIMIT = 500;
+    private static final int CAPTURE_LIST_MIN_HEIGHT_DP = 360;
+    private static final int PAYLOAD_PREVIEW_BYTES = 4 * 1024;
     private static final long CAPTURE_REFRESH_MS = 5000L;
+    private static final long CAPTURE_FILTER_DEBOUNCE_MS = 150L;
+    private static final ExecutorService CAPTURE_REPORT_EXECUTOR =
+            Executors.newSingleThreadExecutor(task -> {
+                Thread thread = new Thread(task, "ppaass-capture-report");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private static final String ALL_PROTOCOLS = "全部协议";
+    private static final String HTTP_PROXY_PROTOCOL = "HTTP 代理";
+    private static final String SOCKS5_PROXY_PROTOCOL = "SOCKS5 代理";
 
     private TextView captureStatus;
     private TextView captureSummary;
     private Button captureToggle;
     private Button captureClear;
+    private Button captureRefresh;
     private EditText captureSearch;
     private EditText captureMinimumKb;
     private Spinner captureDirection;
     private Spinner captureProtocol;
     private Spinner captureSort;
     private LinearLayout capturePacketList;
+    private LinearLayout capturePageRoot;
+    private LinearLayout capturePacketsPanel;
+    private FrameLayout captureListContainer;
     private JSONArray capturePackets = new JSONArray();
-    private boolean captureRefreshInFlight;
+    private ArrayList<String> captureSearchIndexes = new ArrayList<>();
+    private CaptureOperation captureOperation = CaptureOperation.NONE;
+    private long captureOperationToken;
+    private volatile boolean captureUiDestroyed;
+    private boolean captureClearConfirmationVisible;
     private long lastCaptureRefreshMs;
+    private Future<?> captureReportFuture;
+    private final Handler captureFilterHandler = new Handler(Looper.getMainLooper());
+    private final Runnable captureFilterRender = () -> {
+        if (!captureUiDestroyed && !isDestroyed()) {
+            renderPacketList();
+        }
+    };
+
+    private enum CaptureOperation {
+        NONE(""),
+        REFRESHING("●  正在读取抓包…"),
+        ENABLING("●  正在开启抓包…"),
+        DISABLING("●  正在关闭抓包…"),
+        CLEARING("●  正在清空抓包…");
+
+        private final String statusText;
+
+        CaptureOperation(String statusText) {
+            this.statusText = statusText;
+        }
+    }
+
+    private interface CaptureBooleanOperation {
+        boolean run();
+    }
+
+    private static final class CaptureReportData {
+        final int totalPackets;
+        final long fileSize;
+        final JSONArray packets;
+        final ArrayList<String> searchIndexes;
+
+        CaptureReportData(
+                int totalPackets,
+                long fileSize,
+                JSONArray packets,
+                ArrayList<String> searchIndexes) {
+            this.totalPackets = totalPackets;
+            this.fileSize = fileSize;
+            this.packets = packets;
+            this.searchIndexes = searchIndexes;
+        }
+    }
 
     protected void buildPacketCaptureScreen(LinearLayout root) {
+        capturePageRoot = root;
         LinearLayout header = panel(root);
         sectionTitle(header, "明文抓包结果");
         TextView path = mutedText(captureFile().getAbsolutePath(), 12f);
@@ -58,28 +126,32 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         captureClear = secondaryButton("清空");
         captureClear.setOnClickListener(view -> confirmClearPacketCapture());
         actionRow.addView(captureClear, new LinearLayout.LayoutParams(0, dp(42), 1f));
-        Button refresh = secondaryButton("刷新");
-        refresh.setOnClickListener(view -> refreshPacketCapture(true));
+        captureRefresh = secondaryButton("刷新");
+        captureRefresh.setOnClickListener(view -> refreshPacketCapture(true));
         LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(42), 1f);
         refreshParams.setMargins(dp(8), 0, 0, 0);
-        actionRow.addView(refresh, refreshParams);
+        actionRow.addView(captureRefresh, refreshParams);
         LinearLayout.LayoutParams actionParams = matchWrap();
         actionParams.setMargins(0, dp(8), 0, 0);
         header.addView(actionRow, actionParams);
 
         LinearLayout filters = panel(root);
         sectionTitle(filters, "筛选与排序");
-        captureSearch = captureEditText("搜索 IP、端口、协议或内容", false);
+        captureSearch = captureEditText("搜索 IP、端口、协议或预览内容", false);
         captureSearch.addTextChangedListener(filterWatcher());
         filters.addView(filterField("搜索", captureSearch), matchWrap());
 
         LinearLayout filterRow = horizontalRow();
-        captureDirection = spinner(new String[]{"全部方向", "Client → 目标", "目标 → Client"});
+        captureDirection = spinner(new String[]{
+                "全部方向",
+                "Client → Agent / 目标",
+                "Agent / 目标 → Client"
+        });
         captureDirection.setOnItemSelectedListener(filterListener());
         filterRow.addView(
                 filterField("方向", captureDirection),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        captureProtocol = spinner(new String[]{"全部协议"});
+        captureProtocol = spinner(new String[]{ALL_PROTOCOLS});
         captureProtocol.setOnItemSelectedListener(filterListener());
         LinearLayout.LayoutParams protocolFieldParams = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -111,7 +183,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         filters.addView(sortRow, sortRowParams);
 
         LinearLayout resetRow = horizontalRow();
-        TextView filterHint = mutedText("筛选条件会立即应用", 11f);
+        TextView filterHint = mutedText(
+                "筛选立即应用 · 内容搜索仅覆盖 Payload 预览",
+                11f);
         resetRow.addView(filterHint, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button resetFilters = new Button(this);
@@ -132,39 +206,72 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         filters.addView(resetRow, resetRowParams);
 
         LinearLayout packets = panel(root);
+        capturePacketsPanel = packets;
         packets.setPadding(dp(10), dp(16), dp(10), dp(12));
         sectionTitle(packets, "数据包列表");
         captureSummary = mutedText("尚未读取抓包文件", 12f);
         LinearLayout.LayoutParams summaryParams = matchWrap();
         summaryParams.setMargins(0, dp(2), 0, dp(10));
         packets.addView(captureSummary, summaryParams);
-        MaxHeightScrollView scroll = new MaxHeightScrollView(this, dp(560));
+        ScrollView scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setNestedScrollingEnabled(true);
         scroll.setClipToPadding(true);
-        scroll.setFillViewport(false);
+        scroll.setFillViewport(true);
+        final float[] lastCaptureTouchY = {0f};
+        scroll.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    lastCaptureTouchY[0] = event.getY();
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(-1) || view.canScrollVertically(1));
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float currentY = event.getY();
+                    int direction = currentY < lastCaptureTouchY[0] ? 1 : -1;
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(direction));
+                    lastCaptureTouchY[0] = currentY;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
         capturePacketList = new LinearLayout(this);
         capturePacketList.setOrientation(LinearLayout.VERTICAL);
         capturePacketList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
-        scroll.addView(capturePacketList, matchWrap());
+        scroll.addView(capturePacketList, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        FrameLayout listContainer = new FrameLayout(this);
-        listContainer.setClipChildren(true);
-        listContainer.setClipToOutline(true);
+        captureListContainer = new FrameLayout(this);
+        captureListContainer.setClipChildren(true);
+        captureListContainer.setClipToOutline(true);
         GradientDrawable listSurface = new GradientDrawable();
         listSurface.setColor(COLOR_SURFACE);
         listSurface.setCornerRadius(dp(10));
-        listContainer.setBackground(listSurface);
+        captureListContainer.setBackground(listSurface);
         GradientDrawable listFrame = new GradientDrawable();
         listFrame.setColor(Color.TRANSPARENT);
         listFrame.setCornerRadius(dp(10));
         listFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
-        listContainer.setForegroundGravity(Gravity.FILL);
-        listContainer.setForeground(listFrame);
-        listContainer.addView(scroll, new FrameLayout.LayoutParams(
+        captureListContainer.setForegroundGravity(Gravity.FILL);
+        captureListContainer.setForeground(listFrame);
+        captureListContainer.addView(scroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
-        packets.addView(listContainer, matchWrap());
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        packets.addView(captureListContainer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(CAPTURE_LIST_MIN_HEIGHT_DP)));
+        root.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                        oldLeft, oldTop, oldRight, oldBottom) ->
+                updateCaptureListHeight());
+        root.post(this::updateCaptureListHeight);
 
         updatePacketCaptureControls();
         refreshPacketCapture(true);
@@ -184,18 +291,90 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         if (captureToggle == null) {
             return;
         }
-        boolean running = isVpnRunning();
-        boolean enabled = NativeAgent.packetCaptureEnabled();
-        captureToggle.setEnabled(true);
+        boolean busy = captureOperation != CaptureOperation.NONE;
+        captureToggle.setEnabled(!busy);
+        captureClear.setEnabled(!busy && captureFile().exists());
+        captureRefresh.setEnabled(!busy);
+        if (busy) {
+            captureStatus.setText(tr(captureOperation.statusText));
+            captureStatus.setTextColor(COLOR_ACTION_INFO);
+            return;
+        }
+
+        boolean running = isVpnRunning() || isHttpProxyRunning();
+        boolean enabled;
+        try {
+            enabled = NativeAgent.packetCaptureEnabled();
+        } catch (RuntimeException error) {
+            captureStatus.setText(tr("●  抓包状态不可用"));
+            captureStatus.setTextColor(COLOR_ACTION_STOP);
+            return;
+        }
         captureToggle.setText(tr(enabled ? "关闭抓包" : "开启抓包"));
         applyActionButtonStyle(
                 captureToggle,
                 enabled ? COLOR_ACTION_STOP : COLOR_ACTION_START);
         captureStatus.setText(tr(enabled
-                ? running ? "●  正在抓包" : "●  已开启，等待 VPN"
+                ? running
+                    ? "●  正在抓包"
+                    : "●  已开启，等待 VPN 或 HTTP / SOCKS5 代理"
                 : "●  抓包已关闭"));
         captureStatus.setTextColor(enabled ? COLOR_STATUS_RUNNING : COLOR_ACTION_WARN);
-        captureClear.setEnabled(captureFile().exists());
+    }
+
+    private void updateCaptureListHeight() {
+        if (mainScrollView == null
+                || capturePageRoot == null
+                || captureListContainer == null
+                || mainScrollView.getHeight() <= 0
+                || !capturePageRoot.isLaidOut()
+                || !captureListContainer.isLaidOut()) {
+            return;
+        }
+
+        int[] scrollLocation = new int[2];
+        int[] pageLocation = new int[2];
+        int[] listLocation = new int[2];
+        mainScrollView.getLocationInWindow(scrollLocation);
+        capturePageRoot.getLocationInWindow(pageLocation);
+        captureListContainer.getLocationInWindow(listLocation);
+
+        int pageTopInScrollContent =
+                pageLocation[1] - scrollLocation[1] + mainScrollView.getScrollY();
+        int listTopInPage = listLocation[1] - pageLocation[1];
+        View scrollContent = mainScrollView.getChildCount() == 0
+                ? null : mainScrollView.getChildAt(0);
+        int bottomPadding = scrollContent == null ? 0 : scrollContent.getPaddingBottom();
+        int occupiedHeight = Math.max(0, pageTopInScrollContent)
+                + Math.max(0, listTopInPage)
+                + Math.max(0, bottomPadding);
+        int trailingPanelPadding = capturePacketsPanel == null
+                ? 0 : capturePacketsPanel.getPaddingBottom();
+        int targetHeight = calculateCaptureListHeightPx(
+                mainScrollView.getHeight(),
+                occupiedHeight,
+                trailingPanelPadding,
+                dp(CAPTURE_LIST_MIN_HEIGHT_DP));
+
+        ViewGroup.LayoutParams params = captureListContainer.getLayoutParams();
+        if (params != null && params.height != targetHeight) {
+            params.height = targetHeight;
+            captureListContainer.setLayoutParams(params);
+        }
+    }
+
+    static int calculateCaptureListHeightPx(
+            int viewportHeight,
+            int occupiedHeight,
+            int trailingHeight,
+            int minimumHeight) {
+        int safeViewportHeight = Math.max(0, viewportHeight);
+        int safeOccupiedHeight = Math.max(0, occupiedHeight);
+        int safeTrailingHeight = Math.max(0, trailingHeight);
+        int availableHeight = Math.max(
+                0,
+                safeViewportHeight - safeOccupiedHeight - safeTrailingHeight);
+        return Math.max(Math.max(0, minimumHeight), availableHeight);
     }
 
     private File captureFile() {
@@ -203,73 +382,447 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void togglePacketCapture() {
-        boolean enabled = !NativeAgent.packetCaptureEnabled();
-        if (NativeAgent.setPacketCaptureEnabled(captureFile().getAbsolutePath(), enabled)) {
-            updatePacketCaptureControls();
-            refreshPacketCapture(true);
+        if (!canStartCaptureOperation()) {
+            return;
         }
+        boolean enabled;
+        try {
+            enabled = !NativeAgent.packetCaptureEnabled();
+        } catch (RuntimeException error) {
+            showCaptureError("切换抓包失败：", captureFailureDetail(error));
+            updatePacketCaptureControls();
+            return;
+        }
+        CaptureOperation operation = enabled
+                ? CaptureOperation.ENABLING
+                : CaptureOperation.DISABLING;
+        runCaptureBooleanOperation(
+                operation,
+                enabled ? "开启抓包失败：" : "关闭抓包失败：",
+                () -> NativeAgent.setPacketCaptureEnabled(
+                        captureFile().getAbsolutePath(),
+                        enabled),
+                () -> {
+                    updatePacketCaptureControls();
+                    refreshPacketCapture(true);
+                });
     }
 
     private void confirmClearPacketCapture() {
-        new AlertDialog.Builder(this)
+        if (!canStartCaptureOperation()) {
+            return;
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(tr("清空抓包文件"))
                 .setMessage(tr("将永久删除当前全部抓包记录。抓包若已开启，清空后会继续记录。"))
                 .setNegativeButton(tr("取消"), null)
-                .setPositiveButton(tr("确认清空"), (dialog, which) -> {
-                    if (NativeAgent.clearPacketCapture(captureFile().getAbsolutePath())) {
-                        refreshPacketCapture(true);
-                    }
-                })
-                .show();
+                .setPositiveButton(
+                        tr("确认清空"),
+                        (dialogInterface, which) -> clearPacketCapture())
+                .create();
+        captureClearConfirmationVisible = true;
+        dialog.setOnDismissListener(ignored -> captureClearConfirmationVisible = false);
+        dialog.show();
+    }
+
+    private void clearPacketCapture() {
+        runCaptureBooleanOperation(
+                CaptureOperation.CLEARING,
+                "清空抓包失败：",
+                () -> NativeAgent.clearPacketCapture(captureFile().getAbsolutePath()),
+                () -> {
+                    capturePackets = new JSONArray();
+                    captureSearchIndexes = new ArrayList<>();
+                    renderPacketList();
+                    updatePacketCaptureControls();
+                    refreshPacketCapture(true);
+                });
+    }
+
+    private void runCaptureBooleanOperation(
+            CaptureOperation operation,
+            String failurePrefix,
+            CaptureBooleanOperation nativeOperation,
+            Runnable onSuccess) {
+        long token = beginCaptureOperation(operation);
+        if (token < 0) {
+            return;
+        }
+        new Thread(() -> {
+            String failure = null;
+            try {
+                if (!nativeOperation.run()) {
+                    failure = "原生抓包服务未完成请求";
+                }
+            } catch (RuntimeException error) {
+                failure = captureFailureDetail(error);
+            }
+            String finalFailure = failure;
+            postCaptureOperationResult(token, operation, () -> {
+                if (finalFailure == null) {
+                    onSuccess.run();
+                } else {
+                    updatePacketCaptureControls();
+                    showCaptureError(failurePrefix, finalFailure);
+                }
+            });
+        }, "ppaass-capture-" + operation.name().toLowerCase(Locale.ROOT)).start();
     }
 
     private void refreshPacketCapture(boolean showProgress) {
-        if (captureRefreshInFlight || capturePacketList == null) {
+        if (captureClearConfirmationVisible) {
             return;
         }
-        captureRefreshInFlight = true;
+        long token = beginCaptureOperation(CaptureOperation.REFRESHING);
+        if (token < 0) {
+            return;
+        }
         lastCaptureRefreshMs = SystemClock.elapsedRealtime();
         if (showProgress) {
             captureSummary.setText(tr("正在读取抓包结果…"));
         }
         String file = captureFile().getAbsolutePath();
-        new Thread(() -> {
-            String json;
-            try {
-                json = NativeAgent.packetCaptureReportJson(file, CAPTURE_LIMIT);
-            } catch (RuntimeException error) {
-                json = "{\"error\":" + JSONObject.quote(String.valueOf(error)) + "}";
-            }
-            final String result = json;
-            runOnUiThread(() -> {
-                captureRefreshInFlight = false;
-                applyCaptureReport(result);
-            });
-        }, "ppaass-capture-reader").start();
+        int proxyListenPort = httpProxyListenPort();
+        WeakReference<MainActivityPacketCapture> activityRef = new WeakReference<>(this);
+        try {
+            captureReportFuture = CAPTURE_REPORT_EXECUTOR.submit(() ->
+                    runCaptureReportTask(
+                            activityRef,
+                            token,
+                            file,
+                            proxyListenPort,
+                            showProgress));
+        } catch (RuntimeException error) {
+            captureOperation = CaptureOperation.NONE;
+            captureReportFuture = null;
+            updatePacketCaptureControls();
+            showCaptureError(
+                    "读取抓包失败：",
+                    captureFailureDetail(error),
+                    showProgress);
+        }
     }
 
-    private void applyCaptureReport(String json) {
-        try {
-            JSONObject report = new JSONObject(json);
-            if (report.has("error")) {
-                throw new JSONException(report.optString("error"));
-            }
-            capturePackets = report.optJSONArray("packets");
-            if (capturePackets == null) {
-                capturePackets = new JSONArray();
-            }
-            updateProtocolOptions();
-            renderPacketList();
-            captureSummary.setText(tr(String.format(
-                    Locale.US,
-                    "共 %d 包 · 显示最近 %d 包 · PCAP %s · 点击查看详情",
-                    report.optInt("total_packets"),
-                    capturePackets.length(),
-                    formatBytes(report.optLong("file_size")))));
-            updatePacketCaptureControls();
-        } catch (JSONException error) {
-            captureSummary.setText(tr("读取抓包失败：" + error.getMessage()));
+    private static void runCaptureReportTask(
+            WeakReference<MainActivityPacketCapture> activityRef,
+            long token,
+            String file,
+            int proxyListenPort,
+            boolean showProgress) {
+        if (Thread.currentThread().isInterrupted()) {
+            return;
         }
+        CaptureReportData report = null;
+        String failure = null;
+        try {
+            String json = NativeAgent.packetCaptureReportJson(
+                    file,
+                    CAPTURE_LIMIT,
+                    proxyListenPort);
+            if (Thread.currentThread().isInterrupted()) {
+                return;
+            }
+            report = parseCaptureReport(json);
+        } catch (Exception error) {
+            failure = captureFailureDetail(error);
+        }
+        if (Thread.currentThread().isInterrupted()) {
+            return;
+        }
+        CaptureReportData result = report;
+        String finalFailure = failure;
+        MainActivityPacketCapture activity = activityRef.get();
+        if (activity == null) {
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            MainActivityPacketCapture current = activityRef.get();
+            if (current != null) {
+                current.finishCaptureReport(
+                        token,
+                        result,
+                        finalFailure,
+                        showProgress);
+            }
+        });
+    }
+
+    private void finishCaptureReport(
+            long token,
+            CaptureReportData report,
+            String failure,
+            boolean showProgress) {
+        if (captureUiDestroyed
+                || isDestroyed()
+                || token != captureOperationToken
+                || captureOperation != CaptureOperation.REFRESHING) {
+            return;
+        }
+        captureOperation = CaptureOperation.NONE;
+        captureReportFuture = null;
+        updatePacketCaptureControls();
+        if (failure == null) {
+            applyCaptureReport(report);
+        } else {
+            showCaptureError("读取抓包失败：", failure, showProgress);
+        }
+    }
+
+    private boolean canStartCaptureOperation() {
+        return captureOperationCanStart(
+                captureUiDestroyed || isDestroyed(),
+                captureOperation != CaptureOperation.NONE,
+                capturePacketList != null);
+    }
+
+    static boolean captureOperationCanStart(
+            boolean destroyed,
+            boolean operationInFlight,
+            boolean uiReady) {
+        return !destroyed && !operationInFlight && uiReady;
+    }
+
+    private long beginCaptureOperation(CaptureOperation operation) {
+        if (!canStartCaptureOperation() || operation == CaptureOperation.NONE) {
+            return -1;
+        }
+        captureOperation = operation;
+        long token = ++captureOperationToken;
+        updatePacketCaptureControls();
+        return token;
+    }
+
+    private void postCaptureOperationResult(
+            long token,
+            CaptureOperation operation,
+            Runnable result) {
+        if (captureUiDestroyed) {
+            return;
+        }
+        runOnUiThread(() -> {
+            if (captureUiDestroyed
+                    || isDestroyed()
+                    || token != captureOperationToken
+                    || captureOperation != operation) {
+                return;
+            }
+            captureOperation = CaptureOperation.NONE;
+            result.run();
+        });
+    }
+
+    static String captureFailureDetail(Throwable error) {
+        if (error == null) {
+            return "未知错误";
+        }
+        String message = error.getMessage();
+        if (message != null && !message.trim().isEmpty()) {
+            return message.trim();
+        }
+        String type = error.getClass().getSimpleName();
+        return type.isEmpty() ? "未知错误" : type;
+    }
+
+    private void showCaptureError(String prefix, String detail) {
+        showCaptureError(prefix, detail, true);
+    }
+
+    private void showCaptureError(String prefix, String detail, boolean showToast) {
+        if (captureUiDestroyed || isDestroyed()) {
+            return;
+        }
+        String message = tr(prefix) + tr(detail);
+        captureSummary.setText(message);
+        if (showToast) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void applyCaptureReport(CaptureReportData report) {
+        capturePackets = report.packets;
+        captureSearchIndexes = report.searchIndexes;
+        updateProtocolOptions();
+        renderPacketList();
+        captureSummary.setText(tr(String.format(
+                Locale.US,
+                "共 %d 包 · 显示最近 %d 包 · PCAP %s · 点击查看详情",
+                report.totalPackets,
+                capturePackets.length(),
+                formatBytes(report.fileSize))));
+        updatePacketCaptureControls();
+    }
+
+    private static CaptureReportData parseCaptureReport(String json) throws JSONException {
+        if (json == null || json.trim().isEmpty()) {
+            throw new JSONException("原生抓包服务返回空结果");
+        }
+        JSONObject report = new JSONObject(json);
+        if (report.has("error")) {
+            String error = report.optString("error", "").trim();
+            throw new JSONException(error.isEmpty() ? "未知错误" : error);
+        }
+
+        JSONArray rawPackets = report.optJSONArray("packets");
+        if (rawPackets == null) {
+            rawPackets = new JSONArray();
+        }
+        int start = Math.max(0, rawPackets.length() - CAPTURE_LIMIT);
+        JSONArray packets = new JSONArray();
+        ArrayList<String> searchIndexes = new ArrayList<>(
+                Math.min(CAPTURE_LIMIT, rawPackets.length()));
+        for (int index = start; index < rawPackets.length(); index++) {
+            JSONObject packet = rawPackets.optJSONObject(index);
+            if (packet == null) {
+                continue;
+            }
+            normalizePayloadPreview(packet);
+            packets.put(packet);
+            searchIndexes.add(packetSearchIndex(packet));
+        }
+        return new CaptureReportData(
+                Math.max(report.optInt("total_packets"), packets.length()),
+                Math.max(0L, report.optLong("file_size")),
+                packets,
+                searchIndexes);
+    }
+
+    private static void normalizePayloadPreview(JSONObject packet) throws JSONException {
+        String payloadText = optionalStringValue(packet, "payload_text");
+        String payloadHex = optionalStringValue(packet, "payload_hex");
+        int availableBytes = Math.max(payloadText.length(), hexByteCount(payloadHex));
+        int totalBytes = Math.max(0, packet.optInt("payload_length", availableBytes));
+        if (totalBytes == 0 && availableBytes > 0) {
+            totalBytes = availableBytes;
+        }
+        int declaredPreviewBytes = packet.has("payload_preview_length")
+                ? packet.optInt("payload_preview_length", availableBytes)
+                : -1;
+        int previewBytes = boundedPayloadPreviewLength(
+                totalBytes,
+                declaredPreviewBytes,
+                availableBytes);
+        boolean truncated = payloadPreviewIsTruncated(
+                totalBytes,
+                availableBytes,
+                previewBytes,
+                packet.optBoolean("payload_truncated", false));
+
+        packet.put("payload_length", totalBytes);
+        packet.put("payload_preview_length", previewBytes);
+        packet.put("payload_truncated", truncated);
+        packet.put("payload_text", truncatePayloadText(payloadText, previewBytes));
+        packet.put("payload_hex", truncatePayloadHex(payloadHex, previewBytes));
+    }
+
+    static int boundedPayloadPreviewLength(
+            int totalBytes,
+            int declaredPreviewBytes,
+            int availableBytes) {
+        int safeAvailable = Math.max(0, availableBytes);
+        int safeTotal = totalBytes > 0 ? totalBytes : safeAvailable;
+        int safeDeclared = declaredPreviewBytes >= 0
+                ? declaredPreviewBytes : safeAvailable;
+        return Math.max(
+                0,
+                Math.min(
+                        PAYLOAD_PREVIEW_BYTES,
+                        Math.min(safeTotal, Math.min(safeDeclared, safeAvailable))));
+    }
+
+    static boolean payloadPreviewIsTruncated(
+            int totalBytes,
+            int availableBytes,
+            int previewBytes,
+            boolean nativeTruncated) {
+        int safeTotal = Math.max(0, totalBytes);
+        int safeAvailable = Math.max(0, availableBytes);
+        int safePreview = Math.max(0, previewBytes);
+        return nativeTruncated || safeTotal > safePreview || safeAvailable > safePreview;
+    }
+
+    static String payloadPreviewSummary(int previewBytes, int totalBytes) {
+        int safePreview = Math.max(0, previewBytes);
+        int safeTotal = Math.max(safePreview, totalBytes);
+        return "预览前 " + safePreview + " / 共 " + safeTotal + " 字节";
+    }
+
+    static String truncatePayloadText(String value, int previewBytes) {
+        String safeValue = value == null ? "" : value;
+        int end = Math.min(safeValue.length(), Math.max(0, previewBytes));
+        return safeValue.substring(0, end);
+    }
+
+    static String truncatePayloadHex(String value, int previewBytes) {
+        String safeValue = value == null ? "" : value;
+        int targetDigits = Math.max(0, previewBytes) * 2;
+        if (targetDigits == 0 || safeValue.isEmpty()) {
+            return "";
+        }
+        int digits = 0;
+        int end = 0;
+        while (end < safeValue.length() && digits < targetDigits) {
+            if (Character.digit(safeValue.charAt(end), 16) >= 0) {
+                digits++;
+            }
+            end++;
+        }
+        return safeValue.substring(0, end).trim();
+    }
+
+    private static int hexByteCount(String value) {
+        int digits = 0;
+        for (int index = 0; index < value.length(); index++) {
+            if (Character.digit(value.charAt(index), 16) >= 0) {
+                digits++;
+            }
+        }
+        return digits / 2;
+    }
+
+    private static String packetSearchIndex(JSONObject packet) {
+        String proxyProtocol = optionalStringValue(packet, "proxy_protocol");
+        StringBuilder searchable = new StringBuilder()
+                .append(optionalStringValue(packet, "source")).append(' ')
+                .append(optionalStringValue(packet, "destination")).append(' ')
+                .append(optionalStringValue(packet, "source_port")).append(' ')
+                .append(optionalStringValue(packet, "destination_port")).append(' ')
+                .append(optionalStringValue(packet, "protocol")).append(' ')
+                .append(optionalStringValue(packet, "sub_protocol")).append(' ')
+                .append(proxyProtocol).append(' ')
+                .append(proxyProtocolLabelValue(proxyProtocol)).append(' ')
+                .append(optionalStringValue(packet, "summary")).append(' ')
+                .append(optionalStringValue(packet, "payload_text")).append(' ')
+                .append(optionalStringValue(packet, "payload_hex"));
+        if ("HTTP".equals(proxyProtocol)) {
+            searchable.append(" http proxy http 代理");
+        } else if ("SOCKS5".equals(proxyProtocol)) {
+            searchable.append(" socks5 proxy socks5 代理");
+        }
+        if (packet.optBoolean("payload_truncated", false)) {
+            searchable.append(" payload preview 内容预览");
+        }
+        return searchable.toString().toLowerCase(Locale.ROOT);
+    }
+
+    private static String optionalStringValue(JSONObject object, String key) {
+        return object == null || object.isNull(key) ? "" : object.optString(key, "");
+    }
+
+    private static String proxyProtocolLabelValue(String protocol) {
+        return protocol == null || protocol.isEmpty() ? "" : protocol + " 代理";
+    }
+
+    @Override
+    protected void onDestroy() {
+        captureUiDestroyed = true;
+        captureOperationToken++;
+        captureFilterHandler.removeCallbacks(captureFilterRender);
+        Future<?> reportFuture = captureReportFuture;
+        captureReportFuture = null;
+        if (reportFuture != null) {
+            reportFuture.cancel(true);
+        }
+        super.onDestroy();
     }
 
     private void updateProtocolOptions() {
@@ -283,7 +836,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
             if (!child.isEmpty()) protocols.add(child);
         }
         ArrayList<String> values = new ArrayList<>();
-        values.add("全部协议");
+        values.add(ALL_PROTOCOLS);
+        values.add(HTTP_PROXY_PROTOCOL);
+        values.add(SOCKS5_PROXY_PROTOCOL);
         values.addAll(protocols);
         captureProtocol.setAdapter(spinnerAdapter(values.toArray(new String[0])));
         int selected = values.indexOf(previous);
@@ -297,12 +852,14 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         capturePacketList.removeAllViews();
         ArrayList<JSONObject> visible = filteredPackets();
         if (visible.isEmpty()) {
+            capturePacketList.setGravity(Gravity.CENTER);
             TextView empty = mutedText("没有符合条件的数据包", 14f);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(30), dp(8), dp(30));
             capturePacketList.addView(empty, matchWrap());
             return;
         }
+        capturePacketList.setGravity(Gravity.TOP | Gravity.START);
         for (JSONObject packet : visible) {
             capturePacketList.addView(packetRow(packet));
         }
@@ -314,7 +871,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         String direction = captureDirection == null
                 ? "全部方向" : String.valueOf(captureDirection.getSelectedItem());
         String protocol = captureProtocol == null
-                ? "全部协议" : String.valueOf(captureProtocol.getSelectedItem());
+                ? ALL_PROTOCOLS : String.valueOf(captureProtocol.getSelectedItem());
         double minimumBytes = 0;
         try {
             String value = captureMinimumKb == null
@@ -325,23 +882,17 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         ArrayList<JSONObject> result = new ArrayList<>();
         for (int index = 0; index < capturePackets.length(); index++) {
             JSONObject packet = capturePackets.optJSONObject(index);
-            if (packet == null || packet.optLong("length") <= minimumBytes) continue;
+            if (packet == null
+                    || !packetMeetsMinimumSize(packet.optLong("length"), minimumBytes)) continue;
             String packetDirection = packet.optString("direction");
-            if ("Client → 目标".equals(direction) && !"upload".equals(packetDirection)) continue;
-            if ("目标 → Client".equals(direction) && !"download".equals(packetDirection)) continue;
-            if (!"全部协议".equals(protocol)
-                    && !protocol.equals(packet.optString("protocol"))
-                    && !protocol.equals(optionalString(packet, "sub_protocol"))) continue;
-            String haystack = (
-                    packet.optString("source") + " "
-                            + packet.optString("destination") + " "
-                            + packet.optString("source_port") + " "
-                            + packet.optString("destination_port") + " "
-                            + packet.optString("protocol") + " "
-                            + optionalString(packet, "sub_protocol") + " "
-                            + packet.optString("summary") + " "
-                            + packet.optString("payload_text") + " "
-                            + packet.optString("payload_hex")).toLowerCase(Locale.ROOT);
+            if ("Client → Agent / 目标".equals(direction)
+                    && !"upload".equals(packetDirection)) continue;
+            if ("Agent / 目标 → Client".equals(direction)
+                    && !"download".equals(packetDirection)) continue;
+            if (!matchesProtocolFilter(packet, protocol)) continue;
+            String haystack = index < captureSearchIndexes.size()
+                    ? captureSearchIndexes.get(index)
+                    : packetSearchIndex(packet);
             if (query.isEmpty() || haystack.contains(query)) result.add(packet);
         }
         Comparator<JSONObject> comparator;
@@ -374,6 +925,13 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         return result;
     }
 
+    static boolean packetMeetsMinimumSize(long packetBytes, double minimumBytes) {
+        double safeMinimum = Double.isFinite(minimumBytes)
+                ? Math.max(0d, minimumBytes)
+                : 0d;
+        return packetBytes >= safeMinimum;
+    }
+
     private View packetRow(JSONObject packet) {
         boolean upload = "upload".equals(packet.optString("direction"));
         LinearLayout row = horizontalRow();
@@ -383,10 +941,10 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         row.setBackgroundColor(COLOR_SURFACE);
         row.setClickable(true);
         row.setFocusable(true);
-        row.setContentDescription(
-                (upload ? "Client 到目标" : "目标到 Client")
+        row.setContentDescription(tr(
+                (upload ? "Client 到 Agent 或目标" : "Agent 或目标到 Client")
                         + "，数据包 " + packet.optInt("number")
-                        + "，" + packetProtocol(packet));
+                        + "，" + packetProtocol(packet)));
         row.setOnClickListener(view -> showPacketDetail(packet));
 
         TextView direction = new TextView(this);
@@ -465,7 +1023,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         TextView title = titleText("数据包 #" + packet.optInt("number"), 18f);
         heading.addView(title, matchWrap());
         TextView subtitle = mutedText(
-                (upload ? "Client → 目标" : "目标 → Client")
+                (upload ? "Client → Agent / 目标" : "Agent / 目标 → Client")
                         + "  ·  IPv" + packet.optInt("ip_version")
                         + "  ·  " + packetProtocol(packet), 11f);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
@@ -505,7 +1063,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         source.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         source.setTextIsSelectable(true);
         route.addView(source, matchWrap());
-        TextView arrow = mutedText(upload ? "↓  Client → 目标" : "↓  目标 → Client", 10f);
+        TextView arrow = mutedText(
+                upload ? "↓  Client → Agent / 目标" : "↓  Agent / 目标 → Client",
+                10f);
         LinearLayout.LayoutParams arrowParams = matchWrap();
         arrowParams.setMargins(0, dp(2), 0, dp(2));
         route.addView(arrow, arrowParams);
@@ -548,16 +1108,33 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         LinearLayout.LayoutParams rawTitleParams = matchWrap();
         rawTitleParams.setMargins(0, dp(14), 0, dp(5));
         content.addView(rawTitle, rawTitleParams);
+        int totalPayloadBytes = Math.max(0, packet.optInt("payload_length", 0));
+        int previewPayloadBytes = Math.max(
+                0,
+                packet.optInt(
+                        "payload_preview_length",
+                        Math.min(totalPayloadBytes, PAYLOAD_PREVIEW_BYTES)));
+        String previewSummary = payloadPreviewSummary(
+                previewPayloadBytes,
+                totalPayloadBytes);
         View hexPayload = payloadView(
-                "Payload Hex（完整 " + packet.optInt("payload_length") + " 字节）",
+                "Payload Hex（" + previewSummary + "）",
                 packet.optString("payload_hex", "无 Payload"));
         content.addView(hexPayload, matchWrap());
         View asciiPayload = payloadView(
-                "ASCII",
+                "ASCII（" + previewSummary + "）",
                 packet.optString("payload_text", "无 Payload"));
         LinearLayout.LayoutParams asciiPayloadParams = matchWrap();
         asciiPayloadParams.setMargins(0, dp(12), 0, 0);
         content.addView(asciiPayload, asciiPayloadParams);
+        if (packet.optBoolean("payload_truncated", false)) {
+            TextView previewNote = mutedText(
+                    "仅显示 Payload 预览，内容搜索也只覆盖这部分数据",
+                    10.5f);
+            LinearLayout.LayoutParams previewNoteParams = matchWrap();
+            previewNoteParams.setMargins(0, dp(7), 0, 0);
+            content.addView(previewNote, previewNoteParams);
+        }
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
@@ -626,8 +1203,10 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         TextView label = mutedText(title, 11f);
         label.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(label, matchWrap());
-        boolean ascii = "ASCII".equals(title);
-        TextView text = bodyText(value.isEmpty() ? "无 Payload" : value, ascii ? 12f : 10.5f);
+        boolean ascii = title.startsWith("ASCII");
+        String displayValue = value.isEmpty() || "无 Payload".equals(value)
+                ? tr("无 Payload") : value;
+        TextView text = bodyText(displayValue, ascii ? 12f : 10.5f);
         text.setTypeface(Typeface.MONOSPACE);
         text.setTextIsSelectable(true);
         text.setHorizontallyScrolling(false);
@@ -665,10 +1244,37 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         return frame;
     }
 
+    private boolean matchesProtocolFilter(JSONObject packet, String selectedProtocol) {
+        if (ALL_PROTOCOLS.equals(selectedProtocol)) {
+            return true;
+        }
+        if (selectedProtocol.equals(packet.optString("protocol"))
+                || selectedProtocol.equals(optionalString(packet, "sub_protocol"))) {
+            return true;
+        }
+        return selectedProtocol.equals(
+                proxyProtocolLabel(optionalString(packet, "proxy_protocol")));
+    }
+
     private String packetProtocol(JSONObject packet) {
+        LinkedHashSet<String> labels = new LinkedHashSet<>();
         String base = packet.optString("protocol");
+        String proxy = optionalString(packet, "proxy_protocol");
         String child = optionalString(packet, "sub_protocol");
-        return child.isEmpty() ? base : base + " / " + child;
+        if (!base.isEmpty()) {
+            labels.add(base);
+        }
+        if (!proxy.isEmpty()) {
+            labels.add(proxyProtocolLabel(proxy));
+        }
+        if (!child.isEmpty() && !child.equals(proxy)) {
+            labels.add(child);
+        }
+        return String.join(" / ", labels);
+    }
+
+    private String proxyProtocolLabel(String protocol) {
+        return proxyProtocolLabelValue(protocol);
     }
 
     private String optionalString(JSONObject object, String key) {
@@ -698,6 +1304,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         return new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, values) {
             private TextView style(View view, boolean dropdown) {
                 TextView text = (TextView) view;
+                text.setText(tr(text.getText().toString()));
                 text.setTextColor(COLOR_TEXT);
                 text.setTextSize(dropdown ? 13f : 12f);
                 text.setGravity(Gravity.CENTER_VERTICAL);
@@ -740,6 +1347,18 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         captureDirection.setSelection(0);
         captureProtocol.setSelection(0);
         captureSort.setSelection(0);
+        renderPacketListImmediately();
+    }
+
+    private void schedulePacketFilterRender() {
+        captureFilterHandler.removeCallbacks(captureFilterRender);
+        captureFilterHandler.postDelayed(
+                captureFilterRender,
+                CAPTURE_FILTER_DEBOUNCE_MS);
+    }
+
+    private void renderPacketListImmediately() {
+        captureFilterHandler.removeCallbacks(captureFilterRender);
         renderPacketList();
     }
 
@@ -777,7 +1396,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         return new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                renderPacketList();
+                renderPacketListImmediately();
             }
 
             @Override
@@ -790,7 +1409,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         return new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                renderPacketList();
+                schedulePacketFilterRender();
             }
             @Override public void afterTextChanged(Editable s) {}
         };

@@ -8,6 +8,7 @@ use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
+use crate::tun_handler::CapturedTcpStream;
 use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -66,7 +67,7 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
 
 #[instrument(skip(stream, sessions, direct_checker))]
 pub async fn handle_http_connection(
-    stream: TcpStream,
+    stream: CapturedTcpStream,
     sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
 ) -> Result<()> {

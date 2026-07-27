@@ -16,6 +16,7 @@ pub(crate) mod helper_service;
 mod netstack;
 mod network;
 mod packet_capture;
+pub(crate) use packet_capture::CapturedTcpStream;
 pub use packet_capture::PacketCaptureController;
 mod proxy_routing;
 mod route;
@@ -397,7 +398,7 @@ pub async fn run_tun_mode(
         tun_name, tun_if_index, helper_managed_network
     );
     info!(
-        "TUN 明文抓包运行时控制已就绪：默认关闭，文件={}",
+        "明文抓包运行时控制已就绪：默认关闭，文件={}",
         packet_capture.file().display()
     );
 

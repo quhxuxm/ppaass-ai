@@ -74,6 +74,20 @@ Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
 - 模拟 GEO。可以选择内置城市或自定义经纬度；VPN 运行期间会同时更新 Android GPS、网络定位和 Google 融合定位，VPN 停止后恢复真实定位。首次使用需要开启系统定位、在 Android 开发者选项中把 PPAASS VPN 选为“模拟位置信息应用”，并授予定位权限。
 
+## 运行时抓包
+
+Android 抓包默认关闭，由 App 的“抓包”页面在运行时开启、关闭、刷新或清空，不要求重启 VPN 或 HTTP/SOCKS5 Agent。开启后，VPN/TUN 两个方向的原始 IP 包，以及显式 HTTP 与 SOCKS5 TCP 连接在 Client 与 Agent socket 边界传递的字节，会写入同一份可由 Wireshark 打开的 DLT_RAW PCAP。显式代理流量会由 native 封装为仅存在于 PCAP 中的合成 IP/TCP 包，并在实验性 TCP option 中携带自描述标记，使 HTTP/SOCKS5 入口协议与上传/下载方向在后续解析时仍可稳定识别。
+
+抓包记录的是 Client 与 Agent 之间实际经过的字节，不会解密应用自身的 TLS，所以 HTTPS、TLS 隧道等 payload 仍保持密文。Android 的本地 SOCKS5 Agent 只支持 TCP CONNECT，并明确拒绝 UDP ASSOCIATE；因此 Android 不会抓取 SOCKS5 UDP 数据。桌面 Agent 另有 SOCKS5 UDP 支持，能力边界不同。
+
+再次开启抓包时会追加到格式兼容的现有 PCAP，而不是截断已有记录；如果上次写入留下不完整的尾记录，会先修复到最后一条完整记录再追加。格式不兼容、头部损坏或中间记录无效的文件不会被覆盖，用户需要先备份或在 UI 中明确清空。
+
+抓包列表支持关键字、方向、最小大小、排序、普通协议以及独立的“HTTP 代理”和“SOCKS5 代理”过滤；列表行和详情也会显示代理入口标签与 Client/Agent 方向。列表高度根据当前 Android 可用视口动态计算，填满页面下方剩余区域，并在面板内部滚动；空结果会在该区域居中显示。
+
+## DNS 记录管理
+
+状态页的代理 DNS 面板提供过滤输入框，可按域名、回答 IP、客户端、状态、解析器等字段搜索；空格分隔的多个条件按 AND 匹配，并识别常用中英文状态别名。过滤结果可以单条或批量选择，然后把对应域名/IP 加入直连规则，或把覆盖选中记录的现有直连规则移出。修改会保存配置；VPN 或 HTTP/SOCKS5 Agent 正在运行时，App 会按当前运行状态应用重启。
+
 模拟 GEO 使用 Android 标准 mock-location 能力，因此有以下平台边界：
 
 - 模拟定位是设备级状态，Android 不支持普通 `VpnService` 只对 VPN allow-list 中的应用修改定位；未进入 VPN 的应用也可能收到同一模拟位置。

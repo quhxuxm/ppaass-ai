@@ -3,12 +3,14 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import Badge from "primevue/badge";
 import Button from "primevue/button";
 import Card from "primevue/card";
+import InputText from "primevue/inputtext";
 import Knob from "primevue/knob";
 import Tag from "primevue/tag";
 import AppIcon from "../components/AppIcon";
 import {
   dnsAnswerLabel,
   dnsAnswers,
+  dnsRecordMatchesFilter,
   formatBytes,
   formatRate,
   hourLabel,
@@ -27,6 +29,7 @@ import {
 } from "../overviewLayout";
 import {
   directRuleCoversDomain,
+  directRulesMatchingDomainsAndAddresses,
   domainsAndAddressesToDirectRules
 } from "../directRuleDomains";
 import type {
@@ -60,6 +63,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "add-direct-rules": [rules: string[]];
+  "remove-direct-rules": [rules: string[]];
 }>();
 
 const overviewCardOrder = ref(readOverviewCardOrder());
@@ -73,6 +77,7 @@ const latestDnsRecords = ref<DnsResolutionRecord[]>([]);
 const pendingDnsRecordCount = ref(0);
 const dnsListHovered = ref(false);
 const dnsListFocused = ref(false);
+const dnsFilterQuery = ref("");
 
 const overviewCards = computed(() => buildOverviewCards(overviewCardOrder.value));
 const speedGaugeMax = computed(() => Math.max(256 * 1024, props.traffic.download_bps, props.traffic.upload_bps) * 1.25);
@@ -92,22 +97,54 @@ const uploadAreaPath = computed(() => hourlyAreaPath(uploadTrendPoints.value));
 const selectedDnsDomainKeys = computed(
   () => new Set(selectedDnsDomains.value.map((domain) => domain.toLowerCase()))
 );
-const selectedDnsRules = computed(() => {
-  const addresses = displayedDnsRecords.value
-    .filter((record) => selectedDnsDomainKeys.value.has(dnsRecordDomain(record).toLowerCase()))
-    .flatMap(dnsAnswers);
-  return domainsAndAddressesToDirectRules(selectedDnsDomains.value, addresses);
-});
+const filteredDnsRecords = computed(() =>
+  displayedDnsRecords.value.filter((record) =>
+    dnsRecordMatchesFilter(
+      record,
+      dnsFilterQuery.value,
+      dnsDomainIsDirect(record) ? ["已直连 direct"] : []
+    )
+  )
+);
 const selectableDnsDomains = computed(() => {
   const domains = new Map<string, string>();
-  displayedDnsRecords.value.forEach((record) => {
+  filteredDnsRecords.value.forEach((record) => {
     const domain = dnsRecordDomain(record);
     const key = domain.toLowerCase();
-    if (domain && !dnsDomainIsDirect(record) && !domains.has(key)) {
+    if (domain && !domains.has(key)) {
       domains.set(key, domain);
     }
   });
   return [...domains.values()];
+});
+const selectedDnsRecords = computed(() =>
+  displayedDnsRecords.value.filter((record) =>
+    selectedDnsDomainKeys.value.has(dnsRecordDomain(record).toLowerCase())
+  )
+);
+const selectedDnsRulesToAdd = computed(() => {
+  const records = selectedDnsRecords.value.filter((record) => !dnsDomainIsDirect(record));
+  const domains = [...new Map(
+    records.map((record) => {
+      const domain = dnsRecordDomain(record);
+      return [domain.toLowerCase(), domain] as const;
+    })
+  ).values()];
+  const addresses = records.flatMap(dnsAnswers);
+  const existingRuleKeys = new Set(
+    props.summary.direct_rules.map((rule) => rule.trim().toLowerCase())
+  );
+  return domainsAndAddressesToDirectRules(domains, addresses).filter(
+    (rule) => !existingRuleKeys.has(rule.trim().toLowerCase())
+  );
+});
+const selectedDnsRulesToRemove = computed(() => {
+  const addresses = selectedDnsRecords.value.flatMap(dnsAnswers);
+  return directRulesMatchingDomainsAndAddresses(
+    props.summary.direct_rules,
+    selectedDnsDomains.value,
+    addresses
+  );
 });
 const allSelectableDnsSelected = computed(
   () =>
@@ -116,6 +153,15 @@ const allSelectableDnsSelected = computed(
 );
 const selectedDnsActionLabel = computed(() => {
   return props.agentRunning ? "添加并重启" : "添加";
+});
+const selectedDnsRemoveActionLabel = computed(() => {
+  return props.agentRunning ? "移出并重启" : "移出";
+});
+const selectAllDnsLabel = computed(() => {
+  if (!dnsFilterQuery.value.trim()) {
+    return allSelectableDnsSelected.value ? "清空" : "全选";
+  }
+  return allSelectableDnsSelected.value ? "取消结果" : "全选结果";
 });
 
 watch(
@@ -293,7 +339,7 @@ function dnsDomainIsSelected(record: DnsResolutionRecord) {
 function toggleDnsDomainSelection(record: DnsResolutionRecord) {
   const domain = dnsRecordDomain(record);
   const key = domain.toLowerCase();
-  if (!domain || dnsDomainIsDirect(record)) {
+  if (!domain) {
     return;
   }
   selectedDnsDomains.value = selectedDnsDomainKeys.value.has(key)
@@ -302,15 +348,41 @@ function toggleDnsDomainSelection(record: DnsResolutionRecord) {
 }
 
 function toggleAllSelectableDnsDomains() {
-  selectedDnsDomains.value = allSelectableDnsSelected.value ? [] : [...selectableDnsDomains.value];
+  const visibleDomainKeys = new Set(
+    selectableDnsDomains.value.map((domain) => domain.toLowerCase())
+  );
+  if (allSelectableDnsSelected.value) {
+    selectedDnsDomains.value = selectedDnsDomains.value.filter(
+      (domain) => !visibleDomainKeys.has(domain.toLowerCase())
+    );
+    return;
+  }
+
+  const nextDomains = new Map(
+    selectedDnsDomains.value.map((domain) => [domain.toLowerCase(), domain])
+  );
+  selectableDnsDomains.value.forEach((domain) => {
+    nextDomains.set(domain.toLowerCase(), domain);
+  });
+  selectedDnsDomains.value = [...nextDomains.values()];
 }
 
 function addSelectedDnsDomainsToDirectRules() {
-  if (!selectedDnsRules.value.length) {
+  if (!selectedDnsRulesToAdd.value.length) {
     return;
   }
-  emit("add-direct-rules", [...selectedDnsRules.value]);
+  const rules = [...selectedDnsRulesToAdd.value];
   selectedDnsDomains.value = [];
+  emit("add-direct-rules", rules);
+}
+
+function removeSelectedDnsDomainsFromDirectRules() {
+  if (!selectedDnsRulesToRemove.value.length) {
+    return;
+  }
+  const rules = [...selectedDnsRulesToRemove.value];
+  selectedDnsDomains.value = [];
+  emit("remove-direct-rules", rules);
 }
 
 function dnsRecordKey(record: DnsResolutionRecord) {
@@ -552,13 +624,27 @@ function onDnsListFocusOut(event: FocusEvent) {
             <span>等待经过代理的 DNS 请求</span>
           </div>
           <div v-else class="dns-record-content">
+            <div class="dns-filter-toolbar">
+              <label class="dns-filter-search">
+                <AppIcon name="search" />
+                <InputText
+                  v-model="dnsFilterQuery"
+                  type="search"
+                  autocomplete="off"
+                  aria-label="过滤代理 DNS 记录"
+                  placeholder="过滤域名、IP、客户端或状态"
+                  @keydown.esc="dnsFilterQuery = ''"
+                />
+              </label>
+              <span>显示 {{ filteredDnsRecords.length }} / {{ displayedDnsRecords.length }} 条</span>
+            </div>
             <div class="dns-selection-toolbar">
               <span>
-                已选 {{ selectedDnsDomains.length }} · 生成 {{ selectedDnsRules.length }} 条
+                已选 {{ selectedDnsDomains.length }} · 待添加 {{ selectedDnsRulesToAdd.length }} 条 · 待移出 {{ selectedDnsRulesToRemove.length }} 条
                 <em v-if="pendingDnsRecordCount"> · {{ pendingDnsRecordCount }} 条新记录待更新</em>
               </span>
               <Button
-                :label="allSelectableDnsSelected ? '清空' : '全选'"
+                :label="selectAllDnsLabel"
                 severity="secondary"
                 size="small"
                 :disabled="!selectableDnsDomains.length"
@@ -567,8 +653,15 @@ function onDnsListFocusOut(event: FocusEvent) {
               <Button
                 :label="selectedDnsActionLabel"
                 size="small"
-                :disabled="!selectedDnsDomains.length"
+                :disabled="!selectedDnsRulesToAdd.length"
                 @click="addSelectedDnsDomainsToDirectRules"
+              />
+              <Button
+                :label="selectedDnsRemoveActionLabel"
+                severity="danger"
+                size="small"
+                :disabled="!selectedDnsRulesToRemove.length"
+                @click="removeSelectedDnsDomainsFromDirectRules"
               />
             </div>
             <div class="dns-record-frame">
@@ -581,8 +674,12 @@ function onDnsListFocusOut(event: FocusEvent) {
                 @focusin="dnsListFocused = true"
                 @focusout="onDnsListFocusOut"
               >
+                <div v-if="!filteredDnsRecords.length" class="dns-filter-empty">
+                  <AppIcon name="search" />
+                  <span>没有符合过滤条件的 DNS 记录</span>
+                </div>
                 <div
-                  v-for="record in displayedDnsRecords"
+                  v-for="record in filteredDnsRecords"
                   :key="`${record.timestamp_ms}-${record.client}-${record.query}`"
                   :class="[
                     'dns-record-row',
@@ -594,9 +691,8 @@ function onDnsListFocusOut(event: FocusEvent) {
                   ]"
                   role="checkbox"
                   :aria-checked="dnsDomainIsSelected(record)"
-                  :aria-disabled="dnsDomainIsDirect(record)"
-                  :tabindex="dnsDomainIsDirect(record) ? -1 : 0"
-                  :title="dnsDomainIsDirect(record) ? '该域名已在直连规则中' : '点击选择该域名'"
+                  tabindex="0"
+                  :title="dnsDomainIsDirect(record) ? '该域名已在直连规则中，点击选择后可移出' : '点击选择该域名'"
                   @mousedown.stop
                   @click="toggleDnsDomainSelection(record)"
                   @keydown.enter.prevent="toggleDnsDomainSelection(record)"
@@ -606,7 +702,6 @@ function onDnsListFocusOut(event: FocusEvent) {
                     class="dns-record-checkbox"
                     type="checkbox"
                     :checked="dnsDomainIsSelected(record)"
-                    :disabled="dnsDomainIsDirect(record)"
                     tabindex="-1"
                     aria-hidden="true"
                     @click.stop

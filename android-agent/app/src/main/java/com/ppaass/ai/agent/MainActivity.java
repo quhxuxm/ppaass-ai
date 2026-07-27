@@ -31,9 +31,10 @@ public class MainActivity extends MainActivityScreens {
                         || PpaassVpnService.PREF_MOCK_GEO_STOPPING.equals(key)
                         || PpaassVpnService.PREF_MOCK_GEO_ERROR.equals(key)
                         || PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND.equals(key)
-                        || PpaassVpnService.PREF_MOCK_GEO_DIRTY.equals(key)
-                        || MockGeoConfig.PREF_MODE.equals(key)
-                        || PpaassHttpProxyService.PREF_RUNNING.equals(key)) {
+                         || PpaassVpnService.PREF_MOCK_GEO_DIRTY.equals(key)
+                         || MockGeoConfig.PREF_MODE.equals(key)
+                         || PpaassHttpProxyService.PREF_ENABLED.equals(key)
+                         || PpaassHttpProxyService.PREF_RUNNING.equals(key)) {
                     runOnUiThread(() -> {
                         updateVpnToggle();
                         updateHttpProxyToggle();

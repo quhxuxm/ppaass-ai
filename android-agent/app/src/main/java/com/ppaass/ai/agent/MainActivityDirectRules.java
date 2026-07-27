@@ -46,6 +46,21 @@ protected void addDirectRules(List<String> rules) {
         renderDirectRuleList();
     }
 
+protected void removeDirectRules(Collection<String> rules) {
+        HashSet<String> keys = new HashSet<>();
+        for (String rule : rules) {
+            if (rule != null && !rule.trim().isEmpty()) {
+                keys.add(rule.trim().toLowerCase(Locale.US));
+            }
+        }
+        if (keys.isEmpty()) {
+            return;
+        }
+        directRuleValues.removeIf(
+                rule -> keys.contains(rule.trim().toLowerCase(Locale.US)));
+        renderDirectRuleList();
+    }
+
 protected void removeDirectRule(int index) {
         if (isVpnRunning() || isHttpProxyRunning()) {
             Toast.makeText(

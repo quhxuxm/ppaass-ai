@@ -58,8 +58,8 @@ let refreshInFlight = false;
 
 const directionOptions = [
   { label: "全部方向", value: "all" },
-  { label: "Client → 目标", value: "upload" },
-  { label: "目标 → Client", value: "download" }
+  { label: "Client → Agent / 目标", value: "upload" },
+  { label: "Agent / 目标 → Client", value: "download" }
 ];
 
 const sortColumns: Array<{ key: SortKey; label: string }> = [
@@ -76,14 +76,17 @@ const sortColumns: Array<{ key: SortKey; label: string }> = [
 const protocolOptions = computed(() => [
   { label: "全部协议", value: "all" },
   ...Array.from(
-    new Set(
-      (state.report?.packets ?? []).flatMap((packet) =>
-        packet.sub_protocol ? [packet.protocol, packet.sub_protocol] : [packet.protocol]
-      )
-    )
+    new Set([
+      "proxy:HTTP",
+      "proxy:SOCKS5",
+      ...(state.report?.packets ?? []).flatMap(packetProtocolFilterValues)
+    ])
   )
     .sort()
-    .map((value) => ({ label: value, value }))
+    .map((value) => ({
+      label: value.startsWith("proxy:") ? `${value.slice("proxy:".length)} 代理` : value,
+      value
+    }))
 ]);
 
 watch(
@@ -117,8 +120,7 @@ const filteredPackets = computed(() => {
     .filter(
       (packet) =>
         selectedProtocol === "all" ||
-        packet.protocol === selectedProtocol ||
-        packet.sub_protocol === selectedProtocol
+        packetProtocolFilterValues(packet).includes(selectedProtocol)
     )
     .filter((packet) => packet.length > minimumPacketSizeBytes)
     .filter((packet) => {
@@ -132,6 +134,8 @@ const filteredPackets = computed(() => {
         packet.destination_port,
         packet.protocol,
         packet.sub_protocol,
+        packet.proxy_protocol,
+        packet.proxy_protocol ? `${packet.proxy_protocol} proxy 代理` : "",
         packet.summary,
         packet.payload_text,
         packet.payload_hex
@@ -210,7 +214,7 @@ function packetTime(timestampMs: number) {
 }
 
 function directionLabel(value: CapturedPacket["direction"]) {
-  return value === "upload" ? "Client → 目标" : "目标 → Client";
+  return value === "upload" ? "Client → Agent / 目标" : "Agent / 目标 → Client";
 }
 
 function confirmClearCapture() {
@@ -244,7 +248,7 @@ function packetSortValue(packet: CapturedPacket, key: SortKey): number | string 
     case "direction":
       return directionLabel(packet.direction);
     case "protocol":
-      return [packet.protocol, packet.sub_protocol].filter(Boolean).join(" / ");
+      return packetProtocolLabels(packet).join(" / ");
     case "source":
       return endpoint(packet.source, packet.source_port);
     case "destination":
@@ -254,6 +258,29 @@ function packetSortValue(packet: CapturedPacket, key: SortKey): number | string 
     case "summary":
       return packet.summary;
   }
+}
+
+function packetProtocolFilterValues(packet: CapturedPacket) {
+  return Array.from(
+    new Set(
+      [
+        packet.protocol,
+        packet.sub_protocol,
+        packet.proxy_protocol ? `proxy:${packet.proxy_protocol}` : null
+      ].filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function packetProtocolLabels(packet: CapturedPacket) {
+  const labels = [packet.protocol];
+  if (packet.proxy_protocol) {
+    labels.push(`${packet.proxy_protocol} 代理`);
+  }
+  if (packet.sub_protocol && packet.sub_protocol !== packet.proxy_protocol) {
+    labels.push(packet.sub_protocol);
+  }
+  return labels;
 }
 
 function toggleSort(key: SortKey) {
@@ -348,13 +375,13 @@ function hasTauri() {
           </div>
           <div class="metric-tile">
             <AppIcon name="send" />
-            <span>Client → 目标</span>
+            <span>Client → Agent / 目标</span>
             <strong>{{ formatBytes(state.report?.upload_bytes ?? 0) }}</strong>
             <small>{{ state.report?.upload_packets ?? 0 }} 包</small>
           </div>
           <div class="metric-tile">
             <AppIcon name="cloud" />
-            <span>目标 → Client</span>
+            <span>Agent / 目标 → Client</span>
             <strong>{{ formatBytes(state.report?.download_bytes ?? 0) }}</strong>
             <small>{{ state.report?.download_packets ?? 0 }} 包</small>
           </div>
@@ -368,7 +395,13 @@ function hasTauri() {
           抓包默认关闭。点击“开启抓包”即可立即开始，无需重启 Agent。
         </p>
         <p v-else-if="state.report && !state.report.exists" class="capture-notice">
-          尚未生成抓包文件。启动 Agent 并产生 TUN 流量后会自动显示。
+          尚未生成抓包文件。启动 Agent 并产生 TUN、HTTP 或 SOCKS5 流量后会自动显示。
+        </p>
+        <p
+          v-if="(state.report?.file_size ?? 0) > AUTO_REFRESH_MAX_FILE_BYTES"
+          class="capture-notice warning"
+        >
+          PCAP 已超过 {{ formatBytes(AUTO_REFRESH_MAX_FILE_BYTES) }}，为避免反复扫描大文件已暂停自动刷新。点击“刷新”查看最新数据，或清空抓包文件后恢复自动刷新。
         </p>
         <p v-if="state.error" class="capture-notice error">{{ state.error }}</p>
       </template>
@@ -457,13 +490,16 @@ function hasTauri() {
                 </td>
                 <td>
                   <div class="capture-protocol-stack">
-                    <Tag :value="packet.protocol" severity="info" />
-                    <span v-if="packet.sub_protocol">/</span>
-                    <Tag
-                      v-if="packet.sub_protocol"
-                      :value="packet.sub_protocol"
-                      severity="warn"
-                    />
+                    <template
+                      v-for="(label, index) in packetProtocolLabels(packet)"
+                      :key="label"
+                    >
+                      <span v-if="index">/</span>
+                      <Tag
+                        :value="label"
+                        :severity="index === 0 ? 'info' : label.endsWith('代理') ? 'success' : 'warn'"
+                      />
+                    </template>
                   </div>
                 </td>
                 <td><code>{{ endpoint(packet.source, packet.source_port) }}</code></td>
@@ -477,7 +513,7 @@ function hasTauri() {
         <div v-else class="capture-empty">
           <AppIcon name="file-down" />
           <strong>{{ state.loading ? "正在读取抓包结果" : "没有符合条件的数据包" }}</strong>
-          <span>产生 TUN 流量或调整筛选条件后再查看。</span>
+          <span>产生 TUN、HTTP 或 SOCKS5 流量，或调整筛选条件后再查看。</span>
         </div>
       </template>
     </Card>
@@ -493,8 +529,7 @@ function hasTauri() {
       <template v-if="selectedPacket">
         <p class="capture-dialog-subtitle">
           {{ directionLabel(selectedPacket.direction) }} · IPv{{ selectedPacket.ip_version }} ·
-          {{ selectedPacket.protocol
-          }}{{ selectedPacket.sub_protocol ? ` / ${selectedPacket.sub_protocol}` : "" }}
+          {{ packetProtocolLabels(selectedPacket).join(" / ") }}
         </p>
         <div class="capture-detail-grid">
           <div><span>源地址</span><code>{{ endpoint(selectedPacket.source, selectedPacket.source_port) }}</code></div>

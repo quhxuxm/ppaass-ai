@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::process::Stdio;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -87,7 +88,11 @@ pub(crate) fn start_agent_inner(
         config_path.clone(),
         runtime.logs.clone(),
         runtime.last_error.clone(),
+        runtime.packet_capture_enabled.load(Ordering::Acquire),
     )?;
+    runtime
+        .packet_capture_enabled
+        .store(embedded.packet_capture.is_enabled(), Ordering::Release);
 
     *runtime
         .config_path
@@ -228,6 +233,7 @@ fn spawn_embedded_agent(
     config_path: PathBuf,
     logs: UiLogBuffer,
     last_error: Arc<Mutex<Option<String>>>,
+    resume_packet_capture: bool,
 ) -> Result<EmbeddedAgent, String> {
     let agent_base_dir = agent_base_dir(&config_path);
     let mut config = desktop_agent_be::config::AgentConfig::load(&config_path)
@@ -247,6 +253,12 @@ fn spawn_embedded_agent(
     let packet_capture = desktop_agent_be::PacketCaptureController::new(PathBuf::from(
         &config.tun.packet_capture.file,
     ));
+    if resume_packet_capture {
+        match packet_capture.set_enabled(true) {
+            Ok(()) => logs.push("Agent 重启后已继续抓包"),
+            Err(error) => logs.push(format!("Agent 重启后恢复抓包失败，将保持关闭：{error}")),
+        }
+    }
     let thread_packet_capture = packet_capture.clone();
 
     logs.push(format!(
@@ -363,6 +375,9 @@ pub(crate) fn set_packet_capture_runtime_enabled_local(
     controller
         .set_enabled(enabled)
         .map_err(|error| format!("{}抓包失败：{error}", if enabled { "开启" } else { "关闭" }))?;
+    runtime
+        .packet_capture_enabled
+        .store(controller.is_enabled(), Ordering::Release);
     Ok(PacketCaptureRuntimeStatus {
         available: true,
         enabled: controller.is_enabled(),
@@ -697,6 +712,7 @@ mod tests {
 
         let enabled = set_packet_capture_runtime_enabled(&runtime, true).unwrap();
         assert!(enabled.enabled);
+        assert!(runtime.packet_capture_enabled.load(Ordering::Acquire));
         let agent_controller = runtime
             .agent
             .lock()
@@ -713,6 +729,7 @@ mod tests {
 
         let disabled = set_packet_capture_runtime_enabled(&runtime, false).unwrap();
         assert!(!disabled.enabled);
+        assert!(!runtime.packet_capture_enabled.load(Ordering::Acquire));
         fs::remove_file(path).unwrap();
     }
 }

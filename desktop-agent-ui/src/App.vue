@@ -36,6 +36,7 @@ const {
   refreshAgentState,
   reloadAll,
   removeDirectRule,
+  removeDirectRulesAndRestart,
   restoreDefaultConfig,
   runDiagnostics,
   running,
@@ -83,7 +84,7 @@ function setLanguage(language: AppLocale) {
         @update:collapsed="sidebarCollapsed = $event"
       />
 
-      <section class="workspace">
+      <section :class="['workspace', { 'capture-workspace': state.activeTab === 'capture' }]">
         <AppTopbar
           :subtitle="summary.listen_addr || state.statusText"
           :running="running"
@@ -128,6 +129,7 @@ function setLanguage(language: AppLocale) {
           :dns-card-label="dnsCardLabel"
           :agent-running="running"
           @add-direct-rules="addDirectRulesAndRestart"
+          @remove-direct-rules="removeDirectRulesAndRestart"
         />
 
         <ForwardingView

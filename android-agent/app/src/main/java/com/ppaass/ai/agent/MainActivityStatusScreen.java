@@ -142,7 +142,52 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
 
-        dnsSelectionToolbar = horizontalRow();
+        LinearLayout dnsFilterToolbar = horizontalRow();
+        dnsFilterToolbar.setGravity(Gravity.CENTER_VERTICAL);
+        dnsFilterInput = new EditText(this);
+        dnsFilterInput.setHint(tr("过滤域名、IP、客户端、状态或解析器"));
+        dnsFilterInput.setSingleLine(true);
+        dnsFilterInput.setInputType(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_FILTER);
+        dnsFilterInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        dnsFilterInput.setTextSize(13f);
+        dnsFilterInput.setContentDescription(tr("过滤代理 DNS 记录"));
+        styleInput(dnsFilterInput);
+        dnsFilterInput.setPadding(dp(11), 0, dp(11), 0);
+        dnsFilterToolbar.addView(dnsFilterInput, new LinearLayout.LayoutParams(
+                0,
+                dp(42),
+                1f));
+
+        dnsFilterSummary = mutedText("显示 0 / 0 条", 10.5f);
+        dnsFilterSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        dnsFilterSummary.setSingleLine(true);
+        LinearLayout.LayoutParams dnsFilterSummaryParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(42));
+        dnsFilterSummaryParams.setMargins(dp(8), 0, 0, 0);
+        dnsFilterToolbar.addView(dnsFilterSummary, dnsFilterSummaryParams);
+        LinearLayout.LayoutParams dnsFilterToolbarParams = matchWrap();
+        dnsFilterToolbarParams.setMargins(0, 0, 0, dp(7));
+        dnsPanel.addView(dnsFilterToolbar, dnsFilterToolbarParams);
+        dnsFilterInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+                lastDnsRecordsStateKey = "";
+                updateDnsRecords();
+            }
+
+            @Override
+            public void afterTextChanged(Editable editable) {
+            }
+        });
+
+        dnsSelectionToolbar = new LinearLayout(this);
+        dnsSelectionToolbar.setOrientation(LinearLayout.VERTICAL);
         dnsSelectionToolbar.setGravity(Gravity.CENTER_VERTICAL);
         dnsSelectionToolbar.setPadding(dp(5), dp(5), dp(5), dp(5));
         dnsSelectionToolbar.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));

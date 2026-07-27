@@ -35,7 +35,11 @@ protected void updateDnsRecords() {
         String recordsJson;
         try {
             recordsJson = NativeAgent.dnsResolutionRecordsJson();
-            String stateKey = running + ":" + recordsJson;
+            String stateKey = dnsRecordsStateKey(
+                    running,
+                    dnsFilterQuery(),
+                    directRuleValues,
+                    recordsJson);
             if (stateKey.equals(lastDnsRecordsStateKey)) {
                 return;
             }
@@ -43,6 +47,7 @@ protected void updateDnsRecords() {
             records = new JSONArray(recordsJson);
         } catch (JSONException | RuntimeException e) {
             hideDnsSelectionToolbar();
+            updateDnsFilterSummary(0, 0);
             dnsRecordList.removeAllViews();
             addDnsEmptyRow("DNS 记录不可用");
             stabilizeMainScroll(scrollY);
@@ -52,6 +57,7 @@ protected void updateDnsRecords() {
         dnsRecordList.removeAllViews();
         if (records.length() == 0) {
             hideDnsSelectionToolbar();
+            updateDnsFilterSummary(0, 0);
             addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
             stabilizeMainScroll(scrollY);
             return;
@@ -66,17 +72,49 @@ protected void updateDnsRecords() {
         }
         if (agentRecords.isEmpty()) {
             hideDnsSelectionToolbar();
+            updateDnsFilterSummary(0, 0);
             addDnsEmptyRow(running ? "等待代理 DNS 请求" : "VPN 已停止");
             stabilizeMainScroll(scrollY);
             return;
         }
 
         pruneDnsSelection(agentRecords);
-        addDnsSelectionToolbar(agentRecords);
-        for (JSONObject record : agentRecords) {
+        List<JSONObject> filteredRecords = filterDnsRecords(agentRecords);
+        updateDnsFilterSummary(filteredRecords.size(), agentRecords.size());
+        addDnsSelectionToolbar(agentRecords, filteredRecords);
+        if (filteredRecords.isEmpty()) {
+            addDnsEmptyRow("没有符合过滤条件的 DNS 记录");
+            stabilizeMainScroll(scrollY);
+            return;
+        }
+        for (JSONObject record : filteredRecords) {
             addDnsRecordRow(record);
         }
         stabilizeMainScroll(scrollY);
+    }
+
+static String dnsRecordsStateKey(
+        boolean running,
+        String filter,
+        Collection<String> directRules,
+        String recordsJson) {
+        StringBuilder key = new StringBuilder(running ? "1" : "0");
+        appendDnsStatePart(key, filter);
+        if (directRules == null) {
+            key.append("|-1");
+        } else {
+            key.append('|').append(directRules.size());
+            for (String rule : directRules) {
+                appendDnsStatePart(key, rule);
+            }
+        }
+        appendDnsStatePart(key, recordsJson);
+        return key.toString();
+    }
+
+private static void appendDnsStatePart(StringBuilder key, String value) {
+        String safeValue = value == null ? "" : value;
+        key.append('|').append(safeValue.length()).append(':').append(safeValue);
     }
 
 protected void stabilizeMainScroll(int scrollY) {
@@ -125,24 +163,24 @@ protected void addDnsRecordRow(JSONObject record) {
         row.setPadding(dp(4), dp(5), dp(4), dp(5));
         row.setMinimumHeight(dp(46));
         row.setBackgroundColor(selected ? COLOR_ACCENT_SOFT : COLOR_SURFACE);
-        row.setEnabled(!direct);
-        row.setClickable(!direct);
+        row.setEnabled(true);
+        row.setClickable(true);
         row.setFocusable(false);
-        row.setContentDescription(direct
-                ? domain + "，已在直连规则中"
-                : domain + (selected ? "，已选择" : "，未选择"));
+        row.setContentDescription(tr(direct
+                ? domain + "，已在直连规则中，点击选择后可移出"
+                : domain + (selected ? "，已选择" : "，未选择")));
         row.setOnClickListener(view -> toggleDnsDomainSelection(domain));
 
         TextView selector = new TextView(this);
-        selector.setText(selected || direct ? "✓" : "");
+        selector.setText(selected ? "✓" : "");
         selector.setTextSize(11f);
         selector.setTypeface(Typeface.DEFAULT_BOLD);
         selector.setGravity(Gravity.CENTER);
-        selector.setTextColor(direct ? COLOR_MUTED : COLOR_ACCENT_DARK);
+        selector.setTextColor(COLOR_ACCENT_DARK);
         selector.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         selector.setBackground(rounded(
-                selected || direct ? COLOR_ACCENT_SOFT : COLOR_CONTROL,
-                selected ? COLOR_ACCENT : COLOR_BORDER));
+                selected ? COLOR_ACCENT_SOFT : COLOR_CONTROL,
+                selected ? COLOR_ACCENT : (direct ? COLOR_ACTION_INFO : COLOR_BORDER)));
         LinearLayout.LayoutParams selectorParams = new LinearLayout.LayoutParams(dp(18), dp(18));
         selectorParams.setMargins(0, 0, dp(6), 0);
         row.addView(selector, selectorParams);
@@ -240,11 +278,13 @@ protected void addDnsRecordRow(JSONObject record) {
         dnsRecordList.addView(row, rowParams);
     }
 
-protected void addDnsSelectionToolbar(List<JSONObject> records) {
+protected void addDnsSelectionToolbar(
+        List<JSONObject> records,
+        List<JSONObject> filteredRecords) {
         if (dnsSelectionToolbar == null) {
             return;
         }
-        List<String> selectable = selectableDnsDomains(records);
+        List<String> selectable = selectableDnsDomains(filteredRecords);
         boolean allSelected = !selectable.isEmpty();
         for (String domain : selectable) {
             if (!selectedDnsDomains.containsKey(domain.toLowerCase(Locale.US))) {
@@ -256,18 +296,26 @@ protected void addDnsSelectionToolbar(List<JSONObject> records) {
         dnsSelectionToolbar.removeAllViews();
         dnsSelectionToolbar.setVisibility(View.VISIBLE);
 
-        List<String> rules = selectedDnsRules(records);
+        List<String> rulesToAdd = selectedDnsRulesToAdd(records);
+        List<String> rulesToRemove = selectedDnsRulesToRemove(records);
         TextView summary = mutedText(
-                "已选 " + selectedDnsDomains.size() + " · 生成 " + rules.size() + " 条",
+                "已选 " + selectedDnsDomains.size()
+                        + " · 待添加 " + rulesToAdd.size() + " 条"
+                        + " · 待移出 " + rulesToRemove.size() + " 条",
                 10.5f);
         summary.setSingleLine(true);
         summary.setEllipsize(TextUtils.TruncateAt.END);
-        dnsSelectionToolbar.addView(summary, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f));
+        dnsSelectionToolbar.addView(summary, matchWrap());
 
-        Button selectAll = secondaryButton(allSelected ? "清空" : "全选");
+        LinearLayout actions = horizontalRow();
+        String filter = dnsFilterQuery();
+        String selectAllLabel;
+        if (filter.isEmpty()) {
+            selectAllLabel = allSelected ? "清空" : "全选";
+        } else {
+            selectAllLabel = allSelected ? "取消结果" : "全选结果";
+        }
+        Button selectAll = secondaryButton(selectAllLabel);
         selectAll.setTextSize(11f);
         selectAll.setMinHeight(0);
         selectAll.setMinWidth(0);
@@ -275,15 +323,20 @@ protected void addDnsSelectionToolbar(List<JSONObject> records) {
         selectAll.setEnabled(!selectable.isEmpty());
         boolean finalAllSelected = allSelected;
         selectAll.setOnClickListener(view -> {
-            selectedDnsDomains.clear();
-            if (!finalAllSelected) {
+            if (finalAllSelected) {
+                HashSet<String> visibleKeys = new HashSet<>();
+                for (String domain : selectable) {
+                    visibleKeys.add(domain.toLowerCase(Locale.US));
+                }
+                selectedDnsDomains.keySet().removeAll(visibleKeys);
+            } else {
                 for (String domain : selectable) {
                     selectedDnsDomains.put(domain.toLowerCase(Locale.US), domain);
                 }
             }
             refreshDnsSelectionUi();
         });
-        dnsSelectionToolbar.addView(selectAll, new LinearLayout.LayoutParams(dp(64), dp(34)));
+        actions.addView(selectAll, new LinearLayout.LayoutParams(0, dp(36), 1f));
 
         Button add = actionButton(
                 isVpnRunning() || isHttpProxyRunning()
@@ -294,13 +347,33 @@ protected void addDnsSelectionToolbar(List<JSONObject> records) {
         add.setMinHeight(0);
         add.setMinWidth(0);
         add.setPadding(dp(8), 0, dp(8), 0);
-        add.setEnabled(!rules.isEmpty());
+        add.setEnabled(!rulesToAdd.isEmpty());
         add.setOnClickListener(view -> addSelectedDnsRules(records));
-        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
-                isVpnRunning() || isHttpProxyRunning() ? dp(94) : dp(64),
-                dp(34));
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(36), 1f);
         addParams.setMargins(dp(6), 0, 0, 0);
-        dnsSelectionToolbar.addView(add, addParams);
+        actions.addView(add, addParams);
+
+        Button remove = actionButton(
+                isVpnRunning() || isHttpProxyRunning()
+                        ? "移出并重启"
+                        : "移出",
+                COLOR_ACTION_STOP);
+        remove.setTextSize(11f);
+        remove.setMinHeight(0);
+        remove.setMinWidth(0);
+        remove.setPadding(dp(8), 0, dp(8), 0);
+        remove.setEnabled(!rulesToRemove.isEmpty());
+        remove.setOnClickListener(view -> removeSelectedDnsRules(records));
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(
+                0,
+                dp(36),
+                1f);
+        removeParams.setMargins(dp(6), 0, 0, 0);
+        actions.addView(remove, removeParams);
+
+        LinearLayout.LayoutParams actionsParams = matchWrap();
+        actionsParams.setMargins(0, dp(5), 0, 0);
+        dnsSelectionToolbar.addView(actions, actionsParams);
     }
 
 protected void hideDnsSelectionToolbar() {
@@ -313,9 +386,6 @@ protected void hideDnsSelectionToolbar() {
 
 protected void toggleDnsDomainSelection(String domain) {
         String key = domain.toLowerCase(Locale.US);
-        if (dnsDomainIsDirect(domain)) {
-            return;
-        }
         if (selectedDnsDomains.containsKey(key)) {
             selectedDnsDomains.remove(key);
         } else {
@@ -325,12 +395,12 @@ protected void toggleDnsDomainSelection(String domain) {
     }
 
 protected void addSelectedDnsRules(List<JSONObject> records) {
-        List<String> rules = selectedDnsRules(records);
+        List<String> rules = selectedDnsRulesToAdd(records);
         if (rules.isEmpty()) {
             return;
         }
-        boolean restartVpn = isVpnRunning();
-        boolean restartHttpProxy = isHttpProxyRunning();
+        boolean restartVpn = isVpnActiveForRuleReload();
+        boolean restartHttpProxy = isHttpProxyActiveForRuleReload();
         addDirectRules(rules);
         saveConfig();
         selectedDnsDomains.clear();
@@ -338,22 +408,61 @@ protected void addSelectedDnsRules(List<JSONObject> records) {
         restartRunningAgentsAfterRuleUpdate(restartVpn, restartHttpProxy);
     }
 
-protected List<String> selectedDnsRules(List<JSONObject> records) {
+protected void removeSelectedDnsRules(List<JSONObject> records) {
+        List<String> rules = selectedDnsRulesToRemove(records);
+        if (rules.isEmpty()) {
+            return;
+        }
+        boolean restartVpn = isVpnActiveForRuleReload();
+        boolean restartHttpProxy = isHttpProxyActiveForRuleReload();
+        removeDirectRules(rules);
+        saveConfig();
+        selectedDnsDomains.clear();
+        refreshDnsSelectionUi();
+        restartRunningAgentsAfterRuleUpdate(
+                restartVpn,
+                restartHttpProxy,
+                "直连规则已移出",
+                "直连规则已移出，正在重启");
+    }
+
+protected List<String> selectedDnsRulesToAdd(List<JSONObject> records) {
+        LinkedHashMap<String, String> domains = new LinkedHashMap<>();
         List<String> addresses = new ArrayList<>();
         for (JSONObject record : records) {
-            String domainKey = dnsRecordDomain(record).toLowerCase(Locale.US);
+            String domain = dnsRecordDomain(record);
+            String domainKey = domain.toLowerCase(Locale.US);
             if (!selectedDnsDomains.containsKey(domainKey)) {
                 continue;
             }
-            JSONArray answers = record.optJSONArray("answers");
-            if (answers == null) {
+            if (dnsDomainIsDirect(domain)) {
                 continue;
             }
-            for (int index = 0; index < answers.length(); index++) {
-                addresses.add(answers.optString(index));
+            domains.put(domainKey, domain);
+            addresses.addAll(dnsRecordAnswers(record));
+        }
+        HashSet<String> existingRuleKeys = new HashSet<>();
+        for (String rule : directRuleValues) {
+            existingRuleKeys.add(rule.trim().toLowerCase(Locale.US));
+        }
+        List<String> rules = DirectRuleDomains.toDirectRules(domains.values(), addresses);
+        rules.removeIf(rule ->
+                existingRuleKeys.contains(rule.trim().toLowerCase(Locale.US)));
+        return rules;
+    }
+
+protected List<String> selectedDnsRulesToRemove(List<JSONObject> records) {
+        List<String> addresses = new ArrayList<>();
+        for (JSONObject record : records) {
+            String domainKey = dnsRecordDomain(record).toLowerCase(Locale.US);
+            if (selectedDnsDomains.containsKey(domainKey)) {
+                addresses.addAll(dnsRecordAnswers(record));
             }
         }
-        return DirectRuleDomains.toDirectRules(selectedDnsDomains.values(), addresses);
+        return DirectRuleDomains.directRulesMatchingDomainsAndAddresses(
+                directRuleValues,
+                selectedDnsDomains.values(),
+                addresses);
     }
 
 protected void refreshDnsSelectionUi() {
@@ -365,7 +474,7 @@ protected void pruneDnsSelection(List<JSONObject> records) {
         HashSet<String> available = new HashSet<>();
         for (JSONObject record : records) {
             String domain = dnsRecordDomain(record);
-            if (!dnsDomainIsDirect(domain)) {
+            if (!domain.isEmpty()) {
                 available.add(domain.toLowerCase(Locale.US));
             }
         }
@@ -377,11 +486,50 @@ protected List<String> selectableDnsDomains(List<JSONObject> records) {
         for (JSONObject record : records) {
             String domain = dnsRecordDomain(record);
             String key = domain.toLowerCase(Locale.US);
-            if (!domain.isEmpty() && !dnsDomainIsDirect(domain) && !domains.containsKey(key)) {
+            if (!domain.isEmpty() && !domains.containsKey(key)) {
                 domains.put(key, domain);
             }
         }
         return new ArrayList<>(domains.values());
+    }
+
+protected List<JSONObject> filterDnsRecords(List<JSONObject> records) {
+        String filter = dnsFilterQuery();
+        if (filter.isEmpty()) {
+            return new ArrayList<>(records);
+        }
+        List<JSONObject> filtered = new ArrayList<>();
+        for (JSONObject record : records) {
+            String domain = dnsRecordDomain(record);
+            if (DnsRecordFilter.matches(
+                    filter,
+                    domain,
+                    dnsRecordAnswers(record),
+                    record.optString("client", ""),
+                    record.optString("upstream", ""),
+                    record.optString("resolver", ""),
+                    record.optString("record_type", ""),
+                    record.optString("status", ""),
+                    record.optLong("duration_ms", 0),
+                    dnsDomainIsDirect(domain))) {
+                filtered.add(record);
+            }
+        }
+        return filtered;
+    }
+
+protected String dnsFilterQuery() {
+        if (dnsFilterInput == null || dnsFilterInput.getText() == null) {
+            return "";
+        }
+        return dnsFilterInput.getText().toString().trim();
+    }
+
+protected void updateDnsFilterSummary(int filteredCount, int totalCount) {
+        if (dnsFilterSummary != null) {
+            dnsFilterSummary.setText(tr(
+                    "显示 " + filteredCount + " / " + totalCount + " 条"));
+        }
     }
 
 protected boolean dnsDomainIsDirect(String domain) {
@@ -402,13 +550,9 @@ protected String dnsRecordDomain(JSONObject record) {
     }
 
 protected String dnsAnswerLabel(JSONObject record) {
-        JSONArray answers = record.optJSONArray("answers");
-        if (answers != null && answers.length() > 0) {
-            List<String> values = new ArrayList<>();
-            for (int i = 0; i < Math.min(3, answers.length()); i++) {
-                values.add(answers.optString(i));
-            }
-            return TextUtils.join(", ", values);
+        List<String> answers = dnsRecordAnswers(record);
+        if (!answers.isEmpty()) {
+            return TextUtils.join(", ", answers.subList(0, Math.min(3, answers.size())));
         }
         String status = record.optString("status", "");
         if ("NOERROR".equals(status)) {
@@ -418,6 +562,21 @@ protected String dnsAnswerLabel(JSONObject record) {
             return "查询超时";
         }
         return record.optString("upstream", "代理 DNS");
+    }
+
+protected List<String> dnsRecordAnswers(JSONObject record) {
+        List<String> answers = new ArrayList<>();
+        JSONArray rawAnswers = record.optJSONArray("answers");
+        if (rawAnswers == null) {
+            return answers;
+        }
+        for (int index = 0; index < rawAnswers.length(); index++) {
+            String answer = rawAnswers.optString(index, "").trim();
+            if (!answer.isEmpty()) {
+                answers.add(answer);
+            }
+        }
+        return answers;
     }
 
 protected TextView dnsCacheChip(JSONObject record) {

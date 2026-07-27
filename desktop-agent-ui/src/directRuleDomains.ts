@@ -57,3 +57,27 @@ export function directRuleCoversDomain(rule: string, domain: string) {
   const suffix = normalizedRule.slice(2);
   return normalizedDomain !== suffix && normalizedDomain.endsWith(`.${suffix}`);
 }
+
+export function directRulesMatchingDomainsAndAddresses(
+  existingRules: string[],
+  domains: string[],
+  addresses: string[]
+) {
+  const normalizedDomains = domains
+    .map((domain) => domain.trim().replace(/\.$/, ""))
+    .filter(Boolean);
+  const addressKeys = new Set(
+    addresses
+      .map((address) => address.trim())
+      .filter(isIpAddress)
+      .map((address) => address.toLowerCase())
+  );
+
+  return existingRules.filter((rule) => {
+    const normalizedRule = rule.trim().toLowerCase();
+    return (
+      addressKeys.has(normalizedRule) ||
+      normalizedDomains.some((domain) => directRuleCoversDomain(rule, domain))
+    );
+  });
+}

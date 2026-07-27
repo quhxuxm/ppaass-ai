@@ -33,6 +33,7 @@ import java.util.UUID;
 public class PpaassVpnService extends VpnService {
     public static final String ACTION_START = "com.ppaass.ai.agent.START";
     public static final String ACTION_STOP = "com.ppaass.ai.agent.STOP";
+    public static final String ACTION_RELOAD = "com.ppaass.ai.agent.RELOAD";
     public static final String ACTION_START_MOCK_GEO =
             "com.ppaass.ai.agent.START_MOCK_GEO";
     public static final String ACTION_STOP_MOCK_GEO =
@@ -105,6 +106,9 @@ public class PpaassVpnService extends VpnService {
         latestStartId = startId;
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopAgent();
+            return startModeForCurrentOwners();
+        } else if (intent != null && ACTION_RELOAD.equals(intent.getAction())) {
+            reloadAgent();
             return startModeForCurrentOwners();
         } else if (intent != null && ACTION_START_MOCK_GEO.equals(intent.getAction())) {
             getSharedPreferences("ppaass_agent", MODE_PRIVATE)
@@ -316,7 +320,31 @@ public class PpaassVpnService extends VpnService {
         reconcileForegroundAndLifetime();
     }
 
+    private void reloadAgent() {
+        SharedPreferences prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        boolean wasRunning = vpnWasRunningForReload(
+                vpnStarting,
+                nativeHandle != 0,
+                tun != null,
+                runningInProcess,
+                prefs.getBoolean(PREF_RUNNING, false));
+        if (!wasRunning) {
+            return;
+        }
+        boolean originalSystemManaged = prefs.getBoolean(
+                PREF_SYSTEM_MANAGED,
+                isAlwaysOnVpn());
+        // Keep this service and its foreground ownership alive between the old and new TUN.
+        // Mock GEO state is deliberately not touched by this VPN-only reload.
+        stopVpnComponents(true);
+        startAgent(originalSystemManaged);
+    }
+
     private void stopVpnComponents() {
+        stopVpnComponents(false);
+    }
+
+    private void stopVpnComponents(boolean preserveSystemManaged) {
         vpnStarting = false;
         stopNativeHealthChecks();
         if (nativeHandle != 0) {
@@ -332,7 +360,22 @@ public class PpaassVpnService extends VpnService {
         }
         runningInProcess = false;
         setRunning(false);
-        setSystemManaged(false);
+        if (!preserveSystemManaged) {
+            setSystemManaged(false);
+        }
+    }
+
+    static boolean vpnWasRunningForReload(
+            boolean vpnStarting,
+            boolean nativeAttached,
+            boolean tunAttached,
+            boolean runningInProcess,
+            boolean persistedRunning) {
+        return vpnStarting
+                || nativeAttached
+                || tunAttached
+                || runningInProcess
+                || persistedRunning;
     }
 
     private void applyMockGeoConfig(boolean userVisible) {

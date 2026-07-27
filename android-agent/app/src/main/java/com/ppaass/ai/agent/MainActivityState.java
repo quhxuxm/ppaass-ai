@@ -120,6 +120,8 @@ protected TextView uploadSpeed;
 protected TextView trafficDownload;
 protected TextView trafficUpload;
 protected ScrollView mainScrollView;
+protected EditText dnsFilterInput;
+protected TextView dnsFilterSummary;
 protected LinearLayout dnsSelectionToolbar;
 protected LinearLayout dnsRecordList;
 protected Button connectivityTestButton;

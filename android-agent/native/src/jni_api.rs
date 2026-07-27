@@ -298,11 +298,19 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_packetCaptureReportJ
     _class: JClass<'local>,
     file: JString<'local>,
     limit: jint,
+    proxy_listen_port: jint,
 ) -> jstring {
     env.with_env(|env| -> jni::errors::Result<jstring> {
         let path = PathBuf::from(file.try_to_string(env)?);
-        let json = packet_capture::report_json(&path, usize::try_from(limit.max(1)).unwrap_or(1))
-            .unwrap_or_else(|error| format!("{{\"error\":{}}}", serde_json::Value::String(error)));
+        let proxy_listen_port = u16::try_from(proxy_listen_port)
+            .ok()
+            .filter(|port| *port > 0);
+        let json = packet_capture::report_json(
+            &path,
+            usize::try_from(limit.max(1)).unwrap_or(1),
+            proxy_listen_port,
+        )
+        .unwrap_or_else(|error| format!("{{\"error\":{}}}", serde_json::Value::String(error)));
         Ok(env.new_string(json)?.into_raw())
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>()

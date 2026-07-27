@@ -7,7 +7,7 @@ use super::*;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
 pub(super) async fn handle_tcp_connect(
-    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    protocol: Socks5ServerProtocol<CapturedTcpStream, CommandRead>,
     target_addr: TargetAddr,
     sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
@@ -121,10 +121,11 @@ pub(super) async fn handle_tcp_connect(
 }
 
 pub(super) async fn handle_tcp_bind(
-    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    protocol: Socks5ServerProtocol<CapturedTcpStream, CommandRead>,
     target_addr: TargetAddr,
     sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     info!("处理 SOCKS5 BIND 命令，目标: {:?}", target_addr);
     let target_label = format_target_addr(&target_addr);
@@ -152,11 +153,12 @@ pub(super) async fn handle_tcp_bind(
     // 等待绑定地址上的传入连接
     // BIND 不应无限等待远端连接，超时后释放监听端口。
     match tokio::time::timeout(std::time::Duration::from_secs(30), listener.accept()).await {
-        Ok(Ok((mut incoming_stream, peer_addr))) => {
+        Ok(Ok((incoming_stream, peer_addr))) => {
             info!(
                 "SOCKS5 BIND: 接受来自 {} 的连接，目标 {:?}",
                 peer_addr, address
             );
+            let mut incoming_stream = packet_capture.capture_tcp_stream(incoming_stream);
 
             if direct_checker.is_direct(&address) {
                 // === 直连路径 ===
@@ -245,12 +247,15 @@ pub(super) async fn handle_tcp_bind(
     }
 }
 
-async fn relay_data(
-    client_stream: &mut TcpStream,
+async fn relay_data<C>(
+    client_stream: &mut C,
     connected_stream: YamuxTargetStream,
     protocol: &str,
     target: String,
-) -> Result<()> {
+) -> Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+{
     // YamuxTargetStream 隐藏 direct framed TCP/Yamux 差异，上层只看到一个可读写的 proxy 目标流。
     // SOCKS5 与 HTTP/TUN 使用同一个 copy_bidirectional relay，不再为底层传输
     // 分叉不同 flush 或半关闭策略，避免同一视频分片在不同入口表现不一致。

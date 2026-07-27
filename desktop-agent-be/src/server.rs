@@ -130,9 +130,16 @@ impl AgentServer {
                             let tcp_sessions = self.tcp_sessions.clone();
                             let udp_sessions = self.udp_sessions.clone();
                             let direct_checker = self.direct_access_checker.clone();
+                            let packet_capture = self.packet_capture.clone();
                             spawn_guarded("desktop inbound connection", async move {
                                 if let Err(e) =
-                                    handle_connection(stream, tcp_sessions, udp_sessions, direct_checker).await
+                                    handle_connection(
+                                        stream,
+                                        tcp_sessions,
+                                        udp_sessions,
+                                        direct_checker,
+                                        packet_capture,
+                                    ).await
                                 {
                                     error!("处理连接时出错：{}", e);
                                 }
@@ -168,22 +175,34 @@ impl AgentServer {
     }
 }
 
-#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker))]
+#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker, packet_capture))]
 async fn handle_connection(
     stream: TcpStream,
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     // 通过窥探第一个字节来检测协议类型。
     // 同一个 listen_addr 同时服务 SOCKS5 和 HTTP 代理，减少用户配置成本。
     let mut buffer = [0u8; 1];
     stream.peek(&mut buffer).await?;
 
-    // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。
+    // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。捕获包装
+    // 放在协议识别之后，完整的代理握手和后续隧道数据仍都会被记录。
+    let stream = packet_capture.capture_tcp_stream(stream);
     match buffer[0] {
         // SOCKS5 版本号为 0x05
-        0x05 => handle_socks5_connection(stream, tcp_sessions, udp_sessions, direct_checker).await,
+        0x05 => {
+            handle_socks5_connection(
+                stream,
+                tcp_sessions,
+                udp_sessions,
+                direct_checker,
+                packet_capture,
+            )
+            .await
+        }
         // HTTP 方法首字母（G、P、C 等）
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
             handle_http_connection(stream, tcp_sessions, direct_checker).await

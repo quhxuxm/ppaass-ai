@@ -99,49 +99,34 @@ protected void stopHttpProxyService() {
 protected void restartRunningAgentsAfterRuleUpdate(
         boolean restartVpn,
         boolean restartHttpProxy) {
+        restartRunningAgentsAfterRuleUpdate(
+                restartVpn,
+                restartHttpProxy,
+                "直连规则已添加",
+                "直连规则已添加，正在重启");
+    }
+
+protected void restartRunningAgentsAfterRuleUpdate(
+        boolean restartVpn,
+        boolean restartHttpProxy,
+        String stoppedMessage,
+        String restartingMessage) {
         if (!restartVpn && !restartHttpProxy) {
-            Toast.makeText(this, tr("直连规则已添加"), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr(stoppedMessage), Toast.LENGTH_SHORT).show();
             return;
         }
 
         if (restartVpn) {
-            stopVpnService();
+            Intent intent = new Intent(this, PpaassVpnService.class);
+            intent.setAction(PpaassVpnService.ACTION_RELOAD);
+            startService(intent);
         }
         if (restartHttpProxy) {
-            stopHttpProxyService();
+            Intent intent = new Intent(this, PpaassHttpProxyService.class);
+            intent.setAction(PpaassHttpProxyService.ACTION_RELOAD);
+            startService(intent);
         }
-        Toast.makeText(this, tr("直连规则已添加，正在重启"), Toast.LENGTH_SHORT).show();
-
-        statusHandler.postDelayed(new Runnable() {
-            private int attempts;
-
-            @Override
-            public void run() {
-                boolean vpnStopped = !restartVpn || !isVpnRunning();
-                boolean httpProxyStopped = !restartHttpProxy || !isHttpProxyRunning();
-                if ((!vpnStopped || !httpProxyStopped) && attempts++ < 25) {
-                    statusHandler.postDelayed(this, 200);
-                    return;
-                }
-                if (!vpnStopped || !httpProxyStopped) {
-                    Toast.makeText(
-                            MainActivityServiceState.this,
-                            tr("规则已保存，服务停止超时，请手动重启"),
-                            Toast.LENGTH_LONG).show();
-                    return;
-                }
-                if (restartVpn) {
-                    startVpnService();
-                }
-                if (restartHttpProxy) {
-                    startHttpProxyService();
-                }
-                Toast.makeText(
-                        MainActivityServiceState.this,
-                        tr("直连规则已生效"),
-                        Toast.LENGTH_SHORT).show();
-            }
-        }, 200);
+        Toast.makeText(this, tr(restartingMessage), Toast.LENGTH_SHORT).show();
     }
 
 protected void showHttpProxyClientsDialog() {
@@ -178,6 +163,24 @@ protected boolean isHttpProxyRunning() {
             return true;
         }
         return running;
+    }
+
+protected boolean isHttpProxyActiveForRuleReload() {
+        return serviceWasRunningForRuleReload(
+                prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false),
+                PpaassHttpProxyService.isRunningInProcess());
+    }
+
+protected boolean isVpnActiveForRuleReload() {
+        return serviceWasRunningForRuleReload(
+                prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false),
+                PpaassVpnService.isRunningInProcess());
+    }
+
+static boolean serviceWasRunningForRuleReload(
+        boolean persistedRunning,
+        boolean runningInProcess) {
+        return persistedRunning && runningInProcess;
     }
 
 protected void restoreHttpProxyServiceIfEnabled() {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   directRuleCoversDomain,
+  directRulesMatchingDomainsAndAddresses,
   domainsAndAddressesToDirectRules,
   domainsToDirectRules,
   domainToDirectRule,
@@ -29,6 +30,29 @@ assert.deepEqual(
     ["203.0.113.8", "2001:db8::8", "alias.example.com", "203.0.113.8"]
   ),
   ["*.example.com", "203.0.113.8", "2001:db8::8"]
+);
+assert.deepEqual(
+  directRulesMatchingDomainsAndAddresses(
+    [
+      "*.example.com",
+      "api.example.com",
+      "203.0.113.8",
+      "2001:DB8::8",
+      "203.0.113.0/24",
+      "*.other.example"
+    ],
+    ["api.example.com"],
+    ["203.0.113.8", "2001:db8::8", "alias.example.com"]
+  ),
+  ["*.example.com", "api.example.com", "203.0.113.8", "2001:DB8::8"]
+);
+assert.deepEqual(
+  directRulesMatchingDomainsAndAddresses(
+    ["example.com", "*.example.com", "198.51.100.4"],
+    ["example.com"],
+    []
+  ),
+  ["example.com"]
 );
 
 console.log("directRuleDomains tests passed");

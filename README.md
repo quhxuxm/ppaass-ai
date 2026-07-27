@@ -99,9 +99,11 @@ quic_policy = "allow"               # application UDP/443 policy: allow direct/p
 file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
 ```
 
-Packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It applies to TUN traffic and includes both IPv4 and IPv6 in both directions. The output opens directly in Wireshark. It captures the plaintext at the PPAASS tunnel boundary; application-level encryption such as TLS remains encrypted.
+Desktop packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It covers TUN traffic plus local HTTP and SOCKS5 proxy connections, including SOCKS5 UDP, in both directions over IPv4 and IPv6. The output opens directly in Wireshark. TUN packets are recorded at the PPAASS tunnel boundary; explicit proxy streams are represented as valid raw IP packets between the real client and agent listener endpoints. Application-level encryption such as TLS remains encrypted.
 PCAP writes run on a dedicated buffered writer thread. The packet path uses a bounded non-blocking queue; if storage cannot keep up, capture copies are dropped instead of slowing proxy traffic.
 The desktop app's dedicated **Packet Capture** page shows direction, protocol, endpoints, byte counts, packet summaries, filters, and a short payload preview while retaining the PCAP as the source of truth.
+
+Android also provides runtime packet capture for VPN/TUN and explicit HTTP/SOCKS5 TCP ingress, with persistent proxy-protocol labels, safe PCAP append, and an adaptive full-height packet list. Its local SOCKS5 server intentionally does not support UDP ASSOCIATE, so SOCKS5 UDP capture remains a desktop-only capability. Android DNS records can be filtered and selected to add or remove matching direct-access rules; see [android-agent/README.md](android-agent/README.md).
 
 The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 

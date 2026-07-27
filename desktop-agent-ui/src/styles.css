@@ -7505,9 +7505,53 @@ html.app-light .preset-list .p-button {
   min-width: 0;
 }
 
+.dns-filter-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 8px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--app-surface);
+}
+
+.dns-filter-search {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.dns-filter-search > .app-icon {
+  position: absolute;
+  left: 11px;
+  z-index: 1;
+  width: 17px;
+  height: 17px;
+  color: var(--app-text-muted);
+  pointer-events: none;
+}
+
+.dns-filter-search .p-inputtext {
+  width: 100%;
+  min-height: 32px;
+  padding-block: 5px;
+  padding-left: 37px;
+  font-size: 12px;
+}
+
+.dns-filter-toolbar > span {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .dns-record-content .dns-selection-toolbar {
   position: static;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 8px;
   min-height: 42px;
   padding: 5px 6px;
@@ -7565,6 +7609,23 @@ html.app-light .preset-list .p-button {
   background: transparent;
 }
 
+.dns-record-frame .dns-filter-empty {
+  display: flex;
+  min-height: 116px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dns-record-frame .dns-filter-empty .app-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .dns-record-frame .dns-record-list:hover::-webkit-scrollbar-thumb,
 .dns-record-frame .dns-record-list:focus-within::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--app-text-muted) 35%, transparent);
@@ -7604,7 +7665,6 @@ html.app-dark .dns-record-frame .dns-record-row.interactive.selected {
 }
 
 .dns-record-frame .dns-record-row.interactive.direct {
-  cursor: default;
   opacity: 0.78;
 }
 
@@ -7684,6 +7744,7 @@ html.app-dark .dns-record-frame {
   background: #0b1218;
 }
 
+html.app-dark .dns-filter-toolbar,
 html.app-dark .dns-record-content .dns-selection-toolbar,
 html.app-dark .dns-record-frame .dns-record-row {
   border-color: rgba(116, 150, 170, 0.18);
@@ -7691,8 +7752,20 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 @media (max-width: 760px) {
+  .dns-filter-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dns-filter-toolbar > span {
+    padding-left: 4px;
+  }
+
   .dns-record-content .dns-selection-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dns-record-content .dns-selection-toolbar > span {
+    grid-column: 1 / -1;
   }
 
   .dns-record-content .dns-selection-toolbar .p-button {
@@ -8285,6 +8358,43 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 }
 /* Packet capture result explorer. */
+.workspace.capture-workspace {
+  display: flex;
+  flex-direction: column;
+}
+
+.capture-workspace > .topbar {
+  flex: 0 0 auto;
+}
+
+.capture-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: auto minmax(280px, 1fr);
+}
+
+.capture-results {
+  min-height: 0;
+}
+
+.capture-results.p-card .p-card-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.capture-results.p-card .p-card-title {
+  flex: 0 0 auto;
+}
+
+.capture-results.p-card .p-card-content {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .capture-heading-actions,
 .capture-filters {
   display: flex;
@@ -8328,6 +8438,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-filters {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns:
     minmax(240px, 1fr)
     minmax(140px, 180px)
@@ -8368,7 +8479,9 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-table-wrap {
-  max-height: 380px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
   border-radius: 10px;
@@ -8495,6 +8608,8 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-empty {
   display: grid;
+  flex: 1 1 0;
+  align-content: center;
   justify-items: center;
   gap: 8px;
   padding: 54px 20px;
@@ -8637,6 +8752,10 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 @media (max-width: 720px) {
+  .capture-page {
+    grid-template-rows: auto minmax(520px, 1fr);
+  }
+
   .capture-heading-actions,
   .capture-filters {
     grid-template-columns: 1fr;
