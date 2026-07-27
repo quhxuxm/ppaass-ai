@@ -21,6 +21,7 @@ import type {
   DnsResolutionRecord,
   LoadedAgentConfig,
   NetworkTrafficSnapshot,
+  PacketCaptureRuntimeStatus,
   TabKey,
   TrafficBaseline,
   ToastKind
@@ -46,6 +47,12 @@ export function useDesktopAgent() {
       logs: []
     } as AgentState,
     diagnostics: null as ConnectivityReport | null,
+    packetCapture: {
+      available: false,
+      enabled: false,
+      file: null
+    } as PacketCaptureRuntimeStatus,
+    packetCaptureRefreshToken: 0,
     traffic: {
       snapshot: null as NetworkTrafficSnapshot | null,
       previous: null as NetworkTrafficSnapshot | null,
@@ -300,9 +307,58 @@ export function useDesktopAgent() {
         {},
         () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
       );
+      if (!state.agent.running) {
+        state.packetCapture = { available: false, enabled: false, file: null };
+      }
       showToast(state.agent.running ? "error" : "success", state.agent.running ? "代理仍在运行" : "代理已停止");
     } catch (error) {
       await refreshAgentState();
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function togglePacketCapture(enabled: boolean) {
+    if (state.busy || state.packetCapture.enabled === enabled) {
+      return;
+    }
+
+    if (!state.agent.running) {
+      showToast("error", "Agent 未运行，请先启动 Agent");
+      return;
+    }
+
+    try {
+      state.busy = true;
+      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
+        "set_packet_capture_enabled",
+        { enabled },
+        () => ({ available: true, enabled, file: state.packetCapture.file })
+      );
+      state.packetCaptureRefreshToken += 1;
+      showToast("success", enabled ? "抓包已开启，无需重启 Agent" : "抓包已关闭，无需重启 Agent");
+    } catch (error) {
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  async function clearPacketCapture() {
+    if (!state.config || state.busy) {
+      return;
+    }
+    try {
+      state.busy = true;
+      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
+        "clear_packet_capture",
+        { configPath: state.config.path },
+        () => ({ ...state.packetCapture })
+      );
+      state.packetCaptureRefreshToken += 1;
+      showToast("success", "抓包文件已清空");
+    } catch (error) {
       showToast("error", getErrorMessage(error));
     } finally {
       state.busy = false;
@@ -338,6 +394,13 @@ export function useDesktopAgent() {
     agentRefreshInFlight = true;
     try {
       state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, () => state.agent);
+      state.packetCapture = state.agent.running
+        ? await invokeOrFallback<PacketCaptureRuntimeStatus>(
+            "get_packet_capture_runtime_status",
+            {},
+            () => state.packetCapture
+          )
+        : { available: false, enabled: false, file: null };
     } catch {
       // Keep the last visible agent state if the runtime status read fails.
     } finally {
@@ -379,6 +442,97 @@ export function useDesktopAgent() {
     updateDirectRules(normalizeRules([...state.config.summary.direct_rules, ...rules]));
     state.ruleDraft = "";
     showToast("success", "规则已更新");
+  }
+
+  async function addDirectRulesAndRestart(rules: string[]) {
+    if (!state.config) {
+      return;
+    }
+    const nextRules = normalizeRules([...state.config.summary.direct_rules, ...rules]);
+    await applyDirectRulesAndRestart(nextRules, {
+      unchanged: "所选 DNS 没有可添加的直连规则",
+      saved: "直连规则已添加并保存",
+      restarted: "直连规则已添加，Agent 已重启"
+    });
+  }
+
+  async function removeDirectRulesAndRestart(rules: string[]) {
+    if (!state.config) {
+      return;
+    }
+
+    const removeRuleKeys = new Set(
+      normalizeRules(rules).map((rule) => rule.toLowerCase())
+    );
+    const nextRules = normalizeRules(state.config.summary.direct_rules).filter(
+      (rule) => !removeRuleKeys.has(rule.toLowerCase())
+    );
+    await applyDirectRulesAndRestart(nextRules, {
+      unchanged: "所选 DNS 没有可移出的直连规则",
+      saved: "直连规则已移出并保存",
+      restarted: "直连规则已移出，Agent 已重启"
+    });
+  }
+
+  async function applyDirectRulesAndRestart(
+    nextRules: string[],
+    messages: { unchanged: string; saved: string; restarted: string }
+  ) {
+    if (!state.config) {
+      return;
+    }
+    if (state.busy) {
+      showToast("info", "正在处理其他操作");
+      return;
+    }
+
+    const currentRules = normalizeRules(state.config.summary.direct_rules);
+    const normalizedNextRules = normalizeRules(nextRules);
+    if (
+      normalizedNextRules.length === currentRules.length &&
+      normalizedNextRules.every((rule, index) => rule.toLowerCase() === currentRules[index]?.toLowerCase())
+    ) {
+      showToast("info", messages.unchanged);
+      return;
+    }
+
+    const wasRunning = state.agent.running;
+    try {
+      state.busy = true;
+      updateDirectRules(normalizedNextRules, true);
+      await persistConfig();
+
+      if (!wasRunning) {
+        showToast("success", messages.saved);
+        return;
+      }
+
+      state.agent = await invokeOrFallback<AgentState>(
+        "stop_agent",
+        {},
+        () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
+      );
+      if (state.agent.running) {
+        throw new Error("直连规则已保存，但 Agent 停止失败");
+      }
+
+      state.agent = await invokeOrFallback<AgentState>(
+        "start_agent",
+        { configPath: state.config.path },
+        () => ({ ...fallbackAgentState(), running: true, managed: true, pid: 4242, config_path: state.config?.path })
+      );
+      await delay(1800);
+      await refreshAgentState();
+      if (!state.agent.running) {
+        throw new Error(latestAgentLog() ?? "直连规则已保存，但 Agent 重启失败");
+      }
+      showToast("success", messages.restarted);
+    } catch (error) {
+      await refreshAgentState();
+      showToast("error", getErrorMessage(error));
+    } finally {
+      state.busy = false;
+    }
   }
 
   function addDraftRules() {
@@ -608,12 +762,19 @@ export function useDesktopAgent() {
     state.traffic.day_upload_bytes = store.buckets.reduce((total, bucket) => total + bucket.upload_bytes, 0);
   }
 
-  function updateDirectRules(rules: string[]) {
-    if (!state.config || !ensureConfigEditable(false)) {
+  function updateDirectRules(rules: string[], allowWhileRunning = false) {
+    if (!state.config || (!allowWhileRunning && !ensureConfigEditable(false))) {
       return;
     }
-    state.config.summary.direct_rules = normalizeRules(rules);
-    state.config.raw = applyFieldToToml(state.config.raw, "direct_rules", state.config.summary.direct_rules);
+    const directRules = normalizeRules(rules);
+    state.config = {
+      ...state.config,
+      raw: applyFieldToToml(state.config.raw, "direct_rules", directRules),
+      summary: {
+        ...state.config.summary,
+        direct_rules: directRules
+      }
+    };
     state.diagnostics = null;
     state.dirty = true;
   }
@@ -643,7 +804,9 @@ export function useDesktopAgent() {
   return {
     activeForwardingLabel,
     addDirectRules,
+    addDirectRulesAndRestart,
     addDraftRules,
+    clearPacketCapture,
     configLocked,
     diagnosticsPassed,
     diagnosticsTotal,
@@ -656,6 +819,7 @@ export function useDesktopAgent() {
     refreshAgentState,
     reloadAll,
     removeDirectRule,
+    removeDirectRulesAndRestart,
     restoreDefaultConfig,
     runDiagnostics,
     running,
@@ -668,6 +832,7 @@ export function useDesktopAgent() {
     startAgent,
     state,
     stopAgent,
+    togglePacketCapture,
     summary,
     tabs,
     tunDiagnosticsLabel,
@@ -713,7 +878,7 @@ function buildDirectRuleGroups(rules: string[]) {
   rules.forEach((rule, index) => {
     byKey.get(ruleGroupKey(rule))?.items.push({ rule, index });
   });
-  return groups.filter((group) => group.items.length > 0);
+  return groups;
 }
 
 function bytesPerSecond(current: number, previous: number, elapsedSeconds: number) {

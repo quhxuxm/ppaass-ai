@@ -6,16 +6,17 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "test": "node scripts/test-config-toml.mjs",
+    "test": "node --experimental-strip-types scripts/test-direct-rule-domains.mjs && node scripts/test-config-toml.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@lucide/vue": "1.24.0",
     "@primeuix/themes": "^2.0.3",
     "@tauri-apps/api": "^2.11.1",
-    "@lucide/vue": "1.24.0",
     "primeicons": "^7.0.0",
     "primevue": "^4.5.5",
+    "tldts": "^7.4.9",
     "vue": "^3.5.38"
   },
   "devDependencies": {

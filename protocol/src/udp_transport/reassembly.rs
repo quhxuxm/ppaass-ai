@@ -53,7 +53,7 @@ pub struct FragmentReassembler {
 
 impl Default for FragmentReassembler {
     fn default() -> Self {
-        Self::new(ReassemblyConfig::default()).expect("default reassembly limits are valid")
+        Self::from_valid_config(ReassemblyConfig::default())
     }
 }
 
@@ -74,11 +74,15 @@ impl FragmentReassembler {
                 "timeout must be non-zero",
             ));
         }
-        Ok(Self {
+        Ok(Self::from_valid_config(config))
+    }
+
+    fn from_valid_config(config: ReassemblyConfig) -> Self {
+        Self {
             config,
             entries: HashMap::new(),
             total_bytes: 0,
-        })
+        }
     }
 
     pub fn entry_count(&self) -> usize {
@@ -116,8 +120,11 @@ impl FragmentReassembler {
                 ));
             }
             if self.entries.len() >= self.config.max_entries {
-                self.evict_oldest_except(None)
-                    .expect("a full non-empty reassembly table has an oldest entry");
+                self.evict_oldest_except(None)?.ok_or(
+                    UdpTransportError::InconsistentReassemblyState(
+                        "a full reassembly table has no entry to evict",
+                    ),
+                )?;
             }
             self.entries.insert(
                 key,
@@ -136,7 +143,12 @@ impl FragmentReassembler {
 
         let index = usize::from(header.fragment_index);
         let entry_bytes = {
-            let entry = self.entries.get(&key).expect("entry was inserted");
+            let entry =
+                self.entries
+                    .get(&key)
+                    .ok_or(UdpTransportError::InconsistentReassemblyState(
+                        "reassembly entry is missing after insertion",
+                    ))?;
             if entry.fragment_count != header.fragment_count || entry.total_len != header.total_len
             {
                 return Err(UdpTransportError::ConflictingFragment);
@@ -175,7 +187,7 @@ impl FragmentReassembler {
             if new_total <= self.config.max_total_bytes {
                 break;
             }
-            self.evict_oldest_except(Some(key))
+            self.evict_oldest_except(Some(key))?
                 .ok_or(UdpTransportError::ReassemblyLimit(
                     "maximum buffered fragment bytes reached",
                 ))?;
@@ -184,10 +196,12 @@ impl FragmentReassembler {
         let new_total = self.total_bytes.checked_add(fragment.payload.len()).ok_or(
             UdpTransportError::ReassemblyLimit("buffer byte counter overflow"),
         )?;
-        let entry = self
-            .entries
-            .get_mut(&key)
-            .expect("current entry is never evicted");
+        let entry =
+            self.entries
+                .get_mut(&key)
+                .ok_or(UdpTransportError::InconsistentReassemblyState(
+                    "current reassembly entry was evicted",
+                ))?;
 
         entry.fragments[index] = Some(fragment.payload);
         entry.received_count += 1;
@@ -199,7 +213,12 @@ impl FragmentReassembler {
             return Ok(None);
         }
 
-        let entry = self.entries.remove(&key).expect("complete entry exists");
+        let entry =
+            self.entries
+                .remove(&key)
+                .ok_or(UdpTransportError::InconsistentReassemblyState(
+                    "complete reassembly entry is missing",
+                ))?;
         self.total_bytes -= entry.received_bytes;
         if entry.received_bytes != entry.total_len as usize {
             return Err(UdpTransportError::InvalidHeader(
@@ -208,7 +227,13 @@ impl FragmentReassembler {
         }
         let mut message = Vec::with_capacity(entry.received_bytes);
         for fragment in entry.fragments {
-            message.extend_from_slice(fragment.as_deref().expect("all fragments received"));
+            let fragment =
+                fragment
+                    .as_deref()
+                    .ok_or(UdpTransportError::InconsistentReassemblyState(
+                        "completed message contains a missing fragment",
+                    ))?;
+            message.extend_from_slice(fragment);
         }
         Ok(Some(message))
     }
@@ -216,19 +241,24 @@ impl FragmentReassembler {
     fn evict_oldest_except(
         &mut self,
         except: Option<(UdpSessionId, u64)>,
-    ) -> Option<(UdpSessionId, u64)> {
-        let oldest = self
+    ) -> UdpTransportResult<Option<(UdpSessionId, u64)>> {
+        let Some(oldest) = self
             .entries
             .iter()
             .filter(|(key, _)| except.as_ref() != Some(*key))
             .min_by_key(|(_, entry)| entry.updated_at)
-            .map(|(key, _)| *key)?;
-        let removed = self
-            .entries
-            .remove(&oldest)
-            .expect("selected reassembly entry exists");
+            .map(|(key, _)| *key)
+        else {
+            return Ok(None);
+        };
+        let removed =
+            self.entries
+                .remove(&oldest)
+                .ok_or(UdpTransportError::InconsistentReassemblyState(
+                    "selected reassembly entry is missing",
+                ))?;
         self.total_bytes -= removed.received_bytes;
-        Some(oldest)
+        Ok(Some(oldest))
     }
 
     pub fn cleanup_expired(&mut self, now: Instant) -> usize {

@@ -28,6 +28,7 @@ const defaultFieldValues = {
   tun_proxy_udp: true,
   tun_proxy_dns: false,
   tun_quic_policy: "allow",
+  tun_packet_capture_file: "captures/ppaass-tun.pcap",
   direct_mode: "proxy_all",
   direct_rules: []
 } satisfies Partial<Record<keyof AgentConfigSummary, unknown>>;
@@ -104,6 +105,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
     tun_proxy_udp: { section: "tun", key: "proxy_udp", kind: "bool" },
     tun_proxy_dns: { section: "tun", key: "proxy_dns", kind: "bool" },
     tun_quic_policy: { section: "tun", key: "quic_policy", kind: "string" },
+    tun_packet_capture_file: { section: "tun.packet_capture", key: "file", kind: "string" },
     direct_mode: { section: "direct_access", key: "mode", kind: "string" },
     direct_rules: { section: "direct_access", key: "rules", kind: "array" },
     log_dir: { section: null, key: "log_dir", kind: "string" },
@@ -154,6 +156,10 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     tun_proxy_udp: matchBool(raw, "tun", "proxy_udp") ?? defaultValueForField<boolean>("tun_proxy_udp"),
     tun_proxy_dns: matchBool(raw, "tun", "proxy_dns") ?? defaultValueForField<boolean>("tun_proxy_dns"),
     tun_quic_policy: tunQuicPolicy,
+    tun_packet_capture_file: stringOrDefault(
+      matchString(raw, "tun.packet_capture", "file"),
+      "tun_packet_capture_file"
+    ),
     direct_mode: stringOrDefault(matchString(raw, "direct_access", "mode"), "direct_mode"),
     direct_rules: matchStringArray(raw, "rules", "direct_access")
   };

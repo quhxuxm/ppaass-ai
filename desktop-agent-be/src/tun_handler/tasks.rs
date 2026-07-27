@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+use super::PacketCaptureController;
 use super::udp::UdpSessionContext;
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
@@ -35,12 +36,14 @@ pub(super) fn spawn_packet_bridge(
     device: Arc<tun_rs::AsyncDevice>,
     stack: netstack_smoltcp::Stack,
     mtu: usize,
+    packet_capture: PacketCaptureController,
     shutdown: CancellationToken,
 ) -> (JoinHandle<()>, JoinHandle<()>) {
     // stack.split() 得到 TUN 包进入协议栈和协议栈包写回 TUN 的两个方向。
     let (mut stack_sink, mut stack_stream) = stack.split();
 
     let device_in = device.clone();
+    let packet_capture_in = packet_capture.clone();
     let shutdown_in = shutdown.clone();
     let tun_to_stack = spawn_guarded("desktop tun_to_stack", async move {
         // TUN -> netstack：读取系统注入的 IP 包并交给用户态协议栈处理。
@@ -51,6 +54,9 @@ pub(super) fn spawn_packet_bridge(
                 read = device_in.recv(&mut buf) => {
                     match read {
                         Ok(n) if n > 0 => {
+                            if let Err(error) = packet_capture_in.record(&buf[..n]) {
+                                warn!("记录 TUN 上行明文包失败：{error}");
+                            }
                             if !tun_packet_is_safe_for_netstack(&buf[..n]) {
                                 debug!(
                                     bytes = n,
@@ -77,6 +83,7 @@ pub(super) fn spawn_packet_bridge(
     });
 
     let device_out = device;
+    let packet_capture_out = packet_capture;
     let shutdown_out = shutdown;
     let stack_to_tun = spawn_guarded("desktop stack_to_tun", async move {
         // netstack -> TUN：协议栈生成的响应包写回虚拟网卡。
@@ -86,6 +93,9 @@ pub(super) fn spawn_packet_bridge(
                 pkt = stack_stream.next() => {
                     match pkt {
                         Some(Ok(pkt)) => {
+                            if let Err(error) = packet_capture_out.record(&pkt) {
+                                warn!("记录 TUN 下行明文包失败：{error}");
+                            }
                             if let Err(e) = device_out.send(&pkt).await {
                                 warn!("向 TUN 设备写入数据包失败：{e}");
                                 break;

@@ -106,6 +106,10 @@ pub struct TunConfig {
     #[serde(default = "default_tun_proxy_udp")]
     pub proxy_udp: bool,
 
+    /// TUN 双向明文 IP 包抓取配置。
+    #[serde(default)]
+    pub packet_capture: PacketCaptureConfig,
+
     /// TUN 模式下 UDP/443 QUIC 的细粒度处理策略。allow 时命中直连
     /// 规则的目标直连，其余目标通过 proxy UDP relay 转发；block 时统一阻断。
     #[serde(default)]
@@ -152,6 +156,7 @@ impl Default for TunConfig {
             mtu: default_tun_mtu(),
             proxy_dns: false,
             proxy_udp: default_tun_proxy_udp(),
+            packet_capture: PacketCaptureConfig::default(),
             quic_policy: None,
             wintun_file: None,
             route_state_file: None,
@@ -161,6 +166,25 @@ impl Default for TunConfig {
             macos_helper_fallback_to_privilege: default_macos_tun_helper_fallback_to_privilege(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PacketCaptureConfig {
+    /// PCAP 输出文件。相对路径以 agent 当前工作目录为基准。
+    #[serde(default = "default_packet_capture_file")]
+    pub file: String,
+}
+
+impl Default for PacketCaptureConfig {
+    fn default() -> Self {
+        Self {
+            file: default_packet_capture_file(),
+        }
+    }
+}
+
+fn default_packet_capture_file() -> String {
+    "captures/ppaass-tun.pcap".to_string()
 }
 
 fn default_tun_name() -> String {
@@ -369,6 +393,27 @@ proxy_udp = false
         .unwrap();
 
         assert!(!config.tun.proxy_udp);
+    }
+
+    #[test]
+    fn packet_capture_has_default_file() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert_eq!(config.tun.packet_capture.file, "captures/ppaass-tun.pcap");
+    }
+
+    #[test]
+    fn parses_packet_capture_settings() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun.packet_capture]
+file = "captures/debug.pcap"
+"#),
+        )
+        .unwrap();
+
+        assert_eq!(config.tun.packet_capture.file, "captures/debug.pcap");
     }
 
     #[test]

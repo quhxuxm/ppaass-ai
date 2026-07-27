@@ -1,6 +1,6 @@
 import type { AppIconName } from "./components/AppIcon";
 
-export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "diagnostics" | "logs" | "toml";
+export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "capture" | "diagnostics" | "logs" | "toml";
 export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
@@ -30,6 +30,7 @@ export type AgentConfigSummary = {
   tun_proxy_udp: boolean;
   tun_proxy_dns: boolean;
   tun_quic_policy: string;
+  tun_packet_capture_file: string;
   direct_mode: string;
   direct_rules: string[];
 };
@@ -83,6 +84,56 @@ export type NetworkInterfaceTraffic = {
   name: string;
   received_bytes: number;
   transmitted_bytes: number;
+};
+
+export type CapturedPacket = {
+  number: number;
+  timestamp_ms: number;
+  direction: "upload" | "download";
+  ip_version: number;
+  protocol: string;
+  sub_protocol?: string | null;
+  proxy_protocol?: string | null;
+  source: string;
+  source_port?: number | null;
+  destination: string;
+  destination_port?: number | null;
+  length: number;
+  summary: string;
+  payload_length: number;
+  payload_hex: string;
+  payload_text: string;
+  protocol_layers: ProtocolLayer[];
+};
+
+export type ProtocolLayer = {
+  name: string;
+  summary: string;
+  fields: Array<{
+    name: string;
+    value: string;
+  }>;
+};
+
+export type PacketCaptureReport = {
+  file: string;
+  exists: boolean;
+  file_size: number;
+  modified_at_ms?: number | null;
+  total_packets: number;
+  returned_packets: number;
+  truncated: boolean;
+  upload_packets: number;
+  upload_bytes: number;
+  download_packets: number;
+  download_bytes: number;
+  packets: CapturedPacket[];
+};
+
+export type PacketCaptureRuntimeStatus = {
+  available: boolean;
+  enabled: boolean;
+  file?: string | null;
 };
 
 export type DnsResolutionRecord = {

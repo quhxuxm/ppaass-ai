@@ -89,6 +89,8 @@ impl SocksUdpRelay {
     pub(super) fn spawn(
         sessions: Arc<YamuxSessionManager>,
         udp_socket: Arc<UdpSocket>,
+        capture_server_addr: SocketAddr,
+        packet_capture: PacketCaptureController,
     ) -> Arc<Self> {
         let mut shards = Vec::with_capacity(SOCKS_UDP_RELAY_SHARD_COUNT);
         for shard_index in 0..SOCKS_UDP_RELAY_SHARD_COUNT {
@@ -98,6 +100,8 @@ impl SocksUdpRelay {
             tokio::spawn(run_socks_udp_relay(
                 sessions.clone(),
                 udp_socket.clone(),
+                capture_server_addr,
+                packet_capture.clone(),
                 rx,
             ));
         }
@@ -131,6 +135,8 @@ fn socks_udp_relay_shard_index(client: SocketAddr, target: &Address, shard_count
 async fn run_socks_udp_relay(
     sessions: Arc<YamuxSessionManager>,
     udp_socket: Arc<UdpSocket>,
+    capture_server_addr: SocketAddr,
+    packet_capture: PacketCaptureController,
     mut rx: tokio::sync::mpsc::Receiver<SocksUdpRelayRequest>,
 ) {
     let mut state = SocksUdpRelayState::new();
@@ -225,6 +231,8 @@ async fn run_socks_udp_relay(
                                 &udp_socket,
                                 &state,
                                 &response_buf[..n],
+                                capture_server_addr,
+                                &packet_capture,
                             ).await {
                                 debug!("SOCKS5 UDP 回复写回失败：{e}");
                             }
@@ -280,6 +288,8 @@ async fn handle_socks_udp_response(
     udp_socket: &UdpSocket,
     state: &SocksUdpRelayState,
     response: &[u8],
+    capture_server_addr: SocketAddr,
+    packet_capture: &PacketCaptureController,
 ) -> std::io::Result<()> {
     // proxy 返回的 UdpRelayPacket 需要恢复成 SOCKS5 UDP response packet。
     let packet = UdpRelayPacket::decode(response).map_err(std::io::Error::other)?;
@@ -291,6 +301,7 @@ async fn handle_socks_udp_response(
     let response = create_udp_packet(target, &packet.data).map_err(std::io::Error::other)?;
     let response_payload_len = packet.data.len();
     udp_socket.send_to(&response, client).await?;
+    packet_capture.record_udp_payload(capture_server_addr, *client, &response);
     telemetry::record_traffic(0, response_payload_len as u64);
     Ok(())
 }

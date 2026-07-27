@@ -119,6 +119,28 @@ const emit = defineEmits<{
             </label>
           </template>
         </Card>
+
+        <Card class="panel">
+          <template #title>
+            <div class="panel-heading inline">
+              <h2>明文抓包</h2>
+              <Tag value="抓包页运行时控制" severity="info" />
+            </div>
+          </template>
+          <template #content>
+            <label class="field">
+              <span><AppIcon name="file-down" />PCAP 文件</span>
+              <InputText
+                :model-value="summary.tun_packet_capture_file"
+                :disabled="configLocked"
+                @update:model-value="emit('set-field', 'tun_packet_capture_file', $event)"
+              />
+              <small class="field-help">
+                这里只配置输出路径；开启、关闭和清空均在“抓包”页面运行时完成，无需重启 Agent。
+              </small>
+            </label>
+          </template>
+        </Card>
       </div>
     </section>
   </div>

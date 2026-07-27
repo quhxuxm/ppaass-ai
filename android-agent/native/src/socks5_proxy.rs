@@ -8,7 +8,6 @@ use fast_socks5::server::{
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{ReplyError, Socks5Command};
 use protocol::{Address, TransportProtocol};
-use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
 use crate::android_log;
@@ -16,18 +15,20 @@ use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AndroidAgentError, Result};
 use crate::http_proxy_clients::HttpProxyClientLease;
 use crate::http_proxy_io::connect_direct_tcp;
+use crate::packet_capture::CapturedTcpStream;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
 
 pub async fn handle_socks5_connection(
-    stream: TcpStream,
+    stream: CapturedTcpStream,
     sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
     client: HttpProxyClientLease,
 ) -> Result<()> {
     info!("Android SOCKS5 proxy connection");
 
-    let protocol: Socks5ServerProtocol<TcpStream, Opened> = Socks5ServerProtocol::start(stream);
+    let protocol: Socks5ServerProtocol<CapturedTcpStream, Opened> =
+        Socks5ServerProtocol::start(stream);
     let auth_state = protocol
         .negotiate_auth::<NoAuthentication>(&[NoAuthentication])
         .await
@@ -48,7 +49,7 @@ pub async fn handle_socks5_connection(
 }
 
 async fn handle_tcp_connect(
-    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    protocol: Socks5ServerProtocol<CapturedTcpStream, CommandRead>,
     target_addr: TargetAddr,
     sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
@@ -130,7 +131,7 @@ async fn handle_tcp_connect(
 }
 
 async fn relay_socks5_proxy(
-    client_stream: &mut TcpStream,
+    client_stream: &mut CapturedTcpStream,
     connected_stream: &mut AndroidYamuxTargetStream,
     target: &str,
     client: HttpProxyClientLease,

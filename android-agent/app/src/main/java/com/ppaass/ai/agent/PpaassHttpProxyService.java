@@ -21,6 +21,7 @@ import java.util.Set;
 public class PpaassHttpProxyService extends Service {
     public static final String ACTION_START = "com.ppaass.ai.agent.HTTP_PROXY_START";
     public static final String ACTION_STOP = "com.ppaass.ai.agent.HTTP_PROXY_STOP";
+    public static final String ACTION_RELOAD = "com.ppaass.ai.agent.HTTP_PROXY_RELOAD";
     public static final String PREF_BLOCKED_CLIENTS = "http_proxy_blocked_clients";
     public static final String PREF_ENABLED = "http_proxy_enabled";
     public static final String PREF_RUNNING = "http_proxy_running";
@@ -70,6 +71,10 @@ public class PpaassHttpProxyService extends Service {
             stopProxy();
             return START_NOT_STICKY;
         }
+        if (intent != null && ACTION_RELOAD.equals(intent.getAction())) {
+            reloadProxy();
+            return isEnabled() ? START_STICKY : START_NOT_STICKY;
+        }
 
         // enabled 表示“用户希望显式代理长驻”；running 只表示当前 native 实例是否活着。
         if (intent == null && !isEnabled()) {
@@ -93,6 +98,10 @@ public class PpaassHttpProxyService extends Service {
     }
 
     private void startProxy() {
+        startProxy(false);
+    }
+
+    private void startProxy(boolean preserveEnabledOnFailure) {
         if (nativeHandle != 0) {
             if (!NativeAgent.isRunning(nativeHandle)) {
                 NativeAgent.stop(nativeHandle);
@@ -112,9 +121,9 @@ public class PpaassHttpProxyService extends Service {
 
         mainHandler.removeCallbacks(nativeRestart);
         listenPort = parseListenPort();
-        startForeground(NOTIFICATION_ID, notification());
 
         try {
+            startForeground(NOTIFICATION_ID, notification());
             applyBlockedClients();
             JSONObject config = AgentConfigJson.buildHttpProxy(this);
             long handle = NativeAgent.startHttpProxy(config.toString(), listenPort);
@@ -127,9 +136,36 @@ public class PpaassHttpProxyService extends Service {
             setRunning(true);
         } catch (RuntimeException | JSONException error) {
             Log.e(TAG, "Failed to start PPAASS HTTP / SOCKS5 proxy", error);
+            if (reloadFailureShouldScheduleRetry(preserveEnabledOnFailure, isEnabled())) {
+                runningInProcess = false;
+                setRunning(false);
+                // A reload may briefly race the old listener release or another transient
+                // native resource. Keep the foreground service and the user's enabled
+                // preference, then make one delayed recovery attempt. That retry calls the
+                // normal start path, so a persistent configuration error stops cleanly
+                // instead of spinning forever.
+                scheduleNativeRestart();
+                return;
+            }
             setEnabled(false);
             stopProxy();
         }
+    }
+
+    private void reloadProxy() {
+        if (!isEnabled()) {
+            return;
+        }
+        mainHandler.removeCallbacks(nativeRestart);
+        stopNativeHealthChecks();
+        if (nativeHandle != 0) {
+            NativeAgent.stop(nativeHandle);
+            nativeHandle = 0;
+        }
+        runningInProcess = false;
+        setRunning(false);
+        // Keep PREF_ENABLED and the foreground service/notification throughout reload.
+        startProxy(true);
     }
 
     private void stopProxy() {
@@ -157,13 +193,23 @@ public class PpaassHttpProxyService extends Service {
         }
         runningInProcess = false;
         setRunning(false);
-        mainHandler.removeCallbacks(nativeRestart);
         // native 层偶发退出时保留前台 service，并按用户期望自动拉起新的监听实例。
         if (isEnabled()) {
-            mainHandler.postDelayed(nativeRestart, NATIVE_RESTART_DELAY_MS);
+            scheduleNativeRestart();
         } else {
             stopProxy();
         }
+    }
+
+    static boolean reloadFailureShouldScheduleRetry(
+            boolean preserveEnabledOnFailure,
+            boolean enabled) {
+        return preserveEnabledOnFailure && enabled;
+    }
+
+    private void scheduleNativeRestart() {
+        mainHandler.removeCallbacks(nativeRestart);
+        mainHandler.postDelayed(nativeRestart, NATIVE_RESTART_DELAY_MS);
     }
 
     private void startNativeHealthChecks() {
@@ -223,7 +269,7 @@ public class PpaassHttpProxyService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    getString(R.string.http_proxy_channel_name),
+                    UiLanguage.tr(this, getString(R.string.http_proxy_channel_name)),
                     NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
@@ -237,8 +283,8 @@ public class PpaassHttpProxyService extends Service {
 
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
-                .setContentTitle("PPAASS HTTP / SOCKS5 代理")
-                .setContentText("HTTP 与 SOCKS5 监听 0.0.0.0:" + listenPort)
+                .setContentTitle(UiLanguage.tr(this, "PPAASS HTTP / SOCKS5 代理"))
+                .setContentText(UiLanguage.tr(this, "HTTP 与 SOCKS5 监听 0.0.0.0:") + listenPort)
                 .setOngoing(true)
                 .build();
     }

@@ -23,15 +23,10 @@ use crate::http_proxy_clients::{
     HttpProxyClientLease, is_http_proxy_client_blocked, register_http_proxy_client,
 };
 use crate::http_proxy_io::connect_direct_tcp;
+use crate::packet_capture::{self, CapturedTcpStream, ProxyIngressProtocol};
 use crate::socks5_proxy::handle_socks5_connection;
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::yamux_session::{AndroidYamuxSessionManager, AndroidYamuxTargetStream};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProxyProtocol {
-    Socks5,
-    Http,
-}
 
 pub async fn run_android_http_proxy(
     config: AndroidAgentConfig,
@@ -93,11 +88,13 @@ async fn handle_proxy_connection(
         return Ok(());
     }
     match detect_proxy_protocol(buffer[0]) {
-        Some(ProxyProtocol::Socks5) => {
+        Some(protocol @ ProxyIngressProtocol::Socks5) => {
+            let stream = packet_capture::capture_tcp_stream(stream, protocol);
             let client = register_http_proxy_client(peer_addr);
             handle_socks5_connection(stream, sessions, direct_checker, client).await
         }
-        Some(ProxyProtocol::Http) => {
+        Some(protocol @ ProxyIngressProtocol::Http) => {
+            let stream = packet_capture::capture_tcp_stream(stream, protocol);
             let client = register_http_proxy_client(peer_addr);
             handle_http_connection(stream, sessions, direct_checker, client).await
         }
@@ -111,10 +108,10 @@ async fn handle_proxy_connection(
     }
 }
 
-fn detect_proxy_protocol(first_byte: u8) -> Option<ProxyProtocol> {
+fn detect_proxy_protocol(first_byte: u8) -> Option<ProxyIngressProtocol> {
     match first_byte {
-        0x05 => Some(ProxyProtocol::Socks5),
-        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => Some(ProxyProtocol::Http),
+        0x05 => Some(ProxyIngressProtocol::Socks5),
+        b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => Some(ProxyIngressProtocol::Http),
         _ => None,
     }
 }
@@ -152,7 +149,7 @@ fn extract_host_port(req: &Request<Incoming>, uri: &Uri) -> (String, u16) {
 }
 
 async fn handle_http_connection(
-    stream: TcpStream,
+    stream: CapturedTcpStream,
     sessions: Arc<AndroidYamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
     client: HttpProxyClientLease,
@@ -467,9 +464,18 @@ mod tests {
 
     #[test]
     fn proxy_protocol_detection_rejects_non_proxy_probe_bytes() {
-        assert_eq!(detect_proxy_protocol(0x05), Some(ProxyProtocol::Socks5));
-        assert_eq!(detect_proxy_protocol(b'G'), Some(ProxyProtocol::Http));
-        assert_eq!(detect_proxy_protocol(b'C'), Some(ProxyProtocol::Http));
+        assert_eq!(
+            detect_proxy_protocol(0x05),
+            Some(ProxyIngressProtocol::Socks5)
+        );
+        assert_eq!(
+            detect_proxy_protocol(b'G'),
+            Some(ProxyIngressProtocol::Http)
+        );
+        assert_eq!(
+            detect_proxy_protocol(b'C'),
+            Some(ProxyIngressProtocol::Http)
+        );
         assert_eq!(detect_proxy_protocol(0), None);
         assert_eq!(detect_proxy_protocol(b'\n'), None);
         assert_eq!(detect_proxy_protocol(b'X'), None);

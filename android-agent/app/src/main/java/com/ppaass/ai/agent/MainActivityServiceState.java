@@ -96,6 +96,39 @@ protected void stopHttpProxyService() {
         updateHttpProxyToggle();
     }
 
+protected void restartRunningAgentsAfterRuleUpdate(
+        boolean restartVpn,
+        boolean restartHttpProxy) {
+        restartRunningAgentsAfterRuleUpdate(
+                restartVpn,
+                restartHttpProxy,
+                "直连规则已添加",
+                "直连规则已添加，正在重启");
+    }
+
+protected void restartRunningAgentsAfterRuleUpdate(
+        boolean restartVpn,
+        boolean restartHttpProxy,
+        String stoppedMessage,
+        String restartingMessage) {
+        if (!restartVpn && !restartHttpProxy) {
+            Toast.makeText(this, tr(stoppedMessage), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (restartVpn) {
+            Intent intent = new Intent(this, PpaassVpnService.class);
+            intent.setAction(PpaassVpnService.ACTION_RELOAD);
+            startService(intent);
+        }
+        if (restartHttpProxy) {
+            Intent intent = new Intent(this, PpaassHttpProxyService.class);
+            intent.setAction(PpaassHttpProxyService.ACTION_RELOAD);
+            startService(intent);
+        }
+        Toast.makeText(this, tr(restartingMessage), Toast.LENGTH_SHORT).show();
+    }
+
 protected void showHttpProxyClientsDialog() {
         new HttpProxyClientDialog(this, prefs).show();
     }
@@ -130,6 +163,24 @@ protected boolean isHttpProxyRunning() {
             return true;
         }
         return running;
+    }
+
+protected boolean isHttpProxyActiveForRuleReload() {
+        return serviceWasRunningForRuleReload(
+                prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false),
+                PpaassHttpProxyService.isRunningInProcess());
+    }
+
+protected boolean isVpnActiveForRuleReload() {
+        return serviceWasRunningForRuleReload(
+                prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false),
+                PpaassVpnService.isRunningInProcess());
+    }
+
+static boolean serviceWasRunningForRuleReload(
+        boolean persistedRunning,
+        boolean runningInProcess) {
+        return persistedRunning && runningInProcess;
     }
 
 protected void restoreHttpProxyServiceIfEnabled() {

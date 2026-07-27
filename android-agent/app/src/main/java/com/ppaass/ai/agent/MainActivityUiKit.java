@@ -26,13 +26,13 @@ abstract class MainActivityUiKit extends MainActivityState {
 
 protected Button secondaryButton(String text) {
         Button button = new Button(this);
-        button.setText(text);
+        button.setText(tr(text));
         button.setTextSize(13f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
-        button.setSingleLine(false);
-        button.setMaxLines(2);
-        button.setEllipsize(null);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setGravity(Gravity.CENTER);
         button.setMinHeight(0);
         button.setMinWidth(0);
@@ -116,9 +116,11 @@ protected Drawable appBackground() {
             }
 
             @Override
+            @SuppressWarnings("deprecation")
             public int getOpacity() {
                 return PixelFormat.TRANSLUCENT;
             }
+
         };
     }
 
@@ -187,6 +189,21 @@ protected Drawable controlBackground() {
         return background;
     }
 
+protected Drawable controlFillBackground() {
+        StateListDrawable background = new StateListDrawable();
+        background.addState(
+                new int[]{android.R.attr.state_focused},
+                roundedFill(COLOR_ACCENT_SOFT));
+        background.addState(
+                new int[]{android.R.attr.state_pressed},
+                roundedFill(COLOR_ACCENT_SOFT));
+        background.addState(
+                new int[]{-android.R.attr.state_enabled},
+                roundedFill(alphaColor(COLOR_CONTROL, 176)));
+        background.addState(new int[]{}, roundedFill(COLOR_CONTROL));
+        return background;
+    }
+
 protected void styleInput(EditText edit) {
         edit.setTextColor(COLOR_TEXT);
         edit.setHintTextColor(COLOR_MUTED);
@@ -200,6 +217,34 @@ protected void styleInput(EditText edit) {
                 edit.setTextCursorDrawable(cursor);
             }
         }
+    }
+
+protected <T> ArrayAdapter<T> spinnerAdapter(T[] values) {
+        return new ArrayAdapter<T>(this, android.R.layout.simple_spinner_item, values) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getView(position, convertView, parent), false);
+            }
+
+            @Override
+            public View getDropDownView(int position, View convertView, ViewGroup parent) {
+                return styleSpinnerItem(super.getDropDownView(position, convertView, parent), true);
+            }
+        };
+    }
+
+protected View styleSpinnerItem(View view, boolean dropdown) {
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            text.setText(tr(text.getText().toString()));
+            text.setTextColor(COLOR_TEXT);
+            text.setTextSize(15f);
+            text.setGravity(Gravity.CENTER_VERTICAL);
+            text.setMinHeight(dp(48));
+            text.setPadding(dp(12), 0, dp(12), 0);
+            text.setBackgroundColor(dropdown ? COLOR_SURFACE : Color.TRANSPARENT);
+        }
+        return view;
     }
 
 protected ImageView iconPlate(int icon, int color) {
@@ -328,13 +373,13 @@ protected int systemBarInsetFallback(String resourceName) {
 
 protected Button actionButton(String text, int color) {
         Button button = new Button(this);
-        button.setText(text);
+        button.setText(tr(text));
         button.setTextSize(15f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
-        button.setSingleLine(false);
-        button.setMaxLines(2);
-        button.setEllipsize(null);
+        button.setSingleLine(true);
+        button.setMaxLines(1);
+        button.setEllipsize(TextUtils.TruncateAt.END);
         button.setGravity(Gravity.CENTER);
         button.setIncludeFontPadding(false);
         button.setMinHeight(0);
@@ -509,7 +554,7 @@ protected LinearLayout screenPage(FrameLayout host) {
 
 protected void addScreenTab(LinearLayout tabBar, String title, View page) {
         Button button = new Button(this);
-        button.setText(title);
+        button.setText(tr(title));
         button.setTextSize(14f);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
@@ -780,7 +825,7 @@ protected void sectionTitle(LinearLayout root, String text) {
 
 protected TextView titleText(String text, float size) {
         TextView view = new TextView(this);
-        view.setText(text);
+        view.setText(tr(text));
         view.setTextColor(COLOR_TEXT);
         view.setTextSize(size);
         view.setTypeface(Typeface.DEFAULT_BOLD);
@@ -789,7 +834,7 @@ protected TextView titleText(String text, float size) {
 
 protected TextView mutedText(String text, float size) {
         TextView view = new TextView(this);
-        view.setText(text);
+        view.setText(tr(text));
         view.setTextColor(COLOR_MUTED);
         view.setTextSize(size);
         return view;
@@ -797,7 +842,7 @@ protected TextView mutedText(String text, float size) {
 
 protected TextView controlLabel(String text) {
         TextView view = new TextView(this);
-        view.setText(text);
+        view.setText(tr(text));
         view.setTextSize(13f);
         view.setTextColor(COLOR_MUTED);
         view.setGravity(Gravity.CENTER_VERTICAL);
@@ -819,7 +864,7 @@ protected LinearLayout.LayoutParams labelParams() {
 
 protected TextView chip(String text, int color) {
         TextView view = new TextView(this);
-        view.setText(text);
+        view.setText(tr(text));
         view.setTextSize(12f);
         view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setTextColor(chipText(color));

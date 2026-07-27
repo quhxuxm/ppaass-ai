@@ -28,10 +28,8 @@ pub(crate) fn run_connectivity_tests_blocking(
     let listen_addr = summary.listen_addr.clone();
     let tun_enabled = summary.tun_enabled;
     let tun_name = summary.tun_name.clone();
-    let quic_attempt_timeout = quic_attempt_timeout(
-        &summary.transport_mode,
-        summary.connect_timeout_secs,
-    );
+    let quic_attempt_timeout =
+        quic_attempt_timeout(&summary.transport_mode, summary.connect_timeout_secs);
     let agent_reachable = connect_addr(&listen_addr)
         .map(|addr| tcp_connect_timeout(addr, Duration::from_millis(900)))
         .unwrap_or(false);

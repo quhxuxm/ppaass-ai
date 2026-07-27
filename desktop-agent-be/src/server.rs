@@ -9,7 +9,7 @@ use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
-use crate::tun_handler::run_tun_mode;
+use crate::tun_handler::{PacketCaptureController, TunModeResources, run_tun_mode};
 use crate::yamux_session::YamuxSessionManager;
 use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use std::sync::Arc;
@@ -30,11 +30,12 @@ pub struct AgentServer {
     udp_sessions: Arc<YamuxSessionManager>,
     // 直连规则：命中后绕过 proxy，直接使用本机网络出口连接目标。
     direct_access_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 }
 
 impl AgentServer {
-    #[instrument(skip(config))]
-    pub async fn new(config: AgentConfig) -> Result<Self> {
+    #[instrument(skip(config, packet_capture))]
+    pub async fn new(config: AgentConfig, packet_capture: PacketCaptureController) -> Result<Self> {
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
@@ -48,6 +49,7 @@ impl AgentServer {
             tcp_sessions,
             udp_sessions,
             direct_access_checker,
+            packet_capture,
         })
     }
 
@@ -74,14 +76,19 @@ impl AgentServer {
             let tcp_sessions = self.tcp_sessions.clone();
             let udp_sessions = self.udp_sessions.clone();
             let direct_access_checker = self.direct_access_checker.clone();
+            let packet_capture = self.packet_capture.clone();
             let tun_shutdown = shutdown.clone();
+            let tun_resources = TunModeResources {
+                tcp_sessions,
+                udp_sessions,
+                direct_access_checker,
+                packet_capture,
+            };
             tun_tasks.spawn(run_tun_mode(
                 tun_cfg,
                 transport_mode,
                 proxy_addrs,
-                tcp_sessions,
-                udp_sessions,
-                direct_access_checker,
+                tun_resources,
                 tun_shutdown,
             ));
             tun_task_running = true;
@@ -123,9 +130,16 @@ impl AgentServer {
                             let tcp_sessions = self.tcp_sessions.clone();
                             let udp_sessions = self.udp_sessions.clone();
                             let direct_checker = self.direct_access_checker.clone();
+                            let packet_capture = self.packet_capture.clone();
                             spawn_guarded("desktop inbound connection", async move {
                                 if let Err(e) =
-                                    handle_connection(stream, tcp_sessions, udp_sessions, direct_checker).await
+                                    handle_connection(
+                                        stream,
+                                        tcp_sessions,
+                                        udp_sessions,
+                                        direct_checker,
+                                        packet_capture,
+                                    ).await
                                 {
                                     error!("处理连接时出错：{}", e);
                                 }
@@ -161,22 +175,34 @@ impl AgentServer {
     }
 }
 
-#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker))]
+#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker, packet_capture))]
 async fn handle_connection(
     stream: TcpStream,
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     // 通过窥探第一个字节来检测协议类型。
     // 同一个 listen_addr 同时服务 SOCKS5 和 HTTP 代理，减少用户配置成本。
     let mut buffer = [0u8; 1];
     stream.peek(&mut buffer).await?;
 
-    // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。
+    // peek 不消费字节，后续 SOCKS5/HTTP 处理器仍能从完整流开始解析。捕获包装
+    // 放在协议识别之后，完整的代理握手和后续隧道数据仍都会被记录。
+    let stream = packet_capture.capture_tcp_stream(stream);
     match buffer[0] {
         // SOCKS5 版本号为 0x05
-        0x05 => handle_socks5_connection(stream, tcp_sessions, udp_sessions, direct_checker).await,
+        0x05 => {
+            handle_socks5_connection(
+                stream,
+                tcp_sessions,
+                udp_sessions,
+                direct_checker,
+                packet_capture,
+            )
+            .await
+        }
         // HTTP 方法首字母（G、P、C 等）
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => {
             handle_http_connection(stream, tcp_sessions, direct_checker).await

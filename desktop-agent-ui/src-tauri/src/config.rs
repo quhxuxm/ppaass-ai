@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tauri::Manager;
 use tauri::path::BaseDirectory;
+use tauri::Manager;
 use toml::Value;
 
 use crate::logging::UiLogBuffer;
@@ -236,6 +236,11 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
         tun_proxy_udp: bool_at(&value, &["tun", "proxy_udp"]).unwrap_or(true),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(false),
         tun_quic_policy,
+        tun_packet_capture_file: string_or(
+            &value,
+            &["tun", "packet_capture", "file"],
+            "captures/ppaass-tun.pcap",
+        ),
         direct_mode: string_or(&value, &["direct_access", "mode"], "proxy_all"),
         direct_rules: string_array_at(&value, &["direct_access", "rules"]),
     })
@@ -425,7 +430,11 @@ fn string_or(value: &Value, path: &[&str], default: &str) -> String {
 
 fn int_at(value: &Value, path: &[&str]) -> Option<u64> {
     let value = value_at(value, path)?.as_integer()?;
-    if value >= 0 { Some(value as u64) } else { None }
+    if value >= 0 {
+        Some(value as u64)
+    } else {
+        None
+    }
 }
 
 fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
@@ -560,19 +569,15 @@ mod tests {
 
         let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
         assert!(loaded.summary.tun_enabled);
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("enabled = true")
-        );
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = true"));
 
         let loaded = toggle_tun_enabled_in_config(Some(&path)).unwrap();
         assert!(!loaded.summary.tun_enabled);
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("enabled = false")
-        );
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = false"));
     }
 
     #[test]
@@ -714,6 +719,24 @@ quic_policy = "block"
         .unwrap();
 
         assert_eq!(summary.tun_quic_policy, "block");
+    }
+
+    #[test]
+    fn summarize_config_reads_packet_capture() {
+        let summary = summarize_config(
+            r#"
+listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+
+[tun.packet_capture]
+file = "captures/debug.pcap"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(summary.tun_packet_capture_file, "captures/debug.pcap");
     }
 
     #[test]

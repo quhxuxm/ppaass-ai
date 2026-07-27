@@ -94,7 +94,6 @@ protected void addDirectPolicyFacts(LinearLayout root) {
         directModeSummary = addPolicyFact(row, "当前模式", directModeLabel(directAccessModeValue));
         directRuleCountSummary = addPolicyFact(row, "规则数量", directRuleCountLabel());
         directRuleCountFact = directRuleCountSummary == null ? null : (View) directRuleCountSummary.getParent();
-        addPolicyFact(row, "配置段", "direct_access");
         root.addView(row, rowParams);
     }
 
@@ -325,33 +324,87 @@ protected void addDirectRuleManager(LinearLayout root) {
         inventoryParams.setMargins(0, dp(14), 0, dp(6));
         root.addView(inventoryLabel, inventoryParams);
 
+        LinearLayout ruleBrowser = new LinearLayout(this);
+        ruleBrowser.setOrientation(LinearLayout.VERTICAL);
+        ruleBrowser.setPadding(dp(8), dp(8), dp(8), dp(8));
+        ruleBrowser.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+
+        LinearLayout firstTypeRow = horizontalRow();
+        addDirectRuleTypeButton(firstTypeRow, "通配符", "wildcard");
+        addDirectRuleTypeButton(firstTypeRow, "IP / CIDR", "network");
+        ruleBrowser.addView(firstTypeRow, matchWrap());
+
+        LinearLayout secondTypeRow = horizontalRow();
+        addDirectRuleTypeButton(secondTypeRow, "域名", "domain");
+        addDirectRuleTypeButton(secondTypeRow, "其他", "other");
+        LinearLayout.LayoutParams secondTypeParams = matchWrap();
+        secondTypeParams.setMargins(0, dp(7), 0, 0);
+        ruleBrowser.addView(secondTypeRow, secondTypeParams);
+
         directRuleGroupList = new LinearLayout(this);
         directRuleGroupList.setOrientation(LinearLayout.VERTICAL);
+        directRuleGroupList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
 
-        MaxHeightScrollView ruleScroll = new MaxHeightScrollView(
-                this,
-                directRuleListMaxHeightPx());
-        ruleScroll.setPadding(dp(8), dp(8), dp(8), dp(8));
-        ruleScroll.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
-        // 规则列表只是配置卡片内部的一段可滚动内容，常显滚动条会比内容本身更抢眼。
-        // 这里隐藏内层滚动条，保留手势滚动能力，避免和页面外层滚动条形成双重视觉干扰。
-        ruleScroll.setVerticalScrollBarEnabled(false);
+        MaxHeightScrollView ruleScroll = new MaxHeightScrollView(this, dp(340));
+        ruleScroll.setPadding(0, 0, 0, 0);
+        ruleScroll.setVerticalScrollBarEnabled(true);
         ruleScroll.setScrollbarFadingEnabled(true);
-        ruleScroll.setClipToPadding(false);
+        ruleScroll.setScrollBarFadeDuration(450);
+        ruleScroll.setScrollBarDefaultDelayBeforeFade(700);
+        ruleScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        ruleScroll.setClipToPadding(true);
+        ruleScroll.setFillViewport(false);
+        final float[] lastRuleTouchY = {0f};
+        ruleScroll.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    lastRuleTouchY[0] = event.getY();
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(-1) || view.canScrollVertically(1));
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float currentY = event.getY();
+                    int direction = currentY < lastRuleTouchY[0] ? 1 : -1;
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(direction));
+                    lastRuleTouchY[0] = currentY;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             ruleScroll.setNestedScrollingEnabled(true);
         }
         ruleScroll.addView(directRuleGroupList, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(ruleScroll, matchWrap());
-    }
 
-protected int directRuleListMaxHeightPx() {
-        // 这里只限制“最多显示多少条规则”的高度，不给列表设置固定高度。
-        // ScrollView 在 AT_MOST 约束下会按内容自然收缩，只有规则很多时才开始内部滚动。
-        return dp(DIRECT_RULE_LIST_CHROME_HEIGHT_DP
-                + DIRECT_RULE_LIST_VISIBLE_RULES * DIRECT_RULE_LIST_ROW_HEIGHT_DP);
+        FrameLayout ruleListContainer = new FrameLayout(this);
+        ruleListContainer.setClipChildren(true);
+        ruleListContainer.setClipToOutline(true);
+        GradientDrawable ruleListSurface = new GradientDrawable();
+        ruleListSurface.setColor(COLOR_SURFACE);
+        ruleListSurface.setCornerRadius(dp(10));
+        ruleListContainer.setBackground(ruleListSurface);
+        GradientDrawable ruleListFrame = new GradientDrawable();
+        ruleListFrame.setColor(Color.TRANSPARENT);
+        ruleListFrame.setCornerRadius(dp(10));
+        ruleListFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
+        ruleListContainer.setForegroundGravity(Gravity.FILL);
+        ruleListContainer.setForeground(ruleListFrame);
+        ruleListContainer.addView(ruleScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams listContainerParams = matchWrap();
+        listContainerParams.setMargins(0, dp(8), 0, 0);
+        ruleBrowser.addView(ruleListContainer, listContainerParams);
+        root.addView(ruleBrowser, matchWrap());
     }
 
 }

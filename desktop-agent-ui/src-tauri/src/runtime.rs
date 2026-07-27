@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -10,6 +11,7 @@ pub(crate) struct AgentRuntime {
     pub(crate) agent: Mutex<Option<EmbeddedAgent>>,
     pub(crate) config_path: Mutex<Option<PathBuf>>,
     pub(crate) ui_config_path: Mutex<Option<PathBuf>>,
+    pub(crate) packet_capture_enabled: AtomicBool,
     pub(crate) logs: UiLogBuffer,
     pub(crate) last_error: Arc<Mutex<Option<String>>>,
 }
@@ -17,6 +19,7 @@ pub(crate) struct AgentRuntime {
 pub(crate) struct EmbeddedAgent {
     pub(crate) shutdown: CancellationToken,
     pub(crate) join: Option<JoinHandle<()>>,
+    pub(crate) packet_capture: desktop_agent_be::PacketCaptureController,
 }
 
 impl AgentRuntime {
@@ -25,6 +28,7 @@ impl AgentRuntime {
             agent: Mutex::new(None),
             config_path: Mutex::new(None),
             ui_config_path: Mutex::new(None),
+            packet_capture_enabled: AtomicBool::new(false),
             logs: UiLogBuffer::new(1200),
             last_error: Arc::new(Mutex::new(None)),
         }

@@ -4,25 +4,29 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::process::Stdio;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use desktop_agent_be::PacketCaptureController;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{locate_config_path, make_absolute_path, summarize_config};
 use crate::logging::UiLogBuffer;
 #[cfg(target_os = "macos")]
 use crate::macos_helper::ensure_macos_tun_helper_for_config;
-use crate::models::AgentState;
+#[cfg(windows)]
+use crate::models::ServiceRequest;
+use crate::models::{AgentState, PacketCaptureRuntimeStatus};
 use crate::network::connect_addr;
 #[cfg(target_os = "windows")]
 use crate::process_util::hide_child_console;
 use crate::runtime::{AgentRuntime, EmbeddedAgent};
 #[cfg(windows)]
 use crate::windows_service::{
-    start_agent_via_windows_service, stop_agent_via_windows_service, windows_service_is_running,
-    windows_service_matches_current_exe, windows_service_state,
+    send_service_request, start_agent_via_windows_service, stop_agent_via_windows_service,
+    windows_service_is_running, windows_service_matches_current_exe, windows_service_state,
 };
 
 #[cfg(windows)]
@@ -84,7 +88,11 @@ pub(crate) fn start_agent_inner(
         config_path.clone(),
         runtime.logs.clone(),
         runtime.last_error.clone(),
+        runtime.packet_capture_enabled.load(Ordering::Acquire),
     )?;
+    runtime
+        .packet_capture_enabled
+        .store(embedded.packet_capture.is_enabled(), Ordering::Release);
 
     *runtime
         .config_path
@@ -225,6 +233,7 @@ fn spawn_embedded_agent(
     config_path: PathBuf,
     logs: UiLogBuffer,
     last_error: Arc<Mutex<Option<String>>>,
+    resume_packet_capture: bool,
 ) -> Result<EmbeddedAgent, String> {
     let agent_base_dir = agent_base_dir(&config_path);
     let mut config = desktop_agent_be::config::AgentConfig::load(&config_path)
@@ -241,6 +250,16 @@ fn spawn_embedded_agent(
     let thread_error = last_error.clone();
     let stack_size = config.async_runtime_stack_size_mb * 1024 * 1024;
     let runtime_threads = config.runtime_threads;
+    let packet_capture = desktop_agent_be::PacketCaptureController::new(PathBuf::from(
+        &config.tun.packet_capture.file,
+    ));
+    if resume_packet_capture {
+        match packet_capture.set_enabled(true) {
+            Ok(()) => logs.push("Agent 重启后已继续抓包"),
+            Err(error) => logs.push(format!("Agent 重启后恢复抓包失败，将保持关闭：{error}")),
+        }
+    }
+    let thread_packet_capture = packet_capture.clone();
 
     logs.push(format!(
         "准备以内嵌模式启动 Agent：{}",
@@ -264,8 +283,11 @@ fn spawn_embedded_agent(
 
             match builder.build() {
                 Ok(runtime) => {
-                    let result =
-                        runtime.block_on(desktop_agent_be::run_agent(config, shutdown_for_thread));
+                    let result = runtime.block_on(desktop_agent_be::run_agent_with_packet_capture(
+                        config,
+                        shutdown_for_thread,
+                        thread_packet_capture,
+                    ));
                     if let Err(err) = result {
                         let message = format!("内嵌 Agent 异常停止：{err}");
                         if let Ok(mut last_error) = thread_error.lock() {
@@ -288,7 +310,145 @@ fn spawn_embedded_agent(
     Ok(EmbeddedAgent {
         shutdown,
         join: Some(join),
+        packet_capture,
     })
+}
+
+pub(crate) fn packet_capture_runtime_status(
+    runtime: &AgentRuntime,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    #[cfg(windows)]
+    if windows_service_matches_current_exe().unwrap_or(false) {
+        return packet_capture_service_request(&ServiceRequest::PacketCaptureStatus);
+    }
+
+    packet_capture_runtime_status_local(runtime)
+}
+
+pub(crate) fn packet_capture_runtime_status_local(
+    runtime: &AgentRuntime,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let guard = runtime
+        .agent
+        .lock()
+        .map_err(|_| "进程状态锁已损坏".to_string())?;
+    let Some(agent) = guard.as_ref() else {
+        return Ok(PacketCaptureRuntimeStatus {
+            available: false,
+            enabled: false,
+            file: None,
+        });
+    };
+    Ok(PacketCaptureRuntimeStatus {
+        available: true,
+        enabled: agent.packet_capture.is_enabled(),
+        file: Some(agent.packet_capture.file().to_string_lossy().to_string()),
+    })
+}
+
+pub(crate) fn set_packet_capture_runtime_enabled(
+    runtime: &AgentRuntime,
+    enabled: bool,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    #[cfg(windows)]
+    if windows_service_matches_current_exe().unwrap_or(false) {
+        return packet_capture_service_request(&ServiceRequest::SetPacketCapture { enabled });
+    }
+
+    set_packet_capture_runtime_enabled_local(runtime, enabled)
+}
+
+pub(crate) fn set_packet_capture_runtime_enabled_local(
+    runtime: &AgentRuntime,
+    enabled: bool,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let controller = {
+        let guard = runtime
+            .agent
+            .lock()
+            .map_err(|_| "进程状态锁已损坏".to_string())?;
+        guard
+            .as_ref()
+            .map(|agent| agent.packet_capture.clone())
+            .ok_or_else(|| "Agent 未运行，请先启动 Agent".to_string())?
+    };
+    controller
+        .set_enabled(enabled)
+        .map_err(|error| format!("{}抓包失败：{error}", if enabled { "开启" } else { "关闭" }))?;
+    runtime
+        .packet_capture_enabled
+        .store(controller.is_enabled(), Ordering::Release);
+    Ok(PacketCaptureRuntimeStatus {
+        available: true,
+        enabled: controller.is_enabled(),
+        file: Some(controller.file().to_string_lossy().to_string()),
+    })
+}
+
+pub(crate) fn clear_packet_capture_runtime(
+    runtime: &AgentRuntime,
+    config_path: Option<String>,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    #[cfg(windows)]
+    if windows_service_matches_current_exe().unwrap_or(false) {
+        return packet_capture_service_request(&ServiceRequest::ClearPacketCapture {
+            config_path: config_path.clone(),
+        });
+    }
+
+    clear_packet_capture_runtime_local(runtime, config_path)
+}
+
+pub(crate) fn clear_packet_capture_runtime_local(
+    runtime: &AgentRuntime,
+    config_path: Option<String>,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let running_controller = runtime
+        .agent
+        .lock()
+        .map_err(|_| "进程状态锁已损坏".to_string())?
+        .as_ref()
+        .map(|agent| agent.packet_capture.clone());
+    let available = running_controller.is_some();
+
+    let controller = match running_controller {
+        Some(controller) => controller,
+        None => {
+            let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
+                Some(value) => PathBuf::from(value),
+                None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
+            };
+            let config = desktop_agent_be::config::AgentConfig::load(&config_path)
+                .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;
+            PacketCaptureController::new(resolve_agent_output_path(
+                &config_path,
+                &config.tun.packet_capture.file,
+            ))
+        }
+    };
+    controller
+        .clear()
+        .map_err(|error| format!("清空抓包文件失败：{error}"))?;
+    Ok(PacketCaptureRuntimeStatus {
+        available,
+        enabled: controller.is_enabled(),
+        file: Some(controller.file().to_string_lossy().to_string()),
+    })
+}
+
+#[cfg(windows)]
+fn packet_capture_service_request(
+    request: &ServiceRequest,
+) -> Result<PacketCaptureRuntimeStatus, String> {
+    let response = send_service_request(request)?;
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Agent 服务抓包操作失败".to_string()));
+    }
+    response
+        .packet_capture
+        .ok_or_else(|| "Agent 服务未返回抓包状态".to_string())
 }
 
 fn normalize_agent_config_paths(
@@ -325,6 +485,17 @@ fn normalize_agent_config_paths(
                 .into();
         }
     }
+
+    let capture_file = config.tun.packet_capture.file.trim();
+    if !capture_file.is_empty() {
+        config.tun.packet_capture.file = resolve_agent_path(base_dir, capture_file)
+            .to_string_lossy()
+            .into();
+    }
+}
+
+pub(crate) fn resolve_agent_output_path(config_path: &Path, value: &str) -> PathBuf {
+    resolve_agent_path(&agent_base_dir(config_path), value)
 }
 
 fn resolve_existing_agent_path(base_dir: &Path, value: &str) -> PathBuf {
@@ -510,4 +681,55 @@ exit 2
 #[cfg(not(target_os = "windows"))]
 fn stop_external_agent_on_port(_port: u16) -> Result<bool, String> {
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn runtime_capture_defaults_off_and_toggles_and_clears_without_replacing_agent() {
+        let runtime = AgentRuntime::new();
+        let path = std::env::temp_dir().join(format!(
+            "ppaass-runtime-capture-{}-{}.pcap",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let controller = PacketCaptureController::new(path.clone());
+        *runtime.agent.lock().unwrap() = Some(EmbeddedAgent {
+            shutdown: CancellationToken::new(),
+            join: None,
+            packet_capture: controller.clone(),
+        });
+
+        let before = packet_capture_runtime_status(&runtime).unwrap();
+        assert!(before.available);
+        assert!(!before.enabled);
+
+        let enabled = set_packet_capture_runtime_enabled(&runtime, true).unwrap();
+        assert!(enabled.enabled);
+        assert!(runtime.packet_capture_enabled.load(Ordering::Acquire));
+        let agent_controller = runtime
+            .agent
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .packet_capture
+            .clone();
+        assert!(agent_controller.is_enabled());
+
+        let cleared = clear_packet_capture_runtime(&runtime, None).unwrap();
+        assert!(cleared.enabled);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 24);
+
+        let disabled = set_packet_capture_runtime_enabled(&runtime, false).unwrap();
+        assert!(!disabled.enabled);
+        assert!(!runtime.packet_capture_enabled.load(Ordering::Acquire));
+        fs::remove_file(path).unwrap();
+    }
 }

@@ -1,4 +1,4 @@
-import type { DnsResolutionRecord } from "./types";
+import type { ConnectivityCheck, DnsResolutionRecord } from "./types";
 
 export function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -20,6 +20,13 @@ export function shortProxyUrl(value: string) {
   return value.replace(/^https?:\/\//, "").replace(/^socks5h:\/\//, "socks5h ").replace(/^tun:\/\//, "tun ");
 }
 
+export function connectivityResultLabel(result: Pick<ConnectivityCheck, "http_code" | "success">) {
+  if (result.http_code != null) {
+    return String(result.http_code);
+  }
+  return result.success ? "通过" : "失败";
+}
+
 export function dnsAnswerLabel(record: DnsResolutionRecord) {
   const answers = dnsAnswers(record);
   if (answers.length) {
@@ -36,6 +43,48 @@ export function dnsAnswerLabel(record: DnsResolutionRecord) {
 
 export function dnsAnswers(record: DnsResolutionRecord) {
   return Array.isArray(record.answers) ? record.answers : [];
+}
+
+export function dnsRecordMatchesFilter(
+  record: DnsResolutionRecord,
+  filter: string,
+  additionalValues: string[] = []
+) {
+  const terms = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) {
+    return true;
+  }
+
+  const statusAliases: Record<string, string> = {
+    NOERROR: "成功 success",
+    NXDOMAIN: "不存在 not found",
+    TIMEOUT: "超时 解析超时 timeout timed out",
+    SERVFAIL: "失败 failure failed"
+  };
+  const resolverAliases: Record<string, string> = {
+    "agent-cache": "缓存命中 cache hit",
+    "agent-direct": "直连解析 direct resolution",
+    system: "系统 DNS system"
+  };
+  const status = String(record.status ?? "");
+  const resolver = String(record.resolver ?? "");
+  const searchableText = [
+    String(record.query ?? ""),
+    ...dnsAnswers(record),
+    String(record.client ?? ""),
+    String(record.upstream ?? ""),
+    resolver,
+    String(record.record_type ?? ""),
+    status,
+    statusAliases[status.toUpperCase()] ?? "",
+    resolverAliases[resolver.toLowerCase()] ?? "",
+    `${record.duration_ms} ms`,
+    ...additionalValues
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return terms.every((term) => searchableText.includes(term));
 }
 
 export function normalizeDnsRecords(records: unknown): DnsResolutionRecord[] {

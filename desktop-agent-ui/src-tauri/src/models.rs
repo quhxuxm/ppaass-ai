@@ -17,6 +17,13 @@ pub(crate) struct AgentState {
     pub(crate) logs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PacketCaptureRuntimeStatus {
+    pub(crate) available: bool,
+    pub(crate) enabled: bool,
+    pub(crate) file: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AgentConfigSummary {
     pub(crate) listen_addr: String,
@@ -45,6 +52,7 @@ pub(crate) struct AgentConfigSummary {
     pub(crate) tun_proxy_udp: bool,
     pub(crate) tun_proxy_dns: bool,
     pub(crate) tun_quic_policy: String,
+    pub(crate) tun_packet_capture_file: String,
     pub(crate) direct_mode: String,
     pub(crate) direct_rules: Vec<String>,
 }
@@ -107,6 +115,9 @@ pub(crate) enum ServiceRequest {
     Traffic,
     DnsRecords,
     SetLogLevel { log_level: String },
+    PacketCaptureStatus,
+    SetPacketCapture { enabled: bool },
+    ClearPacketCapture { config_path: Option<String> },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,5 +127,6 @@ pub(crate) struct ServiceResponse {
     pub(crate) state: Option<AgentState>,
     pub(crate) traffic: Option<NetworkTrafficSnapshot>,
     pub(crate) dns_records: Option<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>>,
+    pub(crate) packet_capture: Option<PacketCaptureRuntimeStatus>,
     pub(crate) error: Option<String>,
 }

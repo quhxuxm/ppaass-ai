@@ -70,7 +70,7 @@ protected void buildStatusScreen(LinearLayout root) {
         sectionTitle(apps, "VPN 应用");
 
         selectAppsButton = new Button(this);
-        selectAppsButton.setText("选择");
+        selectAppsButton.setText(tr("选择"));
         selectAppsButton.setAllCaps(false);
         selectAppsButton.setTextSize(14f);
         selectAppsButton.setTypeface(Typeface.DEFAULT_BOLD);
@@ -105,6 +105,7 @@ protected void buildStatusScreen(LinearLayout root) {
         appsRowParams.setMargins(0, dp(4), 0, 0);
         apps.addView(appsRow, appsRowParams);
 
+        buildMockGeoPanel(root);
         buildHttpProxyPanel(root);
         buildConnectivityPanel(root);
 
@@ -134,26 +135,124 @@ protected void buildStatusScreen(LinearLayout root) {
         dailyPanel.addView(trafficRow, matchWrap());
 
         LinearLayout dnsPanel = panel(root);
+        dnsPanel.setPadding(dp(10), dp(16), dp(10), dp(12));
         sectionTitle(dnsPanel, "代理 DNS 记录");
         TextView dnsSubtitle = mutedText("最近 80 条 DNS", 13f);
         LinearLayout.LayoutParams dnsSubtitleParams = matchWrap();
         dnsSubtitleParams.setMargins(0, dp(2), 0, dp(10));
         dnsPanel.addView(dnsSubtitle, dnsSubtitleParams);
 
-        ScrollView dnsScroll = new ScrollView(this);
-        dnsScroll.setVerticalScrollBarEnabled(true);
-        dnsScroll.setClipToPadding(false);
-        dnsScroll.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
+        LinearLayout dnsFilterToolbar = horizontalRow();
+        dnsFilterToolbar.setGravity(Gravity.CENTER_VERTICAL);
+        dnsFilterInput = new EditText(this);
+        dnsFilterInput.setHint(tr("过滤域名、IP、客户端、状态或解析器"));
+        dnsFilterInput.setSingleLine(true);
+        dnsFilterInput.setInputType(
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_FILTER);
+        dnsFilterInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        dnsFilterInput.setTextSize(13f);
+        dnsFilterInput.setContentDescription(tr("过滤代理 DNS 记录"));
+        styleInput(dnsFilterInput);
+        dnsFilterInput.setPadding(dp(11), 0, dp(11), 0);
+        dnsFilterToolbar.addView(dnsFilterInput, new LinearLayout.LayoutParams(
+                0,
+                dp(42),
+                1f));
+
+        dnsFilterSummary = mutedText("显示 0 / 0 条", 10.5f);
+        dnsFilterSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        dnsFilterSummary.setSingleLine(true);
+        LinearLayout.LayoutParams dnsFilterSummaryParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(42));
+        dnsFilterSummaryParams.setMargins(dp(8), 0, 0, 0);
+        dnsFilterToolbar.addView(dnsFilterSummary, dnsFilterSummaryParams);
+        LinearLayout.LayoutParams dnsFilterToolbarParams = matchWrap();
+        dnsFilterToolbarParams.setMargins(0, 0, 0, dp(7));
+        dnsPanel.addView(dnsFilterToolbar, dnsFilterToolbarParams);
+        dnsFilterInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+                lastDnsRecordsStateKey = "";
+                updateDnsRecords();
+            }
+
+            @Override
+            public void afterTextChanged(Editable editable) {
+            }
+        });
+
+        dnsSelectionToolbar = new LinearLayout(this);
+        dnsSelectionToolbar.setOrientation(LinearLayout.VERTICAL);
+        dnsSelectionToolbar.setGravity(Gravity.CENTER_VERTICAL);
+        dnsSelectionToolbar.setPadding(dp(5), dp(5), dp(5), dp(5));
+        dnsSelectionToolbar.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        dnsSelectionToolbar.setVisibility(View.GONE);
+        LinearLayout.LayoutParams dnsToolbarParams = matchWrap();
+        dnsToolbarParams.setMargins(0, 0, 0, dp(7));
+        dnsPanel.addView(dnsSelectionToolbar, dnsToolbarParams);
+
+        MaxHeightScrollView dnsScroll = new MaxHeightScrollView(this, dp(440));
+        dnsScroll.setVerticalScrollBarEnabled(false);
+        dnsScroll.setPadding(0, 0, 0, 0);
+        dnsScroll.setClipToPadding(true);
+        dnsScroll.setClipToOutline(false);
+        dnsScroll.setFillViewport(false);
+        // 状态页本身位于外层 ScrollView 中。拖动 DNS 记录时由内层列表接管手势，
+        // 到达列表边界或内容不足时再把手势交还外层页面，避免页面卡住。
+        final float[] lastDnsTouchY = {0f};
+        dnsScroll.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    lastDnsTouchY[0] = event.getY();
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(-1) || view.canScrollVertically(1));
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float currentY = event.getY();
+                    int direction = currentY < lastDnsTouchY[0] ? 1 : -1;
+                    view.getParent().requestDisallowInterceptTouchEvent(
+                            view.canScrollVertically(direction));
+                    lastDnsTouchY[0] = currentY;
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
+        FrameLayout dnsListContainer = new FrameLayout(this);
+        dnsListContainer.setClipChildren(true);
+        dnsListContainer.setClipToOutline(true);
+        GradientDrawable dnsListSurface = new GradientDrawable();
+        dnsListSurface.setColor(COLOR_SURFACE);
+        dnsListSurface.setCornerRadius(dp(10));
+        dnsListContainer.setBackground(dnsListSurface);
+        GradientDrawable dnsListFrame = new GradientDrawable();
+        dnsListFrame.setColor(Color.TRANSPARENT);
+        dnsListFrame.setCornerRadius(dp(10));
+        dnsListFrame.setStroke(dp(1), alphaColor(COLOR_BORDER, 112));
+        dnsListContainer.setForegroundGravity(Gravity.FILL);
+        dnsListContainer.setForeground(dnsListFrame);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             dnsScroll.setNestedScrollingEnabled(true);
         }
         dnsRecordList = new LinearLayout(this);
         dnsRecordList.setOrientation(LinearLayout.VERTICAL);
-        dnsRecordList.setPadding(dp(8), dp(8), dp(8), dp(8));
+        dnsRecordList.setPadding(0, 0, 0, 0);
+        dnsRecordList.setBackgroundColor(alphaColor(COLOR_BORDER, 72));
         dnsScroll.addView(dnsRecordList, matchWrap());
-        LinearLayout.LayoutParams dnsScrollParams = matchWrap();
-        dnsScrollParams.height = dp(300);
-        dnsPanel.addView(dnsScroll, dnsScrollParams);
+        dnsListContainer.addView(dnsScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        dnsPanel.addView(dnsListContainer, matchWrap());
     }
 
 protected void buildHttpProxyPanel(LinearLayout root) {
@@ -229,11 +328,11 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         usbButtonRow.setGravity(Gravity.END);
         httpProxyUsbSettingsButton = secondaryButton("打开设置");
         httpProxyUsbSettingsButton.setOnClickListener(view -> openUsbTetherSettings());
-        LinearLayout.LayoutParams usbSettingsParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        LinearLayout.LayoutParams usbSettingsParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         usbButtonRow.addView(httpProxyUsbSettingsButton, usbSettingsParams);
         httpProxyUsbActionButton = secondaryButton("复制命令");
         httpProxyUsbActionButton.setOnClickListener(view -> handleHttpProxyUsbAction());
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(96), dp(38));
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         copyParams.setMargins(dp(6), 0, 0, 0);
         usbButtonRow.addView(httpProxyUsbActionButton, copyParams);
         LinearLayout.LayoutParams usbButtonParams = matchWrap();
@@ -278,7 +377,7 @@ protected void buildHttpProxyPanel(LinearLayout root) {
         bluetoothButtonRow.setGravity(Gravity.END);
         httpProxyBluetoothActionButton = secondaryButton("打开设置");
         httpProxyBluetoothActionButton.setOnClickListener(view -> handleHttpProxyBluetoothAction());
-        LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(104), dp(38));
+        LinearLayout.LayoutParams bluetoothCopyParams = new LinearLayout.LayoutParams(dp(120), dp(38));
         bluetoothButtonRow.addView(httpProxyBluetoothActionButton, bluetoothCopyParams);
         LinearLayout.LayoutParams bluetoothButtonParams = matchWrap();
         bluetoothButtonParams.setMargins(0, dp(6), 0, 0);

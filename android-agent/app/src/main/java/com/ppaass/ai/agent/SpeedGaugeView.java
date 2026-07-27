@@ -73,7 +73,7 @@ final class SpeedGaugeView extends View {
                 radius,
                 rxBytesPerSecond,
                 scale,
-                "下载",
+                UiLanguage.tr(getContext(), "下载"),
                 COLOR_DOWNLOAD_A,
                 COLOR_DOWNLOAD_B);
         drawGauge(
@@ -83,7 +83,7 @@ final class SpeedGaugeView extends View {
                 radius,
                 txBytesPerSecond,
                 scale,
-                "上传",
+                UiLanguage.tr(getContext(), "上传"),
                 COLOR_UPLOAD_A,
                 COLOR_UPLOAD_B);
 
@@ -91,7 +91,11 @@ final class SpeedGaugeView extends View {
         textPaint.setColor(COLOR_MUTED);
         textPaint.setTextSize(dp(11));
         canvas.drawText(
-                active ? "双通道实时速率 · 刻度 " + formatSpeed(scale) : "VPN 空闲 · 等待流量",
+                UiLanguage.tr(
+                        getContext(),
+                        active
+                                ? "双通道实时速率 · 刻度 " + formatSpeed(scale)
+                                : "VPN 空闲 · 等待流量"),
                 width / 2f,
                 height - dp(12),
                 textPaint);

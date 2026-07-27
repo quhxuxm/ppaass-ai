@@ -26,11 +26,55 @@ public class MainActivity extends MainActivityScreens {
             (sharedPreferences, key) -> {
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
                         || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)
-                        || PpaassHttpProxyService.PREF_RUNNING.equals(key)) {
+                        || PpaassVpnService.PREF_MOCK_GEO_REQUESTED.equals(key)
+                        || PpaassVpnService.PREF_MOCK_GEO_ACTIVE.equals(key)
+                        || PpaassVpnService.PREF_MOCK_GEO_STOPPING.equals(key)
+                        || PpaassVpnService.PREF_MOCK_GEO_ERROR.equals(key)
+                        || PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND.equals(key)
+                         || PpaassVpnService.PREF_MOCK_GEO_DIRTY.equals(key)
+                         || MockGeoConfig.PREF_MODE.equals(key)
+                         || PpaassHttpProxyService.PREF_ENABLED.equals(key)
+                         || PpaassHttpProxyService.PREF_RUNNING.equals(key)) {
                     runOnUiThread(() -> {
                         updateVpnToggle();
                         updateHttpProxyToggle();
+                        refreshMockGeoUi();
                         updateStatusMetrics();
+                        if (activityResumed
+                                && sharedPreferences.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                                false)
+                                && sharedPreferences.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                                false)
+                                && !sharedPreferences.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_STOPPING,
+                                false)
+                                && !sharedPreferences.getBoolean(
+                                PpaassVpnService.PREF_MOCK_GEO_DIRTY,
+                                false)) {
+                            // Run after the service callback has released its in-process
+                            // cleanup owner; multiple preference notifications collapse
+                            // because the first start removes the waiting flag.
+                            statusHandler.post(() -> {
+                                if (activityResumed
+                                        && prefs.getBoolean(
+                                        PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                                        false)
+                                        && prefs.getBoolean(
+                                        PpaassVpnService
+                                                .PREF_MOCK_GEO_WAITING_FOR_FOREGROUND,
+                                        false)
+                                        && !prefs.getBoolean(
+                                        PpaassVpnService.PREF_MOCK_GEO_STOPPING,
+                                        false)
+                                        && !prefs.getBoolean(
+                                        PpaassVpnService.PREF_MOCK_GEO_DIRTY,
+                                        false)) {
+                                    syncMockGeoAfterResume();
+                                }
+                            });
+                        }
                     });
                 }
             };
@@ -39,26 +83,47 @@ public class MainActivity extends MainActivityScreens {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        if (!prefs.contains(PpaassVpnService.PREF_MOCK_GEO_REQUESTED)) {
+            prefs.edit()
+                    .putBoolean(
+                            PpaassVpnService.PREF_MOCK_GEO_REQUESTED,
+                            prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false))
+                    .putBoolean(PpaassVpnService.PREF_MOCK_GEO_STOPPING, false)
+                    .apply();
+        }
+        restoreMockGeoInstanceState(savedInstanceState);
+        cleanupStaleMockGeoState();
         UiPalette.apply(prefs.getString(UiPalette.PREF_COLOR_THEME, UiPalette.DEFAULT_THEME));
         reloadUiPalette();
         configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
         buildUi();
+        UiLanguage.watch(this);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
+        cleanupStaleMockGeoState();
         restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
         updateHttpProxyToggle();
+        syncMockGeoAfterResume();
         startStatusRefresh();
     }
 
     @Override
     protected void onPause() {
+        activityResumed = false;
         statusHandler.removeCallbacks(statusRefresh);
         super.onPause();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        saveMockGeoInstanceState(outState);
+        super.onSaveInstanceState(outState);
     }
 
     @Override
@@ -68,6 +133,7 @@ public class MainActivity extends MainActivityScreens {
             appSelectorDialog.dismiss();
             appSelectorDialog = null;
         }
+        dismissMockGeoDialogs();
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
         }
@@ -80,6 +146,15 @@ public class MainActivity extends MainActivityScreens {
         if (requestCode == VPN_PERMISSION_REQUEST && resultCode == RESULT_OK) {
             startVpnService();
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        handleMockGeoPermissionResult(requestCode, grantResults);
     }
 
     @Override

@@ -15,6 +15,9 @@ mod dns_proxy;
 pub(crate) mod helper_service;
 mod netstack;
 mod network;
+mod packet_capture;
+pub(crate) use packet_capture::CapturedTcpStream;
+pub use packet_capture::PacketCaptureController;
 mod proxy_routing;
 mod route;
 mod tasks;
@@ -36,6 +39,8 @@ use crate::yamux_session::YamuxSessionManager;
 use common::{
     TransportMode, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded,
 };
+#[cfg(windows)]
+use device::tun_ipv4_peer;
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
 use dns::DnsGuard;
@@ -52,7 +57,7 @@ use route::{
 use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tasks::{spawn_packet_bridge, spawn_tcp_listener, spawn_udp_sessions};
@@ -64,6 +69,13 @@ use tun_rs::DeviceBuilder;
 const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
 const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
+
+pub(crate) struct TunModeResources {
+    pub(crate) tcp_sessions: Arc<YamuxSessionManager>,
+    pub(crate) udp_sessions: Arc<YamuxSessionManager>,
+    pub(crate) direct_access_checker: Arc<DirectAccessChecker>,
+    pub(crate) packet_capture: PacketCaptureController,
+}
 
 #[derive(Clone)]
 struct TunForwardContext {
@@ -300,16 +312,20 @@ impl TunDirectEgress {
 }
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(tcp_sessions, udp_sessions, direct_access_checker, shutdown))]
+#[instrument(skip(resources, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
     transport_mode: TransportMode,
     proxy_addrs: Vec<String>,
-    tcp_sessions: Arc<YamuxSessionManager>,
-    udp_sessions: Arc<YamuxSessionManager>,
-    direct_access_checker: Arc<DirectAccessChecker>,
+    resources: TunModeResources,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    let TunModeResources {
+        tcp_sessions,
+        udp_sessions,
+        direct_access_checker,
+        packet_capture,
+    } = resources;
     let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
     info!(
         "启动 TUN 模式转发器：设备={} ipv4={} ipv6={:?} mtu={}",
@@ -381,6 +397,10 @@ pub async fn run_tun_mode(
         "TUN 设备已创建：名称={} if_index={} helper_managed={}",
         tun_name, tun_if_index, helper_managed_network
     );
+    info!(
+        "明文抓包运行时控制已就绪：默认关闭，文件={}",
+        packet_capture.file().display()
+    );
 
     let direct_egress = Arc::new(TunDirectEgress::new(
         proxy_addrs.clone(),
@@ -403,6 +423,7 @@ pub async fn run_tun_mode(
         config.mtu as usize,
         forward_context,
         quic_policy,
+        packet_capture,
         shutdown.clone(),
     )?;
     let route_guard = if helper_managed_network {
@@ -410,6 +431,20 @@ pub async fn run_tun_mode(
     } else {
         install_route_guard(&config, ipv4, ipv4_prefix, tun_if_index, &proxy_addrs)
     };
+    #[cfg(windows)]
+    let dns_guard = if helper_managed_network {
+        None
+    } else {
+        install_windows_dns_guard(
+            proxy_dns,
+            proxy_bind_interface.as_ref(),
+            tun_if_index,
+            ipv4,
+            ipv4_prefix,
+            config.dns_state_file.as_deref(),
+        )
+    };
+    #[cfg(not(windows))]
     if !helper_managed_network {
         cleanup_stale_dns(config.dns_state_file.as_deref());
     }
@@ -422,6 +457,11 @@ pub async fn run_tun_mode(
     tcp_sessions.set_proxy_bind_interface(None);
     udp_sessions.set_proxy_bind_ip(None);
     udp_sessions.set_proxy_bind_interface(None);
+    // Windows DNS Client 会按接口发送查询，仅安装 DNS 服务器的 /32 TUN
+    // 路由无法可靠捕获这类流量。先恢复接口 DNS，再撤销 TUN 路由，避免
+    // 退出窗口内系统查询仍指向已经不可达的虚拟 DNS 地址。
+    #[cfg(windows)]
+    drop(dns_guard);
     drop(route_guard);
     #[cfg(target_os = "macos")]
     drop(system_guard);
@@ -434,10 +474,45 @@ pub async fn run_tun_mode(
     Ok(())
 }
 
+#[cfg(windows)]
+fn install_windows_dns_guard(
+    proxy_dns: bool,
+    proxy_bind_interface: Option<&common::BindInterface>,
+    tun_if_index: u32,
+    tun_ipv4: std::net::Ipv4Addr,
+    tun_ipv4_prefix: u8,
+    dns_state_file: Option<&str>,
+) -> Option<DnsGuard> {
+    let Some(tun_dns) = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix) else {
+        // install(false, ...) still restores a lease left by an interrupted older run.
+        cleanup_stale_dns(dns_state_file);
+        if proxy_dns {
+            warn!(
+                "TUN proxy_dns 已启用，但 {} 无可用虚拟 peer 地址；跳过 Windows 系统 DNS 接管",
+                format_args!("{tun_ipv4}/{tun_ipv4_prefix}")
+            );
+        }
+        return None;
+    };
+
+    if proxy_dns {
+        info!(
+            "Windows TUN proxy_dns 使用虚拟 DNS 地址：{tun_dns} (TUN={tun_ipv4}/{tun_ipv4_prefix})"
+        );
+    }
+    DnsGuard::install(
+        proxy_dns,
+        proxy_bind_interface,
+        tun_if_index,
+        tun_dns,
+        dns_state_file,
+    )
+}
+
 fn cleanup_stale_dns(dns_state_file: Option<&str>) {
-    // Current TUN mode never changes system DNS. This only restores DNS records
-    // left behind by older builds that did temporarily rewrite system DNS.
-    debug!("TUN 模式不会修改系统 DNS；仅检查并恢复旧版本遗留的 DNS 状态");
+    // Windows 正常生命周期由 install_windows_dns_guard 持有 guard；本函数用于
+    // proxy_dns 关闭、无可用虚拟 peer，以及其他平台清理异常退出遗留的状态。
+    debug!("检查并恢复旧版本或异常退出遗留的 DNS 状态");
     let _ = DnsGuard::install(
         false,
         None,

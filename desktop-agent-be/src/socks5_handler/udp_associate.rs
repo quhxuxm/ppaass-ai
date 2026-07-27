@@ -7,11 +7,12 @@ use super::udp_relay::SocksUdpRelay;
 use super::*;
 
 pub(super) async fn handle_udp_associate(
-    protocol: Socks5ServerProtocol<TcpStream, CommandRead>,
+    protocol: Socks5ServerProtocol<CapturedTcpStream, CommandRead>,
     _target_addr: TargetAddr,
     udp_sessions: Arc<YamuxSessionManager>,
     control_local_ip: Option<IpAddr>,
     direct_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     info!("处理 UDP ASSOCIATE");
 
@@ -47,7 +48,13 @@ pub(super) async fn handle_udp_associate(
         debug!("UDP 关联 TCP 控制通道已关闭");
     };
 
-    let udp_handler = process_udp_traffic(udp_socket, udp_sessions, direct_checker);
+    let udp_handler = process_udp_traffic(
+        udp_socket,
+        udp_sessions,
+        direct_checker,
+        reply_addr,
+        packet_capture,
+    );
 
     tokio::select! {
         _ = keep_alive => {
@@ -99,11 +106,18 @@ async fn process_udp_traffic(
     udp_socket: Arc<UdpSocket>,
     udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
+    capture_server_addr: SocketAddr,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     let mut buf = [0u8; 65535];
     type StreamMap = DashMap<Address, Sender<Vec<u8>>>;
     let streams: Arc<StreamMap> = Arc::new(DashMap::new());
-    let udp_relay = SocksUdpRelay::spawn(udp_sessions.clone(), udp_socket.clone());
+    let udp_relay = SocksUdpRelay::spawn(
+        udp_sessions.clone(),
+        udp_socket.clone(),
+        capture_server_addr,
+        packet_capture.clone(),
+    );
 
     loop {
         // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。
@@ -112,6 +126,7 @@ async fn process_udp_traffic(
             .await
             .map_err(|e| AgentError::Socks5(e.to_string()))?;
         let packet_data = &buf[..n];
+        packet_capture.record_udp_payload(client_addr, capture_server_addr, packet_data);
         // 解析 SOCKS5 UDP 头部
         if n < 10 {
             continue;
@@ -150,6 +165,7 @@ async fn process_udp_traffic(
             let udp_client = udp_socket.clone();
             let dest_addr_clone = dest_addr.clone();
             let streams_clone = streams.clone();
+            let packet_capture = packet_capture.clone();
 
             tokio::spawn(async move {
                 // 绑定本地 UDP 套接字并直连目标
@@ -196,10 +212,15 @@ async fn process_udp_traffic(
                                 );
                                 match create_udp_packet(&dest_addr_clone, data) {
                                     Ok(packet) => {
-                                        if let Err(e) =
-                                            udp_client.send_to(&packet, client_addr).await
-                                        {
-                                            error!("发送 UDP 数据包到客户端失败: {}", e);
+                                        match udp_client.send_to(&packet, client_addr).await {
+                                            Ok(_) => packet_capture.record_udp_payload(
+                                                capture_server_addr,
+                                                client_addr,
+                                                &packet,
+                                            ),
+                                            Err(e) => {
+                                                error!("发送 UDP 数据包到客户端失败: {}", e);
+                                            }
                                         }
                                     }
                                     Err(e) => {

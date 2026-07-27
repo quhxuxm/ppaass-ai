@@ -4,26 +4,23 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.view.View;
 
-// 状态页的 24 小时流量柱状图，外部只需要喂入聚合后的小时数据。
+// 状态页的 24 小时上传/下载趋势图，外部只需要喂入聚合后的小时数据。
 final class TrafficBarView extends View {
-    private final int COLOR_CONTROL_A = UiPalette.CHART_IDLE;
     private final int COLOR_MUTED = UiPalette.MUTED;
     private final int COLOR_BORDER = UiPalette.BORDER;
-    private final int COLOR_DOWNLOAD_A = UiPalette.ACTION_START;
-    private final int COLOR_DOWNLOAD_B = UiPalette.ACTION_WARN;
-    private final int COLOR_UPLOAD_A = UiPalette.STATUS_RUNNING;
-    private final int COLOR_UPLOAD_B = UiPalette.ACTION_INFO;
-    private final int[] COLOR_BAR_PALETTE = {
-            COLOR_DOWNLOAD_B, COLOR_DOWNLOAD_A, COLOR_UPLOAD_A, COLOR_UPLOAD_B
-    };
+    private final int COLOR_DOWNLOAD = UiPalette.ACTION_INFO;
+    private final int COLOR_UPLOAD = UiPalette.STATUS_RUNNING;
 
-    private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint chartPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF barBounds = new RectF();
+    private final RectF legendBounds = new RectF();
+    private final Path chartPath = new Path();
+    private final Path areaPath = new Path();
     private final long[] downloadValues = new long[24];
     private final long[] uploadValues = new long[24];
     private int currentHour;
@@ -57,8 +54,8 @@ final class TrafficBarView extends View {
         float bottom = height - dp(25);
         float chartHeight = Math.max(dp(48), bottom - top);
 
-        drawLegend(canvas, left, dp(9), COLOR_UPLOAD_B, "合计");
-        drawLegend(canvas, left + dp(72), dp(9), COLOR_CONTROL_A, "空闲");
+        drawLegend(canvas, left, dp(9), COLOR_DOWNLOAD, UiLanguage.tr(getContext(), "每小时下载"));
+        drawLegend(canvas, left + dp(108), dp(9), COLOR_UPLOAD, UiLanguage.tr(getContext(), "每小时上传"));
 
         for (int i = 0; i < 3; i++) {
             float y = top + chartHeight * i / 2f;
@@ -66,70 +63,84 @@ final class TrafficBarView extends View {
         }
 
         long max = maxTraffic();
-        float gap = dp(3);
-        float groupWidth = Math.max(dp(6), (right - left - gap * 23) / 24f);
-        for (int i = 0; i < downloadValues.length; i++) {
-            boolean highlighted = i == currentHour;
-            float x = left + i * (groupWidth + gap);
-            long total = downloadValues[i] + uploadValues[i];
-            float totalRatio = max == 0 ? 0f : total / (float) max;
-            float totalHeight = total > 0 ? Math.max(dp(7), chartHeight * totalRatio) : dp(4);
-            float y = bottom - totalHeight;
-            drawTotalBar(canvas, x, y, groupWidth, totalHeight, total, barColor(i), highlighted);
-        }
+        drawSeries(canvas, downloadValues, max, left, right, top, bottom, COLOR_DOWNLOAD);
+        drawSeries(canvas, uploadValues, max, left, right, top, bottom, COLOR_UPLOAD);
 
         textPaint.setColor(COLOR_MUTED);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText("00", left + groupWidth / 2f, height - dp(6), textPaint);
-        canvas.drawText("12", left + 12 * (groupWidth + gap) + groupWidth / 2f, height - dp(6), textPaint);
-        canvas.drawText("23", right - groupWidth / 2f, height - dp(6), textPaint);
+        drawHourLabel(canvas, left, right, 0, height);
+        drawHourLabel(canvas, left, right, 6, height);
+        drawHourLabel(canvas, left, right, 12, height);
+        drawHourLabel(canvas, left, right, 18, height);
+        drawHourLabel(canvas, left, right, 23, height);
     }
 
     private long maxTraffic() {
         long max = 0;
         for (int i = 0; i < downloadValues.length; i++) {
-            max = Math.max(max, downloadValues[i] + uploadValues[i]);
+            max = Math.max(max, Math.max(downloadValues[i], uploadValues[i]));
         }
-        return max;
+        return Math.max(1, max);
     }
 
-    private void drawTotalBar(
+    private void drawSeries(
             Canvas canvas,
-            float x,
-            float y,
-            float width,
-            float totalHeight,
-            long total,
-            int color,
-            boolean highlighted) {
-        if (total <= 0) {
-            barPaint.setShader(null);
-            barPaint.setColor(COLOR_CONTROL_A);
-            barBounds.set(x, y, x + width, y + totalHeight);
-            canvas.drawRoundRect(barBounds, dp(4), dp(4), barPaint);
-            return;
+            long[] values,
+            long max,
+            float left,
+            float right,
+            float top,
+            float bottom,
+            int color) {
+        chartPath.reset();
+        areaPath.reset();
+        float chartWidth = right - left;
+        for (int index = 0; index < values.length; index++) {
+            float x = left + chartWidth * index / 23f;
+            float y = bottom - (bottom - top) * values[index] / (float) max;
+            if (index == 0) {
+                chartPath.moveTo(x, y);
+                areaPath.moveTo(x, bottom);
+                areaPath.lineTo(x, y);
+            } else {
+                chartPath.lineTo(x, y);
+                areaPath.lineTo(x, y);
+            }
         }
+        areaPath.lineTo(right, bottom);
+        areaPath.close();
+        chartPaint.setStyle(Paint.Style.FILL);
+        chartPaint.setColor(withAlpha(color, 32));
+        canvas.drawPath(areaPath, chartPaint);
+        chartPaint.setStyle(Paint.Style.STROKE);
+        chartPaint.setStrokeWidth(dp(2));
+        chartPaint.setStrokeCap(Paint.Cap.ROUND);
+        chartPaint.setStrokeJoin(Paint.Join.ROUND);
+        chartPaint.setColor(color);
+        canvas.drawPath(chartPath, chartPaint);
 
-        int alpha = highlighted ? 255 : 188;
-        barPaint.setShader(null);
-        barPaint.setColor(withAlpha(color, alpha));
-        barBounds.set(x, y, x + width, y + totalHeight);
-        canvas.drawRoundRect(barBounds, dp(4), dp(4), barPaint);
-    }
-
-    private int barColor(int index) {
-        return COLOR_BAR_PALETTE[index % COLOR_BAR_PALETTE.length];
+        float currentX = left + chartWidth * Math.max(0, Math.min(23, currentHour)) / 23f;
+        float currentY = bottom - (bottom - top)
+                * values[Math.max(0, Math.min(23, currentHour))] / (float) max;
+        chartPaint.setStyle(Paint.Style.FILL);
+        chartPaint.setColor(color);
+        canvas.drawCircle(currentX, currentY, dp(3), chartPaint);
     }
 
     private void drawLegend(Canvas canvas, float x, float y, int color, String label) {
-        barBounds.set(x, y, x + dp(14), y + dp(10));
-        barPaint.setShader(null);
-        barPaint.setColor(color);
-        canvas.drawRoundRect(barBounds, dp(5), dp(5), barPaint);
+        legendBounds.set(x, y, x + dp(14), y + dp(4));
+        chartPaint.setStyle(Paint.Style.FILL);
+        chartPaint.setColor(color);
+        canvas.drawRoundRect(legendBounds, dp(2), dp(2), chartPaint);
         textPaint.setColor(COLOR_MUTED);
         textPaint.setTextAlign(Paint.Align.LEFT);
         canvas.drawText(label, x + dp(18), y + dp(10), textPaint);
         textPaint.setTextAlign(Paint.Align.CENTER);
+    }
+
+    private void drawHourLabel(Canvas canvas, float left, float right, int hour, int height) {
+        float x = left + (right - left) * hour / 23f;
+        canvas.drawText(String.format(java.util.Locale.ROOT, "%02d", hour), x, height - dp(6), textPaint);
     }
 
     private int withAlpha(int color, int alpha) {

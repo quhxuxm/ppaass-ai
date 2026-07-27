@@ -7,6 +7,7 @@
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AgentError, Result};
 use crate::telemetry;
+use crate::tun_handler::{CapturedTcpStream, PacketCaptureController};
 use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 use dashmap::DashMap;
 use fast_socks5::server::{
@@ -22,7 +23,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -35,19 +36,21 @@ mod udp_relay;
 use tcp::{handle_tcp_bind, handle_tcp_connect};
 use udp_associate::handle_udp_associate;
 
-#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker))]
+#[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker, packet_capture))]
 pub async fn handle_socks5_connection(
-    stream: TcpStream,
+    stream: CapturedTcpStream,
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     direct_checker: Arc<DirectAccessChecker>,
+    packet_capture: PacketCaptureController,
 ) -> Result<()> {
     info!("处理 SOCKS5 连接");
     // UDP ASSOCIATE 回复地址尽量沿用 TCP 控制连接的本地地址族。
     let control_local_ip = stream.local_addr().ok().map(|addr| addr.ip());
 
     // 使用新的 fast-socks5 1.0 API 和 Socks5ServerProtocol
-    let protocol: Socks5ServerProtocol<TcpStream, Opened> = Socks5ServerProtocol::start(stream);
+    let protocol: Socks5ServerProtocol<CapturedTcpStream, Opened> =
+        Socks5ServerProtocol::start(stream);
 
     // 协商认证 - 本地代理默认无认证；用户身份由 agent->proxy 连接的密钥认证承担。
     let auth_state = protocol
@@ -73,7 +76,14 @@ pub async fn handle_socks5_connection(
         }
         // BIND 让 agent 监听一个端口等待远端主动连入。
         Socks5Command::TCPBind => {
-            handle_tcp_bind(protocol, target_addr, tcp_sessions, direct_checker).await
+            handle_tcp_bind(
+                protocol,
+                target_addr,
+                tcp_sessions,
+                direct_checker,
+                packet_capture,
+            )
+            .await
         }
         // UDP ASSOCIATE 通过 TCP 控制连接维持 UDP 会话生命周期。
         Socks5Command::UDPAssociate => {
@@ -83,6 +93,7 @@ pub async fn handle_socks5_connection(
                 udp_sessions,
                 control_local_ip,
                 direct_checker,
+                packet_capture,
             )
             .await
         }

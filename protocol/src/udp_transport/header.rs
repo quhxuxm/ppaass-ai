@@ -144,21 +144,30 @@ impl UdpPacketHeader {
         }
 
         let header = Self {
-            magic: bytes[0..4].try_into().expect("fixed header slice"),
+            magic: read_header_field(bytes, 0)?,
             version: bytes[4],
             kind: UdpPacketKind::try_from(bytes[5])?,
-            session_id: bytes[6..22].try_into().expect("fixed header slice"),
-            seq: u64::from_be_bytes(bytes[22..30].try_into().expect("fixed header slice")),
-            message_id: u64::from_be_bytes(bytes[30..38].try_into().expect("fixed header slice")),
-            fragment_index: u16::from_be_bytes(
-                bytes[38..40].try_into().expect("fixed header slice"),
-            ),
-            fragment_count: u16::from_be_bytes(
-                bytes[40..42].try_into().expect("fixed header slice"),
-            ),
-            total_len: u32::from_be_bytes(bytes[42..46].try_into().expect("fixed header slice")),
+            session_id: read_header_field(bytes, 6)?,
+            seq: u64::from_be_bytes(read_header_field(bytes, 22)?),
+            message_id: u64::from_be_bytes(read_header_field(bytes, 30)?),
+            fragment_index: u16::from_be_bytes(read_header_field(bytes, 38)?),
+            fragment_count: u16::from_be_bytes(read_header_field(bytes, 40)?),
+            total_len: u32::from_be_bytes(read_header_field(bytes, 42)?),
         };
         header.validate()?;
         Ok(header)
     }
+}
+
+fn read_header_field<const N: usize>(bytes: &[u8], start: usize) -> UdpTransportResult<[u8; N]> {
+    let end = start
+        .checked_add(N)
+        .ok_or(UdpTransportError::InvalidHeader(
+            "header field range overflow",
+        ))?;
+    bytes
+        .get(start..end)
+        .ok_or(UdpTransportError::DatagramTooShort(bytes.len()))?
+        .try_into()
+        .map_err(|_| UdpTransportError::InvalidHeader("invalid fixed header field length"))
 }

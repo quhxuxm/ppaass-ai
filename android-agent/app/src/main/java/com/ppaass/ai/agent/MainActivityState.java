@@ -9,6 +9,7 @@ import android.graphics.drawable.*;
 import android.net.*;
 import android.os.*;
 import android.text.*;
+import android.util.TypedValue;
 import android.view.*;
 import android.view.inputmethod.*;
 import android.widget.*;
@@ -61,6 +62,7 @@ protected static final int CONNECTIVITY_TIMEOUT_MS = 8_000;
 protected static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
 protected static final int QUIC_RESERVED_VERSION = 0x0a0a0a0a;
 protected SharedPreferences prefs;
+protected boolean activityResumed;
 protected EditText proxyAddrs;
 protected EditText httpProxyPort;
 protected EditText httpProxyThreads;
@@ -86,7 +88,10 @@ protected TextView directRuleCountSummary;
 protected TextView directRuleGroupSummary;
 protected View directRuleCountFact;
 protected final List<Button> directModeButtons = new ArrayList<>();
+protected final List<Button> directRuleTypeButtons = new ArrayList<>();
 protected final List<String> directRuleValues = new ArrayList<>();
+protected String selectedDirectRuleGroupKey = "wildcard";
+protected final LinkedHashMap<String, String> selectedDnsDomains = new LinkedHashMap<>();
 protected EditText yamuxUdpSessions;
 protected EditText yamuxUdpMaxStreamsPerSession;
 protected EditText yamuxUdpOpenStreamTimeoutSecs;
@@ -114,6 +119,10 @@ protected TextView downloadSpeed;
 protected TextView uploadSpeed;
 protected TextView trafficDownload;
 protected TextView trafficUpload;
+protected ScrollView mainScrollView;
+protected EditText dnsFilterInput;
+protected TextView dnsFilterSummary;
+protected LinearLayout dnsSelectionToolbar;
 protected LinearLayout dnsRecordList;
 protected Button connectivityTestButton;
 protected TextView connectivitySummary;
@@ -154,6 +163,8 @@ protected final Runnable statusRefresh = new Runnable() {
     protected abstract void updateVpnToggle();
 
     protected abstract void updateHttpProxyToggle();
+
+    protected abstract void toggleVpn();
 
     protected abstract boolean isVpnRunning();
 
@@ -208,7 +219,30 @@ protected final Runnable statusRefresh = new Runnable() {
         return drawable;
     }
 
+    protected GradientDrawable roundedFill(int fill) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(16));
+        return drawable;
+    }
+
     protected void flattenButton(View view) {
+        if (view instanceof Button) {
+            Button button = (Button) view;
+            float oneSpPx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    1f,
+                    getResources().getDisplayMetrics());
+            int currentSizeSp = Math.max(8, Math.round(button.getTextSize() / oneSpPx));
+            button.setSingleLine(true);
+            button.setMaxLines(1);
+            button.setEllipsize(null);
+            button.setAutoSizeTextTypeUniformWithConfiguration(
+                    Math.min(8, currentSizeSp),
+                    currentSizeSp,
+                    1,
+                    TypedValue.COMPLEX_UNIT_SP);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             view.setStateListAnimator(null);
             view.setElevation(0f);
@@ -228,6 +262,10 @@ protected final Runnable statusRefresh = new Runnable() {
 
     protected int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density);
+    }
+
+    protected String tr(String source) {
+        return UiLanguage.tr(this, source);
     }
 
 }

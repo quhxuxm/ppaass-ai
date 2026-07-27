@@ -40,17 +40,17 @@ protected void showAppSelector() {
         AppListAdapter adapter = new AppListAdapter(this, apps, checked);
         ListView list = new ListView(this);
         list.setAdapter(adapter);
-        list.setFastScrollEnabled(true);
+        list.setFastScrollEnabled(false);
+        list.setVerticalScrollBarEnabled(true);
+        list.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
         // 项目卡片直接作为 ListView 行根视图，行间距由透明分隔线提供。
         list.setDivider(new ColorDrawable(Color.TRANSPARENT));
         list.setDividerHeight(dp(4));
         list.setCacheColorHint(Color.TRANSPARENT);
-        list.setSelector(interactiveRounded(
-                COLOR_ACCENT_SOFT,
-                alphaColor(COLOR_ACCENT, 118),
-                COLOR_ACCENT));
+        list.setSelector(new ColorDrawable(Color.TRANSPARENT));
 
         TextView selectionSummary = chip(appSelectionSummary(checked), COLOR_STATUS_STOPPED);
+        selectionSummary.setBackground(roundedFill(chipFill(COLOR_STATUS_STOPPED)));
         list.setOnItemClickListener((parent, view, position, id) -> {
             checked[position] = !checked[position];
             selectionSummary.setText(appSelectionSummary(checked));
@@ -59,8 +59,7 @@ protected void showAppSelector() {
 
         LinearLayout dialogContent = new LinearLayout(this);
         dialogContent.setOrientation(LinearLayout.VERTICAL);
-        dialogContent.setPadding(dp(18), dp(16), dp(18), 0);
-        dialogContent.setBackground(rounded(COLOR_SURFACE, COLOR_BORDER));
+        dialogContent.setPadding(dp(24), dp(16), dp(24), dp(16));
 
         LinearLayout titleRow = horizontalRow();
         TextView dialogTitle = titleText("VPN 应用", 20f);
@@ -80,10 +79,9 @@ protected void showAppSelector() {
 
         LinearLayout listShell = new LinearLayout(this);
         listShell.setOrientation(LinearLayout.VERTICAL);
-        // 列表项自身已有完整的圆角边框，外壳只保留上下留白，
-        // 避免左右 padding 让应用项看起来没有铺满列表。
+        // 列表项使用无描边的圆角底色，外壳只保留上下留白，
+        // 避免出现多个圆角容器相互嵌套。
         listShell.setPadding(0, dp(4), 0, dp(4));
-        listShell.setBackground(rounded(COLOR_CONTROL, COLOR_BORDER));
         listShell.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(460)));
@@ -91,7 +89,7 @@ protected void showAppSelector() {
 
         appSelectorDialog = new AlertDialog.Builder(this)
                 .setView(dialogContent)
-                .setPositiveButton("确定", (dialog, which) -> {
+                .setPositiveButton(tr("确定"), (dialog, which) -> {
                     Set<String> next = new HashSet<>();
                     for (int i = 0; i < apps.size(); i++) {
                         if (checked[i]) {
@@ -101,13 +99,14 @@ protected void showAppSelector() {
                     prefs.edit().putStringSet("vpn_apps", next).apply();
                     updateSelectedAppsSummary();
                 })
-                .setNegativeButton("取消", null)
-                .setNeutralButton("清空", null)
+                .setNegativeButton(tr("取消"), null)
+                .setNeutralButton(tr("清空"), null)
                 .create();
         appSelectorDialog.setOnDismissListener(dialog -> appSelectorDialog = null);
         appSelectorDialog.setOnShowListener(dialog -> {
             Window window = appSelectorDialog.getWindow();
             if (window != null) {
+                // 只勾勒对话框最外层；列表内部保持无描边，避免多层圆角框嵌套。
                 window.setBackgroundDrawable(rounded(COLOR_SURFACE, COLOR_BORDER));
             }
             appSelectorDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT_DARK);
@@ -200,11 +199,11 @@ protected void updateSelectedAppsSummary() {
 
         Set<String> selected = selectedPackages();
         if (selected.isEmpty()) {
-            selectedAppsSummary.setText("所有应用");
+            selectedAppsSummary.setText(tr("所有应用"));
             return;
         }
 
-        selectedAppsSummary.setText("已选择 " + selected.size() + " 个");
+        selectedAppsSummary.setText(tr("已选择 " + selected.size() + " 个"));
     }
 
 }

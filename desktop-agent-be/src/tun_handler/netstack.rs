@@ -39,6 +39,7 @@ pub(super) fn spawn_netstack_supervisor(
     mtu: usize,
     context: TunForwardContext,
     quic_policy: QuicPolicy,
+    packet_capture: PacketCaptureController,
     shutdown: CancellationToken,
 ) -> Result<JoinHandle<()>> {
     install_known_smoltcp_panic_hook();
@@ -48,11 +49,21 @@ pub(super) fn spawn_netstack_supervisor(
         mtu,
         context.clone(),
         quic_policy,
+        packet_capture.clone(),
         &shutdown,
     )?;
 
     Ok(spawn_guarded("desktop netstack supervisor", async move {
-        run_netstack_supervisor(device, mtu, context, quic_policy, shutdown, initial).await;
+        run_netstack_supervisor(
+            device,
+            mtu,
+            context,
+            quic_policy,
+            packet_capture,
+            shutdown,
+            initial,
+        )
+        .await;
     }))
 }
 
@@ -62,6 +73,7 @@ fn start_netstack_generation(
     mtu: usize,
     context: TunForwardContext,
     quic_policy: QuicPolicy,
+    packet_capture: PacketCaptureController,
     parent_shutdown: &CancellationToken,
 ) -> Result<NetstackGeneration> {
     // 每次 generation 都重新构建 StackBuilder，避免复用已经异常退出的内部状态。
@@ -79,8 +91,13 @@ fn start_netstack_generation(
         udp_socket.ok_or_else(|| AgentError::Connection("netstack UDP 套接字不可用".into()))?;
 
     let generation_shutdown = parent_shutdown.child_token();
-    let (tun_to_stack, stack_to_tun) =
-        spawn_packet_bridge(device, stack, mtu, generation_shutdown.clone());
+    let (tun_to_stack, stack_to_tun) = spawn_packet_bridge(
+        device,
+        stack,
+        mtu,
+        packet_capture,
+        generation_shutdown.clone(),
+    );
     let tcp_task = spawn_tcp_listener(tcp_listener, context.clone(), generation_shutdown.clone());
     let udp_task = spawn_udp_sessions(
         udp_socket,
@@ -105,6 +122,7 @@ async fn run_netstack_supervisor(
     mtu: usize,
     context: TunForwardContext,
     quic_policy: QuicPolicy,
+    packet_capture: PacketCaptureController,
     shutdown: CancellationToken,
     mut generation: NetstackGeneration,
 ) {
@@ -170,6 +188,7 @@ async fn run_netstack_supervisor(
                 mtu,
                 context.clone(),
                 quic_policy,
+                packet_capture.clone(),
                 &shutdown,
             ) {
                 Ok(next) => {

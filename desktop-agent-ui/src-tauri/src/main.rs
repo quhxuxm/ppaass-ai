@@ -9,6 +9,7 @@ mod logging;
 mod macos_helper;
 mod models;
 mod network;
+mod packet_capture;
 mod process_util;
 mod runtime;
 mod telemetry;

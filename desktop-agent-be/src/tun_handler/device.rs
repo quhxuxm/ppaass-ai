@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(windows)]
+use std::path::Path;
 
 #[cfg(test)]
 mod tests;

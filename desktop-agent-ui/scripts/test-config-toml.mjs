@@ -4,12 +4,42 @@ import { createServer } from "vite";
 const server = await createServer({
   appType: "custom",
   logLevel: "error",
+  optimizeDeps: { noDiscovery: true },
   server: { middlewareMode: true }
 });
 
 try {
   const { applyFieldToToml, coerceField, summarizeRaw } = await server.ssrLoadModule("/src/configToml.ts");
   const { transportModeOptions } = await server.ssrLoadModule("/src/constants.ts");
+  const { connectivityResultLabel, dnsRecordMatchesFilter } =
+    await server.ssrLoadModule("/src/formatters.ts");
+
+  assert.equal(connectivityResultLabel({ success: true, http_code: 204 }), "204");
+  assert.equal(connectivityResultLabel({ success: true, http_code: null }), "通过");
+  assert.equal(connectivityResultLabel({ success: false, http_code: null }), "失败");
+
+  const dnsRecord = {
+    timestamp_ms: 1,
+    resolver: "agent-cache",
+    client: "client-a",
+    upstream: "8.8.8.8:53",
+    query: "api.example.com",
+    record_type: "A",
+    status: "NOERROR",
+    answers: ["203.0.113.8"],
+    duration_ms: 12
+  };
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "EXAMPLE 203.0.113"), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "client-a 成功"), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "缓存命中"), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "cache hit"), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "已直连", ["已直连 direct"]), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "direct", ["已直连 direct"]), true);
+  assert.equal(dnsRecordMatchesFilter(dnsRecord, "TIMEOUT"), false);
+  assert.equal(
+    dnsRecordMatchesFilter({ ...dnsRecord, status: undefined }, "api.example.com"),
+    true
+  );
 
   assert.deepEqual(transportModeOptions, [
     { label: "自动模式", value: "auto" },
@@ -31,6 +61,7 @@ try {
   assert.equal(summarizeRaw("udp_session_pool_size = 99\n").udp_session_pool_size, 8);
   assert.equal(coerceField("udp_session_pool_size", 0), 1);
   assert.equal(coerceField("udp_session_pool_size", 99), 8);
+  assert.equal(udpSummary.tun_packet_capture_file, "captures/ppaass-tun.pcap");
 
   const updated = applyFieldToToml(
     'transport_mode = "udp"\n',
@@ -39,6 +70,9 @@ try {
   );
   assert.match(updated, /^udp_session_pool_size = 6$/m);
   assert.equal(summarizeRaw(updated).udp_session_pool_size, 6);
+
+  const captureUpdated = applyFieldToToml(updated, "tun_packet_capture_file", "captures/debug.pcap");
+  assert.equal(summarizeRaw(captureUpdated).tun_packet_capture_file, "captures/debug.pcap");
 } finally {
   await server.close();
 }

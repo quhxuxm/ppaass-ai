@@ -13,7 +13,10 @@ const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
 const QUIC_PROBE_ATTEMPTS: usize = 3;
 #[cfg(target_os = "windows")]
-const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+// Loading the NetAdapter/NetTCPIP PowerShell modules can take more than three seconds on the
+// first probe after installation. Allow enough time for that cold start so a healthy TUN is not
+// reported as unavailable.
+const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn probe_tun_ready(tun_name: &str) -> (bool, String) {
     let interface_ready = tun_interface_ready(tun_name);

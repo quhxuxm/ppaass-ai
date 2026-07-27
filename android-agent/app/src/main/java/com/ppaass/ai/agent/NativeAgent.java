@@ -20,6 +20,14 @@ final class NativeAgent {
 
     static native long vpnUploadBytes();
 
+    static native boolean packetCaptureEnabled();
+
+    static native boolean setPacketCaptureEnabled(String file, boolean enabled);
+
+    static native boolean clearPacketCapture(String file);
+
+    static native String packetCaptureReportJson(String file, int limit, int proxyListenPort);
+
     static native String dnsResolutionRecordsJson();
 
     static native String httpProxyClientsJson();

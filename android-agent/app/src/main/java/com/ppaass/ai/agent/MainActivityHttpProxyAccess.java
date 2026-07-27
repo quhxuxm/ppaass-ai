@@ -147,26 +147,26 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
         android.content.ClipboardManager clipboard =
                 (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard == null) {
-            Toast.makeText(this, "无法访问剪贴板", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("无法访问剪贴板"), Toast.LENGTH_SHORT).show();
             return;
         }
         clipboard.setPrimaryClip(ClipData.newPlainText(
                 "PPAASS USB 调试转发命令",
                 adbForwardCommand()));
-        Toast.makeText(this, "已复制 USB 调试转发命令", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, tr("已复制 USB 调试转发命令"), Toast.LENGTH_SHORT).show();
     }
 
     protected void copyHttpProxyEndpoint(String endpoint, String channelLabel) {
         android.content.ClipboardManager clipboard =
                 (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard == null) {
-            Toast.makeText(this, "无法访问剪贴板", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("无法访问剪贴板"), Toast.LENGTH_SHORT).show();
             return;
         }
         clipboard.setPrimaryClip(ClipData.newPlainText(
                 "PPAASS HTTP / SOCKS5 代理 " + channelLabel + "入口",
                 endpoint));
-        Toast.makeText(this, "已复制" + channelLabel + "显式代理地址", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, tr("已复制" + channelLabel + "显式代理地址"), Toast.LENGTH_SHORT).show();
     }
 
     protected void openUsbTetherSettings() {
@@ -184,26 +184,26 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
 
     protected void updateHttpProxyBluetoothHint(String text) {
         if (httpProxyBluetoothHint != null) {
-            httpProxyBluetoothHint.setText(text);
+            httpProxyBluetoothHint.setText(tr(text));
         }
     }
 
     protected void updateHttpProxyUsbHint(String text) {
         if (httpProxyUsbHint != null) {
-            httpProxyUsbHint.setText(text);
+            httpProxyUsbHint.setText(tr(text));
         }
     }
 
     protected void updateHttpProxyUsbAction(String text) {
         if (httpProxyUsbActionButton != null) {
-            httpProxyUsbActionButton.setText(text);
+            httpProxyUsbActionButton.setText(tr(text));
             httpProxyUsbActionButton.setEnabled(true);
         }
     }
 
     protected void updateHttpProxyBluetoothAction(String text) {
         if (httpProxyBluetoothActionButton != null) {
-            httpProxyBluetoothActionButton.setText(text);
+            httpProxyBluetoothActionButton.setText(tr(text));
             httpProxyBluetoothActionButton.setEnabled(true);
         }
     }
@@ -225,7 +225,7 @@ abstract class MainActivityHttpProxyAccess extends MainActivityHttpProxyAddressD
             addHttpProxyEndpointDivider(target);
         }
         TextView view = new TextView(this);
-        view.setText(text);
+        view.setText(tr(text));
         view.setTextColor(message ? COLOR_TEXT : COLOR_ACCENT_DARK);
         view.setTextSize(message ? 13.5f : 14.5f);
         view.setTypeface(message ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);

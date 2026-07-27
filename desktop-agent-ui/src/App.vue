@@ -12,13 +12,17 @@ import ForwardingView from "./views/ForwardingView.vue";
 import LogsView from "./views/LogsView.vue";
 import OverviewView from "./views/OverviewView.vue";
 import RoutingView from "./views/RoutingView.vue";
+import PacketCaptureView from "./views/PacketCaptureView.vue";
 import TomlView from "./views/TomlView.vue";
 import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
+import { languageOptions, useI18n, type AppLocale } from "./i18n";
 
 const {
   activeForwardingLabel,
   addDirectRules,
+  addDirectRulesAndRestart,
   addDraftRules,
+  clearPacketCapture,
   configLocked,
   diagnosticsPassed,
   diagnosticsTotal,
@@ -32,11 +36,10 @@ const {
   refreshAgentState,
   reloadAll,
   removeDirectRule,
+  removeDirectRulesAndRestart,
   restoreDefaultConfig,
   runDiagnostics,
   running,
-  runningLabel,
-  runningSeverity,
   sanitizeIntegerInput,
   saveConfig,
   setField,
@@ -44,6 +47,7 @@ const {
   startAgent,
   state,
   stopAgent,
+  togglePacketCapture,
   summary,
   tabs,
   tunDiagnosticsLabel,
@@ -52,10 +56,15 @@ const {
 
 const sidebarCollapsed = ref(false);
 const colorTheme = ref<ColorTheme>(loadColorTheme());
+const { locale, setLocale } = useI18n();
 
 function setColorTheme(theme: ColorTheme) {
   colorTheme.value = theme;
   applyColorTheme(theme);
+}
+
+function setLanguage(language: AppLocale) {
+  setLocale(language);
 }
 </script>
 
@@ -71,16 +80,11 @@ function setColorTheme(theme: ColorTheme) {
         :tabs="tabs"
         :active-tab="state.activeTab"
         :collapsed="sidebarCollapsed"
-        :running="running"
-        :running-label="runningLabel"
-        :running-severity="runningSeverity"
-        :pid="state.agent.pid"
-        :config-path="state.config?.path"
         @update:active-tab="state.activeTab = $event"
         @update:collapsed="sidebarCollapsed = $event"
       />
 
-      <section class="workspace">
+      <section :class="['workspace', { 'capture-workspace': state.activeTab === 'capture' }]">
         <AppTopbar
           :subtitle="summary.listen_addr || state.statusText"
           :running="running"
@@ -90,12 +94,17 @@ function setColorTheme(theme: ColorTheme) {
           :busy="state.busy"
           :color-theme="colorTheme"
           :color-themes="colorThemes"
+          :language="locale"
+          :languages="languageOptions"
+          :pid="state.agent.pid"
+          :config-path="state.config?.path"
           @reload="reloadAll"
           @restore-default-config="restoreDefaultConfig"
           @save="saveConfig"
           @start="startAgent"
           @stop="stopAgent"
           @update:color-theme="setColorTheme"
+          @update:language="setLanguage"
         />
 
         <section v-if="state.loading" class="loading">
@@ -118,6 +127,9 @@ function setColorTheme(theme: ColorTheme) {
           :active-forwarding-label="activeForwardingLabel"
           :direct-mode-label="directModeLabel"
           :dns-card-label="dnsCardLabel"
+          :agent-running="running"
+          @add-direct-rules="addDirectRulesAndRestart"
+          @remove-direct-rules="removeDirectRulesAndRestart"
         />
 
         <ForwardingView
@@ -162,6 +174,18 @@ function setColorTheme(theme: ColorTheme) {
           :diagnostics-passed="diagnosticsPassed"
           :diagnostics-total="diagnosticsTotal"
           @run="runDiagnostics"
+        />
+
+        <PacketCaptureView
+          v-else-if="state.activeTab === 'capture'"
+          :summary="summary"
+          :config-path="state.config.path"
+          :agent-running="running"
+          :capture-enabled="state.packetCapture.enabled"
+          :refresh-token="state.packetCaptureRefreshToken"
+          :busy="state.busy"
+          @toggle-capture="togglePacketCapture"
+          @clear-capture="clearPacketCapture"
         />
 
         <LogsView
