@@ -69,6 +69,13 @@ const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
 const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
 
+pub(crate) struct TunModeResources {
+    pub(crate) tcp_sessions: Arc<YamuxSessionManager>,
+    pub(crate) udp_sessions: Arc<YamuxSessionManager>,
+    pub(crate) direct_access_checker: Arc<DirectAccessChecker>,
+    pub(crate) packet_capture: PacketCaptureController,
+}
+
 #[derive(Clone)]
 struct TunForwardContext {
     // TCP/UDP 两类 proxy Yamux session 管理器分开，避免 UDP 高并发挤占 TCP session。
@@ -304,23 +311,20 @@ impl TunDirectEgress {
 }
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
-#[instrument(skip(
-    tcp_sessions,
-    udp_sessions,
-    direct_access_checker,
-    packet_capture,
-    shutdown
-))]
+#[instrument(skip(resources, shutdown))]
 pub async fn run_tun_mode(
     config: TunConfig,
     transport_mode: TransportMode,
     proxy_addrs: Vec<String>,
-    tcp_sessions: Arc<YamuxSessionManager>,
-    udp_sessions: Arc<YamuxSessionManager>,
-    direct_access_checker: Arc<DirectAccessChecker>,
-    packet_capture: PacketCaptureController,
+    resources: TunModeResources,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    let TunModeResources {
+        tcp_sessions,
+        udp_sessions,
+        direct_access_checker,
+        packet_capture,
+    } = resources;
     let native_udp = transport_mode.uses_native_udp_for(protocol::TransportProtocol::Udp);
     info!(
         "启动 TUN 模式转发器：设备={} ipv4={} ipv6={:?} mtu={}",

@@ -9,7 +9,7 @@ use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
-use crate::tun_handler::{PacketCaptureController, run_tun_mode};
+use crate::tun_handler::{PacketCaptureController, TunModeResources, run_tun_mode};
 use crate::yamux_session::YamuxSessionManager;
 use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
 use std::sync::Arc;
@@ -78,14 +78,17 @@ impl AgentServer {
             let direct_access_checker = self.direct_access_checker.clone();
             let packet_capture = self.packet_capture.clone();
             let tun_shutdown = shutdown.clone();
-            tun_tasks.spawn(run_tun_mode(
-                tun_cfg,
-                transport_mode,
-                proxy_addrs,
+            let tun_resources = TunModeResources {
                 tcp_sessions,
                 udp_sessions,
                 direct_access_checker,
                 packet_capture,
+            };
+            tun_tasks.spawn(run_tun_mode(
+                tun_cfg,
+                transport_mode,
+                proxy_addrs,
+                tun_resources,
                 tun_shutdown,
             ));
             tun_task_running = true;
