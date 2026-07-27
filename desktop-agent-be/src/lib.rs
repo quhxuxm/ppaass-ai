@@ -2,7 +2,6 @@ pub mod config;
 pub mod server;
 pub mod telemetry;
 
-mod cli;
 mod direct_access;
 mod error;
 mod http_handler;

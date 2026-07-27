@@ -5,25 +5,13 @@
 //! 会同时保留本地 HTTP/SOCKS 监听和系统级 TUN 转发。
 
 mod cli;
-mod config;
-mod direct_access;
-mod error;
-mod http_handler;
-mod privilege;
-mod server;
-mod socks5_handler;
-mod tcp_relay;
-mod telemetry;
-mod tun_handler;
-mod tun_helper_client;
-mod yamux_session;
 
 use crate::cli::CliArgs;
-use crate::config::AgentConfig;
-use crate::server::AgentServer;
-use crate::tun_handler::PacketCaptureController;
 use anyhow::Result;
 use clap::Parser;
+use desktop_agent_be::config::AgentConfig;
+use desktop_agent_be::server::AgentServer;
+use desktop_agent_be::{PacketCaptureController, telemetry};
 #[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
 use std::path::PathBuf;
@@ -41,7 +29,7 @@ fn main() -> Result<()> {
     // 主进程通过本地 socket 请求 helper 做需要权限的 TUN/路由操作。
     #[cfg(target_os = "macos")]
     if args.tun_helper_service {
-        return tun_handler::helper_service::run(
+        return desktop_agent_be::run_tun_helper_service(
             args.tun_helper_socket.as_deref(),
             args.tun_helper_allowed_uid,
             args.log_level.as_deref(),
