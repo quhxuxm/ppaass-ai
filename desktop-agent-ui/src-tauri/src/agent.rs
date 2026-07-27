@@ -310,6 +310,12 @@ pub(crate) fn packet_capture_runtime_status(
         return packet_capture_service_request(&ServiceRequest::PacketCaptureStatus);
     }
 
+    packet_capture_runtime_status_local(runtime)
+}
+
+pub(crate) fn packet_capture_runtime_status_local(
+    runtime: &AgentRuntime,
+) -> Result<PacketCaptureRuntimeStatus, String> {
     let guard = runtime
         .agent
         .lock()
@@ -337,6 +343,13 @@ pub(crate) fn set_packet_capture_runtime_enabled(
         return packet_capture_service_request(&ServiceRequest::SetPacketCapture { enabled });
     }
 
+    set_packet_capture_runtime_enabled_local(runtime, enabled)
+}
+
+pub(crate) fn set_packet_capture_runtime_enabled_local(
+    runtime: &AgentRuntime,
+    enabled: bool,
+) -> Result<PacketCaptureRuntimeStatus, String> {
     let controller = {
         let guard = runtime
             .agent
@@ -368,6 +381,13 @@ pub(crate) fn clear_packet_capture_runtime(
         });
     }
 
+    clear_packet_capture_runtime_local(runtime, config_path)
+}
+
+pub(crate) fn clear_packet_capture_runtime_local(
+    runtime: &AgentRuntime,
+    config_path: Option<String>,
+) -> Result<PacketCaptureRuntimeStatus, String> {
     let running_controller = runtime
         .agent
         .lock()

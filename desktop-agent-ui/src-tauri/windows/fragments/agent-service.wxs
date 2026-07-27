@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
+      <Component Id="PpaassAgentServiceCleanup" Guid="*">
+        <RegistryKey
+          Root="HKLM"
+          Key="Software\PPAASS\PPAASS Desktop Agent"
+          Action="createAndRemoveOnUninstall"
+        >
+          <RegistryValue
+            Name="InstallerOwnsAgentServiceCleanup"
+            Type="integer"
+            Value="1"
+            KeyPath="yes"
+          />
+        </RegistryKey>
+        <ServiceControl
+          Id="PpaassAgentServiceControl"
+          Name="PPAASSAgentService"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes"
+        />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

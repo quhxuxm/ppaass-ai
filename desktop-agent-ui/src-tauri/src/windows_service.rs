@@ -1,18 +1,20 @@
 #![cfg(windows)]
 
 use std::fs;
-use std::net::SocketAddr;
+use std::io::{Read, Write};
+use std::net::{Shutdown as TcpShutdown, SocketAddr, TcpStream as StdTcpStream};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Builder;
+use tokio::task;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use windows_service::{
@@ -27,8 +29,8 @@ use windows_service::{
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 
 use crate::agent::{
-    agent_state, clear_packet_capture_runtime, packet_capture_runtime_status,
-    set_packet_capture_runtime_enabled, start_agent_inner, stop_embedded_agent,
+    agent_state, clear_packet_capture_runtime_local, packet_capture_runtime_status_local,
+    set_packet_capture_runtime_enabled_local, start_agent_inner, stop_embedded_agent,
 };
 use crate::logging::UiLogBuffer;
 use crate::models::{AgentState, ServiceRequest, ServiceResponse};
@@ -42,6 +44,8 @@ const SERVICE_NAME: &str = "PPAASSAgentService";
 const SERVICE_DISPLAY_NAME: &str = "PPAASS Agent Service";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
+const SERVICE_IPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const SERVICE_IPC_IO_TIMEOUT: Duration = Duration::from_secs(8);
 
 define_windows_service!(ffi_service_main, windows_service_main);
 
@@ -90,34 +94,43 @@ pub(crate) fn windows_service_matches_current_exe() -> Result<bool, String> {
 }
 
 pub(crate) fn send_service_request(request: &ServiceRequest) -> Result<ServiceResponse, String> {
-    let runtime = Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .map_err(|err| format!("初始化服务 IPC runtime 失败：{err}"))?;
-    runtime.block_on(send_service_request_async(request))
-}
-
-async fn send_service_request_async(request: &ServiceRequest) -> Result<ServiceResponse, String> {
     let addr = SERVICE_IPC_ADDR
         .parse::<SocketAddr>()
         .map_err(|err| format!("服务 IPC 地址无效：{err}"))?;
-    let mut stream = timeout(Duration::from_millis(600), TcpStream::connect(addr))
-        .await
-        .map_err(|_| "连接 Agent 服务超时".to_string())?
-        .map_err(|err| format!("无法连接 Agent 服务：{err}"))?;
+    send_service_request_to(addr, request)
+}
+
+fn send_service_request_to(
+    addr: SocketAddr,
+    request: &ServiceRequest,
+) -> Result<ServiceResponse, String> {
+    // The UI calls this function from Tauri's blocking worker pool. A standard loopback
+    // socket avoids creating and tearing down a Tokio runtime for every telemetry poll and
+    // preserves the reliable Windows connect_timeout behavior used by the original IPC path.
+    let mut stream =
+        StdTcpStream::connect_timeout(&addr, SERVICE_IPC_CONNECT_TIMEOUT).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::TimedOut {
+                "连接 Agent 服务超时".to_string()
+            } else {
+                format!("无法连接 Agent 服务：{err}")
+            }
+        })?;
+    stream
+        .set_read_timeout(Some(SERVICE_IPC_IO_TIMEOUT))
+        .map_err(|err| format!("设置服务 IPC 读超时失败：{err}"))?;
+    stream
+        .set_write_timeout(Some(SERVICE_IPC_IO_TIMEOUT))
+        .map_err(|err| format!("设置服务 IPC 写超时失败：{err}"))?;
 
     let payload = serde_json::to_vec(request).map_err(|err| format!("编码服务请求失败：{err}"))?;
-    timeout(Duration::from_secs(8), stream.write_all(&payload))
-        .await
-        .map_err(|_| "发送服务请求超时".to_string())?
+    stream
+        .write_all(&payload)
         .map_err(|err| format!("发送服务请求失败：{err}"))?;
-    let _ = stream.shutdown().await;
+    let _ = stream.shutdown(TcpShutdown::Write);
 
     let mut response = String::new();
-    timeout(Duration::from_secs(8), stream.read_to_string(&mut response))
-        .await
-        .map_err(|_| "读取服务响应超时".to_string())?
+    stream
+        .read_to_string(&mut response)
         .map_err(|err| format!("读取服务响应失败：{err}"))?;
     serde_json::from_str(&response).map_err(|err| format!("解析服务响应失败：{err}"))
 }
@@ -405,13 +418,25 @@ async fn run_service_ipc_async(runtime: Arc<AgentRuntime>, shutdown: Cancellatio
     runtime
         .logs
         .push(format!("服务 IPC 已监听：{SERVICE_IPC_ADDR}"));
+    let mutation_lock = Arc::new(Mutex::new(()));
 
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => break,
             accepted = listener.accept() => {
                 match accepted {
-                    Ok((mut stream, _)) => respond_to_service_request(&runtime, &mut stream).await,
+                    Ok((stream, _)) => {
+                        let connection_runtime = runtime.clone();
+                        let connection_mutation_lock = mutation_lock.clone();
+                        tokio::spawn(async move {
+                            respond_to_service_request(
+                                connection_runtime,
+                                connection_mutation_lock,
+                                stream,
+                            )
+                            .await;
+                        });
+                    }
                     Err(err) => runtime.logs.push(format!("服务 IPC 接收失败：{err}")),
                 }
             }
@@ -419,22 +444,32 @@ async fn run_service_ipc_async(runtime: Arc<AgentRuntime>, shutdown: Cancellatio
     }
 }
 
-async fn respond_to_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) {
-    let response = handle_service_request(runtime, stream).await;
+async fn respond_to_service_request(
+    runtime: Arc<AgentRuntime>,
+    mutation_lock: Arc<Mutex<()>>,
+    mut stream: TcpStream,
+) {
+    let response = read_and_handle_service_request(runtime, mutation_lock, &mut stream).await;
     let payload = serde_json::to_vec(&response).unwrap_or_else(|err| {
         format!(
             "{{\"ok\":false,\"state\":null,\"traffic\":null,\"error\":\"编码响应失败：{err}\"}}"
         )
         .into_bytes()
     });
-    let _ = stream.write_all(&payload).await;
-    let _ = stream.shutdown().await;
+    let _ = timeout(SERVICE_IPC_IO_TIMEOUT, stream.write_all(&payload)).await;
+    let _ = timeout(SERVICE_IPC_IO_TIMEOUT, stream.shutdown()).await;
 }
 
-async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) -> ServiceResponse {
+async fn read_and_handle_service_request(
+    runtime: Arc<AgentRuntime>,
+    mutation_lock: Arc<Mutex<()>>,
+    stream: &mut TcpStream,
+) -> ServiceResponse {
     let mut payload = String::new();
-    if let Err(err) = stream.read_to_string(&mut payload).await {
-        return service_error(format!("读取服务请求失败：{err}"));
+    match timeout(SERVICE_IPC_IO_TIMEOUT, stream.read_to_string(&mut payload)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => return service_error(format!("读取服务请求失败：{err}")),
+        Err(_) => return service_error("读取服务请求超时".to_string()),
     }
 
     let request = match serde_json::from_str::<ServiceRequest>(&payload) {
@@ -442,6 +477,36 @@ async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) 
         Err(err) => return service_error(format!("解析服务请求失败：{err}")),
     };
 
+    let is_mutating = service_request_is_mutating(&request);
+    match task::spawn_blocking(move || {
+        if is_mutating {
+            let Ok(_guard) = mutation_lock.lock() else {
+                return service_error("Agent 服务操作锁已损坏".to_string());
+            };
+            handle_service_request(&runtime, request)
+        } else {
+            handle_service_request(&runtime, request)
+        }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => service_error(format!("处理服务请求失败：{err}")),
+    }
+}
+
+fn service_request_is_mutating(request: &ServiceRequest) -> bool {
+    matches!(
+        request,
+        ServiceRequest::Start { .. }
+            | ServiceRequest::Stop
+            | ServiceRequest::SetLogLevel { .. }
+            | ServiceRequest::SetPacketCapture { .. }
+            | ServiceRequest::ClearPacketCapture { .. }
+    )
+}
+
+fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> ServiceResponse {
     match request {
         ServiceRequest::Start { config_path } => {
             match start_agent_inner(runtime, PathBuf::from(config_path), false) {
@@ -487,13 +552,13 @@ async fn handle_service_request(runtime: &AgentRuntime, stream: &mut TcpStream) 
             Err(err) => service_error(err),
         },
         ServiceRequest::PacketCaptureStatus => {
-            service_packet_capture_result(packet_capture_runtime_status(runtime))
+            service_packet_capture_result(packet_capture_runtime_status_local(runtime))
         }
-        ServiceRequest::SetPacketCapture { enabled } => {
-            service_packet_capture_result(set_packet_capture_runtime_enabled(runtime, enabled))
-        }
+        ServiceRequest::SetPacketCapture { enabled } => service_packet_capture_result(
+            set_packet_capture_runtime_enabled_local(runtime, enabled),
+        ),
         ServiceRequest::ClearPacketCapture { config_path } => {
-            service_packet_capture_result(clear_packet_capture_runtime(runtime, config_path))
+            service_packet_capture_result(clear_packet_capture_runtime_local(runtime, config_path))
         }
     }
 }
@@ -533,5 +598,48 @@ fn service_error(error: String) -> ServiceResponse {
         dns_records: None,
         packet_capture: None,
         error: Some(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_handles_capture_status_locally_without_recursive_ipc() {
+        let runtime = AgentRuntime::new();
+
+        let response = handle_service_request(&runtime, ServiceRequest::PacketCaptureStatus);
+
+        assert!(response.ok);
+        let status = response.packet_capture.expect("capture status");
+        assert!(!status.available);
+        assert!(!status.enabled);
+    }
+
+    #[test]
+    fn service_returns_dns_records_from_its_own_agent_process() {
+        let runtime = AgentRuntime::new();
+
+        let response = handle_service_request(&runtime, ServiceRequest::DnsRecords);
+
+        assert!(response.ok);
+        assert!(response.dns_records.is_some());
+    }
+
+    #[test]
+    fn only_state_changing_service_requests_are_serialized() {
+        assert!(service_request_is_mutating(&ServiceRequest::Start {
+            config_path: "agent.toml".to_string(),
+        }));
+        assert!(service_request_is_mutating(
+            &ServiceRequest::SetPacketCapture { enabled: true }
+        ));
+        assert!(!service_request_is_mutating(&ServiceRequest::State));
+        assert!(!service_request_is_mutating(&ServiceRequest::Traffic));
+        assert!(!service_request_is_mutating(&ServiceRequest::DnsRecords));
+        assert!(!service_request_is_mutating(
+            &ServiceRequest::PacketCaptureStatus
+        ));
     }
 }
