@@ -2,6 +2,7 @@
 
 mod agent;
 mod app;
+mod auth;
 mod config;
 mod diagnostics;
 mod logging;

@@ -35,6 +35,11 @@ impl ServerConnection {
         let mut flow_set = UdpRelayFlowSet::new(
             self.proxy_config.as_ref(),
             self.egress_state.clone(),
+            self.access_recorder.clone(),
+            self.user_config
+                .as_ref()
+                .map(|user| user.username.clone())
+                .unwrap_or_default(),
             UdpRelayFlowChannels {
                 response_tx: response_tx.clone(),
                 flow_done_tx: flow_done_tx.clone(),

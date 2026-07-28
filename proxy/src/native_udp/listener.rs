@@ -1,6 +1,7 @@
 use super::auth::prepare_session;
 use super::session::{SessionContext, run_session};
 use super::session_label;
+use crate::access_log::AccessRecorder;
 use crate::config::ProxyConfig;
 use crate::connection::EgressState;
 use crate::error::Result;
@@ -23,6 +24,7 @@ pub(crate) async fn run_listener(
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
     egress_state: Arc<EgressState>,
+    access_recorder: AccessRecorder,
 ) -> Result<()> {
     configure_socket_buffers(&socket);
     let (cleanup_tx, cleanup_rx) = mpsc::unbounded_channel();
@@ -31,6 +33,7 @@ pub(crate) async fn run_listener(
         config,
         user_manager,
         egress_state,
+        access_recorder,
         sessions: HashMap::new(),
         session_tasks: JoinSet::new(),
         cleanup_tx,
@@ -62,6 +65,7 @@ struct NativeUdpListener {
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
     egress_state: Arc<EgressState>,
+    access_recorder: AccessRecorder,
     sessions: HashMap<UdpSessionId, SessionRoute>,
     session_tasks: JoinSet<()>,
     cleanup_tx: mpsc::UnboundedSender<SessionCleanup>,
@@ -193,6 +197,8 @@ impl NativeUdpListener {
             socket: self.socket.clone(),
             config: self.config.clone(),
             egress_state: self.egress_state.clone(),
+            access_recorder: self.access_recorder.clone(),
+            username: auth.username.clone(),
             peer,
         };
         let cleanup_tx = self.cleanup_tx.clone();

@@ -26,6 +26,7 @@ pub(crate) use udp_relay_flow::{
 pub(crate) use upstream::UpstreamConnection;
 // UpstreamConnection 在 ServerConnection 定义之后于文件末尾导出
 
+use crate::access_log::AccessRecorder;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
 use bytes::Bytes;
@@ -76,6 +77,7 @@ pub struct ServerConnection {
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
+    access_recorder: AccessRecorder,
 }
 
 impl ServerConnection {
@@ -84,6 +86,7 @@ impl ServerConnection {
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
         egress_state: Arc<EgressState>,
+        access_recorder: AccessRecorder,
     ) -> Self
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -102,6 +105,7 @@ impl ServerConnection {
             pending_auth_request: None,
             proxy_config,
             egress_state,
+            access_recorder,
         }
     }
 }

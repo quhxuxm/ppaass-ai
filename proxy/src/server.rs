@@ -3,6 +3,7 @@
 //! TCP 目标继续使用 framed TCP/Yamux 入站；UDP 目标使用同端口的
 //! PPAASS 原生加密 UDP 入站，两条路径共享用户表和出站状态。
 
+use crate::access_log::AccessRecorder;
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
@@ -13,6 +14,7 @@ use common::{
 };
 use futures::StreamExt;
 use protocol::CompressionMode;
+use proxy_user_store::{AccessLogRepository, SqliteUserRepository, UserRepository};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +32,8 @@ pub struct ProxyServer {
     user_manager: Arc<UserManager>,
     // 出站连接状态在启动时初始化，避免每次 CONNECT 都重新解析出站策略。
     egress_state: Arc<EgressState>,
+    // SQLite 模式下异步记录成功访问；users.toml 模式下是 no-op。
+    access_recorder: AccessRecorder,
 }
 
 #[derive(Clone)]
@@ -38,6 +42,7 @@ struct ConnectionContext {
     proxy_config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
     egress_state: Arc<EgressState>,
+    access_recorder: AccessRecorder,
     compression_mode: CompressionMode,
 }
 
@@ -46,16 +51,52 @@ impl ProxyServer {
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
 
-        // 使用用户配置文件初始化用户管理器
-        let user_manager = Arc::new(UserManager::new(&config.users_path)?);
+        // 数据库模式与 Web 共用 Repository；未配置数据库时保留 users.toml 兼容路径。
+        let (repository, access_recorder) =
+            if let Some(database_path) = config.users_database_path.as_deref() {
+                let sqlite = Arc::new(SqliteUserRepository::connect(database_path).await.map_err(
+                    |error| {
+                        crate::error::ProxyError::Configuration(format!(
+                            "打开用户数据库 {database_path} 失败：{error}"
+                        ))
+                    },
+                )?);
+                let import_outcome = sqlite
+                    .import_users_toml_once(&config.users_path)
+                    .await
+                    .map_err(|error| {
+                        crate::error::ProxyError::Configuration(format!(
+                            "从 {} 导入用户数据库失败：{error}",
+                            config.users_path
+                        ))
+                    })?;
+                info!(
+                    database = %sqlite.path().display(),
+                    ?import_outcome,
+                    "已启用 SQLite 用户 Repository"
+                );
+                let user_repository = sqlite.clone() as Arc<dyn UserRepository>;
+                let access_repository = sqlite as Arc<dyn AccessLogRepository>;
+                (
+                    Some(user_repository),
+                    AccessRecorder::start(access_repository),
+                )
+            } else {
+                (None, AccessRecorder::default())
+            };
+        let user_manager = Arc::new(UserManager::new(&config.users_path, repository)?);
 
         // 出站状态在启动时构建；auto 模式会缓存初始路由表，并在默认路由不可用时刷新。
-        let egress_state = Arc::new(EgressState::new(config.outbound_interface.as_deref())?);
+        let egress_state = Arc::new(EgressState::new(
+            config.outbound_interface.as_deref(),
+            config.dns_upstream_addr.as_deref(),
+        )?);
 
         Ok(Self {
             config,
             user_manager,
             egress_state,
+            access_recorder,
         })
     }
 
@@ -73,6 +114,7 @@ impl ProxyServer {
             self.config.clone(),
             self.user_manager.clone(),
             self.egress_state.clone(),
+            self.access_recorder.clone(),
         );
         tokio::pin!(udp_listener);
         info!(
@@ -93,6 +135,7 @@ impl ProxyServer {
                                 proxy_config: self.config.clone(),
                                 user_manager: self.user_manager.clone(),
                                 egress_state: self.egress_state.clone(),
+                                access_recorder: self.access_recorder.clone(),
                                 compression_mode: self.config.get_compression_mode(),
                             };
                             spawn_guarded("proxy inbound connection", async move {
@@ -260,12 +303,18 @@ where
         proxy_config,
         user_manager,
         egress_state,
+        access_recorder,
         compression_mode,
     } = context;
 
     // ServerConnection 持有共享 EgressState，后续 TCP/UDP 请求都通过它出站。
-    let mut connection =
-        ServerConnection::new(stream, compression_mode, proxy_config.clone(), egress_state);
+    let mut connection = ServerConnection::new(
+        stream,
+        compression_mode,
+        proxy_config.clone(),
+        egress_state,
+        access_recorder,
+    );
 
     // 将认证超时应用到每条 framed 连接/每个 Yamux 子 stream 的认证阶段，防止异常客户端悬挂。
     let auth_timeout = std::time::Duration::from_secs(proxy_config.auth_timeout_secs);

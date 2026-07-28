@@ -7,6 +7,9 @@ listen_addr = "0.0.0.0:80"
 # 用户配置文件路径
 users_path = "users.toml"
 
+# SQLite 用户数据库路径；users.toml 仅用于数据库首次初始化导入。
+users_database_path = "data/proxy-users.sqlite3"
+
 # 日志级别：trace、debug、info、warn、error
 # 远端生产配置保留 warn，便于看到连接失败/带宽软上限等异常，又避免 debug/info 带来的额外 I/O。
 log_level = "warn"

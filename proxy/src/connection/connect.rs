@@ -5,10 +5,40 @@
 //! 共享 UDP relay，或 forward 到上游 proxy。
 
 use super::*;
+use crate::config::{PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP};
 
 impl ServerConnection {
+    fn record_successful_access(&self, transport: TransportProtocol, address: &Address) {
+        if let Some(user) = self.user_config.as_ref() {
+            self.access_recorder
+                .record(&user.username, transport, address);
+        }
+    }
+
     pub(super) async fn handle_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
         debug!("连接请求：{:?}", connect_request.address);
+
+        let permission = match connect_request.transport {
+            TransportProtocol::Tcp => PERMISSION_PROXY_CONNECT_TCP,
+            TransportProtocol::Udp => PERMISSION_PROXY_CONNECT_UDP,
+        };
+        if !self
+            .user_config
+            .as_ref()
+            .is_some_and(|user| user.has_permission(permission))
+        {
+            warn!(
+                permission,
+                request_id = %connect_request.request_id,
+                "用户没有请求的代理传输权限"
+            );
+            return self
+                .send_connect_error(
+                    connect_request.request_id,
+                    format!("Permission denied: {permission}"),
+                )
+                .await;
+        }
 
         // UdpRelay 是协议内的“虚拟地址”，不代表真实目标服务器，而是告诉 proxy
         // 在当前加密 PPAASS 子 stream 内建立共享 UDP relay。
@@ -59,6 +89,7 @@ impl ServerConnection {
         {
             Ok(upstream_conn) => {
                 debug!("已连接到上游代理");
+                self.record_successful_access(connect_request.transport, &connect_request.address);
                 // 只有上游连接成功后才回复 agent 连接成功。
                 self.send_connect_success(
                     connect_request.request_id.clone(),
@@ -108,6 +139,7 @@ impl ServerConnection {
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or("默认路由")
                 );
+                self.record_successful_access(TransportProtocol::Tcp, &connect_request.address);
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
                 self.relay(connect_request.request_id, &mut target_stream)
@@ -160,6 +192,7 @@ impl ServerConnection {
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or("默认路由")
                 );
+                self.record_successful_access(TransportProtocol::Udp, &connect_request.address);
                 self.send_connect_success(connect_request.request_id.clone(), "Connected")
                     .await?;
                 self.relay_udp(connect_request.request_id, socket).await?;

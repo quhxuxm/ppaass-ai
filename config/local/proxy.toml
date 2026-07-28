@@ -7,6 +7,10 @@ listen_addr = "0.0.0.0:8080"
 # 用户配置文件路径
 users_path = "config/local/users.toml"
 
+# SQLite 用户数据库路径。首次启动时会事务化导入上面的 users.toml；
+# 之后 Proxy 和 proxy-web 共用该数据库，Web 变更对新的认证立即生效。
+users_database_path = "data/proxy-users.sqlite3"
+
 # 日志级别：trace、debug、info、warn、error
 log_level = "info"
 

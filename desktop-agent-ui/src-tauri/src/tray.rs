@@ -16,7 +16,10 @@ use tauri::Manager;
 #[cfg(any(windows, target_os = "macos"))]
 use crate::agent::{get_agent_state_inner, start_agent_command, stop_agent_inner_command};
 #[cfg(any(windows, target_os = "macos"))]
-use crate::config::{load_config_from_path, locate_config_path, toggle_tun_enabled_in_config};
+use crate::config::{
+    apply_managed_credentials_to_config, load_config_from_path, locate_config_path,
+    redact_managed_identity, toggle_tun_enabled_in_config,
+};
 #[cfg(any(windows, target_os = "macos"))]
 use crate::runtime::AgentRuntime;
 
@@ -177,6 +180,14 @@ fn handle_tun_menu_event(
     item: &tauri::menu::CheckMenuItem<tauri::Wry>,
     runtime: Arc<AgentRuntime>,
 ) {
+    if !runtime.is_authenticated() {
+        let config_path = current_ui_config_path(&runtime);
+        let _ = item.set_checked(tun_enabled_for_path(config_path.as_deref()));
+        emit_to_main(app, "agent-tray-error", "请先登录 Proxy Web 账号");
+        restore_main_window(app);
+        return;
+    }
+
     if TRAY_EXIT_IN_PROGRESS.load(Ordering::SeqCst) {
         let config_path = current_ui_config_path(&runtime);
         let _ = item.set_checked(tun_enabled_for_path(config_path.as_deref()));
@@ -213,12 +224,25 @@ fn toggle_tun_mode_and_restart(
     runtime: Arc<AgentRuntime>,
     config_path: Option<PathBuf>,
 ) -> Result<(), String> {
-    let config = toggle_tun_enabled_in_config(config_path.as_deref())?;
+    let session = runtime.require_authenticated_session()?;
+    let config_path = config_path
+        .or_else(locate_config_path)
+        .ok_or_else(|| "找不到 Agent 配置文件".to_string())?;
+    let managed = apply_managed_credentials_to_config(
+        &config_path,
+        &session.account.username,
+        &session.private_key_path,
+    )?;
+    let config = toggle_tun_enabled_in_config(Some(Path::new(&managed.path)))?;
     let enabled = config.summary.tun_enabled;
     let restart_path = config.path.clone();
     remember_current_ui_config_path(&runtime, &restart_path);
     let _ = item.set_checked(enabled);
-    emit_to_main(app, "agent-config-updated", config);
+    emit_to_main(
+        app,
+        "agent-config-updated",
+        redact_managed_identity(config)?,
+    );
 
     let state = get_agent_state_inner(&runtime)?;
     emit_to_main(app, "agent-state-updated", state.clone());

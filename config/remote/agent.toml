@@ -3,6 +3,7 @@
 
 listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
+proxy_web_url = "https://140.82.30.214"
 username = "user1"
 private_key_path = "keys/user1.pem"
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。

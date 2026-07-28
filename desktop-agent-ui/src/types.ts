@@ -6,8 +6,6 @@ export type AgentTransportMode = "auto" | "udp" | "tcp";
 export type AgentConfigSummary = {
   listen_addr: string;
   proxy_addrs: string[];
-  username: string;
-  private_key_path: string;
   transport_mode: AgentTransportMode;
   udp_session_pool_size: number;
   connect_timeout_secs: number;
@@ -40,6 +38,31 @@ export type LoadedAgentConfig = {
   raw: string;
   summary: AgentConfigSummary;
 };
+
+export type AgentAuthAccount = {
+  username: string;
+  key_version: number;
+  expires_at: number | null;
+};
+
+export type AgentAuthState = {
+  authenticated: boolean;
+  account: AgentAuthAccount | null;
+  config: LoadedAgentConfig | null;
+};
+
+export type AgentLoginRequest = {
+  username: string;
+  password: string;
+  rememberCredentials: boolean;
+};
+
+export type AgentAuthPhase =
+  | "checking"
+  | "anonymous"
+  | "authenticating"
+  | "authenticated"
+  | "logging-out";
 
 export type AgentState = {
   running: boolean;

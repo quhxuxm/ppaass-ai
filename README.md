@@ -8,6 +8,7 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
+- **User Management Console**: Axum API and Vue/PrimeVue UI backed by the same user repository as Proxy authentication
 - **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
 - **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
@@ -15,12 +16,14 @@ encryption.
 
 ## Architecture
 
-The application consists of four main components:
+The application consists of six main components:
 
 1. **Agent**: Runs on client machine, forwards traffic to proxy
 2. **Proxy**: Server-side component that connects to target servers
-3. **Protocol**: Shared protocol definition and crypto implementation
-4. **Common**: Shared utilities and error types
+3. **Proxy Web**: Axum API and Vue/PrimeVue user management console
+4. **Proxy User Store**: Database-independent user CRUD contract with a SQLite adapter
+5. **Protocol**: Shared protocol definition and crypto implementation
+6. **Common**: Shared utilities and error types
 
 ## Quick Start
 
@@ -38,6 +41,12 @@ cargo build --release
 # Build specific component
 cargo build --release -p desktop-agent-be
 cargo build --release -p proxy
+cargo build --release -p proxy-web
+
+# Build the Vue + PrimeVue console
+cd proxy-web/frontend
+npm install
+npm run build
 ```
 
 ### Configuration
@@ -67,6 +76,28 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/a
 ```
 
 6. Configure your applications to use the proxy at `127.0.0.1:1080`
+
+### Desktop Agent Login
+
+The Tauri desktop app requires a Proxy Web login once per application process before it
+loads the Agent workspace. Its authentication endpoint is read only by the Rust backend
+from the top-level `proxy_web_url` field in the active `agent.toml`; it is not returned
+to or editable by the Vue webview. Loopback endpoints may use HTTP, while remote
+endpoints must use HTTPS.
+
+After authentication, the Rust backend—not the Vue webview—checks the approved key
+state and expiry, downloads the user's private key, verifies it against the public key,
+stores it under the per-user application data directory, and updates
+`username`/`private_key_path` in the active `agent.toml`. On Unix, the credential
+directory is mode `0700` and the private-key file is mode `0600`. Passwords, session
+cookies, CSRF tokens, and PEM contents are never returned to Vue or written to tracing
+logs. Logging out stops the Agent before clearing the in-memory desktop login state.
+
+```bash
+cd desktop-agent-ui
+npm install
+npm run tauri dev
+```
 
 ### Desktop TUN Helper Mode
 
@@ -112,11 +143,16 @@ The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are i
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 users_path = "config/users.toml"          # Users configuration file
+users_database_path = "data/proxy-users.sqlite3" # Optional shared user database
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
 udp_session_channel_size = 256             # Datagrams queued per native UDP session
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
+
+When `users_database_path` is absent, Proxy keeps the existing `users.toml`-only behavior. When it is set, the file is validated and imported once in a transaction, after which Proxy and `proxy-web` read the same database. New user changes are visible to subsequent TCP and UDP authentications without restarting Proxy.
+
+See [`proxy-web/README.md`](proxy-web/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 
 The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
 Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
@@ -166,6 +202,7 @@ Set log level via environment variable:
 ```bash
 RUST_LOG=info cargo run -p proxy
 RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent
+RUST_LOG=proxy_web=debug,proxy_user_store=debug cargo run -p proxy-web
 ```
 
 ## Development
@@ -177,6 +214,8 @@ ppaass-ai/
 ├── desktop-agent-be/  # Client-side desktop agent backend
 ├── desktop-agent-ui/       # Desktop agent UI
 ├── proxy/          # Server-side proxy
+├── proxy-user-store/ # Database-independent user repository + SQLite adapter
+├── proxy-web/      # Axum API and Vue/PrimeVue user management console
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities
 ├── tests/          # Integration and performance tests

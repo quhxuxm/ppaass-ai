@@ -47,6 +47,8 @@ pub(super) struct UdpRelayFlowOptions {
 #[derive(Clone)]
 pub(super) struct UdpRelayFlowContext {
     egress_state: Arc<EgressState>,
+    access_recorder: crate::access_log::AccessRecorder,
+    username: String,
     channels: UdpRelayFlowChannels,
     relay_label: &'static str,
     flow_task_name: &'static str,
@@ -83,6 +85,8 @@ impl UdpRelayFlowSet {
     pub(crate) fn new(
         proxy_config: &ProxyConfig,
         egress_state: Arc<EgressState>,
+        access_recorder: crate::access_log::AccessRecorder,
+        username: String,
         channels: UdpRelayFlowChannels,
         relay_label: &'static str,
         flow_task_name: &'static str,
@@ -97,6 +101,8 @@ impl UdpRelayFlowSet {
             },
             context: UdpRelayFlowContext {
                 egress_state,
+                access_recorder,
+                username,
                 channels,
                 relay_label,
                 flow_task_name,
@@ -209,6 +215,9 @@ async fn spawn_udp_relay_flow(
         .connect_udp(&target_addr)
         .await
         .map_err(|e| ProxyError::Connection(format!("Failed to connect UDP relay target: {e}")))?;
+    context
+        .access_recorder
+        .record(&context.username, TransportProtocol::Udp, &address);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<QueuedUdpRelayData>(options.channel_size);
     let response_address = address.clone();
     let response_tx = context.channels.response_tx;

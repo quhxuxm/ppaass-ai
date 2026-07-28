@@ -3,7 +3,7 @@ mod user_config;
 mod users_config;
 
 pub use proxy_config::ProxyConfig;
-pub use user_config::UserConfig;
+pub use user_config::{PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP, UserConfig};
 pub use users_config::UsersConfig;
 
 #[cfg(test)]

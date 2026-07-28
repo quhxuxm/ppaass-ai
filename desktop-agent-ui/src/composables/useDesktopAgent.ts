@@ -1,7 +1,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { applyFieldToToml, coerceField, fallbackRawConfig, summarizeRaw } from "../configToml";
+import {
+  applyFieldToToml,
+  coerceField,
+  fallbackRawConfig,
+  redactManagedIdentityFromToml,
+  summarizeRaw
+} from "../configToml";
 import { directModeLabels, tabs } from "../constants";
 import { fallbackAgentState, fallbackConnectivityReport, fallbackTrafficSnapshot, loadFallbackConfig } from "../fallbacks";
 import {
@@ -426,9 +432,10 @@ export function useDesktopAgent() {
     if (!state.config || !ensureConfigEditable(false)) {
       return;
     }
-    state.config.raw = raw;
+    const editableRaw = redactManagedIdentityFromToml(raw);
+    state.config.raw = editableRaw;
     try {
-      state.config.summary = summarizeRaw(raw);
+      state.config.summary = summarizeRaw(editableRaw);
     } catch {
       // Keep structured fields stable while the TOML text is mid-edit.
     }

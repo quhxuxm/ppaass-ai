@@ -3,6 +3,7 @@
 
 listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["140.82.30.214:80"]
+proxy_web_url = "http://127.0.0.1:8787"
 # proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"

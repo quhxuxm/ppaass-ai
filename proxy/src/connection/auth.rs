@@ -85,6 +85,12 @@ impl ServerConnection {
             return Err(ProxyError::Authentication("Username mismatch".to_string()));
         }
 
+        if !user_config.enabled {
+            warn!("用户 {} 已停用，拒绝建立 agent 连接", user_config.username);
+            self.send_auth_error("User disabled").await?;
+            return Err(ProxyError::Authentication("User disabled".to_string()));
+        }
+
         // 校验时间戳以防止重放攻击
         let current_time = common::current_timestamp();
         if (current_time - auth_request.timestamp).abs() > proxy_config.replay_attack_tolerance {

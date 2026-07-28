@@ -1,0 +1,107 @@
+//! Proxy 与管理 Web 服务共用的用户模型、校验和 SQLite 存储。
+
+mod model;
+mod repository;
+mod sqlite;
+mod validation;
+
+pub use model::{
+    AccessLogSettings, AccessProtocol, AccessRecord, AccountRole, AccountStatus,
+    ApprovedKeyMaterial, BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey,
+    ExternalIdentity, ImportOutcome, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
+    KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind, KeyRequestStatus, LoginRecord,
+    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
+    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewKeyGenerationRequest,
+    NewManagedUser, NewUser, NewUserAccount, PROXY_CONNECT_TCP_PERMISSION,
+    PROXY_CONNECT_UDP_PERMISSION, UserOrigin, UserRecord, UserUpdate, WebAccount,
+    default_proxy_permissions,
+};
+pub use repository::{AccessLogRepository, AccountRepository, UserRepository};
+pub use sqlite::SqliteUserRepository;
+pub use validation::{
+    MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS, MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES,
+    ValidationError, normalize_permissions, normalize_public_key_pem, normalize_username,
+    parse_expires_at, validate_user,
+};
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum UserRepositoryError {
+    #[error("用户数据校验失败：{0}")]
+    Validation(#[from] ValidationError),
+
+    #[error("用户存储操作失败：{source}")]
+    Storage {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    #[error("读取用户配置失败：{0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("解析用户配置失败：{0}")]
+    Toml(#[from] toml::de::Error),
+
+    #[error("用户已存在：{0}")]
+    Conflict(String),
+
+    #[error("用户不存在：{0}")]
+    NotFound(String),
+
+    #[error("users.toml 配置无效：{0}")]
+    InvalidImport(String),
+
+    #[error("用户数据库 schema 不兼容：{0}")]
+    InvalidSchema(String),
+
+    #[error("不能停用、降级或删除最后一个启用的管理员")]
+    LastAdmin,
+
+    #[error("用户 {username} 的密钥版本冲突：期望 {expected}，实际 {actual}")]
+    VersionConflict {
+        username: String,
+        expected: i64,
+        actual: i64,
+    },
+
+    #[error("外部身份已被占用：{provider}/{subject}")]
+    ExternalIdentityConflict { provider: String, subject: String },
+
+    #[error("账号 {account_id} 已有待审批密钥申请：{request_id}")]
+    PendingKeyRequestConflict {
+        account_id: String,
+        request_id: String,
+    },
+
+    #[error("密钥申请不存在：{0}")]
+    KeyRequestNotFound(String),
+
+    #[error("密钥申请 {request_id} 已被处理，当前状态为 {status:?}")]
+    KeyRequestAlreadyReviewed {
+        request_id: String,
+        status: KeyRequestStatus,
+    },
+
+    #[error("账号 {account_id} 当前不能申请密钥：{reason}")]
+    KeyRequestNotEligible { account_id: String, reason: String },
+
+    #[error("审批过期时间 {expires_at} 必须晚于当前时间 {now}")]
+    InvalidApprovalExpiration { expires_at: i64, now: i64 },
+
+    #[error("密钥申请 {request_id} 已失效：{reason}")]
+    StaleKeyRequest { request_id: String, reason: String },
+
+    #[error("审批账号不是启用的管理员：{account_id}")]
+    ReviewerNotActiveAdmin { account_id: String },
+}
+
+pub type Result<T> = std::result::Result<T, UserRepositoryError>;
+
+impl From<sqlx::Error> for UserRepositoryError {
+    fn from(source: sqlx::Error) -> Self {
+        Self::Storage {
+            source: Box::new(source),
+        }
+    }
+}

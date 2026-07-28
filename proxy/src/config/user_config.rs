@@ -1,7 +1,19 @@
-use serde::{Deserialize, Deserializer, Serialize, de};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 use crate::error::{ProxyError, Result};
+use serde::{Deserialize, Deserializer, Serialize, de};
+
+pub const PERMISSION_PROXY_CONNECT_TCP: &str = "proxy.connect.tcp";
+pub const PERMISSION_PROXY_CONNECT_UDP: &str = "proxy.connect.udp";
+
+fn default_proxy_permissions() -> Vec<String> {
+    vec![
+        PERMISSION_PROXY_CONNECT_TCP.to_string(),
+        PERMISSION_PROXY_CONNECT_UDP.to_string(),
+    ]
+}
+
+const fn default_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
@@ -18,6 +30,14 @@ pub struct UserConfig {
         deserialize_with = "deserialize_expires_at"
     )]
     pub expires_at: Option<String>,
+
+    /// 允许该用户使用的代理传输能力。旧 users.toml 未配置时保持 TCP/UDP 全部可用。
+    #[serde(default = "default_proxy_permissions")]
+    pub permissions: Vec<String>,
+
+    /// 数据库账号可由管理端停用；旧 users.toml 未配置时默认启用。
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 impl UserConfig {
@@ -33,27 +53,17 @@ impl UserConfig {
             .expires_at_unix_timestamp()?
             .is_some_and(|expires_at| current_timestamp >= expires_at))
     }
+
+    pub fn has_permission(&self, permission: &str) -> bool {
+        self.permissions
+            .iter()
+            .any(|candidate| candidate == permission)
+    }
 }
 
 fn parse_expires_at(username: &str, expires_at: &str) -> Result<i64> {
-    let expires_at = expires_at.trim();
-    if expires_at.is_empty() {
-        return Err(ProxyError::Configuration(format!(
-            "用户 {username} 的 expires_at 不能为空；不需要过期时间时请删除该字段"
-        )));
-    }
-
-    if let Ok(timestamp) = expires_at.parse::<i64>() {
-        return Ok(timestamp);
-    }
-
-    OffsetDateTime::parse(expires_at, &Rfc3339)
-        .map(|datetime| datetime.unix_timestamp())
-        .map_err(|e| {
-            ProxyError::Configuration(format!(
-                "用户 {username} 的 expires_at 格式无效：{expires_at}，请使用 RFC3339，例如 2026-12-31T23:59:59Z，或 Unix 秒级时间戳：{e}"
-            ))
-        })
+    proxy_user_store::parse_expires_at(username, expires_at)
+        .map_err(|error| ProxyError::Configuration(error.to_string()))
 }
 
 fn deserialize_expires_at<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
@@ -76,13 +86,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::UserConfig;
+    use super::{
+        PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP, UserConfig,
+        default_proxy_permissions,
+    };
 
     fn user_with_expiry(expires_at: Option<&str>) -> UserConfig {
         UserConfig {
             username: "user1".to_string(),
             public_key_pem: "public-key".to_string(),
             expires_at: expires_at.map(str::to_string),
+            permissions: default_proxy_permissions(),
+            enabled: true,
         }
     }
 
@@ -140,5 +155,20 @@ expires_at = 1893456000
             user.expires_at_unix_timestamp().unwrap(),
             Some(1_893_456_000)
         );
+    }
+
+    #[test]
+    fn legacy_toml_defaults_to_enabled_tcp_and_udp() {
+        let user: UserConfig = toml::from_str(
+            r#"
+username = "user1"
+public_key_pem = "public-key"
+"#,
+        )
+        .unwrap();
+
+        assert!(user.enabled);
+        assert!(user.has_permission(PERMISSION_PROXY_CONNECT_TCP));
+        assert!(user.has_permission(PERMISSION_PROXY_CONNECT_UDP));
     }
 }

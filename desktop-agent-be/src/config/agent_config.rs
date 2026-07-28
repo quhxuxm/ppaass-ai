@@ -16,6 +16,10 @@ pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
+    /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Web 地址。
+    /// 独立运行的 Agent 不依赖该字段，因此旧配置缺省时保持兼容。
+    #[serde(default)]
+    pub proxy_web_url: Option<String>,
     pub username: String,
     pub private_key_path: String,
     /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
@@ -304,6 +308,26 @@ private_key_path = "keys/user1.pem"
 
         assert_eq!(config.get_compression_mode(), CompressionMode::None);
         assert_eq!(config.transport_mode, TransportMode::Udp);
+    }
+
+    #[test]
+    fn proxy_web_url_is_optional() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+        assert_eq!(config.proxy_web_url, None);
+    }
+
+    #[test]
+    fn proxy_web_url_is_parsed_when_configured() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned() + "proxy_web_url = \"https://proxy.example.com\"\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.proxy_web_url.as_deref(),
+            Some("https://proxy.example.com")
+        );
     }
 
     #[test]

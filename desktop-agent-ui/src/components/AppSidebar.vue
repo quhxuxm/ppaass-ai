@@ -7,11 +7,15 @@ defineProps<{
   tabs: Array<{ key: TabKey; label: string; icon: AppIconName }>;
   activeTab: TabKey;
   collapsed: boolean;
+  accountUsername: string;
+  logoutBusy: boolean;
+  busy: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:activeTab": [value: TabKey];
   "update:collapsed": [value: boolean];
+  logout: [];
 }>();
 </script>
 
@@ -54,5 +58,32 @@ const emit = defineEmits<{
         </template>
       </Button>
     </nav>
+
+    <section class="sidebar-account" :title="`当前账户：${accountUsername}`">
+      <div class="sidebar-account-identity">
+        <span class="sidebar-account-avatar" aria-hidden="true">
+          <AppIcon name="user" />
+        </span>
+        <span class="sidebar-account-copy">
+          <small>当前账户</small>
+          <strong>{{ accountUsername }}</strong>
+        </span>
+      </div>
+      <Button
+        class="sidebar-logout"
+        label="退出"
+        severity="secondary"
+        text
+        :loading="logoutBusy"
+        :disabled="busy || logoutBusy"
+        aria-label="退出当前账户"
+        title="退出当前账户"
+        @click="emit('logout')"
+      >
+        <template #icon="slotProps">
+          <AppIcon :class="slotProps.class" name="log-out" />
+        </template>
+      </Button>
+    </section>
   </aside>
 </template>

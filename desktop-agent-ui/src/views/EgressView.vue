@@ -2,7 +2,6 @@
 import Card from "primevue/card";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import AppIcon from "../components/AppIcon";
-import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
@@ -20,8 +19,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="content-grid">
-    <Card class="panel span-6">
+  <div class="content-grid egress-grid">
+    <Card class="panel span-5 egress-endpoints-panel">
       <template #title>
         <div class="panel-heading inline">
           <h2>公共远端出口</h2>
@@ -42,21 +41,7 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card class="panel span-6">
-      <template #title><h2>身份凭据</h2></template>
-      <template #content>
-        <label class="field">
-          <span><AppIcon name="user" />用户</span>
-          <InputText :model-value="summary.username" :disabled="configLocked" @update:model-value="emit('set-field', 'username', $event)" />
-        </label>
-        <label class="field">
-          <span><AppIcon name="key" />私钥</span>
-          <InputText :model-value="summary.private_key_path" :disabled="configLocked" @update:model-value="emit('set-field', 'private_key_path', $event)" />
-        </label>
-      </template>
-    </Card>
-
-    <Card class="panel span-12">
+    <Card class="panel span-7 egress-transport-panel">
       <template #title>
         <div class="panel-heading inline">
           <h2>传输策略</h2>
@@ -102,7 +87,13 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card class="panel span-12">
+    <Card
+      :class="[
+        'panel',
+        'egress-tcp-panel',
+        summary.transport_mode === 'tcp' ? 'span-12' : 'span-5'
+      ]"
+    >
       <template #title>
         <div class="panel-heading inline">
           <h2>TCP 数据</h2>
@@ -122,7 +113,10 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card v-if="summary.transport_mode !== 'tcp'" class="panel span-12">
+    <Card
+      v-if="summary.transport_mode !== 'tcp'"
+      class="panel span-7 egress-native-udp-panel"
+    >
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP 数据 · 原生加密 UDP</h2>
@@ -158,7 +152,10 @@ const emit = defineEmits<{
       </template>
     </Card>
 
-    <Card v-if="summary.transport_mode !== 'udp'" class="panel span-12">
+    <Card
+      v-if="summary.transport_mode !== 'udp'"
+      class="panel span-12 egress-yamux-panel"
+    >
       <template #title>
         <div class="panel-heading inline">
           <h2>UDP 数据 · TCP/Yamux</h2>

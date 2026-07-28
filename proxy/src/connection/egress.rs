@@ -6,18 +6,20 @@
 
 mod auto;
 mod bind;
+mod dns_resolver;
 mod route_guard;
 mod source;
 mod stream;
 
 use auto::AutoInterfaceSelector;
 use bind::bind_socket_to_interface;
+use dns_resolver::ExplicitDnsResolver;
 use route_guard::TargetRouteGuard;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use source::{BoundSource, interface_bind_addrs};
 use std::borrow::Cow;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
@@ -34,6 +36,8 @@ const PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY: Duration = Duration::from_millis(25
 pub struct EgressState {
     // None 表示完全交给系统默认路由；Some 表示需要做接口/源地址绑定。
     interface: Option<InterfaceSelection>,
+    // 配置 dns_upstream_addr 后，普通域名目标也通过该上游显式解析。
+    dns_resolver: Option<ExplicitDnsResolver>,
 }
 
 enum InterfaceSelection {
@@ -44,7 +48,7 @@ enum InterfaceSelection {
 }
 
 impl EgressState {
-    pub fn new(interface: Option<&str>) -> io::Result<Self> {
+    pub fn new(interface: Option<&str>, dns_upstream_addr: Option<&str>) -> io::Result<Self> {
         // 启动阶段解析出站设备配置；auto 模式会读取初始路由表并在失效时刷新。
         let interface = match normalize_interface(interface) {
             Some(interface) if auto::is_auto_interface(interface) => {
@@ -53,30 +57,46 @@ impl EgressState {
             Some(interface) => Some(InterfaceSelection::Named(interface.to_string())),
             None => None,
         };
+        let dns_resolver = ExplicitDnsResolver::from_config(dns_upstream_addr)?;
 
-        Ok(Self { interface })
+        Ok(Self {
+            interface,
+            dns_resolver,
+        })
     }
 
     pub async fn connect_tcp(&self, target_addr: &str) -> io::Result<EgressTcpStream> {
-        // 未指定出站设备时走系统默认路由，不做额外绑定。
-        if self.interface.is_none() {
+        // 两项都未配置时保持原有系统 resolver + 默认路由行为。
+        if self.interface.is_none() && self.dns_resolver.is_none() {
             let stream = connect_tcp_default_with_retry(target_addr).await?;
             tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
             return Ok(EgressTcpStream::new(stream, None));
         }
 
+        let destinations = self.resolve_target(target_addr).await?;
+        if self.interface.is_none() {
+            let stream = connect_tcp_default_resolved_with_retry(&destinations).await?;
+            tune_egress_tcp_stream(&stream, "显式解析出站 TCP 连接");
+            return Ok(EgressTcpStream::new(stream, None));
+        }
+
         // 指定设备或 auto 模式需要按目标地址族选择可用源地址后再连接。
-        connect_tcp_with_interface(target_addr, self).await
+        connect_tcp_with_interface(&destinations, self).await
     }
 
     pub async fn connect_udp(&self, target_addr: &str) -> io::Result<UdpSocket> {
-        // UDP 默认路径只绑定通配地址，由操作系统选择出口。
-        if self.interface.is_none() {
+        // 两项都未配置时保留原来的系统 resolver 路径。
+        if self.interface.is_none() && self.dns_resolver.is_none() {
             return connect_udp_default(target_addr).await;
         }
 
+        let destinations = self.resolve_target(target_addr).await?;
+        if self.interface.is_none() {
+            return connect_udp_default_resolved(&destinations).await;
+        }
+
         // 指定设备或 auto 模式复用同一套出站设备选择逻辑。
-        connect_udp_with_interface(target_addr, self).await
+        connect_udp_with_interface(&destinations, self).await
     }
 
     fn interface_for_dst(&self, dst: SocketAddr) -> io::Result<Cow<'_, str>> {
@@ -89,22 +109,71 @@ impl EgressState {
             None => Err(io::Error::other("未配置出站网络设备")),
         }
     }
+
+    async fn resolve_target(&self, target_addr: &str) -> io::Result<Vec<SocketAddr>> {
+        // 数字地址始终直通，配置显式 DNS 后也不能为它发出查询。
+        if let Ok(address) = target_addr.parse::<SocketAddr>() {
+            return Ok(vec![address]);
+        }
+
+        let addresses = if let Some(resolver) = &self.dns_resolver {
+            let (host, port) = split_domain_target(target_addr)?;
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                vec![SocketAddr::new(ip, port)]
+            } else {
+                resolver.resolve(self, host, port).await?
+            }
+        } else {
+            tokio::net::lookup_host(target_addr).await?.collect()
+        };
+
+        if addresses.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("未解析到目标地址：{target_addr}"),
+            ));
+        }
+        Ok(addresses)
+    }
+
+    pub(super) async fn connect_udp_resolved_addr(&self, dst: SocketAddr) -> io::Result<UdpSocket> {
+        if self.interface.is_none() {
+            return connect_udp_default_addr(dst).await;
+        }
+
+        let interface = self.interface_for_dst(dst)?;
+        let sources = interface_bind_addrs(&interface, dst)?;
+        let mut last_error = None;
+        for source in sources {
+            match connect_udp_addr(dst, &interface, source).await {
+                Ok(socket) => return Ok(socket),
+                Err(err) => {
+                    last_error = Some(connect_context_error(&interface, source.addr, dst, err));
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                format!("出站设备 {interface} 没有可用于 {dst} 的源地址"),
+            )
+        }))
+    }
 }
 
 async fn connect_tcp_with_interface(
-    target_addr: &str,
+    destinations: &[SocketAddr],
     egress_state: &EgressState,
 ) -> io::Result<EgressTcpStream> {
     if egress_state.interface.is_none() {
-        let stream = connect_tcp_default_with_retry(target_addr).await?;
+        let stream = connect_tcp_default_resolved_with_retry(destinations).await?;
         tune_egress_tcp_stream(&stream, "默认出站 TCP 连接");
         return Ok(EgressTcpStream::new(stream, None));
     }
 
     let mut last_error = None;
-    let mut resolved = false;
-    for dst in tokio::net::lookup_host(target_addr).await? {
-        resolved = true;
+    for &dst in destinations {
         // 一个域名可能解析出多个 IPv4/IPv6 地址；逐个尝试能提升可达性。
         // 对每个解析出的目标地址，先确定要绑定的出站设备。
         let interface = match egress_state.interface_for_dst(dst) {
@@ -134,63 +203,30 @@ async fn connect_tcp_with_interface(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        if resolved {
-            io::Error::other("所有目标地址连接失败")
-        } else {
-            io::Error::new(io::ErrorKind::NotFound, "未解析到目标地址")
-        }
-    }))
+    Err(last_error.unwrap_or_else(|| io::Error::other("所有目标地址连接失败")))
 }
 
 async fn connect_udp_with_interface(
-    target_addr: &str,
+    destinations: &[SocketAddr],
     egress_state: &EgressState,
 ) -> io::Result<UdpSocket> {
     if egress_state.interface.is_none() {
-        return connect_udp_default(target_addr).await;
+        return connect_udp_default_resolved(destinations).await;
     }
 
     let mut last_error = None;
-    let mut resolved = false;
-    for dst in tokio::net::lookup_host(target_addr).await? {
-        resolved = true;
+    for &dst in destinations {
         // UDP 也遍历所有解析结果；只有成功 bind + connect 的 socket 才会返回给 relay。
         // UDP 与 TCP 使用相同的出口设备选择，确保两种协议路径一致。
-        let interface = match egress_state.interface_for_dst(dst) {
-            Ok(interface) => interface,
+        match egress_state.connect_udp_resolved_addr(dst).await {
+            Ok(socket) => return Ok(socket),
             Err(err) => {
                 last_error = Some(err);
-                continue;
-            }
-        };
-        // 只使用目标地址族兼容的源地址，避免 IPv4/IPv6 混绑。
-        let sources = match interface_bind_addrs(&interface, dst) {
-            Ok(sources) => sources,
-            Err(err) => {
-                last_error = Some(err);
-                continue;
-            }
-        };
-
-        for source in sources {
-            // UDP connect 只设置默认对端；失败时继续尝试下一个源地址。
-            match connect_udp_addr(dst, &interface, source).await {
-                Ok(socket) => return Ok(socket),
-                Err(err) => {
-                    last_error = Some(connect_context_error(&interface, source.addr, dst, err));
-                }
             }
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        if resolved {
-            io::Error::other("所有目标地址连接失败")
-        } else {
-            io::Error::new(io::ErrorKind::NotFound, "未解析到目标地址")
-        }
-    }))
+    Err(last_error.unwrap_or_else(|| io::Error::other("所有目标地址连接失败")))
 }
 
 async fn connect_tcp_default_with_retry(target_addr: &str) -> io::Result<TcpStream> {
@@ -210,6 +246,34 @@ async fn connect_tcp_default_with_retry(target_addr: &str) -> io::Result<TcpStre
             Err(err) => return Err(err),
         }
     }
+}
+
+async fn connect_tcp_default_resolved_with_retry(
+    destinations: &[SocketAddr],
+) -> io::Result<TcpStream> {
+    let mut last_error = None;
+    for &dst in destinations {
+        let started = Instant::now();
+        let mut delay = PROXY_EGRESS_TCP_ADDR_RETRY_INITIAL_DELAY;
+        loop {
+            match TcpStream::connect(dst).await {
+                Ok(stream) => return Ok(stream),
+                Err(err)
+                    if is_transient_addr_not_available(&err)
+                        && started.elapsed() + delay < PROXY_EGRESS_TCP_ADDR_RETRY_DEADLINE =>
+                {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(PROXY_EGRESS_TCP_ADDR_RETRY_MAX_DELAY);
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| io::Error::other("所有目标地址连接失败")))
 }
 
 fn is_transient_addr_not_available(err: &io::Error) -> bool {
@@ -302,6 +366,74 @@ async fn connect_udp_default(target_addr: &str) -> io::Result<UdpSocket> {
     }))
 }
 
+async fn connect_udp_default_resolved(destinations: &[SocketAddr]) -> io::Result<UdpSocket> {
+    let mut last_error = None;
+    for &dst in destinations {
+        match connect_udp_default_addr(dst).await {
+            Ok(socket) => return Ok(socket),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| io::Error::other("所有目标地址连接失败")))
+}
+
+async fn connect_udp_default_addr(dst: SocketAddr) -> io::Result<UdpSocket> {
+    let bind_addr = if dst.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let socket = UdpSocket::bind(bind_addr).await?;
+    socket.connect(dst).await?;
+    tune_egress_udp_socket(&socket, "已解析出站 UDP 连接");
+    Ok(socket)
+}
+
+fn split_domain_target(target_addr: &str) -> io::Result<(&str, u16)> {
+    // Address::Domain 的 host 历史上允许保存裸 IPv6，因此必须从最后一个冒号拆端口；
+    // 例如 `::ffff:127.0.0.1:8787` 应解析成 `::ffff:127.0.0.1` + `8787`。
+    let (raw_host, port) = target_addr.rsplit_once(':').ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("目标地址缺少端口：{target_addr:?}"),
+        )
+    })?;
+    let host = if let Some(host) = raw_host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+    {
+        // bracket 形式只接受数字 IP，不能把任意 `[domain]` 当成合法主机名。
+        if host.parse::<IpAddr>().is_err() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("目标括号地址格式无效：{target_addr:?}"),
+            ));
+        }
+        host
+    } else {
+        if raw_host.is_empty()
+            || raw_host.contains(['[', ']'])
+            || (raw_host.contains(':') && raw_host.parse::<IpAddr>().is_err())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("目标域名地址格式无效：{target_addr:?}"),
+            ));
+        }
+        raw_host
+    };
+    if host.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("目标域名地址格式无效：{target_addr:?}"),
+        ));
+    }
+    let port = port.parse::<u16>().map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("目标地址端口无效 {target_addr:?}：{err}"),
+        )
+    })?;
+    Ok((host, port))
+}
+
 fn tune_egress_udp_socket(socket: &UdpSocket, context: &str) {
     // QUIC/video traffic is bursty. Keep target-facing buffers large enough
     // that a short scheduler pause does not turn into avoidable packet loss.
@@ -325,4 +457,47 @@ fn connect_context_error(
         err.kind(),
         format!("出站设备 {interface} 使用源地址 {source} 连接 {dst} 失败：{err}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_domain_and_ipv6_targets_without_ambiguity() {
+        assert_eq!(
+            split_domain_target("example.test:443").unwrap(),
+            ("example.test", 443)
+        );
+        assert_eq!(
+            split_domain_target("::ffff:127.0.0.1:8787").unwrap(),
+            ("::ffff:127.0.0.1", 8787)
+        );
+        assert_eq!(
+            split_domain_target("[2001:db8::1]:8443").unwrap(),
+            ("2001:db8::1", 8443)
+        );
+        assert_eq!(
+            split_domain_target("not:an:ipv6:443").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            split_domain_target("[example.test]:443")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_dns_keeps_bare_ipv6_domain_host_numeric() {
+        let egress = EgressState::new(None, Some("127.0.0.1:53")).unwrap();
+        assert_eq!(
+            egress
+                .resolve_target("::ffff:127.0.0.1:8787")
+                .await
+                .unwrap(),
+            vec![SocketAddr::new("::ffff:127.0.0.1".parse().unwrap(), 8787)]
+        );
+    }
 }

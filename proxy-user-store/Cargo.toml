@@ -1,0 +1,20 @@
+[package]
+name = "proxy-user-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+
+async-trait.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+rsa.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

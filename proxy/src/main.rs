@@ -4,6 +4,7 @@
 //! 校验出站网卡配置、构建 Tokio runtime，然后把真正的网络服务交给 `ProxyServer`。
 //! 具体的认证、CONNECT 分流和数据中继都在 `server` 与 `connection` 模块中。
 
+mod access_log;
 mod config;
 mod connection;
 mod error;
@@ -135,6 +136,13 @@ fn main() -> Result<()> {
                 .unwrap_or("默认路由")
         );
         info!("用户配置文件：{}", config.users_path);
+        info!(
+            "用户数据源：{}",
+            config
+                .users_database_path
+                .as_deref()
+                .unwrap_or("users.toml（兼容模式）")
+        );
 
         // 主监听循环外面包一层 panic 恢复：单次服务 run panic 后重新建 listener。
         // 普通错误仍返回给进程，避免配置/绑定等硬错误被无限重启掩盖。

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
+use tempfile::Builder;
 use toml::Value;
+use toml_edit::{value, DocumentMut};
 
 use crate::logging::UiLogBuffer;
 use crate::models::{AgentConfigSummary, LoadedAgentConfig};
@@ -30,6 +32,21 @@ pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, St
     let config_path = make_absolute_path(path);
     let raw = fs::read_to_string(&config_path).map_err(|err| format!("读取配置失败：{err}"))?;
     loaded_config_from_raw(config_path, raw)
+}
+
+pub(crate) fn proxy_web_url_from_config(path: &Path) -> Result<String, String> {
+    let config_path = make_absolute_path(path);
+    let raw = fs::read_to_string(&config_path)
+        .map_err(|_| "无法读取 Agent 认证服务配置，请联系管理员".to_string())?;
+    proxy_web_url_from_raw(&raw)
+}
+
+fn proxy_web_url_from_raw(raw: &str) -> Result<String, String> {
+    let config =
+        toml::from_str::<Value>(raw).map_err(|_| "Agent 配置格式无效，请联系管理员".to_string())?;
+    str_at(&config, &["proxy_web_url"])
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "Agent 缺少认证服务配置，请联系管理员".to_string())
 }
 
 pub(crate) fn load_default_config(
@@ -61,21 +78,92 @@ fn loaded_config_from_raw(config_path: PathBuf, raw: String) -> Result<LoadedAge
 }
 
 pub(crate) fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
-    if let Some(parent) = path
+    let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
-    }
+        .ok_or_else(|| format!("配置文件路径缺少父目录：{}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败：{err}"))?;
     clear_readonly_file_attribute(path)
         .map_err(|err| format!("准备写入配置失败：{}：{err}", path.display()))?;
-    let mut file =
-        fs::File::create(path).map_err(|err| format!("保存配置失败：{}：{err}", path.display()))?;
-    file.write_all(raw.as_bytes())
+    let existing_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let mut temporary = Builder::new()
+        .prefix(".agent-config-")
+        .tempfile_in(parent)
+        .map_err(|err| format!("创建配置临时文件失败：{}：{err}", parent.display()))?;
+    if let Some(permissions) = existing_permissions {
+        temporary
+            .as_file()
+            .set_permissions(permissions)
+            .map_err(|err| format!("保留配置文件权限失败：{err}"))?;
+    }
+    temporary
+        .write_all(raw.as_bytes())
         .map_err(|err| format!("写入配置失败：{err}"))?;
-    file.sync_all()
+    temporary
+        .as_file()
+        .sync_all()
         .map_err(|err| format!("同步配置到磁盘失败：{err}"))?;
+    temporary
+        .persist(path)
+        .map_err(|err| format!("保存配置失败：{}：{}", path.display(), err.error))?;
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
     Ok(())
+}
+
+pub(crate) fn apply_managed_credentials_to_config(
+    path: &Path,
+    username: &str,
+    private_key_path: &Path,
+) -> Result<LoadedAgentConfig, String> {
+    let config_path = make_absolute_path(path);
+    let loaded = load_config_from_path(&config_path)?;
+    let proxy_web_url = proxy_web_url_from_raw(&loaded.raw)?;
+    let raw = enforce_managed_identity(&loaded.raw, username, private_key_path, &proxy_web_url)?;
+    write_config_file(&config_path, &raw)?;
+
+    if let Some(primary_path) = primary_agent_config_path(&config_path) {
+        write_config_file(&primary_path, &raw)?;
+        load_config_from_path(&primary_path)
+    } else {
+        load_config_from_path(&config_path)
+    }
+}
+
+pub(crate) fn enforce_managed_identity(
+    raw: &str,
+    username: &str,
+    private_key_path: &Path,
+    proxy_web_url: &str,
+) -> Result<String, String> {
+    let mut document = raw
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    document["username"] = value(username);
+    document["private_key_path"] = value(private_key_path.to_string_lossy().as_ref());
+    document["proxy_web_url"] = value(proxy_web_url);
+    let managed_raw = document.to_string();
+    summarize_config(&managed_raw)?;
+    Ok(managed_raw)
+}
+
+pub(crate) fn redact_managed_identity(
+    mut loaded: LoadedAgentConfig,
+) -> Result<LoadedAgentConfig, String> {
+    let mut document = loaded
+        .raw
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    document.remove("username");
+    document.remove("private_key_path");
+    document.remove("proxy_web_url");
+    loaded.raw = document.to_string();
+    loaded.summary.username.clear();
+    loaded.summary.private_key_path.clear();
+    Ok(loaded)
 }
 
 pub(crate) fn toggle_tun_enabled_in_config(
@@ -541,8 +629,11 @@ fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::{
-        summarize_config, toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
+        apply_managed_credentials_to_config, enforce_managed_identity, load_config_from_path,
+        proxy_web_url_from_config, redact_managed_identity, summarize_config,
+        toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
     };
+    use crate::models::LoadedAgentConfig;
     use std::fs;
 
     #[test]
@@ -756,5 +847,134 @@ name = "ppaass-tun"
 
         let inserted = upsert_toml_bool("username = \"user1\"\n", "tun", "enabled", true);
         assert!(inserted.contains("[tun]\nenabled = true"));
+    }
+
+    #[test]
+    fn enforce_managed_identity_overrides_quoted_keys_and_escapes_paths() {
+        let raw = concat!(
+            "\"username\" = \"attacker\"\n",
+            "\"private_key_path\" = \"attacker.pem\"\n\n",
+            "[tun]\n",
+            "enabled = false\n",
+        );
+        let key_path = std::path::Path::new(r#"C:\Users\me\private "key".pem"#);
+        let updated =
+            enforce_managed_identity(raw, "new-user", key_path, "https://managed.example.com")
+                .unwrap();
+        let summary = summarize_config(&updated).unwrap();
+        assert_eq!(summary.username, "new-user");
+        assert_eq!(summary.private_key_path, r#"C:\Users\me\private "key".pem"#);
+        assert!(updated.contains("[tun]\nenabled = false"));
+        assert!(!updated.contains("attacker"));
+    }
+
+    #[test]
+    fn redact_managed_identity_removes_credentials_from_ui_config() {
+        let raw = concat!(
+            "# identity is managed by Proxy Web\n",
+            "\"username\" = \"alice\"\n",
+            "\"private_key_path\" = \"/secret/managed.pem\"\n",
+            "\"proxy_web_url\" = \"https://hidden.example.com\"\n",
+            "listen_addr = \"127.0.0.1:10080\"\n\n",
+            "[tun]\n",
+            "enabled = false\n",
+        );
+        let loaded = LoadedAgentConfig {
+            path: "/tmp/agent.toml".to_string(),
+            raw: raw.to_string(),
+            summary: summarize_config(raw).unwrap(),
+        };
+
+        let redacted = redact_managed_identity(loaded).unwrap();
+        assert!(!redacted.raw.contains("username"));
+        assert!(!redacted.raw.contains("private_key_path"));
+        assert!(!redacted.raw.contains("proxy_web_url"));
+        assert!(!redacted.raw.contains("hidden.example.com"));
+        assert!(!redacted.raw.contains("/secret/managed.pem"));
+        assert!(redacted.raw.contains("listen_addr = \"127.0.0.1:10080\""));
+        assert!(redacted.raw.contains("[tun]\nenabled = false"));
+        assert!(redacted.summary.username.is_empty());
+        assert!(redacted.summary.private_key_path.is_empty());
+
+        let serialized = serde_json::to_string(&redacted).unwrap();
+        assert!(!serialized.contains("username"));
+        assert!(!serialized.contains("private_key_path"));
+        assert!(!serialized.contains("proxy_web_url"));
+        assert!(!serialized.contains("hidden.example.com"));
+        assert!(!serialized.contains("/secret/managed.pem"));
+    }
+
+    #[test]
+    fn applies_managed_credentials_without_changing_other_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.toml");
+        fs::write(
+            &path,
+            "listen_addr = \"127.0.0.1:10080\"\nproxy_web_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n\n[tun]\nenabled = false\n",
+        )
+        .unwrap();
+        let key_path = directory.path().join("credentials/new.pem");
+        let loaded = apply_managed_credentials_to_config(&path, "alice", &key_path).unwrap();
+        assert_eq!(loaded.summary.username, "alice");
+        assert_eq!(loaded.summary.private_key_path, key_path.to_string_lossy());
+        assert_eq!(loaded.summary.listen_addr, "127.0.0.1:10080");
+        assert!(!loaded.summary.tun_enabled);
+        assert_eq!(
+            proxy_web_url_from_config(&path).unwrap(),
+            "https://hidden.example.com"
+        );
+    }
+
+    #[test]
+    fn managed_identity_round_trip_keeps_secret_on_disk_but_not_in_ui() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.toml");
+        let key_path = directory.path().join("credentials/managed.pem");
+        fs::write(
+            &path,
+            "listen_addr = \"127.0.0.1:10080\"\nproxy_web_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n",
+        )
+        .unwrap();
+
+        let loaded = apply_managed_credentials_to_config(&path, "alice", &key_path).unwrap();
+        let redacted = redact_managed_identity(loaded).unwrap();
+        assert!(!redacted.raw.contains("private_key_path"));
+        assert!(!redacted.raw.contains("proxy_web_url"));
+
+        let edited = format!(
+            "{}proxy_web_url = \"https://attacker.example.com\"\ntransport_mode = \"tcp\"\n",
+            redacted.raw
+        );
+        let enforced =
+            enforce_managed_identity(&edited, "alice", &key_path, "https://hidden.example.com")
+                .unwrap();
+        write_config_file(&path, &enforced).unwrap();
+        let persisted = load_config_from_path(&path).unwrap();
+        assert_eq!(persisted.summary.username, "alice");
+        assert_eq!(
+            persisted.summary.private_key_path,
+            key_path.to_string_lossy()
+        );
+        assert_eq!(persisted.summary.transport_mode, "tcp");
+        assert_eq!(
+            proxy_web_url_from_config(&path).unwrap(),
+            "https://hidden.example.com"
+        );
+        assert!(!persisted.raw.contains("attacker.example.com"));
+    }
+
+    #[test]
+    fn proxy_web_url_must_exist_in_desktop_agent_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let configured = directory.path().join("configured.toml");
+        let missing = directory.path().join("missing.toml");
+        fs::write(&configured, "proxy_web_url = \"http://127.0.0.1:8787\"\n").unwrap();
+        fs::write(&missing, "listen_addr = \"127.0.0.1:10080\"\n").unwrap();
+
+        assert_eq!(
+            proxy_web_url_from_config(&configured).unwrap(),
+            "http://127.0.0.1:8787"
+        );
+        assert!(proxy_web_url_from_config(&missing).is_err());
     }
 }

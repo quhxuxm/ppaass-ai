@@ -1,13 +1,43 @@
 import type { AgentConfigSummary, AgentTransportMode } from "./types";
-import fallbackRawConfigSource from "../../config/local/agent.toml?raw";
 
-export const fallbackRawConfig = fallbackRawConfigSource;
+const fallbackRawConfigSource = `listen_addr = "0.0.0.0:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+transport_mode = "udp"
+udp_session_pool_size = 4
+connect_timeout_secs = 30
+compression_mode = "none"
+log_level = "info"
+
+[yamux.udp]
+sessions = 5
+max_streams_per_session = 32
+open_stream_timeout_secs = 10
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 10
+stream_window_size_kb = 8192
+
+[tun]
+enabled = false
+name = "ppaass-tun"
+ipv4 = "10.10.10.1/24"
+mtu = 1500
+proxy_udp = true
+proxy_dns = false
+quic_policy = "allow"
+
+[tun.packet_capture]
+file = "captures/ppaass-tun.pcap"
+
+[direct_access]
+mode = "proxy_all"
+rules = []
+`;
+
+export const fallbackRawConfig = redactManagedIdentityFromToml(fallbackRawConfigSource);
 
 const defaultFieldValues = {
   listen_addr: "0.0.0.0:10080",
   proxy_addrs: ["127.0.0.1:8080"],
-  username: "user1",
-  private_key_path: "keys/user1.pem",
   transport_mode: "udp",
   udp_session_pool_size: 4,
   connect_timeout_secs: 30,
@@ -84,8 +114,6 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
   const mapping: Record<string, { section: string | null; key: string; kind: "string" | "number" | "bool" | "array" }> = {
     listen_addr: { section: null, key: "listen_addr", kind: "string" },
     proxy_addrs: { section: null, key: "proxy_addrs", kind: "array" },
-    username: { section: null, key: "username", kind: "string" },
-    private_key_path: { section: null, key: "private_key_path", kind: "string" },
     transport_mode: { section: null, key: "transport_mode", kind: "string" },
     udp_session_pool_size: { section: null, key: "udp_session_pool_size", kind: "number" },
     connect_timeout_secs: { section: null, key: "connect_timeout_secs", kind: "number" },
@@ -132,8 +160,6 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
   return {
     listen_addr: stringOrDefault(matchString(raw, null, "listen_addr"), "listen_addr"),
     proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
-    username: stringOrDefault(matchString(raw, null, "username"), "username"),
-    private_key_path: stringOrDefault(matchString(raw, null, "private_key_path"), "private_key_path"),
     transport_mode: normalizeTransportMode(matchString(raw, null, "transport_mode") ?? "udp"),
     udp_session_pool_size: normalizeUdpSessionPoolSize(matchNumber(raw, null, "udp_session_pool_size")),
     connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
@@ -163,6 +189,13 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
     direct_mode: stringOrDefault(matchString(raw, "direct_access", "mode"), "direct_mode"),
     direct_rules: matchStringArray(raw, "rules", "direct_access")
   };
+}
+
+export function redactManagedIdentityFromToml(raw: string) {
+  return raw.replace(
+    /^[ \t]*(?:(?:"(?:username|private_key_path|proxy_web_url)")|(?:'(?:username|private_key_path|proxy_web_url)')|(?:username|private_key_path|proxy_web_url))[ \t]*=.*(?:\r?\n|$)/gm,
+    ""
+  );
 }
 
 function upsertTomlValue(raw: string, section: string | null, key: string, value: string) {

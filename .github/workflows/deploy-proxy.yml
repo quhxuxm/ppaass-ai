@@ -1,4 +1,4 @@
-name: Build and Deploy Proxy
+name: Build and Deploy Proxy Services
 
 on:
   workflow_dispatch:
@@ -12,39 +12,23 @@ on:
           - dev
           - qa
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-proxy-services-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   deploy-proxy:
     runs-on: ubuntu-latest
     container:
       image: debian:bookworm-slim
     steps:
-      - name: Resolve deploy secrets
-        run: |
-          case "${{ inputs.environment }}" in
-            production)
-              echo "REMOTE_HOST=${{ secrets.PRODUCTION_REMOTE_HOST }}" >> $GITHUB_ENV
-              echo "REMOTE_USER=${{ secrets.PRODUCTION_REMOTE_USER }}" >> $GITHUB_ENV
-              echo "REMOTE_PASSWORD=${{ secrets.PRODUCTION_REMOTE_PASSWORD }}" >> $GITHUB_ENV
-              ;;
-            dev)
-              echo "REMOTE_HOST=${{ secrets.DEV_REMOTE_HOST }}" >> $GITHUB_ENV
-              echo "REMOTE_USER=${{ secrets.DEV_REMOTE_USER }}" >> $GITHUB_ENV
-              echo "REMOTE_PASSWORD=${{ secrets.DEV_REMOTE_PASSWORD }}" >> $GITHUB_ENV
-              ;;
-            qa)
-              echo "REMOTE_HOST=${{ secrets.QA_REMOTE_HOST }}" >> $GITHUB_ENV
-              echo "REMOTE_USER=${{ secrets.QA_REMOTE_USER }}" >> $GITHUB_ENV
-              echo "REMOTE_PASSWORD=${{ secrets.QA_REMOTE_PASSWORD }}" >> $GITHUB_ENV
-              ;;
-            *)
-              echo "Unknown environment: ${{ inputs.environment }}" >&2
-              exit 1
-              ;;
-          esac
-          echo "DEPLOY_FOLDER=${{ secrets.DEPLOY_FOLDER }}" >> $GITHUB_ENV
-
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -56,42 +40,188 @@ jobs:
         with:
           toolchain: "1.93.0"
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Proxy (Linux)
-        run: cargo build -p proxy --release
+      - name: Build Proxy Web frontend
+        run: |
+          npm ci --prefix proxy-web/frontend --no-audit --no-fund
+          npm run build --prefix proxy-web/frontend
 
-      - name: Package proxy deployment
+      - name: Build Proxy services (Linux)
+        run: cargo build -p proxy -p proxy-web --release
+
+      - name: Package proxy services
         shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
         run: |
           set -euo pipefail
           rm -rf .deploy-proxy
           mkdir -p .deploy-proxy
           cp target/release/proxy .deploy-proxy/proxy
+          cp target/release/proxy-web .deploy-proxy/proxy-web
           cp config/remote/proxy.toml .deploy-proxy/proxy.toml
           cp config/remote/users.toml .deploy-proxy/users.toml
           cp start-proxy.sh .deploy-proxy/start-proxy.sh
-          chmod +x .deploy-proxy/proxy .deploy-proxy/start-proxy.sh
+          cp start-proxy-web.sh .deploy-proxy/start-proxy-web.sh
+          mkdir -p .deploy-proxy/proxy-web-frontend
+          cp -R proxy-web/frontend/dist/. .deploy-proxy/proxy-web-frontend/
+
+          {
+            echo "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USERNAME=admin"
+            echo "PPAASS_PROXY_WEB_ALLOW_REGISTRATION=true"
+            echo "PPAASS_PROXY_WEB_LISTEN_ADDR=127.0.0.1:8787"
+            printf 'PPAASS_PROXY_WEB_PUBLIC_HOST=%q\n' "$WEB_PUBLIC_HOST"
+            echo "PPAASS_PROXY_WEB_SECURE_COOKIES=true"
+            echo "RUST_LOG=proxy_web=info,proxy_user_store=info,tower_http=info"
+          } > .deploy-proxy/proxy-web.env
+
+          chmod +x \
+            .deploy-proxy/proxy \
+            .deploy-proxy/proxy-web \
+            .deploy-proxy/start-proxy.sh \
+            .deploy-proxy/start-proxy-web.sh
+
+      - name: Validate Proxy Web admin password
+        shell: bash
+        env:
+          WEB_ADMIN_PASSWORD: ${{ secrets.PPAASS_WEB_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${WEB_ADMIN_PASSWORD:?PPAASS_WEB_ADMIN_PASSWORD secret is required}"
+          case "$WEB_ADMIN_PASSWORD" in
+            *$'\n'*|*$'\r'*)
+              echo "PPAASS_WEB_ADMIN_PASSWORD must not contain a newline" >&2
+              exit 1
+              ;;
+          esac
+          password_bytes="$(printf '%s' "$WEB_ADMIN_PASSWORD" | wc -c | tr -d '[:space:]')"
+          password_characters="$(
+            printf '%s' "$WEB_ADMIN_PASSWORD" \
+              | node -e 'const fs = require("fs"); process.stdout.write(String(Array.from(fs.readFileSync(0, "utf8")).length));'
+          )"
+          if [ "$password_characters" -lt 8 ] || [ "$password_bytes" -gt 256 ]; then
+            echo "PPAASS_WEB_ADMIN_PASSWORD must contain at least 8 characters and at most 256 UTF-8 bytes" >&2
+            exit 1
+          fi
+
+      - name: Validate Proxy Web public host
+        shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+        run: |
+          set -euo pipefail
+          : "${WEB_PUBLIC_HOST:?PPAASS_WEB_PUBLIC_HOST repository variable is required}"
+          case "$WEB_PUBLIC_HOST" in
+            *[!0-9A-Za-z._-]*|'')
+              echo "PPAASS_WEB_PUBLIC_HOST must be an IPv4 address or DNS name without a URL scheme, port, or path" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve deployment connection
+        shell: bash
+        env:
+          PRODUCTION_REMOTE_HOST: ${{ secrets.PRODUCTION_REMOTE_HOST }}
+          PRODUCTION_REMOTE_USER: ${{ secrets.PRODUCTION_REMOTE_USER }}
+          PRODUCTION_REMOTE_PASSWORD: ${{ secrets.PRODUCTION_REMOTE_PASSWORD }}
+          DEV_REMOTE_HOST: ${{ secrets.DEV_REMOTE_HOST }}
+          DEV_REMOTE_USER: ${{ secrets.DEV_REMOTE_USER }}
+          DEV_REMOTE_PASSWORD: ${{ secrets.DEV_REMOTE_PASSWORD }}
+          QA_REMOTE_HOST: ${{ secrets.QA_REMOTE_HOST }}
+          QA_REMOTE_USER: ${{ secrets.QA_REMOTE_USER }}
+          QA_REMOTE_PASSWORD: ${{ secrets.QA_REMOTE_PASSWORD }}
+          DEPLOY_FOLDER_SECRET: ${{ secrets.DEPLOY_FOLDER }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.PPAASS_DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.environment }}" in
+            production)
+              remote_host_value="$PRODUCTION_REMOTE_HOST"
+              remote_user_value="$PRODUCTION_REMOTE_USER"
+              remote_password_value="$PRODUCTION_REMOTE_PASSWORD"
+              ;;
+            dev)
+              remote_host_value="$DEV_REMOTE_HOST"
+              remote_user_value="$DEV_REMOTE_USER"
+              remote_password_value="$DEV_REMOTE_PASSWORD"
+              ;;
+            qa)
+              remote_host_value="$QA_REMOTE_HOST"
+              remote_user_value="$QA_REMOTE_USER"
+              remote_password_value="$QA_REMOTE_PASSWORD"
+              ;;
+            *)
+              echo "Unknown environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
+          : "${remote_host_value:?Remote host secret is required}"
+          : "${remote_user_value:?Remote user secret is required}"
+          : "${remote_password_value:?Remote password secret is required}"
+          : "${DEPLOY_FOLDER_SECRET:?DEPLOY_FOLDER secret is required}"
+          : "${DEPLOY_SSH_KNOWN_HOSTS:?PPAASS_DEPLOY_SSH_KNOWN_HOSTS secret is required}"
+          for connection_value in \
+            "$remote_host_value" \
+            "$remote_user_value" \
+            "$remote_password_value" \
+            "$DEPLOY_FOLDER_SECRET"; do
+            case "$connection_value" in
+              *$'\n'*|*$'\r'*)
+                echo "Deployment connection secrets must not contain newlines" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          connection_file="$RUNNER_TEMP/ppaass-deploy-connection.env"
+          password_file="$RUNNER_TEMP/ppaass-deploy-password"
+          known_hosts_file="$RUNNER_TEMP/ppaass-deploy-known-hosts"
+          umask 077
+          printf '%s' "$remote_password_value" > "$password_file"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          if ! ssh-keygen -F "$remote_host_value" -f "$known_hosts_file" >/dev/null; then
+            echo "PPAASS_DEPLOY_SSH_KNOWN_HOSTS does not contain a key for $remote_host_value" >&2
+            exit 1
+          fi
+          {
+            printf 'REMOTE_HOST=%q\n' "$remote_host_value"
+            printf 'REMOTE_USER=%q\n' "$remote_user_value"
+            printf 'DEPLOY_FOLDER=%q\n' "$DEPLOY_FOLDER_SECRET"
+            printf 'REMOTE_PASSWORD_FILE=%q\n' "$password_file"
+            printf 'REMOTE_KNOWN_HOSTS_FILE=%q\n' "$known_hosts_file"
+          } > "$connection_file"
+          chmod 600 "$connection_file" "$password_file" "$known_hosts_file"
 
       - name: Prepare remote deploy folder
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
           : "${REMOTE_HOST:?REMOTE_HOST is required}"
           : "${REMOTE_USER:?REMOTE_USER is required}"
-          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
           : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
 
-          export SSHPASS="$REMOTE_PASSWORD"
-          sshpass -e ssh \
-            -o StrictHostKeyChecking=accept-new \
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=4 \
             "$REMOTE_USER@$REMOTE_HOST" \
-            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+            "bash -seuo pipefail -- '$deploy_folder_base64'" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          DEPLOY_DIR="$DEPLOY_FOLDER"
+          DEPLOY_DIR="$(printf '%s' "$1" | base64 -d)"
           case "$DEPLOY_DIR" in
             "~")
               DEPLOY_DIR="$HOME"
@@ -102,90 +232,186 @@ jobs:
           esac
 
           mkdir -p "$DEPLOY_DIR"
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          if [ "$(id -u)" -ne 0 ]; then
+            echo "Proxy Web HTTPS on TCP/443 requires a root deployment user" >&2
+            exit 1
+          fi
+          if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+            echo "Caddy deployment requires a systemd-based Linux server" >&2
+            exit 1
+          fi
+          if systemctl is-active --quiet caddy.service 2>/dev/null \
+            || systemctl is-enabled --quiet caddy.service 2>/dev/null; then
+            echo "caddy.service is active or enabled; migrate and disable it before PPAASS manages TCP/443" >&2
+            exit 1
+          fi
           REMOTE_SCRIPT
 
-      - name: Stop running proxy
+      - name: Ensure Caddy is installed
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
           : "${REMOTE_HOST:?REMOTE_HOST is required}"
           : "${REMOTE_USER:?REMOTE_USER is required}"
-          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
-          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
 
-          export SSHPASS="$REMOTE_PASSWORD"
-          sshpass -e ssh \
-            -o StrictHostKeyChecking=accept-new \
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=4 \
             "$REMOTE_USER@$REMOTE_HOST" \
-            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+            "bash -seuo pipefail" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          DEPLOY_DIR="$DEPLOY_FOLDER"
-          case "$DEPLOY_DIR" in
-            "~")
-              DEPLOY_DIR="$HOME"
+          CADDY_MINIMUM_VERSION="2.11.4"
+          CADDY_INSTALL_VERSION="2.11.4"
+          CADDY_INSTALL_PATH="/usr/local/bin/caddy"
+          temporary_directory=""
+
+          cleanup_caddy_installer() {
+            if [ -n "$temporary_directory" ]; then
+              rm -rf -- "$temporary_directory"
+            fi
+          }
+          trap cleanup_caddy_installer EXIT
+
+          version_is_supported() {
+            candidate_version="${1#v}"
+            candidate_version="${candidate_version%% *}"
+            case "$candidate_version" in
+              ''|*[!0-9.]*)
+                return 1
+                ;;
+            esac
+            first_version="$(
+              printf '%s\n%s\n' "$CADDY_MINIMUM_VERSION" "$candidate_version" \
+                | sort -V \
+                | head -n 1
+            )"
+            [ "$first_version" = "$CADDY_MINIMUM_VERSION" ]
+          }
+
+          if ! command -v curl >/dev/null 2>&1; then
+            echo "curl is required to install and health-check Caddy" >&2
+            exit 1
+          fi
+
+          caddy_binary="$(command -v caddy || true)"
+          installed_version=""
+          if [ -n "$caddy_binary" ]; then
+            installed_version="$(
+              "$caddy_binary" version 2>/dev/null \
+                | awk '{ print $1 }' \
+                || true
+            )"
+          fi
+
+          if [ -n "$caddy_binary" ] && version_is_supported "$installed_version"; then
+            if [ "$caddy_binary" != "$CADDY_INSTALL_PATH" ]; then
+              install -o root -g root -m 0755 \
+                "$caddy_binary" \
+                "$CADDY_INSTALL_PATH"
+            fi
+            installed_version="$("$CADDY_INSTALL_PATH" version | awk '{ print $1 }')"
+            echo "Using Caddy $installed_version from $CADDY_INSTALL_PATH"
+            exit 0
+          fi
+
+          case "$(uname -m)" in
+            x86_64|amd64)
+              caddy_architecture="amd64"
               ;;
-            "~/"*)
-              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+            aarch64|arm64)
+              caddy_architecture="arm64"
+              ;;
+            armv7l|armv7)
+              caddy_architecture="armv7"
+              ;;
+            *)
+              echo "Unsupported Caddy architecture: $(uname -m)" >&2
+              exit 1
               ;;
           esac
 
-          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-            systemctl stop ppaass-proxy.service 2>/dev/null || true
+          if ! command -v sha512sum >/dev/null 2>&1; then
+            echo "sha512sum is required to verify Caddy" >&2
+            exit 1
           fi
 
-          if [ -f "$DEPLOY_DIR/start-proxy.sh" ]; then
-            chmod +x "$DEPLOY_DIR/start-proxy.sh"
-            "$DEPLOY_DIR/start-proxy.sh" stop || true
-          fi
+          temporary_directory="$(mktemp -d)"
+          archive_name="caddy_${CADDY_INSTALL_VERSION}_linux_${caddy_architecture}.tar.gz"
+          release_base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_INSTALL_VERSION}"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --output "$temporary_directory/$archive_name" \
+            "$release_base/$archive_name"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --output "$temporary_directory/checksums.txt" \
+            "$release_base/caddy_${CADDY_INSTALL_VERSION}_checksums.txt"
 
-          process_id="$(
-            ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
-              index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
-            '
+          expected_checksum="$(
+            awk -v archive="$archive_name" '$2 == archive { print $1; exit }' \
+              "$temporary_directory/checksums.txt"
           )"
-          if [ -n "$process_id" ]; then
-            echo "Stopping existing proxy process(es): $process_id"
-            kill $process_id || true
-            sleep 5
-
-            stopped_process_id="$(
-              ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
-                index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
-              '
-            )"
-            if [ -n "$stopped_process_id" ]; then
-              echo "Force stopping proxy process(es): $stopped_process_id"
-              kill -9 $stopped_process_id || true
-              sleep 2
-            fi
-
-            stopped_process_id="$(
-              ps -eo pid=,args= | awk -v deploy_dir="$DEPLOY_DIR" '
-                index($0, deploy_dir "/proxy") > 0 || $0 ~ /(^|[[:space:]])\.\/proxy([[:space:]]|$)/ { print $1 }
-              '
-            )"
-            if [ -n "$stopped_process_id" ]; then
-              echo "Failed to stop proxy process(es): $stopped_process_id"
+          case "$expected_checksum" in
+            ''|*[!0-9a-fA-F]*)
+              echo "Caddy release checksum is missing or invalid" >&2
               exit 1
-            fi
-            echo "Stopped existing proxy process(es): $process_id"
-          else
-            echo "No running proxy process found"
+              ;;
+          esac
+          if [ "${#expected_checksum}" -ne 128 ]; then
+            echo "Caddy release checksum has an invalid length" >&2
+            exit 1
           fi
+          printf '%s  %s\n' \
+            "$expected_checksum" \
+            "$temporary_directory/$archive_name" \
+            | sha512sum --check --status
+
+          tar -xzf "$temporary_directory/$archive_name" -C "$temporary_directory" caddy
+          test -f "$temporary_directory/caddy"
+          install -o root -g root -m 0755 \
+            "$temporary_directory/caddy" \
+            "$CADDY_INSTALL_PATH"
+          installed_version="$("$CADDY_INSTALL_PATH" version | awk '{ print $1 }')"
+          if ! version_is_supported "$installed_version"; then
+            echo "Installed unsupported Caddy version: $installed_version" >&2
+            exit 1
+          fi
+          echo "Installed Caddy $installed_version at $CADDY_INSTALL_PATH"
           REMOTE_SCRIPT
 
-      - name: Upload proxy files
+      - name: Upload proxy service files
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
           : "${REMOTE_HOST:?REMOTE_HOST is required}"
           : "${REMOTE_USER:?REMOTE_USER is required}"
-          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
           : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          : "${REMOTE_KNOWN_HOSTS_FILE:?REMOTE_KNOWN_HOSTS_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+          test -r "$REMOTE_KNOWN_HOSTS_FILE"
 
-          export SSHPASS="$REMOTE_PASSWORD"
           REMOTE_UPLOAD_SCRIPT="$(cat <<'REMOTE_SCRIPT'
           set -euo pipefail
           DEPLOY_DIR="$DEPLOY_FOLDER"
@@ -199,35 +425,141 @@ jobs:
           esac
 
           mkdir -p "$DEPLOY_DIR"
-          tar -xf - -C "$DEPLOY_DIR"
-          chmod +x "$DEPLOY_DIR/proxy" "$DEPLOY_DIR/start-proxy.sh"
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          # Upload before stopping the old processes. GNU tar unlinks each
+          # replaced executable first, so a running process keeps its old inode
+          # until the later controlled service restart.
+          tar --unlink-first -xf - -C "$DEPLOY_DIR"
+          chmod +x \
+            "$DEPLOY_DIR/proxy" \
+            "$DEPLOY_DIR/proxy-web" \
+            "$DEPLOY_DIR/start-proxy.sh" \
+            "$DEPLOY_DIR/start-proxy-web.sh"
           REMOTE_SCRIPT
           )"
 
-          tar -C .deploy-proxy -cf - . | sshpass -e ssh \
-            -o StrictHostKeyChecking=accept-new \
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          remote_upload_script_base64="$(printf '%s' "$REMOTE_UPLOAD_SCRIPT" | base64 -w 0)"
+          tar -C .deploy-proxy -cf - . | sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=4 \
             "$REMOTE_USER@$REMOTE_HOST" \
-            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -euo pipefail -c $(printf '%q' "$REMOTE_UPLOAD_SCRIPT")"
+            "bash -c 'deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; remote_script=\"\$(printf \"%s\" \"\$2\" | base64 -d)\"; DEPLOY_FOLDER=\"\$deploy_folder\" bash -euo pipefail -c \"\$remote_script\"' -- '$deploy_folder_base64' '$remote_upload_script_base64'"
 
-      - name: Restart proxy
+      - name: Stop running proxy services
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
           : "${REMOTE_HOST:?REMOTE_HOST is required}"
           : "${REMOTE_USER:?REMOTE_USER is required}"
-          : "${REMOTE_PASSWORD:?REMOTE_PASSWORD is required}"
           : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
 
-          export SSHPASS="$REMOTE_PASSWORD"
-          sshpass -e ssh \
-            -o StrictHostKeyChecking=accept-new \
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=4 \
             "$REMOTE_USER@$REMOTE_HOST" \
-            "DEPLOY_FOLDER=$(printf '%q' "$DEPLOY_FOLDER") bash -seuo pipefail" <<'REMOTE_SCRIPT'
+            "bash -seuo pipefail -- '$deploy_folder_base64'" <<'REMOTE_SCRIPT'
           set -euo pipefail
+          DEPLOY_DIR="$(printf '%s' "$1" | base64 -d)"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+
+          find_deploy_processes() {
+            target_executable="$1"
+            for executable_link in /proc/[0-9]*/exe; do
+              executable="$(readlink "$executable_link" 2>/dev/null || true)"
+              executable="${executable% (deleted)}"
+              if [ "$executable" = "$target_executable" ]; then
+                process_id="${executable_link#/proc/}"
+                printf '%s\n' "${process_id%/exe}"
+              fi
+            done
+          }
+
+          stop_deploy_processes() {
+            service_name="$1"
+            target_executable="$2"
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -z "$process_ids" ]; then
+              echo "No running $service_name process found"
+              return
+            fi
+
+            echo "Stopping existing $service_name process(es): $process_ids"
+            kill $process_ids 2>/dev/null || true
+            for wait_index in $(seq 1 20); do
+              process_ids="$(find_deploy_processes "$target_executable")"
+              [ -z "$process_ids" ] && break
+              sleep 0.5
+            done
+
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -n "$process_ids" ]; then
+              echo "Force stopping $service_name process(es): $process_ids"
+              kill -9 $process_ids 2>/dev/null || true
+              sleep 1
+            fi
+
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -n "$process_ids" ]; then
+              echo "Failed to stop $service_name process(es): $process_ids" >&2
+              exit 1
+            fi
+          }
+
+          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            systemctl stop ppaass-caddy.service 2>/dev/null || true
+            systemctl stop ppaass-proxy.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-web.service 2>/dev/null || true
+          fi
+
+          if [ -f "$DEPLOY_DIR/start-proxy.sh" ]; then
+            chmod +x "$DEPLOY_DIR/start-proxy.sh"
+            "$DEPLOY_DIR/start-proxy.sh" stop || true
+          fi
+          if [ -f "$DEPLOY_DIR/start-proxy-web.sh" ]; then
+            chmod +x "$DEPLOY_DIR/start-proxy-web.sh"
+            "$DEPLOY_DIR/start-proxy-web.sh" stop || true
+          fi
+
+          stop_deploy_processes "Proxy" "$DEPLOY_DIR/proxy"
+          stop_deploy_processes "Proxy Web" "$DEPLOY_DIR/proxy-web"
+          REMOTE_SCRIPT
+
+      - name: Deploy and restart proxy services
+        shell: bash
+        env:
+          WEB_ADMIN_PASSWORD: ${{ secrets.PPAASS_WEB_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          : "${WEB_ADMIN_PASSWORD:?PPAASS_WEB_ADMIN_PASSWORD secret is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+
+          REMOTE_DEPLOY_SCRIPT="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          ADMIN_PASSWORD_INPUT_FILE="${PPAASS_PROXY_WEB_ADMIN_PASSWORD_INPUT_FILE:?}"
           DEPLOY_DIR="$DEPLOY_FOLDER"
           case "$DEPLOY_DIR" in
             "~")
@@ -239,9 +571,131 @@ jobs:
           esac
 
           cd "$DEPLOY_DIR"
-          chmod +x ./proxy ./start-proxy.sh
+          DEPLOY_DIR="$(pwd -P)"
+          umask 077
+          SECRET_DIR="$DEPLOY_DIR/.secrets"
+          KEY_SECRET_FILE="$SECRET_DIR/proxy-web-key-encryption-secret"
+          ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-web-admin-password"
+          DATABASE_FILE="$DEPLOY_DIR/data/proxy-users.sqlite3"
+          CADDY_MINIMUM_VERSION="2.11.4"
+          CADDY_CONFIG_DIR="/etc/ppaass"
+          CADDY_CONFIG_FILE="$CADDY_CONFIG_DIR/Caddyfile"
+          CADDY_STATE_DIR="/var/lib/ppaass-caddy"
+          DEPLOY_SUCCEEDED=false
+          WEB_START_ATTEMPTED=false
+          CADDY_START_ATTEMPTED=false
+          temporary_admin_file=""
+          temporary_key_file=""
+          temporary_caddy_config=""
+
+          cleanup_deployment_secrets() {
+            if [ -n "$temporary_admin_file" ]; then
+              rm -f "$temporary_admin_file"
+            fi
+            if [ -n "$temporary_key_file" ]; then
+              rm -f "$temporary_key_file"
+            fi
+            if [ -n "$temporary_caddy_config" ]; then
+              rm -f "$temporary_caddy_config"
+            fi
+            rm -f "$ADMIN_PASSWORD_FILE"
+            if [ "$DEPLOY_SUCCEEDED" != true ]; then
+              if [ "$CADDY_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-caddy.service 2>/dev/null || true
+              fi
+              if [ "$WEB_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-proxy-web.service 2>/dev/null || true
+              fi
+            fi
+          }
+          trap cleanup_deployment_secrets EXIT
+
+          chmod +x ./proxy ./proxy-web ./start-proxy.sh ./start-proxy-web.sh
           test -f ./proxy.toml
           test -f ./users.toml
+          test -f ./proxy-web.env
+          test -f ./proxy-web-frontend/index.html
+
+          if [ "$(id -u)" -ne 0 ] \
+            || ! command -v systemctl >/dev/null 2>&1 \
+            || [ ! -d /run/systemd/system ]; then
+            echo "Caddy deployment requires a root user on a systemd-based Linux server" >&2
+            exit 1
+          fi
+
+          set -a
+          # shellcheck disable=SC1091
+          . ./proxy-web.env
+          set +a
+          WEB_PUBLIC_HOST="${PPAASS_PROXY_WEB_PUBLIC_HOST:?}"
+          WEB_LISTEN_ADDR="${PPAASS_PROXY_WEB_LISTEN_ADDR:?}"
+          if [ "$WEB_LISTEN_ADDR" != "127.0.0.1:8787" ]; then
+            echo "Proxy Web must listen only on 127.0.0.1:8787 behind Caddy, got $WEB_LISTEN_ADDR" >&2
+            exit 1
+          fi
+          case "$WEB_PUBLIC_HOST" in
+            *[!0-9A-Za-z._-]*|'')
+              echo "Invalid Proxy Web public host: $WEB_PUBLIC_HOST" >&2
+              exit 1
+              ;;
+          esac
+
+          mkdir -p "$SECRET_DIR" "$(dirname "$DATABASE_FILE")"
+          chmod 700 "$SECRET_DIR"
+          test -r "$ADMIN_PASSWORD_INPUT_FILE"
+          temporary_admin_file="$(mktemp "$SECRET_DIR/.proxy-web-admin-password.XXXXXX")"
+          cp "$ADMIN_PASSWORD_INPUT_FILE" "$temporary_admin_file"
+          password_bytes="$(wc -c < "$temporary_admin_file" | tr -d '[:space:]')"
+          if [ "$password_bytes" -eq 0 ] || [ "$password_bytes" -gt 256 ]; then
+            echo "Received Proxy Web admin password has an invalid length" >&2
+            exit 1
+          fi
+          chmod 600 "$temporary_admin_file"
+          mv -f "$temporary_admin_file" "$ADMIN_PASSWORD_FILE"
+          temporary_admin_file=""
+          chmod 600 "$ADMIN_PASSWORD_FILE"
+
+          if [ ! -s "$KEY_SECRET_FILE" ]; then
+            temporary_key_file="$(mktemp "$SECRET_DIR/.proxy-web-key-encryption-secret.XXXXXX")"
+            od -An -N48 -tx1 /dev/urandom | tr -d '[:space:]' > "$temporary_key_file"
+            chmod 600 "$temporary_key_file"
+            mv -f "$temporary_key_file" "$KEY_SECRET_FILE"
+            temporary_key_file=""
+            echo "Generated the persistent Proxy Web key-encryption secret; include $SECRET_DIR in server backups"
+          fi
+          key_secret_bytes="$(wc -c < "$KEY_SECRET_FILE" | tr -d '[:space:]')"
+          if [ "$key_secret_bytes" -lt 32 ]; then
+            echo "Proxy Web key-encryption secret must contain at least 32 bytes" >&2
+            exit 1
+          fi
+          chmod 600 "$KEY_SECRET_FILE"
+
+          version_is_supported() {
+            candidate_version="${1#v}"
+            candidate_version="${candidate_version%% *}"
+            case "$candidate_version" in
+              ''|*[!0-9.]*)
+                return 1
+                ;;
+            esac
+            first_version="$(
+              printf '%s\n%s\n' "$CADDY_MINIMUM_VERSION" "$candidate_version" \
+                | sort -V \
+                | head -n 1
+            )"
+            [ "$first_version" = "$CADDY_MINIMUM_VERSION" ]
+          }
+
+          CADDY_BINARY="/usr/local/bin/caddy"
+          if [ ! -x "$CADDY_BINARY" ]; then
+            echo "Caddy is missing after the installation step" >&2
+            exit 1
+          fi
+          CADDY_VERSION="$("$CADDY_BINARY" version 2>/dev/null | awk '{ print $1 }')"
+          if ! version_is_supported "$CADDY_VERSION"; then
+            echo "Caddy $CADDY_MINIMUM_VERSION or newer is required; found $CADDY_VERSION" >&2
+            exit 1
+          fi
 
           PROXY_LISTEN_ADDR="$(
             awk -F '"' '
@@ -255,6 +709,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$PROXY_LISTEN_PORT" -eq 443 ]; then
+            echo "Proxy TCP port 443 conflicts with Proxy Web HTTPS" >&2
+            exit 1
+          fi
 
           # QUIC 与兼容 TCP 传输共用端口号，但分别使用 UDP 和 TCP。
           # 部署时同步维护主机防火墙，避免服务已监听 UDP、入站规则却只开放 TCP。
@@ -262,19 +720,81 @@ jobs:
             if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
               ufw allow "$PROXY_LISTEN_PORT/tcp"
               ufw allow "$PROXY_LISTEN_PORT/udp"
+              ufw allow 443/tcp
             fi
 
             if command -v firewall-cmd >/dev/null 2>&1 \
               && firewall-cmd --state >/dev/null 2>&1; then
               firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/tcp"
               firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/udp"
+              firewall-cmd --permanent --add-port=443/tcp
               firewall-cmd --reload
             fi
-          else
-            echo "Remote user is not root; skipping host firewall configuration"
           fi
 
-          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+          if ! getent group caddy >/dev/null 2>&1; then
+            groupadd --system caddy
+          fi
+          if ! id -u caddy >/dev/null 2>&1; then
+            nologin_shell="$(command -v nologin || printf '/usr/sbin/nologin')"
+            useradd \
+              --system \
+              --gid caddy \
+              --home-dir "$CADDY_STATE_DIR" \
+              --shell "$nologin_shell" \
+              caddy
+          fi
+          install -d -o caddy -g caddy -m 0700 \
+            "$CADDY_STATE_DIR" \
+            "$CADDY_STATE_DIR/config" \
+            "$CADDY_STATE_DIR/storage"
+          chown -R caddy:caddy "$CADDY_STATE_DIR"
+          install -d -o root -g caddy -m 0750 "$CADDY_CONFIG_DIR"
+
+          temporary_caddy_config="$(mktemp "$CADDY_CONFIG_DIR/.Caddyfile.XXXXXX")"
+          cat > "$temporary_caddy_config" <<EOF
+          {
+            admin off
+            auto_https disable_redirects
+            default_sni $WEB_PUBLIC_HOST
+            storage file_system $CADDY_STATE_DIR/storage
+            servers {
+              protocols h1 h2
+            }
+          }
+
+          https://$WEB_PUBLIC_HOST {
+            tls {
+              issuer acme https://acme-v02.api.letsencrypt.org/directory {
+                profile shortlived
+                disable_http_challenge
+              }
+            }
+
+            encode zstd gzip
+            reverse_proxy 127.0.0.1:8787
+
+            header {
+              Strict-Transport-Security "max-age=31536000"
+              X-Content-Type-Options "nosniff"
+              Referrer-Policy "no-referrer"
+            }
+          }
+          EOF
+          chmod 0640 "$temporary_caddy_config"
+          chown root:caddy "$temporary_caddy_config"
+          HOME="$CADDY_STATE_DIR" \
+            XDG_CONFIG_HOME="$CADDY_STATE_DIR/config" \
+            XDG_DATA_HOME="$CADDY_STATE_DIR" \
+            "$CADDY_BINARY" validate \
+              --config "$temporary_caddy_config" \
+              --adapter caddyfile
+          mv -f "$temporary_caddy_config" "$CADDY_CONFIG_FILE"
+          temporary_caddy_config=""
+          chmod 0640 "$CADDY_CONFIG_FILE"
+          chown root:caddy "$CADDY_CONFIG_FILE"
+          chown -R caddy:caddy "$CADDY_STATE_DIR"
+
           cat > /etc/systemd/system/ppaass-proxy.service <<EOF
           [Unit]
           Description=PPAASS Proxy
@@ -289,27 +809,174 @@ jobs:
           RestartSec=3
           TimeoutStopSec=20
           LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0077
+          NoNewPrivileges=true
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
           [Install]
           WantedBy=multi-user.target
           EOF
 
-            systemctl daemon-reload
-            systemctl enable ppaass-proxy.service
-            systemctl restart ppaass-proxy.service
-            sleep 3
+          cat > /etc/systemd/system/ppaass-proxy-web.service <<EOF
+          [Unit]
+          Description=PPAASS Proxy Web
+          Wants=network-online.target
+          After=network-online.target ppaass-proxy.service
 
-            if ! systemctl is-active --quiet ppaass-proxy.service; then
-              systemctl --no-pager --full status ppaass-proxy.service || true
-              journalctl -u ppaass-proxy.service -n 80 --no-pager || true
-              exit 1
+          [Service]
+          Type=simple
+          WorkingDirectory=$DEPLOY_DIR
+          ExecStart=$DEPLOY_DIR/start-proxy-web.sh run
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0077
+          NoNewPrivileges=true
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          cat > /etc/systemd/system/ppaass-caddy.service <<EOF
+          [Unit]
+          Description=PPAASS Caddy HTTPS reverse proxy
+          Wants=network-online.target
+          Wants=ppaass-proxy-web.service
+          After=network-online.target ppaass-proxy-web.service
+
+          [Service]
+          Type=simple
+          User=caddy
+          Group=caddy
+          Environment=HOME=$CADDY_STATE_DIR
+          Environment=XDG_CONFIG_HOME=$CADDY_STATE_DIR/config
+          Environment=XDG_DATA_HOME=$CADDY_STATE_DIR
+          ExecStart=$CADDY_BINARY run --environ --config $CADDY_CONFIG_FILE --adapter caddyfile
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0077
+          NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadWritePaths=$CADDY_STATE_DIR
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable \
+            ppaass-proxy.service \
+            ppaass-proxy-web.service \
+            ppaass-caddy.service
+          systemctl restart ppaass-proxy.service
+          WEB_START_ATTEMPTED=true
+          systemctl restart ppaass-proxy-web.service
+
+          require_active_service() {
+            service_name="$1"
+            if systemctl is-active --quiet "$service_name"; then
+              return 0
             fi
+            systemctl --no-pager --full status "$service_name" || true
+            journalctl -u "$service_name" -n 100 --no-pager || true
+            return 1
+          }
 
-            systemctl --no-pager --full status ppaass-proxy.service
-          else
-            ./start-proxy.sh restart
-            ./start-proxy.sh status
+          wait_for_proxy_web_internal() {
+            proxy_web_healthy=false
+            for health_attempt in $(seq 1 30); do
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                --noproxy '*' \
+                --connect-timeout 3 \
+                --max-time 5 \
+                "http://127.0.0.1:8787/healthz" >/dev/null 2>&1; then
+                proxy_web_healthy=true
+                break
+              fi
+              sleep 1
+            done
+            if [ "$proxy_web_healthy" != true ]; then
+              echo "Proxy Web internal health check failed on 127.0.0.1:8787" >&2
+              journalctl -u ppaass-proxy-web.service -n 100 --no-pager || true
+              return 1
+            fi
+            echo "Verified Proxy Web internal health on http://127.0.0.1:8787/healthz"
+          }
+
+          wait_for_proxy_web_public() {
+            proxy_web_healthy=false
+            for health_attempt in $(seq 1 90); do
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                --noproxy '*' \
+                --connect-timeout 5 \
+                --max-time 10 \
+                --connect-to "$WEB_PUBLIC_HOST:443:127.0.0.1:443" \
+                "https://$WEB_PUBLIC_HOST/healthz" >/dev/null 2>&1; then
+                proxy_web_healthy=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "$proxy_web_healthy" != true ]; then
+              echo "Caddy HTTPS health check failed for $WEB_PUBLIC_HOST:443" >&2
+              journalctl -u ppaass-caddy.service -n 150 --no-pager || true
+              return 1
+            fi
+            echo "Verified Caddy certificate and reverse proxy on https://$WEB_PUBLIC_HOST/healthz"
+          }
+
+          require_active_service ppaass-proxy.service
+          require_active_service ppaass-proxy-web.service
+          wait_for_proxy_web_internal
+
+          # The password only bootstraps the first enabled admin. Once the Web
+          # process is healthy, remove it and restart so it is absent from both
+          # the filesystem and the long-running process environment.
+          rm -f "$ADMIN_PASSWORD_FILE"
+          systemctl restart ppaass-proxy-web.service
+          require_active_service ppaass-proxy-web.service
+          wait_for_proxy_web_internal
+
+          if systemctl is-active --quiet caddy.service 2>/dev/null \
+            || systemctl is-enabled --quiet caddy.service 2>/dev/null; then
+            echo "caddy.service is active or enabled and may own TCP/443; migrate and disable it before deploying PPAASS" >&2
+            exit 1
           fi
+          if command -v ss >/dev/null 2>&1 \
+            && ss -H -lnt "sport = :443" | grep -q .; then
+            echo "TCP/443 is already occupied after stopping ppaass-caddy.service" >&2
+            ss -H -lntp "sport = :443" >&2 || true
+            exit 1
+          fi
+
+          CADDY_START_ATTEMPTED=true
+          systemctl restart ppaass-caddy.service
+          require_active_service ppaass-caddy.service
+          wait_for_proxy_web_public
 
           if command -v ss >/dev/null 2>&1; then
             if ! ss -H -lnt "sport = :$PROXY_LISTEN_PORT" | grep -q .; then
@@ -321,5 +988,102 @@ jobs:
               exit 1
             fi
             echo "Verified proxy listeners on TCP/$PROXY_LISTEN_PORT and UDP/$PROXY_LISTEN_PORT"
+            if ! ss -H -lnt "sport = :443" | grep -q .; then
+              echo "Caddy is not listening on TCP/443" >&2
+              exit 1
+            fi
+            echo "Verified Caddy listener on TCP/443"
           fi
+
+          systemctl --no-pager --full status ppaass-proxy.service
+          systemctl --no-pager --full status ppaass-proxy-web.service
+          systemctl --no-pager --full status ppaass-caddy.service
+
+          DEPLOY_SUCCEEDED=true
+          trap - EXIT
           REMOTE_SCRIPT
+          )"
+
+          deploy_input_dir="$(mktemp -d "$RUNNER_TEMP/ppaass-web-deploy-inputs.XXXXXX")"
+          cleanup_deploy_inputs() {
+            for input_file in \
+              "$deploy_input_dir/admin-password" \
+              "$deploy_input_dir/deploy.sh"; do
+              if [ ! -e "$input_file" ]; then
+                continue
+              fi
+              if command -v shred >/dev/null 2>&1; then
+                shred --remove --zero "$input_file" || rm -f "$input_file"
+              else
+                rm -f "$input_file"
+              fi
+            done
+            rmdir "$deploy_input_dir" 2>/dev/null || true
+          }
+          trap cleanup_deploy_inputs EXIT
+          umask 077
+          printf '%s' "$WEB_ADMIN_PASSWORD" > "$deploy_input_dir/admin-password"
+          printf '%s' "$REMOTE_DEPLOY_SCRIPT" > "$deploy_input_dir/deploy.sh"
+          chmod 600 "$deploy_input_dir"/*
+
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          tar \
+            -C "$deploy_input_dir" \
+            -cf - \
+            admin-password \
+            deploy.sh \
+            | sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=4 \
+              "$REMOTE_USER@$REMOTE_HOST" \
+              "bash -c 'set -euo pipefail; deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; input_dir=\"\$(mktemp -d)\"; trap \"rm -rf -- \\\"\$input_dir\\\"\" EXIT; tar -xf - -C \"\$input_dir\"; chmod 600 \"\$input_dir\"/*; PPAASS_PROXY_WEB_ADMIN_PASSWORD_INPUT_FILE=\"\$input_dir/admin-password\" DEPLOY_FOLDER=\"\$deploy_folder\" bash \"\$input_dir/deploy.sh\"' -- '$deploy_folder_base64'"
+          cleanup_deploy_inputs
+          trap - EXIT
+
+      - name: Verify public Proxy Web HTTPS
+        shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+        run: |
+          set -euo pipefail
+          : "${WEB_PUBLIC_HOST:?PPAASS_WEB_PUBLIC_HOST repository variable is required}"
+          public_web_healthy=false
+          for health_attempt in $(seq 1 60); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 10 \
+              "https://$WEB_PUBLIC_HOST/healthz" >/dev/null; then
+              public_web_healthy=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$public_web_healthy" != true ]; then
+            echo "Public Proxy Web HTTPS health check failed for $WEB_PUBLIC_HOST:443" >&2
+            exit 1
+          fi
+
+      - name: Clean up deployment credentials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for credential_file in \
+            "$RUNNER_TEMP/ppaass-deploy-password" \
+            "$RUNNER_TEMP/ppaass-deploy-connection.env" \
+            "$RUNNER_TEMP/ppaass-deploy-known-hosts"; do
+            if [ ! -e "$credential_file" ]; then
+              continue
+            fi
+            if command -v shred >/dev/null 2>&1; then
+              shred --remove --zero "$credential_file" || rm -f "$credential_file"
+            else
+              rm -f "$credential_file"
+            fi
+          done

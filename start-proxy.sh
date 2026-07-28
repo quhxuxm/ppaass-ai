@@ -107,7 +107,7 @@ stop_supervisor_processes() {
 
 stop_legacy_proxy_processes() {
     local existing_pids
-    existing_pids="$(pgrep -f "./proxy" || true)"
+    existing_pids="$(pgrep -f '(^|[[:space:]])\./proxy([[:space:]]|$)' || true)"
 
     if [ -n "$existing_pids" ]; then
         echo "Stopping existing Proxy process(es): $existing_pids"
@@ -115,7 +115,7 @@ stop_legacy_proxy_processes() {
         sleep 2
 
         local still_running
-        still_running="$(pgrep -f "./proxy" || true)"
+        still_running="$(pgrep -f '(^|[[:space:]])\./proxy([[:space:]]|$)' || true)"
         if [ -n "$still_running" ]; then
             echo "Force killing Proxy process(es): $still_running"
             kill -9 $still_running 2>/dev/null || true

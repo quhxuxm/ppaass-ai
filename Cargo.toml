@@ -2,6 +2,8 @@
 members = [
     "desktop-agent-be",
     "proxy",
+    "proxy-user-store",
+    "proxy-web",
     "common",
     "protocol",
     "tests",
@@ -78,3 +80,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Shell",
 ] }
 tempfile = "3.27.0"
+axum = "0.8"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "timeout", "trace"] }
+argon2 = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2.5"
+zeroize = "1.8"

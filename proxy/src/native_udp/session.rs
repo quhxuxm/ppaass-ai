@@ -1,5 +1,6 @@
 use super::channel::run_channel_worker;
 use super::session_label;
+use crate::access_log::AccessRecorder;
 use crate::config::ProxyConfig;
 use crate::connection::EgressState;
 use crate::error::{ProxyError, Result};
@@ -18,6 +19,8 @@ pub(super) struct SessionContext {
     pub(super) socket: Arc<UdpSocket>,
     pub(super) config: Arc<ProxyConfig>,
     pub(super) egress_state: Arc<EgressState>,
+    pub(super) access_recorder: AccessRecorder,
+    pub(super) username: String,
     pub(super) peer: SocketAddr,
 }
 

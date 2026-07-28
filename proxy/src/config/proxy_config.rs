@@ -7,9 +7,14 @@ use std::path::Path;
 pub struct ProxyConfig {
     pub listen_addr: String,
 
-    /// 用户配置文件路径。
+    /// 用户配置文件路径。配置 SQLite 时该文件只会在数据库首次初始化时导入。
     #[serde(default = "default_users_path")]
     pub users_path: String,
+
+    /// SQLite 用户数据库路径。配置后 SQLite 是用户数据的唯一运行时来源；
+    /// 未配置时继续兼容原有 users.toml 只读模式。
+    #[serde(default)]
+    pub users_database_path: Option<String>,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -240,6 +245,7 @@ listen_addr = "127.0.0.1:0"
         assert_eq!(config.udp_session_limit, 4096);
         assert_eq!(config.udp_session_channel_size, 256);
         assert_eq!(config.udp_session_max_flows, 256);
+        assert!(config.users_database_path.is_none());
     }
 
     #[test]

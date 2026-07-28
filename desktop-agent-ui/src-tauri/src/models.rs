@@ -1,5 +1,26 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AgentLoginRequest {
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AgentAuthAccount {
+    pub(crate) username: String,
+    pub(crate) key_version: i64,
+    pub(crate) expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AgentAuthState {
+    pub(crate) authenticated: bool,
+    pub(crate) account: Option<AgentAuthAccount>,
+    pub(crate) config: Option<LoadedAgentConfig>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct LoadedAgentConfig {
     pub(crate) path: String,
@@ -28,7 +49,9 @@ pub(crate) struct PacketCaptureRuntimeStatus {
 pub(crate) struct AgentConfigSummary {
     pub(crate) listen_addr: String,
     pub(crate) proxy_addrs: Vec<String>,
+    #[serde(skip_serializing)]
     pub(crate) username: String,
+    #[serde(skip_serializing)]
     pub(crate) private_key_path: String,
     pub(crate) transport_mode: String,
     pub(crate) udp_session_pool_size: usize,
@@ -129,4 +152,42 @@ pub(crate) struct ServiceResponse {
     pub(crate) dns_records: Option<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>>,
     pub(crate) packet_capture: Option<PacketCaptureRuntimeStatus>,
     pub(crate) error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentAuthAccount, AgentAuthState, AgentLoginRequest};
+
+    #[test]
+    fn agent_login_request_rejects_frontend_endpoint_override() {
+        let accepted = serde_json::from_value::<AgentLoginRequest>(serde_json::json!({
+            "username": "alice",
+            "password": "password"
+        }));
+        assert!(accepted.is_ok());
+
+        let rejected = serde_json::from_value::<AgentLoginRequest>(serde_json::json!({
+            "username": "alice",
+            "password": "password",
+            "proxyWebUrl": "https://attacker.example.com"
+        }));
+        assert!(rejected.is_err());
+    }
+
+    #[test]
+    fn auth_state_does_not_serialize_control_plane_endpoint() {
+        let state = AgentAuthState {
+            authenticated: true,
+            account: Some(AgentAuthAccount {
+                username: "alice".to_string(),
+                key_version: 1,
+                expires_at: Some(1_800_000_000),
+            }),
+            config: None,
+        };
+
+        let serialized = serde_json::to_string(&state).unwrap();
+        assert!(!serialized.contains("proxy_web"));
+        assert!(!serialized.contains("attacker.example.com"));
+    }
 }

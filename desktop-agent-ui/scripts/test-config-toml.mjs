@@ -78,3 +78,5 @@ try {
 }
 
 console.log("configToml tests passed");
+
+await import("./test-managed-private-key.mjs");

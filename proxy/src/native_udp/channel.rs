@@ -103,6 +103,9 @@ async fn run_connected_udp_channel(
         return;
     }
 
+    context
+        .access_recorder
+        .record(&context.username, TransportProtocol::Udp, &address);
     debug!("原生 UDP channel 已连接目标 flow_id={flow_id} target={target}");
     let idle_timeout = udp_idle_timeout(&context.config);
     let idle = tokio::time::sleep(idle_timeout);
@@ -153,6 +156,8 @@ async fn run_udp_relay_channel(
     let mut flow_set = UdpRelayFlowSet::new(
         &context.config,
         context.egress_state.clone(),
+        context.access_recorder.clone(),
+        context.username.clone(),
         UdpRelayFlowChannels {
             response_tx,
             flow_done_tx,
@@ -217,7 +222,9 @@ async fn run_forward_channel(
     event_tx: mpsc::UnboundedSender<ChannelEvent>,
 ) {
     let mut upstream =
-        match UpstreamConnection::connect(&context.config, address, TransportProtocol::Udp).await {
+        match UpstreamConnection::connect(&context.config, address.clone(), TransportProtocol::Udp)
+            .await
+        {
             Ok(upstream) => upstream,
             Err(error) => {
                 send_connect_result(
@@ -233,6 +240,9 @@ async fn run_forward_channel(
         return;
     }
 
+    context
+        .access_recorder
+        .record(&context.username, TransportProtocol::Udp, &address);
     let idle_timeout = udp_idle_timeout(&context.config);
     let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);

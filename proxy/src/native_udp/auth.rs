@@ -1,4 +1,4 @@
-use crate::config::{ProxyConfig, UserConfig};
+use crate::config::{PERMISSION_PROXY_CONNECT_UDP, ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
 use crate::user_manager::UserManager;
 use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256, verify_pss_sha256};
@@ -76,6 +76,14 @@ pub(super) async fn prepare_session(
 fn validate_udp_auth(config: &ProxyConfig, user: &UserConfig, auth: &UdpAuthInit) -> Result<()> {
     if auth.username != user.username {
         return Err(ProxyError::Authentication("Username mismatch".to_string()));
+    }
+    if !user.enabled {
+        return Err(ProxyError::Authentication("User disabled".to_string()));
+    }
+    if !user.has_permission(PERMISSION_PROXY_CONNECT_UDP) {
+        return Err(ProxyError::Authentication(format!(
+            "Permission denied: {PERMISSION_PROXY_CONNECT_UDP}"
+        )));
     }
     let now = common::current_timestamp();
     let tolerance = config.replay_attack_tolerance.max(0) as u64;
