@@ -1,23 +1,29 @@
 //! Proxy 与管理 Web 服务共用的用户模型、校验和 SQLite 存储。
 
+mod access_sqlite;
 mod model;
 mod repository;
 mod sqlite;
 mod validation;
 
+pub use access_sqlite::SqliteAccessLogRepository;
 pub use model::{
     AccessLogSettings, AccessProtocol, AccessRecord, AccountRole, AccountStatus,
+    AgentDeviceAuthorization, AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
+    AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus,
     ApprovedKeyMaterial, BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey,
-    ExternalIdentity, ImportOutcome, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
+    ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
     KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind, KeyRequestStatus, LoginRecord,
     MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
-    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewKeyGenerationRequest,
-    NewManagedUser, NewUser, NewUserAccount, PROXY_CONNECT_TCP_PERMISSION,
+    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
+    NewKeyGenerationRequest, NewManagedUser, NewUser, NewUserAccount, PROXY_CONNECT_TCP_PERMISSION,
     PROXY_CONNECT_UDP_PERMISSION, UserOrigin, UserRecord, UserUpdate, WebAccount,
     default_proxy_permissions,
 };
-pub use repository::{AccessLogRepository, AccountRepository, UserRepository};
-pub use sqlite::SqliteUserRepository;
+pub use repository::{
+    AccessLogRepository, AccountRepository, AgentDeviceAuthorizationRepository, UserRepository,
+};
+pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};
 pub use validation::{
     MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS, MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES,
     ValidationError, normalize_permissions, normalize_public_key_pem, normalize_username,
@@ -40,17 +46,14 @@ pub enum UserRepositoryError {
     #[error("读取用户配置失败：{0}")]
     Io(#[from] std::io::Error),
 
-    #[error("解析用户配置失败：{0}")]
-    Toml(#[from] toml::de::Error),
-
     #[error("用户已存在：{0}")]
     Conflict(String),
 
     #[error("用户不存在：{0}")]
     NotFound(String),
 
-    #[error("users.toml 配置无效：{0}")]
-    InvalidImport(String),
+    #[error("数据库布局或迁移配置无效：{0}")]
+    InvalidDatabaseLayout(String),
 
     #[error("用户数据库 schema 不兼容：{0}")]
     InvalidSchema(String),
@@ -94,6 +97,15 @@ pub enum UserRepositoryError {
 
     #[error("审批账号不是启用的管理员：{account_id}")]
     ReviewerNotActiveAdmin { account_id: String },
+
+    #[error("Agent 设备授权 challenge 冲突")]
+    AgentDeviceAuthorizationConflict,
+
+    #[error("Agent 设备授权 challenge 数量已达到安全上限")]
+    AgentDeviceAuthorizationCapacity,
+
+    #[error("普通用户账号数量已达到安全上限")]
+    UserAccountCapacity,
 }
 
 pub type Result<T> = std::result::Result<T, UserRepositoryError>;

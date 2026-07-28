@@ -2,6 +2,7 @@ use jni::objects::{JClass, JObject, JString};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{Env, EnvUnowned};
+use protocol::RsaKeyPair;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
@@ -23,6 +24,45 @@ struct AgentHandle {
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_validateKeyPair<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    private_key_pem: JString<'local>,
+    public_key_pem: JString<'local>,
+) -> jboolean {
+    crate::android_log::install_tracing();
+    env.with_env(|env| -> jni::errors::Result<jboolean> {
+        let private_key_pem = private_key_pem.try_to_string(env)?;
+        let public_key_pem = public_key_pem.try_to_string(env)?;
+        Ok(validate_key_pair(&private_key_pem, &public_key_pem))
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> bool {
+    let Ok(private_key) = RsaKeyPair::from_private_key_pem(private_key_pem) else {
+        return false;
+    };
+    if RsaKeyPair::from_public_key_pem(public_key_pem).is_err() {
+        return false;
+    }
+    let Ok(derived_public_key) = private_key.public_key_to_pem() else {
+        return false;
+    };
+    normalize_pem(&derived_public_key) == normalize_pem(public_key_pem)
+}
+
+fn normalize_pem(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -30,6 +70,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_start<'local>(
     config_json: JString<'local>,
     vpn_service: JObject<'local>,
 ) -> jlong {
+    crate::android_log::install_tracing();
     env.with_env(|env| -> jni::errors::Result<jlong> {
         Ok(start_agent(env, tun_fd, config_json, vpn_service))
     })
@@ -84,13 +125,13 @@ fn start_agent<'local>(
             {
                 Ok(runtime) => runtime,
                 Err(err) => {
-                    eprintln!("failed to create Tokio runtime: {err}");
+                    tracing::error!(error = %err, "failed to create Android Agent Tokio runtime");
                     return;
                 }
             };
 
             if let Err(err) = runtime.block_on(run_android_agent(raw_fd, config, task_shutdown)) {
-                eprintln!("Android agent stopped with error: {err}");
+                tracing::error!(error = %err, "Android Agent stopped");
             }
         }) {
         Ok(thread) => thread,
@@ -115,6 +156,7 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_startHttpProxy<'loca
     config_json: JString<'local>,
     listen_port: jint,
 ) -> jlong {
+    crate::android_log::install_tracing();
     env.with_env(|env| -> jni::errors::Result<jlong> {
         Ok(start_http_proxy(env, config_json, listen_port))
     })
@@ -168,14 +210,17 @@ fn start_http_proxy<'local>(
             {
                 Ok(runtime) => runtime,
                 Err(err) => {
-                    eprintln!("failed to create HTTP proxy Tokio runtime: {err}");
+                    tracing::error!(
+                        error = %err,
+                        "failed to create Android HTTP proxy Tokio runtime"
+                    );
                     return;
                 }
             };
 
             if let Err(err) = runtime.block_on(run_android_http_proxy(config, port, task_shutdown))
             {
-                eprintln!("Android HTTP proxy stopped with error: {err}");
+                tracing::error!(error = %err, "Android HTTP proxy stopped");
             }
         }) {
         Ok(thread) => thread,
@@ -370,4 +415,23 @@ fn throw(env: &mut Env<'_>, message: String) {
         jni::jni_str!("java/lang/IllegalStateException"),
         JNIString::new(message),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_key_pair;
+    use protocol::RsaKeyPair;
+
+    #[test]
+    fn managed_key_pair_validation_rejects_mismatched_or_invalid_pem() {
+        let first = RsaKeyPair::generate(2048).unwrap();
+        let second = RsaKeyPair::generate(2048).unwrap();
+        let first_private = first.private_key_to_pem().unwrap();
+        let first_public = first.public_key_to_pem().unwrap();
+        let second_public = second.public_key_to_pem().unwrap();
+
+        assert!(validate_key_pair(&first_private, &first_public));
+        assert!(!validate_key_pair(&first_private, &second_public));
+        assert!(!validate_key_pair("not a private key", &first_public));
+    }
 }

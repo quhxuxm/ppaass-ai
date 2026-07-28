@@ -274,36 +274,6 @@ a:focus-visible {
   margin-top: 6px;
 }
 
-.or-divider {
-  position: relative;
-  margin: 28px 0 20px;
-  text-align: center;
-}
-
-.or-divider::before {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  left: 0;
-  height: 1px;
-  content: '';
-  background: #eaecf0;
-}
-
-.or-divider span {
-  position: relative;
-  padding: 0 12px;
-  color: #98a2b3;
-  font-size: 0.76rem;
-  background: white;
-}
-
-.oauth-buttons {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
 .registration-note {
   margin: 24px 0 0;
   padding: 12px 14px;
@@ -312,6 +282,223 @@ a:focus-visible {
   line-height: 1.5;
   border-radius: 10px;
   background: #f8fafc;
+}
+
+.agent-authorization-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 13px 15px;
+  color: #175cd3;
+  border: 1px solid #b2ccff;
+  border-radius: 12px;
+  background: #eff8ff;
+}
+
+.agent-authorization-context > i {
+  font-size: 1.2rem;
+}
+
+.agent-authorization-context > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-authorization-context strong {
+  font-size: 0.86rem;
+}
+
+.agent-authorization-context small {
+  overflow: hidden;
+  color: #2970ff;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-authorization-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(21, 94, 239, 0.12), transparent 32rem),
+    #f4f7fc;
+}
+
+.agent-authorization-card {
+  width: min(100%, 560px);
+  display: grid;
+  gap: 28px;
+  padding: clamp(28px, 5vw, 46px);
+  border: 1px solid #e4e7ec;
+  border-radius: 24px;
+  background: white;
+  box-shadow: 0 24px 70px rgba(16, 24, 40, 0.12);
+}
+
+.agent-authorization-heading h1,
+.agent-authorization-outcome h1 {
+  margin: 0;
+  color: #101828;
+  font-size: clamp(1.8rem, 5vw, 2.35rem);
+  letter-spacing: -0.04em;
+}
+
+.agent-authorization-heading > p:last-child,
+.agent-authorization-outcome p {
+  margin: 12px 0 0;
+  color: #667085;
+  line-height: 1.65;
+}
+
+.agent-authorization-account,
+.agent-device-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid #eaecf0;
+  border-radius: 14px;
+  background: #fcfcfd;
+}
+
+.agent-authorization-account > span,
+.agent-device-summary > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-authorization-account small,
+.agent-device-summary small {
+  overflow: hidden;
+  color: #667085;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-authorization-account strong,
+.agent-device-summary strong {
+  overflow: hidden;
+  color: #344054;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-authorization-code-form {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-authorization-code-form label {
+  color: #344054;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.agent-authorization-code-form .p-inputtext {
+  min-height: 50px;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.agent-device-summary {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.agent-device-summary .summary-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.agent-authorization-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px;
+  color: #93370d;
+  border: 1px solid #fedf89;
+  border-radius: 13px;
+  background: #fffaeb;
+}
+
+.agent-authorization-warning > i {
+  margin-top: 2px;
+}
+
+.agent-authorization-warning > span {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-authorization-warning strong {
+  font-size: 0.84rem;
+}
+
+.agent-authorization-warning small {
+  color: #b54708;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.agent-authorization-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 12px;
+}
+
+.agent-authorization-actions .p-button {
+  min-height: 48px;
+}
+
+.agent-authorization-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -10px 0 0;
+  padding: 11px 13px;
+  color: #b42318;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  border-radius: 10px;
+  background: #fef3f2;
+}
+
+.agent-authorization-outcome {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 22px 0 4px;
+  text-align: center;
+}
+
+.agent-authorization-outcome .outcome-icon {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  color: #067647;
+  font-size: 1.7rem;
+  border-radius: 50%;
+  background: #dcfae6;
+}
+
+.agent-authorization-outcome.denied .outcome-icon {
+  color: #b42318;
+  background: #fee4e2;
+}
+
+.agent-authorization-outcome .p-button {
+  margin-top: 6px;
 }
 
 .app-shell {
@@ -1701,12 +1888,26 @@ a:focus-visible {
     padding-inline: 20px;
   }
 
-  .oauth-buttons,
+  .agent-authorization-actions,
   .summary-grid,
   .permission-list,
   .form-row,
   .fixed-capabilities ul {
     grid-template-columns: 1fr;
+  }
+
+  .agent-authorization-page {
+    align-items: start;
+    padding: 0;
+    background: white;
+  }
+
+  .agent-authorization-card {
+    min-height: 100vh;
+    padding: 24px 20px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .page-heading {

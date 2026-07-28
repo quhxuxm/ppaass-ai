@@ -1,14 +1,20 @@
 #!/bin/bash
 # Start Proxy Web (Linux)
-# Assumes proxy-web, proxy-web.env, users.toml, and proxy-web-frontend are in
+# Assumes proxy-web, proxy-web.env, and proxy-web-frontend are in
 # the same deployment directory as this script.
 #
 # Usage:
 #   ./start-proxy-web.sh          Start/restart Proxy Web in background
 #   ./start-proxy-web.sh run      Run Proxy Web in the foreground (systemd)
+#   ./start-proxy-web.sh wait-health
+#                                 Wait for the local health endpoint (systemd)
 #   ./start-proxy-web.sh stop     Stop the background process
 #   ./start-proxy-web.sh status   Show process status
 #   ./start-proxy-web.sh restart  Restart the background process
+#
+# PPAASS_PROXY_WEB_LOG_DIR can override the background log/PID directory.
+# Production keeps the user database group-readable and uses a separate,
+# group-writable access-log database shared by Proxy and Proxy Web.
 
 set -u
 
@@ -16,13 +22,14 @@ SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-LOG_DIR="logs"
+LOG_DIR="${PPAASS_PROXY_WEB_LOG_DIR:-logs}"
 PID_FILE="$LOG_DIR/proxy-web.pid"
 START_TIMEOUT="${PROXY_WEB_START_TIMEOUT:-20}"
 RUNTIME_ENV_FILE="${PPAASS_PROXY_WEB_RUNTIME_ENV_FILE:-proxy-web.env}"
 SECRET_DIR="${PPAASS_PROXY_WEB_SECRET_DIR:-.secrets}"
 KEY_SECRET_FILE="$SECRET_DIR/proxy-web-key-encryption-secret"
 ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-web-admin-password"
+IDENTITY_PRIVATE_KEY="${PPAASS_PROXY_IDENTITY_PRIVATE_KEY:-data/proxy-identity-private.pem}"
 
 read_pid() {
     if [ -f "$PID_FILE" ]; then
@@ -124,15 +131,12 @@ load_secret_environment() {
     else
         unset PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_PASSWORD 2>/dev/null || true
     fi
+
 }
 
 ensure_runtime_files() {
     if [ ! -x "./proxy-web" ]; then
         echo "Error: ./proxy-web is missing or not executable." >&2
-        return 1
-    fi
-    if [ ! -f "./users.toml" ]; then
-        echo "Error: ./users.toml is missing." >&2
         return 1
     fi
     if [ ! -f "./proxy-web-frontend/index.html" ]; then
@@ -141,23 +145,175 @@ ensure_runtime_files() {
     fi
 }
 
+ensure_proxy_identity_public_key() {
+    local public_key="$1"
+    local identity_file private_key_dir public_key_dir
+    local temporary_private_key temporary_public_key
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "Error: openssl is required for the Proxy transport identity." >&2
+        return 1
+    fi
+    for identity_file in "$IDENTITY_PRIVATE_KEY" "$public_key"; do
+        if [ -L "$identity_file" ]; then
+            echo "Error: refusing symlinked Proxy identity file: $identity_file" >&2
+            return 1
+        fi
+        if [ -e "$identity_file" ] && [ ! -f "$identity_file" ]; then
+            echo "Error: Proxy identity path is not a regular file: $identity_file" >&2
+            return 1
+        fi
+    done
+
+    # The production Web UID cannot read the private identity and only needs
+    # the public file provisioned by the deployment workflow.
+    if [ -r "$public_key" ] && [ ! -r "$IDENTITY_PRIVATE_KEY" ]; then
+        if openssl pkey -pubin -in "$public_key" -noout >/dev/null 2>&1; then
+            return 0
+        fi
+        echo "Error: Proxy transport identity public key is invalid." >&2
+        return 1
+    fi
+
+    private_key_dir="$(dirname "$IDENTITY_PRIVATE_KEY")"
+    public_key_dir="$(dirname "$public_key")"
+    mkdir -p "$private_key_dir" "$public_key_dir"
+    if [ ! -e "$IDENTITY_PRIVATE_KEY" ]; then
+        temporary_private_key="$(mktemp "$private_key_dir/.proxy-identity-private.XXXXXX")" \
+            || return 1
+        if ! (
+            umask 077
+            openssl genpkey \
+                -algorithm RSA \
+                -pkeyopt rsa_keygen_bits:3072 \
+                -out "$temporary_private_key" >/dev/null 2>&1
+        ); then
+            rm -f "$temporary_private_key"
+            echo "Error: failed to generate the Proxy transport identity." >&2
+            return 1
+        fi
+        chmod 0600 "$temporary_private_key"
+        if ln "$temporary_private_key" "$IDENTITY_PRIVATE_KEY" 2>/dev/null; then
+            echo "Generated persistent local Proxy transport identity: $IDENTITY_PRIVATE_KEY"
+        fi
+        rm -f "$temporary_private_key"
+    fi
+    if [ ! -r "$IDENTITY_PRIVATE_KEY" ] \
+        || ! openssl rsa -in "$IDENTITY_PRIVATE_KEY" -check -noout >/dev/null 2>&1; then
+        echo "Error: Proxy transport identity private key is unreadable or invalid." >&2
+        return 1
+    fi
+    chmod 0600 "$IDENTITY_PRIVATE_KEY" 2>/dev/null || true
+
+    temporary_public_key="$(mktemp "$public_key_dir/.proxy-identity-public.XXXXXX")" \
+        || return 1
+    if ! openssl pkey \
+        -in "$IDENTITY_PRIVATE_KEY" \
+        -pubout \
+        -out "$temporary_public_key" 2>/dev/null; then
+        rm -f "$temporary_public_key"
+        echo "Error: failed to derive the Proxy transport identity public key." >&2
+        return 1
+    fi
+    chmod 0644 "$temporary_public_key"
+    mv -f "$temporary_public_key" "$public_key"
+}
+
 run_proxy_web() {
-    local listen_addr database_path users_toml_path frontend_dist
+    local listen_addr database_path access_log_database_path proxy_identity_public_key frontend_dist
+    local database_group_readable access_log_database_group_writable
+    local -a database_permission_args=()
+    local -a access_log_database_permission_args=()
 
     load_runtime_environment
+    proxy_identity_public_key="${PPAASS_PROXY_WEB_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
     load_secret_environment || exit 1
     ensure_runtime_files || exit 1
+    ensure_proxy_identity_public_key "$proxy_identity_public_key" || exit 1
 
     listen_addr="${PPAASS_PROXY_WEB_LISTEN_ADDR:-127.0.0.1:8787}"
     database_path="${PPAASS_PROXY_WEB_DATABASE:-data/proxy-users.sqlite3}"
-    users_toml_path="${PPAASS_PROXY_WEB_USERS_TOML:-users.toml}"
+    access_log_database_path="${PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE:-data/proxy-access.sqlite3}"
     frontend_dist="${PPAASS_PROXY_WEB_FRONTEND_DIST:-proxy-web-frontend}"
-    mkdir -p "$LOG_DIR" "$(dirname "$database_path")"
+    database_group_readable="${PPAASS_PROXY_WEB_DATABASE_GROUP_READABLE:-false}"
+    case "$database_group_readable" in
+        true)
+            database_permission_args+=(--database-group-readable)
+            ;;
+        false)
+            ;;
+        *)
+            echo "Error: PPAASS_PROXY_WEB_DATABASE_GROUP_READABLE must be true or false." >&2
+            exit 1
+            ;;
+    esac
+    access_log_database_group_writable="${PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE_GROUP_WRITABLE:-false}"
+    case "$access_log_database_group_writable" in
+        true)
+            access_log_database_permission_args+=(--access-log-database-group-writable)
+            ;;
+        false)
+            ;;
+        *)
+            echo "Error: PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE_GROUP_WRITABLE must be true or false." >&2
+            exit 1
+            ;;
+    esac
+    case "${PPAASS_PROXY_WEB_DATABASE_GROUP_WRITABLE:-false}" in
+        false)
+            ;;
+        *)
+            echo "Error: PPAASS_PROXY_WEB_DATABASE_GROUP_WRITABLE is obsolete; use the split database permission settings." >&2
+            exit 1
+            ;;
+    esac
+    mkdir -p \
+        "$LOG_DIR" \
+        "$(dirname "$database_path")" \
+        "$(dirname "$access_log_database_path")"
     exec ./proxy-web \
         --listen "$listen_addr" \
         --database "$database_path" \
-        --users-toml "$users_toml_path" \
+        "${database_permission_args[@]}" \
+        --access-log-database "$access_log_database_path" \
+        "${access_log_database_permission_args[@]}" \
+        --proxy-identity-public-key "$proxy_identity_public_key" \
         --frontend-dist "$frontend_dist"
+}
+
+wait_for_proxy_web_health() {
+    local timeout_seconds="${PPAASS_PROXY_WEB_HEALTH_TIMEOUT:-60}"
+    local listen_addr="${PPAASS_PROXY_WEB_LISTEN_ADDR:-127.0.0.1:8787}"
+    local deadline
+
+    case "$timeout_seconds" in
+        ''|*[!0-9]*|0)
+            echo "Error: PPAASS_PROXY_WEB_HEALTH_TIMEOUT must be a positive integer." >&2
+            return 1
+            ;;
+    esac
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required for the Proxy Web health check." >&2
+        return 1
+    fi
+
+    deadline=$((SECONDS + timeout_seconds))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if curl \
+            --fail \
+            --silent \
+            --show-error \
+            --noproxy '*' \
+            --connect-timeout 1 \
+            --max-time 2 \
+            "http://$listen_addr/healthz" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "Error: Proxy Web did not become healthy within ${timeout_seconds}s." >&2
+    return 1
 }
 
 wait_for_start() {
@@ -244,8 +400,11 @@ case "${1:-start}" in
     status)
         status_proxy_web
         ;;
+    wait-health)
+        wait_for_proxy_web_health
+        ;;
     *)
-        echo "Usage: $0 [start|run|stop|status|restart]"
+        echo "Usage: $0 [start|run|stop|status|restart|wait-health]"
         exit 1
         ;;
 esac

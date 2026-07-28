@@ -43,6 +43,11 @@ public class PpaassHttpProxyService extends Service {
             if (nativeHandle == 0) {
                 return;
             }
+            if (!AgentAuthSession.isActive(PpaassHttpProxyService.this)) {
+                Log.w(TAG, "Agent login expired; stopping HTTP / SOCKS5 proxy");
+                stopForInvalidAuthentication();
+                return;
+            }
             if (!NativeAgent.isRunning(nativeHandle)) {
                 Log.w(TAG, "Native HTTP / SOCKS5 proxy exited; restarting");
                 restartNativeProxy();
@@ -102,6 +107,11 @@ public class PpaassHttpProxyService extends Service {
     }
 
     private void startProxy(boolean preserveEnabledOnFailure) {
+        if (!AgentAuthSession.isActive(this)) {
+            Log.w(TAG, "Refusing to start HTTP / SOCKS5 proxy without an active Agent login");
+            stopForInvalidAuthentication();
+            return;
+        }
         if (nativeHandle != 0) {
             if (!NativeAgent.isRunning(nativeHandle)) {
                 NativeAgent.stop(nativeHandle);
@@ -171,6 +181,16 @@ public class PpaassHttpProxyService extends Service {
     private void stopProxy() {
         stopProxyNative();
         stopSelf();
+    }
+
+    private void stopForInvalidAuthentication() {
+        AgentAuthSession.clear();
+        if (!ManagedCredentials.clear(this)) {
+            Log.e(TAG, "Failed to completely remove invalid managed credentials");
+        }
+        setEnabled(false);
+        PpaassVpnService.requestMockGeoStopForAuthenticationEnd(this);
+        stopProxy();
     }
 
     private void stopProxyNative() {

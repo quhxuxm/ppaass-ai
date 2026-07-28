@@ -73,13 +73,6 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 1);
         addFieldHelp(connection, "原生 UDP 握手与 TCP 连接共用。");
-        username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
-        privateKey = field(
-                connection,
-                "私钥 PEM",
-                DefaultConfig.normalizePrivateKeyPem(prefString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
-                5,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
 
         LinearLayout httpProxy = configSection(root, "HTTP / SOCKS5 代理");
         httpProxyPort = numberControl(

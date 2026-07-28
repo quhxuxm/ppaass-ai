@@ -1,10 +1,19 @@
 //! 认证阶段与 pre-connect 等待阶段。
 //!
 //! 一条 agent TCP 连接进入 proxy 后，第一条业务消息必须是 `Auth`。
-//! proxy 先从 Auth 中取用户名查 `users.toml`，再用对应用户公钥校验/解出
-//! agent 发来的 AES 会话密钥。认证成功后，后续协议帧才会使用这把 AES key。
+//! proxy 先从 Auth 中取用户名查询 SQLite 用户 Repository，再用对应用户公钥验证
+//! RSA-PSS 身份签名。随后由 proxy 生成会话秘密、加密给该用户，并派生方向独立的
+//! 记录层密钥；认证成功后的协议帧全部受 AEAD 保护。
 
 use super::*;
+use protocol::crypto::{encrypt_oaep_sha256_labelled, verify_pss_sha256};
+use protocol::tcp_transport::{
+    TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TCP_OAEP_LABEL, TCP_SERVER_NONCE_LEN,
+    TCP_SESSION_ID_LEN, TcpSessionCipher, TcpSessionRole, TcpSessionSecret,
+    encode_tcp_session_secret, tcp_auth_request_transcript, tcp_auth_response_signature_transcript,
+    tcp_auth_transcript_hash,
+};
+use rand::Rng;
 
 impl ServerConnection {
     pub(super) async fn read_request(&mut self) -> Result<Option<ProxyRequest>> {
@@ -27,13 +36,14 @@ impl ServerConnection {
         };
 
         if let ProxyRequest::Auth(auth_request) = request {
+            auth_request.validate_shape().map_err(|_| {
+                ProxyError::Authentication("Invalid authentication request".to_string())
+            })?;
             // 先取出用户名用于查配置，完整 AuthRequest 留到 authenticate 中校验。
             let username = auth_request.username.clone();
             debug!(
-                "[认证请求] username={}, timestamp={}, encrypted_aes_key_len={}",
-                auth_request.username,
-                auth_request.timestamp,
-                auth_request.encrypted_aes_key.len()
+                "[认证请求] version={}, username={}, timestamp={}",
+                auth_request.version, auth_request.username, auth_request.timestamp
             );
             // 保存认证请求，稍后继续使用
             self.pending_auth_request = Some(auth_request);
@@ -48,11 +58,7 @@ impl ServerConnection {
     /// 发送认证错误响应
     #[instrument(skip(self))]
     pub async fn send_auth_error(&mut self, message: &str) -> Result<()> {
-        let auth_response = AuthResponse {
-            success: false,
-            message: message.to_string(),
-            session_id: None,
-        };
+        let auth_response = AuthResponse::failure(message);
 
         self.send_response(ProxyResponse::Auth(auth_response)).await
     }
@@ -71,15 +77,16 @@ impl ServerConnection {
             .take()
             .ok_or_else(|| ProxyError::Authentication("No pending auth request".to_string()))?;
 
+        auth_request.validate_shape().map_err(|_| {
+            ProxyError::Authentication("Invalid authentication request".to_string())
+        })?;
         debug!(
-            "[认证请求] 正在处理：username={}, timestamp={}, encrypted_aes_key_len={}",
-            auth_request.username,
-            auth_request.timestamp,
-            auth_request.encrypted_aes_key.len()
+            "[认证请求] 正在处理：version={}, username={}, timestamp={}",
+            auth_request.version, auth_request.username, auth_request.timestamp
         );
 
-        // 校验用户名是否匹配：TOML 表键、UserConfig.username、AuthRequest.username
-        // 三者必须指向同一个用户，避免拿 A 用户的配置认证 B 用户的请求。
+        // Repository 查询键、UserConfig.username、AuthRequest.username 必须指向
+        // 同一个用户，避免拿 A 用户的配置认证 B 用户的请求。
         if auth_request.username != user_config.username {
             self.send_auth_error("Username mismatch").await?;
             return Err(ProxyError::Authentication("Username mismatch".to_string()));
@@ -93,8 +100,8 @@ impl ServerConnection {
 
         // 校验时间戳以防止重放攻击
         let current_time = common::current_timestamp();
-        if (current_time - auth_request.timestamp).abs() > proxy_config.replay_attack_tolerance {
-            // 5 分钟容忍窗口
+        let replay_tolerance = proxy_config.replay_attack_tolerance.max(0) as u64;
+        if current_time.abs_diff(auth_request.timestamp) > replay_tolerance {
             self.send_auth_error("Timestamp expired").await?;
             return Err(ProxyError::Authentication("Timestamp expired".to_string()));
         }
@@ -106,52 +113,117 @@ impl ServerConnection {
             return Err(ProxyError::Authentication("User expired".to_string()));
         }
 
-        // 使用用户公钥解出 AES 密钥。
-        // 这个项目的握手约定是：agent 持有私钥，proxy 持有公钥；
-        // 成功解出会话密钥说明 agent 能证明自己拥有该用户私钥。
+        // Agent 对域分离 transcript 做 RSA-PSS-SHA256 签名；服务端不再接受
+        // 旧版“私钥加密、公钥解密”的原始 RSA 线协议。
         let user_public_key = RsaKeyPair::from_public_key_pem(&user_config.public_key_pem)
             .map_err(|e| ProxyError::Authentication(format!("Invalid public key: {}", e)))?;
-
-        let aes_key_bytes = protocol::crypto::decrypt_with_public_key(
-            &user_public_key,
-            &auth_request.encrypted_aes_key,
+        let transcript = tcp_auth_request_transcript(
+            auth_request.version,
+            &auth_request.username,
+            auth_request.timestamp,
+            &auth_request.client_nonce,
         )
-        .map_err(|e| {
-            error!("解密 AES 密钥失败：{}", e);
-            ProxyError::Authentication(format!("Failed to decrypt AES key: {}", e))
+        .map_err(|_| ProxyError::Authentication("Invalid authentication request".to_string()))?;
+        verify_pss_sha256(&user_public_key, &transcript, &auth_request.signature).map_err(
+            |_| {
+                warn!("用户 {} 的 TCP 认证签名无效", user_config.username);
+                ProxyError::Authentication("Invalid authentication proof".to_string())
+            },
+        )?;
+
+        // 签名验证成功后才占用有界 replay cache；窗口内完全相同的签名请求
+        // 无法再次创建会话。
+        let valid_until = auth_request
+            .timestamp
+            .saturating_add(proxy_config.replay_attack_tolerance.max(0));
+        if !self.user_manager.claim_tcp_auth_nonce(
+            &auth_request.username,
+            auth_request.client_nonce,
+            current_time,
+            valid_until,
+        ) {
+            self.send_auth_error("Authentication request replayed")
+                .await?;
+            return Err(ProxyError::Authentication(
+                "Authentication request replayed".to_string(),
+            ));
+        }
+
+        // 会话主密钥只能由 Proxy 生成，并与两端 nonce、随机 session id 以及
+        // 完整认证 transcript 一起派生方向独立的记录层密钥。
+        let transcript_hash = tcp_auth_transcript_hash(&transcript);
+        let mut master_secret = [0_u8; TCP_MASTER_SECRET_LEN];
+        let mut server_nonce = [0_u8; TCP_SERVER_NONCE_LEN];
+        let mut session_id = [0_u8; TCP_SESSION_ID_LEN];
+        {
+            let mut rng = rand::rng();
+            rng.fill_bytes(&mut master_secret);
+            rng.fill_bytes(&mut server_nonce);
+            rng.fill_bytes(&mut session_id);
+        }
+        let secret = TcpSessionSecret {
+            version: TCP_HANDSHAKE_VERSION,
+            auth_transcript_hash: transcript_hash,
+            client_nonce: auth_request.client_nonce,
+            server_nonce,
+            session_id,
+            master_secret,
+        };
+        let encoded_secret = encode_tcp_session_secret(&secret).map_err(|_| {
+            ProxyError::Authentication("Failed to encode authentication response".to_string())
+        })?;
+        let encrypted_session =
+            encrypt_oaep_sha256_labelled(&user_public_key, TCP_OAEP_LABEL, &encoded_secret)
+                .map_err(|_| {
+                    ProxyError::Authentication(
+                        "Failed to encrypt authentication response".to_string(),
+                    )
+                })?;
+        let proxy_signature_transcript = tcp_auth_response_signature_transcript(
+            TCP_HANDSHAKE_VERSION,
+            &transcript_hash,
+            &encrypted_session,
+        )
+        .map_err(|_| {
+            ProxyError::Authentication(
+                "Failed to build Proxy identity signature context".to_string(),
+            )
+        })?;
+        let proxy_signature = self
+            .transport_identity
+            .sign_pss_sha256(&proxy_signature_transcript)
+            .map_err(|_| {
+                ProxyError::Authentication("Failed to sign authentication response".to_string())
+            })?;
+        let session_cipher = TcpSessionCipher::new(
+            TcpSessionRole::Proxy,
+            master_secret,
+            transcript_hash,
+            auth_request.client_nonce,
+            server_nonce,
+            session_id,
+        )
+        .map_err(|_| {
+            ProxyError::Authentication("Failed to initialize TCP session protection".to_string())
+        })?;
+        let auth_response = AuthResponse::success(encrypted_session, proxy_signature);
+        auth_response.validate_shape().map_err(|_| {
+            ProxyError::Authentication("Invalid authentication response".to_string())
         })?;
 
-        debug!("[认证请求] 已验证会话密钥，长度={}", aes_key_bytes.len());
-
-        // 转换为固定长度数组
-        let aes_key: [u8; 32] = aes_key_bytes
-            .try_into()
-            .map_err(|_| ProxyError::Authentication("Invalid AES key length".to_string()))?;
-
-        let aes_cipher = AesGcmCipher::from_key(aes_key);
-
-        let session_id = common::generate_id();
-
-        // 发送认证响应
-        let auth_response = AuthResponse {
-            success: true,
-            message: "Authentication successful".to_string(),
-            session_id: Some(session_id.clone()),
-        };
-
-        debug!(
-            "[认证响应] 正在发送：成功=true，会话 ID={:?}",
-            auth_response.session_id
-        );
-
+        // 在发送成功响应前固定本次握手的身份快照。后续 CONNECT 和 active relay
+        // 既检查数据库实时状态，也以该快照的 key_version/绝对 expiry 作为上界。
+        let authorization = ConnectionAuthorization::new(self.user_manager.clone(), &user_config)?;
         self.send_response(ProxyResponse::Auth(auth_response))
             .await?;
 
         self.user_config = Some(user_config);
+        self.authorization = Some(authorization);
 
-        // 更新后续消息使用的加密状态。
-        // 注意要先发送未加密的 AuthResponse，再设置 cipher；agent 端也在收到成功响应后启用 AES。
-        self.cipher_state.set_cipher(Arc::new(aes_cipher));
+        // 成功 AuthResponse 本身保持明文 envelope（会话材料已经 OAEP 加密）；
+        // 发送完成后一次性切换到 v2 记录层，此后不接受任何明文业务帧。
+        self.cipher_state
+            .set_session_cipher(Arc::new(session_cipher))?;
 
         debug!("认证成功");
         Ok(())

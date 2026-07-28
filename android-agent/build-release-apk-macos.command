@@ -93,28 +93,21 @@ if [ ! -f "$UNSIGNED_APK" ]; then
   exit 1
 fi
 
-KEYSTORE="${PPAASS_RELEASE_KEYSTORE:-$SCRIPT_DIR/local-release.keystore}"
-KEY_ALIAS="${PPAASS_RELEASE_KEY_ALIAS:-ppaass-local-release}"
-STORE_PASSWORD="${PPAASS_RELEASE_STORE_PASSWORD:-ppaass-local-release}"
-KEY_PASSWORD="${PPAASS_RELEASE_KEY_PASSWORD:-$STORE_PASSWORD}"
+KEYSTORE="${PPAASS_RELEASE_KEYSTORE:-}"
+KEY_ALIAS="${PPAASS_RELEASE_KEY_ALIAS:-}"
+STORE_PASSWORD="${PPAASS_RELEASE_STORE_PASSWORD:-}"
+KEY_PASSWORD="${PPAASS_RELEASE_KEY_PASSWORD:-}"
+
+if [ -z "$KEYSTORE" ] || [ -z "$KEY_ALIAS" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+  echo "Error: release signing requires PPAASS_RELEASE_KEYSTORE, PPAASS_RELEASE_KEY_ALIAS,"
+  echo "       PPAASS_RELEASE_STORE_PASSWORD, and PPAASS_RELEASE_KEY_PASSWORD."
+  echo "       Keep the keystore outside the repository and provide secrets through the environment."
+  exit 1
+fi
 
 if [ ! -f "$KEYSTORE" ]; then
-  if ! command -v keytool >/dev/null 2>&1; then
-    echo "Error: keytool was not found in PATH."
-    exit 1
-  fi
-
-  echo "Creating local signing keystore: $KEYSTORE"
-  keytool -genkeypair \
-    -keystore "$KEYSTORE" \
-    -storepass "$STORE_PASSWORD" \
-    -keypass "$KEY_PASSWORD" \
-    -alias "$KEY_ALIAS" \
-    -keyalg RSA \
-    -keysize 2048 \
-    -validity 10000 \
-    -dname "CN=PPAASS Local Release, OU=Development, O=PPAASS, L=Local, ST=Local, C=CN" \
-    >/dev/null
+  echo "Error: release signing keystore was not found: $KEYSTORE"
+  exit 1
 fi
 
 echo "Signing release APK..."

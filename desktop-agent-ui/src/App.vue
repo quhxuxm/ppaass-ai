@@ -13,14 +13,19 @@ import type { AgentLoginRequest } from "./types";
 const {
   account,
   authenticated,
+  cancelDeviceLogin,
   checking,
+  deviceLogin,
+  deviceLoginRemaining,
+  deviceLoginStarting,
   error,
   login,
   loggingIn,
   loggingOut,
   logout,
   openRegistration,
-  registrationLoading
+  registrationLoading,
+  startDeviceLogin
 } = useAgentAuth();
 
 async function handleLogin(request: AgentLoginRequest) {
@@ -59,7 +64,12 @@ async function handleLogin(request: AgentLoginRequest) {
     v-else
     :loading="loggingIn"
     :registration-loading="registrationLoading"
+    :device-login="deviceLogin"
+    :device-login-remaining="deviceLoginRemaining"
+    :device-login-starting="deviceLoginStarting"
     :error="error"
+    @cancel-device-login="cancelDeviceLogin"
+    @device-login="startDeviceLogin"
     @register="openRegistration"
     @submit="handleLogin"
   />

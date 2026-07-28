@@ -13,7 +13,6 @@ use tracing::debug;
 
 use super::ForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
-use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
@@ -104,9 +103,8 @@ async fn handle_tcp(
             None => format!("{connect_target} (original {target})"),
         };
         debug!("Android TUN TCP direct -> {}", target_str);
-        android_log::info(format!("Android TUN TCP DIRECT {target_str}"));
         let mut target_stream = connect_direct_tcp(connect_target).await.map_err(|e| {
-            android_log::warn(format!("Android TUN TCP DIRECT failed {target_str}: {e}"));
+            debug!("Android TUN TCP direct connect failed {target_str}: {e}");
             AndroidAgentError::Connection(format!("direct connect {target_str} failed: {e}"))
         })?;
         match relay_tcp_bidirectional(
@@ -131,7 +129,6 @@ async fn handle_tcp(
         debug!("Android TUN TCP DNS -> proxy -> {}", target_label);
     } else {
         debug!("Android TUN TCP proxy -> {}", proxy_label);
-        android_log::info(format!("Android TUN TCP PROXY {proxy_label}"));
     }
     let (mut proxy_io, prefetched) = match connect_proxy_stream_with_tun_prefetch(
         &mut client,
@@ -143,9 +140,7 @@ async fn handle_tcp(
     {
         Ok(result) => result,
         Err(e) => {
-            android_log::error(format!(
-                "Android TUN TCP PROXY connect failed {proxy_label}: {e}"
-            ));
+            debug!("Android TUN TCP proxy connect failed {proxy_label}: {e}");
             return Err(e);
         }
     };

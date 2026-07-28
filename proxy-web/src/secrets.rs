@@ -117,7 +117,7 @@ impl PrivateKeyCipher {
             .map_err(|_| PrivateKeyCipherError::CryptographicFailure)?;
         let (nonce_bytes, ciphertext) = envelope[1..].split_at(NONCE_BYTES);
         let aad = associated_data(username, key_version);
-        let plaintext = Zeroizing::new(
+        let mut plaintext = Zeroizing::new(
             cipher
                 .decrypt(
                     Nonce::from_slice(nonce_bytes),
@@ -128,9 +128,13 @@ impl PrivateKeyCipher {
                 )
                 .map_err(|_| PrivateKeyCipherError::CryptographicFailure)?,
         );
-        let value = String::from_utf8(plaintext.to_vec())
-            .map_err(|_| PrivateKeyCipherError::InvalidPlaintext)?;
-        Ok(Zeroizing::new(value))
+        match String::from_utf8(std::mem::take(&mut *plaintext)) {
+            Ok(value) => Ok(Zeroizing::new(value)),
+            Err(error) => {
+                let _invalid_plaintext = Zeroizing::new(error.into_bytes());
+                Err(PrivateKeyCipherError::InvalidPlaintext)
+            }
+        }
     }
 }
 

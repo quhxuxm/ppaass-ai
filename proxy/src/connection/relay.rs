@@ -5,6 +5,7 @@
 //! 再与目标 socket 做双向搬运。
 
 use super::*;
+use crate::config::{PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
@@ -124,6 +125,12 @@ impl ServerConnection {
         // 这个 legacy UDP 路径面向单个已 connect 的 UDP socket；
         // 多目标 UDP 共享连接走 udp_relay.rs 的 flow_id 机制。
         let stream_id_filter = stream_id.clone();
+        let authorization = self.authorization_context()?;
+        let authorization_guard = authorization.enforce(
+            PERMISSION_PROXY_CONNECT_UDP,
+            self.authorization_recheck_secs(),
+        );
+        tokio::pin!(authorization_guard);
 
         // 使用自定义 Sink 将 UDP 响应数据重新封装成 proxy DataPacket。
         let sink = BytesToProxyResponseSink {
@@ -192,6 +199,11 @@ impl ServerConnection {
         loop {
             // 任一方向有数据就重置 idle；两边都长期无数据才关闭 UDP socket。
             tokio::select! {
+                biased;
+                authorization_result = &mut authorization_guard => {
+                    warn!("legacy UDP relay 授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                    return authorization_result;
+                }
                 _ = &mut idle_timeout => {
                     debug!(
                         "UDP 中继空闲超过 {} 秒，关闭 socket",
@@ -209,7 +221,19 @@ impl ServerConnection {
                                 udp_socket.peer_addr(),
                                 pretty_hex::pretty_hex(&data)
                             );
-                            match tokio::time::timeout(udp_relay_idle_timeout, udp_send.send(data)).await {
+                            let send = tokio::time::timeout(
+                                udp_relay_idle_timeout,
+                                udp_send.send(data),
+                            );
+                            let send_result = tokio::select! {
+                                biased;
+                                authorization_result = &mut authorization_guard => {
+                                    warn!("legacy UDP relay 授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                                    return authorization_result;
+                                }
+                                send_result = send => send_result,
+                            };
+                            match send_result {
                                 Ok(Ok(_)) => {
                                     idle_timeout.as_mut().reset(tokio::time::Instant::now() + udp_relay_idle_timeout);
                                 }
@@ -238,10 +262,18 @@ impl ServerConnection {
                                 udp_socket.peer_addr(),
                                 pretty_hex::pretty_hex(&data)
                             );
-                            let write_result = tokio::time::timeout(udp_relay_idle_timeout, async {
+                            let write = tokio::time::timeout(udp_relay_idle_timeout, async {
                                 agent_writer.write_all(data).await?;
                                 agent_writer.flush().await
-                            }).await;
+                            });
+                            let write_result = tokio::select! {
+                                biased;
+                                authorization_result = &mut authorization_guard => {
+                                    warn!("legacy UDP relay 授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                                    return authorization_result;
+                                }
+                                write_result = write => write_result,
+                            };
                             match write_result {
                                 Ok(Ok(())) => {
                                     idle_timeout.as_mut().reset(tokio::time::Instant::now() + udp_relay_idle_timeout);
@@ -269,13 +301,26 @@ impl ServerConnection {
         Ok(())
     }
 
-    pub(super) async fn relay<S>(&mut self, stream_id: String, target_stream: &mut S) -> Result<()>
+    pub(super) async fn relay<S>(
+        &mut self,
+        stream_id: String,
+        target_stream: &mut S,
+        transport: TransportProtocol,
+    ) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
         // TCP 中继把 agent 数据包流和目标 TCP 流转换成双向字节拷贝。
         // legacy 模式下，一条 agent->proxy TCP 连接通常只服务一个 request_id。
         let stream_id_filter = stream_id.clone();
+        let permission = match transport {
+            TransportProtocol::Tcp => PERMISSION_PROXY_CONNECT_TCP,
+            TransportProtocol::Udp => PERMISSION_PROXY_CONNECT_UDP,
+        };
+        let authorization = self.authorization_context()?;
+        let authorization_guard =
+            authorization.enforce(permission, self.authorization_recheck_secs());
+        tokio::pin!(authorization_guard);
 
         // 使用自定义 Sink 实现，避免 SinkExt::with 与闭包引发 HRTB 问题
         let sink = BytesToProxyResponseSink {
@@ -334,8 +379,20 @@ impl ServerConnection {
         let timeouts =
             TcpRelayTimeouts::new(tcp_relay_idle_timeout_secs, half_close_idle_timeout_secs);
 
-        let (up_bytes, down_bytes) =
-            relay_tcp_with_half_close(target_stream, &mut agent_io, timeouts).await?;
+        let relay = relay_tcp_with_half_close(target_stream, &mut agent_io, timeouts);
+        tokio::pin!(relay);
+        let (up_bytes, down_bytes) = tokio::select! {
+            biased;
+            authorization_result = &mut authorization_guard => {
+                warn!(
+                    ?transport,
+                    "active relay 授权已失效，主动关闭：{:?}",
+                    authorization_result.as_ref().err()
+                );
+                return authorization_result;
+            }
+            relay_result = &mut relay => relay_result?,
+        };
 
         debug!("中继已结束：上行 {}，下行 {}", up_bytes, down_bytes);
 

@@ -129,9 +129,18 @@ async fn run_netstack_supervisor(
             result = &mut generation.runner => {
                 match result {
                     Ok(NetstackRunnerExit::Finished) => warn!("Android netstack runner generation={} exited; rebuilding netstack", generation.id),
-                    Ok(NetstackRunnerExit::Error(err)) => warn!("Android netstack runner generation={} failed: {err}; rebuilding netstack", generation.id),
-                    Ok(NetstackRunnerExit::Panic(message)) => warn!("Android netstack runner generation={} panicked: {message}; rebuilding netstack", generation.id),
-                    Err(err) => warn!("Android netstack runner generation={} join error: {err}; rebuilding netstack", generation.id),
+                    Ok(NetstackRunnerExit::Error(err)) => {
+                        warn!("Android netstack runner generation={} failed; rebuilding netstack", generation.id);
+                        debug!(generation = generation.id, error = %err, "Android netstack runner failure details");
+                    }
+                    Ok(NetstackRunnerExit::Panic(message)) => {
+                        warn!("Android netstack runner generation={} panicked; rebuilding netstack", generation.id);
+                        debug!(generation = generation.id, panic = %message, "Android netstack runner panic details");
+                    }
+                    Err(err) => {
+                        warn!("Android netstack runner generation={} join failed; rebuilding netstack", generation.id);
+                        debug!(generation = generation.id, error = %err, "Android netstack runner join failure details");
+                    }
                 }
                 Some(NetstackTaskKind::Runner)
             }
@@ -221,9 +230,17 @@ fn log_netstack_task_exit(
         Ok(()) => warn!(
             "Android netstack {task_name} generation={generation} exited; rebuilding netstack"
         ),
-        Err(err) => warn!(
-            "Android netstack {task_name} generation={generation} join error: {err}; rebuilding netstack"
-        ),
+        Err(err) => {
+            warn!(
+                "Android netstack {task_name} generation={generation} join failed; rebuilding netstack"
+            );
+            debug!(
+                task = task_name,
+                generation,
+                error = %err,
+                "Android netstack task join failure details"
+            );
+        }
     }
 }
 
@@ -258,6 +275,13 @@ where
     match handle.await {
         Ok(_) => {}
         Err(err) if err.is_cancelled() => {}
-        Err(err) => warn!("error while aborting Android netstack generation task {name}: {err}"),
+        Err(err) => {
+            warn!("error while aborting Android netstack generation task {name}");
+            debug!(
+                task = name,
+                error = %err,
+                "Android netstack task abort failure details"
+            );
+        }
     }
 }

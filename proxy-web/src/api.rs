@@ -1,27 +1,31 @@
 use axum::{
     Json, Router,
     extract::{
-        DefaultBodyLimit, Path, Query, State,
+        ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, Query, State,
         rejection::{JsonRejection, QueryRejection},
     },
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     middleware::{self, Next},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{any, get, post},
 };
 use protocol::RsaKeyPair;
 use proxy_user_store::{
     AccessLogRepository, AccessProtocol, AccessRecord, AccountRepository, AccountRole,
-    AccountStatus, ApprovedKeyMaterial, ExternalIdentity, KeyGenerationRequest, KeyPairRotation,
-    KeyRequestApproval, KeyRequestKind, KeyRequestStatus, MAX_ACCESS_LOG_QUERY_LIMIT,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewKeyGenerationRequest, NewManagedUser, NewUser, NewUserAccount, UserOrigin, UserRecord,
-    UserRepository, UserRepositoryError, UserUpdate, WebAccount, normalize_username,
-    parse_expires_at,
+    AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
+    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
+    AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
+    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, ExternalIdentity, KeyGenerationRequest,
+    KeyPairRotation, KeyRequestApproval, KeyRequestKind, KeyRequestStatus,
+    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
+    ManagedUser, ManagedUserUpdate, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
+    NewManagedUser, NewUser, NewUserAccount, UserOrigin, UserRecord, UserRepository,
+    UserRepositoryError, UserUpdate, WebAccount, normalize_username, parse_expires_at,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use rand::RngExt;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{convert::Infallible, future, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower_http::{services::ServeDir, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{info, instrument, warn};
@@ -30,14 +34,30 @@ use zeroize::Zeroizing;
 use crate::{
     auth::{AuthenticatedSession, PasswordService, SessionStore, append_set_cookie, random_token},
     error::ApiError,
-    oauth::{OAuthIdentity, OAuthProvider, OAuthService},
+    rate_limit::{AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint},
     secrets::PrivateKeyCipher,
 };
 
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024;
+#[cfg(not(test))]
+const REQUEST_TIMEOUT_SECONDS: u64 = 30;
+// Parallel API tests intentionally exercise several real 2048-bit RSA key generations.
+// Give those CPU-bound test requests enough time on smaller CI runners without weakening
+// the production request deadline.
+#[cfg(test)]
+const REQUEST_TIMEOUT_SECONDS: u64 = 180;
+const MAX_AGENT_PRIVATE_KEY_BYTES: usize = 16 * 1024;
+const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
 const DEFAULT_ACCESS_RECORD_LIMIT: u32 = 100;
 const SECONDS_PER_DAY: i64 = 86_400;
 const RSA_BITS: usize = 2048;
+const AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS: i64 = 10 * 60;
+const AGENT_DEVICE_POLL_INTERVAL_SECONDS: u32 = 5;
+const AGENT_DEVICE_CODE_BYTES: usize = 32;
+const AGENT_USER_CODE_CHARACTERS: usize = 12;
+const AGENT_USER_CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const AGENT_DEVICE_CODE_HASH_DOMAIN: &[u8] = b"ppaass-agent-device-code-v1\0";
+const AGENT_USER_CODE_HASH_DOMAIN: &[u8] = b"ppaass-agent-user-code-v1\0";
 const PRIVATE_KEY_READ_PERMISSION: &str = "key.private.read";
 const KEY_ROTATE_PERMISSION: &str = "key.rotate";
 const PROXY_CONNECT_TCP_PERMISSION: &str = "proxy.connect.tcp";
@@ -54,11 +74,33 @@ pub struct AppState {
     pub users: Arc<dyn UserRepository>,
     pub accounts: Arc<dyn AccountRepository>,
     pub access_logs: Arc<dyn AccessLogRepository>,
+    pub device_authorizations: Arc<dyn AgentDeviceAuthorizationRepository>,
     pub passwords: PasswordService,
     pub sessions: SessionStore,
     pub private_keys: PrivateKeyCipher,
-    pub oauth: OAuthService,
+    pub proxy_identity_public_key_pem: Arc<str>,
     pub allow_registration: bool,
+    pub device_authorization_guard: AgentDeviceAuthorizationGuard,
+}
+
+struct OptionalPeerAddress(Option<SocketAddr>);
+
+impl<S> FromRequestParts<S> for OptionalPeerAddress
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        let address = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ConnectInfo(address)| *address);
+        future::ready(Ok(Self(address)))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -70,13 +112,6 @@ struct HealthResponse {
 #[derive(Debug, Serialize)]
 struct ProvidersResponse {
     local_registration: bool,
-    providers: ProviderAvailability,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderAvailability {
-    google: bool,
-    wechat: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +127,49 @@ struct AuthenticationResponse {
     account: WebAccount,
     csrf_token: String,
     session_expires_at: i64,
+}
+
+#[derive(Serialize)]
+struct AgentDeviceAuthorizationStartResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: &'static str,
+    verification_uri_complete: String,
+    expires_in: i64,
+    interval: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDeviceAuthorizationInspectionResponse {
+    client_name: String,
+    platform: String,
+    expires_at: i64,
+    status: AgentDeviceAuthorizationStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDeviceAuthorizationDecisionResponse {
+    status: AgentDeviceAuthorizationStatus,
+}
+
+#[derive(Serialize)]
+struct AgentDeviceTokenResponse {
+    account: WebAccount,
+    profile: AgentDeviceProfileResponse,
+    public_key_pem: String,
+    proxy_identity_public_key_pem: Arc<str>,
+    #[serde(serialize_with = "serialize_zeroizing_string")]
+    private_key_pem: Zeroizing<String>,
+    csrf_token: String,
+    session_expires_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDeviceProfileResponse {
+    username: String,
+    permissions: Vec<String>,
+    key_version: i64,
+    expires_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,7 +295,9 @@ struct AdminUserProfileResponse {
 struct PrivateKeyResponse {
     username: String,
     public_key_pem: String,
-    private_key_pem: String,
+    proxy_identity_public_key_pem: Arc<str>,
+    #[serde(serialize_with = "serialize_zeroizing_string")]
+    private_key_pem: Zeroizing<String>,
     key_version: i64,
 }
 
@@ -294,11 +374,6 @@ impl From<AccessRecord> for AccessRecordResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct OAuthStartResponse {
-    authorization_url: String,
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PasswordLoginRequest {
@@ -313,6 +388,26 @@ struct RegistrationRequest {
     password: String,
     #[serde(default)]
     display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDeviceAuthorizationStartRequest {
+    platform: String,
+    #[serde(default)]
+    client_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentUserCodeRequest {
+    user_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDeviceTokenRequest {
+    device_code: String,
 }
 
 #[derive(Deserialize)]
@@ -372,16 +467,6 @@ struct UpdateAccessLogSettingsRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct OAuthCallbackQuery {
-    #[serde(default)]
-    code: String,
-    #[serde(default)]
-    state: String,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum ExpiresAtValue {
     String(String),
@@ -417,8 +502,26 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
-        .route("/auth/oauth/{provider}/start", get(oauth_start))
-        .route("/auth/oauth/{provider}/callback", get(oauth_callback))
+        .route(
+            "/agent/device-authorizations",
+            post(start_agent_device_authorization),
+        )
+        .route(
+            "/agent/device-authorizations/token",
+            post(poll_agent_device_authorization),
+        )
+        .route(
+            "/agent/device-authorizations/inspect",
+            post(inspect_agent_device_authorization),
+        )
+        .route(
+            "/agent/device-authorizations/approve",
+            post(approve_agent_device_authorization),
+        )
+        .route(
+            "/agent/device-authorizations/deny",
+            post(deny_agent_device_authorization),
+        )
         .route("/session", get(get_session))
         .route("/me", get(get_me))
         .route("/me/private-key", get(get_my_private_key))
@@ -488,10 +591,24 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(30),
+            Duration::from_secs(REQUEST_TIMEOUT_SECONDS),
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &axum::http::Request<axum::body::Body>| {
+                // 只记录 path，不把查询参数写入 tracing span，避免设备授权码或
+                // 未来新增的一次性敏感参数出现在日志中。
+                tracing::debug_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %request_path_for_trace(request)
+                )
+            },
+        ))
         .layer(middleware::from_fn(add_security_headers))
+}
+
+fn request_path_for_trace<B>(request: &axum::http::Request<B>) -> &str {
+    request.uri().path()
 }
 
 async fn api_not_found() -> ApiError {
@@ -547,10 +664,6 @@ async fn health() -> Json<HealthResponse> {
 async fn get_auth_providers(State(state): State<AppState>) -> Json<ProvidersResponse> {
     Json(ProvidersResponse {
         local_registration: state.allow_registration,
-        providers: ProviderAvailability {
-            google: state.oauth.is_enabled(OAuthProvider::Google),
-            wechat: state.oauth.is_enabled(OAuthProvider::Wechat),
-        },
     })
 }
 
@@ -558,6 +671,7 @@ async fn get_auth_providers(State(state): State<AppState>) -> Json<ProvidersResp
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
+    OptionalPeerAddress(peer): OptionalPeerAddress,
     payload: Result<Json<RegistrationRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
@@ -565,6 +679,11 @@ async fn register(
         return Err(ApiError::forbidden("普通用户注册未启用"));
     }
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let _permit = state.device_authorization_guard.enter(
+        DeviceAuthorizationEndpoint::Registration,
+        &headers,
+        peer,
+    )?;
     let username = normalize_username(&request.username)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let password_hash = state
@@ -595,12 +714,23 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
+    OptionalPeerAddress(peer): OptionalPeerAddress,
     payload: Result<Json<PasswordLoginRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
-    let login_name = request.username.trim();
-    let record = state.accounts.get_login_record(login_name).await?;
+    let normalized_login_name = normalize_username(&request.username).ok();
+    let _permit = state.device_authorization_guard.enter_login(
+        &headers,
+        peer,
+        normalized_login_name
+            .as_deref()
+            .unwrap_or("<invalid-login-name>"),
+    )?;
+    let record = match normalized_login_name {
+        Some(login_name) => state.accounts.get_login_record(&login_name).await?,
+        None => None,
+    };
     let password_hash = record
         .as_ref()
         .and_then(|record| record.password_hash.clone());
@@ -613,7 +743,7 @@ async fn login(
         return Err(ApiError::invalid_credentials());
     };
     if record.account.status != AccountStatus::Active {
-        return Err(ApiError::forbidden("账号已停用"));
+        return Err(ApiError::invalid_credentials());
     }
     finish_login(&state, record.account).await
 }
@@ -675,88 +805,366 @@ async fn get_session(
     Ok(Json(response).into_response())
 }
 
-async fn oauth_start(
+#[instrument(skip(state, headers, payload))]
+async fn start_agent_device_authorization(
     State(state): State<AppState>,
-    Path(provider): Path<String>,
-) -> Result<Response, ApiError> {
-    let provider =
-        OAuthProvider::parse(&provider).ok_or_else(|| ApiError::not_found("OAuth 提供方不存在"))?;
-    let start = state.oauth.start(provider)?;
-    let mut response = Json(OAuthStartResponse {
-        authorization_url: start.authorization_url,
-    })
-    .into_response();
-    append_set_cookie(response.headers_mut(), start.state_cookie);
-    Ok(response)
+    OptionalPeerAddress(peer): OptionalPeerAddress,
+    headers: HeaderMap,
+    payload: Result<Json<AgentDeviceAuthorizationStartRequest>, JsonRejection>,
+) -> Result<Json<AgentDeviceAuthorizationStartResponse>, ApiError> {
+    validate_native_agent_request(&headers)?;
+    let _permit = state.device_authorization_guard.enter(
+        DeviceAuthorizationEndpoint::Start,
+        &headers,
+        peer,
+    )?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let platform = normalize_agent_platform(&request.platform)?;
+    let client_name = request
+        .client_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| match platform.as_str() {
+            "android" => "PPAASS Android Agent".to_string(),
+            "windows" => "PPAASS Windows Agent".to_string(),
+            _ => unreachable!("平台已在上方校验"),
+        });
+    let created_at = current_timestamp();
+    let expires_at = created_at.saturating_add(AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS);
+
+    for _ in 0..3 {
+        let device_code = random_token(AGENT_DEVICE_CODE_BYTES);
+        let user_code = generate_agent_user_code();
+        let create = state
+            .device_authorizations
+            .create_agent_device_authorization(NewAgentDeviceAuthorization {
+                device_code_hash: hash_agent_code(
+                    AGENT_DEVICE_CODE_HASH_DOMAIN,
+                    device_code.as_bytes(),
+                ),
+                user_code_hash: hash_agent_code(
+                    AGENT_USER_CODE_HASH_DOMAIN,
+                    canonical_agent_user_code(&user_code)?.as_bytes(),
+                ),
+                client_name: client_name.clone(),
+                platform: platform.clone(),
+                created_at,
+                expires_at,
+            })
+            .await;
+        match create {
+            Ok(()) => {
+                return Ok(Json(AgentDeviceAuthorizationStartResponse {
+                    device_code,
+                    user_code: user_code.clone(),
+                    verification_uri: "/#agent-authorize",
+                    verification_uri_complete: format!("/#agent-authorize={user_code}"),
+                    expires_in: AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS,
+                    interval: AGENT_DEVICE_POLL_INTERVAL_SECONDS,
+                }));
+            }
+            Err(UserRepositoryError::AgentDeviceAuthorizationConflict) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(ApiError::internal())
 }
 
-#[instrument(skip(state, headers, query), fields(provider))]
-async fn oauth_callback(
+#[instrument(skip(state, headers, payload))]
+async fn inspect_agent_device_authorization(
     State(state): State<AppState>,
-    Path(provider): Path<String>,
     headers: HeaderMap,
-    Query(query): Query<OAuthCallbackQuery>,
-) -> Result<Response, ApiError> {
-    if query.error.is_some() {
-        return Err(ApiError::bad_request("第三方登录已取消或被拒绝"));
-    }
-    let provider =
-        OAuthProvider::parse(&provider).ok_or_else(|| ApiError::not_found("OAuth 提供方不存在"))?;
-    let identity = state
-        .oauth
-        .finish(provider, &query.code, &query.state, &headers)
+    payload: Result<Json<AgentUserCodeRequest>, JsonRejection>,
+) -> Result<Json<AgentDeviceAuthorizationInspectionResponse>, ApiError> {
+    validate_browser_mutation(&headers)?;
+    let session = authenticate(&state, &headers).await?;
+    state.sessions.require_csrf(&session, &headers)?;
+    require_agent_user_account(&session.account)?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let user_code_hash = agent_user_code_hash(&request.user_code)?;
+    let authorization = state
+        .device_authorizations
+        .get_agent_device_authorization_by_user_code(&user_code_hash, current_timestamp())
+        .await?
+        .ok_or_else(|| ApiError::not_found("设备授权码无效"))?;
+    ensure_visible_agent_authorization(&authorization, &session.account)?;
+    Ok(Json(AgentDeviceAuthorizationInspectionResponse {
+        client_name: authorization.client_name,
+        platform: authorization.platform,
+        expires_at: authorization.expires_at,
+        status: authorization.status,
+    }))
+}
+
+#[instrument(skip(state, headers, payload))]
+async fn approve_agent_device_authorization(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<AgentUserCodeRequest>, JsonRejection>,
+) -> Result<Json<AgentDeviceAuthorizationDecisionResponse>, ApiError> {
+    validate_browser_mutation(&headers)?;
+    let session = authenticate(&state, &headers).await?;
+    state.sessions.require_csrf(&session, &headers)?;
+    require_agent_user_account(&session.account)?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let user_code_hash = agent_user_code_hash(&request.user_code)?;
+    let authorization = state
+        .device_authorizations
+        .get_agent_device_authorization_by_user_code(&user_code_hash, current_timestamp())
+        .await?
+        .ok_or_else(|| ApiError::not_found("设备授权码无效"))?;
+    ensure_visible_agent_authorization(&authorization, &session.account)?;
+    // 在 challenge 进入 authorized 之前验证当前密钥可解密，避免 Agent 领取到
+    // 一个已知不可用的授权。
+    let (_profile, private_key) = load_agent_credentials(&state, &session.account).await?;
+    drop(private_key);
+
+    let decision = state
+        .device_authorizations
+        .authorize_agent_device(
+            &user_code_hash,
+            &session.account.account_id,
+            session.account.auth_version,
+            current_timestamp(),
+        )
         .await?;
-    let account = get_or_create_oauth_account(&state, provider, identity).await?;
-    let login_time = OffsetDateTime::now_utc().unix_timestamp();
+    match decision {
+        AgentDeviceAuthorizationDecision::Authorized
+        | AgentDeviceAuthorizationDecision::AlreadyAuthorized => {
+            info!(
+                account_id = session.account.account_id,
+                "用户批准 Agent 设备登录"
+            );
+            Ok(Json(AgentDeviceAuthorizationDecisionResponse {
+                status: AgentDeviceAuthorizationStatus::Authorized,
+            }))
+        }
+        AgentDeviceAuthorizationDecision::Expired => Err(agent_device_expired_error()),
+        AgentDeviceAuthorizationDecision::Denied
+        | AgentDeviceAuthorizationDecision::AlreadyDenied => Err(ApiError::conflict(
+            "device_authorization_denied",
+            "该设备登录已被拒绝",
+        )),
+        AgentDeviceAuthorizationDecision::Finalized => Err(ApiError::conflict(
+            "device_authorization_finalized",
+            "该设备登录已完成，不能重复授权",
+        )),
+        AgentDeviceAuthorizationDecision::NotFound => Err(ApiError::not_found("设备授权码无效")),
+    }
+}
+
+#[instrument(skip(state, headers, payload))]
+async fn deny_agent_device_authorization(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<AgentUserCodeRequest>, JsonRejection>,
+) -> Result<Json<AgentDeviceAuthorizationDecisionResponse>, ApiError> {
+    validate_browser_mutation(&headers)?;
+    let session = authenticate(&state, &headers).await?;
+    state.sessions.require_csrf(&session, &headers)?;
+    require_agent_user_account(&session.account)?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let decision = state
+        .device_authorizations
+        .deny_agent_device(
+            &agent_user_code_hash(&request.user_code)?,
+            &session.account.account_id,
+            current_timestamp(),
+        )
+        .await?;
+    match decision {
+        AgentDeviceAuthorizationDecision::Denied
+        | AgentDeviceAuthorizationDecision::AlreadyDenied => {
+            info!(
+                account_id = session.account.account_id,
+                "用户拒绝 Agent 设备登录"
+            );
+            Ok(Json(AgentDeviceAuthorizationDecisionResponse {
+                status: AgentDeviceAuthorizationStatus::Denied,
+            }))
+        }
+        AgentDeviceAuthorizationDecision::Expired => Err(agent_device_expired_error()),
+        AgentDeviceAuthorizationDecision::Authorized
+        | AgentDeviceAuthorizationDecision::AlreadyAuthorized => Err(ApiError::conflict(
+            "device_authorization_authorized",
+            "该设备登录已经获得授权",
+        )),
+        AgentDeviceAuthorizationDecision::Finalized => Err(ApiError::conflict(
+            "device_authorization_finalized",
+            "该设备登录已完成，不能重复操作",
+        )),
+        AgentDeviceAuthorizationDecision::NotFound => Err(ApiError::not_found("设备授权码无效")),
+    }
+}
+
+#[instrument(skip(state, headers, payload))]
+async fn poll_agent_device_authorization(
+    State(state): State<AppState>,
+    OptionalPeerAddress(peer): OptionalPeerAddress,
+    headers: HeaderMap,
+    payload: Result<Json<AgentDeviceTokenRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    validate_native_agent_request(&headers)?;
+    let _permit = state.device_authorization_guard.enter(
+        DeviceAuthorizationEndpoint::Poll,
+        &headers,
+        peer,
+    )?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let device_code_hash = agent_device_code_hash(&request.device_code)?;
+    let poll = state
+        .device_authorizations
+        .poll_agent_device_authorization(
+            &device_code_hash,
+            current_timestamp(),
+            AGENT_DEVICE_POLL_INTERVAL_SECONDS,
+        )
+        .await?;
+    let (account_id, expected_auth_version) = match poll {
+        AgentDeviceAuthorizationPoll::Pending {
+            retry_after_seconds,
+        } => {
+            return Err(ApiError::device_authorization_error(
+                StatusCode::PRECONDITION_REQUIRED,
+                "authorization_pending",
+                "等待用户在浏览器中确认",
+                Some(retry_after_seconds),
+            ));
+        }
+        AgentDeviceAuthorizationPoll::SlowDown {
+            retry_after_seconds,
+        } => {
+            return Err(ApiError::device_authorization_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "slow_down",
+                "轮询过于频繁，请按 Retry-After 稍后重试",
+                Some(retry_after_seconds),
+            ));
+        }
+        AgentDeviceAuthorizationPoll::Denied => {
+            return Err(ApiError::device_authorization_error(
+                StatusCode::FORBIDDEN,
+                "access_denied",
+                "用户拒绝了该设备登录",
+                None,
+            ));
+        }
+        AgentDeviceAuthorizationPoll::Expired => return Err(agent_device_expired_error()),
+        AgentDeviceAuthorizationPoll::NotFound | AgentDeviceAuthorizationPoll::Consumed => {
+            return Err(ApiError::device_authorization_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_device_code",
+                "设备码无效或已被使用",
+                None,
+            ));
+        }
+        AgentDeviceAuthorizationPoll::Authorized {
+            account_id,
+            account_auth_version,
+        } => (account_id, account_auth_version),
+    };
+
+    let account = state
+        .accounts
+        .get_account_by_id(&account_id)
+        .await?
+        .ok_or_else(agent_device_authorization_invalidated)?;
+    if account.auth_version != expected_auth_version {
+        return Err(agent_device_authorization_invalidated());
+    }
+    if require_agent_user_account(&account).is_err() {
+        return Err(agent_device_authorization_invalidated());
+    }
+    let (profile, private_key) = load_agent_credentials_for_claim(&state, &account).await?;
+    let claim = AgentDeviceAuthorizationClaim {
+        device_code_hash,
+        account_id: account.account_id.clone(),
+        account_auth_version: expected_auth_version,
+        username: profile.username.clone(),
+        permissions: profile.permissions.clone(),
+        key_version: profile.key_version,
+        expires_at: profile.expires_at,
+        now: current_timestamp(),
+    };
+    let login_time = current_timestamp();
     state
         .accounts
         .update_last_login(&account.account_id, login_time)
         .await?;
-    let (_session, session_cookie) = state.sessions.issue(&account.account_id);
-    let mut response = Redirect::to("/#oauth=success").into_response();
-    append_set_cookie(response.headers_mut(), session_cookie);
-    append_set_cookie(response.headers_mut(), state.oauth.clear_state_cookie());
-    Ok(response)
-}
-
-async fn get_or_create_oauth_account(
-    state: &AppState,
-    provider: OAuthProvider,
-    identity: OAuthIdentity,
-) -> Result<WebAccount, ApiError> {
-    if let Some(account) = state
-        .accounts
-        .get_account_by_external(&identity.provider, &identity.subject)
-        .await?
-    {
-        if account.status != AccountStatus::Active {
-            return Err(ApiError::forbidden("账号已停用"));
+    let (session, cookie) = state.sessions.issue(&account.account_id);
+    let response_body = AgentDeviceTokenResponse {
+        account,
+        profile: AgentDeviceProfileResponse {
+            username: profile.username,
+            permissions: profile.permissions,
+            key_version: profile.key_version,
+            expires_at: profile.expires_at,
+        },
+        public_key_pem: private_key.public_key_pem,
+        proxy_identity_public_key_pem: private_key.proxy_identity_public_key_pem,
+        private_key_pem: private_key.private_key_pem,
+        csrf_token: session.csrf_token.clone(),
+        session_expires_at: session.expires_at,
+    };
+    let mut encoded = match serde_json::to_vec(&response_body) {
+        Ok(encoded) => Zeroizing::new(encoded),
+        Err(_) => {
+            state.sessions.revoke_issued(&session);
+            return Err(ApiError::internal());
         }
-        return Ok(account);
+    };
+    if encoded.len() > MAX_AGENT_TOKEN_RESPONSE_BYTES {
+        state.sessions.revoke_issued(&session);
+        warn!(
+            account_id = response_body.account.account_id,
+            bytes = encoded.len(),
+            "拒绝返回异常大小的 Agent 凭据响应"
+        );
+        return Err(ApiError::internal());
     }
-
-    let digest = Sha256::digest(identity.subject.as_bytes());
-    let username = format!(
-        "{}_{}",
-        provider.as_str(),
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)[..16]
-    );
-    let account = state
-        .accounts
-        .create_user_account(NewUserAccount {
-            account_id: new_account_id(),
-            login_name: username.clone(),
-            password_hash: None,
-            display_name: trim_optional(identity.display_name),
-            email: trim_optional(identity.email),
-            avatar_url: trim_optional(identity.avatar_url),
-            external_identity: Some(ExternalIdentity {
-                provider: identity.provider,
-                subject: identity.subject,
-            }),
-        })
-        .await?;
-    Ok(account)
+    let finalize = match state
+        .device_authorizations
+        .finalize_agent_device_authorization(claim)
+        .await
+    {
+        Ok(finalize) => finalize,
+        Err(error) => {
+            state.sessions.revoke_issued(&session);
+            return Err(error.into());
+        }
+    };
+    match finalize {
+        AgentDeviceAuthorizationFinalize::Finalized => {}
+        AgentDeviceAuthorizationFinalize::AlreadyFinalized => {
+            state.sessions.revoke_issued(&session);
+            return Err(ApiError::device_authorization_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_device_code",
+                "设备码无效或已被使用",
+                None,
+            ));
+        }
+        AgentDeviceAuthorizationFinalize::Expired => {
+            state.sessions.revoke_issued(&session);
+            return Err(agent_device_expired_error());
+        }
+        AgentDeviceAuthorizationFinalize::Invalidated
+        | AgentDeviceAuthorizationFinalize::NotFound => {
+            state.sessions.revoke_issued(&session);
+            return Err(agent_device_authorization_invalidated());
+        }
+    }
+    let encoded = std::mem::take(&mut *encoded);
+    let mut response = (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        encoded,
+    )
+        .into_response();
+    append_set_cookie(response.headers_mut(), cookie);
+    Ok(response)
 }
 
 async fn get_me(
@@ -1032,7 +1440,7 @@ async fn admin_update_user(
         email: patch_optional(request.email),
         avatar_url: patch_optional(request.avatar_url),
     };
-    // Web 托管账号的四项基础能力是不可撤销的；legacy TOML profile 没有
+    // Web 托管账号的四项基础能力是不可撤销的；历史导入 profile 没有
     // Web 账号和可恢复私钥，必须保留其原始权限语义。
     if managed.account.is_some() {
         if update.expires_at == Some(None) {
@@ -1078,7 +1486,7 @@ async fn admin_update_user(
             || update.avatar_url.is_some()
         {
             return Err(ApiError::bad_request(
-                "users.toml 导入用户尚未绑定 Web 账号，不能修改账号字段",
+                "历史 legacy 用户尚未绑定 Web 账号，不能修改账号字段",
             ));
         }
         let profile = managed
@@ -1407,12 +1815,6 @@ fn initial_user_origin(managed: &ManagedUser) -> UserOrigin {
     if managed
         .providers
         .iter()
-        .any(|identity| identity.provider == "google")
-    {
-        UserOrigin::Google
-    } else if managed
-        .providers
-        .iter()
         .any(|identity| identity.provider == "wechat")
     {
         UserOrigin::Wechat
@@ -1567,7 +1969,8 @@ async fn load_private_key(
     Ok(PrivateKeyResponse {
         username: profile.username,
         public_key_pem: profile.public_key_pem,
-        private_key_pem: private_key_pem.to_string(),
+        proxy_identity_public_key_pem: state.proxy_identity_public_key_pem.clone(),
+        private_key_pem,
         key_version: profile.key_version,
     })
 }
@@ -1597,7 +2000,8 @@ async fn rotate_profile_key(
     Ok(PrivateKeyResponse {
         username: updated.username,
         public_key_pem: updated.public_key_pem,
-        private_key_pem: private_key_pem.to_string(),
+        proxy_identity_public_key_pem: state.proxy_identity_public_key_pem.clone(),
+        private_key_pem,
         key_version: updated.key_version,
     })
 }
@@ -1734,6 +2138,188 @@ fn new_key_request_id() -> String {
     format!("keyreq_{}", random_token(24))
 }
 
+fn normalize_agent_platform(value: &str) -> Result<String, ApiError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "android" => Ok("android".to_string()),
+        "windows" => Ok("windows".to_string()),
+        _ => Err(ApiError::bad_request(
+            "platform 目前只支持 android 或 windows",
+        )),
+    }
+}
+
+fn generate_agent_user_code() -> String {
+    let mut entropy = [0_u8; AGENT_USER_CODE_CHARACTERS];
+    rand::rng().fill(&mut entropy);
+    let canonical = entropy
+        .iter()
+        .map(|byte| AGENT_USER_CODE_ALPHABET[usize::from(*byte) % AGENT_USER_CODE_ALPHABET.len()])
+        .map(char::from)
+        .collect::<String>();
+    format!(
+        "{}-{}-{}",
+        &canonical[0..4],
+        &canonical[4..8],
+        &canonical[8..12]
+    )
+}
+
+fn canonical_agent_user_code(value: &str) -> Result<String, ApiError> {
+    let canonical = value
+        .bytes()
+        .filter(|byte| *byte != b'-' && !byte.is_ascii_whitespace())
+        .map(|byte| byte.to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    if canonical.len() != AGENT_USER_CODE_CHARACTERS
+        || !canonical
+            .iter()
+            .all(|byte| AGENT_USER_CODE_ALPHABET.contains(byte))
+    {
+        return Err(ApiError::bad_request("设备授权短码格式无效"));
+    }
+    String::from_utf8(canonical).map_err(|_| ApiError::bad_request("设备授权短码格式无效"))
+}
+
+fn agent_device_code_hash(value: &str) -> Result<String, ApiError> {
+    if value.len() != 43
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ApiError::bad_request("device_code 格式无效"));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| ApiError::bad_request("device_code 格式无效"))?;
+    if decoded.len() != AGENT_DEVICE_CODE_BYTES
+        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != value
+    {
+        return Err(ApiError::bad_request("device_code 格式无效"));
+    }
+    Ok(hash_agent_code(
+        AGENT_DEVICE_CODE_HASH_DOMAIN,
+        value.as_bytes(),
+    ))
+}
+
+fn agent_user_code_hash(value: &str) -> Result<String, ApiError> {
+    let canonical = canonical_agent_user_code(value)?;
+    Ok(hash_agent_code(
+        AGENT_USER_CODE_HASH_DOMAIN,
+        canonical.as_bytes(),
+    ))
+}
+
+fn hash_agent_code(domain: &[u8], value: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(value);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.finalize())
+}
+
+fn require_agent_user_account(account: &WebAccount) -> Result<(), ApiError> {
+    if account.role != AccountRole::User {
+        return Err(ApiError::forbidden("管理员账号不能授权 Agent 普通用户登录"));
+    }
+    if account.status != AccountStatus::Active {
+        return Err(ApiError::forbidden("账号已停用"));
+    }
+    Ok(())
+}
+
+async fn load_agent_credentials(
+    state: &AppState,
+    account: &WebAccount,
+) -> Result<(UserRecord, PrivateKeyResponse), ApiError> {
+    require_agent_user_account(account)?;
+    let profile = require_active_key_profile(state, account).await?;
+    require_profile_permission(&profile, PRIVATE_KEY_READ_PERMISSION)?;
+    let private_key = load_private_key(state, profile.clone()).await?;
+    if private_key.private_key_pem.len() > MAX_AGENT_PRIVATE_KEY_BYTES {
+        warn!(
+            username = profile.username,
+            bytes = private_key.private_key_pem.len(),
+            "拒绝返回异常大小的 Agent 私钥"
+        );
+        return Err(ApiError::internal());
+    }
+    Ok((profile, private_key))
+}
+
+async fn load_agent_credentials_for_claim(
+    state: &AppState,
+    account: &WebAccount,
+) -> Result<(UserRecord, PrivateKeyResponse), ApiError> {
+    let managed = state
+        .accounts
+        .get_managed_user(&account.account_id)
+        .await?
+        .ok_or_else(agent_device_authorization_invalidated)?;
+    let profile = match key_state(&managed, current_timestamp()) {
+        KeyState::Active => managed
+            .profile
+            .ok_or_else(agent_device_authorization_invalidated)?,
+        KeyState::Missing | KeyState::Expired | KeyState::Disabled => {
+            return Err(agent_device_authorization_invalidated());
+        }
+    };
+    if require_profile_permission(&profile, PRIVATE_KEY_READ_PERMISSION).is_err() {
+        return Err(agent_device_authorization_invalidated());
+    }
+    let private_key = load_private_key(state, profile.clone()).await?;
+    if private_key.private_key_pem.len() > MAX_AGENT_PRIVATE_KEY_BYTES {
+        warn!(
+            username = profile.username,
+            bytes = private_key.private_key_pem.len(),
+            "拒绝返回异常大小的 Agent 私钥"
+        );
+        return Err(ApiError::internal());
+    }
+    Ok((profile, private_key))
+}
+
+fn ensure_visible_agent_authorization(
+    authorization: &AgentDeviceAuthorization,
+    account: &WebAccount,
+) -> Result<(), ApiError> {
+    if authorization.expires_at <= current_timestamp() {
+        return Err(agent_device_expired_error());
+    }
+    match authorization.status {
+        AgentDeviceAuthorizationStatus::Pending => Ok(()),
+        AgentDeviceAuthorizationStatus::Authorized | AgentDeviceAuthorizationStatus::Denied
+            if authorization.authorized_account_id.as_deref()
+                == Some(account.account_id.as_str()) =>
+        {
+            Ok(())
+        }
+        AgentDeviceAuthorizationStatus::Authorized
+        | AgentDeviceAuthorizationStatus::Denied
+        | AgentDeviceAuthorizationStatus::Consumed => Err(ApiError::conflict(
+            "device_authorization_finalized",
+            "该设备授权码已经被处理",
+        )),
+    }
+}
+
+fn agent_device_expired_error() -> ApiError {
+    ApiError::device_authorization_error(
+        StatusCode::BAD_REQUEST,
+        "expired_token",
+        "设备授权码已过期，请在 Agent 中重新开始登录",
+        None,
+    )
+}
+
+fn agent_device_authorization_invalidated() -> ApiError {
+    ApiError::device_authorization_error(
+        StatusCode::FORBIDDEN,
+        "authorization_invalidated",
+        "账号状态已变化，请在 Agent 中重新开始登录",
+        None,
+    )
+}
+
 fn current_timestamp() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -1757,6 +2343,16 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn serialize_zeroizing_string<S>(
+    value: &Zeroizing<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(value.as_str())
+}
+
 fn patch_optional(value: PatchField<String>) -> Option<Option<String>> {
     match value {
         PatchField::Missing => None,
@@ -1776,12 +2372,33 @@ fn validate_browser_mutation(headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
-// `encode` is a trait method used when deriving deterministic OAuth login names.
+fn validate_native_agent_request(headers: &HeaderMap) -> Result<(), ApiError> {
+    if headers.contains_key(header::ORIGIN) {
+        return Err(ApiError::forbidden(
+            "Agent 设备授权接口不接受浏览器跨源请求",
+        ));
+    }
+    if let Some(site) = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        && site != "none"
+    {
+        return Err(ApiError::forbidden(
+            "Agent 设备授权接口只接受原生客户端请求",
+        ));
+    }
+    Ok(())
+}
+
+// `encode`/`decode` are trait methods used for opaque Agent device codes.
 use base64::Engine;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rate_limit::{
+        LOGIN_ACCOUNT_CAPACITY, LOGIN_CLIENT_CAPACITY, REGISTRATION_CLIENT_CAPACITY,
+    };
     use axum::{
         body::{Body, to_bytes},
         http::Request,
@@ -1797,7 +2414,60 @@ mod tests {
     const FUTURE_EXPIRATION: i64 = 4_102_444_800;
     const LATER_FUTURE_EXPIRATION: i64 = 4_102_531_200;
 
+    fn test_proxy_identity_public_key() -> Arc<str> {
+        static KEY: std::sync::OnceLock<Arc<str>> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| {
+            Arc::from(
+                RsaKeyPair::generate(RSA_BITS)
+                    .unwrap()
+                    .public_key_to_pem()
+                    .unwrap(),
+            )
+        })
+        .clone()
+    }
+
+    #[test]
+    fn http_trace_path_excludes_sensitive_query_parameters() {
+        let request = Request::builder()
+            .uri("/api/v1/agent/device-authorizations/inspect?user_code=secret-code")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            request_path_for_trace(&request),
+            "/api/v1/agent/device-authorizations/inspect"
+        );
+    }
+
     async fn test_app() -> (TempDir, Router) {
+        let (directory, _store, _sessions, _private_keys, app) = test_app_with_components().await;
+        (directory, app)
+    }
+
+    #[tokio::test]
+    async fn third_party_oauth_routes_are_not_exposed() {
+        let (_directory, app) = test_app().await;
+        for path in [
+            "/api/v1/auth/oauth/google/start",
+            "/api/v1/auth/oauth/wechat/start",
+            "/api/v1/auth/oauth/wechat/callback?code=secret&state=secret",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    async fn test_app_with_components() -> (
+        TempDir,
+        Arc<SqliteUserRepository>,
+        SessionStore,
+        PrivateKeyCipher,
+        Router,
+    ) {
         let directory = TempDir::new().unwrap();
         let store = Arc::new(
             SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
@@ -1820,17 +2490,27 @@ mod tests {
             })
             .await
             .unwrap();
+        let sessions = SessionStore::new(false);
+        let private_keys = PrivateKeyCipher::new(MASTER_SECRET).unwrap();
         let state = AppState {
             users: store.clone(),
             accounts: store.clone(),
-            access_logs: store,
+            access_logs: store.clone(),
+            device_authorizations: store.clone(),
             passwords,
-            sessions: SessionStore::new(false),
-            private_keys: PrivateKeyCipher::new(MASTER_SECRET).unwrap(),
-            oauth: OAuthService::disabled(false),
+            sessions: sessions.clone(),
+            private_keys: private_keys.clone(),
+            proxy_identity_public_key_pem: test_proxy_identity_public_key(),
             allow_registration: true,
+            device_authorization_guard: AgentDeviceAuthorizationGuard::default(),
         };
-        (directory, build_router(state, None))
+        (
+            directory,
+            store,
+            sessions,
+            private_keys,
+            build_router(state, None),
+        )
     }
 
     async fn json_body(response: Response) -> Value {
@@ -1944,6 +2624,23 @@ mod tests {
         (cookie, body["csrf_token"].as_str().unwrap().to_string())
     }
 
+    async fn login_from_peer(app: &Router, username: &str, password: &str, peer: &str) -> Response {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/login")
+                    .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"username":username,"password":password}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
     async fn create_approved_user(
         app: &Router,
         admin_cookie: &str,
@@ -1974,6 +2671,55 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         json_body(response).await
+    }
+
+    async fn start_device_authorization(app: &Router, platform: &str) -> (String, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "platform": platform,
+                            "client_name": "Test Agent"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["verification_uri"], "/#agent-authorize");
+        assert_eq!(body["expires_in"], AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS);
+        assert_eq!(body["interval"], AGENT_DEVICE_POLL_INTERVAL_SECONDS);
+        let device_code = body["device_code"].as_str().unwrap().to_string();
+        let user_code = body["user_code"].as_str().unwrap().to_string();
+        assert_eq!(device_code.len(), 43);
+        assert_eq!(user_code.len(), 14);
+        assert_eq!(
+            body["verification_uri_complete"],
+            format!("/#agent-authorize={user_code}")
+        );
+        (device_code, user_code)
+    }
+
+    async fn poll_device_authorization(app: &Router, device_code: &str) -> Response {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"device_code": device_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -2069,6 +2815,144 @@ mod tests {
             "boundary-admin-password"
         );
         login_user(&app, "boundary-admin-password", "abcdefgh").await;
+    }
+
+    #[tokio::test]
+    async fn public_registration_is_strictly_limited_by_trusted_peer_address() {
+        let (_directory, app) = test_app().await;
+        for index in 0..REGISTRATION_CLIENT_CAPACITY as usize {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/auth/register")
+                        .extension(ConnectInfo(
+                            "203.0.113.90:31000".parse::<SocketAddr>().unwrap(),
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "username": format!("limited-registration-{index}"),
+                                "password": "short"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/register")
+                    .extension(ConnectInfo(
+                        "203.0.113.90:31001".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "registration-rate-exhausted",
+                            "password": "short"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        assert_eq!(json_body(response).await["error"]["code"], "rate_limited");
+    }
+
+    #[tokio::test]
+    async fn password_login_limits_ip_and_account_without_account_enumeration() {
+        let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+        register_user(&app, "disabled-user", "disabled-user-password").await;
+        let disabled = store
+            .get_account_by_login("disabled-user")
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .update_managed_user(
+                &disabled.account_id,
+                ManagedUserUpdate {
+                    status: Some(AccountStatus::Disabled),
+                    ..ManagedUserUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let disabled_response = login_from_peer(
+            &app,
+            "disabled-user",
+            "disabled-user-password",
+            "203.0.113.101:32001",
+        )
+        .await;
+        let missing_response = login_from_peer(
+            &app,
+            "missing-user",
+            "disabled-user-password",
+            "203.0.113.102:32002",
+        )
+        .await;
+        let malformed_response =
+            login_from_peer(&app, "", "disabled-user-password", "203.0.113.103:32003").await;
+        assert_eq!(disabled_response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(missing_response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(malformed_response.status(), StatusCode::UNAUTHORIZED);
+        let disabled_body = json_body(disabled_response).await;
+        assert_eq!(json_body(missing_response).await, disabled_body);
+        assert_eq!(json_body(malformed_response).await, disabled_body);
+
+        let oversized_password = "x".repeat(257);
+        for index in 0..LOGIN_ACCOUNT_CAPACITY as u16 {
+            let response = login_from_peer(
+                &app,
+                "distributed-target",
+                &oversized_password,
+                &format!("198.51.100.{}:33000", index + 1),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = login_from_peer(
+            &app,
+            "distributed-target",
+            &oversized_password,
+            "198.51.100.200:33000",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+
+        for index in 0..LOGIN_CLIENT_CAPACITY as usize {
+            let response = login_from_peer(
+                &app,
+                &format!("credential-stuffing-{index}"),
+                &oversized_password,
+                "192.0.2.80:34000",
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = login_from_peer(
+            &app,
+            "credential-stuffing-exhausted",
+            &oversized_password,
+            "192.0.2.80:34001",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(json_body(response).await["error"]["code"], "rate_limited");
     }
 
     #[tokio::test]
@@ -2308,6 +3192,12 @@ mod tests {
                 .unwrap()
                 .contains("PRIVATE KEY")
         );
+        assert!(
+            body["proxy_identity_public_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PUBLIC KEY")
+        );
     }
 
     #[tokio::test]
@@ -2522,6 +3412,12 @@ mod tests {
                 .contains("BEGIN PUBLIC KEY")
         );
         assert!(
+            body["proxy_identity_public_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PUBLIC KEY")
+        );
+        assert!(
             body["private_key_pem"]
                 .as_str()
                 .unwrap()
@@ -2593,29 +3489,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_toml_permission_update_does_not_gain_private_key_capabilities() {
+    async fn legacy_database_permission_update_does_not_gain_private_key_capabilities() {
         let (directory, app) = test_app().await;
         let store = SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
             .await
             .unwrap();
-        let users_path = directory.path().join("users.toml");
         let public_key = RsaKeyPair::generate(2048)
             .unwrap()
             .public_key_to_pem()
             .unwrap();
-        std::fs::write(
-            &users_path,
-            format!(
-                r#"
-[users.legacy-user]
-username = "legacy-user"
-public_key_pem = """
-{public_key}"""
-"#
-            ),
-        )
-        .unwrap();
-        store.import_users_toml_once(&users_path).await.unwrap();
+        store
+            .create_user_record(NewUser::new("legacy-user", public_key, UserOrigin::Legacy))
+            .await
+            .unwrap();
 
         let (cookie, csrf) = login_admin(&app).await;
         let response = app
@@ -3240,6 +4126,613 @@ public_key_pem = """
         assert_eq!(body["retention_days"], 1);
         assert_eq!(body["records"].as_array().unwrap().len(), 1);
         assert_eq!(body["records"][0]["target_host"], "current.example");
+    }
+
+    #[tokio::test]
+    async fn agent_device_flow_rate_limits_and_delivers_credentials_once() {
+        let (_directory, app) = test_app().await;
+        let (admin_cookie, admin_csrf) = login_admin(&app).await;
+        create_approved_user(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            "agent-alice",
+            "agent-alice-password",
+        )
+        .await;
+        let (user_cookie, user_csrf) =
+            login_user(&app, "agent-alice", "agent-alice-password").await;
+        let (device_code, user_code) = start_device_authorization(&app, "android").await;
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER).unwrap(),
+            AGENT_DEVICE_POLL_INTERVAL_SECONDS.to_string().as_str()
+        );
+        assert_eq!(
+            json_body(response).await["error"]["code"],
+            "authorization_pending"
+        );
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        assert_eq!(json_body(response).await["error"]["code"], "slow_down");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/inspect")
+                    .header(header::COOKIE, &user_cookie)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": &user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/inspect")
+                    .header(header::COOKIE, &user_cookie)
+                    .header("x-csrf-token", &user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": &user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["client_name"], "Test Agent");
+        assert_eq!(body["platform"], "android");
+        assert_eq!(body["status"], "pending");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, &user_cookie)
+                    .header("x-csrf-token", &user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["status"], "authorized");
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::SET_COOKIE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("ppaass_session=")
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let body = json_body(response).await;
+        assert_eq!(body["account"]["login_name"], "agent-alice");
+        assert_eq!(body["account"]["role"], "user");
+        assert_eq!(body["profile"]["username"], "agent-alice");
+        assert!(
+            body["profile"]["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|permission| permission == PRIVATE_KEY_READ_PERMISSION)
+        );
+        assert!(
+            body["private_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PRIVATE KEY")
+        );
+        assert!(
+            body["public_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PUBLIC KEY")
+        );
+        let serialized = body.to_string();
+        assert!(serialized.len() < MAX_AGENT_TOKEN_RESPONSE_BYTES);
+        for forbidden in ["device_code", "user_code"] {
+            assert!(!serialized.contains(forbidden));
+        }
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(response).await["error"]["code"],
+            "invalid_device_code"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_credential_construction_does_not_burn_device_code() {
+        let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+        let (admin_cookie, admin_csrf) = login_admin(&app).await;
+        create_approved_user(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            "retry-device-user",
+            "retry-device-password",
+        )
+        .await;
+        let (user_cookie, user_csrf) =
+            login_user(&app, "retry-device-user", "retry-device-password").await;
+        let (device_code, user_code) = start_device_authorization(&app, "android").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, user_cookie)
+                    .header("x-csrf-token", user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": &user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let broken_app = build_router(
+            AppState {
+                users: store.clone(),
+                accounts: store.clone(),
+                access_logs: store.clone(),
+                device_authorizations: store.clone(),
+                passwords: PasswordService::new(1).await.unwrap(),
+                sessions: SessionStore::new(false),
+                private_keys: PrivateKeyCipher::new(
+                    "different-test-secret-that-cannot-decrypt-existing-keys",
+                )
+                .unwrap(),
+                proxy_identity_public_key_pem: test_proxy_identity_public_key(),
+                allow_registration: true,
+                device_authorization_guard: AgentDeviceAuthorizationGuard::default(),
+            },
+            None,
+        );
+        let response = poll_device_authorization(&broken_app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let authorization = store
+            .get_agent_device_authorization_by_user_code(
+                &agent_user_code_hash(&user_code).unwrap(),
+                current_timestamp(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            authorization.status,
+            AgentDeviceAuthorizationStatus::Authorized
+        );
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            json_body(response).await["private_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PRIVATE KEY")
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_device_claim_returns_credentials_to_exactly_one_request() {
+        let (_directory, _store, sessions, _private_keys, app) = test_app_with_components().await;
+        let (admin_cookie, admin_csrf) = login_admin(&app).await;
+        create_approved_user(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            "concurrent-device-user",
+            "concurrent-device-password",
+        )
+        .await;
+        let (user_cookie, user_csrf) =
+            login_user(&app, "concurrent-device-user", "concurrent-device-password").await;
+        let (device_code, user_code) = start_device_authorization(&app, "windows").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, user_cookie)
+                    .header("x-csrf-token", user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let sessions_before_claim = sessions.active_session_count();
+
+        let (left, right) = tokio::join!(
+            poll_device_authorization(&app, &device_code),
+            poll_device_authorization(&app, &device_code)
+        );
+        let (success, rejected) = if left.status() == StatusCode::OK {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        assert_eq!(success.status(), StatusCode::OK);
+        assert!(
+            json_body(success).await["private_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PRIVATE KEY")
+        );
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(rejected).await["error"]["code"],
+            "invalid_device_code"
+        );
+        assert_eq!(sessions.active_session_count(), sessions_before_claim + 1);
+    }
+
+    #[tokio::test]
+    async fn public_device_start_flood_is_bounded_and_returns_429() {
+        let (_directory, _store, _sessions, _private_keys, app) = test_app_with_components().await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..64 {
+            let app = app.clone();
+            tasks.spawn(async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/agent/device-authorizations")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "platform": "android",
+                                "client_name": "Flood Test Agent"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            });
+        }
+        let mut accepted = 0_i64;
+        let mut rejected = 0_i64;
+        while let Some(result) = tasks.join_next().await {
+            let response = result.unwrap();
+            match response.status() {
+                StatusCode::OK => accepted += 1,
+                StatusCode::TOO_MANY_REQUESTS => {
+                    assert!(response.headers().contains_key(header::RETRY_AFTER));
+                    assert_eq!(json_body(response).await["error"]["code"], "rate_limited");
+                    rejected += 1;
+                }
+                status => panic!("unexpected device start flood status: {status}"),
+            }
+        }
+        assert!(accepted > 0 && accepted <= 40);
+        assert!(rejected > 0);
+    }
+
+    #[tokio::test]
+    async fn existing_external_account_session_can_authorize_agent_without_a_password() {
+        let (_directory, store, sessions, private_keys, app) = test_app_with_components().await;
+        let account = store
+            .create_user_account(NewUserAccount {
+                account_id: "acc_external_only".to_string(),
+                login_name: "external_device_user".to_string(),
+                password_hash: None,
+                display_name: Some("Historical External User".to_string()),
+                email: Some("device@example.test".to_string()),
+                avatar_url: None,
+                external_identity: Some(ExternalIdentity {
+                    provider: "retired-provider".to_string(),
+                    subject: "retired-subject-device-only".to_string(),
+                }),
+            })
+            .await
+            .unwrap();
+        let request = store
+            .submit_key_generation_request(NewKeyGenerationRequest {
+                request_id: "keyreq_external_device".to_string(),
+                account_id: account.account_id.clone(),
+            })
+            .await
+            .unwrap();
+        let stored_keys = generate_stored_keys(&private_keys, &account.login_name, 1)
+            .await
+            .unwrap();
+        let mut profile = NewUser::new(
+            &account.login_name,
+            stored_keys.public_key_pem,
+            UserOrigin::Local,
+        );
+        profile.permissions = default_web_permissions();
+        profile.expires_at = Some(FUTURE_EXPIRATION);
+        store
+            .approve_key_generation_request(KeyRequestApproval {
+                request_id: request.request_id,
+                reviewer_account_id: "acc_admin".to_string(),
+                expires_at: FUTURE_EXPIRATION,
+                material: ApprovedKeyMaterial::Initial {
+                    profile,
+                    encrypted_private_key: stored_keys.encrypted_private_key,
+                },
+            })
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": account.login_name,
+                            "password": "cannot-login-with-password"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let (device_code, user_code) = start_device_authorization(&app, "windows").await;
+        let (browser_session, browser_cookie) = sessions.issue(&account.account_id);
+        let browser_cookie = browser_cookie
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, browser_cookie)
+                    .header("x-csrf-token", browser_session.csrf_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["account"]["account_id"], "acc_external_only");
+        assert_eq!(body["profile"]["username"], "external_device_user");
+        assert!(
+            body["private_key_pem"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PRIVATE KEY")
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_device_approval_rejects_admin_missing_keys_and_cross_origin_clients() {
+        let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"platform":"android"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let (admin_cookie, admin_csrf) = login_admin(&app).await;
+        let (_admin_device_code, admin_user_code) =
+            start_device_authorization(&app, "android").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, &admin_cookie)
+                    .header("x-csrf-token", &admin_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"user_code": admin_user_code}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let (user_cookie, user_csrf) =
+            register_user(&app, "waiting-user", "waiting-user-password").await;
+        let (waiting_device_code, waiting_user_code) =
+            start_device_authorization(&app, "android").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, &user_cookie)
+                    .header("x-csrf-token", &user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"user_code": waiting_user_code}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_body(response).await["error"]["code"],
+            "key_request_required"
+        );
+        let response = poll_device_authorization(&app, &waiting_device_code).await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+
+        create_approved_user(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            "no-private-read",
+            "no-private-read-password",
+        )
+        .await;
+        store
+            .update_user(
+                "no-private-read",
+                UserUpdate {
+                    permissions: Some(vec![
+                        PROXY_CONNECT_TCP_PERMISSION.to_string(),
+                        PROXY_CONNECT_UDP_PERMISSION.to_string(),
+                    ]),
+                    ..UserUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (limited_cookie, limited_csrf) =
+            login_user(&app, "no-private-read", "no-private-read-password").await;
+        let (_limited_device_code, limited_user_code) =
+            start_device_authorization(&app, "windows").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/approve")
+                    .header(header::COOKIE, limited_cookie)
+                    .header("x-csrf-token", limited_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"user_code": limited_user_code}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_body(response).await["error"]["code"], "forbidden");
+
+        for (username, update, expected_status, expected_code) in [
+            (
+                "disabled-device",
+                UserUpdate {
+                    enabled: Some(false),
+                    ..UserUpdate::default()
+                },
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                "expired-device",
+                UserUpdate {
+                    expires_at: Some(Some(current_timestamp() - 1)),
+                    ..UserUpdate::default()
+                },
+                StatusCode::CONFLICT,
+                "key_request_required",
+            ),
+        ] {
+            let password = format!("{username}-password");
+            create_approved_user(&app, &admin_cookie, &admin_csrf, username, &password).await;
+            store.update_user(username, update).await.unwrap();
+            let (cookie, csrf) = login_user(&app, username, &password).await;
+            let (_device_code, user_code) = start_device_authorization(&app, "android").await;
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/agent/device-authorizations/approve")
+                        .header(header::COOKIE, cookie)
+                        .header("x-csrf-token", csrf)
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({"user_code": user_code}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            assert_eq!(json_body(response).await["error"]["code"], expected_code);
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_agent_device_authorization_cannot_be_claimed() {
+        let (_directory, app) = test_app().await;
+        let (admin_cookie, admin_csrf) = login_admin(&app).await;
+        create_approved_user(
+            &app,
+            &admin_cookie,
+            &admin_csrf,
+            "deny-device-user",
+            "deny-device-password",
+        )
+        .await;
+        let (user_cookie, user_csrf) =
+            login_user(&app, "deny-device-user", "deny-device-password").await;
+        let (device_code, user_code) = start_device_authorization(&app, "android").await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agent/device-authorizations/deny")
+                    .header(header::COOKIE, user_cookie)
+                    .header("x-csrf-token", user_csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"user_code": user_code}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["status"], "denied");
+
+        let response = poll_device_authorization(&app, &device_code).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_body(response).await["error"]["code"], "access_denied");
     }
 
     #[tokio::test]

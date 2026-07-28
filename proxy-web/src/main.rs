@@ -1,13 +1,25 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use protocol::RsaKeyPair;
 use proxy_user_store::{
-    AccountRepository, BootstrapOutcome, NewAdminAccount, SqliteUserRepository,
+    AccessLogRepository, AccountRepository, BootstrapOutcome, NewAdminAccount,
+    SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
 };
 use proxy_web::{
-    AppState, OAuthService, PasswordService, PrivateKeyCipher, SessionStore, build_router,
+    AgentDeviceAuthorizationGuard, AppState, PasswordService, PrivateKeyCipher, SessionStore,
+    build_router,
 };
-use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
-use tracing::info;
+use rsa::traits::PublicKeyParts;
+use std::{
+    env,
+    fs::{self, File},
+    io::Read,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use time::OffsetDateTime;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 const KEY_ENCRYPTION_SECRET_ENV: &str = "PPAASS_PROXY_WEB_KEY_ENCRYPTION_SECRET";
@@ -15,6 +27,14 @@ const BOOTSTRAP_ADMIN_USERNAME_ENV: &str = "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USE
 const BOOTSTRAP_ADMIN_PASSWORD_ENV: &str = "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_PASSWORD";
 const ALLOW_REGISTRATION_ENV: &str = "PPAASS_PROXY_WEB_ALLOW_REGISTRATION";
 const SECURE_COOKIES_ENV: &str = "PPAASS_PROXY_WEB_SECURE_COOKIES";
+const TRUST_PROXY_HEADERS_ENV: &str = "PPAASS_PROXY_WEB_TRUST_PROXY_HEADERS";
+const DATABASE_GROUP_READABLE_ENV: &str = "PPAASS_PROXY_WEB_DATABASE_GROUP_READABLE";
+const ACCESS_LOG_DATABASE_GROUP_WRITABLE_ENV: &str =
+    "PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE_GROUP_WRITABLE";
+const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
+const MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES: u64 = 64 * 1024;
+const MIN_PROXY_IDENTITY_RSA_BITS: usize = 2048;
+const MAX_PROXY_IDENTITY_RSA_BITS: usize = 8192;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "PPAASS Proxy 用户管理 Web 服务")]
@@ -27,9 +47,21 @@ struct Args {
     #[arg(long, default_value = "data/proxy-users.sqlite3")]
     database: PathBuf,
 
-    /// 数据库首次初始化时导入的 users.toml
-    #[arg(long, default_value = "config/local/users.toml")]
-    users_toml: PathBuf,
+    /// Unix 下允许用户数据库及 sidecar 由文件属组只读（0640）
+    #[arg(long)]
+    database_group_readable: bool,
+
+    /// 与 Proxy 共用的独立访问记录 SQLite；不得与用户数据库为同一文件
+    #[arg(long, default_value = "data/proxy-access.sqlite3")]
+    access_log_database: PathBuf,
+
+    /// Unix 下允许访问记录数据库及 sidecar 由文件属组读写（0660）
+    #[arg(long)]
+    access_log_database_group_writable: bool,
+
+    /// Proxy TCP/Yamux 传输身份的 SPKI PEM 公钥
+    #[arg(long)]
+    proxy_identity_public_key: PathBuf,
 
     /// Vue 构建产物目录
     #[arg(long, default_value = "proxy-web/frontend/dist")]
@@ -45,10 +77,62 @@ async fn main() -> Result<()> {
     init_tracing();
     let args = Args::parse();
     validate_listen_address(args.listen, args.allow_insecure_remote)?;
+    let proxy_identity_public_key_pem =
+        load_proxy_identity_public_key(&args.proxy_identity_public_key)?;
 
-    let store = Arc::new(SqliteUserRepository::connect(&args.database).await?);
-    let import_outcome = store.import_users_toml_once(&args.users_toml).await?;
-    info!(?import_outcome, "users.toml 首次导入检查完成");
+    SqliteAccessLogRepository::validate_distinct_database_paths(
+        &args.access_log_database,
+        &args.database,
+    )?;
+    let database_file_permissions = select_database_file_permissions(
+        args.database_group_readable,
+        bool_env(DATABASE_GROUP_READABLE_ENV)?,
+        SqliteFilePermissions::OwnerReadWriteGroupRead,
+    );
+    let store = Arc::new(
+        SqliteUserRepository::connect_with_permissions(&args.database, database_file_permissions)
+            .await?,
+    );
+    let access_log_file_permissions = select_database_file_permissions(
+        args.access_log_database_group_writable,
+        bool_env(ACCESS_LOG_DATABASE_GROUP_WRITABLE_ENV)?,
+        SqliteFilePermissions::OwnerAndGroup,
+    );
+    let access_logs = Arc::new(
+        SqliteAccessLogRepository::connect_with_permissions(
+            &args.access_log_database,
+            access_log_file_permissions,
+        )
+        .await?,
+    );
+    let migrated_access_rows = access_logs
+        .import_legacy_user_database_once(&args.database)
+        .await?;
+    let access_log_settings = access_logs.get_access_log_settings().await?;
+    let retention_cutoff = OffsetDateTime::now_utc().unix_timestamp()
+        - i64::from(access_log_settings.retention_days) * SECONDS_PER_DAY;
+    let cleaned_legacy_access_rows = access_logs
+        .cleanup_legacy_user_database_access_records(&args.database, retention_cutoff)
+        .await?;
+    let purged_expired_access_rows = access_logs
+        .purge_access_records_before(retention_cutoff)
+        .await?;
+    if let Err(error) = access_logs.checkpoint_wal().await {
+        // Proxy may still be serving with a short read/write transaction during an ordinary Web
+        // restart. Retention is already committed with secure_delete enabled, so a busy
+        // checkpoint is a recoverable availability event and a later automatic/manual
+        // checkpoint will truncate the WAL.
+        warn!(%error, "访问记录数据库 WAL 暂时无法截断，将继续启动");
+    }
+    info!(
+        migrated_access_rows,
+        cleaned_legacy_access_rows,
+        purged_expired_access_rows,
+        retention_days = access_log_settings.retention_days,
+        user_database = %args.database.display(),
+        access_database = %args.access_log_database.display(),
+        "访问记录拆库迁移、源库清理与保留期清理完成"
+    );
 
     let master_secret = env::var(KEY_ENCRYPTION_SECRET_ENV)
         .with_context(|| format!("必须设置环境变量 {KEY_ENCRYPTION_SECRET_ENV}"))?;
@@ -57,31 +141,84 @@ async fn main() -> Result<()> {
     let passwords = PasswordService::new(4).await?;
     bootstrap_admin(store.as_ref(), &passwords).await?;
     let secure_cookies = bool_env(SECURE_COOKIES_ENV)?.unwrap_or(!args.listen.ip().is_loopback());
-    let allow_registration = bool_env(ALLOW_REGISTRATION_ENV)?.unwrap_or(
-        OAuthService::local_registration_enabled_default(args.listen.ip().is_loopback()),
-    );
-    let oauth = OAuthService::from_env(secure_cookies)?;
+    let allow_registration =
+        bool_env(ALLOW_REGISTRATION_ENV)?.unwrap_or(args.listen.ip().is_loopback());
+    let trust_proxy_headers = bool_env(TRUST_PROXY_HEADERS_ENV)?.unwrap_or(false);
+    if trust_proxy_headers && !args.listen.ip().is_loopback() {
+        bail!("{TRUST_PROXY_HEADERS_ENV}=true 仅允许用于回环监听后的受信反向代理");
+    }
 
     let state = AppState {
         users: store.clone(),
         accounts: store.clone(),
-        access_logs: store,
+        access_logs,
+        device_authorizations: store,
         passwords,
         sessions: SessionStore::new(secure_cookies),
         private_keys,
-        oauth,
+        proxy_identity_public_key_pem,
         allow_registration,
+        device_authorization_guard: AgentDeviceAuthorizationGuard::new(trust_proxy_headers),
     };
     let app = build_router(state, Some(args.frontend_dist));
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("无法监听 {}", args.listen))?;
     info!(address = %args.listen, "PPAASS Proxy 用户管理服务已启动");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     info!("PPAASS Proxy 用户管理服务已停止");
     Ok(())
+}
+
+fn load_proxy_identity_public_key(path: &Path) -> Result<Arc<str>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("无法读取 Proxy 传输身份公钥文件元数据：{}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!("Proxy 传输身份公钥路径必须是普通文件：{}", path.display());
+    }
+    if metadata.len() > MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES {
+        bail!(
+            "Proxy 传输身份公钥文件超过 {} 字节上限：{}",
+            MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES,
+            path.display()
+        );
+    }
+
+    let file = File::open(path)
+        .with_context(|| format!("无法打开 Proxy 传输身份公钥文件：{}", path.display()))?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .unwrap_or(usize::MAX)
+            .min(MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES as usize),
+    );
+    file.take(MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("无法读取 Proxy 传输身份公钥文件：{}", path.display()))?;
+    if bytes.len() as u64 > MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES {
+        bail!(
+            "Proxy 传输身份公钥文件超过 {} 字节上限：{}",
+            MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES,
+            path.display()
+        );
+    }
+    let pem = String::from_utf8(bytes)
+        .with_context(|| format!("Proxy 传输身份公钥文件不是 UTF-8：{}", path.display()))?;
+    let pem = pem.trim();
+    let public_key = RsaKeyPair::from_public_key_pem(pem)
+        .with_context(|| format!("Proxy 传输身份公钥不是有效 SPKI PEM：{}", path.display()))?;
+    let bits = public_key.n().bits();
+    if !(MIN_PROXY_IDENTITY_RSA_BITS..=MAX_PROXY_IDENTITY_RSA_BITS).contains(&bits) {
+        bail!(
+            "Proxy 传输身份 RSA 公钥必须为 {MIN_PROXY_IDENTITY_RSA_BITS}..={MAX_PROXY_IDENTITY_RSA_BITS} 位：{}",
+            path.display()
+        );
+    }
+    Ok(Arc::from(pem))
 }
 
 async fn ensure_key_encryption_binding(
@@ -184,6 +321,18 @@ fn bool_env(name: &str) -> Result<Option<bool>> {
     }
 }
 
+fn select_database_file_permissions(
+    cli_enabled: bool,
+    env_enabled: Option<bool>,
+    enabled_permissions: SqliteFilePermissions,
+) -> SqliteFilePermissions {
+    if cli_enabled || env_enabled.unwrap_or(false) {
+        enabled_permissions
+    } else {
+        SqliteFilePermissions::OwnerOnly
+    }
+}
+
 fn validate_listen_address(address: SocketAddr, allow_insecure_remote: bool) -> Result<()> {
     if !address.ip().is_loopback() && !allow_insecure_remote {
         bail!(
@@ -226,6 +375,75 @@ mod tests {
         assert!(validate_listen_address(loopback, false).is_ok());
         assert!(validate_listen_address(remote, false).is_err());
         assert!(validate_listen_address(remote, true).is_ok());
+    }
+
+    #[test]
+    fn database_group_modes_can_be_enabled_by_cli_or_service_environment() {
+        assert_eq!(
+            select_database_file_permissions(
+                false,
+                None,
+                SqliteFilePermissions::OwnerReadWriteGroupRead,
+            ),
+            SqliteFilePermissions::OwnerOnly
+        );
+        assert_eq!(
+            select_database_file_permissions(
+                false,
+                Some(false),
+                SqliteFilePermissions::OwnerReadWriteGroupRead,
+            ),
+            SqliteFilePermissions::OwnerOnly
+        );
+        assert_eq!(
+            select_database_file_permissions(
+                true,
+                Some(false),
+                SqliteFilePermissions::OwnerReadWriteGroupRead,
+            ),
+            SqliteFilePermissions::OwnerReadWriteGroupRead
+        );
+        assert_eq!(
+            select_database_file_permissions(
+                false,
+                Some(true),
+                SqliteFilePermissions::OwnerAndGroup,
+            ),
+            SqliteFilePermissions::OwnerAndGroup
+        );
+    }
+
+    #[test]
+    fn loads_a_valid_proxy_identity_spki_public_key() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("proxy-identity-public.pem");
+        let pem = RsaKeyPair::generate(2048)
+            .unwrap()
+            .public_key_to_pem()
+            .unwrap();
+        fs::write(&path, format!("\n{pem}\n")).unwrap();
+
+        assert_eq!(
+            load_proxy_identity_public_key(&path).unwrap().as_ref(),
+            pem.trim()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_oversized_proxy_identity_public_key_files() {
+        let directory = TempDir::new().unwrap();
+        let invalid = directory.path().join("invalid.pem");
+        fs::write(&invalid, "not a public key").unwrap();
+        assert!(load_proxy_identity_public_key(&invalid).is_err());
+
+        let oversized = directory.path().join("oversized.pem");
+        fs::write(
+            &oversized,
+            vec![b'x'; MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(load_proxy_identity_public_key(&oversized).is_err());
+        assert!(load_proxy_identity_public_key(directory.path()).is_err());
     }
 
     #[tokio::test]

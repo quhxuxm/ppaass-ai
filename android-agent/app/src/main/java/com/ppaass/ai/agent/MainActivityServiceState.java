@@ -25,6 +25,10 @@ import java.util.*;
 abstract class MainActivityServiceState extends MainActivityConfig {
 
 protected void toggleVpn() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (isVpnRunning()) {
             stopVpnService();
             return;
@@ -40,6 +44,10 @@ protected void toggleVpn() {
     }
 
 protected void startVpnService() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_START);
         intent.putExtra(PpaassVpnService.EXTRA_STARTED_BY_APP, true);
@@ -59,6 +67,10 @@ protected void stopVpnService() {
     }
 
 protected void toggleHttpProxy() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (isHttpProxyRunning()) {
             stopHttpProxyService();
             return;
@@ -69,6 +81,10 @@ protected void toggleHttpProxy() {
     }
 
 protected void startHttpProxyService() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         prefs.edit()
                 .putBoolean(PpaassHttpProxyService.PREF_ENABLED, true)
                 .apply();

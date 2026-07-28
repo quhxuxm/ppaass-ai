@@ -19,7 +19,6 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::android_log;
 use crate::config::AndroidAgentConfig;
 use crate::error::{AndroidAgentError, Result};
 
@@ -155,11 +154,13 @@ impl AndroidYamuxSessionManager {
                         self.auto_udp_fallback_to_yamux[slot_index].store(true, Ordering::Release);
                         warn!(
                             slot = slot_index,
-                            "Android automatic UDP session timed out; switching only this session slot to TCP/Yamux: {err}"
+                            "Android automatic UDP session timed out; switching only this session slot to TCP/Yamux"
                         );
-                        android_log::warn(format!(
-                            "Automatic UDP session slot {slot_index} switched to TCP/Yamux after timeout: {err}"
-                        ));
+                        debug!(
+                            slot = slot_index,
+                            error = %err,
+                            "Android automatic UDP session timeout details"
+                        );
                         self.open_target_stream(address, transport).await
                     }
                     Err(err) => Err(err),
@@ -253,7 +254,14 @@ impl AndroidYamuxSessionManager {
                         manager = self.manager_name,
                         slot = slot_index,
                         connection_id = handle.id,
-                        "Android native UDP proxy session closed; rebuilding only this pool slot: {err}"
+                        "Android native UDP proxy session closed; rebuilding only this pool slot"
+                    );
+                    debug!(
+                        manager = self.manager_name,
+                        slot = slot_index,
+                        connection_id = handle.id,
+                        error = %err,
+                        "Android native UDP proxy session close details"
                     );
                 }
                 Err(err) => return Err(AndroidAgentError::Io(err)),
@@ -289,14 +297,10 @@ impl AndroidYamuxSessionManager {
         match tokio::time::timeout(timeout_duration, connect).await {
             Ok(result) => result,
             Err(_) => {
-                warn!(
+                debug!(
                     "Android TCP proxy stream timed out target={} after {:?}",
                     target, timeout_duration
                 );
-                android_log::warn(format!(
-                    "Android TCP proxy stream timed out {target} after {}s",
-                    timeout_duration.as_secs()
-                ));
                 Err(AndroidAgentError::Connection(format!(
                     "Android TCP proxy stream timed out after {} seconds",
                     timeout_duration.as_secs()
@@ -369,13 +373,16 @@ impl AndroidYamuxSessionManager {
                         return Err(AndroidAgentError::Connection(message));
                     }
                     warn!(
-                        "Android {} Yamux session {} unusable; retrying: {message}",
-                        self.manager_name, session.id
+                        manager = self.manager_name,
+                        session_id = session.id,
+                        "Android Yamux session unusable; retrying"
                     );
-                    android_log::warn(format!(
-                        "Android {} Yamux session unusable: {message}",
-                        self.manager_name
-                    ));
+                    debug!(
+                        manager = self.manager_name,
+                        session_id = session.id,
+                        error = %message,
+                        "Android Yamux session failure details"
+                    );
                     self.remove_yamux_session(session.id).await;
                     attempts += 1;
                     if attempts >= max_sessions.max(3) {
@@ -452,10 +459,17 @@ impl AndroidYamuxSessionManager {
                     last_error = Some(err);
                 }
                 Err(err) if err.is_cancelled() => {}
-                Err(err) => warn!(
-                    "Android {} Yamux refill join error: {err}",
-                    self.manager_name
-                ),
+                Err(err) => {
+                    warn!(
+                        manager = self.manager_name,
+                        "Android Yamux refill task join failed"
+                    );
+                    debug!(
+                        manager = self.manager_name,
+                        error = %err,
+                        "Android Yamux refill task join failure details"
+                    );
+                }
             }
         }
 
@@ -464,13 +478,14 @@ impl AndroidYamuxSessionManager {
                 AndroidAgentError::Connection("failed to create Android Yamux session".into())
             });
             warn!(
-                "failed to refill Android {} Yamux: {err}",
-                self.manager_name
+                manager = self.manager_name,
+                "failed to refill Android Yamux"
             );
-            android_log::warn(format!(
-                "Android {} Yamux refill failed: {err}",
-                self.manager_name
-            ));
+            debug!(
+                manager = self.manager_name,
+                error = %err,
+                "Android Yamux refill failure details"
+            );
             return Err(err);
         }
 

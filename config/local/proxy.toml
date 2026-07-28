@@ -4,12 +4,15 @@
 # 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 PPAASS 原生加密 UDP。
 listen_addr = "0.0.0.0:8080"
 
-# 用户配置文件路径
-users_path = "config/local/users.toml"
-
-# SQLite 用户数据库路径。首次启动时会事务化导入上面的 users.toml；
-# 之后 Proxy 和 proxy-web 共用该数据库，Web 变更对新的认证立即生效。
+# SQLite 用户数据库路径。proxy-web 负责初始化和管理，Proxy 始终只读；
+# Web 变更对新的认证立即生效。
 users_database_path = "data/proxy-users.sqlite3"
+
+# 独立访问记录数据库；Proxy 只写该文件，不具备修改用户数据库的能力。
+access_log_database_path = "data/proxy-access.sqlite3"
+
+# TCP/Yamux 传输身份私钥（PKCS#8 PEM）；公钥由 Proxy Web 提供给 Agent 固定校验。
+transport_identity_private_key_path = "data/proxy-identity-private.pem"
 
 # 日志级别：trace、debug、info、warn、error
 log_level = "info"
@@ -56,10 +59,10 @@ async_runtime_stack_size_mb = 4
 # upstream_proxy_addr = "127.0.0.1:9090"
 
 # 连接上游代理时使用的认证用户名
-# upstream_username = "user2"
+# upstream_username = "local-upstream"
 
 # 连接上游代理时用于认证的私钥路径
-# upstream_private_key_path = "keys/user2.pem"
+# upstream_private_key_path = "keys/local-upstream.pem"
 
 # 上游代理地址列表，用于负载均衡和故障切换
 # 指定多个地址时，每个连接会随机选择其中一个
@@ -99,6 +102,7 @@ udp_relay_max_flows = 256
 udp_session_limit = 4096
 udp_session_channel_size = 256
 udp_session_max_flows = 256
+udp_session_authorization_recheck_secs = 5
 
 [yamux]
 # proxy 端 Yamux acceptor 参数；现在只用于 UDP relay 的 raw TCP Yamux 外层连接。

@@ -22,6 +22,15 @@ pub(crate) struct AgentAuthState {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct AgentDeviceLoginProgress {
+    pub(crate) status: String,
+    pub(crate) user_code: String,
+    pub(crate) expires_at: i64,
+    pub(crate) retry_after_seconds: u32,
+    pub(crate) auth_state: Option<AgentAuthState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct LoadedAgentConfig {
     pub(crate) path: String,
     pub(crate) raw: String,
@@ -156,7 +165,7 @@ pub(crate) struct ServiceResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAuthAccount, AgentAuthState, AgentLoginRequest};
+    use super::{AgentAuthAccount, AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest};
 
     #[test]
     fn agent_login_request_rejects_frontend_endpoint_override() {
@@ -189,5 +198,27 @@ mod tests {
         let serialized = serde_json::to_string(&state).unwrap();
         assert!(!serialized.contains("proxy_web"));
         assert!(!serialized.contains("attacker.example.com"));
+    }
+
+    #[test]
+    fn device_login_progress_never_serializes_device_or_private_credentials() {
+        let progress = AgentDeviceLoginProgress {
+            status: "authorization_pending".to_string(),
+            user_code: "ABCD-EFGH-JKMN".to_string(),
+            expires_at: 1_800_000_000,
+            retry_after_seconds: 5,
+            auth_state: None,
+        };
+
+        let serialized = serde_json::to_string(&progress).unwrap();
+        assert!(serialized.contains("ABCD-EFGH-JKMN"));
+        for secret_field in [
+            "device_code",
+            "private_key",
+            "proxy_web",
+            "verification_uri",
+        ] {
+            assert!(!serialized.contains(secret_field));
+        }
     }
 }

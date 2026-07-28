@@ -7,15 +7,20 @@ use crate::access_log::AccessRecorder;
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::error::Result;
+use crate::transport_identity::load_transport_identity_private_key;
 use crate::user_manager::UserManager;
 use common::{
     DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_proxy_tcp_stream,
     spawn_guarded,
 };
 use futures::StreamExt;
-use protocol::CompressionMode;
-use proxy_user_store::{AccessLogRepository, SqliteUserRepository, UserRepository};
+use protocol::{CompressionMode, RsaKeyPair};
+use proxy_user_store::{
+    AccessLogRepository, SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
+    UserRepository,
+};
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -30,9 +35,11 @@ pub struct ProxyServer {
     config: Arc<ProxyConfig>,
     // 用户表在认证路径读取，内部用锁保证并发读安全。
     user_manager: Arc<UserManager>,
+    // TCP/Yamux 成功认证响应由该独立传输身份签名；Agent pin 对应公钥。
+    transport_identity: Arc<RsaKeyPair>,
     // 出站连接状态在启动时初始化，避免每次 CONNECT 都重新解析出站策略。
     egress_state: Arc<EgressState>,
-    // SQLite 模式下异步记录成功访问；users.toml 模式下是 no-op。
+    // 成功访问异步写入与用户主库物理隔离的 SQLite。
     access_recorder: AccessRecorder,
 }
 
@@ -41,6 +48,7 @@ struct ConnectionContext {
     // 拆成 context 是为了让 accept loop 只负责接入，把连接生命周期移动到独立任务。
     proxy_config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
+    transport_identity: Arc<RsaKeyPair>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     compression_mode: CompressionMode,
@@ -50,41 +58,65 @@ impl ProxyServer {
     #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
-
-        // 数据库模式与 Web 共用 Repository；未配置数据库时保留 users.toml 兼容路径。
-        let (repository, access_recorder) =
-            if let Some(database_path) = config.users_database_path.as_deref() {
-                let sqlite = Arc::new(SqliteUserRepository::connect(database_path).await.map_err(
-                    |error| {
-                        crate::error::ProxyError::Configuration(format!(
-                            "打开用户数据库 {database_path} 失败：{error}"
-                        ))
-                    },
-                )?);
-                let import_outcome = sqlite
-                    .import_users_toml_once(&config.users_path)
-                    .await
-                    .map_err(|error| {
-                        crate::error::ProxyError::Configuration(format!(
-                            "从 {} 导入用户数据库失败：{error}",
-                            config.users_path
-                        ))
-                    })?;
-                info!(
-                    database = %sqlite.path().display(),
-                    ?import_outcome,
-                    "已启用 SQLite 用户 Repository"
-                );
-                let user_repository = sqlite.clone() as Arc<dyn UserRepository>;
-                let access_repository = sqlite as Arc<dyn AccessLogRepository>;
-                (
-                    Some(user_repository),
-                    AccessRecorder::start(access_repository),
+        let identity_path = config
+            .transport_identity_private_key_path
+            .as_deref()
+            .ok_or_else(|| {
+                crate::error::ProxyError::Configuration(
+                    "必须配置 transport_identity_private_key_path".to_string(),
                 )
-            } else {
-                (None, AccessRecorder::default())
-            };
-        let user_manager = Arc::new(UserManager::new(&config.users_path, repository)?);
+            })?;
+        let transport_identity = Arc::new(load_transport_identity_private_key(Path::new(
+            identity_path,
+        ))?);
+        info!("已安全加载 Proxy TCP/Yamux 传输身份私钥");
+
+        // Proxy 对主用户库只有读取能力；访问历史写入物理隔离的第二个 SQLite。
+        let database_path = &config.users_database_path;
+        let access_database_path = &config.access_log_database_path;
+        SqliteAccessLogRepository::validate_distinct_database_paths(
+            access_database_path,
+            database_path,
+        )
+        .map_err(|error| {
+            crate::error::ProxyError::Configuration(format!("访问记录数据库路径不安全：{error}"))
+        })?;
+        let sqlite = Arc::new(
+            SqliteUserRepository::connect_read_only(database_path)
+                .await
+                .map_err(|error| {
+                    crate::error::ProxyError::Configuration(format!(
+                        "以只读模式打开用户数据库 {database_path} 失败：{error}"
+                    ))
+                })?,
+        );
+        let access_file_permissions = if config.access_log_database_group_writable {
+            SqliteFilePermissions::OwnerAndGroup
+        } else {
+            SqliteFilePermissions::OwnerOnly
+        };
+        let access_sqlite = Arc::new(
+            SqliteAccessLogRepository::connect_with_permissions(
+                access_database_path,
+                access_file_permissions,
+            )
+            .await
+            .map_err(|error| {
+                crate::error::ProxyError::Configuration(format!(
+                    "打开访问记录数据库 {access_database_path} 失败：{error}"
+                ))
+            })?,
+        );
+        info!(
+            user_database = %sqlite.path().display(),
+            access_database = %access_sqlite.path().display(),
+            ?access_file_permissions,
+            "已启用只读用户 Repository 与独立访问记录 Repository"
+        );
+        let user_repository = sqlite as Arc<dyn UserRepository>;
+        let access_repository = access_sqlite as Arc<dyn AccessLogRepository>;
+        let access_recorder = AccessRecorder::start(access_repository);
+        let user_manager = Arc::new(UserManager::new(user_repository));
 
         // 出站状态在启动时构建；auto 模式会缓存初始路由表，并在默认路由不可用时刷新。
         let egress_state = Arc::new(EgressState::new(
@@ -95,6 +127,7 @@ impl ProxyServer {
         Ok(Self {
             config,
             user_manager,
+            transport_identity,
             egress_state,
             access_recorder,
         })
@@ -113,6 +146,7 @@ impl ProxyServer {
             udp_socket,
             self.config.clone(),
             self.user_manager.clone(),
+            self.transport_identity.clone(),
             self.egress_state.clone(),
             self.access_recorder.clone(),
         );
@@ -134,6 +168,7 @@ impl ProxyServer {
                             let context = ConnectionContext {
                                 proxy_config: self.config.clone(),
                                 user_manager: self.user_manager.clone(),
+                                transport_identity: self.transport_identity.clone(),
                                 egress_state: self.egress_state.clone(),
                                 access_recorder: self.access_recorder.clone(),
                                 compression_mode: self.config.get_compression_mode(),
@@ -302,6 +337,7 @@ where
     let ConnectionContext {
         proxy_config,
         user_manager,
+        transport_identity,
         egress_state,
         access_recorder,
         compression_mode,
@@ -312,6 +348,8 @@ where
         stream,
         compression_mode,
         proxy_config.clone(),
+        user_manager.clone(),
+        transport_identity,
         egress_state,
         access_recorder,
     );

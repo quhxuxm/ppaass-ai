@@ -51,8 +51,7 @@ ppaass-ai/
 │
 ├── config/             # Configuration files
 │   ├── agent.toml            # Agent configuration
-│   ├── proxy.toml            # Proxy configuration
-│   └── users.toml            # Users configuration
+│   └── proxy.toml            # Proxy configuration
 │
 ├── doc/                # Documentation
 │   └── requirements.md       # Original requirements
@@ -140,8 +139,8 @@ cargo build --release --workspace
 
 ### 3. Add a User
 
-Add the user's public key and optional bandwidth limit to `users.toml`.
-Save the matching private key to `keys/myuser.pem`.
+Register the user in Proxy Web, submit a key request, and let an administrator approve it with an
+expiration time. Proxy and Proxy Web then use the same SQLite user database.
 
 ### 4. Configure and Start the Agent
 

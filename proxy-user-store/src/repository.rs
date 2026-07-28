@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 
 use crate::{
-    AccessLogSettings, AccessRecord, BootstrapOutcome, EncryptedPrivateKey, KeyEncryptionBinding,
+    AccessLogSettings, AccessRecord, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
+    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
+    AgentDeviceAuthorizationPoll, BootstrapOutcome, EncryptedPrivateKey, KeyEncryptionBinding,
     KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
     LoginRecord, ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount,
-    NewKeyGenerationRequest, NewManagedUser, NewUserAccount, Result, UserRecord, UserUpdate,
-    WebAccount,
+    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewUserAccount, Result,
+    UserRecord, UserUpdate, WebAccount,
 };
 
 /// 数据库无关的用户 CRUD 接口。
@@ -56,7 +58,7 @@ pub trait AccountRepository: Send + Sync {
     /// 登录校验专用查询；返回值含密码哈希，调用方不得记录。
     async fn get_login_record(&self, login_name: &str) -> Result<Option<LoginRecord>>;
 
-    /// 同时列出有 Web 账号的托管用户与仅来自 users.toml 的 legacy 用户。
+    /// 同时列出有 Web 账号的托管用户与数据库中保留的历史 legacy 用户。
     async fn list_managed_users(&self) -> Result<Vec<ManagedUser>>;
 
     async fn get_managed_user(&self, account_id: &str) -> Result<Option<ManagedUser>>;
@@ -149,4 +151,52 @@ pub trait AccessLogRepository: Send + Sync {
 
     /// 删除早于 `before` 的记录并返回删除数量。
     async fn purge_access_records_before(&self, before: i64) -> Result<u64>;
+}
+
+/// Agent 浏览器设备授权的数据库无关接口。
+///
+/// 原始设备码和用户短码永远不进入该接口；调用方只能传入带域分隔的摘要。
+#[async_trait]
+pub trait AgentDeviceAuthorizationRepository: Send + Sync {
+    async fn create_agent_device_authorization(
+        &self,
+        authorization: NewAgentDeviceAuthorization,
+    ) -> Result<()>;
+
+    async fn get_agent_device_authorization_by_user_code(
+        &self,
+        user_code_hash: &str,
+        now: i64,
+    ) -> Result<Option<AgentDeviceAuthorization>>;
+
+    async fn authorize_agent_device(
+        &self,
+        user_code_hash: &str,
+        account_id: &str,
+        account_auth_version: i64,
+        now: i64,
+    ) -> Result<AgentDeviceAuthorizationDecision>;
+
+    async fn deny_agent_device(
+        &self,
+        user_code_hash: &str,
+        account_id: &str,
+        now: i64,
+    ) -> Result<AgentDeviceAuthorizationDecision>;
+
+    /// 原子执行轮询限频；已消费的 challenge 不再返回账号快照。
+    async fn poll_agent_device_authorization(
+        &self,
+        device_code_hash: &str,
+        now: i64,
+        minimum_interval_seconds: u32,
+    ) -> Result<AgentDeviceAuthorizationPoll>;
+
+    /// 在响应已成功构造后，以账号快照为 CAS 条件把 challenge 标记为已领取。
+    ///
+    /// 同一 device code 的后续重试返回 `AlreadyFinalized` 并必须被调用方拒绝。
+    async fn finalize_agent_device_authorization(
+        &self,
+        claim: AgentDeviceAuthorizationClaim,
+    ) -> Result<AgentDeviceAuthorizationFinalize>;
 }

@@ -186,7 +186,9 @@ async fn run_udp_relay_channel(
                         continue;
                     }
                 };
-                flow_set.dispatch(relay_packet).await;
+                if let Err(error) = flow_set.dispatch(relay_packet).await {
+                    break Some(format!("UDP relay authorization failed: {error}"));
+                }
                 idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
             }
             response = response_rx.recv() => {

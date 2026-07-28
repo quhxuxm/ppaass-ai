@@ -26,7 +26,8 @@ use crate::runtime::{AgentRuntime, EmbeddedAgent};
 #[cfg(windows)]
 use crate::windows_service::{
     send_service_request, start_agent_via_windows_service, stop_agent_via_windows_service,
-    windows_service_is_running, windows_service_matches_current_exe, windows_service_state,
+    trusted_windows_wintun_path, windows_service_is_running, windows_service_matches_current_exe,
+    windows_service_state,
 };
 
 #[cfg(windows)]
@@ -89,6 +90,7 @@ pub(crate) fn start_agent_inner(
         runtime.logs.clone(),
         runtime.last_error.clone(),
         runtime.packet_capture_enabled.load(Ordering::Acquire),
+        cfg!(windows) && !allow_elevation,
     )?;
     runtime
         .packet_capture_enabled
@@ -109,12 +111,18 @@ pub(crate) fn start_agent_inner(
 
 pub(crate) fn stop_agent_inner_command(runtime: &AgentRuntime) -> Result<AgentState, String> {
     #[cfg(windows)]
-    if let Ok(state) = stop_agent_via_windows_service() {
-        return Ok(state);
+    {
+        if windows_service_is_running()? {
+            return stop_agent_via_windows_service();
+        }
+        agent_state(runtime)
     }
 
-    stop_embedded_agent(runtime)?;
-    agent_state(runtime)
+    #[cfg(not(windows))]
+    {
+        stop_embedded_agent(runtime)?;
+        agent_state(runtime)
+    }
 }
 
 pub(crate) fn stop_embedded_agent(runtime: &AgentRuntime) -> Result<(), String> {
@@ -234,11 +242,22 @@ fn spawn_embedded_agent(
     logs: UiLogBuffer,
     last_error: Arc<Mutex<Option<String>>>,
     resume_packet_capture: bool,
+    enforce_trusted_windows_assets: bool,
 ) -> Result<EmbeddedAgent, String> {
     let agent_base_dir = agent_base_dir(&config_path);
     let mut config = desktop_agent_be::config::AgentConfig::load(&config_path)
         .map_err(|err| format!("加载 Agent 配置失败：{err}"))?;
     normalize_agent_config_paths(&mut config, &agent_base_dir);
+    #[cfg(windows)]
+    if enforce_trusted_windows_assets {
+        config.tun.wintun_file = Some(
+            trusted_windows_wintun_path()?
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = enforce_trusted_windows_assets;
     config.log_dir = None;
     #[cfg(target_os = "macos")]
     {

@@ -66,6 +66,25 @@ protected void buildStatusScreen(LinearLayout root) {
         headerRow.addView(vpnToggle, toggleParams);
         header.addView(headerRow, matchWrap());
 
+        LinearLayout accountRow = horizontalRow();
+        accountRow.setPadding(0, dp(14), 0, 0);
+        TextView accountSummary = mutedText(authenticatedAccountSummary(), 12.5f);
+        accountSummary.setSingleLine(true);
+        accountSummary.setEllipsize(TextUtils.TruncateAt.END);
+        accountSummary.setContentDescription(tr("当前登录用户"));
+        accountRow.addView(accountSummary, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        Button logoutButton = secondaryButton("退出登录");
+        logoutButton.setOnClickListener(view -> logoutAgentAccount());
+        LinearLayout.LayoutParams logoutParams = new LinearLayout.LayoutParams(
+                dp(96),
+                dp(40));
+        logoutParams.setMargins(dp(10), 0, 0, 0);
+        accountRow.addView(logoutButton, logoutParams);
+        header.addView(accountRow, matchWrap());
+
         LinearLayout apps = panel(root);
         sectionTitle(apps, "VPN 应用");
 
@@ -437,5 +456,20 @@ protected void buildConnectivityPanel(LinearLayout root) {
         panel.addView(connectivityResultList, resultParams);
         addConnectivityEmptyRow("尚未运行测试");
     }
+
+protected String authenticatedAccountSummary() {
+        StringBuilder summary = new StringBuilder()
+                .append("已登录：")
+                .append(AgentAuthSession.username())
+                .append(" · 密钥版本 ")
+                .append(AgentAuthSession.keyVersion());
+        long expiresAt = AgentAuthSession.expiresAt();
+        if (expiresAt > 0) {
+            summary.append(" · 有效期至 ")
+                    .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                            .format(new Date(expiresAt * 1000L)));
+        }
+        return summary.toString();
+}
 
 }

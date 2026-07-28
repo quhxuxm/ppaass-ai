@@ -8,7 +8,10 @@ use dashmap::DashMap;
 use proxy_user_store::{AccountRepository, AccountStatus, WebAccount};
 use rand::RngExt;
 use std::{
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -23,6 +26,8 @@ pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
 const SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 const PASSWORD_MIN_CHARS: usize = 8;
 const PASSWORD_MAX_BYTES: usize = 256;
+const MAX_ACTIVE_SESSIONS: usize = 10_000;
+const MAX_SESSIONS_PER_ACCOUNT: usize = 8;
 
 #[derive(Clone)]
 pub struct PasswordService {
@@ -135,6 +140,10 @@ fn validate_password(password: &str) -> Result<(), PasswordError> {
 #[derive(Clone)]
 pub struct SessionStore {
     sessions: Arc<DashMap<String, Session>>,
+    issue_lock: Arc<Mutex<()>>,
+    next_issue_sequence: Arc<AtomicU64>,
+    max_sessions: usize,
+    max_sessions_per_account: usize,
     secure_cookies: bool,
 }
 
@@ -143,6 +152,7 @@ struct Session {
     account_id: String,
     csrf_token: String,
     expires_at: i64,
+    issue_sequence: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -155,23 +165,68 @@ pub struct AuthenticatedSession {
 
 impl SessionStore {
     pub fn new(secure_cookies: bool) -> Self {
+        Self::with_limits(
+            secure_cookies,
+            MAX_ACTIVE_SESSIONS,
+            MAX_SESSIONS_PER_ACCOUNT,
+        )
+    }
+
+    fn with_limits(
+        secure_cookies: bool,
+        max_sessions: usize,
+        max_sessions_per_account: usize,
+    ) -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
+            issue_lock: Arc::new(Mutex::new(())),
+            next_issue_sequence: Arc::new(AtomicU64::new(1)),
+            max_sessions: max_sessions.max(1),
+            max_sessions_per_account: max_sessions_per_account.max(1),
             secure_cookies,
         }
     }
 
     pub fn issue(&self, account_id: &str) -> (AuthenticatedSessionToken, HeaderValue) {
-        self.prune_expired();
+        self.issue_at(account_id, now())
+    }
+
+    fn issue_at(
+        &self,
+        account_id: &str,
+        issued_at: i64,
+    ) -> (AuthenticatedSessionToken, HeaderValue) {
+        // 只有 issue 会增加集合大小。串行化这一小段内存操作，确保并发成功登录
+        // 也绝不会越过全局或单账号硬上限。
+        let _issue_guard = self
+            .issue_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.prune_expired_at(issued_at);
+        while self.account_session_count(account_id) >= self.max_sessions_per_account {
+            let Some(token) = self.oldest_session(Some(account_id)) else {
+                break;
+            };
+            self.sessions.remove(&token);
+        }
+        while self.sessions.len() >= self.max_sessions {
+            let Some(token) = self.oldest_session(None) else {
+                break;
+            };
+            self.sessions.remove(&token);
+        }
+
         let token = random_token(32);
         let csrf_token = random_token(32);
-        let expires_at = now() + SESSION_TTL.as_secs() as i64;
+        let expires_at = issued_at + SESSION_TTL.as_secs() as i64;
+        let issue_sequence = self.next_issue_sequence.fetch_add(1, Ordering::Relaxed);
         self.sessions.insert(
             token.clone(),
             Session {
                 account_id: account_id.to_string(),
                 csrf_token: csrf_token.clone(),
                 expires_at,
+                issue_sequence,
             },
         );
         (
@@ -189,6 +244,10 @@ impl SessionStore {
             self.sessions.remove(token);
         }
         clear_session_cookie(self.secure_cookies)
+    }
+
+    pub fn revoke_issued(&self, session: &AuthenticatedSessionToken) {
+        self.sessions.remove(session._token.as_str());
     }
 
     pub async fn authenticate(
@@ -236,10 +295,29 @@ impl SessionStore {
         Ok(())
     }
 
-    fn prune_expired(&self) {
-        let current = now();
+    fn prune_expired_at(&self, current: i64) {
         self.sessions
             .retain(|_, session| session.expires_at > current);
+    }
+
+    fn account_session_count(&self, account_id: &str) -> usize {
+        self.sessions
+            .iter()
+            .filter(|entry| entry.account_id == account_id)
+            .count()
+    }
+
+    fn oldest_session(&self, account_id: Option<&str>) -> Option<String> {
+        self.sessions
+            .iter()
+            .filter(|entry| account_id.is_none_or(|account_id| entry.account_id == account_id))
+            .min_by_key(|entry| entry.issue_sequence)
+            .map(|entry| entry.key().clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.sessions.len()
     }
 }
 
@@ -384,5 +462,34 @@ mod tests {
             HeaderValue::from_static("other=1; ppaass_session=expected; suffix=2"),
         );
         assert_eq!(session_token(&headers), Some("expected"));
+    }
+
+    #[test]
+    fn session_store_evicts_oldest_sessions_at_account_and_global_limits() {
+        let sessions = SessionStore::with_limits(false, 3, 2);
+        let (alice_one, _) = sessions.issue_at("alice", 1_000);
+        let (alice_two, _) = sessions.issue_at("alice", 1_001);
+        let (alice_three, _) = sessions.issue_at("alice", 1_002);
+        assert!(!sessions.sessions.contains_key(&alice_one._token));
+        assert!(sessions.sessions.contains_key(&alice_two._token));
+        assert!(sessions.sessions.contains_key(&alice_three._token));
+
+        let (bob_one, _) = sessions.issue_at("bob", 1_003);
+        let (bob_two, _) = sessions.issue_at("bob", 1_004);
+        assert_eq!(sessions.active_session_count(), 3);
+        assert!(!sessions.sessions.contains_key(&alice_two._token));
+        assert!(sessions.sessions.contains_key(&alice_three._token));
+        assert!(sessions.sessions.contains_key(&bob_one._token));
+        assert!(sessions.sessions.contains_key(&bob_two._token));
+    }
+
+    #[test]
+    fn session_store_prunes_expired_entries_before_capacity_eviction() {
+        let sessions = SessionStore::with_limits(false, 2, 2);
+        let (expired, _) = sessions.issue_at("alice", 0);
+        let (current, _) = sessions.issue_at("bob", SESSION_TTL.as_secs() as i64 + 1);
+        assert!(!sessions.sessions.contains_key(&expired._token));
+        assert!(sessions.sessions.contains_key(&current._token));
+        assert_eq!(sessions.active_session_count(), 1);
     }
 }

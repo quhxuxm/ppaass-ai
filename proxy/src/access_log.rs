@@ -1,8 +1,7 @@
 //! Proxy 访问记录的异步写入层。
 //!
 //! 代理连接的热路径只向有界队列执行一次 `try_send`，SQLite 等持久化工作由
-//! 后台任务串行完成。未配置共享用户数据库时 recorder 是 no-op，从而完整保留
-//! `users.toml` 模式。
+//! 后台任务串行完成。默认 no-op recorder 仅供不需要持久化的内部测试使用。
 
 use protocol::{Address, TransportProtocol};
 use proxy_user_store::{

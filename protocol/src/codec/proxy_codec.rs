@@ -10,7 +10,7 @@ pub struct ProxyCodec {
 }
 
 impl ProxyCodec {
-    pub fn new(state: Option<Arc<CipherState>>) -> Self {
+    pub fn new(state: Arc<CipherState>) -> Self {
         Self {
             inner: MessageCodec::new(state),
         }
@@ -31,6 +31,17 @@ impl Decoder for ProxyCodec {
                             format!("Failed to deserialize proxy request: {}", e),
                         )
                     })?;
+                let expected_type = match &request {
+                    ProxyRequest::Auth(_) => MessageType::AuthRequest,
+                    ProxyRequest::Connect(_) => MessageType::ConnectRequest,
+                    ProxyRequest::Data(_) => MessageType::Data,
+                };
+                if message.message_type != expected_type {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "proxy request type does not match authenticated frame type",
+                    ));
+                }
                 Ok(Some(request))
             }
             None => Ok(None),

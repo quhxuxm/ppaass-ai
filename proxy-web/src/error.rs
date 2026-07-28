@@ -13,6 +13,7 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    retry_after_seconds: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +33,7 @@ impl ApiError {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_request",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl ApiError {
             status: StatusCode::UNAUTHORIZED,
             code: "unauthorized",
             message: "请先登录".to_string(),
+            retry_after_seconds: None,
         }
     }
 
@@ -48,6 +51,7 @@ impl ApiError {
             status: StatusCode::UNAUTHORIZED,
             code: "invalid_credentials",
             message: "用户名或密码错误".to_string(),
+            retry_after_seconds: None,
         }
     }
 
@@ -56,6 +60,7 @@ impl ApiError {
             status: StatusCode::FORBIDDEN,
             code: "forbidden",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -64,6 +69,7 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             code,
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -72,6 +78,7 @@ impl ApiError {
             status: StatusCode::NOT_FOUND,
             code: "not_found",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -80,14 +87,7 @@ impl ApiError {
             status: StatusCode::METHOD_NOT_ALLOWED,
             code: "method_not_allowed",
             message: "该 API 不支持此 HTTP 方法".to_string(),
-        }
-    }
-
-    pub fn bad_gateway(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_GATEWAY,
-            code: "oauth_upstream_error",
-            message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -96,6 +96,21 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
             message: "服务器内部错误".to_string(),
+            retry_after_seconds: None,
+        }
+    }
+
+    pub fn device_authorization_error(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+        retry_after_seconds: Option<u32>,
+    ) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+            retry_after_seconds,
         }
     }
 
@@ -114,10 +129,11 @@ impl ApiError {
                 "invalid_json"
             },
             message: if status == StatusCode::PAYLOAD_TOO_LARGE {
-                "请求体不能超过 20 KiB".to_string()
+                "请求体不能超过 32 KiB".to_string()
             } else {
                 "JSON 请求格式或 Content-Type 无效".to_string()
             },
+            retry_after_seconds: None,
         }
     }
 }
@@ -130,11 +146,13 @@ impl From<UserRepositoryError> for ApiError {
                 status: StatusCode::CONFLICT,
                 code: "user_exists",
                 message: format!("用户 {username} 已存在"),
+                retry_after_seconds: None,
             },
             UserRepositoryError::NotFound(username) => Self {
                 status: StatusCode::NOT_FOUND,
                 code: "user_not_found",
                 message: format!("用户 {username} 不存在"),
+                retry_after_seconds: None,
             },
             UserRepositoryError::LastAdmin => {
                 Self::conflict("last_admin", "不能停用、降级或删除最后一个启用的管理员")
@@ -169,6 +187,21 @@ impl From<UserRepositoryError> for ApiError {
             UserRepositoryError::ReviewerNotActiveAdmin { .. } => {
                 Self::forbidden("审批人不是启用的管理员")
             }
+            UserRepositoryError::AgentDeviceAuthorizationCapacity => {
+                Self::device_authorization_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "device_authorization_capacity",
+                    "当前设备授权请求过多，请稍后重试",
+                    Some(30),
+                )
+            }
+            UserRepositoryError::UserAccountCapacity => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "registration_capacity",
+                message: "当前账号容量已满，请联系管理员".to_string(),
+                retry_after_seconds: None,
+            },
+            UserRepositoryError::AgentDeviceAuthorizationConflict => Self::internal(),
             error => {
                 error!(error = %error, "用户管理 API 数据库操作失败");
                 Self::internal()
@@ -194,6 +227,13 @@ impl IntoResponse for ApiError {
                 axum::http::header::WWW_AUTHENTICATE,
                 axum::http::HeaderValue::from_static("Session"),
             );
+        }
+        if let Some(retry_after_seconds) = self.retry_after_seconds
+            && let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_seconds.to_string())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
         }
         response
     }

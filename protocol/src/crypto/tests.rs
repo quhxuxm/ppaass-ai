@@ -1,4 +1,4 @@
-use super::{RsaKeyPair, encrypt_oaep_sha256, verify_pss_sha256};
+use super::{RsaKeyPair, encrypt_oaep_sha256, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 
 fn key_pair_and_public_key() -> (RsaKeyPair, rsa::RsaPublicKey) {
     let pair = RsaKeyPair::generate(2048).unwrap();
@@ -39,4 +39,34 @@ fn oaep_sha256_rejects_ciphertext_tampering() {
     let mut tampered_ciphertext = ciphertext;
     tampered_ciphertext[29] ^= 0x40;
     assert!(pair.decrypt_oaep_sha256(&tampered_ciphertext).is_err());
+}
+
+#[test]
+fn labelled_oaep_requires_the_exact_tcp_context_label_and_key() {
+    let (pair, public_key) = key_pair_and_public_key();
+    let (wrong_pair, _) = key_pair_and_public_key();
+    let plaintext = b"tcp v2 session secret";
+    let ciphertext =
+        encrypt_oaep_sha256_labelled(&public_key, "ppaass/tcp-test/v2", plaintext).unwrap();
+
+    assert_eq!(
+        pair.decrypt_oaep_sha256_labelled("ppaass/tcp-test/v2", &ciphertext)
+            .unwrap(),
+        plaintext
+    );
+    assert!(
+        pair.decrypt_oaep_sha256_labelled("ppaass/tcp-test/v1", &ciphertext)
+            .is_err()
+    );
+    assert!(
+        wrong_pair
+            .decrypt_oaep_sha256_labelled("ppaass/tcp-test/v2", &ciphertext)
+            .is_err()
+    );
+
+    let short_ciphertext = &ciphertext[..ciphertext.len() - 1];
+    assert!(
+        pair.decrypt_oaep_sha256_labelled("ppaass/tcp-test/v2", short_ciphertext)
+            .is_err()
+    );
 }

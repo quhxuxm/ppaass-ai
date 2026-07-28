@@ -19,7 +19,6 @@ use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
 use super::udp_relay::UdpRelay;
-use crate::android_log;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::Result;
 use crate::yamux_session::AndroidYamuxSessionManager;
@@ -299,9 +298,6 @@ pub(super) async fn handle_tun_udp(
     {
         let target_str = address_to_string(&address);
         debug!("Android TUN UDP direct -> {}", target_str);
-        android_log::info(format!(
-            "Android TUN UDP DIRECT {target_str} -> {connect_target}"
-        ));
         relay_direct_udp(
             client,
             target,
@@ -320,7 +316,6 @@ pub(super) async fn handle_tun_udp(
         debug!("Android TUN UDP DNS -> proxy -> {}", target_label);
     } else {
         debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
-        android_log::info(format!("Android TUN UDP PROXY {proxy_label}"));
     }
     let proxy_io = match udp_sessions
         .connect_to_target(proxy_address, TransportProtocol::Udp)
@@ -328,9 +323,7 @@ pub(super) async fn handle_tun_udp(
     {
         Ok(proxy_io) => proxy_io,
         Err(e) => {
-            android_log::error(format!(
-                "Android TUN UDP PROXY connect failed {proxy_label}: {e}"
-            ));
+            debug!("Android TUN UDP proxy connect failed {proxy_label}: {e}");
             return Err(e);
         }
     };

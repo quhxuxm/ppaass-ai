@@ -2,7 +2,7 @@ name: Build and Run Unit Tests
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
 
 jobs:
@@ -22,17 +22,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.93.0"
+          toolchain: "1.95.0"
           components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --workspace --all-targets --release
+        run: cargo build --workspace --all-targets --release --locked
 
       - name: Unit Tests
-        run: cargo test --workspace --lib --bins
+        run: cargo test --workspace --lib --bins --locked
 
   desktop-build:
     name: Desktop build (${{ matrix.os }})
@@ -58,7 +58,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.93.0"
+          toolchain: "1.95.0"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -68,5 +68,116 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci
 
+      - name: Test desktop frontend and credential handling
+        run: npm test
+
+      - name: Test desktop Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
       - name: Build desktop application
         run: npm run tauri build
+
+      - name: Upload Windows installers
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppaass-desktop-agent-windows
+          path: |
+            desktop-agent-ui/src-tauri/target/release/bundle/msi/*.msi
+            desktop-agent-ui/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  android-build:
+    name: Android agent
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            android-agent/**/*.gradle*
+            android-agent/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and NDK
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}"
+          android_ndk_home="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+          {
+            echo "ANDROID_NDK_HOME=${android_ndk_home}"
+            echo "ANDROID_NDK_ROOT=${android_ndk_home}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk@4.1.2
+
+      - name: Test and lint Android Java
+        working-directory: android-agent
+        run: |
+          ./gradlew testDebugUnitTest lintDebug \
+            -PskipRustBuild=true \
+            --no-daemon \
+            --stacktrace
+
+      - name: Test Android Rust native
+        run: |
+          cargo test \
+            --manifest-path android-agent/native/Cargo.toml \
+            --locked
+
+      - name: Build Android Rust native
+        run: |
+          cargo ndk \
+            -t arm64-v8a \
+            -t armeabi-v7a \
+            -t x86_64 \
+            -P 26 \
+            -o android-agent/app/src/main/jniLibs \
+            build \
+            --manifest-path android-agent/native/Cargo.toml \
+            --release \
+            --locked \
+            --jobs 1
+
+      - name: Build debug APK
+        working-directory: android-agent
+        run: |
+          ./gradlew assembleDebug \
+            -PskipRustBuild=true \
+            --no-daemon \
+            --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppaass-android-agent-debug
+          path: android-agent/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

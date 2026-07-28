@@ -16,7 +16,7 @@ clap.workspace = true
 dashmap.workspace = true
 http-body-util.workspace = true
 rand.workspace = true
-reqwest.workspace = true
+rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -26,7 +26,6 @@ tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

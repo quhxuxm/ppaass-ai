@@ -1,17 +1,19 @@
 use crate::{
     AccessLogRepository, AccessLogSettings, AccessProtocol, AccessRecord, AccountRepository,
-    AccountRole, AccountStatus, ApprovedKeyMaterial, BootstrapOutcome,
-    DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey, ExternalIdentity, ImportOutcome,
-    KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation, KeyRequestApproval,
-    KeyRequestApprovalResult, KeyRequestKind, KeyRequestStatus, LoginRecord,
-    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
-    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewKeyGenerationRequest,
+    AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
+    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
+    AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
+    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, BootstrapOutcome,
+    DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding,
+    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
+    KeyRequestKind, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
+    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
     NewManagedUser, NewUser, NewUserAccount, Result, UserOrigin, UserRecord, UserRepository,
     UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_permissions,
-    normalize_public_key_pem, normalize_username, parse_expires_at, validate_user,
+    normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
-use serde::{Deserialize, Deserializer, de};
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{
@@ -19,19 +21,18 @@ use sqlx::{
     },
 };
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use time::OffsetDateTime;
-use tracing::{debug, info, instrument};
+use tokio::sync::Mutex;
+use tracing::{info, instrument, warn};
 
-const TOML_IMPORT_MARKER: &str = "users_toml_import_v1";
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 4;
-const DEFAULT_PERMISSIONS_SQL: &str = "proxy.connect.tcp,proxy.connect.udp";
+const SQLITE_SCHEMA_VERSION: i64 = 5;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -42,6 +43,67 @@ const MAX_AVATAR_URL_BYTES: usize = 2048;
 const MAX_PRIVATE_KEY_ENVELOPE_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_ACCESS_TARGET_HOST_BYTES: usize = 1_024;
+const DEVICE_CODE_HASH_BYTES: usize = 43;
+const USER_CODE_HASH_BYTES: usize = 43;
+const MAX_AGENT_CLIENT_NAME_BYTES: usize = 128;
+const MAX_AGENT_PLATFORM_BYTES: usize = 32;
+const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
+const MAX_USER_ACCOUNTS: i64 = 100_000;
+const DEVICE_AUTHORIZATION_HISTORY_SECONDS: i64 = 86_400;
+const DEVICE_AUTHORIZATION_MAINTENANCE_SECONDS: i64 = 30;
+// These two legacy demo keypairs were committed to the public repository. Matching legacy
+// profiles are disabled on every writable Web startup so an already-imported production
+// database cannot silently keep accepting the compromised private keys. A legitimate user can
+// recover only by rotating to a different key through the normal admin workflow.
+const COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS: [&str; 2] = [
+    r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtm6UwXI/ZmUrWPF9gkXs
+vmnh/77vci16aGJBZv9BM7+wuY2ml7mvdYFbGVPiKB9LC4tudvGmv298XuecKxuz
+HRoSwspj2qnr8wA1qsjHlVKaACVKKSgajlRE4bkBxylyfIZmXGOQrrzvuu61Ku3S
+xAPMzdW5EUIaHHJ5bd01ZfEJ6vsJKLG8cT9Iyj+ssED8pRTRp2jbtVJ/sNqc0tS1
+MznDGEVOa8UzyZUa8aGaQjGQExAzRCCDzh3ceSedIhp4ySs6Kud7nsQSgFVc0pxc
+PxzO8/ImXr5KWigaTnkfTVGFzFHrzgTdqPJiLtNRPCmxQAMZpu/U9nxCA5YY2xR5
+ywIDAQAB
+-----END PUBLIC KEY-----"#,
+    r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0yqkQjUeFaYbsJxiUJtW
+s3Jd22uAg7fyGyZZAtzI6JNmF/L8zeHxoWhUjEOUuwHmRn4AaEvgSbjFIwnPuVGm
+qCAd8h31379p3Mp5ahA4IMDarb6PUoKDDIxSAYUfkRtpjNZilPVeh2eFWyH41NrS
+NyuKhxQ/aMnVoDrwuEwJQM5K8hdo0pwnfQv3yNtX16E3woe/vTb5f2fvPMZfz0sQ
+rqKBednzxoJ3Zd5SCHBBTnD4u6VVzKlkQc9qpsSIkhJ8jQK4SsxCXlKH2vrsYAHj
+Xsg2dea7zeV8pRw0uL010Cx208clFEtV3EMdgY2iSpbTW+gOuhgciVdzjR/EAXtH
+lwIDAQAB
+-----END PUBLIC KEY-----"#,
+];
+
+/// Unix file permissions applied to the SQLite database and its sidecar files.
+///
+/// `OwnerAndGroup` only adds group read/write bits. It intentionally does not
+/// change ownership: deployments using separate service users must place the
+/// database in a trusted setgid directory owned by their shared group. On
+/// non-Unix platforms this policy is accepted but file access remains governed
+/// by the platform's native ACLs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SqliteFilePermissions {
+    /// Restrict the database, WAL, SHM and rollback journal to the owner (`0600`).
+    #[default]
+    OwnerOnly,
+    /// Permit the owner to write and the inherited group to read (`0640`).
+    OwnerReadWriteGroupRead,
+    /// Permit both the owner and the inherited group to access the files (`0660`).
+    OwnerAndGroup,
+}
+
+#[cfg(unix)]
+impl SqliteFilePermissions {
+    pub(crate) const fn unix_mode(self) -> u32 {
+        match self {
+            Self::OwnerOnly => 0o600,
+            Self::OwnerReadWriteGroupRead => 0o640,
+            Self::OwnerAndGroup => 0o660,
+        }
+    }
+}
 
 const USER_SELECT: &str = "username, public_key_pem, permissions, enabled, origin, \
                            key_version, expires_at, created_at, updated_at";
@@ -56,33 +118,130 @@ const KEY_REQUEST_SELECT: &str = "request_id, account_id, kind, status, expected
                                   approved_expires_at";
 const ACCESS_RECORD_SELECT: &str = "record_id, username, protocol, target_host, target_port, \
                                     access_count, accessed_at";
+const DEVICE_AUTHORIZATION_SELECT: &str = "device_code_hash, user_code_hash, client_name, \
+                                           platform, status, authorized_account_id, \
+                                           authorized_auth_version, created_at, expires_at, \
+                                           authorized_at, consumed_at, last_polled_at";
 
 #[derive(Debug, Clone)]
 pub struct SqliteUserRepository {
     pool: SqlitePool,
     path: PathBuf,
+    file_permissions: SqliteFilePermissions,
+    max_user_accounts: i64,
+    device_authorization_maintenance: Arc<Mutex<DeviceAuthorizationMaintenance>>,
 }
 
-#[derive(Debug, Deserialize)]
-struct UsersToml {
-    users: BTreeMap<String, TomlUser>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TomlUser {
-    username: String,
-    public_key_pem: String,
-    #[serde(
-        default,
-        alias = "expire_at",
-        deserialize_with = "deserialize_expires_at"
-    )]
-    expires_at: Option<String>,
+#[derive(Debug)]
+struct DeviceAuthorizationMaintenance {
+    active_count: i64,
+    next_run_at: i64,
 }
 
 impl SqliteUserRepository {
     #[instrument(skip(path), fields(database = %path.as_ref().display()))]
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self> {
+        Self::connect_with_permissions(path, SqliteFilePermissions::OwnerOnly).await
+    }
+
+    /// Opens an already-initialized user database without any write capability.
+    ///
+    /// This is the only constructor the Proxy process should use. It neither creates
+    /// directories/files nor runs migrations/imports, and every SQLite connection has both
+    /// `SQLITE_OPEN_READONLY` and `PRAGMA query_only=ON`. Proxy Web must initialize and migrate
+    /// the database before Proxy starts.
+    #[instrument(skip(path), fields(database = %path.as_ref().display(), read_only = true))]
+    pub async fn connect_read_only(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "只读用户数据库 {} 不存在或无法访问：{error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "只读用户数据库路径不是普通文件（拒绝符号链接）：{}",
+                    path.display()
+                ),
+            )
+            .into());
+        }
+
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .read_only(true)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(5))
+            .foreign_keys(true)
+            .pragma("query_only", "ON");
+        let pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(8)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(options)
+            .await?;
+
+        let schema_version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&pool)
+            .await?;
+        if schema_version != SQLITE_SCHEMA_VERSION {
+            return Err(UserRepositoryError::InvalidSchema(format!(
+                "Proxy 只读用户数据库版本必须为 {SQLITE_SCHEMA_VERSION}，实际为 \
+                 {schema_version}；请先启动 Proxy Web 完成迁移"
+            )));
+        }
+        // Proxy authentication only needs this table. A zero-row query validates its complete
+        // runtime contract without loading user or key data.
+        sqlx::query(&format!("SELECT {USER_SELECT} FROM users LIMIT 0"))
+            .execute(&pool)
+            .await?;
+
+        let store = Self {
+            pool,
+            path,
+            // A read-only repository never applies this mode; retain a deterministic value so
+            // the common repository representation does not expose SQLite details to callers.
+            file_permissions: SqliteFilePermissions::OwnerOnly,
+            max_user_accounts: MAX_USER_ACCOUNTS,
+            device_authorization_maintenance: Arc::new(Mutex::new(
+                DeviceAuthorizationMaintenance {
+                    active_count: 0,
+                    next_run_at: i64::MIN,
+                },
+            )),
+        };
+        info!(
+            database = %store.path.display(),
+            schema_version = SQLITE_SCHEMA_VERSION,
+            "SQLite 用户数据库已以强制只读模式打开"
+        );
+        Ok(store)
+    }
+
+    /// Opens the SQLite repository with an explicit Unix file permission policy.
+    ///
+    /// The policy is applied before SQLite opens the database and again after
+    /// migration. Existing database, WAL, SHM and rollback journal files are
+    /// opened without following a terminal symlink before their modes are
+    /// changed. SQLite derives newly-created sidecar modes from the database
+    /// file, so they inherit the same `0600` or `0660` policy.
+    #[instrument(
+        skip(path),
+        fields(
+            database = %path.as_ref().display(),
+            file_permissions = ?file_permissions
+        )
+    )]
+    pub async fn connect_with_permissions(
+        path: impl AsRef<Path>,
+        file_permissions: SqliteFilePermissions,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path
             .parent()
@@ -90,7 +249,7 @@ impl SqliteUserRepository {
         {
             fs::create_dir_all(parent)?;
         }
-        Self::prepare_database_file(&path)?;
+        Self::prepare_database_files(&path, file_permissions)?;
 
         let options = SqliteConnectOptions::new()
             .filename(&path)
@@ -106,12 +265,24 @@ impl SqliteUserRepository {
             .connect_with(options)
             .await?;
 
-        let store = Self { pool, path };
+        let store = Self {
+            pool,
+            path,
+            file_permissions,
+            max_user_accounts: MAX_USER_ACCOUNTS,
+            device_authorization_maintenance: Arc::new(Mutex::new(
+                DeviceAuthorizationMaintenance {
+                    active_count: 0,
+                    next_run_at: i64::MIN,
+                },
+            )),
+        };
         store.migrate().await?;
-        store.restrict_file_permissions()?;
+        store.apply_file_permissions()?;
         info!(
             database = %store.path.display(),
             schema_version = SQLITE_SCHEMA_VERSION,
+            file_permissions = ?store.file_permissions,
             "SQLite 用户数据库已就绪"
         );
         Ok(store)
@@ -154,6 +325,12 @@ impl SqliteUserRepository {
         if schema_version < 4 {
             migrate_access_records_to_v4(&mut transaction).await?;
         }
+        if schema_version < 5 {
+            create_v5_tables(&mut transaction).await?;
+        }
+        ensure_v5_indexes(&mut transaction).await?;
+        let revoked_compromised_profiles =
+            revoke_compromised_bundled_demo_profiles(&mut transaction).await?;
 
         validate_schema(&mut transaction).await?;
         if sqlx::query("PRAGMA foreign_key_check")
@@ -168,116 +345,18 @@ impl SqliteUserRepository {
 
         if schema_version < SQLITE_SCHEMA_VERSION {
             // 版本号是迁移的提交标记，必须最后写入。
-            sqlx::query("PRAGMA user_version = 4")
+            sqlx::query("PRAGMA user_version = 5")
                 .execute(&mut *transaction)
                 .await?;
         }
         transaction.commit().await?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, users_path), fields(users_toml = %users_path.as_ref().display()))]
-    pub async fn import_users_toml_once(
-        &self,
-        users_path: impl AsRef<Path>,
-    ) -> Result<ImportOutcome> {
-        let users_path = users_path.as_ref();
-        let already_handled =
-            sqlx::query_scalar::<_, i64>("SELECT 1 FROM app_metadata WHERE key = ? LIMIT 1")
-                .bind(TOML_IMPORT_MARKER)
-                .fetch_optional(&self.pool)
-                .await?
-                .is_some();
-        if already_handled {
-            return Ok(ImportOutcome::AlreadyHandled);
-        }
-
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let marker_result = sqlx::query(
-            "INSERT INTO app_metadata (key, value) VALUES (?, 'in_progress') \
-             ON CONFLICT(key) DO NOTHING",
-        )
-        .bind(TOML_IMPORT_MARKER)
-        .execute(&mut *transaction)
-        .await?;
-        if marker_result.rows_affected() == 0 {
-            transaction.rollback().await?;
-            return Ok(ImportOutcome::AlreadyHandled);
-        }
-
-        let existing_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&mut *transaction)
-            .await?;
-        if existing_users > 0 {
-            let existing_users = usize::try_from(existing_users).unwrap_or(usize::MAX);
-            set_import_marker(
-                &mut transaction,
-                &format!("skipped_nonempty:{existing_users}"),
-            )
-            .await?;
-            transaction.commit().await?;
-            info!(
-                users = existing_users,
-                "SQLite 已有用户，跳过 users.toml 首次导入"
+        if revoked_compromised_profiles != 0 {
+            warn!(
+                profiles = revoked_compromised_profiles,
+                "已停用使用公开仓库泄露私钥的 legacy 用户；必须轮换密钥后再启用"
             );
-            return Ok(ImportOutcome::SkippedNonEmptyDatabase {
-                users: existing_users,
-            });
         }
-
-        if !users_path.try_exists()? {
-            transaction.rollback().await?;
-            debug!("users.toml 不存在，跳过首次导入");
-            return Ok(ImportOutcome::SourceMissing);
-        }
-
-        // 在持有写锁时校验小型 TOML 文件，避免另一服务并发创建首个用户后仍导入。
-        let content = fs::read_to_string(users_path)?;
-        let users: UsersToml = toml::from_str(&content)?;
-        let mut validated = Vec::with_capacity(users.users.len());
-        for (key, user) in users.users {
-            let (username, public_key_pem) = validate_user(&user.username, &user.public_key_pem)
-                .map_err(|error| {
-                    UserRepositoryError::InvalidImport(format!("用户 {key}：{error}"))
-                })?;
-            if key != username {
-                return Err(UserRepositoryError::InvalidImport(format!(
-                    "用户配置键 {key} 与 username 字段 {} 不一致",
-                    user.username
-                )));
-            }
-            let expires_at = user
-                .expires_at
-                .as_deref()
-                .map(|value| parse_expires_at(&username, value))
-                .transpose()
-                .map_err(|error| UserRepositoryError::InvalidImport(error.to_string()))?;
-            validated.push((username, public_key_pem, expires_at));
-        }
-
-        let now = now();
-        for (username, public_key_pem, expires_at) in &validated {
-            sqlx::query(
-                "INSERT INTO users \
-                 (username, public_key_pem, permissions, enabled, origin, key_version, \
-                  expires_at, created_at, updated_at) \
-                 VALUES (?, ?, ?, 1, 'legacy', 1, ?, ?, ?)",
-            )
-            .bind(username)
-            .bind(public_key_pem)
-            .bind(DEFAULT_PERMISSIONS_SQL)
-            .bind(*expires_at)
-            .bind(now)
-            .bind(now)
-            .execute(&mut *transaction)
-            .await?;
-        }
-        set_import_marker(&mut transaction, &format!("imported:{}", validated.len())).await?;
-        transaction.commit().await?;
-        info!(users = validated.len(), "users.toml 已首次导入 SQLite");
-        Ok(ImportOutcome::Imported {
-            users: validated.len(),
-        })
+        Ok(())
     }
 
     /// 使用完整的新用户模型创建 Proxy profile。
@@ -466,41 +545,37 @@ impl SqliteUserRepository {
     }
 
     #[cfg(unix)]
-    fn prepare_database_file(path: &Path) -> Result<()> {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(path)?;
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(path, permissions)?;
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn prepare_database_file(_path: &Path) -> Result<()> {
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    fn restrict_file_permissions(&self) -> Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-
-        for path in database_files(&self.path) {
-            if path.try_exists()? {
-                let mut permissions = fs::metadata(&path)?.permissions();
-                permissions.set_mode(0o600);
-                fs::set_permissions(path, permissions)?;
-            }
+    fn prepare_database_files(
+        database_path: &Path,
+        file_permissions: SqliteFilePermissions,
+    ) -> Result<()> {
+        let mode = file_permissions.unix_mode();
+        secure_open_and_set_mode(database_path, mode, true)?;
+        for path in database_sidecar_files(database_path) {
+            secure_open_and_set_mode(&path, mode, false)?;
         }
         Ok(())
     }
 
     #[cfg(not(unix))]
-    fn restrict_file_permissions(&self) -> Result<()> {
+    fn prepare_database_files(
+        _database_path: &Path,
+        _file_permissions: SqliteFilePermissions,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn apply_file_permissions(&self) -> Result<()> {
+        let mode = self.file_permissions.unix_mode();
+        for path in database_files(&self.path) {
+            secure_open_and_set_mode(&path, mode, false)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn apply_file_permissions(&self) -> Result<()> {
         Ok(())
     }
 }
@@ -659,6 +734,430 @@ impl AccessLogRepository for SqliteUserRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+}
+
+#[async_trait]
+impl AgentDeviceAuthorizationRepository for SqliteUserRepository {
+    #[instrument(skip(self, authorization))]
+    async fn create_agent_device_authorization(
+        &self,
+        authorization: NewAgentDeviceAuthorization,
+    ) -> Result<()> {
+        let device_code_hash =
+            normalize_code_hash("device_code_hash", &authorization.device_code_hash)?;
+        let user_code_hash = normalize_code_hash("user_code_hash", &authorization.user_code_hash)?;
+        let client_name = normalize_agent_client_name(&authorization.client_name)?;
+        let platform = normalize_agent_platform(&authorization.platform)?;
+        if authorization.created_at < 0 || authorization.expires_at <= authorization.created_at {
+            return Err(
+                ValidationError::InvalidAccountField("设备授权有效期无效".to_string()).into(),
+            );
+        }
+
+        let mut maintenance = self.device_authorization_maintenance.lock().await;
+        if authorization.created_at >= maintenance.next_run_at {
+            let history_cutoff = authorization
+                .created_at
+                .saturating_sub(DEVICE_AUTHORIZATION_HISTORY_SECONDS);
+            let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+            sqlx::query(
+                "DELETE FROM agent_device_authorizations \
+                 WHERE expires_at < ? OR (consumed_at IS NOT NULL AND consumed_at < ?)",
+            )
+            .bind(history_cutoff)
+            .bind(history_cutoff)
+            .execute(&mut *transaction)
+            .await?;
+            maintenance.active_count = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_device_authorizations \
+                 WHERE expires_at > ? AND status IN ('pending', 'authorized')",
+            )
+            .bind(authorization.created_at)
+            .fetch_one(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            maintenance.next_run_at = authorization
+                .created_at
+                .saturating_add(DEVICE_AUTHORIZATION_MAINTENANCE_SECONDS);
+        }
+        if maintenance.active_count >= MAX_ACTIVE_DEVICE_AUTHORIZATIONS {
+            return Err(UserRepositoryError::AgentDeviceAuthorizationCapacity);
+        }
+
+        let insert = sqlx::query(
+            "INSERT INTO agent_device_authorizations \
+             (device_code_hash, user_code_hash, client_name, platform, status, \
+              authorized_account_id, authorized_auth_version, created_at, expires_at, \
+              authorized_at, consumed_at, last_polled_at) \
+             VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL, NULL, NULL) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(device_code_hash)
+        .bind(user_code_hash)
+        .bind(client_name)
+        .bind(platform)
+        .bind(authorization.created_at)
+        .bind(authorization.expires_at)
+        .execute(&self.pool)
+        .await?;
+        if insert.rows_affected() != 1 {
+            return Err(UserRepositoryError::AgentDeviceAuthorizationConflict);
+        }
+        maintenance.active_count = maintenance.active_count.saturating_add(1);
+        Ok(())
+    }
+
+    async fn get_agent_device_authorization_by_user_code(
+        &self,
+        user_code_hash: &str,
+        now: i64,
+    ) -> Result<Option<AgentDeviceAuthorization>> {
+        let user_code_hash = normalize_code_hash("user_code_hash", user_code_hash)?;
+        if now < 0 {
+            return Err(
+                ValidationError::InvalidAccountField("当前时间不能为负数".to_string()).into(),
+            );
+        }
+        let query = format!(
+            "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
+             WHERE user_code_hash = ?"
+        );
+        sqlx::query(&query)
+            .bind(user_code_hash)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(row_to_agent_device_authorization)
+            .transpose()
+    }
+
+    #[instrument(skip(self, user_code_hash), fields(account_id, account_auth_version))]
+    async fn authorize_agent_device(
+        &self,
+        user_code_hash: &str,
+        account_id: &str,
+        account_auth_version: i64,
+        now: i64,
+    ) -> Result<AgentDeviceAuthorizationDecision> {
+        let user_code_hash = normalize_code_hash("user_code_hash", user_code_hash)?;
+        let account_id = normalize_account_id(account_id)?;
+        if account_auth_version < 1 || now < 0 {
+            return Err(ValidationError::InvalidAccountField(
+                "设备授权账号版本或时间无效".to_string(),
+            )
+            .into());
+        }
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let Some(record) =
+            fetch_agent_device_authorization_by_user_code(&mut transaction, &user_code_hash)
+                .await?
+        else {
+            transaction.rollback().await?;
+            return Ok(AgentDeviceAuthorizationDecision::NotFound);
+        };
+        let decision = if record.expires_at <= now {
+            AgentDeviceAuthorizationDecision::Expired
+        } else {
+            match record.status {
+                AgentDeviceAuthorizationStatus::Pending => {
+                    sqlx::query(
+                        "UPDATE agent_device_authorizations SET status = 'authorized', \
+                         authorized_account_id = ?, authorized_auth_version = ?, authorized_at = ? \
+                         WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ?",
+                    )
+                    .bind(&account_id)
+                    .bind(account_auth_version)
+                    .bind(now)
+                    .bind(&user_code_hash)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+                    AgentDeviceAuthorizationDecision::Authorized
+                }
+                AgentDeviceAuthorizationStatus::Authorized
+                    if record.authorized_account_id.as_deref() == Some(account_id.as_str()) =>
+                {
+                    AgentDeviceAuthorizationDecision::AlreadyAuthorized
+                }
+                AgentDeviceAuthorizationStatus::Denied => {
+                    AgentDeviceAuthorizationDecision::AlreadyDenied
+                }
+                AgentDeviceAuthorizationStatus::Authorized
+                | AgentDeviceAuthorizationStatus::Consumed => {
+                    AgentDeviceAuthorizationDecision::Finalized
+                }
+            }
+        };
+        transaction.commit().await?;
+        Ok(decision)
+    }
+
+    #[instrument(skip(self, user_code_hash), fields(account_id))]
+    async fn deny_agent_device(
+        &self,
+        user_code_hash: &str,
+        account_id: &str,
+        now: i64,
+    ) -> Result<AgentDeviceAuthorizationDecision> {
+        let user_code_hash = normalize_code_hash("user_code_hash", user_code_hash)?;
+        let account_id = normalize_account_id(account_id)?;
+        if now < 0 {
+            return Err(
+                ValidationError::InvalidAccountField("当前时间不能为负数".to_string()).into(),
+            );
+        }
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let Some(record) =
+            fetch_agent_device_authorization_by_user_code(&mut transaction, &user_code_hash)
+                .await?
+        else {
+            transaction.rollback().await?;
+            return Ok(AgentDeviceAuthorizationDecision::NotFound);
+        };
+        let decision = if record.expires_at <= now {
+            AgentDeviceAuthorizationDecision::Expired
+        } else {
+            match record.status {
+                AgentDeviceAuthorizationStatus::Pending => {
+                    sqlx::query(
+                        "UPDATE agent_device_authorizations SET status = 'denied', \
+                         authorized_account_id = ?, authorized_at = ? \
+                         WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ?",
+                    )
+                    .bind(&account_id)
+                    .bind(now)
+                    .bind(&user_code_hash)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+                    AgentDeviceAuthorizationDecision::Denied
+                }
+                AgentDeviceAuthorizationStatus::Denied
+                    if record.authorized_account_id.as_deref() == Some(account_id.as_str()) =>
+                {
+                    AgentDeviceAuthorizationDecision::AlreadyDenied
+                }
+                AgentDeviceAuthorizationStatus::Authorized => {
+                    AgentDeviceAuthorizationDecision::AlreadyAuthorized
+                }
+                AgentDeviceAuthorizationStatus::Denied
+                | AgentDeviceAuthorizationStatus::Consumed => {
+                    AgentDeviceAuthorizationDecision::Finalized
+                }
+            }
+        };
+        transaction.commit().await?;
+        if decision == AgentDeviceAuthorizationDecision::Denied {
+            let mut maintenance = self.device_authorization_maintenance.lock().await;
+            maintenance.active_count = maintenance.active_count.saturating_sub(1);
+        }
+        Ok(decision)
+    }
+
+    #[instrument(skip(self, device_code_hash))]
+    async fn poll_agent_device_authorization(
+        &self,
+        device_code_hash: &str,
+        now: i64,
+        minimum_interval_seconds: u32,
+    ) -> Result<AgentDeviceAuthorizationPoll> {
+        let device_code_hash = normalize_code_hash("device_code_hash", device_code_hash)?;
+        if now < 0 || minimum_interval_seconds == 0 {
+            return Err(
+                ValidationError::InvalidAccountField("设备授权轮询参数无效".to_string()).into(),
+            );
+        }
+        let query = format!(
+            "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
+             WHERE device_code_hash = ?"
+        );
+        let initial = sqlx::query(&query)
+            .bind(&device_code_hash)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(row_to_agent_device_authorization)
+            .transpose()?;
+        let Some(initial) = initial else {
+            return Ok(AgentDeviceAuthorizationPoll::NotFound);
+        };
+        if let Some(result) = non_pending_device_authorization_poll(&initial, now)? {
+            return Ok(result);
+        }
+
+        // 只有 pending challenge 需要写入轮询时间。无效随机 device code 和已结束
+        // challenge 走上面的只读快路径，避免公开轮询接口争抢 SQLite 写锁。
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let record = sqlx::query(&query)
+            .bind(&device_code_hash)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(row_to_agent_device_authorization)
+            .transpose()?;
+        let Some(record) = record else {
+            transaction.rollback().await?;
+            return Ok(AgentDeviceAuthorizationPoll::NotFound);
+        };
+        if let Some(result) = non_pending_device_authorization_poll(&record, now)? {
+            transaction.commit().await?;
+            return Ok(result);
+        }
+
+        let minimum_interval = i64::from(minimum_interval_seconds);
+        let result = if let Some(last_polled_at) = record.last_polled_at {
+            let next_allowed = last_polled_at.saturating_add(minimum_interval);
+            if now < next_allowed {
+                AgentDeviceAuthorizationPoll::SlowDown {
+                    retry_after_seconds: u32::try_from(next_allowed - now)
+                        .unwrap_or(minimum_interval_seconds),
+                }
+            } else {
+                sqlx::query(
+                    "UPDATE agent_device_authorizations SET last_polled_at = ? \
+                     WHERE device_code_hash = ? AND status = 'pending'",
+                )
+                .bind(now)
+                .bind(&device_code_hash)
+                .execute(&mut *transaction)
+                .await?;
+                AgentDeviceAuthorizationPoll::Pending {
+                    retry_after_seconds: minimum_interval_seconds,
+                }
+            }
+        } else {
+            sqlx::query(
+                "UPDATE agent_device_authorizations SET last_polled_at = ? \
+                 WHERE device_code_hash = ? AND status = 'pending'",
+            )
+            .bind(now)
+            .bind(&device_code_hash)
+            .execute(&mut *transaction)
+            .await?;
+            AgentDeviceAuthorizationPoll::Pending {
+                retry_after_seconds: minimum_interval_seconds,
+            }
+        };
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    #[instrument(
+        skip(self, claim),
+        fields(
+            account_id = %claim.account_id,
+            account_auth_version = claim.account_auth_version
+        )
+    )]
+    async fn finalize_agent_device_authorization(
+        &self,
+        claim: AgentDeviceAuthorizationClaim,
+    ) -> Result<AgentDeviceAuthorizationFinalize> {
+        let device_code_hash = normalize_code_hash("device_code_hash", &claim.device_code_hash)?;
+        let account_id = normalize_account_id(&claim.account_id)?;
+        let username = normalize_username(&claim.username)?;
+        let permissions = normalize_permissions(&claim.permissions)?;
+        if claim.account_auth_version < 1 || claim.key_version < 1 || claim.now < 0 {
+            return Err(
+                ValidationError::InvalidAccountField("设备授权领取参数无效".to_string()).into(),
+            );
+        }
+        if claim
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= claim.now)
+        {
+            return Ok(AgentDeviceAuthorizationFinalize::Invalidated);
+        }
+        let encoded_permissions = encode_permissions(&permissions);
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let query = format!(
+            "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
+             WHERE device_code_hash = ?"
+        );
+        let record = sqlx::query(&query)
+            .bind(&device_code_hash)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .map(row_to_agent_device_authorization)
+            .transpose()?;
+        let Some(record) = record else {
+            transaction.rollback().await?;
+            return Ok(AgentDeviceAuthorizationFinalize::NotFound);
+        };
+        let result = if record.expires_at <= claim.now {
+            AgentDeviceAuthorizationFinalize::Expired
+        } else if record.authorized_account_id.as_deref() != Some(account_id.as_str())
+            || record.authorized_auth_version != Some(claim.account_auth_version)
+        {
+            AgentDeviceAuthorizationFinalize::Invalidated
+        } else {
+            let snapshot_is_current: bool = sqlx::query_scalar(
+                "SELECT EXISTS(\
+                   SELECT 1 FROM web_accounts AS account \
+                   JOIN users AS profile ON profile.username = account.linked_username \
+                   JOIN user_private_keys AS private_key \
+                     ON private_key.username = profile.username \
+                   WHERE account.account_id = ? \
+                     AND account.auth_version = ? \
+                     AND account.role = 'user' \
+                     AND account.status = 'active' \
+                     AND profile.username = ? \
+                     AND profile.permissions = ? \
+                     AND profile.enabled = 1 \
+                     AND profile.key_version = ? \
+                     AND profile.expires_at IS ? \
+                     AND (profile.expires_at IS NULL OR profile.expires_at > ?) \
+                     AND private_key.key_version = profile.key_version\
+                 )",
+            )
+            .bind(&account_id)
+            .bind(claim.account_auth_version)
+            .bind(&username)
+            .bind(&encoded_permissions)
+            .bind(claim.key_version)
+            .bind(claim.expires_at)
+            .bind(claim.now)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if !snapshot_is_current {
+                transaction.commit().await?;
+                return Ok(AgentDeviceAuthorizationFinalize::Invalidated);
+            }
+            match record.status {
+                AgentDeviceAuthorizationStatus::Authorized => {
+                    let update = sqlx::query(
+                        "UPDATE agent_device_authorizations \
+                         SET status = 'consumed', consumed_at = ? \
+                         WHERE device_code_hash = ? AND status = 'authorized' \
+                           AND authorized_account_id = ? AND authorized_auth_version = ? \
+                           AND expires_at > ?",
+                    )
+                    .bind(claim.now)
+                    .bind(&device_code_hash)
+                    .bind(&account_id)
+                    .bind(claim.account_auth_version)
+                    .bind(claim.now)
+                    .execute(&mut *transaction)
+                    .await?;
+                    if update.rows_affected() == 1 {
+                        AgentDeviceAuthorizationFinalize::Finalized
+                    } else {
+                        AgentDeviceAuthorizationFinalize::Invalidated
+                    }
+                }
+                AgentDeviceAuthorizationStatus::Consumed => {
+                    AgentDeviceAuthorizationFinalize::AlreadyFinalized
+                }
+                AgentDeviceAuthorizationStatus::Pending
+                | AgentDeviceAuthorizationStatus::Denied => {
+                    AgentDeviceAuthorizationFinalize::Invalidated
+                }
+            }
+        };
+        transaction.commit().await?;
+        if result == AgentDeviceAuthorizationFinalize::Finalized {
+            let mut maintenance = self.device_authorization_maintenance.lock().await;
+            maintenance.active_count = maintenance.active_count.saturating_sub(1);
+        }
+        Ok(result)
     }
 }
 
@@ -938,6 +1437,9 @@ impl AccountRepository for SqliteUserRepository {
             .transpose()?;
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if role == AccountRole::User {
+            ensure_user_account_capacity(&mut transaction, self.max_user_accounts).await?;
+        }
         ensure_account_identifiers_available(
             &mut transaction,
             &account_id,
@@ -1032,8 +1534,16 @@ impl AccountRepository for SqliteUserRepository {
             .transpose()?;
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        ensure_account_identifiers_available(&mut transaction, &account_id, &login_name, None)
-            .await?;
+        ensure_user_account_capacity(&mut transaction, self.max_user_accounts).await?;
+        // 初始密钥审批会把 login_name 直接作为 Proxy username。注册阶段就在同一
+        // 写事务中保留该名字，避免 legacy/direct profile 使审批永久冲突。
+        ensure_account_identifiers_available(
+            &mut transaction,
+            &account_id,
+            &login_name,
+            Some(&login_name),
+        )
+        .await?;
         if let Some(identity) = &external_identity {
             ensure_external_identity_available(&mut transaction, identity).await?;
         }
@@ -1297,7 +1807,7 @@ impl AccountRepository for SqliteUserRepository {
                 actual,
             })?;
 
-        // UPSERT 是有意的：从 users.toml 导入的 legacy 用户没有私钥记录，也应能轮换。
+        // UPSERT 是有意的：历史 legacy 用户可能没有私钥记录，也应能轮换。
         sqlx::query(
             "INSERT INTO user_private_keys \
              (username, encrypted_private_key, key_version, updated_at) VALUES (?, ?, ?, ?) \
@@ -2104,6 +2614,111 @@ async fn migrate_access_records_to_v4(transaction: &mut Transaction<'_, Sqlite>)
     Ok(())
 }
 
+async fn create_v5_tables(transaction: &mut Transaction<'_, Sqlite>) -> Result<()> {
+    sqlx::query(
+        r#"
+        CREATE TABLE agent_device_authorizations (
+            device_code_hash TEXT COLLATE BINARY NOT NULL PRIMARY KEY
+                CHECK(length(device_code_hash) = 43),
+            user_code_hash TEXT COLLATE BINARY NOT NULL UNIQUE
+                CHECK(length(user_code_hash) = 43),
+            client_name TEXT NOT NULL
+                CHECK(length(client_name) > 0 AND length(client_name) <= 128),
+            platform TEXT NOT NULL
+                CHECK(length(platform) > 0 AND length(platform) <= 32),
+            status TEXT NOT NULL
+                CHECK(status IN ('pending', 'authorized', 'denied', 'consumed')),
+            authorized_account_id TEXT COLLATE BINARY,
+            authorized_auth_version INTEGER
+                CHECK(authorized_auth_version IS NULL OR authorized_auth_version >= 1),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL CHECK(expires_at > created_at),
+            authorized_at INTEGER,
+            consumed_at INTEGER,
+            last_polled_at INTEGER,
+            FOREIGN KEY(authorized_account_id) REFERENCES web_accounts(account_id)
+                ON DELETE CASCADE,
+            CHECK (
+                (status = 'pending' AND authorized_account_id IS NULL
+                    AND authorized_auth_version IS NULL AND authorized_at IS NULL
+                    AND consumed_at IS NULL) OR
+                (status = 'authorized' AND authorized_account_id IS NOT NULL
+                    AND authorized_auth_version IS NOT NULL AND authorized_at IS NOT NULL
+                    AND consumed_at IS NULL) OR
+                (status = 'denied' AND authorized_account_id IS NOT NULL
+                    AND authorized_auth_version IS NULL AND authorized_at IS NOT NULL
+                    AND consumed_at IS NULL) OR
+                (status = 'consumed' AND authorized_account_id IS NOT NULL
+                    AND authorized_auth_version IS NOT NULL AND authorized_at IS NOT NULL
+                    AND consumed_at IS NOT NULL)
+            )
+        )
+        "#,
+    )
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX idx_agent_device_authorizations_expiry \
+         ON agent_device_authorizations(expires_at)",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn ensure_v5_indexes(transaction: &mut Transaction<'_, Sqlite>) -> Result<()> {
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_web_accounts_role \
+         ON web_accounts(role)",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_agent_device_authorizations_active_expiry \
+         ON agent_device_authorizations(expires_at) \
+         WHERE status IN ('pending', 'authorized')",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn revoke_compromised_bundled_demo_profiles(
+    transaction: &mut Transaction<'_, Sqlite>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE users \
+         SET enabled = 0, \
+             key_version = CASE \
+                 WHEN key_version < 9223372036854775807 THEN key_version + 1 \
+                 ELSE key_version \
+             END, \
+             updated_at = ? \
+         WHERE origin = 'legacy' AND enabled = 1 \
+           AND public_key_pem IN (?, ?)",
+    )
+    .bind(now())
+    .bind(COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS[0])
+    .bind(COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS[1])
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+async fn ensure_user_account_capacity(
+    transaction: &mut Transaction<'_, Sqlite>,
+    max_user_accounts: i64,
+) -> Result<()> {
+    let account_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM web_accounts WHERE role = 'user'")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if account_count >= max_user_accounts {
+        return Err(UserRepositoryError::UserAccountCapacity);
+    }
+    Ok(())
+}
+
 async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -> Result<()> {
     require_columns(
         transaction,
@@ -2186,6 +2801,25 @@ async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -> Result<()
             "target_port",
             "access_count",
             "accessed_at",
+        ],
+    )
+    .await?;
+    require_columns(
+        transaction,
+        "agent_device_authorizations",
+        &[
+            "device_code_hash",
+            "user_code_hash",
+            "client_name",
+            "platform",
+            "status",
+            "authorized_account_id",
+            "authorized_auth_version",
+            "created_at",
+            "expires_at",
+            "authorized_at",
+            "consumed_at",
+            "last_polled_at",
         ],
     )
     .await?;
@@ -2405,6 +3039,22 @@ async fn fetch_pending_key_request_for_account(
         .transpose()
 }
 
+async fn fetch_agent_device_authorization_by_user_code(
+    connection: &mut SqliteConnection,
+    user_code_hash: &str,
+) -> Result<Option<AgentDeviceAuthorization>> {
+    let query = format!(
+        "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
+         WHERE user_code_hash = ?"
+    );
+    sqlx::query(&query)
+        .bind(user_code_hash)
+        .fetch_optional(&mut *connection)
+        .await?
+        .map(row_to_agent_device_authorization)
+        .transpose()
+}
+
 async fn fetch_profile(
     connection: &mut SqliteConnection,
     username: &str,
@@ -2620,6 +3270,95 @@ fn row_to_access_record(row: SqliteRow) -> Result<AccessRecord> {
     })
 }
 
+fn row_to_agent_device_authorization(row: SqliteRow) -> Result<AgentDeviceAuthorization> {
+    let device_code_hash: String = row.try_get("device_code_hash")?;
+    let status_encoded: String = row.try_get("status")?;
+    let status = AgentDeviceAuthorizationStatus::parse(&status_encoded).ok_or_else(|| {
+        UserRepositoryError::InvalidSchema(format!(
+            "Agent challenge {device_code_hash} 的 status 值无效：{status_encoded}"
+        ))
+    })?;
+    let authorization = AgentDeviceAuthorization {
+        device_code_hash,
+        user_code_hash: row.try_get("user_code_hash")?,
+        client_name: row.try_get("client_name")?,
+        platform: row.try_get("platform")?,
+        status,
+        authorized_account_id: row.try_get("authorized_account_id")?,
+        authorized_auth_version: row.try_get("authorized_auth_version")?,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+        authorized_at: row.try_get("authorized_at")?,
+        consumed_at: row.try_get("consumed_at")?,
+        last_polled_at: row.try_get("last_polled_at")?,
+    };
+    let valid = match authorization.status {
+        AgentDeviceAuthorizationStatus::Pending => {
+            authorization.authorized_account_id.is_none()
+                && authorization.authorized_auth_version.is_none()
+                && authorization.authorized_at.is_none()
+                && authorization.consumed_at.is_none()
+        }
+        AgentDeviceAuthorizationStatus::Authorized => {
+            authorization.authorized_account_id.is_some()
+                && authorization
+                    .authorized_auth_version
+                    .is_some_and(|version| version >= 1)
+                && authorization.authorized_at.is_some()
+                && authorization.consumed_at.is_none()
+        }
+        AgentDeviceAuthorizationStatus::Denied => {
+            authorization.authorized_account_id.is_some()
+                && authorization.authorized_auth_version.is_none()
+                && authorization.authorized_at.is_some()
+                && authorization.consumed_at.is_none()
+        }
+        AgentDeviceAuthorizationStatus::Consumed => {
+            authorization.authorized_account_id.is_some()
+                && authorization
+                    .authorized_auth_version
+                    .is_some_and(|version| version >= 1)
+                && authorization.authorized_at.is_some()
+                && authorization.consumed_at.is_some()
+        }
+    };
+    if !valid || authorization.expires_at <= authorization.created_at {
+        return Err(UserRepositoryError::InvalidSchema(
+            "Agent challenge 状态字段不一致".to_string(),
+        ));
+    }
+    Ok(authorization)
+}
+
+fn non_pending_device_authorization_poll(
+    authorization: &AgentDeviceAuthorization,
+    now: i64,
+) -> Result<Option<AgentDeviceAuthorizationPoll>> {
+    if authorization.expires_at <= now {
+        return Ok(Some(AgentDeviceAuthorizationPoll::Expired));
+    }
+    let result = match authorization.status {
+        AgentDeviceAuthorizationStatus::Pending => return Ok(None),
+        AgentDeviceAuthorizationStatus::Authorized => {
+            let account_id = authorization.authorized_account_id.clone().ok_or_else(|| {
+                UserRepositoryError::InvalidSchema("已授权的 Agent challenge 缺少账号".to_string())
+            })?;
+            let account_auth_version = authorization.authorized_auth_version.ok_or_else(|| {
+                UserRepositoryError::InvalidSchema(
+                    "已授权的 Agent challenge 缺少账号版本".to_string(),
+                )
+            })?;
+            AgentDeviceAuthorizationPoll::Authorized {
+                account_id,
+                account_auth_version,
+            }
+        }
+        AgentDeviceAuthorizationStatus::Denied => AgentDeviceAuthorizationPoll::Denied,
+        AgentDeviceAuthorizationStatus::Consumed => AgentDeviceAuthorizationPoll::Consumed,
+    };
+    Ok(Some(result))
+}
+
 fn normalize_new_user(user: NewUser) -> Result<NewUser> {
     let (username, public_key_pem) = validate_user(&user.username, &user.public_key_pem)?;
     let permissions = normalize_permissions(&user.permissions)?;
@@ -2667,6 +3406,37 @@ fn normalize_account_id(value: &str) -> Result<String> {
         .into());
     }
     Ok(value.to_string())
+}
+
+fn normalize_code_hash(field: &str, value: &str) -> Result<String> {
+    let expected_bytes = match field {
+        "device_code_hash" => DEVICE_CODE_HASH_BYTES,
+        "user_code_hash" => USER_CODE_HASH_BYTES,
+        _ => {
+            return Err(UserRepositoryError::InvalidSchema(
+                "未知的 Agent code hash 字段".to_string(),
+            ));
+        }
+    };
+    if value.len() != expected_bytes
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ValidationError::InvalidAccountField(format!(
+            "{field} 必须是 {expected_bytes} 字节的 base64url SHA-256 摘要"
+        ))
+        .into());
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_agent_client_name(value: &str) -> Result<String> {
+    normalize_field("client_name", value, MAX_AGENT_CLIENT_NAME_BYTES)
+}
+
+fn normalize_agent_platform(value: &str) -> Result<String> {
+    normalize_stable_identifier("platform", value, MAX_AGENT_PLATFORM_BYTES)
 }
 
 fn normalize_request_id(value: &str) -> Result<String> {
@@ -2871,49 +3641,80 @@ fn validate_private_key_envelope(value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-async fn set_import_marker(transaction: &mut Transaction<'_, Sqlite>, value: &str) -> Result<()> {
-    sqlx::query("UPDATE app_metadata SET value = ? WHERE key = ?")
-        .bind(value)
-        .bind(TOML_IMPORT_MARKER)
-        .execute(&mut **transaction)
-        .await?;
-    Ok(())
-}
-
-fn deserialize_expires_at<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let Some(value) = Option::<toml::Value>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-
-    match value {
-        toml::Value::String(expires_at) => Ok(Some(expires_at)),
-        toml::Value::Datetime(expires_at) => Ok(Some(expires_at.to_string())),
-        toml::Value::Integer(expires_at) => Ok(Some(expires_at.to_string())),
-        _ => Err(de::Error::custom(
-            "expires_at must be a RFC3339 datetime string or Unix timestamp",
-        )),
-    }
-}
-
 fn now() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
 
 #[cfg(unix)]
-fn database_files(database_path: &Path) -> [PathBuf; 3] {
+fn secure_open_and_set_mode(path: &Path, mode: u32, create: bool) -> std::io::Result<()> {
+    use std::io;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .mode(mode)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    if create {
+        options.create(true);
+    }
+
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "无法安全打开 SQLite 数据文件 {}（拒绝符号链接）：{error}",
+                    path.display()
+                ),
+            ));
+        }
+    };
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("SQLite 数据路径不是普通文件：{}", path.display()),
+        ));
+    }
+    let actual_mode = metadata.permissions().mode() & 0o7777;
+    if actual_mode != mode {
+        file.set_permissions(fs::Permissions::from_mode(mode))
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "无法把 SQLite 数据文件 {} 的权限从 {actual_mode:04o} 调整为 \
+                         {mode:04o}：{error}",
+                        path.display()
+                    ),
+                )
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn database_sidecar_files(database_path: &Path) -> [PathBuf; 3] {
     let auxiliary_path = |suffix: &str| {
         let mut path = database_path.as_os_str().to_os_string();
         path.push(suffix);
         PathBuf::from(path)
     };
     [
-        database_path.to_path_buf(),
         auxiliary_path("-wal"),
         auxiliary_path("-shm"),
+        auxiliary_path("-journal"),
     ]
+}
+
+#[cfg(unix)]
+fn database_files(database_path: &Path) -> [PathBuf; 4] {
+    let [wal, shm, journal] = database_sidecar_files(database_path);
+    [database_path.to_path_buf(), wal, shm, journal]
 }
 
 #[cfg(test)]
@@ -3205,33 +4006,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn imports_toml_as_legacy_public_profiles_only() {
-        let (directory, store) = test_store().await;
-        let users_path = directory.path().join("users.toml");
-        fs::write(
-            &users_path,
-            format!(
-                r#"
-[users.alice]
-username = "alice"
-public_key_pem = """
-{}"""
-expires_at = "2030-01-01T00:00:00Z"
-"#,
-                public_key()
-            ),
-        )
-        .unwrap();
-
-        assert_eq!(
-            store.import_users_toml_once(&users_path).await.unwrap(),
-            ImportOutcome::Imported { users: 1 }
-        );
+    async fn preserves_legacy_database_profiles_without_web_accounts() {
+        let (_directory, store) = test_store().await;
+        let mut legacy = NewUser::new("alice", public_key(), UserOrigin::Legacy);
+        legacy.expires_at = Some(1_893_456_000);
+        store.create_user_record(legacy).await.unwrap();
         let user = store.get_user("alice").await.unwrap().unwrap();
         assert_eq!(user.origin, UserOrigin::Legacy);
         assert_eq!(user.permissions, default_proxy_permissions());
         assert!(user.enabled);
         assert_eq!(user.key_version, 1);
+        assert_eq!(user.expires_at, Some(1_893_456_000));
         let managed = store
             .get_managed_user_by_username("alice")
             .await
@@ -3239,12 +4024,44 @@ expires_at = "2030-01-01T00:00:00Z"
             .unwrap();
         assert!(managed.account.is_none());
         assert!(!managed.has_private_key);
+    }
 
-        fs::write(&users_path, "this is no longer valid TOML").unwrap();
-        assert_eq!(
-            store.import_users_toml_once(&users_path).await.unwrap(),
-            ImportOutcome::AlreadyHandled
-        );
+    #[tokio::test]
+    async fn account_registration_rejects_login_reserved_by_legacy_database_profile() {
+        let (_directory, store) = test_store().await;
+        store
+            .create_user_record(NewUser::new("alice", public_key(), UserOrigin::Legacy))
+            .await
+            .unwrap();
+
+        let error = store
+            .create_user_account(user_account("account-alice", "alice"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            UserRepositoryError::Conflict(ref identifier) if identifier == "alice"
+        ));
+        assert!(store.get_account_by_login("alice").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn account_registration_rejects_login_reserved_by_direct_profile() {
+        let (_directory, store) = test_store().await;
+        store
+            .create_user_record(NewUser::new("bob", public_key(), UserOrigin::Admin))
+            .await
+            .unwrap();
+
+        let error = store
+            .create_user_account(user_account("account-bob", "bob"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            UserRepositoryError::Conflict(ref identifier) if identifier == "bob"
+        ));
+        assert!(store.get_account_by_login("bob").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -3391,6 +4208,41 @@ expires_at = "2030-01-01T00:00:00Z"
                 .encrypted_private_key,
             b"encrypted-private-key"
         );
+    }
+
+    #[tokio::test]
+    async fn user_account_capacity_is_atomic_and_a_deleted_account_frees_a_slot() {
+        let (_directory, mut store) = test_store().await;
+        store.max_user_accounts = 1;
+        let first_store = store.clone();
+        let second_store = store.clone();
+        let (first, second) = tokio::join!(
+            first_store.create_user_account(user_account("account-alice", "alice-login")),
+            second_store.create_user_account(user_account("account-bob", "bob-login")),
+        );
+        assert_eq!(
+            usize::from(first.is_ok()) + usize::from(second.is_ok()),
+            1,
+            "BEGIN IMMEDIATE 下的容量检查与插入必须是原子的"
+        );
+        let capacity_error = first.err().or_else(|| second.err()).unwrap();
+        assert!(matches!(
+            capacity_error,
+            UserRepositoryError::UserAccountCapacity
+        ));
+
+        let created_id = store
+            .list_managed_users()
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|managed| managed.account.map(|account| account.account_id))
+            .unwrap();
+        store.delete_managed_user(&created_id).await.unwrap();
+        store
+            .create_user_account(user_account("account-carol", "carol-login"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -4033,6 +4885,328 @@ expires_at = "2030-01-01T00:00:00Z"
     }
 
     #[tokio::test]
+    async fn device_authorization_is_rate_limited_and_finalized_exactly_once() {
+        let (_directory, store) = test_store().await;
+        let managed = store
+            .create_managed_user(managed_user(
+                "device-account",
+                "device-user",
+                "device-user",
+                AccountRole::User,
+                None,
+            ))
+            .await
+            .unwrap();
+        let account = managed.account.unwrap();
+        let profile = managed.profile.unwrap();
+        let device_code_hash = "A".repeat(43);
+        let user_code_hash = "B".repeat(43);
+        store
+            .create_agent_device_authorization(NewAgentDeviceAuthorization {
+                device_code_hash: device_code_hash.clone(),
+                user_code_hash: user_code_hash.clone(),
+                client_name: "Alice Android".to_string(),
+                platform: "android".to_string(),
+                created_at: 100,
+                expires_at: 700,
+            })
+            .await
+            .unwrap();
+        let record = store
+            .get_agent_device_authorization_by_user_code(&user_code_hash, 100)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, AgentDeviceAuthorizationStatus::Pending);
+        assert_eq!(record.client_name, "Alice Android");
+
+        assert_eq!(
+            store
+                .poll_agent_device_authorization(&device_code_hash, 101, 5)
+                .await
+                .unwrap(),
+            AgentDeviceAuthorizationPoll::Pending {
+                retry_after_seconds: 5
+            }
+        );
+        assert_eq!(
+            store
+                .poll_agent_device_authorization(&device_code_hash, 102, 5)
+                .await
+                .unwrap(),
+            AgentDeviceAuthorizationPoll::SlowDown {
+                retry_after_seconds: 4
+            }
+        );
+        assert_eq!(
+            store
+                .authorize_agent_device(
+                    &user_code_hash,
+                    &account.account_id,
+                    account.auth_version,
+                    103,
+                )
+                .await
+                .unwrap(),
+            AgentDeviceAuthorizationDecision::Authorized
+        );
+        assert_eq!(
+            store
+                .authorize_agent_device(
+                    &user_code_hash,
+                    &account.account_id,
+                    account.auth_version,
+                    104,
+                )
+                .await
+                .unwrap(),
+            AgentDeviceAuthorizationDecision::AlreadyAuthorized
+        );
+
+        let first_poll = store
+            .poll_agent_device_authorization(&device_code_hash, 105, 5)
+            .await
+            .unwrap();
+        let second_poll = store
+            .poll_agent_device_authorization(&device_code_hash, 105, 5)
+            .await
+            .unwrap();
+        assert!(matches!(
+            first_poll,
+            AgentDeviceAuthorizationPoll::Authorized { .. }
+        ));
+        assert!(matches!(
+            second_poll,
+            AgentDeviceAuthorizationPoll::Authorized { .. }
+        ));
+
+        let claim = || AgentDeviceAuthorizationClaim {
+            device_code_hash: device_code_hash.clone(),
+            account_id: account.account_id.clone(),
+            account_auth_version: account.auth_version,
+            username: profile.username.clone(),
+            permissions: profile.permissions.clone(),
+            key_version: profile.key_version,
+            expires_at: profile.expires_at,
+            now: 106,
+        };
+        let first = store.clone();
+        let first_claim = claim();
+        let second = store.clone();
+        let second_claim = claim();
+        let (left, right) = tokio::join!(
+            async move {
+                first
+                    .finalize_agent_device_authorization(first_claim)
+                    .await
+                    .unwrap()
+            },
+            async move {
+                second
+                    .finalize_agent_device_authorization(second_claim)
+                    .await
+                    .unwrap()
+            }
+        );
+        assert!(
+            matches!(
+                (&left, &right),
+                (
+                    AgentDeviceAuthorizationFinalize::Finalized,
+                    AgentDeviceAuthorizationFinalize::AlreadyFinalized
+                ) | (
+                    AgentDeviceAuthorizationFinalize::AlreadyFinalized,
+                    AgentDeviceAuthorizationFinalize::Finalized
+                )
+            ),
+            "并发领取必须只执行一次状态 CAS"
+        );
+        assert!(matches!(
+            store
+                .poll_agent_device_authorization(&device_code_hash, 107, 5)
+                .await
+                .unwrap(),
+            AgentDeviceAuthorizationPoll::Consumed
+        ));
+    }
+
+    #[tokio::test]
+    async fn device_authorization_maintenance_is_time_controlled_and_infrequent() {
+        let (_directory, store) = test_store().await;
+        sqlx::query(
+            "INSERT INTO agent_device_authorizations \
+             (device_code_hash, user_code_hash, client_name, platform, status, \
+              created_at, expires_at) \
+             VALUES (?, ?, 'Old Agent', 'android', 'pending', 1, 100)",
+        )
+        .bind("O".repeat(43))
+        .bind("P".repeat(43))
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        for (suffix, now) in [("A", 100_000_i64), ("B", 100_001_i64)] {
+            store
+                .create_agent_device_authorization(NewAgentDeviceAuthorization {
+                    device_code_hash: suffix.repeat(43),
+                    user_code_hash: suffix.to_ascii_lowercase().repeat(43),
+                    client_name: "Maintenance Test".to_string(),
+                    platform: "android".to_string(),
+                    created_at: now,
+                    expires_at: now + 600,
+                })
+                .await
+                .unwrap();
+        }
+        let old_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agent_device_authorizations \
+             WHERE device_code_hash = ?)",
+        )
+        .bind("O".repeat(43))
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert!(!old_exists);
+        let maintenance = store.device_authorization_maintenance.lock().await;
+        assert_eq!(maintenance.next_run_at, 100_030);
+        assert_eq!(maintenance.active_count, 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_device_authorization_creation_keeps_cached_capacity_consistent() {
+        let (_directory, store) = test_store().await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..64_u32 {
+            let store = store.clone();
+            tasks.spawn(async move {
+                store
+                    .create_agent_device_authorization(NewAgentDeviceAuthorization {
+                        device_code_hash: format!("D{index:042}"),
+                        user_code_hash: format!("U{index:042}"),
+                        client_name: "Concurrent Agent".to_string(),
+                        platform: "windows".to_string(),
+                        created_at: 200_000,
+                        expires_at: 200_600,
+                    })
+                    .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let database_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM agent_device_authorizations")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(database_count, 64);
+        assert_eq!(
+            store
+                .device_authorization_maintenance
+                .lock()
+                .await
+                .active_count,
+            64
+        );
+    }
+
+    #[tokio::test]
+    async fn disables_publicly_compromised_legacy_demo_keys_until_rotated() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let store = SqliteUserRepository::connect(&path).await.unwrap();
+        let created = store
+            .create_user_record(NewUser::new(
+                "compromised-demo",
+                COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS[0],
+                UserOrigin::Legacy,
+            ))
+            .await
+            .unwrap();
+        assert!(created.enabled);
+        assert_eq!(created.key_version, 1);
+        store.pool.close().await;
+
+        let reopened = SqliteUserRepository::connect(&path).await.unwrap();
+        let disabled = reopened
+            .get_user("compromised-demo")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.key_version, 2);
+        reopened.pool.close().await;
+
+        // Repeated startups are idempotent. A real key rotation moves the profile away from the
+        // denylisted public key and is the only supported way to enable it again.
+        let reopened = SqliteUserRepository::connect(&path).await.unwrap();
+        let unchanged = reopened
+            .get_user("compromised-demo")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.key_version, 2);
+        let rotated = reopened
+            .update_user(
+                "compromised-demo",
+                UserUpdate {
+                    public_key_pem: Some(public_key()),
+                    enabled: Some(true),
+                    ..UserUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(rotated.enabled);
+        assert_eq!(rotated.key_version, 3);
+        reopened.pool.close().await;
+
+        let final_store = SqliteUserRepository::connect(&path).await.unwrap();
+        assert!(
+            final_store
+                .get_user("compromised-demo")
+                .await
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn migrates_v4_database_to_agent_device_authorization_schema() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let store = SqliteUserRepository::connect(&path).await.unwrap();
+        sqlx::query("DROP TABLE agent_device_authorizations")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 4")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        store.pool.close().await;
+
+        let reopened = SqliteUserRepository::connect(&path).await.unwrap();
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&reopened.pool)
+            .await
+            .unwrap();
+        assert_eq!(version, SQLITE_SCHEMA_VERSION);
+        let mut transaction = reopened.pool.begin().await.unwrap();
+        let columns = table_columns(&mut transaction, "agent_device_authorizations")
+            .await
+            .unwrap();
+        transaction.rollback().await.unwrap();
+        assert!(columns.iter().any(|column| column == "device_code_hash"));
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "authorized_auth_version")
+        );
+    }
+
+    #[tokio::test]
     async fn migrates_v1_users_with_legacy_defaults() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("users.sqlite3");
@@ -4060,12 +5234,10 @@ expires_at = "2030-01-01T00:00:00Z"
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO app_metadata (key, value) VALUES ('users_toml_import_v1', 'imported:1')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO app_metadata (key, value) VALUES ('existing_key', 'value')")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO users \
              (username, public_key_pem, expires_at, created_at, updated_at) VALUES (?, ?, NULL, 1, 1)",
@@ -4088,11 +5260,11 @@ expires_at = "2030-01-01T00:00:00Z"
         assert!(user.enabled);
         assert_eq!(user.key_version, 1);
         let marker: String = sqlx::query_scalar("SELECT value FROM app_metadata WHERE key = ?")
-            .bind(TOML_IMPORT_MARKER)
+            .bind("existing_key")
             .fetch_one(&store.pool)
             .await
             .unwrap();
-        assert_eq!(marker, "imported:1");
+        assert_eq!(marker, "value");
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
             .fetch_one(&store.pool)
             .await
@@ -4110,6 +5282,10 @@ expires_at = "2030-01-01T00:00:00Z"
             .await
             .unwrap();
         sqlx::query("DROP TABLE user_access_records")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE agent_device_authorizations")
             .execute(&store.pool)
             .await
             .unwrap();
@@ -4169,6 +5345,10 @@ expires_at = "2030-01-01T00:00:00Z"
             .await
             .unwrap();
         sqlx::query("DROP TABLE user_access_records")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE agent_device_authorizations")
             .execute(&store.pool)
             .await
             .unwrap();
@@ -4252,7 +5432,7 @@ expires_at = "2030-01-01T00:00:00Z"
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::query("PRAGMA user_version = 4")
+        sqlx::query("PRAGMA user_version = 6")
             .execute(&pool)
             .await
             .unwrap();
@@ -4271,12 +5451,107 @@ expires_at = "2030-01-01T00:00:00Z"
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 6);
+    }
+
+    #[tokio::test]
+    async fn read_only_repository_observes_writer_changes_and_rejects_writes() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let writer = SqliteUserRepository::connect(&path).await.unwrap();
+        writer
+            .create_user("alice", &public_key(), None)
+            .await
+            .unwrap();
+
+        let reader = SqliteUserRepository::connect_read_only(&path)
+            .await
+            .unwrap();
+        let query_only: i64 = sqlx::query_scalar("PRAGMA query_only")
+            .fetch_one(&reader.pool)
+            .await
+            .unwrap();
+        assert_eq!(query_only, 1);
+        assert!(reader.get_user("alice").await.unwrap().is_some());
+        writer
+            .create_user("bob", &public_key(), None)
+            .await
+            .unwrap();
+        assert!(reader.get_user("bob").await.unwrap().is_some());
+        assert!(
+            reader
+                .create_user("mallory", &public_key(), None)
+                .await
+                .is_err()
+        );
+        assert!(writer.get_user("mallory").await.unwrap().is_none());
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn database_and_wal_files_are_owner_only() {
+    async fn read_only_repository_opens_wal_database_without_os_write_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let writer = SqliteUserRepository::connect(&path).await.unwrap();
+        writer
+            .create_user("alice", &public_key(), None)
+            .await
+            .unwrap();
+        for file in database_files(&path) {
+            if file.try_exists().unwrap() {
+                fs::set_permissions(&file, fs::Permissions::from_mode(0o440)).unwrap();
+            }
+        }
+
+        let reader = SqliteUserRepository::connect_read_only(&path)
+            .await
+            .unwrap();
+        assert!(reader.get_user("alice").await.unwrap().is_some());
+        assert!(
+            reader
+                .create_user("mallory", &public_key(), None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_repository_requires_an_initialized_current_schema() {
+        let directory = TempDir::new().unwrap();
+        let missing = directory.path().join("missing.sqlite3");
+        assert!(
+            SqliteUserRepository::connect_read_only(&missing)
+                .await
+                .is_err()
+        );
+
+        let outdated = directory.path().join("outdated.sqlite3");
+        let options = SqliteConnectOptions::new()
+            .filename(&outdated)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 4")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert!(matches!(
+            SqliteUserRepository::connect_read_only(&outdated)
+                .await
+                .unwrap_err(),
+            UserRepositoryError::InvalidSchema(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn database_and_sidecar_files_are_owner_only_by_default() {
         use std::os::unix::fs::PermissionsExt;
 
         let (_directory, store) = test_store().await;
@@ -4293,5 +5568,201 @@ expires_at = "2030-01-01T00:00:00Z"
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn group_read_policy_never_grants_group_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let store = SqliteUserRepository::connect_with_permissions(
+            &path,
+            SqliteFilePermissions::OwnerReadWriteGroupRead,
+        )
+        .await
+        .unwrap();
+        store
+            .create_user("alice", &public_key(), None)
+            .await
+            .unwrap();
+        store.apply_file_permissions().unwrap();
+
+        for file in database_files(&path) {
+            if file.try_exists().unwrap() {
+                assert_eq!(
+                    fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                    0o640
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn group_writable_policy_applies_to_database_and_all_sidecars() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        fs::write(&path, []).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o777)).unwrap();
+        let store = SqliteUserRepository::connect_with_permissions(
+            &path,
+            SqliteFilePermissions::OwnerAndGroup,
+        )
+        .await
+        .unwrap();
+        store
+            .create_user("alice", &public_key(), None)
+            .await
+            .unwrap();
+
+        // WAL/SHM are created by SQLite from the main file's mode. A rollback
+        // journal is uncommon after WAL is enabled, so create one to exercise
+        // the same fd-based correction path for an existing file.
+        let journal = database_sidecar_files(&path)[2].clone();
+        fs::write(&journal, []).unwrap();
+        for file in database_files(&path) {
+            if file.try_exists().unwrap() {
+                fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        store.apply_file_permissions().unwrap();
+
+        for file in database_files(&path) {
+            assert!(
+                file.try_exists().unwrap(),
+                "{} should exist",
+                file.display()
+            );
+            assert_eq!(
+                fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                0o660
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn group_writable_policy_accepts_an_existing_database_with_the_target_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        fs::write(&path, []).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+
+        let store = SqliteUserRepository::connect_with_permissions(
+            &path,
+            SqliteFilePermissions::OwnerAndGroup,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::metadata(store.path()).unwrap().permissions().mode() & 0o777,
+            0o660
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sqlite_recreated_sidecars_inherit_the_group_writable_database_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("users.sqlite3");
+        let store = SqliteUserRepository::connect_with_permissions(
+            &path,
+            SqliteFilePermissions::OwnerAndGroup,
+        )
+        .await
+        .unwrap();
+        store.pool.close().await;
+        let [wal, shm, _journal] = database_sidecar_files(&path);
+        for sidecar in [&wal, &shm] {
+            if sidecar.try_exists().unwrap() {
+                fs::remove_file(sidecar).unwrap();
+            }
+        }
+
+        // Open SQLite directly so no repository post-open chmod can mask the
+        // mode SQLite gives to sidecars recreated later in the process lifetime.
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .journal_mode(SqliteJournalMode::Wal);
+        let pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT OR REPLACE INTO app_metadata (key, value) \
+             VALUES ('sidecar-mode-test', 'written')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for sidecar in [wal, shm] {
+            assert!(sidecar.try_exists().unwrap());
+            assert_eq!(
+                fs::metadata(sidecar).unwrap().permissions().mode() & 0o777,
+                0o660
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refuses_a_symlink_database_without_changing_its_target() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = TempDir::new().unwrap();
+        let target = directory.path().join("target");
+        let database = directory.path().join("users.sqlite3");
+        fs::write(&target, b"must-not-be-opened-as-sqlite").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&target, &database).unwrap();
+
+        assert!(matches!(
+            SqliteUserRepository::connect_with_permissions(
+                &database,
+                SqliteFilePermissions::OwnerAndGroup,
+            )
+            .await
+            .unwrap_err(),
+            UserRepositoryError::Io(_)
+        ));
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refuses_a_symlink_sidecar_without_changing_its_target() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = TempDir::new().unwrap();
+        let database = directory.path().join("users.sqlite3");
+        let target = directory.path().join("target");
+        fs::write(&database, []).unwrap();
+        fs::write(&target, b"must-not-be-opened-as-a-journal").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        let journal = database_sidecar_files(&database)[2].clone();
+        symlink(&target, journal).unwrap();
+
+        assert!(matches!(
+            SqliteUserRepository::connect(&database).await.unwrap_err(),
+            UserRepositoryError::Io(_)
+        ));
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 }

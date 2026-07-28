@@ -45,12 +45,25 @@ pub struct YamuxClientConnection {
     auth_config: Arc<YamuxSubstreamAuthConfig>,
 }
 
-#[derive(Debug)]
 struct YamuxSubstreamAuthConfig {
     username: String,
     private_key_pem: String,
+    proxy_identity_public_key_pem: String,
     timeout: Duration,
     compression_mode: CompressionMode,
+}
+
+impl std::fmt::Debug for YamuxSubstreamAuthConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("YamuxSubstreamAuthConfig")
+            .field("username", &self.username)
+            .field("private_key_pem", &"[REDACTED]")
+            .field("proxy_identity_public_key_pem", &"[PINNED PUBLIC KEY]")
+            .field("timeout", &self.timeout)
+            .field("compression_mode", &self.compression_mode)
+            .finish()
+    }
 }
 
 impl ClientConnectionConfig for YamuxSubstreamAuthConfig {
@@ -64,6 +77,10 @@ impl ClientConnectionConfig for YamuxSubstreamAuthConfig {
 
     fn private_key_pem(&self) -> Result<String, String> {
         Ok(self.private_key_pem.clone())
+    }
+
+    fn proxy_identity_public_key_pem(&self) -> Result<String, String> {
+        Ok(self.proxy_identity_public_key_pem.clone())
     }
 
     fn timeout_duration(&self) -> Duration {
@@ -109,6 +126,9 @@ impl YamuxClientConnection {
             username: config.username(),
             private_key_pem: config
                 .private_key_pem()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            proxy_identity_public_key_pem: config
+                .proxy_identity_public_key_pem()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
             timeout: config.timeout_duration(),
             compression_mode: config.compression_mode(),

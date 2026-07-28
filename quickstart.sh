@@ -47,11 +47,11 @@ cat << "EOF"
 1️⃣  Start the Proxy Server:
    ./target/release/proxy --config config/proxy.toml
 
-2️⃣  Add the user's public key to config/users.toml
+2️⃣  Start Proxy Web and register the user
 
-3️⃣  Save the matching private key to keys/myuser.pem
+3️⃣  Approve the user's key request and expiration in the admin console
 
-4️⃣  Update config/agent.toml with your settings
+4️⃣  Sign in from the Agent UI; it downloads the approved managed credential
 
 5️⃣  Start the Agent:
    ./target/release/desktop-agent --config config/agent.toml

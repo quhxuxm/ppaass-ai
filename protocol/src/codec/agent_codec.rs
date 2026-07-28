@@ -11,7 +11,7 @@ pub struct AgentCodec {
 }
 
 impl AgentCodec {
-    pub fn new(state: Option<Arc<CipherState>>) -> Self {
+    pub fn new(state: Arc<CipherState>) -> Self {
         Self {
             inner: MessageCodec::new(state),
         }
@@ -33,6 +33,17 @@ impl Decoder for AgentCodec {
                             format!("Failed to deserialize proxy response: {}", e),
                         )
                     })?;
+                let expected_type = match &response {
+                    ProxyResponse::Auth(_) => MessageType::AuthResponse,
+                    ProxyResponse::Connect(_) => MessageType::ConnectResponse,
+                    ProxyResponse::Data(_) | ProxyResponse::Error { .. } => MessageType::Data,
+                };
+                if message.message_type != expected_type {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "proxy response type does not match authenticated frame type",
+                    ));
+                }
                 Ok(Some(response))
             }
             None => Ok(None),

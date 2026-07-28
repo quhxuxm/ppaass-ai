@@ -6,8 +6,6 @@ export type KeyRequestKind = 'initial' | 'rotate'
 
 export interface ProviderAvailability {
   localRegistration: boolean
-  google: boolean
-  wechat: boolean
 }
 
 export interface AccountSummary {
@@ -93,6 +91,19 @@ export interface AccessLogSettings {
 export interface AccessRecordsResult {
   records: AccessRecord[]
   retentionDays: number
+}
+
+export type AgentDeviceAuthorizationStatus =
+  | 'pending'
+  | 'authorized'
+  | 'denied'
+  | 'consumed'
+
+export interface AgentDeviceAuthorizationInspection {
+  clientName: string
+  platform: 'android' | 'windows'
+  expiresAt: number
+  status: AgentDeviceAuthorizationStatus
 }
 
 export interface RegisterPayload {
@@ -210,32 +221,13 @@ function adoptCsrf(value: unknown): void {
 export async function getProviders(): Promise<ProviderAvailability> {
   const body = await request<unknown>('/api/v1/auth/providers')
   const root = asRecord(body) ?? {}
-  const providers = asRecord(root.providers) ?? root
-  const names = Array.isArray(root.providers)
-    ? root.providers.filter((entry): entry is string => typeof entry === 'string')
-    : []
 
   return {
     localRegistration:
       boolValue(root.local_registration) ??
       boolValue(root.localRegistration) ??
-      boolValue(providers.local_registration) ??
       true,
-    google:
-      providerEnabled(providers.google) ||
-      names.some((name) => name.toLowerCase() === 'google'),
-    wechat:
-      providerEnabled(providers.wechat) ||
-      names.some((name) => ['wechat', 'weixin'].includes(name.toLowerCase())),
   }
-}
-
-function providerEnabled(value: unknown): boolean {
-  if (typeof value === 'boolean') {
-    return value
-  }
-  const record = asRecord(value)
-  return boolValue(record?.enabled) ?? boolValue(record?.configured) ?? false
 }
 
 export async function getSession(): Promise<SessionState> {
@@ -269,22 +261,35 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function startOAuth(
-  provider: 'google' | 'wechat',
-): Promise<string> {
+export async function inspectAgentDeviceAuthorization(
+  userCode: string,
+): Promise<AgentDeviceAuthorizationInspection> {
   const body = await request<unknown>(
-    `/api/v1/auth/oauth/${provider}/start`,
+    '/api/v1/agent/device-authorizations/inspect',
+    {
+      method: 'POST',
+      body: JSON.stringify({ user_code: userCode }),
+    },
   )
-  const record = asRecord(body)
-  const url =
-    stringValue(record?.authorization_url) ??
-    stringValue(record?.authorizationUrl) ??
-    stringValue(record?.auth_url) ??
-    stringValue(record?.url)
-  if (!url) {
-    throw new ApiError('服务器没有返回第三方登录地址', 502)
-  }
-  return url
+  return decodeAgentDeviceAuthorization(body)
+}
+
+export async function approveAgentDeviceAuthorization(
+  userCode: string,
+): Promise<void> {
+  await request<unknown>('/api/v1/agent/device-authorizations/approve', {
+    method: 'POST',
+    body: JSON.stringify({ user_code: userCode }),
+  })
+}
+
+export async function denyAgentDeviceAuthorization(
+  userCode: string,
+): Promise<void> {
+  await request<unknown>('/api/v1/agent/device-authorizations/deny', {
+    method: 'POST',
+    body: JSON.stringify({ user_code: userCode }),
+  })
 }
 
 export async function getMe(): Promise<SelfView> {
@@ -488,6 +493,36 @@ function decodeSession(
     (assumeAuthenticated || account !== null)
 
   return { authenticated, account }
+}
+
+function decodeAgentDeviceAuthorization(
+  value: unknown,
+): AgentDeviceAuthorizationInspection {
+  const root = asRecord(value)
+  const clientName =
+    stringValue(root?.client_name) ?? stringValue(root?.clientName)
+  const platform = stringValue(root?.platform)?.toLowerCase()
+  const expiresAt =
+    numberValue(root?.expires_at) ?? numberValue(root?.expiresAt)
+  const status =
+    stringValue(root?.status)?.toLowerCase() as
+      | AgentDeviceAuthorizationStatus
+      | undefined
+  if (
+    !clientName ||
+    (platform !== 'android' && platform !== 'windows') ||
+    expiresAt === undefined ||
+    !status ||
+    !['pending', 'authorized', 'denied', 'consumed'].includes(status)
+  ) {
+    throw new ApiError('服务器返回的设备授权信息格式无效', 502)
+  }
+  return {
+    clientName,
+    platform,
+    expiresAt,
+    status,
+  }
 }
 
 function decodeSelf(value: unknown): SelfView {

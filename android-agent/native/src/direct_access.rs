@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tracing::{debug, info};
 
-use crate::android_log;
-
 const FORCE_PROXY_DOMAIN_SUFFIXES: &[&str] = &[
     "google.com",
     "google.cn",
@@ -67,11 +65,6 @@ impl DirectAccessChecker {
             config.mode,
             rules.len()
         );
-        android_log::info(format!(
-            "Android direct access initialized: mode={:?}, rules={}",
-            config.mode,
-            rules.len()
-        ));
         for (i, rule) in rules.iter().enumerate() {
             debug!("Android direct access rule[{i}]: {rule:?}");
         }

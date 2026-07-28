@@ -34,6 +34,7 @@ parking_lot.workspace = true
 dashmap.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true
+libc.workspace = true
 pretty-hex.workspace = true
 socket2.workspace = true
 if-addrs.workspace = true
@@ -44,3 +45,4 @@ hickory-proto.workspace = true
 windows-sys.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

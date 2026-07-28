@@ -10,6 +10,7 @@ mod connection;
 mod error;
 mod native_udp;
 mod server;
+mod transport_identity;
 mod user_manager;
 
 use crate::config::ProxyConfig;
@@ -135,14 +136,8 @@ fn main() -> Result<()> {
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or("默认路由")
         );
-        info!("用户配置文件：{}", config.users_path);
-        info!(
-            "用户数据源：{}",
-            config
-                .users_database_path
-                .as_deref()
-                .unwrap_or("users.toml（兼容模式）")
-        );
+        info!("只读用户数据库：{}", config.users_database_path);
+        info!("访问记录数据库：{}", config.access_log_database_path);
 
         // 主监听循环外面包一层 panic 恢复：单次服务 run panic 后重新建 listener。
         // 普通错误仍返回给进程，避免配置/绑定等硬错误被无限重启掩盖。

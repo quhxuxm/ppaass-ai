@@ -1,11 +1,9 @@
 # PPAASS Desktop Agent 配置
-# 该配置用于演示，包含真实 RSA 密钥
+# 正式客户端登录后才会写入托管用户名和私钥路径
 
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["140.82.30.214:80", "140.82.30.214:80"]
+proxy_addrs = ["140.82.30.214:80"]
 proxy_web_url = "https://140.82.30.214"
-username = "user1"
-private_key_path = "keys/user1.pem"
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
 transport_mode = "udp"
 # 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。

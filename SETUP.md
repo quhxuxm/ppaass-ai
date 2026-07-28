@@ -50,7 +50,9 @@ mkdir -p config keys
 
 ```toml
 listen_addr = "0.0.0.0:8080"
-users_path = "config/users.toml"
+users_database_path = "data/proxy-users.sqlite3"
+access_log_database_path = "data/proxy-access.sqlite3"
+transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
 2. Start the proxy server:
@@ -77,33 +79,20 @@ If you deploy the binaries and configs alongside the scripts, use:
 .\start-proxy.bat
 ```
 
-### Step 2: Add a User in `users.toml`
+### Step 2: Register and Approve a User
 
-Add the user's public key to the proxy users file:
-
-```toml
-[users.myuser]
-username = "myuser"
-public_key_pem = """
------BEGIN PUBLIC KEY-----
-...
------END PUBLIC KEY-----
-"""
-# Optional. If omitted, the user never expires.
-expires_at = "2026-12-31T23:59:59Z"
-```
+Start Proxy Web against the same `users_database_path`, register a normal account, submit a key
+request, and approve it from the administrator console with an expiration time. Proxy Web creates
+the managed key pair and writes the user profile to SQLite; Proxy opens that database read-only.
 
 ### Step 3: Configure the Agent
 
-1. Save the matching private key to `keys/myuser.pem`
-
-2. Edit `config/agent.toml`:
+Edit `config/agent.toml` with the Proxy and Proxy Web endpoints, then sign in from the Agent UI.
+The Agent downloads and applies the approved managed credential automatically.
 
 ```toml
 listen_addr = "127.0.0.1:1080"
 proxy_addrs = ["your.proxy.server:8080"]  # Change to your proxy address
-username = "myuser"
-private_key_path = "keys/myuser.pem"
 connection_timeout_secs = 30
 
 [yamux.tcp]
@@ -204,7 +193,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 2. **Check user configuration:**
     - Verify the username in agent config matches the proxy
-    - Check that the user exists in the proxy `users.toml`
+    - Check that the account has an active approved profile in the Proxy Web SQLite database
 
 ### Performance Issues
 
@@ -221,7 +210,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 ### Multiple Users
 
-You can add multiple users by adding multiple `[users.<name>]` sections to `users.toml`.
+Create and approve additional accounts from the Proxy Web administrator console.
 
 ## Support
 

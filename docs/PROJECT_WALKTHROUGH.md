@@ -24,7 +24,7 @@ ppaass-ai/
 ├── android-agent/       # Android VpnService + Rust JNI native Agent
 ├── tests/               # mock target、mock client、集成测试、性能测试和报告
 ├── config/              # local/remote 示例配置
-├── keys/                # 示例私钥，proxy 侧 users.toml 存公钥
+├── keys/                # 本地忽略的密钥材料；生产身份不进入仓库
 └── .github/workflows/   # unit/integration/clippy/deploy workflow
 ```
 
@@ -66,7 +66,7 @@ Proxy 是服务端出口。
 
 它做的事情：
 
-- 读取 `proxy.toml` 和 `users.toml`。
+- 读取 `proxy.toml`，并以只读方式连接 Proxy Web 管理的 SQLite 用户库。
 - 在同一个数值端口同时监听 Agent 的入站 TCP 和 raw UDP。TCP 入站先 peek 首包判断是 direct framed PPAASS 还是 raw Yamux；UDP 入站按原生协议建立、查找和维护认证 session。
 - 对每条 direct framed 连接或 Yamux 子流执行流式 PPAASS Auth，再等待 `ConnectRequest`；原生 UDP 则先做 RSA 身份认证/会话建立，再处理被逐包认证的 `Connect/Data/Close` 数据报。
 - 根据目标类型进入 TCP relay、单目标 UDP、共享 UDP relay、Proxy DNS 或上游转发。
@@ -321,7 +321,9 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 - `listen_addr`: Proxy 监听地址。
 - Proxy 在 `listen_addr` 的同一数值端口绑定 TCP 与 raw UDP；启用原生 UDP 模式时防火墙必须同时放行 UDP。
-- `users_path`: 用户配置文件。
+- `users_database_path`: 必填的只读用户 SQLite 路径。
+- `access_log_database_path`: 必填且物理独立的访问记录 SQLite 路径。
+- `transport_identity_private_key_path`: 必填的 Proxy TCP/Yamux 传输身份私钥。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
 - `[yamux]`: Proxy 作为 `tcp` 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接进入 PPAASS 流协议处理；raw UDP 入站进入独立的 session packet codec。
@@ -341,11 +343,11 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 - `proxy/src/config/user_config.rs`
 - `proxy/src/user_manager.rs`
-- `config/local/users.toml`
+- `proxy-user-store/src/repository.rs`
 
 字段：
 
-- `username`: 必须与 `[users.<key>]` 的 key 一致。
+- `username`: SQLite 用户记录中的稳定认证名。
 - `public_key_pem`: Proxy 持有用户公钥。
 - `expires_at`: 可选 RFC3339 或 Unix 秒级时间戳。
 
@@ -458,7 +460,7 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 - `unit-test.yml`: Debian container，Rust 1.93，build workspace，跑 unit tests。
 - `integration-test.yml`: 启动 mock target、proxy、agent，然后跑 integration tests。
 - `rust-clippy.yml`: Clippy SARIF 分析。
-- `deploy-proxy.yml`: 手动选择 production/dev/qa，构建 Linux proxy，打包 `proxy`、`proxy.toml`、`users.toml`、`start-proxy.sh`，上传远端并重启。
+- `deploy-proxy.yml`: 手动选择 production/dev/qa，构建 Proxy、Proxy Web 和 Vue，上传并以隔离的 SQLite/身份密钥目录重启。
 - `checkmarx-one.yml` / `codescan.yml`: 安全/代码扫描。
 
 部署脚本：

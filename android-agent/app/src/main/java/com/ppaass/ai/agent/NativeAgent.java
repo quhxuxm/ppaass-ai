@@ -12,6 +12,8 @@ final class NativeAgent {
 
     static native long startHttpProxy(String configJson, int listenPort);
 
+    static native boolean validateKeyPair(String privateKeyPem, String publicKeyPem);
+
     static native boolean isRunning(long handle);
 
     static native void stop(long handle);

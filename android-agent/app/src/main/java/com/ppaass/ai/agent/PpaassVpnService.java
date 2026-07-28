@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -81,10 +82,17 @@ public class PpaassVpnService extends VpnService {
     private final Runnable nativeHealthCheck = new Runnable() {
         @Override
         public void run() {
-            if (nativeHandle == 0) {
+            boolean vpnWork = nativeHandle != 0;
+            boolean mockGeoWork = hasMockGeoWork();
+            if (!vpnWork && !mockGeoWork) {
                 return;
             }
-            if (!NativeAgent.isRunning(nativeHandle)) {
+            if (!AgentAuthSession.isActive(PpaassVpnService.this)) {
+                Log.w(TAG, "Agent login expired; stopping VPN and mock GEO");
+                stopForInvalidAuthentication();
+                return;
+            }
+            if (vpnWork && !NativeAgent.isRunning(nativeHandle)) {
                 Log.w(TAG, "Native VPN agent exited; stopping service");
                 stopAgent();
                 return;
@@ -101,26 +109,42 @@ public class PpaassVpnService extends VpnService {
         return mockGeoRunningInProcess;
     }
 
+    static boolean actionRequiresAuthentication(String action) {
+        return !ACTION_STOP.equals(action) && !ACTION_STOP_MOCK_GEO.equals(action);
+    }
+
+    static void requestMockGeoStopForAuthenticationEnd(Context context) {
+        SharedPreferences preferences =
+                context.getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        if (!preferences.edit()
+                .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                .putBoolean(PREF_MOCK_GEO_STOPPING, true)
+                .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .commit()) {
+            Log.e(TAG, "Failed to persist mock GEO stop requested by authentication end");
+        }
+        Intent intent = new Intent(context, PpaassVpnService.class);
+        intent.setAction(ACTION_STOP_MOCK_GEO);
+        intent.putExtra(EXTRA_USER_VISIBLE, false);
+        try {
+            context.startService(intent);
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Failed to request mock GEO stop after authentication ended", error);
+        }
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         latestStartId = startId;
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            stopAgent();
+            if (AgentAuthSession.isActive(this)) {
+                stopAgent();
+            } else {
+                stopForInvalidAuthentication();
+            }
             return startModeForCurrentOwners();
-        } else if (intent != null && ACTION_RELOAD.equals(intent.getAction())) {
-            reloadAgent();
-            return startModeForCurrentOwners();
-        } else if (intent != null && ACTION_START_MOCK_GEO.equals(intent.getAction())) {
-            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
-                    .edit()
-                    .putBoolean(PREF_MOCK_GEO_REQUESTED, true)
-                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
-                    .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
-                    .remove(PREF_MOCK_GEO_ERROR)
-                    .apply();
-            applyMockGeoConfig(intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
-            return startModeForCurrentOwners();
-        } else if (intent != null && ACTION_STOP_MOCK_GEO.equals(intent.getAction())) {
+        }
+        if (intent != null && ACTION_STOP_MOCK_GEO.equals(intent.getAction())) {
             getSharedPreferences("ppaass_agent", MODE_PRIVATE)
                     .edit()
                     .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
@@ -133,6 +157,28 @@ public class PpaassVpnService extends VpnService {
                     false,
                     "",
                     intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
+            refreshAuthenticationHealthChecks();
+            return startModeForCurrentOwners();
+        }
+        String action = intent == null ? null : intent.getAction();
+        if (actionRequiresAuthentication(action) && !AgentAuthSession.isActive(this)) {
+            Log.w(TAG, "Refusing Agent service action without an active login");
+            stopForInvalidAuthentication();
+            return startModeForCurrentOwners();
+        }
+        if (intent != null && ACTION_RELOAD.equals(intent.getAction())) {
+            reloadAgent();
+            return startModeForCurrentOwners();
+        } else if (intent != null && ACTION_START_MOCK_GEO.equals(intent.getAction())) {
+            getSharedPreferences("ppaass_agent", MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREF_MOCK_GEO_REQUESTED, true)
+                    .putBoolean(PREF_MOCK_GEO_STOPPING, false)
+                    .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                    .remove(PREF_MOCK_GEO_ERROR)
+                    .apply();
+            applyMockGeoConfig(intent.getBooleanExtra(EXTRA_USER_VISIBLE, false));
+            refreshAuthenticationHealthChecks();
             return startModeForCurrentOwners();
         } else if (intent != null && ACTION_UPDATE_MOCK_GEO.equals(intent.getAction())) {
             if (getSharedPreferences("ppaass_agent", MODE_PRIVATE)
@@ -144,6 +190,7 @@ public class PpaassVpnService extends VpnService {
                 stopMockLocation(false, "");
             }
             reconcileForegroundAndLifetime();
+            refreshAuthenticationHealthChecks();
             return startModeForCurrentOwners();
         } else {
             boolean startedByApp = intent != null
@@ -207,6 +254,11 @@ public class PpaassVpnService extends VpnService {
     }
 
     private boolean startAgent(boolean systemManaged) {
+        if (!AgentAuthSession.isActive(this)) {
+            Log.w(TAG, "Refusing to start VPN without an active Agent login");
+            stopForInvalidAuthentication();
+            return false;
+        }
         if (nativeHandle != 0) {
             runningInProcess = true;
             startNativeHealthChecks();
@@ -318,6 +370,36 @@ public class PpaassVpnService extends VpnService {
     private void stopAgent() {
         stopVpnComponents();
         reconcileForegroundAndLifetime();
+        refreshAuthenticationHealthChecks();
+    }
+
+    private void stopForInvalidAuthentication() {
+        AgentAuthSession.clear();
+        if (!ManagedCredentials.clear(this)) {
+            Log.e(TAG, "Failed to completely remove invalid managed credentials");
+        }
+
+        SharedPreferences preferences = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        boolean mockGeoCleanupRequired = mockLocationController != null
+                || mockGeoStarting
+                || mockGeoCleanupInFlight
+                || preferences.getBoolean(PREF_MOCK_GEO_DIRTY, false)
+                || preferences.getBoolean(PREF_MOCK_GEO_ACTIVE, false);
+        preferences.edit()
+                .putBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                .putBoolean(PREF_MOCK_GEO_STOPPING, mockGeoCleanupRequired)
+                .remove(PREF_MOCK_GEO_WAITING_FOR_FOREGROUND)
+                .apply();
+        restartMockGeoAfterCleanup = false;
+        stopVpnComponents();
+        if (mockGeoCleanupRequired) {
+            stopMockLocation(false, "", false);
+        } else {
+            mockGeoStarting = false;
+            mockGeoRunningInProcess = false;
+            stopNativeHealthChecks();
+            reconcileForegroundAndLifetime();
+        }
     }
 
     private void reloadAgent() {
@@ -779,6 +861,22 @@ public class PpaassVpnService extends VpnService {
     private void startNativeHealthChecks() {
         mainHandler.removeCallbacks(nativeHealthCheck);
         mainHandler.postDelayed(nativeHealthCheck, HEALTH_CHECK_INTERVAL_MS);
+    }
+
+    private void refreshAuthenticationHealthChecks() {
+        if (nativeHandle != 0 || hasMockGeoWork()) {
+            startNativeHealthChecks();
+        } else {
+            stopNativeHealthChecks();
+        }
+    }
+
+    private boolean hasMockGeoWork() {
+        SharedPreferences preferences = getSharedPreferences("ppaass_agent", MODE_PRIVATE);
+        return mockLocationController != null
+                || mockGeoStarting
+                || preferences.getBoolean(PREF_MOCK_GEO_REQUESTED, false)
+                || preferences.getBoolean(PREF_MOCK_GEO_ACTIVE, false);
     }
 
     private void stopNativeHealthChecks() {

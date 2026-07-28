@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::Duration;
 
 use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
@@ -10,12 +11,16 @@ use crate::error::{AndroidAgentError, Result};
 
 pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_pem: String,
+    /// Pinned Proxy TCP/Yamux transport identity public key provisioned by
+    /// Proxy Web. TCP connections fail closed when it is missing.
+    #[serde(default)]
+    pub proxy_identity_public_key_pem: Option<String>,
 
     #[serde(default)]
     pub transport_mode: TransportMode,
@@ -48,6 +53,48 @@ pub struct AndroidAgentConfig {
 
     #[serde(default)]
     pub tun: AndroidTunConfig,
+}
+
+struct RedactedPrivateKey;
+
+impl fmt::Debug for RedactedPrivateKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+impl fmt::Debug for AndroidAgentConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AndroidAgentConfig")
+            .field("proxy_addrs", &self.proxy_addrs)
+            .field("username", &self.username)
+            .field("private_key_pem", &RedactedPrivateKey)
+            .field(
+                "proxy_identity_public_key_configured",
+                &self
+                    .proxy_identity_public_key_pem
+                    .as_deref()
+                    .is_some_and(|pem| !pem.trim().is_empty()),
+            )
+            .field("transport_mode", &self.transport_mode)
+            .field("udp_session_pool_size", &self.udp_session_pool_size)
+            .field(
+                "async_runtime_stack_size_mb",
+                &self.async_runtime_stack_size_mb,
+            )
+            .field("runtime_threads", &self.runtime_threads)
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field(
+                "http_proxy_max_concurrent_connects",
+                &self.http_proxy_max_concurrent_connects,
+            )
+            .field("compression_mode", &self.compression_mode)
+            .field("yamux", &self.yamux)
+            .field("direct_access", &self.direct_access)
+            .field("tun", &self.tun)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +152,15 @@ impl AndroidAgentConfig {
                 "private_key_pem must not be empty".to_string(),
             ));
         }
+        if self
+            .proxy_identity_public_key_pem
+            .as_deref()
+            .is_none_or(|pem| pem.trim().is_empty())
+        {
+            return Err(AndroidAgentError::Connection(
+                "proxy_identity_public_key_pem must not be empty".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -125,6 +181,14 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
         Ok(self.private_key_pem.clone())
+    }
+
+    fn proxy_identity_public_key_pem(&self) -> std::result::Result<String, String> {
+        self.proxy_identity_public_key_pem
+            .as_deref()
+            .filter(|pem| !pem.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "Proxy identity public key not configured".to_string())
     }
 
     fn timeout_duration(&self) -> Duration {
@@ -233,6 +297,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.transport_mode, TransportMode::Udp);
+    }
+
+    #[test]
+    fn agent_debug_redacts_private_key() {
+        let config: AndroidAgentConfig = serde_json::from_str(
+            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"super-secret-private-key"}"#,
+        )
+        .unwrap();
+
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("private_key_pem: <redacted>"));
+        assert!(!rendered.contains("super-secret-private-key"));
     }
 
     #[test]

@@ -14,7 +14,6 @@ use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
-use crate::android_log;
 use crate::config::AndroidAgentConfig;
 use crate::direct_access::{DirectAccessChecker, address_to_string};
 use crate::error::{AndroidAgentError, Result};
@@ -44,9 +43,6 @@ pub async fn run_android_http_proxy(
     info!(
         "Android HTTP / SOCKS5 proxy listening on {bind_addr}; tcp_transport=direct-framed-tcp (transport_mode only applies to UDP)"
     );
-    android_log::info(format!(
-        "Android HTTP / SOCKS5 proxy listening on {bind_addr}; TCP uses direct framed TCP"
-    ));
 
     loop {
         tokio::select! {
@@ -72,7 +68,6 @@ pub async fn run_android_http_proxy(
     }
 
     info!("Android HTTP / SOCKS5 proxy stopped");
-    android_log::info("Android HTTP / SOCKS5 proxy stopped");
     Ok(())
 }
 
@@ -193,13 +188,21 @@ async fn handle_http_request(
     direct_checker: Arc<DirectAccessChecker>,
     client: HttpProxyClientLease,
 ) -> std::result::Result<Response<AgentBody>, hyper::Error> {
-    debug!("Android HTTP proxy request: {} {}", req.method(), req.uri());
+    debug!(
+        method = %req.method(),
+        host = %request_log_host(req.uri()),
+        "Android HTTP proxy request"
+    );
 
     if req.method() == Method::CONNECT {
         handle_connect(req, sessions, direct_checker, client).await
     } else {
         handle_regular_request(req, sessions, direct_checker, client).await
     }
+}
+
+fn request_log_host(uri: &Uri) -> &str {
+    uri.host().unwrap_or("<unknown>")
 }
 
 async fn handle_connect(
@@ -230,10 +233,7 @@ async fn handle_connect(
         let target_stream = match connect_direct_tcp(&target).await {
             Ok(stream) => stream,
             Err(err) => {
-                error!("Android HTTP CONNECT direct failed {target}: {err}");
-                android_log::warn(format!(
-                    "Android HTTP CONNECT direct failed {target}: {err}"
-                ));
+                debug!("Android HTTP CONNECT direct failed {target}: {err}");
                 return Ok(text_response(
                     StatusCode::BAD_GATEWAY,
                     "Failed to connect to target",
@@ -279,10 +279,7 @@ async fn handle_connect(
     {
         Ok(stream) => stream,
         Err(err) => {
-            error!("Android HTTP CONNECT proxy stream failed {target}: {err}");
-            android_log::warn(format!(
-                "Android HTTP CONNECT proxy stream failed {target}: {err}"
-            ));
+            debug!("Android HTTP CONNECT proxy stream failed {target}: {err}");
             return Ok(text_response(
                 StatusCode::BAD_GATEWAY,
                 "Failed to connect to proxy",
@@ -300,9 +297,6 @@ async fn handle_connect(
                     result = tunnel(upgraded, connected_stream, target.clone()) => {
                         if let Err(err) = result {
                             error!("Android HTTP CONNECT proxy tunnel error: {err}");
-                            android_log::warn(format!(
-                                "Android HTTP CONNECT proxy tunnel error {target}: {err}"
-                            ));
                         }
                     }
                     _ = cancel.cancelled() => {
@@ -350,7 +344,7 @@ async fn handle_regular_request(
         let target_stream = match connect_direct_tcp(&target).await {
             Ok(stream) => stream,
             Err(err) => {
-                error!("Android HTTP direct request failed {target}: {err}");
+                debug!("Android HTTP direct request failed {target}: {err}");
                 return Ok(text_response(
                     StatusCode::BAD_GATEWAY,
                     "Failed to connect to target",
@@ -362,7 +356,8 @@ async fn handle_regular_request(
             hyper::client::conn::http1::handshake(TokioIo::new(target_stream)).await?;
         tokio::spawn(async move {
             if let Err(err) = conn.await {
-                error!("Android HTTP direct client connection failed: {err:?}");
+                error!("Android HTTP direct client connection failed");
+                debug!(error = ?err, "Android HTTP direct client connection failure details");
             }
         });
 
@@ -378,7 +373,7 @@ async fn handle_regular_request(
     {
         Ok(stream) => stream,
         Err(err) => {
-            error!("Android HTTP proxy request stream failed {host}:{port}: {err}");
+            debug!("Android HTTP proxy request stream failed {host}:{port}: {err}");
             return Ok(text_response(
                 StatusCode::BAD_GATEWAY,
                 "Failed to connect to proxy",
@@ -390,7 +385,8 @@ async fn handle_regular_request(
         hyper::client::conn::http1::handshake(TokioIo::new(connected_stream)).await?;
     tokio::spawn(async move {
         if let Err(err) = conn.await {
-            error!("Android HTTP proxy client connection failed: {err:?}");
+            error!("Android HTTP proxy client connection failed");
+            debug!(error = ?err, "Android HTTP proxy client connection failure details");
         }
     });
 
@@ -416,12 +412,7 @@ async fn tunnel(
             "Android HTTP CONNECT proxy tunnel closed {target}: up={} down={}",
             stats.client_to_remote, stats.remote_to_client
         ),
-        Err(err) => {
-            debug!("Android HTTP CONNECT proxy tunnel ended {target}: {err}");
-            android_log::warn(format!(
-                "Android HTTP CONNECT proxy tunnel ended {target}: {err}"
-            ));
-        }
+        Err(err) => debug!("Android HTTP CONNECT proxy tunnel ended {target}: {err}"),
     }
     Ok(())
 }
@@ -481,6 +472,15 @@ mod tests {
         assert_eq!(detect_proxy_protocol(b'X'), None);
     }
 
+    #[test]
+    fn request_log_host_omits_path_and_query() {
+        let uri: Uri = "http://example.com/private/path?access_token=secret"
+            .parse()
+            .unwrap();
+
+        assert_eq!(request_log_host(&uri), "example.com");
+    }
+
     #[tokio::test]
     async fn socks5_proxy_connects_to_direct_tcp_target() {
         let echo_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -501,6 +501,7 @@ mod tests {
             proxy_addrs: vec!["127.0.0.1:9".to_string()],
             username: "test".to_string(),
             private_key_pem: "test".to_string(),
+            proxy_identity_public_key_pem: Some("test".to_string()),
             transport_mode: common::TransportMode::Udp,
             udp_session_pool_size: 4,
             async_runtime_stack_size_mb: 4,
@@ -764,6 +765,7 @@ mod tests {
             proxy_addrs: vec!["127.0.0.1:9".to_string()],
             username: "test".to_string(),
             private_key_pem: "test".to_string(),
+            proxy_identity_public_key_pem: Some("test".to_string()),
             transport_mode: common::TransportMode::Udp,
             udp_session_pool_size: 4,
             async_runtime_stack_size_mb: 4,

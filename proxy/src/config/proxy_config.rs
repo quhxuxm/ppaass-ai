@@ -1,5 +1,5 @@
 use common::YamuxServerConfig;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fs;
 use std::path::Path;
 
@@ -7,14 +7,18 @@ use std::path::Path;
 pub struct ProxyConfig {
     pub listen_addr: String,
 
-    /// 用户配置文件路径。配置 SQLite 时该文件只会在数据库首次初始化时导入。
-    #[serde(default = "default_users_path")]
-    pub users_path: String,
+    /// SQLite 用户数据库路径。Proxy 始终以 read-only/query-only 模式打开，
+    /// 写入和 schema 迁移只由 Proxy Web 完成。
+    pub users_database_path: String,
 
-    /// SQLite 用户数据库路径。配置后 SQLite 是用户数据的唯一运行时来源；
-    /// 未配置时继续兼容原有 users.toml 只读模式。
+    /// 独立的访问记录 SQLite 路径。Proxy 只对这个数据库写入访问历史，绝不向
+    /// 用户数据库写入。
+    pub access_log_database_path: String,
+
+    /// Unix 下允许访问记录数据库及 sidecar 由文件属组读写（`0660`），以便
+    /// Proxy Web 查询记录和管理保留期。
     #[serde(default)]
-    pub users_database_path: Option<String>,
+    pub access_log_database_group_writable: bool,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -43,6 +47,13 @@ pub struct ProxyConfig {
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
 
+    /// PKCS#8 PEM private key for the Proxy TCP/Yamux transport identity.
+    ///
+    /// Proxy startup requires this file. On Unix it must be a regular,
+    /// non-symlink file with no group/world permission bits.
+    #[serde(default)]
+    pub transport_identity_private_key_path: Option<String>,
+
     /// 入站 Yamux acceptor 参数。proxy 对每条 raw TCP 连接都直接维护一个 Yamux session；
     /// 外层 session 数由 agent 端控制。
     #[serde(default)]
@@ -64,6 +75,11 @@ pub struct ProxyConfig {
 
     #[serde(default)]
     pub upstream_private_key_path: Option<String>,
+
+    /// Pinned SubjectPublicKeyInfo PEM for an upstream Proxy transport
+    /// identity. Required whenever forward mode opens a TCP/Yamux connection.
+    #[serde(default)]
+    pub upstream_proxy_identity_public_key_path: Option<String>,
 
     /// 连接目标服务器时绑定的出站网络设备名。
     /// 为空时使用系统默认路由。
@@ -123,6 +139,15 @@ pub struct ProxyConfig {
     /// 创建队列、socket 或 worker 任务。
     #[serde(default = "default_udp_session_max_flows")]
     pub udp_session_max_flows: usize,
+
+    /// 已建立的 TCP/Yamux relay 与原生 UDP 会话重新查询用户状态的间隔（秒）。
+    /// 用于让管理员停用、权限撤销、密钥轮换和提前过期在 active relay 上生效。
+    /// 安全边界固定为 1..=5 秒：可以缩短，但不能通过配置延后到 5 秒以上。
+    #[serde(
+        default = "default_udp_session_authorization_recheck_secs",
+        deserialize_with = "deserialize_udp_session_authorization_recheck_secs"
+    )]
+    pub udp_session_authorization_recheck_secs: u64,
 }
 
 fn default_log_level() -> String {
@@ -131,10 +156,6 @@ fn default_log_level() -> String {
 
 fn default_log_file() -> String {
     "proxy.log".to_string()
-}
-
-fn default_users_path() -> String {
-    "users.toml".to_string()
 }
 
 fn default_compression_mode() -> String {
@@ -189,6 +210,26 @@ fn default_udp_session_max_flows() -> usize {
     256
 }
 
+fn default_udp_session_authorization_recheck_secs() -> u64 {
+    5
+}
+
+fn deserialize_udp_session_authorization_recheck_secs<'de, D>(
+    deserializer: D,
+) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if (1..=5).contains(&value) {
+        Ok(value)
+    } else {
+        Err(de::Error::custom(
+            "udp_session_authorization_recheck_secs must be between 1 and 5",
+        ))
+    }
+}
+
 fn default_async_runtime_stack_size_mb() -> usize {
     2
 }
@@ -221,6 +262,8 @@ mod tests {
         let config: ProxyConfig = toml::from_str(
             r#"
 	listen_addr = "127.0.0.1:0"
+	users_database_path = "users.sqlite3"
+	access_log_database_path = "access.sqlite3"
 	tcp_relay_idle_timeout_secs = 60
 	"#,
         )
@@ -236,6 +279,8 @@ mod tests {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
 "#,
         )
         .unwrap();
@@ -245,7 +290,47 @@ listen_addr = "127.0.0.1:0"
         assert_eq!(config.udp_session_limit, 4096);
         assert_eq!(config.udp_session_channel_size, 256);
         assert_eq!(config.udp_session_max_flows, 256);
-        assert!(config.users_database_path.is_none());
+        assert_eq!(config.udp_session_authorization_recheck_secs, 5);
+        assert_eq!(config.users_database_path, "users.sqlite3");
+        assert_eq!(config.access_log_database_path, "access.sqlite3");
+        assert!(!config.access_log_database_group_writable);
+    }
+
+    #[test]
+    fn separate_access_database_mode_is_explicitly_configurable() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+users_database_path = "data/proxy-users.sqlite3"
+access_log_database_path = "data/proxy-access.sqlite3"
+access_log_database_group_writable = true
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.access_log_database_path, "data/proxy-access.sqlite3");
+        assert!(config.access_log_database_group_writable);
+    }
+
+    #[test]
+    fn sqlite_user_and_access_database_paths_are_required() {
+        assert!(
+            toml::from_str::<ProxyConfig>(
+                r#"
+listen_addr = "127.0.0.1:0"
+"#
+            )
+            .is_err()
+        );
+        assert!(
+            toml::from_str::<ProxyConfig>(
+                r#"
+listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -253,6 +338,8 @@ listen_addr = "127.0.0.1:0"
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
 udp_session_max_flows = 17
 "#,
         )
@@ -262,10 +349,41 @@ udp_session_max_flows = 17
     }
 
     #[test]
+    fn udp_session_authorization_recheck_is_limited_to_five_seconds() {
+        for value in [1, 3, 5] {
+            let config: ProxyConfig = toml::from_str(&format!(
+                r#"
+listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
+udp_session_authorization_recheck_secs = {value}
+"#
+            ))
+            .unwrap();
+            assert_eq!(config.udp_session_authorization_recheck_secs, value);
+        }
+        for value in [0, 6, u64::MAX] {
+            assert!(
+                toml::from_str::<ProxyConfig>(&format!(
+                    r#"
+listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
+udp_session_authorization_recheck_secs = {value}
+"#
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn udp_relay_max_flows_is_configurable() {
         let config: ProxyConfig = toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
 udp_relay_max_flows = 23
 "#,
         )

@@ -6,8 +6,10 @@
 - Vue 3 + PrimeVue 4 提供普通用户中心与管理员控制台。
 - 本地密码使用 Argon2id 哈希；登录态使用服务端不透明会话、HttpOnly Cookie 和 CSRF Token。
 - RSA 私钥使用部署主密钥 AES-256-GCM 加密后写入数据库，公钥与私钥按版本原子更新。
-- `proxy-user-store::UserRepository`、`AccountRepository` 和 `AccessLogRepository` 是数据库无关接口；当前适配器使用 SQLite。
-- Proxy 与 Web 可读取同一个 SQLite 文件；全部服务日志使用 `tracing`，不会记录密码、Cookie 或私钥。
+- `proxy-user-store::UserRepository`、`AccountRepository`、`AccessLogRepository` 和
+  `AgentDeviceAuthorizationRepository` 是数据库无关接口；当前适配器使用 SQLite。
+- Web 读写用户 SQLite，Proxy 仅只读该库；访问记录使用单独的共享 SQLite。全部服务
+  日志使用 `tracing`，不会记录密码、Cookie 或私钥。
 
 ## 首次启动与管理员账号
 
@@ -31,6 +33,13 @@ RUST_LOG=proxy_web=debug,proxy_user_store=debug,tower_http=info \
 手动运行 `.github/workflows/deploy-proxy.yml` 会同时构建并部署 Proxy、Proxy Web 和 Vue
 静态资源。必须为 workflow 配置以下 GitHub Actions 配置：
 
+部署 job 会绑定 workflow 输入所选的同名 GitHub Environment：`production`、`dev` 或
+`qa`。下面的 Secrets 和 Variables 必须分别配置在对应 Environment 中，不应使用一套
+仓库级凭据跨环境复用；Environment protection rules 也会在读取该环境凭据前生效。
+
+- 对应环境的 SSH Secrets：`PRODUCTION_REMOTE_HOST/USER/PASSWORD`、
+  `DEV_REMOTE_HOST/USER/PASSWORD` 或 `QA_REMOTE_HOST/USER/PASSWORD`。
+- Secret `DEPLOY_FOLDER`：该环境服务器上的专用上传暂存子目录。
 - Secret `PPAASS_WEB_ADMIN_PASSWORD`：首次创建 `admin` 使用的密码。
 - Secret `PPAASS_DEPLOY_SSH_KNOWN_HOSTS`：部署服务器经过核验的 SSH `known_hosts`
   记录；workflow 会强制校验主机公钥，拒绝未知或发生变化的服务器。
@@ -56,19 +65,62 @@ Let's Encrypt 的设计；正常运行的 Caddy 会持续自动管理它。HTTP-
 安全组需要允许公网访问 TCP/443，并允许 Caddy 访问 Let's Encrypt 的 ACME 服务；
 workflow 会通过系统信任链访问公开的 `/healthz`，以验证证书和反向代理均可用。
 
-私钥加密主密钥首次部署时生成在远端部署目录的
-`.secrets/proxy-web-key-encryption-secret`，不会打入构建包。Proxy Web 会把认证校验信封
+私钥加密主密钥首次部署时生成在
+`/var/lib/ppaass/secrets/proxy-web-key-encryption-secret`，不会打入构建包。Proxy Web 会把认证校验信封
 存入 SQLite 元数据，并在每次启动时校验当前主密钥；已有 legacy 数据库可以首次接入，
 错误主密钥则无法通过启动检查。必须将数据库和主密钥成对备份与迁移，避免已有托管
 私钥无法解密。
+
+Proxy TCP/Yamux 传输身份同样不进入仓库或 GitHub Secrets。服务器首次部署时由 OpenSSL
+原子生成一把持久的 3072 位 PKCS#8 RSA 私钥，保存为
+`/var/lib/ppaass/identity/proxy-identity-private.pem`（仅 Proxy UID、`0600`）；每次部署
+都从它重新派生 SPKI 公钥给 Proxy Web 只读。后续部署复用同一私钥，不会静默轮换 Agent
+已经固定校验的服务端身份。
+
+`DEPLOY_FOLDER` 只作为 root 使用的上传暂存目录；它必须是专用子目录（例如
+`/root/ppaass-upload`），即使位于 `/root` 下也不会成为 systemd 服务的工作目录。
+workflow 将 root 拥有的二进制、脚本和配置安装到
+`/opt/ppaass`，并使用两个 UID 不同的无登录系统用户运行服务：
+
+- Proxy 使用 `ppaass-proxy` 用户，只保留绑定低端口所需的
+  `CAP_NET_BIND_SERVICE`，并通过 systemd `InaccessiblePaths` 阻止读取 Web Secret。
+- Proxy Web 使用 `ppaass-proxy-web` 用户且不持有 capability。Web Secret 由 root
+  拥有且只给 `ppaass-proxy-web` 组读权限，因此 Proxy UID 无法通过文件权限或
+  `/proc/<pid>`/ptrace 读取 Web 主密钥或管理员密码。
+- 用户/账号/密钥数据库位于 `/var/lib/ppaass/users`。目录由 Web UID 拥有并使用
+  `ppaass-user-readers` 组和 `2750`；数据库、WAL、SHM 与 rollback journal 使用
+  `ppaass-proxy-web:ppaass-user-readers` 和 `0640`。Proxy 只拥有该组的读/执行权限，
+  并同时通过 SQLite read-only/query-only 模式及 systemd `ReadOnlyPaths` 禁止写入。
+- 访问记录单独存放在 `/var/lib/ppaass/access`。该目录使用受限
+  `ppaass-access` 共享组和 `2770`，数据库及 sidecar 使用 `0660`。Proxy 需要写入
+  访问次数，Web 需要查询和执行保留期清理，因此只有这个不含账号、密钥或认证资料的
+  数据库允许两个 UID 读写。
+
+首次采用新目录布局时，workflow 会在两个服务停止后，把旧
+`DEPLOY_FOLDER/data/proxy-users.sqlite3`，或上一版固定目录中的
+`/var/lib/ppaass/data/proxy-users.sqlite3`，连同 WAL/SHM/journal 一起迁移到
+`/var/lib/ppaass/users`，并迁移旧 `.secrets` 中的加密主密钥。若多个旧位置同时存在，
+或旧位置和新位置同时存在用户数据库，workflow 会明确失败，不会静默选择一份数据。
+用户数据库会原地调整为 Web 拥有的 `0640`，不会复制或重建。
+
+部署会先启动 Proxy Web。它完成用户 schema 迁移，并把旧用户数据库里的历史访问
+记录与保留期设置幂等迁移到新的访问记录数据库；核对导入结果后会清空主库旧记录并
+截断对应 WAL，避免访问历史继续残留在用户库。`/healthz` 成功后才启动只读用户库的
+Proxy。systemd 冷启动也会让 Proxy 等待 Web 健康，避免 Proxy 在 schema 迁移前打开
+数据库。
 
 默认配置：
 
 - 对外地址：`https://<PPAASS_WEB_PUBLIC_HOST>`（Caddy TCP/443）
 - Axum 回环地址：`http://127.0.0.1:8787`
+- 服务运行目录：`/opt/ppaass`
 - Caddy 持久化目录：`/var/lib/ppaass-caddy`
-- SQLite：`data/proxy-users.sqlite3`
-- 首次导入：`config/local/users.toml`
+- 用户 SQLite：`/var/lib/ppaass/users/proxy-users.sqlite3`
+- 访问记录 SQLite：`/var/lib/ppaass/access/proxy-access.sqlite3`
+- Proxy 传输身份私钥：`/var/lib/ppaass/identity/proxy-identity-private.pem`
+- Proxy Web 可读的传输身份公钥：`/var/lib/ppaass/identity/proxy-identity-public.pem`
+- Proxy Web Secret：`/var/lib/ppaass/secrets`
+- 服务日志：`/var/log/ppaass/proxy`、`/var/log/ppaass/proxy-web`
 - Vue 构建目录：`proxy-web/frontend/dist`
 - GitHub 部署显式开放普通用户注册，并强制使用 Secure Cookie
 
@@ -77,13 +129,22 @@ workflow 会通过系统信任链访问公开的 `/healthz`，以验证证书和
 ```bash
 export PPAASS_PROXY_WEB_ALLOW_REGISTRATION="true"
 export PPAASS_PROXY_WEB_SECURE_COOKIES="true"
+# 仅当 Axum 回环监听且前方是受信反向代理时启用，用于按真实客户端 IP 限频。
+export PPAASS_PROXY_WEB_TRUST_PROXY_HEADERS="true"
 ```
 
 Axum 本身只提供 HTTP，默认只允许监听回环地址。本地开发或手动启动时继续使用：
 
 ```bash
+mkdir -p data
+umask 077
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+  -out data/proxy-identity-private.pem
+openssl pkey -in data/proxy-identity-private.pem -pubout \
+  -out data/proxy-identity-public.pem
 cargo run -p proxy-web -- \
-  --listen 127.0.0.1:8787
+  --listen 127.0.0.1:8787 \
+  --proxy-identity-public-key data/proxy-identity-public.pem
 ```
 
 生产部署不要让 Axum 直接持有证书或监听 443，应保持回环监听并由 Caddy 提供公网
@@ -105,28 +166,6 @@ npm run dev
 
 也可以先运行 `npm run build`，再访问 `http://127.0.0.1:8787`；Axum 会直接托管 `dist`。
 
-## Google 与微信登录
-
-第三方登录只有在对应变量完整配置后才会出现在页面中。
-
-Google：
-
-```bash
-export PPAASS_GOOGLE_CLIENT_ID="..."
-export PPAASS_GOOGLE_CLIENT_SECRET="..."
-export PPAASS_GOOGLE_REDIRECT_URI="https://example.com/api/v1/auth/oauth/google/callback"
-```
-
-微信开放平台网站应用：
-
-```bash
-export PPAASS_WECHAT_APP_ID="..."
-export PPAASS_WECHAT_APP_SECRET="..."
-export PPAASS_WECHAT_REDIRECT_URI="https://example.com/api/v1/auth/oauth/wechat/callback"
-```
-
-Google 流程使用 authorization code、state 和 PKCE；微信流程使用 `snsapi_login` 与 state。外部身份以 Google `sub`、微信 `unionid`（没有时使用 `openid`）为稳定标识。首次第三方登录只创建普通账号，不会创建 Proxy 配置或密钥；用户需要提交密钥申请，管理员审批并指定有效期后，服务端才会生成并托管密钥对。
-
 ## API
 
 登录成功后浏览器接收 HttpOnly 会话 Cookie。修改请求还必须发送登录或 session 响应中的
@@ -139,12 +178,15 @@ X-CSRF-Token: <csrf_token>
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/healthz` | 健康检查 |
-| `GET` | `/api/v1/auth/providers` | 查询本地注册及 OAuth 可用状态 |
+| `GET` | `/api/v1/auth/providers` | 查询本地注册是否启用 |
 | `POST` | `/api/v1/auth/register` | 创建普通账号（不生成 Proxy 配置或密钥） |
 | `POST` | `/api/v1/auth/login` | 用户名密码登录 |
 | `POST` | `/api/v1/auth/logout` | 退出登录 |
-| `GET` | `/api/v1/auth/oauth/{provider}/start` | 创建 OAuth 登录请求 |
-| `GET` | `/api/v1/auth/oauth/{provider}/callback` | OAuth 回调 |
+| `POST` | `/api/v1/agent/device-authorizations` | Agent 创建浏览器设备登录 challenge |
+| `POST` | `/api/v1/agent/device-authorizations/token` | Agent 限频轮询并一次性领取账户配置和密钥 |
+| `POST` | `/api/v1/agent/device-authorizations/inspect` | 已登录用户核对设备登录请求 |
+| `POST` | `/api/v1/agent/device-authorizations/approve` | 已登录用户批准设备登录 |
+| `POST` | `/api/v1/agent/device-authorizations/deny` | 已登录用户拒绝设备登录 |
 | `GET` | `/api/v1/session` | 查询当前登录态并取得 CSRF Token |
 | `GET` | `/api/v1/me` | 查询账号、Proxy 配置、密钥状态和待审批申请 |
 | `GET` | `/api/v1/me/private-key` | 读取自己的有效公钥和私钥 |
@@ -166,9 +208,68 @@ X-CSRF-Token: <csrf_token>
 路由不存在。只有用户本人登录后，才能通过 `/api/v1/me` 查看自己的公钥信息，并通过
 `/api/v1/me/private-key` 读取自己的公私钥。私钥响应带 `Cache-Control: no-store`。
 
+## Agent 浏览器设备登录
+
+Android 和 Windows Agent 不在应用内收集网页登录凭据。原生客户端先向配置好的
+Proxy Web 地址发送：
+
+```http
+POST /api/v1/agent/device-authorizations
+Content-Type: application/json
+
+{"platform":"android","client_name":"Alice Android"}
+```
+
+响应包含 256 位随机 `device_code`、12 字符短码、相对验证地址、600 秒有效期和 5 秒
+最小轮询间隔：
+
+```json
+{
+  "device_code": "<base64url>",
+  "user_code": "ABCD-EFGH-JKLM",
+  "verification_uri": "/#agent-authorize",
+  "verification_uri_complete": "/#agent-authorize=ABCD-EFGH-JKLM",
+  "expires_in": 600,
+  "interval": 5
+}
+```
+
+Agent 使用自身配置的 Proxy Web base URL 拼接 `verification_uri_complete`，并交给系统
+浏览器打开。用户使用本地账号密码完成网页登录，然后在独立确认页核对短码、设备名称
+和平台。
+
+Agent 以 JSON `{"device_code":"..."}` 轮询
+`POST /api/v1/agent/device-authorizations/token`。服务端响应约定：
+
+- `428 authorization_pending`：尚未确认；带 `Retry-After`。
+- `429 slow_down`：轮询过快；必须按 `Retry-After` 等待。
+- `429 rate_limited`：服务端全局或来源限流；Agent 保留 challenge 并按
+  `Retry-After` 重试。
+- `403 access_denied`：用户拒绝。
+- `400 expired_token`：challenge 已过期。
+- `400 invalid_device_code`：设备码无效或已经消费。
+- `403 authorization_invalidated`：确认后账号角色、状态或认证版本发生变化。
+
+成功只会发生一次，返回 `200` 和原有 `ppaass_session` HttpOnly Cookie。JSON 包含
+`account`、`profile`（用户名、权限、密钥版本、有效期）、同一密钥版本的
+`public_key_pem`/`private_key_pem`、`csrf_token` 和 `session_expires_at`。公钥专用于
+Agent 在应用私钥前校验密钥对，不会显示在普通用户确认页面。所有 API 响应统一带
+`Cache-Control: no-store`。
+
+challenge 的原始设备码和用户短码不会写入数据库；存储层只接收带不同域分隔的
+SHA-256 摘要。状态更新和领取在 repository 内原子执行，并且服务端执行轮询限频、
+短 TTL、一次消费和活动 challenge 数量上限。原生创建/轮询端点拒绝带 `Origin` 的
+浏览器请求且没有 CORS 授权；浏览器 inspect/approve/deny 必须同时具有现有登录 Cookie
+和 CSRF Token。
+
+只有启用的普通用户、有效且未停用的 Proxy profile、可解密的托管私钥以及
+`key.private.read` 权限全部满足时才能批准和领取。管理员账号始终拒绝。账号尚无密钥
+或密钥已过期时，approve 返回现有的 `409 key_request_required`；challenge 保持 pending，
+用户仍需先提交密钥申请并等待管理员设置有效期。
+
 ## 密钥申请、审批与有效期
 
-本地注册和 OAuth 首次登录只创建账号。没有 Proxy 配置或密钥已经过期时，用户通过
+本地注册只创建账号。没有 Proxy 配置或密钥已经过期时，用户通过
 `POST /api/v1/me/key-requests` 提交申请；同一账号同时只能有一条 `pending` 申请，
 重复或并发提交会幂等返回同一条申请。管理员批准时必须给出严格晚于当前时间的
 `expires_at`，RSA 密钥只在服务端生成，私钥加密入库且不会出现在管理员响应中。
@@ -185,9 +286,14 @@ X-CSRF-Token: <csrf_token>
 过期或缺失密钥不能通过用户或管理员的直接轮换接口恢复，也不能通过管理员 PATCH
 清空有效期或把过期时间改到未来绕过审批；必须重新提交并批准密钥申请。管理员直接
 创建用户仍属于已批准流程，`expires_at` 必填且必须严格晚于当前时间，额外权限会与
-四项基础权限合并。`users.toml` 导入的 legacy 用户不参与 Web 密钥申请流程。
+四项基础权限合并。数据库中保留的历史 legacy 用户不参与 Web 密钥申请流程。
 
-公钥/私钥轮换只影响后续认证；已经建立的 TCP 连接或 UDP 会话不会被主动断开。
+SQLite 模式下，已经建立的 TCP/Yamux relay 与原生 UDP 会话都会按 Proxy 的
+`udp_session_authorization_recheck_secs` 周期重新检查账号启用状态、对应 TCP/UDP
+权限、密钥版本和绝对过期时间，停用、撤权、提前过期或轮换密钥后最迟 5 秒关闭。
+TCP 承载的共享 UDP relay 只在真正创建新 flow 前复核授权，Existing/AtCapacity
+不增加查询，并使用不超过 1 秒的成功授权快照合并突发查询；原生 UDP 的
+`OpenData` flow 保持同样的检查边界。
 
 ## 访问记录与保留期
 
@@ -209,36 +315,32 @@ X-CSRF-Token: <csrf_token>
 - `key.private.read`
 - `key.rotate`
 
-本地注册或 OAuth 账号的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
+本地注册账号的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
 配置都会强制拥有以上四项基础能力。管理员创建用户时传入的其他权限会与基础能力合并；
 管理员后续通过 PATCH 更新权限时，也不能移除这四项能力。
 
 Proxy 会在认证及 CONNECT/原生 UDP 边界实际执行 TCP/UDP 权限，不只是把权限展示在页面上。
 
-## Proxy 与 users.toml 兼容
+## Proxy 与数据库边界
 
-原有模式完全保留：
-
-```toml
-# 不配置 users_database_path
-users_path = "config/local/users.toml"
-```
-
-共享数据库模式：
+Proxy 只支持 SQLite 用户库：
 
 ```toml
-users_path = "config/local/users.toml"
 users_database_path = "data/proxy-users.sqlite3"
+access_log_database_path = "data/proxy-access.sqlite3"
+access_log_database_group_writable = false
+transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
-数据库模式首次启动时会完整校验并事务导入 `users.toml`。导入后 SQLite 是唯一运行时数据源，不与 TOML 双写；数据库已有用户时会记录跳过状态，不覆盖已有数据。
+Proxy Web 是用户 schema 和账号写入的唯一所有者；Proxy 以 read-only/query-only
+方式打开用户库。旧数据库里已有的 `origin=legacy` 记录继续保留，但服务不再提供
+文件导入入口。legacy public-only 记录没有可登录领取的私钥，因此仍不能参与普通用户
+密钥申请流程。
 
-TOML 导入用户只有历史公钥，不可能恢复原私钥，因此在管理端标记为 `legacy`。这类
-public-only 记录保持原有默认 TCP/UDP 权限，不会因为 Web 普通用户策略而自动增加
-`key.private.read` 或 `key.rotate`。由于它没有可登录并领取密钥的 Web 账号，管理端
-会拒绝为 legacy 记录轮换密钥，避免生成一套无人能取得的私钥。未配置
-`users_database_path` 时，原 TOML 解析及默认 TCP/UDP 权限行为保持不变。
-
-在 Unix 上，SQLite 主文件、WAL 和共享内存文件设为 `0600`。Proxy 与 Web 应以同一操作系统用户运行并使用完全相同的数据库路径。
+在 Unix 上，本地默认将两个 SQLite 的主文件及 sidecar 设为 `0600`。生产部署中，
+Proxy Web 使用 `--database-group-readable` 将用户库设为 `0640`；Proxy 对它只读。
+访问记录库通过 Proxy 的 `access_log_database_group_writable = true` 与 Proxy Web 的
+`--access-log-database-group-writable` 显式设为 `0660`，并放在独立的 setgid 共享
+目录。
 
 两个业务层只依赖数据库无关 Repository。将来增加 PostgreSQL 等数据库时，应新增适配器并在启动阶段选择实现，无需修改 Proxy 认证或 Axum handler。

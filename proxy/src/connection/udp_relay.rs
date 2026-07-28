@@ -9,6 +9,8 @@ use super::udp_relay_flow::{
     udp_relay_channel_size,
 };
 use super::*;
+use crate::config::PERMISSION_PROXY_CONNECT_UDP;
+use tokio::time::Instant;
 
 impl ServerConnection {
     pub(super) async fn handle_udp_relay_connect(
@@ -16,9 +18,23 @@ impl ServerConnection {
         connect_request: ConnectRequest,
     ) -> Result<()> {
         debug!("正在建立 UDP 共享中继");
-        // 先告诉 agent 共享中继已经建立；后续所有 UDP 数据都走同一个 request_id。
-        self.send_connect_success(connect_request.request_id.clone(), "UDP relay connected")
-            .await?;
+        // CONNECT 分流前已经检查过一次；发送成功响应前再查一次，覆盖两次操作
+        // 之间发生的撤权/换钥。之后同一个独立 guard 按绝对 expiry 和周期重验关闭 relay。
+        let authorization = self.authorization_context()?;
+        authorization.validate(PERMISSION_PROXY_CONNECT_UDP).await?;
+        let relay_authorization = authorization.clone();
+        let authorization_guard = relay_authorization.enforce(
+            PERMISSION_PROXY_CONNECT_UDP,
+            self.authorization_recheck_secs(),
+        );
+        tokio::pin!(authorization_guard);
+        let connect_success =
+            self.send_connect_success(connect_request.request_id.clone(), "UDP relay connected");
+        tokio::select! {
+            biased;
+            authorization_result = &mut authorization_guard => return authorization_result,
+            result = connect_success => result?,
+        }
 
         let channel_size = udp_relay_channel_size(&self.proxy_config);
         // response_tx：各个 flow 任务把目标响应送回主 relay 循环。
@@ -46,7 +62,11 @@ impl ServerConnection {
             },
             "UDP relay",
             "proxy udp relay flow",
-        );
+        )
+        .with_authorization(authorization);
+        // 发送 ConnectSuccess 前刚完成的查询也可作为新 flow 的授权依据；一秒
+        // 合并窗口只减少突发查询，不延长外层五秒周期的撤权窗口。
+        flow_set.record_authorization_success(Instant::now());
         let stream_id = connect_request.request_id;
         let relay_idle_timeout = flow_set.idle_timeout();
         let relay_idle = tokio::time::sleep(relay_idle_timeout);
@@ -54,6 +74,11 @@ impl ServerConnection {
 
         loop {
             tokio::select! {
+                biased;
+                authorization_result = &mut authorization_guard => {
+                    warn!("UDP 共享中继授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                    return authorization_result;
+                }
                 _ = &mut relay_idle => {
                     debug!(
                         "UDP 共享中继空闲超过 {} 秒，关闭该连接",
@@ -95,20 +120,37 @@ impl ServerConnection {
                         }
                     };
 
-                    flow_set.dispatch(relay_packet).await;
+                    let dispatch = flow_set.dispatch(relay_packet);
+                    tokio::select! {
+                        biased;
+                        authorization_result = &mut authorization_guard => {
+                            warn!("UDP 共享中继授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                            return authorization_result;
+                        }
+                        dispatch_result = dispatch => dispatch_result?,
+                    }
                 }
                 response = response_rx.recv() => {
                     let Some(response) = response else { break };
                     // 下行响应可能在同一 tick 内已经积压多个。这里一次取出一小批一起 feed，
                     // 最后统一 flush，减少高包率场景下 `send().await`/flush 对 relay 主循环
                     // 的唤醒压力。批量大小由公共常量控制，避免 drain 过多导致上行读取延迟。
-                    if let Err(err) = send_udp_relay_response_batch_with_timeout(
+                    let send_responses = send_udp_relay_response_batch_with_timeout(
                         &mut self.writer,
                         &mut response_rx,
                         response,
                         &stream_id,
                         relay_idle_timeout,
-                    ).await {
+                    );
+                    let send_result = tokio::select! {
+                        biased;
+                        authorization_result = &mut authorization_guard => {
+                            warn!("UDP 共享中继授权已失效，主动关闭：{:?}", authorization_result.as_ref().err());
+                            return authorization_result;
+                        }
+                        send_result = send_responses => send_result,
+                    };
+                    if let Err(err) = send_result {
                         warn!("UDP 共享中继写回 agent 失败，关闭该连接：{err}");
                         return Err(err);
                     }
@@ -238,7 +280,21 @@ mod tests {
 
     #[tokio::test]
     async fn udp_relay_response_write_times_out_when_agent_stalls() {
-        let framed = proxy_framed_stream(PendingAgentStream, ProxyCodec::new(None));
+        let cipher_state = Arc::new(CipherState::new());
+        cipher_state
+            .set_session_cipher(Arc::new(
+                protocol::tcp_transport::TcpSessionCipher::new(
+                    protocol::tcp_transport::TcpSessionRole::Proxy,
+                    [1; 32],
+                    [2; 32],
+                    [3; 32],
+                    [4; 32],
+                    [5; 16],
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        let framed = proxy_framed_stream(PendingAgentStream, ProxyCodec::new(cipher_state));
         let (mut writer, _reader) = framed.split();
         let (_response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
         let response = QueuedUdpRelayResponse {

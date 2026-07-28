@@ -6,6 +6,7 @@ use crate::config::ProxyConfig;
 use crate::connection::EgressState;
 use crate::error::Result;
 use crate::user_manager::UserManager;
+use protocol::RsaKeyPair;
 use protocol::udp_transport::{
     UDP_MAX_DATAGRAM_SIZE, UdpPacketHeader, UdpPacketKind, UdpSessionId, decode_auth_init,
 };
@@ -18,11 +19,24 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, trace, warn};
 
 const NATIVE_UDP_SOCKET_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+const MAX_NATIVE_UDP_SESSIONS_PER_USERNAME: usize = 8;
+
+fn username_session_limit_reached<'a>(
+    usernames: impl Iterator<Item = &'a str>,
+    username: &str,
+) -> bool {
+    usernames
+        .filter(|candidate| *candidate == username)
+        .take(MAX_NATIVE_UDP_SESSIONS_PER_USERNAME)
+        .count()
+        >= MAX_NATIVE_UDP_SESSIONS_PER_USERNAME
+}
 
 pub(crate) async fn run_listener(
     socket: Arc<UdpSocket>,
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
+    transport_identity: Arc<RsaKeyPair>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
 ) -> Result<()> {
@@ -32,6 +46,7 @@ pub(crate) async fn run_listener(
         socket,
         config,
         user_manager,
+        transport_identity,
         egress_state,
         access_recorder,
         sessions: HashMap::new(),
@@ -64,6 +79,7 @@ struct NativeUdpListener {
     socket: Arc<UdpSocket>,
     config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
+    transport_identity: Arc<RsaKeyPair>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     sessions: HashMap<UdpSessionId, SessionRoute>,
@@ -75,6 +91,7 @@ struct NativeUdpListener {
 
 struct SessionRoute {
     peer: SocketAddr,
+    username: String,
     generation: u64,
     inbound_tx: mpsc::Sender<Vec<u8>>,
     auth_init_datagram: Vec<u8>,
@@ -165,18 +182,37 @@ impl NativeUdpListener {
             );
             return;
         }
+        if username_session_limit_reached(
+            self.sessions.values().map(|route| route.username.as_str()),
+            &auth.username,
+        ) {
+            warn!(
+                username = %auth.username,
+                limit = MAX_NATIVE_UDP_SESSIONS_PER_USERNAME,
+                peer = %peer,
+                "该用户的原生 UDP 会话数已达硬上限，拒绝新认证"
+            );
+            return;
+        }
 
-        let prepared =
-            match prepare_session(&self.config, &self.user_manager, session_id, &auth).await {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    debug!(
-                        "原生 UDP 认证失败 peer={peer} username={}: {error}",
-                        auth.username
-                    );
-                    return;
-                }
-            };
+        let prepared = match prepare_session(
+            &self.config,
+            &self.user_manager,
+            &self.transport_identity,
+            session_id,
+            &auth,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                debug!(
+                    "原生 UDP 认证失败 peer={peer} username={}: {error}",
+                    auth.username
+                );
+                return;
+            }
+        };
 
         let generation = self.allocate_generation();
         let channel_size = self.config.udp_session_channel_size.max(1);
@@ -186,6 +222,7 @@ impl NativeUdpListener {
             session_id,
             SessionRoute {
                 peer,
+                username: auth.username.clone(),
                 generation,
                 inbound_tx,
                 auth_init_datagram: datagram.to_vec(),
@@ -196,9 +233,13 @@ impl NativeUdpListener {
         let session_context = SessionContext {
             socket: self.socket.clone(),
             config: self.config.clone(),
+            user_manager: self.user_manager.clone(),
             egress_state: self.egress_state.clone(),
             access_recorder: self.access_recorder.clone(),
             username: auth.username.clone(),
+            authenticated_public_key_pem: prepared.authenticated_public_key_pem,
+            authenticated_key_version: prepared.authenticated_key_version,
+            expires_at: prepared.expires_at,
             peer,
         };
         let cleanup_tx = self.cleanup_tx.clone();
@@ -294,5 +335,28 @@ struct SessionCleanupGuard {
 impl Drop for SessionCleanupGuard {
     fn drop(&mut self) {
         let _ = self.cleanup_tx.send(self.cleanup);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NATIVE_UDP_SESSIONS_PER_USERNAME, username_session_limit_reached};
+
+    #[test]
+    fn per_username_session_limit_is_exact_and_does_not_count_other_users() {
+        let mut usernames = vec!["bob"; 20];
+        usernames.extend(std::iter::repeat_n(
+            "alice",
+            MAX_NATIVE_UDP_SESSIONS_PER_USERNAME - 1,
+        ));
+        assert!(!username_session_limit_reached(
+            usernames.iter().copied(),
+            "alice"
+        ));
+        usernames.push("alice");
+        assert!(username_session_limit_reached(
+            usernames.iter().copied(),
+            "alice"
+        ));
     }
 }

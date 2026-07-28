@@ -6,16 +6,28 @@ import InputText from "primevue/inputtext";
 import Message from "primevue/message";
 import Password from "primevue/password";
 import AppIcon from "../components/AppIcon";
+import {
+  deviceLoginStatusText,
+  formatDeviceLoginCountdown
+} from "../deviceLogin";
 import { loadRememberedAgentLogin } from "../rememberedLogin";
-import type { AgentLoginRequest } from "../types";
+import type {
+  AgentDeviceLoginViewState,
+  AgentLoginRequest
+} from "../types";
 
 const props = defineProps<{
   loading: boolean;
   registrationLoading: boolean;
+  deviceLogin: AgentDeviceLoginViewState | null;
+  deviceLoginRemaining: number;
+  deviceLoginStarting: boolean;
   error: string;
 }>();
 
 const emit = defineEmits<{
+  cancelDeviceLogin: [];
+  deviceLogin: [];
   register: [];
   submit: [request: AgentLoginRequest];
 }>();
@@ -33,7 +45,6 @@ const canSubmit = computed(
     Boolean(form.username.trim()) &&
     form.password.length >= 8
 );
-
 function submit() {
   if (!canSubmit.value) {
     return;
@@ -68,7 +79,44 @@ function submit() {
         <p>登录后才能进入桌面 Agent，并使用为当前账户批准的代理凭据。</p>
       </div>
 
-      <form class="auth-form" @submit.prevent="submit">
+      <Message v-if="error" class="auth-error" severity="error" :closable="false">
+        {{ error }}
+      </Message>
+
+      <section
+        v-if="deviceLogin"
+        class="auth-device-login"
+        aria-labelledby="agent-device-login-title"
+      >
+        <span class="auth-device-icon"><AppIcon name="globe" /></span>
+        <div class="auth-device-copy">
+          <span class="auth-device-eyebrow">系统浏览器授权</span>
+          <strong id="agent-device-login-title">
+            在系统浏览器中继续
+          </strong>
+          <p role="status" aria-live="polite">
+            {{ deviceLoginStatusText(deviceLogin.status) }}
+          </p>
+        </div>
+        <div class="auth-device-code">
+          <span>设备授权码</span>
+          <code>{{ deviceLogin.user_code }}</code>
+        </div>
+        <div class="auth-device-timing">
+          <span><AppIcon name="clock" />剩余时间</span>
+          <strong>{{ formatDeviceLoginCountdown(deviceLoginRemaining) }}</strong>
+        </div>
+        <Button
+          class="auth-device-cancel"
+          type="button"
+          label="取消设备登录"
+          severity="secondary"
+          outlined
+          @click="emit('cancelDeviceLogin')"
+        />
+      </section>
+
+      <form v-else class="auth-form" @submit.prevent="submit">
         <label class="auth-field" for="agent-login-username">
           <span>用户名</span>
           <InputText
@@ -77,7 +125,7 @@ function submit() {
             autocomplete="username"
             autofocus
             placeholder="输入 Proxy Web 用户名"
-            :disabled="loading"
+            :disabled="loading || deviceLoginStarting"
           />
         </label>
 
@@ -90,7 +138,7 @@ function submit() {
             placeholder="至少 8 位"
             :feedback="false"
             :minlength="8"
-            :disabled="loading"
+            :disabled="loading || deviceLoginStarting"
             toggle-mask
             fluid
           />
@@ -100,27 +148,41 @@ function submit() {
           <Checkbox
             input-id="agent-login-remember"
             v-model="form.rememberCredentials"
-            :disabled="loading"
+            :disabled="loading || deviceLoginStarting"
             binary
           />
           <label for="agent-login-remember">记住用户名和密码</label>
         </div>
-
-        <Message v-if="error" class="auth-error" severity="error" :closable="false">
-          {{ error }}
-        </Message>
 
         <Button
           class="auth-submit"
           type="submit"
           label="登录并配置 Agent"
           :loading="loading"
-          :disabled="!canSubmit"
+          :disabled="!canSubmit || deviceLoginStarting"
         >
           <template #icon="slotProps">
             <AppIcon :class="slotProps.class" name="key" />
           </template>
         </Button>
+
+        <div class="auth-browser-divider"><span>或在系统浏览器中登录</span></div>
+
+        <div class="auth-browser-buttons">
+          <Button
+            type="button"
+            label="使用浏览器登录"
+            severity="secondary"
+            outlined
+            :loading="deviceLoginStarting"
+            :disabled="loading || deviceLoginStarting"
+            @click="emit('deviceLogin')"
+          >
+            <template #icon="slotProps">
+              <AppIcon :class="slotProps.class" name="cloud" />
+            </template>
+          </Button>
+        </div>
 
         <Button
           class="auth-register"
@@ -129,7 +191,7 @@ function submit() {
           severity="secondary"
           outlined
           :loading="registrationLoading"
-          :disabled="loading"
+          :disabled="loading || deviceLoginStarting"
           @click="emit('register')"
         >
           <template #icon="slotProps">

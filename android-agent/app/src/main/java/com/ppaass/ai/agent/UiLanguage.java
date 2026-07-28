@@ -74,7 +74,98 @@ final class UiLanguage {
         put("优先使用固定 IP 或 192.168.0.0/16 这样的网段。", "Prefer a fixed IP or a network such as 192.168.0.0/16.");
         put("需要先启用代理 DNS；命中 DNS 缓存后规则才会生效。", "Requires proxy DNS; rules take effect after a DNS cache hit.");
         put("连接", "Connection"); put("代理地址", "Proxy address"); put("用户名", "Username");
-        put("私钥 PEM", "Private key PEM"); put("共享监听端口", "Shared listen port");
+        put("密码", "Password"); put("共享监听端口", "Shared listen port");
+        put("连接你的代理账户", "Connect your proxy account");
+        put("登录后自动下载并应用当前账户获批的代理凭据。",
+                "Sign in to download and apply the approved proxy credential for this account.");
+        put("输入 Proxy Web 用户名", "Enter your Proxy Web username");
+        put("至少 8 位", "At least 8 characters");
+        put("记住用户名和密码", "Remember username and password");
+        put("登录并配置 Agent", "Sign in and configure Agent");
+        put("正在登录", "Signing in");
+        put("使用浏览器登录", "Sign in with browser");
+        put("正在等待浏览器授权", "Waiting for browser approval");
+        put("取消第三方登录", "Cancel third-party sign-in");
+        put("正在创建安全的浏览器登录请求…",
+                "Creating a secure browser sign-in request…");
+        put("请在浏览器完成登录并批准此设备，然后返回 Agent。",
+                "Sign in and approve this device in the browser, then return to Agent.");
+        put("浏览器授权仍在处理中，Agent 已降低检查频率。",
+                "Browser approval is still pending; Agent is checking less frequently.");
+        put("第三方登录已取消", "Third-party sign-in cancelled");
+        put("设备登录已取消", "Device sign-in cancelled");
+        put("无法创建设备登录请求", "Could not create the device sign-in request");
+        put("无法创建设备登录轮询请求", "Could not create the device sign-in poll request");
+        put("Proxy Web 返回的设备登录参数无效",
+                "Proxy Web returned invalid device sign-in parameters");
+        put("Proxy Web 返回的设备登录地址无效",
+                "Proxy Web returned an invalid device sign-in URL");
+        put("Proxy Web 返回的设备登录结果无效",
+                "Proxy Web returned an invalid device sign-in result");
+        put("无法打开第三方登录页面", "Could not open the third-party sign-in page");
+        put("浏览器登录或应用 Agent 凭据失败",
+                "Browser sign-in or Agent credential setup failed");
+        put("你已在浏览器中拒绝这次 Agent 登录",
+                "You denied this Agent sign-in in the browser");
+        put("账号状态已变化，请重新开始登录",
+                "The account changed; start sign-in again");
+        put("浏览器登录请求已过期，请重新开始",
+                "The browser sign-in request expired; start again");
+        put("浏览器登录请求无效或已被使用，请重新开始",
+                "The browser sign-in request is invalid or already used; start again");
+        put("Proxy Web 返回的密钥版本无效",
+                "Proxy Web returned an invalid key version");
+        put("Proxy Web 返回的登录会话已经过期",
+                "Proxy Web returned an expired sign-in session");
+        put("新用户注册", "Create account");
+        put("私钥会从 Proxy Web 自动下载到应用私有目录，不会显示在界面中。",
+                "The private key is downloaded into app-private storage and is never shown in the UI.");
+        put("请输入用户名", "Enter your username");
+        put("密码至少需要 8 位", "Password must be at least 8 characters");
+        put("无法保存已记住的登录信息", "Could not save remembered sign-in details");
+        put("无法清除已记住的登录信息", "Could not clear remembered sign-in details");
+        put("登录或应用 Agent 凭据失败", "Sign-in or Agent credential setup failed");
+        put("无法完全清理旧的 Agent 私钥，请重试登录",
+                "Could not completely remove the previous Agent key; try signing in again");
+        put("无法完全删除 Agent 私钥；代理已停止，请重试登录以再次清理",
+                "The Agent key could not be completely removed; proxies were stopped, and the next sign-in will retry cleanup");
+        put("无法完全删除已失效的 Agent 私钥",
+                "The expired Agent key could not be completely removed");
+        put("无法打开新用户注册页面", "Could not open the account registration page");
+        put("请先登录 Agent", "Sign in to Agent first");
+        put("已退出 Agent", "Signed out of Agent");
+        put("登录状态或代理凭据已过期，请重新登录",
+                "Your sign-in or proxy credential expired; sign in again");
+        put("当前登录用户", "Current signed-in user");
+        put("退出登录", "Sign out");
+        put("已登录：", "Signed in: ");
+        put("密钥版本 ", "key version ");
+        put("有效期至 ", "expires ");
+        put("管理员账号不能用于 Agent，请使用普通用户账号登录",
+                "Administrator accounts cannot use Agent; sign in with a regular user account");
+        put("账号已停用", "This account is disabled");
+        put("账号与 Proxy 用户绑定关系不一致，请联系管理员",
+                "The account does not match its linked proxy user; contact the administrator");
+        put("Proxy 用户已停用", "The proxy user is disabled");
+        put("当前账号没有读取私钥的权限",
+                "This account is not permitted to retrieve its private key");
+        put("密钥已经过期，请先申请新密钥并等待管理员批准",
+                "The key has expired; request a new key and wait for administrator approval");
+        put("密钥申请正在等待管理员审批",
+                "The key request is waiting for administrator approval");
+        put("当前没有可用密钥，请先在用户中心提交申请并等待管理员批准",
+                "No key is available; submit a request in the user portal and wait for approval");
+        put("用户名或密码错误", "Incorrect username or password");
+        put("认证服务 TLS 或证书校验失败，请联系管理员",
+                "Authentication service TLS or certificate validation failed; contact the administrator");
+        put("连接认证服务超时，请稍后重试",
+                "Authentication service connection timed out; try again later");
+        put("无法连接认证服务，请联系管理员检查 Agent 配置和服务状态",
+                "Cannot reach the authentication service; ask the administrator to check Agent configuration and service status");
+        put("认证服务请求失败，请稍后重试",
+                "Authentication service request failed; try again later");
+        put("Agent 认证服务配置无效，请联系管理员",
+                "Agent authentication service configuration is invalid; contact the administrator");
         put("代理线程", "Proxy threads"); put("并发建连", "Concurrent connections");
         put("同端口支持 HTTP 与 SOCKS5。", "The same port supports HTTP and SOCKS5.");
         put("HTTP/SOCKS5 工作线程，重启后生效。", "HTTP/SOCKS5 worker threads; effective after restart.");

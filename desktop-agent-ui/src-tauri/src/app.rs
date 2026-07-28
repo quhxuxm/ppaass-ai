@@ -9,12 +9,17 @@ use crate::agent::{
     packet_capture_runtime_status, resolve_agent_output_path, set_packet_capture_runtime_enabled,
     start_agent_command, stop_agent_inner_command,
 };
-use crate::auth::{authenticate_and_download, registration_page_url, write_managed_private_key};
+use crate::auth::{
+    authenticate_and_download, cleanup_old_managed_private_keys, destroy_managed_private_key,
+    destroy_managed_proxy_identity_public_key, open_system_browser, poll_device_authorization,
+    registration_page_url, start_device_authorization, write_managed_private_key,
+    write_managed_proxy_identity_public_key, DeviceAuthorizationPoll, DownloadedCredential,
+};
 use crate::config::{
-    apply_managed_credentials_to_config, enforce_managed_identity, install_bundled_agent_assets,
-    load_config_from_path, load_default_config, locate_config_path, make_absolute_path,
-    primary_agent_config_path, proxy_web_url_from_config, redact_managed_identity,
-    write_config_file,
+    apply_managed_credentials_to_config, clear_managed_credentials_from_config,
+    enforce_managed_identity, install_bundled_agent_assets, load_config_from_path,
+    load_default_config, locate_config_path, make_absolute_path, primary_agent_config_path,
+    proxy_web_url_from_config, redact_managed_identity, write_config_file,
 };
 use crate::diagnostics::run_connectivity_tests_blocking;
 #[cfg(target_os = "macos")]
@@ -25,8 +30,8 @@ use crate::macos_helper::{
 #[cfg(windows)]
 use crate::models::ServiceRequest;
 use crate::models::{
-    AgentAuthState, AgentLoginRequest, AgentState, ConnectivityReport, LoadedAgentConfig,
-    NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
+    AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest, AgentState, ConnectivityReport,
+    LoadedAgentConfig, NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
@@ -40,8 +45,9 @@ use crate::tray::{
 };
 #[cfg(windows)]
 use crate::windows_service::{
-    install_and_start_windows_service, run_windows_service, send_service_request,
-    INSTALL_SERVICE_ARG, SERVICE_ARG,
+    activate_windows_service_session, install_and_start_windows_service,
+    invalidate_windows_service_session, run_windows_service, send_service_request,
+    service_config_root_from_args, INSTALL_SERVICE_ARG, SERVICE_ARG,
 };
 
 #[tauri::command]
@@ -101,6 +107,10 @@ async fn login_and_provision_agent(
 ) -> Result<AgentAuthState, String> {
     let runtime = runtime.inner().clone();
     let _operation = runtime.auth_operation.lock().await;
+    if runtime.is_authenticated() {
+        return Err("当前 Agent 已经登录，请先退出当前账号".to_string());
+    }
+    runtime.cancel_pending_device_authorization()?;
     let AgentLoginRequest { username, password } = request;
     let username = username.trim().to_string();
     if username.is_empty() {
@@ -118,35 +128,256 @@ async fn login_and_provision_agent(
     let proxy_web_url = proxy_web_url_from_config(&config_path)?;
     let downloaded =
         authenticate_and_download(&proxy_web_url, &username, password.as_str()).await?;
-    let agent_state = get_agent_state_inner(&runtime)?;
+    provision_downloaded_credential(&app, &runtime, &config_path, downloaded)
+}
+
+#[tauri::command]
+async fn start_agent_device_login(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+) -> Result<AgentDeviceLoginProgress, String> {
+    let runtime = runtime.inner().clone();
+    let _operation = runtime.auth_operation.lock().await;
+    if runtime.is_authenticated() {
+        return Err("当前 Agent 已经登录".to_string());
+    }
+    runtime.cancel_pending_device_authorization()?;
+    let config_path = current_ui_config_path(&runtime)
+        .or_else(locate_config_path)
+        .ok_or_else(|| {
+            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
+        })?;
+    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let started = start_device_authorization(&proxy_web_url).await?;
+    let verification_url = started.verification_url.clone();
+    let challenge = runtime.set_pending_device_authorization(
+        started.device_code,
+        started.proxy_web_url,
+        config_path,
+        started.user_code,
+        started.expires_at,
+        started.interval_seconds,
+    )?;
+    if let Err(error) = open_system_browser(&verification_url) {
+        let _ = runtime.take_pending_device_authorization_if(challenge.id);
+        return Err(error);
+    }
+    info!(
+        expires_at = challenge.expires_at,
+        "已在系统默认浏览器中打开 Windows Agent 设备登录"
+    );
+    Ok(device_login_progress(
+        &challenge,
+        "authorization_pending",
+        challenge.interval_seconds,
+        None,
+    ))
+}
+
+#[tauri::command]
+async fn poll_agent_device_login(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+) -> Result<AgentDeviceLoginProgress, String> {
+    let runtime = runtime.inner().clone();
+    let _operation = runtime.auth_operation.lock().await;
+    if runtime.is_authenticated() {
+        return Err("当前 Agent 已经登录".to_string());
+    }
+    let challenge = runtime
+        .pending_device_authorization()?
+        .ok_or_else(|| "设备登录已取消或失效".to_string())?;
+    let poll = match poll_device_authorization(
+        &challenge.proxy_web_url,
+        &challenge.device_code,
+        challenge.interval_seconds,
+    )
+    .await
+    {
+        Ok(poll) => poll,
+        Err(error) => {
+            let _ = runtime.take_pending_device_authorization_if(challenge.id);
+            return Err(error);
+        }
+    };
+    match poll {
+        DeviceAuthorizationPoll::Pending {
+            slow_down,
+            retry_after_seconds,
+        } => {
+            let still_pending = runtime
+                .pending_device_authorization()?
+                .is_some_and(|pending| pending.id == challenge.id);
+            if !still_pending {
+                return Err("设备登录已取消".to_string());
+            }
+            Ok(device_login_progress(
+                &challenge,
+                if slow_down {
+                    "slow_down"
+                } else {
+                    "authorization_pending"
+                },
+                retry_after_seconds,
+                None,
+            ))
+        }
+        DeviceAuthorizationPoll::Authorized(downloaded) => {
+            if !runtime.take_pending_device_authorization_if(challenge.id)? {
+                return Err("设备登录已取消".to_string());
+            }
+            let auth_state = provision_downloaded_credential(
+                &app,
+                &runtime,
+                &challenge.config_path,
+                downloaded,
+            )?;
+            Ok(device_login_progress(
+                &challenge,
+                "authenticated",
+                0,
+                Some(auth_state),
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+async fn cancel_agent_device_login(
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+) -> Result<(), String> {
+    runtime.cancel_pending_device_authorization()?;
+    info!("已取消 Windows Agent 浏览器设备登录");
+    Ok(())
+}
+
+fn device_login_progress(
+    challenge: &crate::runtime::PendingAgentDeviceAuthorization,
+    status: &str,
+    retry_after_seconds: u32,
+    auth_state: Option<AgentAuthState>,
+) -> AgentDeviceLoginProgress {
+    AgentDeviceLoginProgress {
+        status: status.to_string(),
+        user_code: challenge.user_code.clone(),
+        expires_at: challenge.expires_at,
+        retry_after_seconds,
+        auth_state,
+    }
+}
+
+fn provision_downloaded_credential(
+    app: &tauri::AppHandle,
+    runtime: &Arc<AgentRuntime>,
+    config_path: &Path,
+    downloaded: DownloadedCredential,
+) -> Result<AgentAuthState, String> {
+    #[cfg(windows)]
+    activate_windows_service_session(app, downloaded.account.expires_at)?;
+    let agent_state = match get_agent_state_inner(runtime) {
+        Ok(state) => state,
+        Err(error) => {
+            #[cfg(windows)]
+            let _ = invalidate_windows_service_session(app);
+            return Err(error);
+        }
+    };
     if agent_state.running {
-        let stopped = stop_agent_inner_command(&runtime)?;
+        let stopped = match stop_agent_inner_command(runtime) {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                #[cfg(windows)]
+                let _ = invalidate_windows_service_session(app);
+                return Err(error);
+            }
+        };
         if stopped.running {
+            #[cfg(windows)]
+            let _ = invalidate_windows_service_session(app);
             return Err("更新登录凭据前无法停止 Agent".to_string());
         }
     }
 
-    let private_key_path = write_managed_private_key(
-        &app,
+    let private_key_path = match write_managed_private_key(
+        app,
         &downloaded.account.username,
         downloaded.account.key_version,
         &downloaded.private_key_pem,
-    )?;
-    let loaded = apply_managed_credentials_to_config(
-        &config_path,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            #[cfg(windows)]
+            let _ = invalidate_windows_service_session(app);
+            return Err(error);
+        }
+    };
+    let proxy_identity_public_key_path = match write_managed_proxy_identity_public_key(
+        app,
+        &downloaded.proxy_identity_public_key_pem,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = destroy_managed_private_key(&private_key_path);
+            #[cfg(windows)]
+            let _ = invalidate_windows_service_session(app);
+            return Err(error);
+        }
+    };
+    let loaded = match apply_managed_credentials_to_config(
+        config_path,
         &downloaded.account.username,
         &private_key_path,
-    )?;
-    let ui_config = redact_managed_identity(loaded.clone())?;
-    apply_ui_log_level(&runtime, &loaded.summary.log_level);
-    remember_ui_config_path(&runtime, &loaded.path)?;
+        &proxy_identity_public_key_path,
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            rollback_downloaded_credential(
+                app,
+                config_path,
+                &private_key_path,
+                &proxy_identity_public_key_path,
+            );
+            return Err(error);
+        }
+    };
+    let ui_config = match redact_managed_identity(loaded.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            rollback_downloaded_credential(
+                app,
+                config_path,
+                &private_key_path,
+                &proxy_identity_public_key_path,
+            );
+            return Err(error);
+        }
+    };
+    apply_ui_log_level(runtime, &loaded.summary.log_level);
+    if let Err(error) = remember_ui_config_path(runtime, &loaded.path) {
+        rollback_downloaded_credential(
+            app,
+            config_path,
+            &private_key_path,
+            &proxy_identity_public_key_path,
+        );
+        return Err(error);
+    }
 
     let account = downloaded.account;
-    runtime.set_authenticated_session(
+    if let Err(error) = runtime.set_authenticated_session(
         account.clone(),
-        private_key_path,
+        private_key_path.clone(),
+        proxy_identity_public_key_path.clone(),
         downloaded.proxy_web_url,
-    )?;
+    ) {
+        rollback_downloaded_credential(
+            app,
+            config_path,
+            &private_key_path,
+            &proxy_identity_public_key_path,
+        );
+        return Err(error);
+    }
+    cleanup_old_managed_private_keys(&private_key_path);
     info!(
         username = %account.username,
         key_version = account.key_version,
@@ -154,7 +385,7 @@ async fn login_and_provision_agent(
         "Agent 登录凭据已安全下载并应用"
     );
     #[cfg(any(windows, target_os = "macos"))]
-    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
+    sync_tray_tun_checked(app, loaded.summary.tun_enabled);
 
     Ok(AgentAuthState {
         authenticated: true,
@@ -163,15 +394,58 @@ async fn login_and_provision_agent(
     })
 }
 
+fn rollback_downloaded_credential(
+    app: &tauri::AppHandle,
+    config_path: &Path,
+    private_key_path: &Path,
+    proxy_identity_public_key_path: &Path,
+) {
+    let _ = clear_managed_credentials_from_config(config_path);
+    let _ = destroy_managed_private_key(private_key_path);
+    let _ = destroy_managed_proxy_identity_public_key(proxy_identity_public_key_path);
+    #[cfg(windows)]
+    let _ = invalidate_windows_service_session(app);
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
 #[tauri::command]
 async fn logout_agent(
+    app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
 ) -> Result<AgentAuthState, String> {
+    #[cfg(not(windows))]
+    let _ = &app;
     let runtime = runtime.inner().clone();
     let _operation = runtime.auth_operation.lock().await;
     let state = stop_agent_inner_command(&runtime)?;
     if state.running {
         return Err("Agent 仍在运行，无法安全退出登录".to_string());
+    }
+    let session = runtime.require_authenticated_session()?;
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = destroy_managed_private_key(&session.private_key_path) {
+        cleanup_errors.push(error);
+    }
+    if let Err(error) =
+        destroy_managed_proxy_identity_public_key(&session.proxy_identity_public_key_path)
+    {
+        cleanup_errors.push(error);
+    }
+    if let Some(config_path) = current_ui_config_path(&runtime).or_else(locate_config_path) {
+        if let Err(error) = clear_managed_credentials_from_config(&config_path) {
+            cleanup_errors.push(error);
+        }
+    }
+    #[cfg(windows)]
+    if let Err(error) = invalidate_windows_service_session(&app) {
+        cleanup_errors.push(error);
+    }
+    if !cleanup_errors.is_empty() {
+        return Err(format!(
+            "Agent 已停止，但清理登录凭据失败：{}",
+            cleanup_errors.join("；")
+        ));
     }
     if let Some(session) = runtime.take_authenticated_session()? {
         info!(username = %session.account.username, "Agent 用户已退出登录");
@@ -258,6 +532,7 @@ async fn start_agent(
             &config_path,
             &session.account.username,
             &session.private_key_path,
+            &session.proxy_identity_public_key_path,
         )?;
         remember_ui_config_path(&runtime, &loaded.path)?;
         start_agent_command(&runtime, loaded.path)
@@ -402,6 +677,7 @@ fn save_agent_config_inner(
         &raw,
         &session.account.username,
         &session.private_key_path,
+        &session.proxy_identity_public_key_path,
         &session.proxy_web_url,
     )?;
     write_config_file(&config_path, &managed_raw)?;
@@ -481,14 +757,18 @@ pub(crate) fn run() {
     #[cfg(windows)]
     {
         if std::env::args().any(|arg| arg == INSTALL_SERVICE_ARG) {
-            if let Err(err) = install_and_start_windows_service() {
+            if let Err(err) =
+                service_config_root_from_args().and_then(install_and_start_windows_service)
+            {
                 eprintln!("{err}");
+                std::process::exit(1);
             }
             return;
         }
         if std::env::args().any(|arg| arg == SERVICE_ARG) {
-            if let Err(err) = run_windows_service() {
+            if let Err(err) = service_config_root_from_args().and_then(run_windows_service) {
                 eprintln!("{err}");
+                std::process::exit(1);
             }
             return;
         }
@@ -537,6 +817,9 @@ pub(crate) fn run() {
             get_agent_auth_state,
             open_user_registration,
             login_and_provision_agent,
+            start_agent_device_login,
+            poll_agent_device_login,
+            cancel_agent_device_login,
             logout_agent,
             load_agent_config,
             save_agent_config,

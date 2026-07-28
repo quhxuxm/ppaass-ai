@@ -39,6 +39,14 @@ impl<'a> ProxyClientConfig<'a> {
         config.upstream_private_key_path.as_ref().ok_or_else(|| {
             ProxyError::Configuration("Upstream private key path not configured".to_string())
         })?;
+        config
+            .upstream_proxy_identity_public_key_path
+            .as_ref()
+            .ok_or_else(|| {
+                ProxyError::Configuration(
+                    "Upstream Proxy identity public key path not configured".to_string(),
+                )
+            })?;
 
         Ok(Self { config })
     }
@@ -75,6 +83,15 @@ impl<'a> ClientConnectionConfig for ProxyClientConfig<'a> {
             .as_ref()
             .ok_or_else(|| "Private key path not configured".to_string())?;
 
+        read_to_string(path).map_err(|e| e.to_string())
+    }
+
+    fn proxy_identity_public_key_pem(&self) -> std::result::Result<String, String> {
+        let path = self
+            .config
+            .upstream_proxy_identity_public_key_path
+            .as_ref()
+            .ok_or_else(|| "Upstream Proxy identity public key path not configured".to_string())?;
         read_to_string(path).map_err(|e| e.to_string())
     }
 

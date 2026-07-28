@@ -9,6 +9,9 @@ pub struct Message {
     /// 压缩模式标志：0=None，1=Zstd，2=Lz4，3=Gzip
     #[serde(default)]
     pub compression: u8,
+    /// 单方向严格递增的帧序号。认证完成前的明文握手帧固定为 0。
+    #[serde(default)]
+    pub sequence: u64,
     pub payload: Vec<u8>,
 }
 
@@ -18,6 +21,7 @@ impl Message {
             version: PROTOCOL_VERSION,
             message_type,
             compression: 0,
+            sequence: 0,
             payload,
         }
     }
@@ -27,6 +31,7 @@ impl Message {
             version: PROTOCOL_VERSION,
             message_type,
             compression,
+            sequence: 0,
             payload,
         }
     }

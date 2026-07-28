@@ -1,6 +1,7 @@
 package com.ppaass.ai.agent;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.*;
 import android.content.*;
 import android.content.pm.*;
@@ -840,6 +841,7 @@ protected TextView mutedText(String text, float size) {
         return view;
     }
 
+@SuppressLint("WrongConstant")
 protected TextView controlLabel(String text) {
         TextView view = new TextView(this);
         view.setText(tr(text));

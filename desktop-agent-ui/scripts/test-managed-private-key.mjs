@@ -127,12 +127,16 @@ try {
     tauriConfig.bundle.resources["../../config/local/agent.toml"],
     "config/local/agent.toml"
   );
+  assert.equal(tauriConfig.bundle.resources["../../keys/user1.pem"], undefined);
+  assert.equal(tauriConfig.bundle.resources["../../keys/user2.pem"], undefined);
   const packagedAgentConfig = await readFile(
     new URL("../../config/remote/agent.toml", import.meta.url),
     "utf8"
   );
   assert.match(packagedAgentConfig, /^proxy_web_url = "https:\/\/140\.82\.30\.214"$/m);
   assert.doesNotMatch(packagedAgentConfig, /proxy_web_url = "http:\/\/127\.0\.0\.1:8787"/);
+  assert.doesNotMatch(packagedAgentConfig, /^\s*username\s*=/m);
+  assert.doesNotMatch(packagedAgentConfig, /^\s*private_key_path\s*=/m);
 
   const {
     fallbackRawConfig,

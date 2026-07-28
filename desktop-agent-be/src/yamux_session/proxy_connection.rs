@@ -53,6 +53,16 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
         read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
     }
 
+    fn proxy_identity_public_key_pem(&self) -> std::result::Result<String, String> {
+        let path = self
+            .config
+            .proxy_identity_public_key_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| "Proxy identity public key path not configured".to_string())?;
+        read_to_string(path).map_err(|e| e.to_string())
+    }
+
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(self.config.connect_timeout_secs)
     }

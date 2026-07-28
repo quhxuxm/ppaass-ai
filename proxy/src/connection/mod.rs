@@ -6,6 +6,7 @@
 
 mod agent_io;
 mod auth;
+mod authorization;
 mod connect;
 mod egress;
 mod relay;
@@ -17,6 +18,7 @@ mod udp_relay_flow;
 mod upstream;
 
 pub use agent_io::AgentIo;
+pub(crate) use authorization::ConnectionAuthorization;
 pub use egress::EgressState;
 pub use response_sink::BytesToProxyResponseSink;
 pub(crate) use target::target_addr_for_address;
@@ -29,6 +31,7 @@ pub(crate) use upstream::UpstreamConnection;
 use crate::access_log::AccessRecorder;
 use crate::config::{ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
+use crate::user_manager::UserManager;
 use bytes::Bytes;
 use common::spawn_guarded;
 use futures::{
@@ -38,7 +41,7 @@ use futures::{
 use protocol::{
     Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
     ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol, UdpRelayPacket,
-    crypto::{AesGcmCipher, RsaKeyPair},
+    crypto::RsaKeyPair,
 };
 use std::io;
 use std::sync::Arc;
@@ -71,13 +74,20 @@ pub struct ServerConnection {
     reader: FramedReader,
     // 认证成功后保存用户配置；relay 阶段用于日志和生命周期上下文。
     user_config: Option<UserConfig>,
-    // 每条外层 TCP 连接独立一份加密状态：认证前无 AES，认证后设置 AES cipher。
+    // 握手身份与共享用户源组成的持续授权上下文；active relay 以它处理
+    // 停用、撤权、提前过期与密钥轮换。
+    authorization: Option<ConnectionAuthorization>,
+    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v2 Auth，
+    // 认证后一次性设置方向独立的 AEAD 记录层。
     cipher_state: Arc<CipherState>,
     // `peek_auth_username` 会先读走 AuthRequest，这里暂存给后续 authenticate 继续校验。
     pending_auth_request: Option<AuthRequest>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
+    user_manager: Arc<UserManager>,
+    // 独立的 Proxy TCP/Yamux 传输身份，仅用于成功握手响应 PSS 签名。
+    transport_identity: Arc<RsaKeyPair>,
 }
 
 impl ServerConnection {
@@ -85,6 +95,8 @@ impl ServerConnection {
         stream: S,
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
+        user_manager: Arc<UserManager>,
+        transport_identity: Arc<RsaKeyPair>,
         egress_state: Arc<EgressState>,
         access_recorder: AccessRecorder,
     ) -> Self
@@ -92,20 +104,23 @@ impl ServerConnection {
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         // 每条 Yamux 子 stream 都有独立的编解码器和加密状态。
-        // compression_mode 在 stream 创建时确定，AES cipher 在认证成功后再写入同一个 state。
+        // compression_mode 在 stream 创建时确定，v2 记录层在认证成功后写入同一个 state。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
-        let framed = proxy_framed_stream(stream, ProxyCodec::new(Some(cipher_state.clone())));
+        let framed = proxy_framed_stream(stream, ProxyCodec::new(cipher_state.clone()));
         let (writer, reader) = framed.split();
 
         Self {
             writer,
             reader,
             user_config: None,
+            authorization: None,
             cipher_state,
             pending_auth_request: None,
             proxy_config,
             egress_state,
             access_recorder,
+            user_manager,
+            transport_identity,
         }
     }
 }

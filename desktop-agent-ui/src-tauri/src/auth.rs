@@ -3,28 +3,61 @@ use std::io::Write;
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use protocol::RsaKeyPair;
+use protocol::{RsaKeyPair, crypto::validate_rsa_public_key_size};
 use reqwest::{redirect::Policy, Client, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::Manager;
 use tempfile::Builder;
 use tracing::{info, instrument, warn};
 use url::Url;
+#[cfg(windows)]
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use zeroize::Zeroizing;
 
 use crate::models::AgentAuthAccount;
 
 const CREDENTIALS_DIR: &str = "credentials";
+const PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
 const MAX_NORMAL_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_PRIVATE_KEY_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_DEVICE_AUTHORIZATION_SECONDS: i64 = 60 * 60;
+const MAX_DEVICE_POLL_SECONDS: u32 = 120;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(crate) struct DownloadedCredential {
     pub(crate) account: AgentAuthAccount,
     pub(crate) private_key_pem: Zeroizing<String>,
+    pub(crate) proxy_identity_public_key_pem: String,
     pub(crate) proxy_web_url: String,
+}
+
+pub(crate) struct StartedDeviceAuthorization {
+    pub(crate) device_code: Zeroizing<String>,
+    pub(crate) user_code: String,
+    pub(crate) verification_url: Url,
+    pub(crate) expires_at: i64,
+    pub(crate) interval_seconds: u32,
+    pub(crate) proxy_web_url: String,
+}
+
+pub(crate) enum DeviceAuthorizationPoll {
+    Pending {
+        slow_down: bool,
+        retry_after_seconds: u32,
+    },
+    Authorized(DownloadedCredential),
 }
 
 #[derive(Serialize)]
@@ -73,8 +106,51 @@ struct PendingKeyRequest {
 struct PrivateKeyResponse {
     username: String,
     public_key_pem: String,
+    proxy_identity_public_key_pem: String,
     private_key_pem: String,
     key_version: i64,
+}
+
+#[derive(Serialize)]
+struct AgentDeviceAuthorizationStartPayload<'a> {
+    platform: &'a str,
+    client_name: &'a str,
+}
+
+#[derive(Deserialize)]
+struct AgentDeviceAuthorizationStartResponse {
+    device_code: String,
+    user_code: String,
+    #[serde(rename = "verification_uri")]
+    _verification_uri: String,
+    verification_uri_complete: String,
+    expires_in: i64,
+    interval: u32,
+}
+
+#[derive(Serialize)]
+struct AgentDeviceTokenPayload<'a> {
+    device_code: &'a str,
+}
+
+#[derive(Deserialize)]
+struct AgentDeviceTokenResponse {
+    account: AuthenticationAccount,
+    profile: AgentDeviceProfile,
+    public_key_pem: String,
+    proxy_identity_public_key_pem: String,
+    private_key_pem: String,
+    csrf_token: String,
+    #[serde(rename = "session_expires_at")]
+    _session_expires_at: i64,
+}
+
+#[derive(Deserialize)]
+struct AgentDeviceProfile {
+    username: String,
+    permissions: Vec<String>,
+    key_version: i64,
+    expires_at: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +286,7 @@ pub(crate) async fn authenticate_and_download(
     }
     let private_key_pem = Zeroizing::new(private_key.private_key_pem);
     validate_key_pair(&private_key_pem, &private_key.public_key_pem)?;
+    validate_proxy_identity_public_key(&private_key.proxy_identity_public_key_pem)?;
 
     info!(
         username = %profile.username,
@@ -223,8 +300,279 @@ pub(crate) async fn authenticate_and_download(
             expires_at: profile.expires_at,
         },
         private_key_pem,
+        proxy_identity_public_key_pem: private_key.proxy_identity_public_key_pem,
         proxy_web_url: normalized_url,
     })
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn start_device_authorization(
+    proxy_web_url: &str,
+) -> Result<StartedDeviceAuthorization, String> {
+    let base_url = normalize_proxy_web_url(proxy_web_url)
+        .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
+    let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
+    let client = build_proxy_web_client()?;
+    let response = client
+        .post(endpoint(&base_url, "api/v1/agent/device-authorizations")?)
+        .json(&AgentDeviceAuthorizationStartPayload {
+            platform: "windows",
+            client_name: "PPAASS Windows Agent",
+        })
+        .send()
+        .await
+        .map_err(map_request_error)?;
+    let response = decode_json_response::<AgentDeviceAuthorizationStartResponse>(
+        response,
+        MAX_NORMAL_RESPONSE_BYTES,
+    )
+    .await?;
+
+    let device_code = Zeroizing::new(response.device_code);
+    validate_device_code(&device_code)?;
+    validate_user_code(&response.user_code)?;
+    if !(1..=MAX_DEVICE_AUTHORIZATION_SECONDS).contains(&response.expires_in) {
+        return Err("Proxy Web 返回的设备登录有效期无效".to_string());
+    }
+    if !(1..=MAX_DEVICE_POLL_SECONDS).contains(&response.interval) {
+        return Err("Proxy Web 返回的设备登录轮询间隔无效".to_string());
+    }
+    let verification_url = device_verification_url(&base_url, &response.verification_uri_complete)?;
+    let expires_at = current_timestamp().saturating_add(response.expires_in);
+    info!(
+        expires_at,
+        interval_seconds = response.interval,
+        "已创建 Windows Agent 浏览器设备登录"
+    );
+    Ok(StartedDeviceAuthorization {
+        device_code,
+        user_code: response.user_code,
+        verification_url,
+        expires_at,
+        interval_seconds: response.interval,
+        proxy_web_url: normalized_url,
+    })
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn poll_device_authorization(
+    proxy_web_url: &str,
+    device_code: &str,
+    default_interval_seconds: u32,
+) -> Result<DeviceAuthorizationPoll, String> {
+    validate_device_code(device_code)?;
+    let base_url = normalize_proxy_web_url(proxy_web_url)
+        .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
+    let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
+    let client = build_proxy_web_client()?;
+    let response = client
+        .post(endpoint(
+            &base_url,
+            "api/v1/agent/device-authorizations/token",
+        )?)
+        .json(&AgentDeviceTokenPayload { device_code })
+        .send()
+        .await
+        .map_err(map_request_error)?;
+
+    if !response.status().is_success() {
+        return decode_device_authorization_error(response, default_interval_seconds).await;
+    }
+
+    let mut token =
+        decode_json_response::<AgentDeviceTokenResponse>(response, MAX_PRIVATE_KEY_RESPONSE_BYTES)
+            .await?;
+    let csrf_token = Zeroizing::new(std::mem::take(&mut token.csrf_token));
+    let downloaded = validate_device_token(token, normalized_url);
+    best_effort_logout(&client, &base_url, &csrf_token).await;
+    let downloaded = downloaded?;
+    info!(
+        username = %downloaded.account.username,
+        key_version = downloaded.account.key_version,
+        "Windows Agent 浏览器设备登录授权成功"
+    );
+    Ok(DeviceAuthorizationPoll::Authorized(downloaded))
+}
+
+pub(crate) fn open_system_browser(url: &Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("设备登录地址无效".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let operation = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target = std::ffi::OsStr::new(url.as_str())
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: both UTF-16 strings are NUL-terminated and remain alive for the call.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        if result as isize <= 32 {
+            return Err("无法打开系统默认浏览器，请检查 Windows 默认浏览器设置".to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url.as_str())
+            .spawn()
+            .map_err(|_| "无法打开系统默认浏览器".to_string())?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url.as_str())
+            .spawn()
+            .map_err(|_| "无法打开系统默认浏览器".to_string())?;
+        Ok(())
+    }
+}
+
+fn validate_device_token(
+    token: AgentDeviceTokenResponse,
+    proxy_web_url: String,
+) -> Result<DownloadedCredential, String> {
+    let AgentDeviceTokenResponse {
+        account,
+        profile,
+        public_key_pem,
+        proxy_identity_public_key_pem,
+        private_key_pem,
+        csrf_token: _,
+        _session_expires_at: _,
+    } = token;
+    let private_key_pem = Zeroizing::new(private_key_pem);
+    if account.role != "user" {
+        return Err("管理员账号不能用于 Agent，请使用普通用户账号登录".to_string());
+    }
+    if account.status != "active" {
+        return Err("账号已停用".to_string());
+    }
+    if let Some(linked_username) = account.linked_username.as_deref() {
+        if linked_username != profile.username {
+            return Err("账号与 Proxy 用户绑定关系不一致，请联系管理员".to_string());
+        }
+    }
+    if !profile
+        .permissions
+        .iter()
+        .any(|permission| permission == "key.private.read")
+    {
+        return Err("当前账号没有读取私钥的权限".to_string());
+    }
+    if profile
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= current_timestamp())
+    {
+        return Err("密钥已经过期，请先申请新密钥并等待管理员批准".to_string());
+    }
+    validate_key_pair(&private_key_pem, &public_key_pem)?;
+    validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
+    Ok(DownloadedCredential {
+        account: AgentAuthAccount {
+            username: profile.username,
+            key_version: profile.key_version,
+            expires_at: profile.expires_at,
+        },
+        private_key_pem,
+        proxy_identity_public_key_pem,
+        proxy_web_url,
+    })
+}
+
+async fn decode_device_authorization_error(
+    response: Response,
+    default_interval_seconds: u32,
+) -> Result<DeviceAuthorizationPoll, String> {
+    let status = response.status();
+    let retry_after_seconds = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| (1..=MAX_DEVICE_POLL_SECONDS).contains(value))
+        .unwrap_or_else(|| default_interval_seconds.clamp(1, MAX_DEVICE_POLL_SECONDS));
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| "读取认证服务响应失败".to_string())?;
+    if bytes.len() > MAX_NORMAL_RESPONSE_BYTES {
+        return Err("Proxy Web 响应过大，已拒绝处理".to_string());
+    }
+    let envelope = serde_json::from_slice::<ErrorEnvelope>(&bytes)
+        .map_err(|_| format!("Proxy Web 返回 HTTP {}", status.as_u16()))?;
+    match envelope.error.code.as_str() {
+        "authorization_pending" => Ok(DeviceAuthorizationPoll::Pending {
+            slow_down: false,
+            retry_after_seconds,
+        }),
+        "slow_down" | "rate_limited" => Ok(DeviceAuthorizationPoll::Pending {
+            slow_down: true,
+            retry_after_seconds,
+        }),
+        "access_denied" => Err("你已在浏览器中拒绝这次设备登录".to_string()),
+        "expired_token" => Err("设备登录已过期，请重新开始".to_string()),
+        "invalid_device_code" => Err("设备登录码无效或已经使用，请重新开始".to_string()),
+        "authorization_invalidated" => Err("账号状态已变化，请重新开始设备登录".to_string()),
+        _ => Err(map_api_error(status, envelope.error)),
+    }
+}
+
+fn validate_device_code(value: &str) -> Result<(), String> {
+    if value.len() != 43
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Proxy Web 返回的设备登录码格式无效".to_string());
+    }
+    Ok(())
+}
+
+fn validate_user_code(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("Proxy Web 返回的设备授权短码格式无效".to_string());
+    }
+    Ok(())
+}
+
+fn device_verification_url(base_url: &Url, value: &str) -> Result<Url, String> {
+    if value.is_empty() || value.len() > 2048 {
+        return Err("Proxy Web 返回的设备登录地址无效".to_string());
+    }
+    let url = base_url
+        .join(value)
+        .map_err(|_| "Proxy Web 返回的设备登录地址无效".to_string())?;
+    if url.origin() != base_url.origin()
+        || !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("Proxy Web 返回的设备登录地址不可信".to_string());
+    }
+    Ok(url)
 }
 
 fn build_proxy_web_client() -> Result<Client, String> {
@@ -248,13 +596,73 @@ pub(crate) fn write_managed_private_key(
     key_version: i64,
     private_key_pem: &str,
 ) -> Result<PathBuf, String> {
+    let credentials_dir = managed_credentials_dir(app)?;
+    let file_name = managed_private_key_file_name(username, key_version);
+    write_private_key_to_dir(&credentials_dir, &file_name, private_key_pem)
+}
+
+pub(crate) fn write_managed_proxy_identity_public_key(
+    app: &tauri::AppHandle,
+    public_key_pem: &str,
+) -> Result<PathBuf, String> {
+    validate_proxy_identity_public_key(public_key_pem)?;
+    let credentials_dir = managed_credentials_dir(app)?;
+    write_private_key_to_dir(
+        &credentials_dir,
+        PROXY_IDENTITY_PUBLIC_KEY_FILE,
+        public_key_pem,
+    )
+}
+
+fn managed_credentials_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("定位 Agent 本地数据目录失败：{error}"))?;
+    #[cfg(not(windows))]
     let app_data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("定位 Agent 数据目录失败：{error}"))?;
-    let credentials_dir = app_data_dir.join(CREDENTIALS_DIR);
-    let file_name = managed_private_key_file_name(username, key_version);
-    write_private_key_to_dir(&credentials_dir, &file_name, private_key_pem)
+    Ok(app_data_dir.join(CREDENTIALS_DIR))
+}
+
+pub(crate) fn destroy_managed_private_key(path: &Path) -> Result<(), String> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "托管私钥文件名无效".to_string())?;
+    if !file_name.starts_with("managed-") || !file_name.ends_with(".pem") {
+        return Err("拒绝删除非托管私钥文件".to_string());
+    }
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|error| format!("清空托管私钥失败：{error}"))?;
+    file.flush()
+        .map_err(|error| format!("清空托管私钥失败：{error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("同步托管私钥清理失败：{error}"))?;
+    drop(file);
+    fs::remove_file(path).map_err(|error| format!("删除托管私钥失败：{error}"))
+}
+
+pub(crate) fn destroy_managed_proxy_identity_public_key(path: &Path) -> Result<(), String> {
+    if path.file_name().and_then(|value| value.to_str())
+        != Some(PROXY_IDENTITY_PUBLIC_KEY_FILE)
+    {
+        return Err("拒绝删除非托管 Proxy 身份公钥文件".to_string());
+    }
+    if path.exists() {
+        fs::remove_file(path).map_err(|error| format!("删除 Proxy 身份公钥失败：{error}"))?;
+    }
+    Ok(())
 }
 
 fn require_active_profile(me: &MeResponse) -> Result<&MeProfile, String> {
@@ -405,6 +813,16 @@ fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> Result<(), 
     Ok(())
 }
 
+fn validate_proxy_identity_public_key(public_key_pem: &str) -> Result<(), String> {
+    if public_key_pem.len() > 64 * 1024 {
+        return Err("Proxy Web 返回的 Proxy 身份公钥过大".to_string());
+    }
+    let public_key = RsaKeyPair::from_public_key_pem(public_key_pem)
+        .map_err(|_| "Proxy Web 返回的 Proxy 身份公钥格式无效".to_string())?;
+    validate_rsa_public_key_size(&public_key)
+        .map_err(|_| "Proxy Web 返回的 Proxy 身份公钥强度无效".to_string())
+}
+
 fn normalize_pem(value: &str) -> String {
     value
         .lines()
@@ -416,12 +834,11 @@ fn normalize_pem(value: &str) -> String {
 }
 
 fn managed_private_key_file_name(username: &str, key_version: i64) -> String {
-    let username_hex = username
-        .as_bytes()
+    let username_digest = Sha256::digest(username.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    format!("managed-{username_hex}-v{key_version}.pem")
+    format!("managed-{username_digest}-v{key_version}.pem")
 }
 
 fn write_private_key_to_dir(
@@ -433,6 +850,8 @@ fn write_private_key_to_dir(
     #[cfg(unix)]
     fs::set_permissions(credentials_dir, fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("设置私钥目录权限失败：{error}"))?;
+    #[cfg(windows)]
+    set_windows_restricted_acl(credentials_dir, true)?;
 
     let destination = credentials_dir.join(file_name);
     let mut temporary = Builder::new()
@@ -457,10 +876,100 @@ fn write_private_key_to_dir(
     #[cfg(unix)]
     fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("设置私钥权限失败：{error}"))?;
+    #[cfg(windows)]
+    set_windows_restricted_acl(&destination, false)?;
     if let Ok(directory) = fs::File::open(credentials_dir) {
         let _ = directory.sync_all();
     }
     Ok(destination)
+}
+
+pub(crate) fn cleanup_old_managed_private_keys(current_private_key: &Path) {
+    let Some(credentials_dir) = current_private_key.parent() else {
+        return;
+    };
+    let Some(current_file_name) = current_private_key
+        .file_name()
+        .and_then(|value| value.to_str())
+    else {
+        return;
+    };
+    remove_other_managed_private_keys(credentials_dir, current_file_name);
+}
+
+fn remove_other_managed_private_keys(credentials_dir: &Path, current_file_name: &str) {
+    let Ok(entries) = fs::read_dir(credentials_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if file_name.starts_with("managed-")
+            && file_name.ends_with(".pem")
+            && file_name != current_file_name
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn set_windows_restricted_acl(path: &Path, directory: bool) -> Result<(), String> {
+    let user_sid = windows_current_user_sid()?;
+    let user_permission = if directory {
+        format!("*{user_sid}:(OI)(CI)F")
+    } else {
+        format!("*{user_sid}:F")
+    };
+    let system_permission = if directory {
+        "*S-1-5-18:(OI)(CI)F"
+    } else {
+        "*S-1-5-18:F"
+    };
+    let output = Command::new("icacls.exe")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(user_permission)
+        .arg(system_permission)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| format!("设置 Windows 私钥 ACL 失败：{error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "设置 Windows 私钥 ACL 失败：{}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+#[cfg(windows)]
+fn windows_current_user_sid() -> Result<String, String> {
+    let output = Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| format!("读取当前 Windows 用户 SID 失败：{error}"))?;
+    if !output.status.success() {
+        return Err("读取当前 Windows 用户 SID 失败".to_string());
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let sid = line
+        .trim()
+        .rsplit(',')
+        .next()
+        .map(|value| value.trim().trim_matches('"'))
+        .filter(|value| value.starts_with("S-1-"))
+        .ok_or_else(|| "当前 Windows 用户 SID 格式无效".to_string())?;
+    Ok(sid.to_string())
 }
 
 fn current_timestamp() -> i64 {
@@ -480,12 +989,15 @@ mod tests {
 
     use protocol::RsaKeyPair;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::time::timeout;
 
     use super::{
-        build_proxy_web_client, managed_private_key_file_name, normalize_proxy_web_url,
-        registration_page_url, validate_key_pair, write_private_key_to_dir,
+        build_proxy_web_client, device_verification_url, managed_private_key_file_name,
+        normalize_proxy_web_url, poll_device_authorization, registration_page_url,
+        remove_other_managed_private_keys, start_device_authorization, validate_device_code,
+        validate_key_pair, validate_proxy_identity_public_key, write_private_key_to_dir,
+        DeviceAuthorizationPoll,
     };
 
     struct ProxyEnvironmentGuard {
@@ -525,6 +1037,49 @@ mod tests {
         assert!(request_bytes > 0);
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    async fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2048];
+        loop {
+            let bytes = stream.read(&mut buffer).await.unwrap();
+            assert!(bytes > 0, "connection closed before request was complete");
+            request.extend_from_slice(&buffer[..bytes]);
+            let Some(header_end) = request.windows(4).position(|value| value == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + content_length {
+                return String::from_utf8(request).unwrap();
+            }
+        }
+    }
+
+    async fn write_http_response(
+        stream: &mut TcpStream,
+        status: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) {
+        let extra_headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{extra_headers}connection: close\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(response.as_bytes()).await.unwrap();
@@ -578,6 +1133,206 @@ mod tests {
         assert!(registration_page_url("https://proxy.example.com/path").is_err());
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn starts_windows_device_authorization_without_exposing_endpoint_overrides() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            assert!(request.starts_with("POST /api/v1/agent/device-authorizations HTTP/1.1"));
+            assert!(request.contains(r#""platform":"windows""#));
+            assert!(request.contains(r#""client_name":"PPAASS Windows Agent""#));
+            let body = serde_json::json!({
+                "device_code": "A".repeat(43),
+                "user_code": "ABCD-EFGH-JKMN",
+                "verification_uri": "/#agent-authorize",
+                "verification_uri_complete": "/#agent-authorize=ABCD-EFGH-JKMN",
+                "expires_in": 600,
+                "interval": 5
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", &[], &body).await;
+        });
+
+        let started = start_device_authorization(&format!("http://{address}"))
+            .await
+            .unwrap();
+        assert_eq!(started.device_code.as_str(), "A".repeat(43));
+        assert_eq!(started.user_code, "ABCD-EFGH-JKMN");
+        assert_eq!(started.interval_seconds, 5);
+        assert_eq!(
+            started.verification_url.as_str(),
+            format!("http://{address}/#agent-authorize=ABCD-EFGH-JKMN")
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn device_authorization_poll_honors_pending_and_slow_down_retry_after() {
+        for (status, code, retry_after, expected_slow_down) in [
+            (
+                "428 Precondition Required",
+                "authorization_pending",
+                "7",
+                false,
+            ),
+            ("429 Too Many Requests", "slow_down", "11", true),
+            ("429 Too Many Requests", "rate_limited", "13", true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_http_request(&mut stream).await;
+                assert!(
+                    request.starts_with("POST /api/v1/agent/device-authorizations/token HTTP/1.1")
+                );
+                let body = serde_json::json!({
+                    "error": {
+                        "code": code,
+                        "message": "waiting"
+                    }
+                })
+                .to_string();
+                write_http_response(&mut stream, status, &[("retry-after", retry_after)], &body)
+                    .await;
+            });
+
+            let result =
+                poll_device_authorization(&format!("http://{address}"), &"A".repeat(43), 5)
+                    .await
+                    .unwrap();
+            match result {
+                DeviceAuthorizationPoll::Pending {
+                    slow_down,
+                    retry_after_seconds,
+                } => {
+                    assert_eq!(slow_down, expected_slow_down);
+                    assert_eq!(retry_after_seconds, retry_after.parse::<u32>().unwrap());
+                }
+                DeviceAuthorizationPoll::Authorized(_) => {
+                    panic!("pending response must not authorize the Agent")
+                }
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn device_authorization_poll_handles_all_terminal_errors() {
+        for (status, code, expected_message) in [
+            ("403 Forbidden", "access_denied", "拒绝"),
+            ("400 Bad Request", "expired_token", "过期"),
+            ("400 Bad Request", "invalid_device_code", "无效"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let _request = read_http_request(&mut stream).await;
+                let body = serde_json::json!({
+                    "error": {
+                        "code": code,
+                        "message": "terminal"
+                    }
+                })
+                .to_string();
+                write_http_response(&mut stream, status, &[], &body).await;
+            });
+
+            let error = poll_device_authorization(&format!("http://{address}"), &"A".repeat(43), 5)
+                .await
+                .err()
+                .expect("terminal response must fail");
+            assert!(error.contains(expected_message), "{error}");
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn device_authorization_validates_key_pair_and_logs_out_temporary_session() {
+        let pair = RsaKeyPair::generate(2048).unwrap();
+        let private_key = pair.private_key_to_pem().unwrap();
+        let public_key = pair.public_key_to_pem().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut token_stream, _) = listener.accept().await.unwrap();
+            let token_request = read_http_request(&mut token_stream).await;
+            assert!(token_request
+                .starts_with("POST /api/v1/agent/device-authorizations/token HTTP/1.1"));
+            let body = serde_json::json!({
+                "account": {
+                    "role": "user",
+                    "status": "active",
+                    "linked_username": "alice"
+                },
+                "profile": {
+                    "username": "alice",
+                    "permissions": ["key.private.read"],
+                    "key_version": 9,
+                    "expires_at": 4_000_000_000_i64
+                },
+                "public_key_pem": public_key.clone(),
+                "proxy_identity_public_key_pem": public_key,
+                "private_key_pem": private_key,
+                "csrf_token": "csrf-device-token",
+                "session_expires_at": 4_000_000_000_i64
+            })
+            .to_string();
+            write_http_response(
+                &mut token_stream,
+                "200 OK",
+                &[(
+                    "set-cookie",
+                    "ppaass_session=device-session; Path=/; HttpOnly; SameSite=Lax",
+                )],
+                &body,
+            )
+            .await;
+
+            let (mut logout_stream, _) = listener.accept().await.unwrap();
+            let logout_request = read_http_request(&mut logout_stream).await;
+            assert!(logout_request.starts_with("POST /api/v1/auth/logout HTTP/1.1"));
+            assert!(logout_request
+                .to_ascii_lowercase()
+                .contains("cookie: ppaass_session=device-session"));
+            assert!(logout_request
+                .to_ascii_lowercase()
+                .contains("x-csrf-token: csrf-device-token"));
+            write_http_response(&mut logout_stream, "204 No Content", &[], "").await;
+        });
+
+        let result = poll_device_authorization(&format!("http://{address}"), &"A".repeat(43), 5)
+            .await
+            .unwrap();
+        match result {
+            DeviceAuthorizationPoll::Authorized(downloaded) => {
+                assert_eq!(downloaded.account.username, "alice");
+                assert_eq!(downloaded.account.key_version, 9);
+                assert!(downloaded.private_key_pem.contains("BEGIN PRIVATE KEY"));
+            }
+            DeviceAuthorizationPoll::Pending { .. } => {
+                panic!("authorized response must deliver credentials")
+            }
+        }
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn device_authorization_rejects_malformed_codes_and_cross_origin_verification_urls() {
+        assert!(validate_device_code(&"A".repeat(43)).is_ok());
+        assert!(validate_device_code("../not-a-device-code").is_err());
+        let base = normalize_proxy_web_url("https://proxy.example.com").unwrap();
+        assert!(device_verification_url(&base, "/#agent-authorize=ABCD").is_ok());
+        assert!(device_verification_url(
+            &base,
+            "https://attacker.example.com/#agent-authorize=ABCD"
+        )
+        .is_err());
+    }
+
     #[test]
     fn validates_matching_key_pair_and_rejects_mismatch() {
         let pair = RsaKeyPair::generate(2048).unwrap();
@@ -590,11 +1345,44 @@ mod tests {
     }
 
     #[test]
+    fn validates_proxy_identity_public_key_strength() {
+        let valid = RsaKeyPair::generate(2048).unwrap().public_key_to_pem().unwrap();
+        assert!(validate_proxy_identity_public_key(&valid).is_ok());
+        let weak = RsaKeyPair::generate(1024).unwrap().public_key_to_pem().unwrap();
+        assert!(validate_proxy_identity_public_key(&weak).is_err());
+        assert!(validate_proxy_identity_public_key("not a key").is_err());
+    }
+
+    #[test]
     fn managed_key_filename_cannot_escape_credentials_directory() {
         let name = managed_private_key_file_name("../用户/name", 7);
         assert!(!name.contains('/'));
         assert!(!name.contains('\\'));
         assert!(name.ends_with("-v7.pem"));
+        assert_eq!(name.len(), "managed-".len() + 64 + "-v7.pem".len());
+    }
+
+    #[test]
+    fn managed_key_filename_is_bounded_for_maximum_length_username() {
+        let username = "x".repeat(128);
+        let name = managed_private_key_file_name(&username, i64::MAX);
+        assert!(name.len() < 255);
+        assert!(!name.contains(&username));
+        assert_eq!(name, managed_private_key_file_name(&username, i64::MAX));
+    }
+
+    #[test]
+    fn cleanup_removes_legacy_username_encoded_managed_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let current = managed_private_key_file_name("alice", 2);
+        let legacy = "managed-616c696365-v1.pem";
+        fs::write(directory.path().join(&current), "current").unwrap();
+        fs::write(directory.path().join(legacy), "legacy").unwrap();
+
+        remove_other_managed_private_keys(directory.path(), &current);
+
+        assert!(directory.path().join(&current).is_file());
+        assert!(!directory.path().join(legacy).exists());
     }
 
     #[test]

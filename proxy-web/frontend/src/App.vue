@@ -20,16 +20,19 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import {
   ApiError,
+  approveAgentDeviceAuthorization,
   approveKeyRequest,
   clearClientSession,
   createManagedUser,
   deleteManagedUser,
+  denyAgentDeviceAuthorization,
   getAccessLogSettings,
   getMe,
   getMyKeyRequest,
   getMyPrivateKey,
   getProviders,
   getSession,
+  inspectAgentDeviceAuthorization,
   listPendingKeyRequests,
   listMyAccessRecords,
   listManagedUsers,
@@ -39,11 +42,11 @@ import {
   rejectKeyRequest,
   rotateManagedUserKey,
   rotateMyKey,
-  startOAuth,
   submitMyKeyRequest,
   updateAccessLogSettings,
   updateManagedUser,
   type AccessRecord,
+  type AgentDeviceAuthorizationInspection,
   type AccountRole,
   type AccountStatus,
   type KeyMaterial,
@@ -58,6 +61,7 @@ type AuthMode = 'login' | 'register'
 type AppPage = 'account' | 'admin'
 
 const PASSWORD_MIN_CHARACTERS = 8
+const AGENT_AUTHORIZATION_STORAGE_KEY = 'ppaass-agent-authorization'
 
 function requestedAuthMode(): AuthMode {
   return new URLSearchParams(window.location.search).get('mode') === 'register'
@@ -116,17 +120,23 @@ let clockTimer: ReturnType<typeof setInterval> | undefined
 const booting = ref(true)
 const authMode = ref<AuthMode>(requestedAuthMode())
 const authLoading = ref(false)
-const oauthLoading = ref<'google' | 'wechat' | null>(null)
 const providers = ref<ProviderAvailability>({
   localRegistration: true,
-  google: false,
-  wechat: false,
 })
 const session = ref<SessionState | null>(null)
 const self = ref<SelfView | null>(null)
 const activePage = ref<AppPage>('account')
 const pageLoading = ref(false)
 const authForm = reactive({ username: '', password: '' })
+const initialAgentAuthorization = restoreAgentAuthorization()
+const agentAuthorizationActive = ref(initialAgentAuthorization.active)
+const agentAuthorizationCode = ref(initialAgentAuthorization.code)
+const agentAuthorizationInput = ref(initialAgentAuthorization.code)
+const agentAuthorization = ref<AgentDeviceAuthorizationInspection | null>(null)
+const agentAuthorizationLoading = ref(false)
+const agentAuthorizationDecisionLoading = ref<'approve' | 'deny' | null>(null)
+const agentAuthorizationOutcome = ref<'authorized' | 'denied' | null>(null)
+const agentAuthorizationError = ref('')
 
 const ownKey = ref<KeyMaterial | null>(null)
 const ownKeyVisible = ref(false)
@@ -291,26 +301,11 @@ onMounted(async () => {
       session.value = sessionResult.value
     }
 
-    if (readOAuthSuccess()) {
-      clearOAuthLocation()
-      if (session.value?.authenticated) {
-        toast.add({
-          severity: 'success',
-          summary: '第三方账号登录成功',
-          life: 2600,
-        })
-      } else {
-        toast.add({
-          severity: 'error',
-          summary: '第三方登录会话未建立',
-          detail: '请重新尝试登录',
-          life: 4200,
-        })
-      }
-    }
-
     if (session.value?.authenticated) {
       await refreshSelf()
+      if (agentAuthorizationActive.value && agentAuthorizationCode.value) {
+        await refreshAgentAuthorization()
+      }
     }
   } finally {
     booting.value = false
@@ -390,6 +385,9 @@ async function submitAuth(): Promise<void> {
         : await login(payload)
     authForm.password = ''
     await refreshSelf()
+    if (agentAuthorizationActive.value && agentAuthorizationCode.value) {
+      await refreshAgentAuthorization()
+    }
     toast.add({
       severity: 'success',
       summary: authMode.value === 'register' ? '账号注册成功' : '欢迎回来',
@@ -400,17 +398,6 @@ async function submitAuth(): Promise<void> {
   } finally {
     authForm.password = ''
     authLoading.value = false
-  }
-}
-
-async function beginOAuth(provider: 'google' | 'wechat'): Promise<void> {
-  oauthLoading.value = provider
-  try {
-    const url = await startOAuth(provider)
-    window.location.assign(url)
-  } catch (error) {
-    oauthLoading.value = null
-    showError(provider === 'google' ? 'Google 登录失败' : '微信登录失败', error)
   }
 }
 
@@ -430,7 +417,75 @@ async function performLogout(): Promise<void> {
   accessRecordsFirst.value = 0
   activePage.value = 'account'
   authForm.password = ''
+  agentAuthorization.value = null
+  agentAuthorizationOutcome.value = null
+  agentAuthorizationError.value = ''
   toast.add({ severity: 'info', summary: '已安全退出', life: 2200 })
+}
+
+async function refreshAgentAuthorization(): Promise<void> {
+  const code = agentAuthorizationInput.value.trim()
+  if (!code) {
+    agentAuthorizationError.value = '请输入 Agent 显示的设备授权短码'
+    return
+  }
+  agentAuthorizationLoading.value = true
+  agentAuthorizationError.value = ''
+  agentAuthorizationOutcome.value = null
+  try {
+    const next = await inspectAgentDeviceAuthorization(code)
+    agentAuthorizationCode.value = code
+    agentAuthorizationInput.value = code
+    agentAuthorization.value = next
+    agentAuthorizationOutcome.value =
+      next.status === 'authorized' || next.status === 'denied'
+        ? next.status
+        : null
+    persistAgentAuthorization()
+  } catch (error) {
+    agentAuthorization.value = null
+    agentAuthorizationError.value = errorMessage(error)
+  } finally {
+    agentAuthorizationLoading.value = false
+  }
+}
+
+async function decideAgentAuthorization(
+  decision: 'approve' | 'deny',
+): Promise<void> {
+  if (!agentAuthorization.value || !agentAuthorizationCode.value) {
+    return
+  }
+  agentAuthorizationDecisionLoading.value = decision
+  agentAuthorizationError.value = ''
+  try {
+    if (decision === 'approve') {
+      await approveAgentDeviceAuthorization(agentAuthorizationCode.value)
+      agentAuthorizationOutcome.value = 'authorized'
+      agentAuthorization.value.status = 'authorized'
+    } else {
+      await denyAgentDeviceAuthorization(agentAuthorizationCode.value)
+      agentAuthorizationOutcome.value = 'denied'
+      agentAuthorization.value.status = 'denied'
+    }
+    clearStoredAgentAuthorization()
+    clearAgentAuthorizationLocation()
+  } catch (error) {
+    agentAuthorizationError.value = errorMessage(error)
+  } finally {
+    agentAuthorizationDecisionLoading.value = null
+  }
+}
+
+function leaveAgentAuthorization(): void {
+  clearStoredAgentAuthorization()
+  agentAuthorizationActive.value = false
+  agentAuthorizationCode.value = ''
+  agentAuthorizationInput.value = ''
+  agentAuthorization.value = null
+  agentAuthorizationOutcome.value = null
+  agentAuthorizationError.value = ''
+  clearAgentAuthorizationLocation()
 }
 
 async function refreshSelf(): Promise<void> {
@@ -1062,10 +1117,10 @@ function parseAdditionalPermissions(value: string): string[] | null {
 function originLabel(origin?: string): string {
   const labels: Record<string, string> = {
     local: '本地账号',
-    google: 'Google',
-    wechat: '微信',
+    google: '历史第三方账号',
+    wechat: '历史第三方账号',
     admin: '管理员',
-    legacy: 'users.toml',
+    legacy: '历史导入账号',
   }
   return labels[origin ?? ''] ?? origin ?? '未知'
 }
@@ -1118,18 +1173,80 @@ function minimumFutureExpiry(): Date {
   return new Date(Date.now() + 60_000)
 }
 
-function readOAuthSuccess(): boolean {
-  const hash = new URLSearchParams(
-    window.location.hash.startsWith('#')
-      ? window.location.hash.slice(1)
-      : window.location.hash,
-  )
-  return hash.get('oauth') === 'success'
+function restoreAgentAuthorization(): { active: boolean; code: string } {
+  const hash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash
+  if (hash === 'agent-authorize') {
+    return { active: true, code: '' }
+  }
+  if (hash.startsWith('agent-authorize=')) {
+    const code = decodeURIComponent(hash.slice('agent-authorize='.length)).trim()
+    try {
+      window.sessionStorage.setItem(
+        AGENT_AUTHORIZATION_STORAGE_KEY,
+        JSON.stringify({ active: true, code }),
+      )
+    } catch {
+      // sessionStorage 可能被浏览器隐私策略禁用；页面内状态仍然可用。
+    }
+    return { active: true, code }
+  }
+  try {
+    const stored = window.sessionStorage.getItem(
+      AGENT_AUTHORIZATION_STORAGE_KEY,
+    )
+    if (stored) {
+      const value = JSON.parse(stored) as {
+        active?: unknown
+        code?: unknown
+      }
+      if (value.active === true) {
+        return {
+          active: true,
+          code: typeof value.code === 'string' ? value.code : '',
+        }
+      }
+    }
+  } catch {
+    // 忽略损坏或不可用的浏览器临时存储。
+  }
+  return { active: false, code: '' }
 }
 
-function clearOAuthLocation(): void {
-  window.history.replaceState({}, document.title, window.location.pathname)
+function persistAgentAuthorization(): void {
+  if (!agentAuthorizationActive.value) {
+    return
+  }
+  try {
+    window.sessionStorage.setItem(
+      AGENT_AUTHORIZATION_STORAGE_KEY,
+      JSON.stringify({
+        active: true,
+        code: agentAuthorizationCode.value || agentAuthorizationInput.value.trim(),
+      }),
+    )
+  } catch {
+    // 页面当前生命周期内仍会保留授权状态。
+  }
 }
+
+function clearStoredAgentAuthorization(): void {
+  try {
+    window.sessionStorage.removeItem(AGENT_AUTHORIZATION_STORAGE_KEY)
+  } catch {
+    // 无需阻止用户离开授权页面。
+  }
+}
+
+function clearAgentAuthorizationLocation(): void {
+  window.history.replaceState(
+    {},
+    document.title,
+    `${window.location.pathname}${window.location.search}`,
+  )
+}
+
 </script>
 
 <template>
@@ -1164,13 +1281,27 @@ function clearOAuthLocation(): void {
 
     <section class="auth-panel" aria-label="账户登录">
       <div class="auth-card">
+        <div
+          v-if="agentAuthorizationActive"
+          class="agent-authorization-context"
+          role="status"
+        >
+          <i class="pi pi-desktop" />
+          <span>
+            <strong>正在登录 Agent</strong>
+            <small v-if="agentAuthorizationCode">
+              设备授权短码：{{ agentAuthorizationCode }}
+            </small>
+            <small v-else>登录后输入 Agent 显示的设备授权短码。</small>
+          </span>
+        </div>
         <div class="auth-heading">
           <p class="eyebrow">{{ authMode === 'login' ? '欢迎回来' : '创建账户' }}</p>
           <h2>{{ authMode === 'login' ? '登录 PPAASS' : '注册普通用户' }}</h2>
           <p>
             {{
               authMode === 'login'
-                ? '使用用户名密码，或已绑定的第三方账号继续。'
+                ? '使用用户名和密码继续。'
                 : '注册后可以提交密钥申请；管理员批准有效期后，密钥仅向你本人显示。'
             }}
           </p>
@@ -1236,36 +1367,179 @@ function clearOAuthLocation(): void {
           />
         </form>
 
-        <div v-if="providers.google || providers.wechat" class="oauth-section">
-          <div class="or-divider"><span>或使用第三方账号</span></div>
-          <div class="oauth-buttons">
-            <Button
-              v-if="providers.google"
-              label="Google"
-              icon="pi pi-google"
-              severity="secondary"
-              outlined
-              :loading="oauthLoading === 'google'"
-              :disabled="oauthLoading !== null && oauthLoading !== 'google'"
-              @click="beginOAuth('google')"
-            />
-            <Button
-              v-if="providers.wechat"
-              label="微信"
-              icon="pi pi-comments"
-              severity="success"
-              outlined
-              :loading="oauthLoading === 'wechat'"
-              :disabled="oauthLoading !== null && oauthLoading !== 'wechat'"
-              @click="beginOAuth('wechat')"
-            />
-          </div>
-        </div>
-
         <p v-if="!providers.localRegistration && authMode === 'login'" class="registration-note">
-          当前未开放自主注册，请使用第三方账号或联系管理员。
+          当前未开放自主注册，请联系管理员创建账号。
         </p>
       </div>
+    </section>
+  </main>
+
+  <main
+    v-else-if="agentAuthorizationActive"
+    class="agent-authorization-page"
+  >
+    <section class="agent-authorization-card" aria-labelledby="agent-authorization-title">
+      <a class="brand" href="/" aria-label="PPAASS 首页" @click.prevent="leaveAgentAuthorization">
+        <span class="brand-mark"><i class="pi pi-shield" /></span>
+        <span>PPAASS</span>
+      </a>
+
+      <template v-if="agentAuthorizationOutcome">
+        <div
+          class="agent-authorization-outcome"
+          :class="agentAuthorizationOutcome"
+          role="status"
+        >
+          <span class="outcome-icon">
+            <i
+              :class="
+                agentAuthorizationOutcome === 'authorized'
+                  ? 'pi pi-check'
+                  : 'pi pi-times'
+              "
+            />
+          </span>
+          <h1>
+            {{
+              agentAuthorizationOutcome === 'authorized'
+                ? 'Agent 登录已授权'
+                : 'Agent 登录已拒绝'
+            }}
+          </h1>
+          <p>
+            {{
+              agentAuthorizationOutcome === 'authorized'
+                ? '你可以返回 Agent，它会自动领取账户配置和私钥。设备码只能使用一次。'
+                : 'Agent 无法使用这次设备码登录。如需登录，请从 Agent 重新发起。'
+            }}
+          </p>
+          <Button
+            label="返回用户中心"
+            icon="pi pi-arrow-left"
+            @click="leaveAgentAuthorization"
+          />
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="agent-authorization-heading">
+          <p class="eyebrow">AGENT SIGN-IN</p>
+          <h1 id="agent-authorization-title">确认 Agent 登录</h1>
+          <p>只有你正在操作自己的 Agent 时才批准。我们不会在此页面展示或传输私钥。</p>
+        </div>
+
+        <div class="agent-authorization-account">
+          <Avatar
+            :label="(account?.displayName || account?.username || 'U').slice(0, 1).toUpperCase()"
+            shape="circle"
+          />
+          <span>
+            <small>当前登录账户</small>
+            <strong>{{ account?.displayName || account?.username }}</strong>
+          </span>
+          <Button
+            label="切换账户"
+            severity="secondary"
+            text
+            size="small"
+            @click="performLogout"
+          />
+        </div>
+
+        <form
+          v-if="!agentAuthorization"
+          class="agent-authorization-code-form"
+          @submit.prevent="refreshAgentAuthorization"
+        >
+          <label for="agent-authorization-code">设备授权短码</label>
+          <InputText
+            id="agent-authorization-code"
+            v-model="agentAuthorizationInput"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            placeholder="例如 ABCD-EFGH-JKLM"
+            :disabled="agentAuthorizationLoading"
+            fluid
+          />
+          <Button
+            type="submit"
+            label="继续"
+            icon="pi pi-arrow-right"
+            :loading="agentAuthorizationLoading"
+            fluid
+          />
+        </form>
+
+        <template v-else>
+          <div class="agent-device-summary">
+            <span class="summary-icon blue">
+              <i
+                :class="
+                  agentAuthorization.platform === 'android'
+                    ? 'pi pi-mobile'
+                    : 'pi pi-desktop'
+                "
+              />
+            </span>
+            <span>
+              <small>申请登录的设备</small>
+              <strong>{{ agentAuthorization.clientName }}</strong>
+              <small>
+                {{
+                  agentAuthorization.platform === 'android' ? 'Android' : 'Windows'
+                }}
+                · 授权码 {{ agentAuthorizationCode }}
+              </small>
+            </span>
+          </div>
+
+          <div class="agent-authorization-warning">
+            <i class="pi pi-exclamation-triangle" />
+            <span>
+              <strong>请核对 Agent 上显示的短码</strong>
+              <small>
+                此请求将在
+                {{ formatExpiry(String(agentAuthorization.expiresAt)) }}
+                失效。批准后，Agent 可一次性领取你的代理配置和私钥。
+              </small>
+            </span>
+          </div>
+
+          <div class="agent-authorization-actions">
+            <Button
+              label="拒绝"
+              icon="pi pi-times"
+              severity="secondary"
+              outlined
+              :loading="agentAuthorizationDecisionLoading === 'deny'"
+              :disabled="
+                agentAuthorizationDecisionLoading !== null &&
+                agentAuthorizationDecisionLoading !== 'deny'
+              "
+              @click="decideAgentAuthorization('deny')"
+            />
+            <Button
+              label="批准登录"
+              icon="pi pi-check"
+              :loading="agentAuthorizationDecisionLoading === 'approve'"
+              :disabled="
+                agentAuthorizationDecisionLoading !== null &&
+                agentAuthorizationDecisionLoading !== 'approve'
+              "
+              @click="decideAgentAuthorization('approve')"
+            />
+          </div>
+        </template>
+
+        <p
+          v-if="agentAuthorizationError"
+          class="agent-authorization-error"
+          role="alert"
+        >
+          <i class="pi pi-exclamation-circle" />
+          {{ agentAuthorizationError }}
+        </p>
+      </template>
     </section>
   </main>
 
@@ -1922,7 +2196,7 @@ function clearOAuthLocation(): void {
           <div class="table-toolbar">
             <div>
               <h2>用户列表</h2>
-              <p>users.toml 导入的旧用户没有 Web 登录账号，将保留原公钥兼容模式。</p>
+              <p>历史数据库用户没有 Web 登录账号；如需登录，请由管理员新建正式账号。</p>
             </div>
             <div class="table-actions">
               <span class="search-box">
@@ -2204,7 +2478,7 @@ function clearOAuthLocation(): void {
       </div>
       <div v-else class="legacy-notice">
         <i class="pi pi-info-circle" />
-        <span>这是从 users.toml 导入的只读兼容配置，Web 控制台不会修改其有效期、权限或密钥。</span>
+        <span>这是历史导入的只读配置，Web 控制台不会修改其有效期、权限或密钥。</span>
       </div>
       <template v-if="editingUser?.profile">
         <div

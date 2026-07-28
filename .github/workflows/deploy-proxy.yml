@@ -22,6 +22,7 @@ concurrency:
 jobs:
   deploy-proxy:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     container:
       image: debian:bookworm-slim
     steps:
@@ -67,7 +68,6 @@ jobs:
           cp target/release/proxy .deploy-proxy/proxy
           cp target/release/proxy-web .deploy-proxy/proxy-web
           cp config/remote/proxy.toml .deploy-proxy/proxy.toml
-          cp config/remote/users.toml .deploy-proxy/users.toml
           cp start-proxy.sh .deploy-proxy/start-proxy.sh
           cp start-proxy-web.sh .deploy-proxy/start-proxy-web.sh
           mkdir -p .deploy-proxy/proxy-web-frontend
@@ -79,6 +79,7 @@ jobs:
             echo "PPAASS_PROXY_WEB_LISTEN_ADDR=127.0.0.1:8787"
             printf 'PPAASS_PROXY_WEB_PUBLIC_HOST=%q\n' "$WEB_PUBLIC_HOST"
             echo "PPAASS_PROXY_WEB_SECURE_COOKIES=true"
+            echo "PPAASS_PROXY_WEB_TRUST_PROXY_HEADERS=true"
             echo "RUST_LOG=proxy_web=info,proxy_user_store=info,tower_http=info"
           } > .deploy-proxy/proxy-web.env
 
@@ -233,6 +234,24 @@ jobs:
 
           mkdir -p "$DEPLOY_DIR"
           DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          RUNTIME_DIR="/opt/ppaass"
+          STATE_DIR="/var/lib/ppaass"
+          case "$DEPLOY_DIR" in
+            /|/root|/home|/opt|/var|/usr|/etc)
+              echo "DEPLOY_FOLDER must be a dedicated staging subdirectory, got $DEPLOY_DIR" >&2
+              exit 1
+              ;;
+            "$RUNTIME_DIR"|"$RUNTIME_DIR"/*|"$STATE_DIR"|"$STATE_DIR"/*)
+              echo "DEPLOY_FOLDER is an upload staging directory and must not overlap $RUNTIME_DIR or $STATE_DIR" >&2
+              exit 1
+              ;;
+          esac
+          case "$DEPLOY_DIR" in
+            /root/*)
+              echo "DEPLOY_FOLDER is under /root; it will be used only for root-owned upload staging"
+              echo "Services will run from $RUNTIME_DIR with persistent state in $STATE_DIR"
+              ;;
+          esac
           if [ "$(id -u)" -ne 0 ]; then
             echo "Proxy Web HTTPS on TCP/443 requires a root deployment user" >&2
             exit 1
@@ -297,6 +316,23 @@ jobs:
 
           if ! command -v curl >/dev/null 2>&1; then
             echo "curl is required to install and health-check Caddy" >&2
+            exit 1
+          fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y openssl
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y openssl
+            else
+              echo "OpenSSL is missing and no supported package manager is available" >&2
+              exit 1
+            fi
+          fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "OpenSSL installation did not provide the openssl command" >&2
             exit 1
           fi
 
@@ -479,6 +515,7 @@ jobs:
               ;;
           esac
           DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          RUNTIME_DIR="/opt/ppaass"
 
           find_deploy_processes() {
             target_executable="$1"
@@ -540,6 +577,8 @@ jobs:
 
           stop_deploy_processes "Proxy" "$DEPLOY_DIR/proxy"
           stop_deploy_processes "Proxy Web" "$DEPLOY_DIR/proxy-web"
+          stop_deploy_processes "Proxy runtime" "$RUNTIME_DIR/proxy"
+          stop_deploy_processes "Proxy Web runtime" "$RUNTIME_DIR/proxy-web"
           REMOTE_SCRIPT
 
       - name: Deploy and restart proxy services
@@ -560,32 +599,57 @@ jobs:
           REMOTE_DEPLOY_SCRIPT="$(cat <<'REMOTE_SCRIPT'
           set -euo pipefail
           ADMIN_PASSWORD_INPUT_FILE="${PPAASS_PROXY_WEB_ADMIN_PASSWORD_INPUT_FILE:?}"
-          DEPLOY_DIR="$DEPLOY_FOLDER"
-          case "$DEPLOY_DIR" in
+          STAGING_DIR="$DEPLOY_FOLDER"
+          case "$STAGING_DIR" in
             "~")
-              DEPLOY_DIR="$HOME"
+              STAGING_DIR="$HOME"
               ;;
             "~/"*)
-              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              STAGING_DIR="$HOME/${STAGING_DIR#~/}"
               ;;
           esac
 
-          cd "$DEPLOY_DIR"
-          DEPLOY_DIR="$(pwd -P)"
+          cd "$STAGING_DIR"
+          STAGING_DIR="$(pwd -P)"
           umask 077
-          SECRET_DIR="$DEPLOY_DIR/.secrets"
+          RUNTIME_DIR="/opt/ppaass"
+          STATE_DIR="/var/lib/ppaass"
+          USER_DATA_DIR="$STATE_DIR/users"
+          ACCESS_DATA_DIR="$STATE_DIR/access"
+          SECRET_DIR="$STATE_DIR/secrets"
+          IDENTITY_DIR="$STATE_DIR/identity"
+          PROXY_LOG_DIR="/var/log/ppaass/proxy"
+          WEB_LOG_DIR="/var/log/ppaass/proxy-web"
+          PROXY_USER="ppaass-proxy"
+          PROXY_GROUP="ppaass-proxy"
+          WEB_USER="ppaass-proxy-web"
+          WEB_GROUP="ppaass-proxy-web"
+          USER_READ_GROUP="ppaass-user-readers"
+          ACCESS_GROUP="ppaass-access"
           KEY_SECRET_FILE="$SECRET_DIR/proxy-web-key-encryption-secret"
           ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-web-admin-password"
-          DATABASE_FILE="$DEPLOY_DIR/data/proxy-users.sqlite3"
+          DATABASE_FILE="$USER_DATA_DIR/proxy-users.sqlite3"
+          ACCESS_LOG_DATABASE_FILE="$ACCESS_DATA_DIR/proxy-access.sqlite3"
+          PROXY_IDENTITY_PRIVATE_KEY="$IDENTITY_DIR/proxy-identity-private.pem"
+          PROXY_IDENTITY_PUBLIC_KEY="$IDENTITY_DIR/proxy-identity-public.pem"
+          LEGACY_STAGING_DATA_DIR="$STAGING_DIR/data"
+          LEGACY_STAGING_DATABASE_FILE="$LEGACY_STAGING_DATA_DIR/proxy-users.sqlite3"
+          LEGACY_STATE_DATA_DIR="$STATE_DIR/data"
+          LEGACY_STATE_DATABASE_FILE="$LEGACY_STATE_DATA_DIR/proxy-users.sqlite3"
+          LEGACY_SECRET_DIR="$STAGING_DIR/.secrets"
           CADDY_MINIMUM_VERSION="2.11.4"
           CADDY_CONFIG_DIR="/etc/ppaass"
           CADDY_CONFIG_FILE="$CADDY_CONFIG_DIR/Caddyfile"
           CADDY_STATE_DIR="/var/lib/ppaass-caddy"
           DEPLOY_SUCCEEDED=false
+          PROXY_START_ATTEMPTED=false
           WEB_START_ATTEMPTED=false
           CADDY_START_ATTEMPTED=false
           temporary_admin_file=""
           temporary_key_file=""
+          temporary_identity_private_key=""
+          temporary_identity_public_key=""
+          temporary_proxy_config=""
           temporary_caddy_config=""
 
           cleanup_deployment_secrets() {
@@ -594,6 +658,15 @@ jobs:
             fi
             if [ -n "$temporary_key_file" ]; then
               rm -f "$temporary_key_file"
+            fi
+            if [ -n "$temporary_identity_private_key" ]; then
+              rm -f "$temporary_identity_private_key"
+            fi
+            if [ -n "$temporary_identity_public_key" ]; then
+              rm -f "$temporary_identity_public_key"
+            fi
+            if [ -n "$temporary_proxy_config" ]; then
+              rm -f "$temporary_proxy_config"
             fi
             if [ -n "$temporary_caddy_config" ]; then
               rm -f "$temporary_caddy_config"
@@ -606,15 +679,31 @@ jobs:
               if [ "$WEB_START_ATTEMPTED" = true ]; then
                 systemctl stop ppaass-proxy-web.service 2>/dev/null || true
               fi
+              if [ "$PROXY_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-proxy.service 2>/dev/null || true
+              fi
             fi
           }
           trap cleanup_deployment_secrets EXIT
 
-          chmod +x ./proxy ./proxy-web ./start-proxy.sh ./start-proxy-web.sh
-          test -f ./proxy.toml
-          test -f ./users.toml
-          test -f ./proxy-web.env
-          test -f ./proxy-web-frontend/index.html
+          case "$STAGING_DIR" in
+            /|/root|/home|/opt|/var|/usr|/etc)
+              echo "DEPLOY_FOLDER must be a dedicated staging subdirectory, got $STAGING_DIR" >&2
+              exit 1
+              ;;
+            "$RUNTIME_DIR"|"$RUNTIME_DIR"/*|"$STATE_DIR"|"$STATE_DIR"/*)
+              echo "DEPLOY_FOLDER must be a staging directory outside $RUNTIME_DIR and $STATE_DIR" >&2
+              exit 1
+              ;;
+          esac
+
+          test -x "$STAGING_DIR/proxy"
+          test -x "$STAGING_DIR/proxy-web"
+          test -x "$STAGING_DIR/start-proxy.sh"
+          test -x "$STAGING_DIR/start-proxy-web.sh"
+          test -f "$STAGING_DIR/proxy.toml"
+          test -f "$STAGING_DIR/proxy-web.env"
+          test -f "$STAGING_DIR/proxy-web-frontend/index.html"
 
           if [ "$(id -u)" -ne 0 ] \
             || ! command -v systemctl >/dev/null 2>&1 \
@@ -622,10 +711,14 @@ jobs:
             echo "Caddy deployment requires a root user on a systemd-based Linux server" >&2
             exit 1
           fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "OpenSSL is required to provision the persistent Proxy transport identity" >&2
+            exit 1
+          fi
 
           set -a
           # shellcheck disable=SC1091
-          . ./proxy-web.env
+          . "$STAGING_DIR/proxy-web.env"
           set +a
           WEB_PUBLIC_HOST="${PPAASS_PROXY_WEB_PUBLIC_HOST:?}"
           WEB_LISTEN_ADDR="${PPAASS_PROXY_WEB_LISTEN_ADDR:?}"
@@ -640,8 +733,311 @@ jobs:
               ;;
           esac
 
-          mkdir -p "$SECRET_DIR" "$(dirname "$DATABASE_FILE")"
-          chmod 700 "$SECRET_DIR"
+          nologin_shell="$(command -v nologin || printf '/usr/sbin/nologin')"
+
+          ensure_system_group() {
+            group_name="$1"
+            if ! getent group "$group_name" >/dev/null 2>&1; then
+              groupadd --system "$group_name"
+            fi
+          }
+
+          ensure_system_user() {
+            local service_user="$1"
+            local service_group="$2"
+            local service_passwd_entry service_home service_shell
+            if id -u "$service_user" >/dev/null 2>&1; then
+              service_passwd_entry="$(getent passwd "$service_user")"
+              service_home="$(printf '%s\n' "$service_passwd_entry" | cut -d: -f6)"
+              service_shell="$(printf '%s\n' "$service_passwd_entry" | cut -d: -f7)"
+              if [ "$(id -u "$service_user")" -eq 0 ]; then
+                echo "$service_user must not resolve to UID 0" >&2
+                exit 1
+              fi
+              if [ "$(id -gn "$service_user")" != "$service_group" ]; then
+                echo "$service_user exists with unexpected primary group $(id -gn "$service_user")" >&2
+                exit 1
+              fi
+              case "$service_home" in
+                /nonexistent|/var/empty|/var/lib/ppaass)
+                  ;;
+                *)
+                  echo "$service_user exists with non-service home $service_home" >&2
+                  exit 1
+                  ;;
+              esac
+              case "$service_shell" in
+                */nologin|/bin/false)
+                  ;;
+                *)
+                  echo "$service_user exists with an interactive shell: $service_shell" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              useradd \
+                --system \
+                --gid "$service_group" \
+                --home-dir /nonexistent \
+                --no-create-home \
+                --shell "$nologin_shell" \
+                "$service_user"
+            fi
+          }
+
+          ensure_system_group "$PROXY_GROUP"
+          ensure_system_group "$WEB_GROUP"
+          ensure_system_group "$USER_READ_GROUP"
+          ensure_system_group "$ACCESS_GROUP"
+          ensure_system_user "$PROXY_USER" "$PROXY_GROUP"
+          ensure_system_user "$WEB_USER" "$WEB_GROUP"
+          if [ "$(id -u "$PROXY_USER")" -eq "$(id -u "$WEB_USER")" ]; then
+            echo "Proxy and Proxy Web must use distinct Unix UIDs" >&2
+            exit 1
+          fi
+
+          for managed_directory in \
+            "$RUNTIME_DIR" \
+            "$STATE_DIR" \
+            "$USER_DATA_DIR" \
+            "$ACCESS_DATA_DIR" \
+            "$SECRET_DIR" \
+            "$IDENTITY_DIR" \
+            /var/log/ppaass \
+            "$PROXY_LOG_DIR" \
+            "$WEB_LOG_DIR"; do
+            if [ -L "$managed_directory" ]; then
+              echo "Refusing symlinked managed directory: $managed_directory" >&2
+              exit 1
+            fi
+          done
+
+          install -d -o root -g root -m 0755 "$STATE_DIR"
+          install -d -o "$WEB_USER" -g "$USER_READ_GROUP" -m 2750 "$USER_DATA_DIR"
+          install -d -o root -g "$ACCESS_GROUP" -m 2770 "$ACCESS_DATA_DIR"
+          install -d -o root -g "$WEB_GROUP" -m 0750 "$SECRET_DIR"
+          install -d -o root -g root -m 0755 "$IDENTITY_DIR"
+          install -d -o root -g root -m 0755 /var/log/ppaass
+          install -d -o root -g "$PROXY_GROUP" -m 0770 "$PROXY_LOG_DIR"
+          install -d -o root -g "$WEB_GROUP" -m 0770 "$WEB_LOG_DIR"
+
+          require_regular_file_or_absent() {
+            checked_file="$1"
+            if [ ! -e "$checked_file" ] && [ ! -L "$checked_file" ]; then
+              return
+            fi
+            if [ ! -f "$checked_file" ] || [ -L "$checked_file" ]; then
+              echo "Refusing non-regular deployment state file: $checked_file" >&2
+              exit 1
+            fi
+            if [ "$(stat -c '%h' -- "$checked_file")" -ne 1 ]; then
+              echo "Refusing hard-linked deployment state file: $checked_file" >&2
+              exit 1
+            fi
+          }
+
+          for legacy_data_directory in \
+            "$LEGACY_STAGING_DATA_DIR" \
+            "$LEGACY_STATE_DATA_DIR"; do
+            if [ -L "$legacy_data_directory" ]; then
+              echo "Refusing symlinked legacy data directory: $legacy_data_directory" >&2
+              exit 1
+            fi
+          done
+
+          require_sqlite_family() {
+            sqlite_database="$1"
+            for sqlite_suffix in "" "-wal" "-shm" "-journal"; do
+              require_regular_file_or_absent "${sqlite_database}${sqlite_suffix}"
+            done
+            if [ ! -e "$sqlite_database" ]; then
+              for sqlite_suffix in "-wal" "-shm" "-journal"; do
+                if [ -e "${sqlite_database}${sqlite_suffix}" ]; then
+                  echo "SQLite sidecar exists without its database: ${sqlite_database}${sqlite_suffix}" >&2
+                  exit 1
+                fi
+              done
+            fi
+          }
+
+          require_sqlite_family "$LEGACY_STAGING_DATABASE_FILE"
+          require_sqlite_family "$LEGACY_STATE_DATABASE_FILE"
+          require_sqlite_family "$DATABASE_FILE"
+          require_sqlite_family "$ACCESS_LOG_DATABASE_FILE"
+          require_regular_file_or_absent "$PROXY_IDENTITY_PRIVATE_KEY"
+          require_regular_file_or_absent "$PROXY_IDENTITY_PUBLIC_KEY"
+
+          if [ ! -e "$PROXY_IDENTITY_PRIVATE_KEY" ]; then
+            temporary_identity_private_key="$(
+              mktemp "$IDENTITY_DIR/.proxy-identity-private.XXXXXX"
+            )"
+            if ! openssl genpkey \
+              -algorithm RSA \
+              -pkeyopt rsa_keygen_bits:3072 \
+              -out "$temporary_identity_private_key" >/dev/null 2>&1; then
+              echo "Failed to generate the persistent Proxy transport identity" >&2
+              exit 1
+            fi
+            chown "$PROXY_USER":"$PROXY_GROUP" "$temporary_identity_private_key"
+            chmod 0600 "$temporary_identity_private_key"
+            mv -f "$temporary_identity_private_key" "$PROXY_IDENTITY_PRIVATE_KEY"
+            temporary_identity_private_key=""
+            echo "Generated persistent 3072-bit Proxy transport identity; include $IDENTITY_DIR in server backups"
+          fi
+          if ! openssl rsa \
+            -in "$PROXY_IDENTITY_PRIVATE_KEY" \
+            -check \
+            -noout >/dev/null 2>&1; then
+            echo "Stored Proxy transport identity is not a valid RSA private key" >&2
+            exit 1
+          fi
+          chown "$PROXY_USER":"$PROXY_GROUP" "$PROXY_IDENTITY_PRIVATE_KEY"
+          chmod 0600 "$PROXY_IDENTITY_PRIVATE_KEY"
+
+          temporary_identity_public_key="$(
+            mktemp "$IDENTITY_DIR/.proxy-identity-public.XXXXXX"
+          )"
+          if ! openssl pkey \
+            -in "$PROXY_IDENTITY_PRIVATE_KEY" \
+            -pubout \
+            -out "$temporary_identity_public_key" 2>/dev/null; then
+            echo "Failed to derive the Proxy transport identity public key" >&2
+            exit 1
+          fi
+          chown root:"$WEB_GROUP" "$temporary_identity_public_key"
+          chmod 0640 "$temporary_identity_public_key"
+          mv -f "$temporary_identity_public_key" "$PROXY_IDENTITY_PUBLIC_KEY"
+          temporary_identity_public_key=""
+
+          legacy_database_source=""
+          for candidate_database in \
+            "$LEGACY_STAGING_DATABASE_FILE" \
+            "$LEGACY_STATE_DATABASE_FILE"; do
+            if [ -e "$candidate_database" ]; then
+              if [ -n "$legacy_database_source" ]; then
+                echo "Multiple legacy Proxy databases exist; refusing to choose silently" >&2
+                echo "First: $legacy_database_source" >&2
+                echo "Second: $candidate_database" >&2
+                exit 1
+              fi
+              legacy_database_source="$candidate_database"
+            fi
+          done
+          if [ -n "$legacy_database_source" ]; then
+            if [ -e "$DATABASE_FILE" ]; then
+              echo "Both a legacy and canonical user database exist; refusing to choose silently" >&2
+              echo "Legacy: $legacy_database_source" >&2
+              echo "Canonical: $DATABASE_FILE" >&2
+              exit 1
+            fi
+            for database_suffix in "" "-wal" "-shm" "-journal"; do
+              legacy_database_part="${legacy_database_source}${database_suffix}"
+              if [ -e "$legacy_database_part" ]; then
+                mv "$legacy_database_part" "${DATABASE_FILE}${database_suffix}"
+              fi
+            done
+            echo "Migrated the stopped user SQLite database and sidecars from $(dirname "$legacy_database_source") to $USER_DATA_DIR"
+          fi
+
+          for database_suffix in "" "-wal" "-shm" "-journal"; do
+            database_part="${DATABASE_FILE}${database_suffix}"
+            if [ -e "$database_part" ]; then
+              chown "$WEB_USER":"$USER_READ_GROUP" "$database_part"
+              chmod 0640 "$database_part"
+            fi
+            access_database_part="${ACCESS_LOG_DATABASE_FILE}${database_suffix}"
+            if [ -e "$access_database_part" ]; then
+              chown root:"$ACCESS_GROUP" "$access_database_part"
+              chmod 0660 "$access_database_part"
+            fi
+          done
+
+          if [ -L "$LEGACY_SECRET_DIR" ]; then
+            echo "Refusing symlinked legacy secret directory: $LEGACY_SECRET_DIR" >&2
+            exit 1
+          fi
+          legacy_key_secret_file="$LEGACY_SECRET_DIR/proxy-web-key-encryption-secret"
+          require_regular_file_or_absent "$legacy_key_secret_file"
+          require_regular_file_or_absent "$KEY_SECRET_FILE"
+          if [ -e "$legacy_key_secret_file" ]; then
+            if [ -e "$KEY_SECRET_FILE" ]; then
+              if ! cmp -s "$legacy_key_secret_file" "$KEY_SECRET_FILE"; then
+                echo "Legacy and canonical Proxy Web encryption secrets differ; refusing migration" >&2
+                exit 1
+              fi
+              rm -f "$legacy_key_secret_file"
+            else
+              mv "$legacy_key_secret_file" "$KEY_SECRET_FILE"
+              echo "Migrated the persistent Proxy Web encryption secret to $SECRET_DIR"
+            fi
+          fi
+
+          install -d -o root -g root -m 0755 "$RUNTIME_DIR"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/proxy" \
+            "$RUNTIME_DIR/proxy"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/proxy-web" \
+            "$RUNTIME_DIR/proxy-web"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/start-proxy.sh" \
+            "$RUNTIME_DIR/start-proxy.sh"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/start-proxy-web.sh" \
+            "$RUNTIME_DIR/start-proxy-web.sh"
+          install -o root -g "$WEB_GROUP" -m 0640 \
+            "$STAGING_DIR/proxy-web.env" \
+            "$RUNTIME_DIR/proxy-web.env"
+
+          temporary_proxy_config="$(mktemp "$RUNTIME_DIR/.proxy.toml.XXXXXX")"
+          if ! awk \
+            -v database_file="$DATABASE_FILE" \
+            -v access_log_database_file="$ACCESS_LOG_DATABASE_FILE" \
+            -v proxy_identity_private_key="$PROXY_IDENTITY_PRIVATE_KEY" '
+            /^[[:space:]]*access_log_database_path[[:space:]]*=/ {
+              access_log_database_path_count++
+              next
+            }
+            /^[[:space:]]*access_log_database_group_writable[[:space:]]*=/ {
+              access_log_database_group_writable_count++
+              next
+            }
+            /^[[:space:]]*transport_identity_private_key_path[[:space:]]*=/ {
+              print "transport_identity_private_key_path = \"" proxy_identity_private_key "\""
+              transport_identity_private_key_path_count++
+              next
+            }
+            /^[[:space:]]*users_database_path[[:space:]]*=/ {
+              print "users_database_path = \"" database_file "\""
+              print "access_log_database_path = \"" access_log_database_file "\""
+              print "access_log_database_group_writable = true"
+              users_database_path_count++
+              next
+            }
+            { print }
+            END {
+              if (users_database_path_count != 1 \
+                  || access_log_database_path_count > 1 \
+                  || access_log_database_group_writable_count > 1 \
+                  || transport_identity_private_key_path_count != 1) {
+                exit 2
+              }
+            }
+          ' "$STAGING_DIR/proxy.toml" > "$temporary_proxy_config"; then
+            echo "proxy.toml has invalid database path or permission settings" >&2
+            exit 1
+          fi
+          chown root:"$PROXY_GROUP" "$temporary_proxy_config"
+          chmod 0640 "$temporary_proxy_config"
+          mv -f "$temporary_proxy_config" "$RUNTIME_DIR/proxy.toml"
+          temporary_proxy_config=""
+
+          rm -rf -- "$RUNTIME_DIR/proxy-web-frontend"
+          cp -a -- "$STAGING_DIR/proxy-web-frontend" "$RUNTIME_DIR/proxy-web-frontend"
+          chown -R root:root "$RUNTIME_DIR/proxy-web-frontend"
+          find "$RUNTIME_DIR/proxy-web-frontend" -type d -exec chmod 0755 {} +
+          find "$RUNTIME_DIR/proxy-web-frontend" -type f -exec chmod 0644 {} +
+
           test -r "$ADMIN_PASSWORD_INPUT_FILE"
           temporary_admin_file="$(mktemp "$SECRET_DIR/.proxy-web-admin-password.XXXXXX")"
           cp "$ADMIN_PASSWORD_INPUT_FILE" "$temporary_admin_file"
@@ -650,15 +1046,18 @@ jobs:
             echo "Received Proxy Web admin password has an invalid length" >&2
             exit 1
           fi
-          chmod 600 "$temporary_admin_file"
+          chown root:"$WEB_GROUP" "$temporary_admin_file"
+          chmod 0640 "$temporary_admin_file"
           mv -f "$temporary_admin_file" "$ADMIN_PASSWORD_FILE"
           temporary_admin_file=""
-          chmod 600 "$ADMIN_PASSWORD_FILE"
+          chown root:"$WEB_GROUP" "$ADMIN_PASSWORD_FILE"
+          chmod 0640 "$ADMIN_PASSWORD_FILE"
 
           if [ ! -s "$KEY_SECRET_FILE" ]; then
             temporary_key_file="$(mktemp "$SECRET_DIR/.proxy-web-key-encryption-secret.XXXXXX")"
             od -An -N48 -tx1 /dev/urandom | tr -d '[:space:]' > "$temporary_key_file"
-            chmod 600 "$temporary_key_file"
+            chown root:"$WEB_GROUP" "$temporary_key_file"
+            chmod 0640 "$temporary_key_file"
             mv -f "$temporary_key_file" "$KEY_SECRET_FILE"
             temporary_key_file=""
             echo "Generated the persistent Proxy Web key-encryption secret; include $SECRET_DIR in server backups"
@@ -668,7 +1067,16 @@ jobs:
             echo "Proxy Web key-encryption secret must contain at least 32 bytes" >&2
             exit 1
           fi
-          chmod 600 "$KEY_SECRET_FILE"
+          chown root:"$WEB_GROUP" "$KEY_SECRET_FILE"
+          chmod 0640 "$KEY_SECRET_FILE"
+
+          rm -f \
+            "$LEGACY_SECRET_DIR/proxy-web-admin-password" \
+            "$LEGACY_SECRET_DIR/proxy-web-oauth.env"
+          rm -f \
+            "$RUNTIME_DIR/users.toml" \
+            "$SECRET_DIR/proxy-web-oauth.env"
+          rmdir "$LEGACY_SECRET_DIR" 2>/dev/null || true
 
           version_is_supported() {
             candidate_version="${1#v}"
@@ -700,7 +1108,7 @@ jobs:
           PROXY_LISTEN_ADDR="$(
             awk -F '"' '
               /^[[:space:]]*listen_addr[[:space:]]*=/ { print $2; exit }
-            ' ./proxy.toml
+            ' "$RUNTIME_DIR/proxy.toml"
           )"
           PROXY_LISTEN_PORT="${PROXY_LISTEN_ADDR##*:}"
           case "$PROXY_LISTEN_PORT" in
@@ -798,20 +1206,39 @@ jobs:
           cat > /etc/systemd/system/ppaass-proxy.service <<EOF
           [Unit]
           Description=PPAASS Proxy
-          Wants=network-online.target
-          After=network-online.target
+          Wants=network-online.target ppaass-proxy-web.service
+          After=network-online.target ppaass-proxy-web.service
 
           [Service]
           Type=simple
-          WorkingDirectory=$DEPLOY_DIR
-          ExecStart=$DEPLOY_DIR/proxy --config $DEPLOY_DIR/proxy.toml
+          User=$PROXY_USER
+          Group=$PROXY_GROUP
+          SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
+          WorkingDirectory=$RUNTIME_DIR
+          Environment=PPAASS_PROXY_WEB_LISTEN_ADDR=$WEB_LISTEN_ADDR
+          Environment=PPAASS_PROXY_IDENTITY_PRIVATE_KEY=$PROXY_IDENTITY_PRIVATE_KEY
+          Environment=PPAASS_PROXY_IDENTITY_PUBLIC_KEY=$PROXY_IDENTITY_PUBLIC_KEY
+          ExecStartPre=$RUNTIME_DIR/start-proxy-web.sh wait-health
+          ExecStart=$RUNTIME_DIR/proxy --config $RUNTIME_DIR/proxy.toml --log-dir $PROXY_LOG_DIR
           Restart=always
           RestartSec=3
           TimeoutStopSec=20
           LimitNOFILE=1048576
           LimitCORE=0
-          UMask=0077
+          UMask=0007
           NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadOnlyPaths=$USER_DATA_DIR $PROXY_IDENTITY_PRIVATE_KEY
+          ReadWritePaths=$ACCESS_DATA_DIR $PROXY_LOG_DIR
+          InaccessiblePaths=$SECRET_DIR
           AmbientCapabilities=CAP_NET_BIND_SERVICE
           CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
@@ -823,20 +1250,45 @@ jobs:
           [Unit]
           Description=PPAASS Proxy Web
           Wants=network-online.target
-          After=network-online.target ppaass-proxy.service
+          After=network-online.target
 
           [Service]
           Type=simple
-          WorkingDirectory=$DEPLOY_DIR
-          ExecStart=$DEPLOY_DIR/start-proxy-web.sh run
+          User=$WEB_USER
+          Group=$WEB_GROUP
+          SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
+          WorkingDirectory=$RUNTIME_DIR
+          Environment=PPAASS_PROXY_WEB_RUNTIME_ENV_FILE=$RUNTIME_DIR/proxy-web.env
+          Environment=PPAASS_PROXY_WEB_SECRET_DIR=$SECRET_DIR
+          Environment=PPAASS_PROXY_WEB_DATABASE=$DATABASE_FILE
+          Environment=PPAASS_PROXY_WEB_DATABASE_GROUP_READABLE=true
+          Environment=PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE=$ACCESS_LOG_DATABASE_FILE
+          Environment=PPAASS_PROXY_WEB_ACCESS_LOG_DATABASE_GROUP_WRITABLE=true
+          Environment=PPAASS_PROXY_IDENTITY_PRIVATE_KEY=$PROXY_IDENTITY_PRIVATE_KEY
+          Environment=PPAASS_PROXY_WEB_PROXY_IDENTITY_PUBLIC_KEY=$PROXY_IDENTITY_PUBLIC_KEY
+          Environment=PPAASS_PROXY_WEB_FRONTEND_DIST=$RUNTIME_DIR/proxy-web-frontend
+          Environment=PPAASS_PROXY_WEB_LOG_DIR=$WEB_LOG_DIR
+          ExecStart=$RUNTIME_DIR/start-proxy-web.sh run
           Restart=always
           RestartSec=3
           TimeoutStopSec=20
           LimitNOFILE=1048576
           LimitCORE=0
-          UMask=0077
+          UMask=0027
           NoNewPrivileges=true
           PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadWritePaths=$USER_DATA_DIR $ACCESS_DATA_DIR $WEB_LOG_DIR
+          ReadOnlyPaths=$SECRET_DIR $PROXY_IDENTITY_PUBLIC_KEY
+          AmbientCapabilities=
+          CapabilityBoundingSet=
 
           [Install]
           WantedBy=multi-user.target
@@ -886,9 +1338,6 @@ jobs:
             ppaass-proxy.service \
             ppaass-proxy-web.service \
             ppaass-caddy.service
-          systemctl restart ppaass-proxy.service
-          WEB_START_ATTEMPTED=true
-          systemctl restart ppaass-proxy-web.service
 
           require_active_service() {
             service_name="$1"
@@ -949,7 +1398,11 @@ jobs:
             echo "Verified Caddy certificate and reverse proxy on https://$WEB_PUBLIC_HOST/healthz"
           }
 
-          require_active_service ppaass-proxy.service
+          # Proxy Web exclusively migrates the user database and creates/imports
+          # the access-log database. Keep Proxy stopped until that work is healthy
+          # so its read-only user-database open always sees the current schema.
+          WEB_START_ATTEMPTED=true
+          systemctl restart ppaass-proxy-web.service
           require_active_service ppaass-proxy-web.service
           wait_for_proxy_web_internal
 
@@ -960,6 +1413,10 @@ jobs:
           systemctl restart ppaass-proxy-web.service
           require_active_service ppaass-proxy-web.service
           wait_for_proxy_web_internal
+
+          PROXY_START_ATTEMPTED=true
+          systemctl restart ppaass-proxy.service
+          require_active_service ppaass-proxy.service
 
           if systemctl is-active --quiet caddy.service 2>/dev/null \
             || systemctl is-enabled --quiet caddy.service 2>/dev/null; then

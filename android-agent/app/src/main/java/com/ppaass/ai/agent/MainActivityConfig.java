@@ -79,8 +79,6 @@ protected void saveConfig() {
         }
         prefs.edit()
                 .putString("proxy_addrs", proxyAddrs.getText().toString())
-                .putString("username", username.getText().toString())
-                .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
                 .putString("transport_mode", selectedTransportMode())
                 .putString("udp_session_pool_size", udpSessionPoolSizeValue)
                 .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
@@ -127,8 +125,6 @@ protected void restoreDefaultConfig() {
         httpProxyThreads.setText(String.valueOf(DefaultConfig.HTTP_PROXY_THREADS));
         httpProxyMaxConcurrentConnects.setText(
                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
-        username.setText(DefaultConfig.USERNAME);
-        privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
         udpSessionPoolSize.setText(String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE));
         connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));

@@ -4,8 +4,13 @@
 # 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:9090"
 
-# 用户配置文件路径
-users_path = "config/local/users.toml"
+# SQLite 用户数据库由 proxy-web 管理，Proxy 只读。
+users_database_path = "data/proxy-users.sqlite3"
+
+# 访问记录使用独立的可写 SQLite 数据库。
+access_log_database_path = "data/proxy-access.sqlite3"
+
+transport_identity_private_key_path = "data/proxy-forward-identity-private.pem"
 
 # 日志级别：trace、debug、info、warn、error
 # forward 链路会额外经过一跳 proxy，debug 日志在视频下载时开销很明显，默认用 info。
@@ -54,10 +59,13 @@ forward_mode = true
 upstream_proxy_addr = "127.0.0.1:9090"
 
 # 连接上游代理时使用的认证用户名
-upstream_username = "user2"
+upstream_username = "local-upstream"
 
 # 连接上游代理时用于认证的私钥路径
-upstream_private_key_path = "keys/user2.pem"
+upstream_private_key_path = "keys/local-upstream.pem"
+
+# 固定校验上游 Proxy 的 TCP/Yamux 传输身份公钥。
+upstream_proxy_identity_public_key_path = "data/proxy-identity-public.pem"
 
 # 上游代理地址列表，用于负载均衡和故障切换
 # 指定多个地址时，每个连接会随机选择其中一个

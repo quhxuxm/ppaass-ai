@@ -7,6 +7,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,12 +40,23 @@ final class AgentConfigJson {
                         prefs.getString("direct_access_mode", DefaultConfig.DIRECT_ACCESS_MODE)))
                 .put("rules", new JSONArray(tokens(
                         prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
+        final String username;
+        final String privateKeyPem;
+        final String proxyIdentityPublicKeyPem;
+        try {
+            username = ManagedCredentials.username(context);
+            privateKeyPem = ManagedCredentials.readPrivateKey(context);
+            proxyIdentityPublicKeyPem =
+                    ManagedCredentials.readProxyIdentityPublicKey(context);
+        } catch (IOException error) {
+            throw new JSONException(error.getMessage());
+        }
 
         return new JSONObject()
                 .put("proxy_addrs", new JSONArray(tokens(prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR))))
-                .put("username", prefs.getString("username", DefaultConfig.USERNAME))
-                .put("private_key_pem", DefaultConfig.normalizePrivateKeyPem(
-                        prefs.getString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)))
+                .put("username", username)
+                .put("private_key_pem", privateKeyPem)
+                .put("proxy_identity_public_key_pem", proxyIdentityPublicKeyPem)
                 .put("transport_mode", transportMode)
                 .put("udp_session_pool_size", parseClampedInt(
                         prefs.getString(

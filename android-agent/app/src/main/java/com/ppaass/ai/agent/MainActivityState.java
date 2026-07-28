@@ -68,8 +68,6 @@ protected EditText httpProxyPort;
 protected EditText httpProxyThreads;
 protected EditText httpProxyMaxConcurrentConnects;
 protected EditText connectTimeoutSecs;
-protected EditText username;
-protected EditText privateKey;
 protected EditText runtimeThreads;
 protected Spinner compressionMode;
 protected String transportModeValue;
@@ -153,6 +151,10 @@ protected final Handler statusHandler = new Handler(Looper.getMainLooper());
 protected final Runnable statusRefresh = new Runnable() {
         @Override
         public void run() {
+            if (!AgentAuthSession.isActive(MainActivityState.this)) {
+                onAgentSessionInvalidated();
+                return;
+            }
             updateStatusMetrics();
             statusHandler.postDelayed(this, 1000);
         }
@@ -169,6 +171,10 @@ protected final Runnable statusRefresh = new Runnable() {
     protected abstract boolean isVpnRunning();
 
     protected abstract boolean isHttpProxyRunning();
+
+    protected abstract void logoutAgentAccount();
+
+    protected abstract void onAgentSessionInvalidated();
 
     protected void reloadUiPalette() {
         COLOR_BACKGROUND = UiPalette.BACKGROUND;

@@ -9,8 +9,14 @@ use futures::{SinkExt, StreamExt};
 use protocol::{
     Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
     TransportProtocol,
-    crypto::{AesGcmCipher, RsaKeyPair},
+    crypto::{RsaKeyPair, verify_pss_sha256},
+    tcp_transport::{
+        TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
+        TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
+        tcp_auth_response_signature_transcript, tcp_auth_transcript_hash,
+    },
 };
+use rand::Rng;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,7 +54,8 @@ where
 {
     /// 在一条已经建立的双向流上执行 PPAASS 认证。
     ///
-    /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功后才启用 AES。
+    /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功并完成上下文
+    /// 校验后才启用 v2 方向独立的记录层密钥。
     pub async fn authenticate_stream<C>(stream: S, config: &C) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
@@ -56,32 +63,51 @@ where
         let username = config.username();
         let timeout = config.timeout_duration();
 
-        // 2. 设置编解码器。认证成功前 cipher_state 只有压缩配置，没有 AES cipher。
+        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v2 记录层。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
-        let framed = Framed::new(stream, AgentCodec::new(Some(cipher_state.clone())));
+        let framed = Framed::new(stream, AgentCodec::new(cipher_state.clone()));
         let (mut writer, mut reader) = framed.split();
 
         // 3. 准备认证。
-        // agent 生成一次性 AES 会话密钥，再用用户私钥处理后发给 proxy；
-        // proxy 用用户公钥还原/校验，成功后双方切换到同一 AES cipher。
-        let aes_cipher = AesGcmCipher::new();
-        let aes_key = *aes_cipher.key();
-
         let private_key_pem = config
             .private_key_pem()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let rsa_keypair = RsaKeyPair::from_private_key_pem(&private_key_pem)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        let encrypted_aes_key = rsa_keypair
-            .encrypt_with_private_key(&aes_key)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let proxy_identity_public_key_pem =
+            config.proxy_identity_public_key_pem().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "未配置可信的 Proxy 传输身份公钥",
+                )
+            })?;
+        let proxy_identity_public_key =
+            RsaKeyPair::from_public_key_pem(&proxy_identity_public_key_pem).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Proxy 传输身份公钥格式无效",
+                )
+            })?;
+        let timestamp = crate::current_timestamp();
+        let mut client_nonce = [0_u8; TCP_AUTH_NONCE_LEN];
+        rand::rng().fill_bytes(&mut client_nonce);
+        let transcript =
+            tcp_auth_request_transcript(TCP_HANDSHAKE_VERSION, &username, timestamp, &client_nonce)
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+                })?;
+        let transcript_hash = tcp_auth_transcript_hash(&transcript);
+        let signature = rsa_keypair
+            .sign_pss_sha256(&transcript)
+            .map_err(|_| std::io::Error::other("无法生成认证签名"))?;
 
         let auth_request = AuthRequest {
+            version: TCP_HANDSHAKE_VERSION,
             username,
-            timestamp: crate::current_timestamp(),
-            encrypted_aes_key,
+            timestamp,
+            client_nonce,
+            signature,
         };
 
         // 4. 发送认证请求
@@ -109,16 +135,80 @@ where
         };
 
         if let ProxyResponse::Auth(auth_resp) = response {
+            auth_resp.validate_shape().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "认证服务返回了无效响应")
+            })?;
             if !auth_resp.success {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    format!("认证失败: {}", auth_resp.message),
+                    "认证失败",
                 ));
             }
+            let proxy_signature_transcript = tcp_auth_response_signature_transcript(
+                auth_resp.version,
+                &transcript_hash,
+                &auth_resp.encrypted_session,
+            )
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "认证服务返回了无效的身份签名上下文",
+                )
+            })?;
+            // Verify the pinned Proxy identity before attempting private-key
+            // OAEP decryption or installing any attacker-selected session key.
+            verify_pss_sha256(
+                &proxy_identity_public_key,
+                &proxy_signature_transcript,
+                &auth_resp.proxy_signature,
+            )
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Proxy 传输身份验证失败",
+                )
+            })?;
+            let encoded_secret = rsa_keypair
+                .decrypt_oaep_sha256_labelled(TCP_OAEP_LABEL, &auth_resp.encrypted_session)
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "无法解密认证服务返回的会话响应",
+                    )
+                })?;
+            let secret = decode_tcp_session_secret(&encoded_secret).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "认证服务返回的会话响应格式无效",
+                )
+            })?;
+            secret
+                .validate_handshake_context(&transcript_hash, &client_nonce)
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "认证服务返回的会话响应与本次登录不匹配",
+                    )
+                })?;
+            let session_cipher = TcpSessionCipher::new(
+                TcpSessionRole::Agent,
+                secret.master_secret,
+                transcript_hash,
+                client_nonce,
+                secret.server_nonce,
+                secret.session_id,
+            )
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "无法初始化认证会话记录层")
+            })?;
             info!("已通过远端代理认证");
-            // 必须在收到成功 AuthResponse 后再启用 AES；
-            // 否则会把认证响应本身当成加密帧读取，双方状态就错位。
-            cipher_state.set_cipher(Arc::new(aes_cipher));
+            // 必须在解密并核对成功 AuthResponse 后再启用记录层，否则会把
+            // 认证响应本身当成受保护帧读取。
+            cipher_state
+                .set_session_cipher(Arc::new(session_cipher))
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "认证会话记录层重复初始化")
+                })?;
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -411,5 +501,180 @@ where
 fn tune_proxy_keepalive(socket: &Socket, dst: SocketAddr) {
     if let Err(err) = configure_proxy_tcp_socket(socket) {
         debug!("设置代理 TCP keepalive 失败 (dst={}): {err}", dst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::crypto::encrypt_oaep_sha256_labelled;
+    use protocol::tcp_transport::{
+        TCP_MASTER_SECRET_LEN, TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN, TcpSessionSecret,
+        encode_tcp_session_secret,
+    };
+    use protocol::{AuthResponse, ConnectResponse, ProxyCodec};
+    use std::fmt;
+
+    struct TestClientConfig {
+        username: String,
+        private_key_pem: String,
+        proxy_identity_public_key_pem: String,
+    }
+
+    impl fmt::Debug for TestClientConfig {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestClientConfig")
+                .field("username", &self.username)
+                .field("private_key_pem", &"[REDACTED]")
+                .field("proxy_identity_public_key_pem", &"[CONFIGURED]")
+                .finish()
+        }
+    }
+
+    impl ClientConnectionConfig for TestClientConfig {
+        fn remote_addr(&self) -> String {
+            "unused.invalid:1".to_string()
+        }
+
+        fn username(&self) -> String {
+            self.username.clone()
+        }
+
+        fn private_key_pem(&self) -> Result<String, String> {
+            Ok(self.private_key_pem.clone())
+        }
+
+        fn proxy_identity_public_key_pem(&self) -> Result<String, String> {
+            Ok(self.proxy_identity_public_key_pem.clone())
+        }
+
+        fn timeout_duration(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+    }
+
+    #[tokio::test]
+    async fn framed_stream_switches_from_clear_auth_to_encrypted_connect() {
+        let user_identity = RsaKeyPair::generate(2048).unwrap();
+        let user_public_key =
+            RsaKeyPair::from_public_key_pem(&user_identity.public_key_to_pem().unwrap()).unwrap();
+        let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+        let config = TestClientConfig {
+            username: "alice".to_string(),
+            private_key_pem: user_identity.private_key_to_pem().unwrap(),
+            proxy_identity_public_key_pem: proxy_identity.public_key_to_pem().unwrap(),
+        };
+        let expected_address = Address::Domain {
+            host: "example.com".to_string(),
+            port: 443,
+        };
+        let server_expected_address = expected_address.clone();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+
+        let server_flow = async move {
+            let cipher_state = Arc::new(CipherState::new());
+            let framed = Framed::new(server_io, ProxyCodec::new(cipher_state.clone()));
+            let (mut writer, mut reader) = framed.split();
+
+            let auth = match reader.next().await.unwrap().unwrap() {
+                ProxyRequest::Auth(auth) => auth,
+                other => panic!("expected Auth request, got {other:?}"),
+            };
+            auth.validate_shape().unwrap();
+            let transcript = tcp_auth_request_transcript(
+                auth.version,
+                &auth.username,
+                auth.timestamp,
+                &auth.client_nonce,
+            )
+            .unwrap();
+            verify_pss_sha256(&user_public_key, &transcript, &auth.signature).unwrap();
+            let transcript_hash = tcp_auth_transcript_hash(&transcript);
+            let master_secret = [11_u8; TCP_MASTER_SECRET_LEN];
+            let server_nonce = [22_u8; TCP_SERVER_NONCE_LEN];
+            let session_id = [33_u8; TCP_SESSION_ID_LEN];
+            let secret = TcpSessionSecret {
+                version: TCP_HANDSHAKE_VERSION,
+                auth_transcript_hash: transcript_hash,
+                client_nonce: auth.client_nonce,
+                server_nonce,
+                session_id,
+                master_secret,
+            };
+            let encrypted_session = encrypt_oaep_sha256_labelled(
+                &user_public_key,
+                TCP_OAEP_LABEL,
+                &encode_tcp_session_secret(&secret).unwrap(),
+            )
+            .unwrap();
+            let response_transcript = tcp_auth_response_signature_transcript(
+                TCP_HANDSHAKE_VERSION,
+                &transcript_hash,
+                &encrypted_session,
+            )
+            .unwrap();
+            let response_signature = proxy_identity
+                .sign_pss_sha256(&response_transcript)
+                .unwrap();
+            let server_cipher = TcpSessionCipher::new(
+                TcpSessionRole::Proxy,
+                master_secret,
+                transcript_hash,
+                auth.client_nonce,
+                server_nonce,
+                session_id,
+            )
+            .unwrap();
+
+            // The successful AuthResponse is the final clear envelope. Only
+            // after it has been written may either codec accept business data.
+            writer
+                .send(ProxyResponse::Auth(AuthResponse::success(
+                    encrypted_session,
+                    response_signature,
+                )))
+                .await
+                .unwrap();
+            cipher_state
+                .set_session_cipher(Arc::new(server_cipher))
+                .unwrap();
+
+            let connect = match reader.next().await.unwrap().unwrap() {
+                ProxyRequest::Connect(connect) => connect,
+                other => panic!("expected encrypted Connect request, got {other:?}"),
+            };
+            assert_eq!(connect.address, server_expected_address);
+            assert_eq!(connect.transport, TransportProtocol::Tcp);
+            let request_id = connect.request_id.clone();
+            writer
+                .send(ProxyResponse::Connect(ConnectResponse {
+                    request_id: connect.request_id,
+                    success: true,
+                    message: "connected".to_string(),
+                }))
+                .await
+                .unwrap();
+            request_id
+        };
+
+        let client_flow = async {
+            let connection = AuthenticatedConnection::authenticate_stream(client_io, &config)
+                .await
+                .unwrap();
+            let (_stream, request_id) = connection
+                .connect_to_target(expected_address, TransportProtocol::Tcp)
+                .await
+                .unwrap();
+            request_id
+        };
+
+        let (server_request_id, client_request_id) =
+            tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::join!(server_flow, client_flow)
+            })
+            .await
+            .unwrap();
+        assert_eq!(server_request_id, client_request_id);
     }
 }

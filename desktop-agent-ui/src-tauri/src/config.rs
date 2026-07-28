@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -14,10 +15,18 @@ use crate::logging::UiLogBuffer;
 use crate::models::{AgentConfigSummary, LoadedAgentConfig};
 
 const BUNDLED_AGENT_CONFIG_PATHS: &[&str] = &["agent.toml", "config/local/agent.toml"];
-const BUNDLED_AGENT_SUPPORT_FILES: &[(&str, &str)] = &[
-    ("keys/user1.pem", "keys/user1.pem"),
-    ("keys/user2.pem", "keys/user2.pem"),
-    ("wintun.dll", "wintun.dll"),
+// Windows Service must load wintun.dll from the protected installation directory.
+// Never deploy executable code into the user-writable Agent data directory.
+const BUNDLED_AGENT_SUPPORT_FILES: &[(&str, &str)] = &[];
+const LEGACY_BUNDLED_DEMO_KEYS: &[(&str, &str)] = &[
+    (
+        "keys/user1.pem",
+        "f643613d2d534bd85a8ee6022c91a1c526eec013922d1cb178a03e22a9a4f71c",
+    ),
+    (
+        "keys/user2.pem",
+        "9a237dc718f468584f094c02482bdef4ca89c1f7ed855a03ac7880e027025288",
+    ),
 ];
 
 // UDP Yamux 保持较小默认值，避免普通 UDP/QUIC 场景创建过多长期外层 TCP。
@@ -117,11 +126,18 @@ pub(crate) fn apply_managed_credentials_to_config(
     path: &Path,
     username: &str,
     private_key_path: &Path,
+    proxy_identity_public_key_path: &Path,
 ) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(path);
     let loaded = load_config_from_path(&config_path)?;
     let proxy_web_url = proxy_web_url_from_raw(&loaded.raw)?;
-    let raw = enforce_managed_identity(&loaded.raw, username, private_key_path, &proxy_web_url)?;
+    let raw = enforce_managed_identity(
+        &loaded.raw,
+        username,
+        private_key_path,
+        proxy_identity_public_key_path,
+        &proxy_web_url,
+    )?;
     write_config_file(&config_path, &raw)?;
 
     if let Some(primary_path) = primary_agent_config_path(&config_path) {
@@ -132,10 +148,30 @@ pub(crate) fn apply_managed_credentials_to_config(
     }
 }
 
+pub(crate) fn clear_managed_credentials_from_config(path: &Path) -> Result<(), String> {
+    let config_path = make_absolute_path(path);
+    let loaded = load_config_from_path(&config_path)?;
+    let mut document = loaded
+        .raw
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    document.remove("username");
+    document.remove("private_key_path");
+    document.remove("proxy_identity_public_key_path");
+    let raw = document.to_string();
+    summarize_config(&raw)?;
+    write_config_file(&config_path, &raw)?;
+    if let Some(primary_path) = primary_agent_config_path(&config_path) {
+        write_config_file(&primary_path, &raw)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn enforce_managed_identity(
     raw: &str,
     username: &str,
     private_key_path: &Path,
+    proxy_identity_public_key_path: &Path,
     proxy_web_url: &str,
 ) -> Result<String, String> {
     let mut document = raw
@@ -143,6 +179,8 @@ pub(crate) fn enforce_managed_identity(
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     document["username"] = value(username);
     document["private_key_path"] = value(private_key_path.to_string_lossy().as_ref());
+    document["proxy_identity_public_key_path"] =
+        value(proxy_identity_public_key_path.to_string_lossy().as_ref());
     document["proxy_web_url"] = value(proxy_web_url);
     let managed_raw = document.to_string();
     summarize_config(&managed_raw)?;
@@ -158,6 +196,7 @@ pub(crate) fn redact_managed_identity(
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     document.remove("username");
     document.remove("private_key_path");
+    document.remove("proxy_identity_public_key_path");
     document.remove("proxy_web_url");
     loaded.raw = document.to_string();
     loaded.summary.username.clear();
@@ -262,10 +301,38 @@ pub(crate) fn install_bundled_agent_assets(
     }
 
     if !cfg!(debug_assertions) {
+        remove_legacy_bundled_demo_keys(&app_data_dir, logs);
         migrate_packaged_proxy_web_url(app, &app_data_dir, logs)?;
     }
 
     Ok(())
+}
+
+fn remove_legacy_bundled_demo_keys(app_data_dir: &Path, logs: &UiLogBuffer) {
+    for (relative_path, expected_sha256) in LEGACY_BUNDLED_DEMO_KEYS {
+        let path = app_data_dir.join(relative_path);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            logs.push(format!(
+                "无法读取旧版演示私钥，未自动清理：{}",
+                path.display()
+            ));
+            continue;
+        };
+        let actual_sha256 = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual_sha256 != *expected_sha256 {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => logs.push(format!("已清理旧版内置演示私钥：{}", path.display())),
+            Err(_) => logs.push(format!("无法清理旧版内置演示私钥：{}", path.display())),
+        }
+    }
 }
 
 fn migrate_packaged_proxy_web_url(
@@ -352,8 +419,8 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
     Ok(AgentConfigSummary {
         listen_addr: string_or(&value, &["listen_addr"], "0.0.0.0:10080"),
         proxy_addrs: string_array_at(&value, &["proxy_addrs"]),
-        username: string_or(&value, &["username"], "user1"),
-        private_key_path: string_or(&value, &["private_key_path"], "keys/user1.pem"),
+        username: string_or(&value, &["username"], ""),
+        private_key_path: string_or(&value, &["private_key_path"], ""),
         transport_mode,
         udp_session_pool_size: int_at(&value, &["udp_session_pool_size"])
             .unwrap_or(DEFAULT_UDP_SESSION_POOL_SIZE)
@@ -702,9 +769,9 @@ fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 mod tests {
     use super::{
         apply_managed_credentials_to_config, bundled_agent_config_resource,
-        enforce_managed_identity, load_config_from_path, migrate_legacy_proxy_web_url,
-        proxy_web_url_from_config, redact_managed_identity, summarize_config,
-        toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
+        clear_managed_credentials_from_config, enforce_managed_identity, load_config_from_path,
+        migrate_legacy_proxy_web_url, proxy_web_url_from_config, redact_managed_identity,
+        summarize_config, toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
     };
     use crate::models::LoadedAgentConfig;
     use std::fs;
@@ -927,13 +994,20 @@ name = "ppaass-tun"
         let raw = concat!(
             "\"username\" = \"attacker\"\n",
             "\"private_key_path\" = \"attacker.pem\"\n\n",
+            "\"proxy_identity_public_key_path\" = \"attacker-identity.pem\"\n",
             "[tun]\n",
             "enabled = false\n",
         );
         let key_path = std::path::Path::new(r#"C:\Users\me\private "key".pem"#);
-        let updated =
-            enforce_managed_identity(raw, "new-user", key_path, "https://managed.example.com")
-                .unwrap();
+        let identity_path = std::path::Path::new(r#"C:\Users\me\proxy identity.pem"#);
+        let updated = enforce_managed_identity(
+            raw,
+            "new-user",
+            key_path,
+            identity_path,
+            "https://managed.example.com",
+        )
+        .unwrap();
         let summary = summarize_config(&updated).unwrap();
         assert_eq!(summary.username, "new-user");
         assert_eq!(summary.private_key_path, r#"C:\Users\me\private "key".pem"#);
@@ -947,6 +1021,7 @@ name = "ppaass-tun"
             "# identity is managed by Proxy Web\n",
             "\"username\" = \"alice\"\n",
             "\"private_key_path\" = \"/secret/managed.pem\"\n",
+            "\"proxy_identity_public_key_path\" = \"/secret/proxy-identity.pem\"\n",
             "\"proxy_web_url\" = \"https://hidden.example.com\"\n",
             "listen_addr = \"127.0.0.1:10080\"\n\n",
             "[tun]\n",
@@ -961,6 +1036,7 @@ name = "ppaass-tun"
         let redacted = redact_managed_identity(loaded).unwrap();
         assert!(!redacted.raw.contains("username"));
         assert!(!redacted.raw.contains("private_key_path"));
+        assert!(!redacted.raw.contains("proxy_identity_public_key_path"));
         assert!(!redacted.raw.contains("proxy_web_url"));
         assert!(!redacted.raw.contains("hidden.example.com"));
         assert!(!redacted.raw.contains("/secret/managed.pem"));
@@ -972,6 +1048,7 @@ name = "ppaass-tun"
         let serialized = serde_json::to_string(&redacted).unwrap();
         assert!(!serialized.contains("username"));
         assert!(!serialized.contains("private_key_path"));
+        assert!(!serialized.contains("proxy_identity_public_key_path"));
         assert!(!serialized.contains("proxy_web_url"));
         assert!(!serialized.contains("hidden.example.com"));
         assert!(!serialized.contains("/secret/managed.pem"));
@@ -987,7 +1064,10 @@ name = "ppaass-tun"
         )
         .unwrap();
         let key_path = directory.path().join("credentials/new.pem");
-        let loaded = apply_managed_credentials_to_config(&path, "alice", &key_path).unwrap();
+        let identity_path = directory.path().join("credentials/proxy-identity-public.pem");
+        let loaded =
+            apply_managed_credentials_to_config(&path, "alice", &key_path, &identity_path)
+                .unwrap();
         assert_eq!(loaded.summary.username, "alice");
         assert_eq!(loaded.summary.private_key_path, key_path.to_string_lossy());
         assert_eq!(loaded.summary.listen_addr, "127.0.0.1:10080");
@@ -1003,13 +1083,16 @@ name = "ppaass-tun"
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("agent.toml");
         let key_path = directory.path().join("credentials/managed.pem");
+        let identity_path = directory.path().join("credentials/proxy-identity-public.pem");
         fs::write(
             &path,
             "listen_addr = \"127.0.0.1:10080\"\nproxy_web_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n",
         )
         .unwrap();
 
-        let loaded = apply_managed_credentials_to_config(&path, "alice", &key_path).unwrap();
+        let loaded =
+            apply_managed_credentials_to_config(&path, "alice", &key_path, &identity_path)
+                .unwrap();
         let redacted = redact_managed_identity(loaded).unwrap();
         assert!(!redacted.raw.contains("private_key_path"));
         assert!(!redacted.raw.contains("proxy_web_url"));
@@ -1019,8 +1102,14 @@ name = "ppaass-tun"
             redacted.raw
         );
         let enforced =
-            enforce_managed_identity(&edited, "alice", &key_path, "https://hidden.example.com")
-                .unwrap();
+            enforce_managed_identity(
+                &edited,
+                "alice",
+                &key_path,
+                &identity_path,
+                "https://hidden.example.com",
+            )
+            .unwrap();
         write_config_file(&path, &enforced).unwrap();
         let persisted = load_config_from_path(&path).unwrap();
         assert_eq!(persisted.summary.username, "alice");
@@ -1034,6 +1123,26 @@ name = "ppaass-tun"
             "https://hidden.example.com"
         );
         assert!(!persisted.raw.contains("attacker.example.com"));
+    }
+
+    #[test]
+    fn clearing_managed_credentials_preserves_hidden_proxy_web_endpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.toml");
+        fs::write(
+            &path,
+            "proxy_web_url = \"https://hidden.example.com\"\nusername = \"alice\"\nprivate_key_path = \"credentials/managed.pem\"\nproxy_identity_public_key_path = \"credentials/proxy-identity-public.pem\"\ntransport_mode = \"tcp\"\n",
+        )
+        .unwrap();
+
+        clear_managed_credentials_from_config(&path).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("username"));
+        assert!(!raw.contains("private_key_path"));
+        assert!(!raw.contains("proxy_identity_public_key_path"));
+        assert!(raw.contains("proxy_web_url = \"https://hidden.example.com\""));
+        assert!(raw.contains("transport_mode = \"tcp\""));
     }
 
     #[test]

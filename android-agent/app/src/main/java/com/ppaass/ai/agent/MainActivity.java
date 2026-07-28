@@ -21,7 +21,7 @@ import java.security.*;
 import java.text.*;
 import java.util.*;
 
-public class MainActivity extends MainActivityScreens {
+public class MainActivity extends MainActivityAuth {
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
@@ -97,14 +97,19 @@ public class MainActivity extends MainActivityScreens {
         reloadUiPalette();
         configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
-        buildUi();
-        UiLanguage.watch(this);
+        showAgentEntry();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        if (!hasAuthenticatedAgentSession()) {
+            if (!isAgentAuthenticationInProgress()) {
+                onAgentSessionInvalidated();
+            }
+            return;
+        }
         cleanupStaleMockGeoState();
         restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
@@ -143,7 +148,9 @@ public class MainActivity extends MainActivityScreens {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == VPN_PERMISSION_REQUEST && resultCode == RESULT_OK) {
+        if (requestCode == VPN_PERMISSION_REQUEST
+                && resultCode == RESULT_OK
+                && hasAuthenticatedAgentSession()) {
             startVpnService();
         }
     }

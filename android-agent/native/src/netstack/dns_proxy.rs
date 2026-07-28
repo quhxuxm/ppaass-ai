@@ -19,7 +19,6 @@ use tracing::{debug, warn};
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
 use super::udp::UdpWriter;
-use crate::android_log;
 use crate::error::Result;
 use crate::traffic_stats::{self, DnsResolutionRecord};
 
@@ -226,8 +225,8 @@ async fn run_dns_proxy(
                 proxy_io
             }
             Err(e) => {
-                warn!("Android TUN DNS proxy connection failed: {e}");
-                android_log::error(format!("Android TUN DNS proxy connection failed: {e}"));
+                warn!("Android TUN DNS proxy connection failed; retrying");
+                debug!(error = %e, "Android TUN DNS proxy connection failure details");
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = tokio::time::sleep(reconnect_delay) => {}
@@ -425,17 +424,18 @@ async fn try_send_direct_dns_response(
     request: &DnsProxyRequest,
 ) -> bool {
     let Some(question) = parse_dns_question(&request.packet) else {
-        android_log::warn(format!(
-            "Android TUN DNS request parse failed bytes={}",
-            request.packet.len()
-        ));
+        debug!(
+            bytes = request.packet.len(),
+            "Android TUN DNS request parse failed"
+        );
         return false;
     };
     if !context.direct_checker.is_direct_domain(&question.query) {
-        android_log::info(format!(
-            "Android TUN DNS PROXY_CANDIDATE {} {}",
-            question.query, question.record_type
-        ));
+        debug!(
+            query = %question.query,
+            record_type = %question.record_type,
+            "Android TUN DNS proxy candidate"
+        );
         return false;
     }
 
@@ -444,10 +444,6 @@ async fn try_send_direct_dns_response(
         "Android TUN DNS direct -> {} {} via {}",
         question.query, question.record_type, request.target
     );
-    android_log::info(format!(
-        "Android TUN DNS DIRECT {} {} via {}",
-        question.query, question.record_type, request.target
-    ));
 
     let direct_result = timeout(
         DIRECT_DNS_TIMEOUT,
@@ -458,25 +454,17 @@ async fn try_send_direct_dns_response(
     let mut response = match direct_result {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => {
-            warn!(
+            debug!(
                 "Android TUN DNS direct query failed: {} {} via {}, error: {}",
                 question.query, question.record_type, request.target, e
             );
-            android_log::warn(format!(
-                "Android TUN DNS DIRECT failed {} {} via {}: {}",
-                question.query, question.record_type, request.target, e
-            ));
             build_dns_error_response(&request.packet, 2).unwrap_or_default()
         }
         Err(_) => {
-            warn!(
+            debug!(
                 "Android TUN DNS direct query timed out: {} {} via {}",
                 question.query, question.record_type, request.target
             );
-            android_log::warn(format!(
-                "Android TUN DNS DIRECT timeout {} {} via {}",
-                question.query, question.record_type, request.target
-            ));
             build_dns_error_response(&request.packet, 2).unwrap_or_default()
         }
     };
@@ -588,7 +576,11 @@ where
     };
     let (query, record_type) = parse_dns_query(&request.packet)
         .unwrap_or_else(|| ("<unknown>".to_string(), "UNKNOWN".to_string()));
-    android_log::info(format!("Android TUN DNS PROXY {query} {record_type}"));
+    debug!(
+        query = %query,
+        record_type,
+        "Android TUN DNS proxy request"
+    );
 
     cleanup_pending_dns(pending);
     let Some(upstream_id) = allocate_dns_id(pending, next_id) else {

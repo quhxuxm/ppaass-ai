@@ -65,9 +65,10 @@ cp config/proxy.toml.example config/proxy.toml
 cargo run --release -p proxy -- --config config/proxy.toml
 ```
 
-3. Add the user's public key to `config/users.toml`
+3. Start Proxy Web, register a user, and approve the user's key request. Proxy Web is the only
+   writer for the shared SQLite user database.
 
-4. Update `config/agent.toml` with your username and private key path
+4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Web.
 
 5. Start the agent:
 
@@ -110,8 +111,8 @@ macOS TUN mode can run the existing `desktop-agent` binary in a privileged helpe
 ```toml
 listen_addr = "127.0.0.1:1080"      # Local proxy address
 proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
-username = "user1"                    # Your username
-private_key_path = "keys/user1.pem"  # Path to your RSA private key
+username = "local-test"                    # Legacy CLI compatibility username
+private_key_path = "keys/local-test.pem"  # Local-only private key; never commit it
 transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
 udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
 connect_timeout_secs = 30             # Connection timeout
@@ -142,15 +143,19 @@ The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are i
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
-users_path = "config/users.toml"          # Users configuration file
-users_database_path = "data/proxy-users.sqlite3" # Optional shared user database
+users_database_path = "data/proxy-users.sqlite3" # Required user database; Proxy opens it read-only
+access_log_database_path = "data/proxy-access.sqlite3" # Required, separate writable access database
+transport_identity_private_key_path = "data/proxy-identity-private.pem" # Required PKCS#8 identity
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
 udp_session_channel_size = 256             # Datagrams queued per native UDP session
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
 
-When `users_database_path` is absent, Proxy keeps the existing `users.toml`-only behavior. When it is set, the file is validated and imported once in a transaction, after which Proxy and `proxy-web` read the same database. New user changes are visible to subsequent TCP and UDP authentications without restarting Proxy.
+Proxy requires the SQLite user database and has no file-based user fallback. Proxy Web owns schema
+migrations and user writes; Proxy opens the same user database read-only and writes visit history
+only to the physically separate access database. New user changes are visible to subsequent TCP
+and UDP authentications without restarting Proxy.
 
 See [`proxy-web/README.md`](proxy-web/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 

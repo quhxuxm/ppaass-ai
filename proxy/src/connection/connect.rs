@@ -22,22 +22,13 @@ impl ServerConnection {
             TransportProtocol::Tcp => PERMISSION_PROXY_CONNECT_TCP,
             TransportProtocol::Udp => PERMISSION_PROXY_CONNECT_UDP,
         };
+        // 握手和 CONNECT 之间也可能发生停用、撤权、过期或换钥。创建任何
+        // 出站资源前先读一次当前授权状态，不能只信握手时保存的 UserConfig。
         if !self
-            .user_config
-            .as_ref()
-            .is_some_and(|user| user.has_permission(permission))
+            .check_connect_authorization(&connect_request.request_id, permission)
+            .await?
         {
-            warn!(
-                permission,
-                request_id = %connect_request.request_id,
-                "用户没有请求的代理传输权限"
-            );
-            return self
-                .send_connect_error(
-                    connect_request.request_id,
-                    format!("Permission denied: {permission}"),
-                )
-                .await;
+            return Ok(());
         }
 
         // UdpRelay 是协议内的“虚拟地址”，不代表真实目标服务器，而是告诉 proxy
@@ -70,6 +61,66 @@ impl ServerConnection {
         }
     }
 
+    async fn check_connect_authorization(
+        &mut self,
+        request_id: &str,
+        permission: &'static str,
+    ) -> Result<bool> {
+        match self.validate_authorization(permission).await {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                warn!(
+                    permission,
+                    %request_id,
+                    "CONNECT 授权已失效，拒绝请求：{error}"
+                );
+                self.send_connect_error(
+                    request_id.to_string(),
+                    "Authorization no longer valid".to_string(),
+                )
+                .await?;
+                Ok(false)
+            }
+        }
+    }
+
+    async fn send_authorized_connect_success(
+        &mut self,
+        request_id: &str,
+        message: &str,
+        permission: &'static str,
+    ) -> Result<bool> {
+        if !self
+            .check_connect_authorization(request_id, permission)
+            .await?
+        {
+            return Ok(false);
+        }
+
+        // 写成功响应也可能被慢 agent 阻塞。独立授权 guard 与写操作竞速，
+        // 使绝对 expiry/周期重验不会等到 send 返回后才开始生效。
+        let authorization = self.authorization_context()?;
+        let authorization_guard =
+            authorization.enforce(permission, self.authorization_recheck_secs());
+        tokio::pin!(authorization_guard);
+        let send = self.send_connect_success(request_id.to_string(), message);
+        tokio::select! {
+            biased;
+            authorization_result = &mut authorization_guard => {
+                warn!(
+                    permission,
+                    %request_id,
+                    "发送 ConnectSuccess 期间授权已失效，主动关闭"
+                );
+                authorization_result.map(|()| false)
+            }
+            send_result = send => {
+                send_result?;
+                Ok(true)
+            }
+        }
+    }
+
     fn target_addr_for_request(&self, address: &Address) -> Result<String> {
         // ProxyDns 是特殊地址类型，需要在 proxy 端决定真正的 DNS 上游。
         target_addr_for_address(&self.proxy_config, address)
@@ -89,18 +140,32 @@ impl ServerConnection {
         {
             Ok(upstream_conn) => {
                 debug!("已连接到上游代理");
+                // 上游 connect 可能较慢；成功响应前必须再次检查，避免在等待期间
+                // 已撤销的身份得到一条新 active relay。
+                let permission = match connect_request.transport {
+                    TransportProtocol::Tcp => PERMISSION_PROXY_CONNECT_TCP,
+                    TransportProtocol::Udp => PERMISSION_PROXY_CONNECT_UDP,
+                };
+                if !self
+                    .send_authorized_connect_success(
+                        &connect_request.request_id,
+                        "Connected through upstream",
+                        permission,
+                    )
+                    .await?
+                {
+                    return Ok(());
+                }
                 self.record_successful_access(connect_request.transport, &connect_request.address);
-                // 只有上游连接成功后才回复 agent 连接成功。
-                self.send_connect_success(
-                    connect_request.request_id.clone(),
-                    "Connected through upstream",
-                )
-                .await?;
 
                 let mut upstream_conn = upstream_conn;
                 // 上游连接也是一个 AsyncRead/AsyncWrite，复用普通 TCP 中继逻辑。
                 let relay_result = self
-                    .relay(connect_request.request_id, &mut upstream_conn)
+                    .relay(
+                        connect_request.request_id,
+                        &mut upstream_conn,
+                        connect_request.transport,
+                    )
                     .await;
                 upstream_conn.close().await;
                 relay_result?;
@@ -139,11 +204,23 @@ impl ServerConnection {
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or("默认路由")
                 );
+                if !self
+                    .send_authorized_connect_success(
+                        &connect_request.request_id,
+                        "Connected",
+                        PERMISSION_PROXY_CONNECT_TCP,
+                    )
+                    .await?
+                {
+                    return Ok(());
+                }
                 self.record_successful_access(TransportProtocol::Tcp, &connect_request.address);
-                self.send_connect_success(connect_request.request_id.clone(), "Connected")
-                    .await?;
-                self.relay(connect_request.request_id, &mut target_stream)
-                    .await?;
+                self.relay(
+                    connect_request.request_id,
+                    &mut target_stream,
+                    TransportProtocol::Tcp,
+                )
+                .await?;
             }
             Ok(Err(e)) => {
                 warn!("连接目标失败（TCP）：{}，目标={}", e, target_addr);
@@ -192,9 +269,17 @@ impl ServerConnection {
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or("默认路由")
                 );
+                if !self
+                    .send_authorized_connect_success(
+                        &connect_request.request_id,
+                        "Connected",
+                        PERMISSION_PROXY_CONNECT_UDP,
+                    )
+                    .await?
+                {
+                    return Ok(());
+                }
                 self.record_successful_access(TransportProtocol::Udp, &connect_request.address);
-                self.send_connect_success(connect_request.request_id.clone(), "Connected")
-                    .await?;
                 self.relay_udp(connect_request.request_id, socket).await?;
             }
             Err(e) => {

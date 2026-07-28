@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
 *.toml.local
 *.log
 /logs
@@ -15,6 +14,9 @@ Cargo.lock
 .DS_Store
 package-lock.json
 Cargo.lock
+!/Cargo.lock
+!/desktop-agent-ui/package-lock.json
+!/desktop-agent-ui/src-tauri/Cargo.lock
 /node_modules
 /desktop-agent-ui/node_modules
 /desktop-agent-ui/dist
@@ -26,4 +28,7 @@ Cargo.lock
 /android-agent/app/build
 /android-agent/app/src/main/jniLibs
 /android-agent/local.properties
+/android-agent/*.keystore
+/android-agent/*.jks
+/keys/*.pem
 *~

@@ -176,12 +176,45 @@ impl<S> Unpin for ClientStream<S> where S: AsyncRead + AsyncWrite + Unpin {}
 mod tests {
     use super::*;
     use futures::{FutureExt, StreamExt};
-    use protocol::{DataPacket, ProxyCodec};
+    use protocol::{
+        CipherState, DataPacket, ProxyCodec,
+        tcp_transport::{TcpSessionCipher, TcpSessionRole},
+    };
+    use std::sync::Arc;
     use tokio::io::{AsyncWriteExt, DuplexStream};
 
     fn stream_pair() -> (ClientStream<DuplexStream>, Framed<DuplexStream, ProxyCodec>) {
         let (client_io, proxy_io) = tokio::io::duplex(4096);
-        let (writer, reader) = Framed::new(client_io, AgentCodec::new(None)).split();
+        let client_state = Arc::new(CipherState::new());
+        let proxy_state = Arc::new(CipherState::new());
+        let session_inputs = ([1; 32], [2; 32], [3; 32], [4; 32], [5; 16]);
+        client_state
+            .set_session_cipher(Arc::new(
+                TcpSessionCipher::new(
+                    TcpSessionRole::Agent,
+                    session_inputs.0,
+                    session_inputs.1,
+                    session_inputs.2,
+                    session_inputs.3,
+                    session_inputs.4,
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        proxy_state
+            .set_session_cipher(Arc::new(
+                TcpSessionCipher::new(
+                    TcpSessionRole::Proxy,
+                    session_inputs.0,
+                    session_inputs.1,
+                    session_inputs.2,
+                    session_inputs.3,
+                    session_inputs.4,
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        let (writer, reader) = Framed::new(client_io, AgentCodec::new(client_state)).split();
         let client = ClientStream {
             writer,
             reader,
@@ -190,7 +223,7 @@ mod tests {
             read_buf: Vec::new(),
             read_pos: 0,
         };
-        let proxy = Framed::new(proxy_io, ProxyCodec::new(None));
+        let proxy = Framed::new(proxy_io, ProxyCodec::new(proxy_state));
         (client, proxy)
     }
 

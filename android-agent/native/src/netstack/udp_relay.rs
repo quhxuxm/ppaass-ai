@@ -267,7 +267,8 @@ async fn run_udp_relay(
                 proxy_io
             }
             Err(e) => {
-                warn!("Android TUN UDP relay connection failed: {e}");
+                warn!("Android TUN UDP relay connection failed; retrying");
+                debug!(error = %e, "Android TUN UDP relay connection failure details");
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = tokio::time::sleep(reconnect_delay) => {}

@@ -232,6 +232,7 @@ fn toggle_tun_mode_and_restart(
         &config_path,
         &session.account.username,
         &session.private_key_path,
+        &session.proxy_identity_public_key_path,
     )?;
     let config = toggle_tun_enabled_in_config(Some(Path::new(&managed.path)))?;
     let enabled = config.summary.tun_enabled;

@@ -24,6 +24,6 @@ fn main() {
     println!("=== 私钥（保存到 keys/user1.pem）===");
     println!("{}", private_key_pem.as_str());
 
-    println!("\n=== 公钥（用于 users.toml）===");
+    println!("\n=== 公钥（仅用于本地密钥对验证）===");
     println!("{}", public_key_pem);
 }

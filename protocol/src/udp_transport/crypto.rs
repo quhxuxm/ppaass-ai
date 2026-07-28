@@ -60,7 +60,7 @@ impl UdpDirectionalKeyMaterial {
         server_nonce: &[u8; 32],
     ) -> UdpTransportResult<Self> {
         let mut salt_hasher = Sha256::new();
-        salt_hasher.update(b"ppaass/native-udp/hkdf-salt/v1\0");
+        salt_hasher.update(b"ppaass/native-udp/hkdf-salt/v2\0");
         salt_hasher.update(session_id);
         salt_hasher.update(client_nonce);
         salt_hasher.update(server_nonce);
@@ -75,22 +75,22 @@ impl UdpDirectionalKeyMaterial {
         };
         expand_label(
             &hkdf,
-            b"ppaass/native-udp/v1/client-to-server/key",
+            b"ppaass/native-udp/v2/client-to-server/key",
             &mut material.client_to_server_key,
         )?;
         expand_label(
             &hkdf,
-            b"ppaass/native-udp/v1/server-to-client/key",
+            b"ppaass/native-udp/v2/server-to-client/key",
             &mut material.server_to_client_key,
         )?;
         expand_label(
             &hkdf,
-            b"ppaass/native-udp/v1/client-to-server/nonce-prefix",
+            b"ppaass/native-udp/v2/client-to-server/nonce-prefix",
             &mut material.client_to_server_nonce_prefix,
         )?;
         expand_label(
             &hkdf,
-            b"ppaass/native-udp/v1/server-to-client/nonce-prefix",
+            b"ppaass/native-udp/v2/server-to-client/nonce-prefix",
             &mut material.server_to_client_nonce_prefix,
         )?;
 

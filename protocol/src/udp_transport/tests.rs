@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::crypto::{RsaKeyPair, encrypt_oaep_sha256};
+use crate::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 use crate::{Address, UdpRelayPacket};
 
 use super::*;
@@ -87,6 +87,7 @@ fn auth_datagrams_share_header_and_validate_kind_and_size() {
 
     let ok = UdpAuthOk {
         encrypted_session_secret: vec![9; 256],
+        proxy_signature: vec![10; 256],
     };
     let encoded_ok = encode_auth_ok(SESSION_ID, &ok).unwrap();
     let (ok_header, decoded_ok) = decode_auth_ok(&encoded_ok).unwrap();
@@ -96,6 +97,7 @@ fn auth_datagrams_share_header_and_validate_kind_and_size() {
         decoded_ok.encrypted_session_secret,
         ok.encrypted_session_secret
     );
+    assert_eq!(decoded_ok.proxy_signature, ok.proxy_signature);
 
     let oversized = UdpAuthInit {
         proof: noisy_bytes(UDP_MAX_DATAGRAM_SIZE * 2),
@@ -143,6 +145,7 @@ fn auth_magic_version_and_payload_length_are_checked() {
 #[test]
 fn session_secret_roundtrips_and_auth_transcript_binds_every_input() {
     let secret = UdpSessionSecret {
+        version: UDP_TRANSPORT_VERSION,
         session_id: SESSION_ID,
         client_nonce: CLIENT_NONCE,
         master_key: MASTER_KEY,
@@ -191,14 +194,20 @@ fn encrypted_session_secret_is_bound_to_one_handshake_context() {
     let pair = RsaKeyPair::generate(2048).unwrap();
     let public_key = RsaKeyPair::from_public_key_pem(&pair.public_key_to_pem().unwrap()).unwrap();
     let secret = UdpSessionSecret {
+        version: UDP_TRANSPORT_VERSION,
         session_id: SESSION_ID,
         client_nonce: CLIENT_NONCE,
         master_key: MASTER_KEY,
         server_nonce: SERVER_NONCE,
     };
     let plaintext = encode_session_secret(&secret).unwrap();
-    let ciphertext = encrypt_oaep_sha256(&public_key, &plaintext).unwrap();
-    let decoded = decode_session_secret(&pair.decrypt_oaep_sha256(&ciphertext).unwrap()).unwrap();
+    let ciphertext = encrypt_oaep_sha256_labelled(&public_key, UDP_OAEP_LABEL, &plaintext).unwrap();
+    let decoded = decode_session_secret(
+        &pair
+            .decrypt_oaep_sha256_labelled(UDP_OAEP_LABEL, &ciphertext)
+            .unwrap(),
+    )
+    .unwrap();
 
     decoded
         .validate_handshake_context(&SESSION_ID, &CLIENT_NONCE)
@@ -213,6 +222,36 @@ fn encrypted_session_secret_is_bound_to_one_handshake_context() {
             .validate_handshake_context(&SESSION_ID, &[0x34; 32])
             .is_err()
     );
+}
+
+#[test]
+fn signed_auth_ok_binds_request_ciphertext_and_rejects_replay_to_new_context() {
+    let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+    let pinned_proxy_public =
+        RsaKeyPair::from_public_key_pem(&proxy_identity.public_key_to_pem().unwrap()).unwrap();
+    let wrong_proxy_identity = RsaKeyPair::generate(2048).unwrap();
+    let wrong_pin =
+        RsaKeyPair::from_public_key_pem(&wrong_proxy_identity.public_key_to_pem().unwrap())
+            .unwrap();
+    let proof_digest = udp_auth_proof_digest(&SESSION_ID, "alice", 100, &CLIENT_NONCE);
+    let ciphertext = vec![0x55; 256];
+    let transcript =
+        udp_auth_ok_signature_transcript(&SESSION_ID, &proof_digest, &ciphertext).unwrap();
+    let signature = proxy_identity.sign_pss_sha256(&transcript).unwrap();
+    verify_pss_sha256(&pinned_proxy_public, &transcript, &signature).unwrap();
+    assert!(verify_pss_sha256(&wrong_pin, &transcript, &signature).is_err());
+
+    let replay_session = [0x12; 16];
+    let replay_digest = udp_auth_proof_digest(&replay_session, "alice", 101, &[0x34; 32]);
+    let replay_transcript =
+        udp_auth_ok_signature_transcript(&replay_session, &replay_digest, &ciphertext).unwrap();
+    assert!(verify_pss_sha256(&pinned_proxy_public, &replay_transcript, &signature).is_err());
+
+    let mut tampered_ciphertext = ciphertext;
+    tampered_ciphertext[0] ^= 1;
+    let tampered =
+        udp_auth_ok_signature_transcript(&SESSION_ID, &proof_digest, &tampered_ciphertext).unwrap();
+    assert!(verify_pss_sha256(&pinned_proxy_public, &tampered, &signature).is_err());
 }
 
 #[test]

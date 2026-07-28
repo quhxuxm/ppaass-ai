@@ -10,6 +10,7 @@
 #
 # Optional environment variables:
 #   PROXY_CONFIG=proxy.toml        Override config path
+#   PPAASS_PROXY_LOG_DIR=logs      Override supervisor log/PID directory
 #   PROXY_RESTART_DELAY=3          Seconds to wait before restarting proxy
 #   PROXY_START_TIMEOUT=15         Seconds to wait for startup verification
 
@@ -19,12 +20,14 @@ SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-LOG_DIR="logs"
+LOG_DIR="${PPAASS_PROXY_LOG_DIR:-logs}"
 SUPERVISOR_PID_FILE="$LOG_DIR/proxy-supervisor.pid"
 PROXY_PID_FILE="$LOG_DIR/proxy.pid"
 CONFIG_PATH="${PROXY_CONFIG:-proxy.toml}"
 RESTART_DELAY="${PROXY_RESTART_DELAY:-3}"
 START_TIMEOUT="${PROXY_START_TIMEOUT:-15}"
+IDENTITY_PRIVATE_KEY="${PPAASS_PROXY_IDENTITY_PRIVATE_KEY:-data/proxy-identity-private.pem}"
+IDENTITY_PUBLIC_KEY="${PPAASS_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
 
 read_pid() {
     local pid_file="$1"
@@ -54,6 +57,73 @@ ensure_proxy_binary() {
     fi
 
     return 0
+}
+
+ensure_proxy_identity() {
+    local identity_file private_key_dir public_key_dir
+    local temporary_private_key temporary_public_key
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "Error: openssl is required for the Proxy transport identity." >&2
+        return 1
+    fi
+    for identity_file in "$IDENTITY_PRIVATE_KEY" "$IDENTITY_PUBLIC_KEY"; do
+        if [ -L "$identity_file" ]; then
+            echo "Error: refusing symlinked Proxy identity file: $identity_file" >&2
+            return 1
+        fi
+        if [ -e "$identity_file" ] && [ ! -f "$identity_file" ]; then
+            echo "Error: Proxy identity path is not a regular file: $identity_file" >&2
+            return 1
+        fi
+    done
+
+    private_key_dir="$(dirname "$IDENTITY_PRIVATE_KEY")"
+    public_key_dir="$(dirname "$IDENTITY_PUBLIC_KEY")"
+    mkdir -p "$private_key_dir" "$public_key_dir"
+    if [ ! -e "$IDENTITY_PRIVATE_KEY" ]; then
+        temporary_private_key="$(mktemp "$private_key_dir/.proxy-identity-private.XXXXXX")" \
+            || return 1
+        if ! (
+            umask 077
+            openssl genpkey \
+                -algorithm RSA \
+                -pkeyopt rsa_keygen_bits:3072 \
+                -out "$temporary_private_key" >/dev/null 2>&1
+        ); then
+            rm -f "$temporary_private_key"
+            echo "Error: failed to generate the Proxy transport identity." >&2
+            return 1
+        fi
+        chmod 0600 "$temporary_private_key"
+        if ln "$temporary_private_key" "$IDENTITY_PRIVATE_KEY" 2>/dev/null; then
+            echo "Generated persistent local Proxy transport identity: $IDENTITY_PRIVATE_KEY"
+        fi
+        rm -f "$temporary_private_key"
+    fi
+    if [ ! -r "$IDENTITY_PRIVATE_KEY" ] \
+        || ! openssl rsa -in "$IDENTITY_PRIVATE_KEY" -check -noout >/dev/null 2>&1; then
+        echo "Error: Proxy transport identity private key is unreadable or invalid." >&2
+        return 1
+    fi
+    chmod 0600 "$IDENTITY_PRIVATE_KEY" 2>/dev/null || true
+
+    # Local launches keep the public key synchronized. In production the
+    # Proxy UID cannot overwrite the root/Web-owned public file.
+    if [ ! -e "$IDENTITY_PUBLIC_KEY" ] || [ -w "$IDENTITY_PUBLIC_KEY" ]; then
+        temporary_public_key="$(mktemp "$public_key_dir/.proxy-identity-public.XXXXXX")" \
+            || return 1
+        if ! openssl pkey \
+            -in "$IDENTITY_PRIVATE_KEY" \
+            -pubout \
+            -out "$temporary_public_key" 2>/dev/null; then
+            rm -f "$temporary_public_key"
+            echo "Error: failed to derive the Proxy transport identity public key." >&2
+            return 1
+        fi
+        chmod 0644 "$temporary_public_key"
+        mv -f "$temporary_public_key" "$IDENTITY_PUBLIC_KEY"
+    fi
 }
 
 wait_for_exit() {
@@ -209,7 +279,7 @@ run_supervisor() {
     trap request_stop INT TERM
 
     while [ "$stop_requested" -eq 0 ]; do
-        if ! ensure_proxy_binary; then
+        if ! ensure_proxy_binary || ! ensure_proxy_identity; then
             break
         fi
 
@@ -245,7 +315,7 @@ run_supervisor() {
 }
 
 start_proxy() {
-    if ! ensure_proxy_binary; then
+    if ! ensure_proxy_binary || ! ensure_proxy_identity; then
         exit 1
     fi
 
