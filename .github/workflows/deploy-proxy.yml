@@ -464,8 +464,10 @@ jobs:
           DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
           # Upload before stopping the old processes. GNU tar unlinks each
           # replaced executable first, so a running process keeps its old inode
-          # until the later controlled service restart.
-          tar --unlink-first -xf - -C "$DEPLOY_DIR"
+          # until the later controlled service restart. Recursively unlink old
+          # directory trees as well, because --unlink-first alone cannot replace
+          # a non-empty frontend directory.
+          tar --unlink-first --recursive-unlink -xf - -C "$DEPLOY_DIR"
           chmod +x \
             "$DEPLOY_DIR/proxy" \
             "$DEPLOY_DIR/proxy-web" \
@@ -482,7 +484,7 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=4 \
             "$REMOTE_USER@$REMOTE_HOST" \
-            "bash -c 'deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; remote_script=\"\$(printf \"%s\" \"\$2\" | base64 -d)\"; DEPLOY_FOLDER=\"\$deploy_folder\" bash -euo pipefail -c \"\$remote_script\"' -- '$deploy_folder_base64' '$remote_upload_script_base64'"
+            "bash -c 'deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; remote_script=\"\$(printf \"%s\" \"\$2\" | base64 -d)\"; DEPLOY_FOLDER=\"\$deploy_folder\" bash -eo pipefail -c \"\$remote_script\"' -- '$deploy_folder_base64' '$remote_upload_script_base64'"
 
       - name: Stop running proxy services
         shell: bash
