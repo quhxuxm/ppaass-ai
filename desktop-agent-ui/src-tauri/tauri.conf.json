@@ -31,6 +31,7 @@
     "targets": "all",
     "resources": {
       "../../config/local/agent.toml": "config/local/agent.toml",
+      "../../config/remote/agent.toml": "config/remote/agent.toml",
       "../../keys/user1.pem": "keys/user1.pem",
       "../../keys/user2.pem": "keys/user2.pem",
       "../../wintun.dll": "wintun.dll"

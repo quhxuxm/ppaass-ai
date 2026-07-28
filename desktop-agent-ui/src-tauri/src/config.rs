@@ -13,9 +13,8 @@ use toml_edit::{value, DocumentMut};
 use crate::logging::UiLogBuffer;
 use crate::models::{AgentConfigSummary, LoadedAgentConfig};
 
-const BUNDLED_AGENT_FILES: &[(&str, &str)] = &[
-    ("config/local/agent.toml", "agent.toml"),
-    ("config/local/agent.toml", "config/local/agent.toml"),
+const BUNDLED_AGENT_CONFIG_PATHS: &[&str] = &["agent.toml", "config/local/agent.toml"];
+const BUNDLED_AGENT_SUPPORT_FILES: &[(&str, &str)] = &[
     ("keys/user1.pem", "keys/user1.pem"),
     ("keys/user2.pem", "keys/user2.pem"),
     ("wintun.dll", "wintun.dll"),
@@ -226,7 +225,13 @@ pub(crate) fn install_bundled_agent_assets(
         .map_err(|err| format!("创建 Agent 数据目录失败：{}：{err}", app_data_dir.display()))?;
     let _ = DEPLOYED_AGENT_DATA_DIR.set(app_data_dir.clone());
 
-    for (resource_path, deploy_path) in BUNDLED_AGENT_FILES {
+    let config_resource_path = bundled_agent_config_resource(cfg!(debug_assertions));
+    let bundled_files = BUNDLED_AGENT_CONFIG_PATHS
+        .iter()
+        .map(|deploy_path| (config_resource_path, *deploy_path))
+        .chain(BUNDLED_AGENT_SUPPORT_FILES.iter().copied());
+
+    for (resource_path, deploy_path) in bundled_files {
         let destination = app_data_dir.join(deploy_path);
         if destination.exists() {
             logs.push(format!("保留已有 Agent 资源：{}", destination.display()));
@@ -256,7 +261,74 @@ pub(crate) fn install_bundled_agent_assets(
         logs.push(format!("已部署默认 Agent 资源：{}", destination.display()));
     }
 
+    if !cfg!(debug_assertions) {
+        migrate_packaged_proxy_web_url(app, &app_data_dir, logs)?;
+    }
+
     Ok(())
+}
+
+fn migrate_packaged_proxy_web_url(
+    app: &tauri::App,
+    app_data_dir: &Path,
+    logs: &UiLogBuffer,
+) -> Result<(), String> {
+    let bundled_config = bundled_agent_resource_path(app, bundled_agent_config_resource(false))?;
+    let bundled_raw = fs::read_to_string(&bundled_config)
+        .map_err(|err| format!("读取内置 Agent 认证配置失败：{err}"))?;
+    let bundled_url = proxy_web_url_from_raw(&bundled_raw)?;
+
+    // agent.toml 是运行时的权威配置。旧版仅有 legacy 配置时，资源安装步骤会先
+    // 将它复制为 agent.toml；因此不需要解析废弃副本，也不会让损坏的副本阻止启动。
+    let destination = app_data_dir.join("agent.toml");
+    let raw = fs::read_to_string(&destination).map_err(|err| {
+        format!(
+            "读取已部署 Agent 配置失败：{}：{err}",
+            destination.display()
+        )
+    })?;
+    let Some(migrated) = migrate_legacy_proxy_web_url(&raw, &bundled_url)? else {
+        return Ok(());
+    };
+    write_config_file(&destination, &migrated)?;
+    logs.push(format!(
+        "已更新 Agent 内置认证服务配置：{}",
+        destination.display()
+    ));
+    Ok(())
+}
+
+fn migrate_legacy_proxy_web_url(raw: &str, bundled_url: &str) -> Result<Option<String>, String> {
+    let mut document = raw
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
+    let existing = document
+        .get("proxy_web_url")
+        .and_then(toml_edit::Item::as_str);
+    let should_migrate = existing.is_none_or(is_legacy_bundled_proxy_web_url);
+    if !should_migrate || existing == Some(bundled_url) {
+        return Ok(None);
+    }
+
+    document["proxy_web_url"] = value(bundled_url);
+    let migrated = document.to_string();
+    summarize_config(&migrated)?;
+    Ok(Some(migrated))
+}
+
+fn is_legacy_bundled_proxy_web_url(url: &str) -> bool {
+    matches!(
+        url.trim_end_matches('/'),
+        "http://127.0.0.1:8787" | "http://localhost:8787"
+    )
+}
+
+fn bundled_agent_config_resource(debug: bool) -> &'static str {
+    if debug {
+        "config/local/agent.toml"
+    } else {
+        "config/remote/agent.toml"
+    }
 }
 
 pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
@@ -388,7 +460,7 @@ fn bundled_agent_resource_path(app: &tauri::App, resource_path: &str) -> Result<
 }
 
 fn default_agent_config_resource_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let resource_path = "config/local/agent.toml";
+    let resource_path = bundled_agent_config_resource(cfg!(debug_assertions));
     if let Ok(path) = app.path().resolve(resource_path, BaseDirectory::Resource) {
         if path.is_file() {
             return Ok(path);
@@ -629,7 +701,8 @@ fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_managed_credentials_to_config, enforce_managed_identity, load_config_from_path,
+        apply_managed_credentials_to_config, bundled_agent_config_resource,
+        enforce_managed_identity, load_config_from_path, migrate_legacy_proxy_web_url,
         proxy_web_url_from_config, redact_managed_identity, summarize_config,
         toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
     };
@@ -976,5 +1049,69 @@ name = "ppaass-tun"
             "http://127.0.0.1:8787"
         );
         assert!(proxy_web_url_from_config(&missing).is_err());
+    }
+
+    #[test]
+    fn packaged_config_migrates_only_legacy_or_missing_proxy_web_urls() {
+        let legacy = concat!(
+            "# keep this comment\n",
+            "proxy_web_url = \"http://127.0.0.1:8787\"\n",
+            "transport_mode = \"tcp\"\n",
+            "username = \"alice\"\n",
+        );
+        let migrated = migrate_legacy_proxy_web_url(legacy, "https://140.82.30.214")
+            .unwrap()
+            .unwrap();
+        assert!(migrated.contains("proxy_web_url = \"https://140.82.30.214\""));
+        assert!(migrated.contains("transport_mode = \"tcp\""));
+        assert!(migrated.contains("username = \"alice\""));
+        assert!(migrated.contains("# keep this comment"));
+
+        let mut legacy_semantics = toml::from_str::<toml::Value>(legacy).unwrap();
+        legacy_semantics
+            .as_table_mut()
+            .unwrap()
+            .remove("proxy_web_url");
+        let mut migrated_semantics = toml::from_str::<toml::Value>(&migrated).unwrap();
+        migrated_semantics
+            .as_table_mut()
+            .unwrap()
+            .remove("proxy_web_url");
+        assert_eq!(migrated_semantics, legacy_semantics);
+
+        let missing = "transport_mode = \"udp\"\n";
+        let migrated = migrate_legacy_proxy_web_url(missing, "https://140.82.30.214")
+            .unwrap()
+            .unwrap();
+        assert!(migrated.contains("proxy_web_url = \"https://140.82.30.214\""));
+
+        let custom = "proxy_web_url = \"https://proxy.example.com\"\n";
+        assert!(
+            migrate_legacy_proxy_web_url(custom, "https://140.82.30.214")
+                .unwrap()
+                .is_none()
+        );
+
+        let current = "proxy_web_url = \"https://140.82.30.214\"\n";
+        assert!(
+            migrate_legacy_proxy_web_url(current, "https://140.82.30.214")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            migrate_legacy_proxy_web_url("proxy_web_url = [", "https://140.82.30.214").is_err()
+        );
+    }
+
+    #[test]
+    fn bundled_config_selector_separates_debug_and_release_defaults() {
+        assert_eq!(
+            bundled_agent_config_resource(true),
+            "config/local/agent.toml"
+        );
+        assert_eq!(
+            bundled_agent_config_resource(false),
+            "config/remote/agent.toml"
+        );
     }
 }

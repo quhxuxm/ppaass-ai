@@ -116,6 +116,23 @@ try {
     "utf8"
   );
   assert.doesNotMatch(capabilitySource, /dialog:allow-open/);
+  const tauriConfig = JSON.parse(
+    await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")
+  );
+  assert.equal(
+    tauriConfig.bundle.resources["../../config/remote/agent.toml"],
+    "config/remote/agent.toml"
+  );
+  assert.equal(
+    tauriConfig.bundle.resources["../../config/local/agent.toml"],
+    "config/local/agent.toml"
+  );
+  const packagedAgentConfig = await readFile(
+    new URL("../../config/remote/agent.toml", import.meta.url),
+    "utf8"
+  );
+  assert.match(packagedAgentConfig, /^proxy_web_url = "https:\/\/140\.82\.30\.214"$/m);
+  assert.doesNotMatch(packagedAgentConfig, /proxy_web_url = "http:\/\/127\.0\.0\.1:8787"/);
 
   const {
     fallbackRawConfig,
