@@ -127,18 +127,35 @@ if not exist "%UNSIGNED_APK%" (
 )
 
 set "KEYSTORE=%PPAASS_RELEASE_KEYSTORE%"
+if not defined KEYSTORE set "KEYSTORE=%CD%\local-release.keystore"
 set "KEY_ALIAS=%PPAASS_RELEASE_KEY_ALIAS%"
+if not defined KEY_ALIAS set "KEY_ALIAS=ppaass-local-release"
 set "STORE_PASSWORD=%PPAASS_RELEASE_STORE_PASSWORD%"
+if not defined STORE_PASSWORD set "STORE_PASSWORD=ppaass-local-release"
 set "KEY_PASSWORD=%PPAASS_RELEASE_KEY_PASSWORD%"
+if not defined KEY_PASSWORD set "KEY_PASSWORD=%STORE_PASSWORD%"
 
-if not defined KEYSTORE goto :missing_signing_config
-if not defined KEY_ALIAS goto :missing_signing_config
-if not defined STORE_PASSWORD goto :missing_signing_config
-if not defined KEY_PASSWORD goto :missing_signing_config
+set "KEYTOOL="
+for /f "delims=" %%K in ('where keytool 2^>nul') do if not defined KEYTOOL set "KEYTOOL=%%K"
+if not defined KEYTOOL if defined JAVA_HOME if exist "%JAVA_HOME%\bin\keytool.exe" set "KEYTOOL=%JAVA_HOME%\bin\keytool.exe"
 
 if not exist "%KEYSTORE%" (
-  echo Error: release signing keystore was not found: %KEYSTORE%
-  exit /b 1
+  if not defined KEYTOOL (
+    echo Error: keytool was not found in PATH or JAVA_HOME\bin.
+    exit /b 1
+  )
+
+  echo Creating local signing keystore: %KEYSTORE%
+  "%KEYTOOL%" -genkeypair ^
+    -keystore "%KEYSTORE%" ^
+    -storepass "%STORE_PASSWORD%" ^
+    -keypass "%KEY_PASSWORD%" ^
+    -alias "%KEY_ALIAS%" ^
+    -keyalg RSA ^
+    -keysize 2048 ^
+    -validity 10000 ^
+    -dname "CN=PPAASS Local Release, OU=Development, O=PPAASS, L=Local, ST=Local, C=CN" >nul
+  if errorlevel 1 exit /b 1
 )
 
 echo Signing release APK...
@@ -166,10 +183,3 @@ echo All release APK output:
 dir /b /s "app\build\outputs\apk\release\*.apk"
 endlocal
 exit /b 0
-
-:missing_signing_config
-echo Error: release signing requires PPAASS_RELEASE_KEYSTORE, PPAASS_RELEASE_KEY_ALIAS,
-echo        PPAASS_RELEASE_STORE_PASSWORD, and PPAASS_RELEASE_KEY_PASSWORD.
-echo        Keep the keystore outside the repository and provide secrets through the environment.
-endlocal
-exit /b 1

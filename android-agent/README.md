@@ -35,15 +35,12 @@ cargo install cargo-ndk
 ./gradlew assembleDebug
 ```
 
-构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本：
+构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本。
+不设置签名环境变量时，脚本会自动创建并复用已被 Git 忽略的
+`android-agent/local-release.keystore`，最终生成可安装的
+`app-release-signed.apk`：
 
 ```bash
-# 签名文件必须放在仓库外；下面四项都必须显式配置。
-export PPAASS_RELEASE_KEYSTORE=/secure/path/ppaass-release.keystore
-export PPAASS_RELEASE_KEY_ALIAS=ppaass-release
-export PPAASS_RELEASE_STORE_PASSWORD='...'
-export PPAASS_RELEASE_KEY_PASSWORD='...'
-
 # Windows
 .\build-release-apk-windows.bat
 
@@ -51,9 +48,18 @@ export PPAASS_RELEASE_KEY_PASSWORD='...'
 bash ./build-release-apk-macos.command
 ```
 
-Windows 使用同名环境变量。Release 构建不会自动生成签名密钥，也没有默认密码；正式
-keystore 和密码必须保存在 GitHub Actions Secret、密码管理器或受限的本机目录中，
-不得提交到仓库。普通模拟器/开发调试使用 `./gradlew assembleDebug`，不需要正式签名。
+本地 keystore 是开发发布证书，需要妥善备份；删除或丢失后重新生成的 APK 无法覆盖安装
+之前由它签名的版本。正式发布应把签名文件放在仓库外，并用以下环境变量覆盖本地签名配置：
+
+```bash
+export PPAASS_RELEASE_KEYSTORE=/secure/path/ppaass-release.keystore
+export PPAASS_RELEASE_KEY_ALIAS=ppaass-release
+export PPAASS_RELEASE_STORE_PASSWORD='...'
+export PPAASS_RELEASE_KEY_PASSWORD='...'
+```
+
+Windows 使用同名环境变量。正式 keystore 和密码应保存在 GitHub Actions Secret、密码管理器
+或受限的本机目录中，不得提交到仓库。普通模拟器/开发调试使用 `./gradlew assembleDebug`。
 
 Gradle 构建过程中会执行：
 
