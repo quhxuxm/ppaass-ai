@@ -30,7 +30,7 @@ import {
 import {
   directRuleCoversDomain,
   directRulesMatchingDomainsAndAddresses,
-  domainsAndAddressesToDirectRules
+  selectedDomainsToNewDirectRules
 } from "../directRuleDomains";
 import type {
   AgentConfigSummary,
@@ -123,19 +123,13 @@ const selectedDnsRecords = computed(() =>
   )
 );
 const selectedDnsRulesToAdd = computed(() => {
-  const records = selectedDnsRecords.value.filter((record) => !dnsDomainIsDirect(record));
-  const domains = [...new Map(
-    records.map((record) => {
-      const domain = dnsRecordDomain(record);
-      return [domain.toLowerCase(), domain] as const;
-    })
-  ).values()];
-  const addresses = records.flatMap(dnsAnswers);
-  const existingRuleKeys = new Set(
-    props.summary.direct_rules.map((rule) => rule.trim().toLowerCase())
-  );
-  return domainsAndAddressesToDirectRules(domains, addresses).filter(
-    (rule) => !existingRuleKeys.has(rule.trim().toLowerCase())
+  const addresses = selectedDnsRecords.value
+    .filter((record) => !dnsDomainIsDirect(record))
+    .flatMap(dnsAnswers);
+  return selectedDomainsToNewDirectRules(
+    selectedDnsDomains.value,
+    addresses,
+    props.summary.direct_rules
   );
 });
 const selectedDnsRulesToRemove = computed(() => {

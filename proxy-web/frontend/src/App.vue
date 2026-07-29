@@ -118,7 +118,8 @@ const currentTime = ref(Date.now())
 let clockTimer: ReturnType<typeof setInterval> | undefined
 
 const booting = ref(true)
-const authMode = ref<AuthMode>(requestedAuthMode())
+const initialAuthMode = requestedAuthMode()
+const authMode = ref<AuthMode>(initialAuthMode)
 const authLoading = ref(false)
 const providers = ref<ProviderAvailability>({
   localRegistration: true,
@@ -280,6 +281,9 @@ const editingHasEditableFields = computed(
   () =>
     Boolean(editingUser.value?.account) ||
     (Boolean(editingUser.value?.profile) && !editingProfileReadOnly.value),
+)
+const registrationOnly = computed(
+  () => initialAuthMode === 'register' && providers.value.localRegistration,
 )
 
 onMounted(async () => {
@@ -1267,10 +1271,18 @@ function clearAgentAuthorizationLocation(): void {
       </a>
       <div class="intro-copy">
         <p class="eyebrow">SECURE ACCESS</p>
-        <h1 id="auth-title">你的代理身份，<br />由你掌控。</h1>
-        <p>
-          登录后查看私钥、有效期与权限。私钥仅在需要时显示，并会自动从页面中清除。
-        </p>
+        <template v-if="registrationOnly">
+          <h1 id="auth-title">创建你的<br />代理账户。</h1>
+          <p>
+            注册后提交密钥申请；管理员批准并分配有效期后，即可使用代理服务。
+          </p>
+        </template>
+        <template v-else>
+          <h1 id="auth-title">你的代理身份，<br />由你掌控。</h1>
+          <p>
+            登录后查看私钥、有效期与权限。私钥仅在需要时显示，并会自动从页面中清除。
+          </p>
+        </template>
       </div>
       <div class="intro-security">
         <span><i class="pi pi-database" /> SQLite 加密存储</span>
@@ -1279,7 +1291,10 @@ function clearAgentAuthorizationLocation(): void {
       </div>
     </section>
 
-    <section class="auth-panel" aria-label="账户登录">
+    <section
+      class="auth-panel"
+      :aria-label="registrationOnly ? '用户注册' : '账户登录'"
+    >
       <div class="auth-card">
         <div
           v-if="agentAuthorizationActive"
@@ -1307,7 +1322,12 @@ function clearAgentAuthorizationLocation(): void {
           </p>
         </div>
 
-        <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+        <div
+          v-if="!registrationOnly"
+          class="auth-tabs"
+          role="tablist"
+          aria-label="登录或注册"
+        >
           <button
             type="button"
             role="tab"

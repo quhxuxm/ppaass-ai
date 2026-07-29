@@ -5,7 +5,8 @@ import {
   domainsAndAddressesToDirectRules,
   domainsToDirectRules,
   domainToDirectRule,
-  isIpAddress
+  isIpAddress,
+  selectedDomainsToNewDirectRules
 } from "../src/directRuleDomains.ts";
 
 assert.equal(domainToDirectRule("api.example.com"), "*.example.com");
@@ -53,6 +54,20 @@ assert.deepEqual(
     []
   ),
   ["example.com"]
+);
+assert.deepEqual(
+  selectedDomainsToNewDirectRules(["new.example.com"], [], []),
+  ["*.example.com"],
+  "selected domains stay addable after their visible DNS record is refreshed away"
+);
+assert.deepEqual(
+  selectedDomainsToNewDirectRules(
+    ["direct.example.com", "new.example.net"],
+    ["203.0.113.8"],
+    ["*.example.com", "203.0.113.8"]
+  ),
+  ["*.example.net"],
+  "covered domains and existing address rules are excluded"
 );
 
 console.log("directRuleDomains tests passed");
