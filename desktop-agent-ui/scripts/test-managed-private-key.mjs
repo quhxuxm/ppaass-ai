@@ -76,13 +76,13 @@ try {
 
   const appSource = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
   assert.doesNotMatch(appSource, /default-proxy-web-url|default_proxy_web_url/);
-  const tauriAppSource = await readFile(
-    new URL("../src-tauri/src/app.rs", import.meta.url),
+  const tauriAppStateSource = await readFile(
+    new URL("../src-tauri/src/app/state.rs", import.meta.url),
     "utf8"
   );
-  const statusReporter = tauriAppSource.slice(
-    tauriAppSource.indexOf("fn report_verified_proxy_auth_status"),
-    tauriAppSource.indexOf("fn current_ui_config_path")
+  const statusReporter = tauriAppStateSource.slice(
+    tauriAppStateSource.indexOf("fn report_verified_proxy_auth_status"),
+    tauriAppStateSource.indexOf("fn current_ui_config_path")
   );
   assert.match(statusReporter, /保留登录状态和本机凭据/);
   assert.doesNotMatch(

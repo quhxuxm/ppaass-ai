@@ -1,5 +1,4 @@
 import type { AgentConfigSummary, AgentTransportMode } from "./types";
-
 const fallbackRawConfigSource = `listen_addr = "0.0.0.0:10080"
 proxy_addrs = ["127.0.0.1:8080"]
 transport_mode = "udp"

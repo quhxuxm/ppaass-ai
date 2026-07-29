@@ -4,22 +4,26 @@
 //! `handle_tun_tcp`、`handle_tun_udp`、DNS proxy 或共享 UDP relay。
 
 use super::TunForwardContext;
+
+mod packet_bridge;
+
 use super::dns_proxy::DnsProxy;
 use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
+use super::udp::UdpSessionContext;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
+pub(super) use packet_bridge::spawn_packet_bridge;
+#[cfg(test)]
+use packet_bridge::tun_packet_is_safe_for_netstack;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
-
-use super::PacketCaptureController;
-use super::udp::UdpSessionContext;
+use tracing::{debug, warn};
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
@@ -30,139 +34,6 @@ enum UdpRoute {
     Direct,
     Proxy,
     Block,
-}
-
-pub(super) fn spawn_packet_bridge(
-    device: Arc<tun_rs::AsyncDevice>,
-    stack: netstack_smoltcp::Stack,
-    mtu: usize,
-    packet_capture: PacketCaptureController,
-    shutdown: CancellationToken,
-) -> (JoinHandle<()>, JoinHandle<()>) {
-    // stack.split() 得到 TUN 包进入协议栈和协议栈包写回 TUN 的两个方向。
-    let (mut stack_sink, mut stack_stream) = stack.split();
-
-    let device_in = device.clone();
-    let packet_capture_in = packet_capture.clone();
-    let shutdown_in = shutdown.clone();
-    let tun_to_stack = spawn_guarded("desktop tun_to_stack", async move {
-        // TUN -> netstack：读取系统注入的 IP 包并交给用户态协议栈处理。
-        let mut buf = vec![0u8; mtu.max(1500) + 64];
-        loop {
-            tokio::select! {
-                _ = shutdown_in.cancelled() => break,
-                read = device_in.recv(&mut buf) => {
-                    match read {
-                        Ok(n) if n > 0 => {
-                            if let Err(error) = packet_capture_in.record(&buf[..n]) {
-                                warn!("记录 TUN 上行明文包失败：{error}");
-                            }
-                            if !tun_packet_is_safe_for_netstack(&buf[..n]) {
-                                debug!(
-                                    bytes = n,
-                                    "TUN 丢弃分片或长度异常的 IP 包，避免终止整个 netstack 传输流"
-                                );
-                                continue;
-                            }
-                            let pkt = buf[..n].to_vec();
-                            if let Err(e) = stack_sink.send(pkt).await {
-                                warn!("向 netstack 推送数据包失败：{e}");
-                                break;
-                            }
-                        }
-                        Ok(_) => continue,
-                        Err(e) => {
-                            error!("TUN 读取错误：{e}");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        debug!("tun_to_stack 任务退出");
-    });
-
-    let device_out = device;
-    let packet_capture_out = packet_capture;
-    let shutdown_out = shutdown;
-    let stack_to_tun = spawn_guarded("desktop stack_to_tun", async move {
-        // netstack -> TUN：协议栈生成的响应包写回虚拟网卡。
-        loop {
-            tokio::select! {
-                _ = shutdown_out.cancelled() => break,
-                pkt = stack_stream.next() => {
-                    match pkt {
-                        Some(Ok(pkt)) => {
-                            if let Err(error) = packet_capture_out.record(&pkt) {
-                                warn!("记录 TUN 下行明文包失败：{error}");
-                            }
-                            if let Err(e) = device_out.send(&pkt).await {
-                                warn!("向 TUN 设备写入数据包失败：{e}");
-                                break;
-                            }
-                        }
-                        Some(Err(e)) => {
-                            warn!("netstack 流错误：{e}");
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-        debug!("stack_to_tun 任务退出");
-    });
-
-    (tun_to_stack, stack_to_tun)
-}
-
-fn tun_packet_is_safe_for_netstack(packet: &[u8]) -> bool {
-    let Some(version) = packet.first().map(|byte| byte >> 4) else {
-        return false;
-    };
-    match version {
-        4 => {
-            if packet.len() < 20 {
-                return false;
-            }
-            let header_len = usize::from(packet[0] & 0x0f) * 4;
-            let total_len = usize::from(u16::from_be_bytes([packet[2], packet[3]]));
-            if header_len < 20 || total_len < header_len || total_len > packet.len() {
-                return false;
-            }
-
-            // netstack-smoltcp 0.2.2 does not reassemble IP fragments before
-            // dispatching them to its TCP/UDP stream parsers. Passing a later
-            // fragment there can be mistaken for a complete transport header
-            // and makes the stream return None. Drop the individual fragment;
-            // never let it terminate the whole Desktop UDP task.
-            let fragment = u16::from_be_bytes([packet[6], packet[7]]);
-            if fragment & 0x3fff != 0 {
-                return false;
-            }
-
-            packet[9] != 17 || valid_udp_payload(&packet[header_len..total_len])
-        }
-        6 => {
-            if packet.len() < 40 {
-                return false;
-            }
-            let payload_len = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
-            let total_len = 40 + payload_len;
-            if total_len > packet.len() || packet[6] == 44 {
-                return false;
-            }
-            packet[6] != 17 || valid_udp_payload(&packet[40..total_len])
-        }
-        _ => false,
-    }
-}
-
-fn valid_udp_payload(payload: &[u8]) -> bool {
-    if payload.len() < 8 {
-        return false;
-    }
-    let declared_len = usize::from(u16::from_be_bytes([payload[4], payload[5]]));
-    declared_len >= 8 && declared_len <= payload.len()
 }
 
 pub(super) fn spawn_tcp_listener(
@@ -438,113 +309,4 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        UdpRoute, classify_udp_route, should_consult_udp_domain_cache, should_start_udp_relay,
-    };
-    use common::QuicPolicy;
-
-    fn ipv4_packet(protocol: u8, payload: &[u8]) -> Vec<u8> {
-        let total_len = 20 + payload.len();
-        let mut packet = vec![0_u8; total_len];
-        packet[0] = 0x45;
-        packet[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
-        packet[8] = 64;
-        packet[9] = protocol;
-        packet[12..16].copy_from_slice(&[10, 0, 0, 1]);
-        packet[16..20].copy_from_slice(&[1, 1, 1, 1]);
-        packet[20..].copy_from_slice(payload);
-        packet
-    }
-
-    fn udp_payload(data: &[u8], declared_len: Option<u16>) -> Vec<u8> {
-        let mut payload = vec![0_u8; 8 + data.len()];
-        let udp_len = declared_len.unwrap_or(payload.len() as u16);
-        payload[0..2].copy_from_slice(&50_000_u16.to_be_bytes());
-        payload[2..4].copy_from_slice(&443_u16.to_be_bytes());
-        payload[4..6].copy_from_slice(&udp_len.to_be_bytes());
-        payload[8..].copy_from_slice(data);
-        payload
-    }
-
-    #[test]
-    fn tun_packet_guard_keeps_valid_udp_and_tcp() {
-        assert!(super::tun_packet_is_safe_for_netstack(&ipv4_packet(
-            17,
-            &udp_payload(b"media", None),
-        )));
-        assert!(super::tun_packet_is_safe_for_netstack(&ipv4_packet(
-            6,
-            b"tcp payload",
-        )));
-    }
-
-    #[test]
-    fn tun_packet_guard_drops_fragments_and_invalid_udp_lengths() {
-        let mut fragment = ipv4_packet(17, b"fragment bytes");
-        fragment[6..8].copy_from_slice(&0x2000_u16.to_be_bytes());
-        assert!(!super::tun_packet_is_safe_for_netstack(&fragment));
-
-        let invalid_udp = ipv4_packet(17, &udp_payload(b"short", Some(400)));
-        assert!(!super::tun_packet_is_safe_for_netstack(&invalid_udp));
-    }
-
-    #[test]
-    fn ordinary_udp_proxy_switch_preserves_old_routing_or_forces_direct() {
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, true, false),
-            UdpRoute::Proxy
-        );
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, true, true),
-            UdpRoute::Direct
-        );
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, false, false),
-            UdpRoute::Direct
-        );
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Block, false, true),
-            UdpRoute::Direct
-        );
-    }
-
-    #[test]
-    fn quic_allow_routes_direct_matches_direct_and_other_targets_to_proxy() {
-        assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, false, false),
-            UdpRoute::Proxy
-        );
-        assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, false, true),
-            UdpRoute::Direct
-        );
-        assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, true, false),
-            UdpRoute::Proxy
-        );
-    }
-
-    #[test]
-    fn explicit_quic_block_overrides_udp_and_direct_access_routing() {
-        for proxy_udp in [false, true] {
-            for direct_access_match in [false, true] {
-                assert_eq!(
-                    classify_udp_route(443, QuicPolicy::Block, proxy_udp, direct_access_match,),
-                    UdpRoute::Block
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn relay_and_domain_cache_stay_available_for_quic() {
-        assert!(should_start_udp_relay(false, QuicPolicy::Allow));
-        assert!(!should_start_udp_relay(false, QuicPolicy::Block));
-        assert!(should_start_udp_relay(true, QuicPolicy::Block));
-
-        assert!(should_consult_udp_domain_cache(false, 443));
-        assert!(!should_consult_udp_domain_cache(false, 3478));
-        assert!(should_consult_udp_domain_cache(true, 3478));
-    }
-}
+mod tests;

@@ -5,21 +5,21 @@
 //! 能减少频繁建连，同时避免所有 flow 都挤在单条 relay stream 上。
 
 use super::udp::UdpWriter;
+
+mod state;
+
 use crate::telemetry;
 use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
-use std::collections::{HashMap, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+pub(super) use state::UdpRelay;
+use state::{UdpRelayRequest, UdpRelayState, UdpRelayStats};
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -28,227 +28,6 @@ const UDP_RELAY_SHARD_COUNT: usize = 4;
 const UDP_RELAY_REQUEST_BATCH_LIMIT: usize = 32;
 const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CONNECTION_IDLE: Duration = Duration::from_secs(30);
-
-pub(super) struct UdpRelay {
-    shards: Vec<mpsc::Sender<UdpRelayRequest>>,
-    stats: Arc<UdpRelayStats>,
-}
-
-#[derive(Clone, Debug)]
-struct UdpRelayRequest {
-    client: SocketAddr,
-    target: SocketAddr,
-    address: Address,
-    packet: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq)]
-struct UdpFlowKey {
-    client: SocketAddr,
-    target: SocketAddr,
-}
-
-impl PartialEq for UdpFlowKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.client == other.client && self.target == other.target
-    }
-}
-
-impl Hash for UdpFlowKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.client.hash(state);
-        self.target.hash(state);
-    }
-}
-
-struct UdpRelayState {
-    // (client,target) -> flow_id，保证同一 UDP flow 在 proxy 端对应同一个 UDP socket。
-    flow_ids: HashMap<UdpFlowKey, u64>,
-    // flow_id -> (client,target)，用于把 proxy 响应写回正确的 netstack 方向。
-    flows: HashMap<u64, UdpFlowKey>,
-    last_seen: HashMap<u64, Instant>,
-    next_flow_id: u64,
-}
-
-#[derive(Debug, Default)]
-struct UdpRelayStats {
-    sent_packets: AtomicU64,
-    sent_payload_bytes: AtomicU64,
-    send_batches: AtomicU64,
-    send_batched_packets: AtomicU64,
-    response_packets: AtomicU64,
-    response_payload_bytes: AtomicU64,
-    queue_drops: AtomicU64,
-}
-
-#[derive(Debug, Default)]
-struct UdpRelayStatsSnapshot {
-    sent_packets: u64,
-    sent_payload_bytes: u64,
-    send_batches: u64,
-    send_batched_packets: u64,
-    response_packets: u64,
-    response_payload_bytes: u64,
-    queue_drops: u64,
-}
-
-impl UdpRelayStats {
-    fn record_sent_batch(&self, packets: usize, payload_bytes: usize) {
-        self.sent_packets
-            .fetch_add(packets as u64, Ordering::Relaxed);
-        self.sent_payload_bytes
-            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
-        self.send_batches.fetch_add(1, Ordering::Relaxed);
-        if packets > 1 {
-            self.send_batched_packets
-                .fetch_add(packets as u64, Ordering::Relaxed);
-        }
-    }
-
-    fn record_response(&self, payload_bytes: usize) {
-        self.response_packets.fetch_add(1, Ordering::Relaxed);
-        self.response_payload_bytes
-            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
-    }
-
-    fn record_queue_drop(&self) {
-        self.queue_drops.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
-        UdpRelayStatsSnapshot {
-            sent_packets: self.sent_packets.swap(0, Ordering::Relaxed),
-            sent_payload_bytes: self.sent_payload_bytes.swap(0, Ordering::Relaxed),
-            send_batches: self.send_batches.swap(0, Ordering::Relaxed),
-            send_batched_packets: self.send_batched_packets.swap(0, Ordering::Relaxed),
-            response_packets: self.response_packets.swap(0, Ordering::Relaxed),
-            response_payload_bytes: self.response_payload_bytes.swap(0, Ordering::Relaxed),
-            queue_drops: self.queue_drops.swap(0, Ordering::Relaxed),
-        }
-    }
-}
-
-impl UdpRelayState {
-    fn new() -> Self {
-        Self {
-            flow_ids: HashMap::new(),
-            flows: HashMap::new(),
-            last_seen: HashMap::new(),
-            next_flow_id: 1,
-        }
-    }
-
-    fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
-        let key = UdpFlowKey { client, target };
-        if let Some(id) = self.flow_ids.get(&key) {
-            self.last_seen.insert(*id, Instant::now());
-            return *id;
-        }
-
-        let id = self.next_available_flow_id();
-        self.flow_ids.insert(key, id);
-        self.flows.insert(id, key);
-        self.last_seen.insert(id, Instant::now());
-        id
-    }
-
-    fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
-        self.flows.get(&flow_id).copied()
-    }
-
-    fn active_flows(&self) -> usize {
-        self.flows.len()
-    }
-
-    fn tracked_flow_keys(&self) -> usize {
-        self.flow_ids.len()
-    }
-
-    fn next_available_flow_id(&mut self) -> u64 {
-        loop {
-            let id = self.next_flow_id;
-            self.next_flow_id = self.next_flow_id.wrapping_add(1).max(1);
-            if !self.flows.contains_key(&id) {
-                return id;
-            }
-        }
-    }
-
-    fn cleanup_expired(&mut self) {
-        let now = Instant::now();
-        let expired: Vec<u64> = self
-            .last_seen
-            .iter()
-            .filter_map(|(id, last_seen)| ((*last_seen + UDP_FLOW_TTL) <= now).then_some(*id))
-            .collect();
-
-        for id in expired {
-            self.last_seen.remove(&id);
-            if let Some(key) = self.flows.remove(&id) {
-                self.flow_ids.remove(&key);
-            }
-        }
-    }
-}
-
-impl UdpRelay {
-    pub(super) fn spawn(
-        sessions: Arc<YamuxSessionManager>,
-        netstack_tx: UdpWriter,
-        shutdown: CancellationToken,
-    ) -> Arc<Self> {
-        let mut shards = Vec::with_capacity(UDP_RELAY_SHARD_COUNT);
-        let stats = Arc::new(UdpRelayStats::default());
-        for shard_index in 0..UDP_RELAY_SHARD_COUNT {
-            let (tx, rx) = mpsc::channel(UDP_RELAY_CHANNEL_SIZE);
-            shards.push(tx);
-            debug!("启动 TUN UDP 共享 relay shard {shard_index}");
-            spawn_guarded(
-                "desktop tun udp relay",
-                run_udp_relay(
-                    sessions.clone(),
-                    netstack_tx.clone(),
-                    rx,
-                    shutdown.clone(),
-                    stats.clone(),
-                ),
-            );
-        }
-        spawn_udp_relay_stats_logger(stats.clone(), shutdown);
-        Arc::new(Self { shards, stats })
-    }
-
-    pub(super) fn send(
-        &self,
-        client: SocketAddr,
-        target: SocketAddr,
-        address: Address,
-        packet: Vec<u8>,
-    ) {
-        let shard_index = udp_relay_shard_index(client, target, self.shards.len());
-        match self.shards[shard_index].try_send(UdpRelayRequest {
-            client,
-            target,
-            address,
-            packet,
-        }) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.stats.record_queue_drop();
-                debug!("TUN UDP 共享转发队列已满，丢弃一个 UDP 包");
-            }
-            Err(TrySendError::Closed(_)) => debug!("TUN UDP 共享转发器已关闭，丢弃请求"),
-        }
-    }
-}
-
-fn udp_relay_shard_index(client: SocketAddr, target: SocketAddr, shard_count: usize) -> usize {
-    debug_assert!(shard_count > 0);
-    let key = UdpFlowKey { client, target };
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    (hasher.finish() % shard_count as u64) as usize
-}
 
 async fn run_udp_relay(
     sessions: Arc<YamuxSessionManager>,
@@ -516,62 +295,4 @@ fn spawn_udp_relay_stats_logger(stats: Arc<UdpRelayStats>, shutdown: Cancellatio
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::AsyncReadExt;
-
-    #[test]
-    fn assigns_stable_flow_ids() {
-        let mut state = UdpRelayState::new();
-        let client: SocketAddr = "10.10.10.2:10000".parse().unwrap();
-        let target: SocketAddr = "8.8.8.8:443".parse().unwrap();
-
-        let first = state.flow_id(client, target);
-        let second = state.flow_id(client, target);
-
-        assert_eq!(first, second);
-        assert_eq!(state.flow(first).unwrap().client, client);
-        assert_eq!(state.flow(first).unwrap().target, target);
-    }
-
-    #[tokio::test]
-    async fn encodes_quic_target_for_udp_relay() {
-        let mut state = UdpRelayState::new();
-        let client: SocketAddr = "10.10.10.2:10000".parse().unwrap();
-        let target: SocketAddr = "8.8.8.8:443".parse().unwrap();
-        let address = Address::Ipv4 {
-            addr: [8, 8, 8, 8],
-            port: 443,
-        };
-        let request = UdpRelayRequest {
-            client,
-            target,
-            address: address.clone(),
-            packet: b"quic-client-initial".to_vec(),
-        };
-        let (mut writer, mut reader) = tokio::io::duplex(4096);
-
-        let mut rx = tokio::sync::mpsc::channel(1).1;
-        let stats = UdpRelayStats::default();
-        send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
-            .await
-            .unwrap();
-        drop(writer);
-
-        let mut encoded = Vec::new();
-        reader.read_to_end(&mut encoded).await.unwrap();
-        let packet = UdpRelayPacket::decode(&encoded).unwrap();
-
-        assert_eq!(packet.flow_id, 1);
-        match packet.address {
-            Address::Ipv4 { addr, port } => {
-                assert_eq!(addr, [8, 8, 8, 8]);
-                assert_eq!(port, 443);
-            }
-            other => panic!("unexpected relay address: {other:?}"),
-        }
-        assert_eq!(packet.data, b"quic-client-initial");
-        assert_eq!(state.flow(packet.flow_id).unwrap().client, client);
-        assert_eq!(state.flow(packet.flow_id).unwrap().target, target);
-    }
-}
+mod tests;

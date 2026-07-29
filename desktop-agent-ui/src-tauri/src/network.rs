@@ -1,22 +1,17 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::process::Command;
-#[cfg(any(windows, target_os = "linux"))]
-use std::process::Stdio;
-#[cfg(target_os = "windows")]
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::models::ConnectivityCheck;
 use crate::process_util::hide_child_console;
 
+mod tun_probe;
+
+use tun_probe::{resolved_tun_name, tun_interface_ready, tun_routes_ready};
+
 const QUIC_PROBE_SIZE: usize = 1200;
 const QUIC_RESERVED_VERSION: u32 = 0x0a0a0a0a;
 const QUIC_PROBE_ATTEMPTS: usize = 3;
-#[cfg(target_os = "windows")]
-// Loading the NetAdapter/NetTCPIP PowerShell modules can take more than three seconds on the
-// first probe after installation. Allow enough time for that cold start so a healthy TUN is not
-// reported as unavailable.
-const WINDOWS_TUN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn probe_tun_ready(tun_name: &str) -> (bool, String) {
     let interface_ready = tun_interface_ready(tun_name);
@@ -332,178 +327,6 @@ fn connection_id(seed: u64) -> [u8; 8] {
 
 fn is_quic_version_negotiation_response(response: &[u8]) -> bool {
     response.len() >= 7 && (response[0] & 0x80) != 0 && response[1..5] == [0, 0, 0, 0]
-}
-
-#[cfg(target_os = "windows")]
-fn tun_interface_ready(tun_name: &str) -> bool {
-    powershell_status(
-        "$adapter = Get-NetAdapter -Name $env:PPAASS_TUN_NAME -ErrorAction SilentlyContinue; if ($adapter -and $adapter.Status -eq 'Up') { exit 0 }; exit 1",
-        tun_name,
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn tun_routes_ready(tun_name: &str) -> bool {
-    powershell_status(
-        "$routes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/1','128.0.0.0/1' -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq $env:PPAASS_TUN_NAME }); if ($routes.Count -ge 2) { exit 0 }; exit 1",
-        tun_name,
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn powershell_status(script: &str, tun_name: &str) -> bool {
-    let mut command = Command::new("powershell.exe");
-    command
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .env("PPAASS_TUN_NAME", tun_name)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    hide_child_console(&mut command);
-    command_status_with_timeout(&mut command, WINDOWS_TUN_PROBE_TIMEOUT)
-}
-
-#[cfg(target_os = "windows")]
-fn command_status_with_timeout(command: &mut Command, timeout: Duration) -> bool {
-    let Ok(mut child) = command.spawn() else {
-        return false;
-    };
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                // NetTCPIP/CIM providers can occasionally stall on Windows (notably while a
-                // Wintun adapter is being created). Never let the whole diagnostics command
-                // wait indefinitely for a readiness hint.
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn tun_interface_ready(tun_name: &str) -> bool {
-    macos_ifconfig_up(tun_name)
-        || macos_active_tun_route_interface().is_some_and(|name| macos_ifconfig_up(&name))
-}
-
-#[cfg(target_os = "macos")]
-fn tun_routes_ready(tun_name: &str) -> bool {
-    (route_get_uses_tun("1.1.1.1", tun_name) && route_get_uses_tun("200.0.0.1", tun_name))
-        || macos_active_tun_route_interface().is_some()
-}
-
-#[cfg(target_os = "macos")]
-fn route_get_uses_tun(target: &str, tun_name: &str) -> bool {
-    route_get_interface(target).is_some_and(|name| name == tun_name)
-}
-
-#[cfg(target_os = "macos")]
-fn resolved_tun_name(tun_name: &str) -> Option<String> {
-    if macos_ifconfig_up(tun_name) {
-        return Some(tun_name.to_string());
-    }
-    macos_active_tun_route_interface()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn resolved_tun_name(tun_name: &str) -> Option<String> {
-    Some(tun_name.to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn macos_ifconfig_up(tun_name: &str) -> bool {
-    let output = Command::new("ifconfig").arg(tun_name).output().ok();
-    output.is_some_and(|output| {
-        output.status.success()
-            && String::from_utf8_lossy(&output.stdout)
-                .to_ascii_uppercase()
-                .contains("UP")
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn macos_active_tun_route_interface() -> Option<String> {
-    let first = route_get_interface("1.1.1.1")?;
-    let second = route_get_interface("200.0.0.1")?;
-    if first == second && first.starts_with("utun") {
-        Some(first)
-    } else {
-        None
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn route_get_interface(target: &str) -> Option<String> {
-    let output = Command::new("route")
-        .args(["-n", "get", target])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("interface:")
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(ToOwned::to_owned)
-        })
-}
-
-#[cfg(target_os = "linux")]
-fn tun_interface_ready(tun_name: &str) -> bool {
-    Command::new("ip")
-        .args(["link", "show", "dev", tun_name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-#[cfg(target_os = "linux")]
-fn tun_routes_ready(tun_name: &str) -> bool {
-    ip_route_uses_tun("1.1.1.1", tun_name) && ip_route_uses_tun("200.0.0.1", tun_name)
-}
-
-#[cfg(target_os = "linux")]
-fn ip_route_uses_tun(target: &str, tun_name: &str) -> bool {
-    Command::new("ip")
-        .args(["route", "get", target])
-        .output()
-        .ok()
-        .is_some_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!(" dev {tun_name} "))
-        })
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn tun_interface_ready(_tun_name: &str) -> bool {
-    false
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn tun_routes_ready(_tun_name: &str) -> bool {
-    false
 }
 
 #[cfg(test)]

@@ -83,11 +83,11 @@ struct BucketConfig {
     client_refill_per_second: f64,
 }
 
-struct TokenBucket {
-    tokens: f64,
-    updated_at: f64,
-    last_seen_at: f64,
-}
+mod client_ip;
+mod token_bucket;
+
+use client_ip::resolve_client_ip;
+use token_bucket::TokenBucket;
 
 #[derive(Debug)]
 pub(crate) struct DeviceAuthorizationPermit {
@@ -363,94 +363,6 @@ impl LoginBuckets {
     }
 }
 
-impl TokenBucket {
-    fn full(capacity: f64) -> Self {
-        Self {
-            tokens: capacity,
-            updated_at: 0.0,
-            last_seen_at: 0.0,
-        }
-    }
-
-    fn retry_after(&mut self, now: f64, capacity: f64, refill_per_second: f64) -> Option<u32> {
-        let elapsed = (now - self.updated_at).max(0.0);
-        self.tokens = (self.tokens + elapsed * refill_per_second).min(capacity);
-        self.updated_at = now;
-        self.last_seen_at = now;
-        if self.tokens >= 1.0 {
-            None
-        } else {
-            Some((((1.0 - self.tokens) / refill_per_second).ceil() as u32).max(1))
-        }
-    }
-
-    fn consume(&mut self) {
-        self.tokens = (self.tokens - 1.0).max(0.0);
-    }
-}
-
-fn resolve_client_ip(
-    trust_proxy_headers: bool,
-    headers: &HeaderMap,
-    peer: Option<SocketAddr>,
-) -> Option<IpAddr> {
-    let peer_ip = peer.map(|peer| normalize_ip(peer.ip()));
-    if trust_proxy_headers && peer_ip.is_some_and(|ip| ip.is_loopback()) {
-        forwarded_for(headers).or(peer_ip)
-    } else {
-        peer_ip
-    }
-}
-
-fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
-    headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .rfind(|value| !value.is_empty())
-        .and_then(parse_forwarded_ip)
-        .or_else(|| {
-            headers
-                .get(header::FORWARDED)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.rsplit(',').next())
-                .and_then(|hop| {
-                    hop.split(';').find_map(|parameter| {
-                        let (name, value) = parameter.trim().split_once('=')?;
-                        name.eq_ignore_ascii_case("for")
-                            .then_some(value.trim().trim_matches('"'))
-                    })
-                })
-                .and_then(parse_forwarded_ip)
-        })
-}
-
-fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
-    value
-        .parse::<IpAddr>()
-        .ok()
-        .or_else(|| value.parse::<SocketAddr>().ok().map(|address| address.ip()))
-        .or_else(|| {
-            value
-                .strip_prefix('[')
-                .and_then(|value| value.split_once(']'))
-                .and_then(|(ip, _)| ip.parse::<IpAddr>().ok())
-        })
-        .map(normalize_ip)
-}
-
-fn normalize_ip(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(ip) => ip
-            .to_ipv4_mapped()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V6(ip)),
-        ip => ip,
-    }
-}
-
 fn rate_limited(retry_after_seconds: u32) -> ApiError {
     ApiError::device_authorization_error(
         StatusCode::TOO_MANY_REQUESTS,
@@ -461,113 +373,4 @@ fn rate_limited(retry_after_seconds: u32) -> ApiError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn token_bucket_is_time_controllable_and_refills() {
-        let mut state = RateLimitState::new();
-        let client = Some("203.0.113.10".parse().unwrap());
-        for _ in 0..START_CLIENT_CAPACITY as usize {
-            assert_eq!(
-                state.check(DeviceAuthorizationEndpoint::Start, client, 0.0),
-                None
-            );
-        }
-        assert_eq!(
-            state.check(DeviceAuthorizationEndpoint::Start, client, 0.0),
-            Some(5)
-        );
-        assert_eq!(
-            state.check(DeviceAuthorizationEndpoint::Start, client, 5.0),
-            None
-        );
-    }
-
-    #[test]
-    fn forwarded_address_is_used_only_for_explicit_loopback_proxy() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "198.51.100.3, 203.0.113.9".parse().unwrap(),
-        );
-        let loopback = Some("127.0.0.1:32100".parse().unwrap());
-        let remote = Some("192.0.2.8:32100".parse().unwrap());
-        assert_eq!(
-            resolve_client_ip(true, &headers, loopback),
-            Some("203.0.113.9".parse().unwrap())
-        );
-        assert_eq!(
-            resolve_client_ip(false, &headers, loopback),
-            Some("127.0.0.1".parse().unwrap())
-        );
-        assert_eq!(
-            resolve_client_ip(true, &headers, remote),
-            Some("192.0.2.8".parse().unwrap())
-        );
-    }
-
-    #[test]
-    fn concurrency_gate_rejects_without_waiting() {
-        let guard = AgentDeviceAuthorizationGuard::with_concurrency_limit(false, 1);
-        let headers = HeaderMap::new();
-        let first = guard
-            .enter(DeviceAuthorizationEndpoint::Start, &headers, None)
-            .unwrap();
-        let error = guard
-            .enter(DeviceAuthorizationEndpoint::Start, &headers, None)
-            .unwrap_err();
-        assert_eq!(
-            axum::response::IntoResponse::into_response(error).status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        drop(first);
-        assert!(
-            guard
-                .enter(DeviceAuthorizationEndpoint::Start, &headers, None)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn login_is_limited_by_account_across_client_addresses() {
-        let mut state = RateLimitState::new();
-        let account_digest: [u8; 32] = Sha256::digest(b"alice").into();
-        for index in 0..LOGIN_ACCOUNT_CAPACITY as u8 {
-            let client = Some(IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, index)));
-            assert_eq!(state.login.check(client, account_digest, 0.0), None);
-        }
-        assert_eq!(
-            state
-                .login
-                .check(Some("198.51.100.1".parse().unwrap()), account_digest, 0.0),
-            Some(5)
-        );
-        assert_eq!(
-            state
-                .login
-                .check(Some("198.51.100.1".parse().unwrap()), account_digest, 5.0),
-            None
-        );
-    }
-
-    #[test]
-    fn registration_has_a_strict_per_client_budget() {
-        let mut state = RateLimitState::new();
-        let client = Some("203.0.113.22".parse().unwrap());
-        for _ in 0..REGISTRATION_CLIENT_CAPACITY as usize {
-            assert_eq!(
-                state.check(DeviceAuthorizationEndpoint::Registration, client, 0.0),
-                None
-            );
-        }
-        assert_eq!(
-            state.check(DeviceAuthorizationEndpoint::Registration, client, 0.0),
-            Some(60)
-        );
-        assert_eq!(
-            state.check(DeviceAuthorizationEndpoint::Registration, client, 60.0),
-            None
-        );
-    }
-}
+mod tests;

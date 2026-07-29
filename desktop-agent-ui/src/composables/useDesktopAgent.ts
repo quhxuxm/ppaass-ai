@@ -1,153 +1,74 @@
-import { computed, onBeforeUnmount, onMounted, reactive } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { onBeforeUnmount, onMounted } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import {
-  applyFieldToToml,
-  coerceField,
-  fallbackRawConfig,
-  redactManagedIdentityFromToml,
-  summarizeRaw
-} from "../configToml";
-import { directModeLabels, tabs } from "../constants";
-import { fallbackAgentState, fallbackConnectivityReport, fallbackTrafficSnapshot, loadFallbackConfig } from "../fallbacks";
-import {
-  delay,
-  dnsRecordTimestamp,
-  getErrorMessage,
-  isAgentOrSystemDnsRecord,
-  normalizeDnsRecords,
-  shortPath
-} from "../formatters";
-import { emptyTrafficBuckets, ensureTrafficBaseline, ensureTrafficHourlyStore, saveTrafficHourlyStore } from "../trafficStorage";
+import { tabs } from "../constants";
 import type {
-  AgentConfigSummary,
   AgentState,
-  ConnectivityReport,
-  DirectRuleGroup,
-  DnsResolutionRecord,
   LoadedAgentConfig,
-  NetworkTrafficSnapshot,
-  PacketCaptureRuntimeStatus,
-  TabKey,
-  TrafficBaseline,
   ToastKind
 } from "../types";
+import {
+  createConfigController,
+  type ConfigController
+} from "./desktopAgent/configController";
+import { createDirectRuleController } from "./desktopAgent/directRules";
+import {
+  guardIntegerBeforeInput,
+  guardIntegerPaste,
+  sanitizeIntegerInput
+} from "./desktopAgent/integerInput";
+import {
+  createDesktopAgentModel,
+  showToast
+} from "./desktopAgent/model";
+import { createPollingController } from "./desktopAgent/pollingController";
+import { createRuntimeController } from "./desktopAgent/runtimeController";
 
 export function useDesktopAgent() {
-  const state = reactive({
-    activeTab: "overview" as TabKey,
-    loading: true,
-    busy: false,
-    diagnosticsRunning: false,
-    dirty: false,
-    ruleDraft: "",
-    statusText: "初始化",
-    toast: null as null | { kind: ToastKind; message: string },
-    config: null as LoadedAgentConfig | null,
-    agent: {
-      running: false,
-      managed: false,
-      pid: null,
-      config_path: null,
-      binary_path: null,
-      logs: []
-    } as AgentState,
-    diagnostics: null as ConnectivityReport | null,
-    packetCapture: {
-      available: false,
-      enabled: false,
-      file: null
-    } as PacketCaptureRuntimeStatus,
-    packetCaptureRefreshToken: 0,
-    traffic: {
-      snapshot: null as NetworkTrafficSnapshot | null,
-      previous: null as NetworkTrafficSnapshot | null,
-      baseline: null as TrafficBaseline | null,
-      hourly_buckets: emptyTrafficBuckets(),
-      download_bps: 0,
-      upload_bps: 0,
-      day_download_bytes: 0,
-      day_upload_bytes: 0
-    },
-    dnsRecords: [] as DnsResolutionRecord[]
+  const model = createDesktopAgentModel();
+  const { state } = model;
+  const notify = (kind: ToastKind, message: string) =>
+    showToast(model, kind, message);
+
+  let configController: ConfigController;
+  const runtimeController = createRuntimeController(model, {
+    persistConfig: () => configController.persistConfig(),
+    showToast: notify
+  });
+  configController = createConfigController(model, {
+    refreshAgentState: runtimeController.refreshAgentState,
+    showToast: notify
+  });
+  const pollingController = createPollingController(model, {
+    applyExternalConfig: configController.applyExternalConfig,
+    refreshAgentState: runtimeController.refreshAgentState
+  });
+  const directRuleController = createDirectRuleController(model, {
+    ensureConfigEditable: configController.ensureConfigEditable,
+    persistConfig: configController.persistConfig,
+    refreshAgentState: runtimeController.refreshAgentState,
+    showToast: notify,
+    updateDirectRules: configController.updateDirectRules
   });
 
-  const summary = computed(() => state.config?.summary ?? summarizeRaw(fallbackRawConfig));
-  const running = computed(() => state.agent.running);
-  const configLocked = computed(() => running.value);
-  const runningLabel = computed(() => (running.value ? "运行中" : "已停止"));
-  const runningSeverity = computed(() => (running.value ? "success" : "secondary"));
-  const proxyDiagnosticResults = computed(() => state.diagnostics?.results ?? []);
-  const tunDiagnosticResults = computed(() => state.diagnostics?.tun_results ?? []);
-  const diagnosticsTotal = computed(() => proxyDiagnosticResults.value.length + tunDiagnosticResults.value.length);
-  const diagnosticsPassed = computed(
-    () =>
-      proxyDiagnosticResults.value.filter((item) => item.success).length +
-      tunDiagnosticResults.value.filter((item) => item.success).length
-  );
-  const tunDiagnosticsLabel = computed(() => {
-    if (!state.diagnostics) {
-      return "待测试";
-    }
-    if (!state.diagnostics.tun_enabled) {
-      return "未启用";
-    }
-    if (!state.diagnostics.tun_ready) {
-      return "未就绪";
-    }
-    if (!tunDiagnosticResults.value.length) {
-      return "无测试";
-    }
-    const passed = tunDiagnosticResults.value.filter((item) => item.success).length;
-    return `${passed}/${tunDiagnosticResults.value.length}`;
-  });
-  const directModeLabel = computed(() => directModeLabels[summary.value.direct_mode] ?? summary.value.direct_mode);
-  const tunModeLabel = computed(() => (summary.value.tun_enabled ? "已启用" : "未启用"));
-  const proxyEntryStateLabel = computed(() => "随代理启动");
-  const activeForwardingLabel = computed(() => (summary.value.tun_enabled ? "TUN + HTTP / SOCKS5" : "HTTP / SOCKS5 代理"));
-  const recentDnsRecords = computed(() =>
-    normalizeDnsRecords(state.dnsRecords)
-      .filter(isAgentOrSystemDnsRecord)
-      .sort((left, right) => dnsRecordTimestamp(right) - dnsRecordTimestamp(left))
-      .slice(0, 80)
-  );
-  const dnsCardLabel = computed(() => (summary.value.tun_proxy_dns ? `${recentDnsRecords.value.length} 条` : "系统"));
-  const directRuleGroups = computed(() => buildDirectRuleGroups(summary.value.direct_rules));
-
-  let trafficTimer: number | undefined;
-  let agentTimer: number | undefined;
-  let configTimer: number | undefined;
-  let dnsTimer: number | undefined;
-  let pollingActive = false;
-  let trafficRefreshInFlight = false;
-  let agentRefreshInFlight = false;
-  let configRefreshInFlight = false;
-  let dnsRefreshInFlight = false;
+  let mounted = false;
   let unlistenConfigUpdated: UnlistenFn | undefined;
   let unlistenTrayError: UnlistenFn | undefined;
   let unlistenAgentStateUpdated: UnlistenFn | undefined;
   let unlistenTrayInfo: UnlistenFn | undefined;
 
   onMounted(() => {
-    pollingActive = true;
+    mounted = true;
     void registerTauriEventListeners();
-    void boot().finally(() => {
-      if (!pollingActive) {
-        return;
+    void configController.boot().finally(() => {
+      if (mounted) {
+        pollingController.start();
       }
-      startTrafficPolling();
-      startAgentPolling();
-      startConfigPolling();
-      startDnsPolling();
     });
   });
 
   onBeforeUnmount(() => {
-    pollingActive = false;
-    clearPollingTimer(trafficTimer);
-    clearPollingTimer(agentTimer);
-    clearPollingTimer(configTimer);
-    clearPollingTimer(dnsTimer);
+    mounted = false;
+    pollingController.stop();
     unlistenConfigUpdated?.();
     unlistenTrayError?.();
     unlistenAgentStateUpdated?.();
@@ -156,806 +77,74 @@ export function useDesktopAgent() {
 
   async function registerTauriEventListeners() {
     try {
-      unlistenConfigUpdated = await listen<LoadedAgentConfig>("agent-config-updated", (event) => {
-        applyExternalConfig(event.payload, true);
-      });
-      unlistenTrayError = await listen<string>("agent-tray-error", (event) => {
-        showToast("error", event.payload);
-      });
-      unlistenAgentStateUpdated = await listen<AgentState>("agent-state-updated", (event) => {
-        state.agent = event.payload;
-        void refreshConfigFromDisk(false);
-      });
-      unlistenTrayInfo = await listen<string>("agent-tray-info", (event) => {
-        showToast("success", event.payload);
-      });
+      unlistenConfigUpdated = await listen<LoadedAgentConfig>(
+        "agent-config-updated",
+        (event) => {
+          configController.applyExternalConfig(event.payload, true);
+        }
+      );
+      unlistenTrayError = await listen<string>(
+        "agent-tray-error",
+        (event) => {
+          notify("error", event.payload);
+        }
+      );
+      unlistenAgentStateUpdated = await listen<AgentState>(
+        "agent-state-updated",
+        (event) => {
+          state.agent = event.payload;
+          void pollingController.refreshConfigFromDisk(false);
+        }
+      );
+      unlistenTrayInfo = await listen<string>(
+        "agent-tray-info",
+        (event) => {
+          notify("success", event.payload);
+        }
+      );
     } catch {
       // The event API is only available inside Tauri.
     }
   }
 
-  function applyExternalConfig(loaded: LoadedAgentConfig, notify: boolean) {
-    if (!loaded?.summary) {
-      return;
-    }
-
-    const enabled = loaded.summary.tun_enabled;
-    const previousEnabled = state.config?.summary.tun_enabled;
-    if (state.config && state.dirty) {
-      state.config = {
-        ...state.config,
-        raw: applyFieldToToml(state.config.raw, "tun_enabled", enabled),
-        summary: {
-          ...state.config.summary,
-          tun_enabled: enabled
-        }
-      };
-    } else {
-      state.config = loaded;
-      state.dirty = false;
-    }
-    state.diagnostics = null;
-    if (notify && previousEnabled !== enabled) {
-      showToast(
-        "success",
-        `${enabled ? "已从系统菜单启用" : "已从系统菜单关闭"} TUN 模式${state.agent.running ? "，正在重启代理" : ""}`
-      );
-      void refreshAgentState();
-    }
-  }
-
-  async function boot() {
-    try {
-      state.config = await invokeOrFallback<LoadedAgentConfig>("load_agent_config", {}, loadFallbackConfig);
-      await refreshAgentState();
-      state.statusText = "就绪";
-    } catch (error) {
-      state.statusText = "配置异常";
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.loading = false;
-    }
-  }
-
-  async function reloadAll() {
-    try {
-      state.busy = true;
-      const path = state.config?.path;
-      state.config = await invokeOrFallback<LoadedAgentConfig>(
-        "load_agent_config",
-        path ? { path } : {},
-        loadFallbackConfig
-      );
-      await refreshAgentState();
-      state.diagnostics = null;
-      state.dirty = false;
-      showToast("success", "已重新载入");
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function saveConfig() {
-    if (!state.config || !ensureConfigEditable()) {
-      return;
-    }
-    try {
-      state.busy = true;
-      await persistConfig();
-      showToast("success", `已保存到 ${shortPath(state.config.path)}`);
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function restoreDefaultConfig() {
-    if (!state.config || !ensureConfigEditable()) {
-      return;
-    }
-    if (!hasTauri()) {
-      showToast("error", "当前环境无法读取内置默认配置");
-      return;
-    }
-
-    try {
-      state.busy = true;
-      state.config = await invoke<LoadedAgentConfig>("load_default_agent_config", {
-        path: state.config.path
-      });
-      state.ruleDraft = "";
-      state.diagnostics = null;
-      state.dirty = true;
-      showToast("success", "已恢复默认配置，保存后生效");
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function startAgent() {
-    if (!state.config) {
-      return;
-    }
-    try {
-      state.busy = true;
-      if (state.dirty) {
-        await persistConfig();
-      }
-      state.agent = await invokeOrFallback<AgentState>(
-        "start_agent",
-        { configPath: state.config.path },
-        () => ({ ...fallbackAgentState(), running: true, managed: true, pid: 4242, config_path: state.config?.path })
-      );
-      await delay(1800);
-      await refreshAgentState();
-      showToast(
-        state.agent.running ? "success" : "error",
-        state.agent.running ? "代理已启动" : latestAgentLog() ?? "代理启动失败"
-      );
-    } catch (error) {
-      await refreshAgentState();
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function stopAgent() {
-    try {
-      state.busy = true;
-      state.agent = await invokeOrFallback<AgentState>(
-        "stop_agent",
-        {},
-        () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
-      );
-      if (!state.agent.running) {
-        state.packetCapture = { available: false, enabled: false, file: null };
-      }
-      showToast(state.agent.running ? "error" : "success", state.agent.running ? "代理仍在运行" : "代理已停止");
-    } catch (error) {
-      await refreshAgentState();
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function togglePacketCapture(enabled: boolean) {
-    if (state.busy || state.packetCapture.enabled === enabled) {
-      return;
-    }
-
-    if (!state.agent.running) {
-      showToast("error", "Agent 未运行，请先启动 Agent");
-      return;
-    }
-
-    try {
-      state.busy = true;
-      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
-        "set_packet_capture_enabled",
-        { enabled },
-        () => ({ available: true, enabled, file: state.packetCapture.file })
-      );
-      state.packetCaptureRefreshToken += 1;
-      showToast("success", enabled ? "抓包已开启，无需重启 Agent" : "抓包已关闭，无需重启 Agent");
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function clearPacketCapture() {
-    if (!state.config || state.busy) {
-      return;
-    }
-    try {
-      state.busy = true;
-      state.packetCapture = await invokeOrFallback<PacketCaptureRuntimeStatus>(
-        "clear_packet_capture",
-        { configPath: state.config.path },
-        () => ({ ...state.packetCapture })
-      );
-      state.packetCaptureRefreshToken += 1;
-      showToast("success", "抓包文件已清空");
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  async function runDiagnostics() {
-    if (!state.config) {
-      return;
-    }
-    try {
-      state.diagnosticsRunning = true;
-      state.diagnostics = null;
-      state.diagnostics = await invokeOrFallback<ConnectivityReport>(
-        "run_connectivity_tests",
-        { path: state.config.path },
-        () => fallbackConnectivityReport(state.config?.summary)
-      );
-      const total = diagnosticsTotal.value;
-      const passed = diagnosticsPassed.value;
-      showToast(total > 0 && passed === total ? "success" : "error", `诊断完成：${passed}/${total}`);
-    } catch (error) {
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.diagnosticsRunning = false;
-    }
-  }
-
-  async function refreshAgentState() {
-    if (agentRefreshInFlight) {
-      return;
-    }
-    agentRefreshInFlight = true;
-    try {
-      state.agent = await invokeOrFallback<AgentState>("get_agent_state", {}, () => state.agent);
-      state.packetCapture = state.agent.running
-        ? await invokeOrFallback<PacketCaptureRuntimeStatus>(
-            "get_packet_capture_runtime_status",
-            {},
-            () => state.packetCapture
-          )
-        : { available: false, enabled: false, file: null };
-    } catch {
-      // Keep the last visible agent state if the runtime status read fails.
-    } finally {
-      agentRefreshInFlight = false;
-    }
-  }
-
-  function setField(field: keyof AgentConfigSummary, value: unknown) {
-    if (!state.config || !ensureConfigEditable(false)) {
-      return;
-    }
-    const coerced = coerceField(field, value);
-    (state.config.summary as Record<string, unknown>)[field] = coerced;
-    if (field === "runtime_threads") {
-      state.config.summary.effective_runtime_threads = Number(coerced);
-    }
-    state.config.raw = applyFieldToToml(state.config.raw, field, coerced);
-    state.diagnostics = null;
-    state.dirty = true;
-  }
-
-  function setRawConfig(raw: string) {
-    if (!state.config || !ensureConfigEditable(false)) {
-      return;
-    }
-    const editableRaw = redactManagedIdentityFromToml(raw);
-    state.config.raw = editableRaw;
-    try {
-      state.config.summary = summarizeRaw(editableRaw);
-    } catch {
-      // Keep structured fields stable while the TOML text is mid-edit.
-    }
-    state.dirty = true;
-  }
-
-  function addDirectRules(rules: string[]) {
-    if (!state.config || !ensureConfigEditable()) {
-      return;
-    }
-    updateDirectRules(normalizeRules([...state.config.summary.direct_rules, ...rules]));
-    state.ruleDraft = "";
-    showToast("success", "规则已更新");
-  }
-
-  async function addDirectRulesAndRestart(rules: string[]) {
-    if (!state.config) {
-      return;
-    }
-    const nextRules = normalizeRules([...state.config.summary.direct_rules, ...rules]);
-    await applyDirectRulesAndRestart(nextRules, {
-      unchanged: "所选 DNS 没有可添加的直连规则",
-      saved: "直连规则已添加并保存",
-      restarted: "直连规则已添加，Agent 已重启"
-    });
-  }
-
-  async function removeDirectRulesAndRestart(rules: string[]) {
-    if (!state.config) {
-      return;
-    }
-
-    const removeRuleKeys = new Set(
-      normalizeRules(rules).map((rule) => rule.toLowerCase())
-    );
-    const nextRules = normalizeRules(state.config.summary.direct_rules).filter(
-      (rule) => !removeRuleKeys.has(rule.toLowerCase())
-    );
-    await applyDirectRulesAndRestart(nextRules, {
-      unchanged: "所选 DNS 没有可移出的直连规则",
-      saved: "直连规则已移出并保存",
-      restarted: "直连规则已移出，Agent 已重启"
-    });
-  }
-
-  async function applyDirectRulesAndRestart(
-    nextRules: string[],
-    messages: { unchanged: string; saved: string; restarted: string }
-  ) {
-    if (!state.config) {
-      return;
-    }
-    if (state.busy) {
-      showToast("info", "正在处理其他操作");
-      return;
-    }
-
-    const currentRules = normalizeRules(state.config.summary.direct_rules);
-    const normalizedNextRules = normalizeRules(nextRules);
-    if (
-      normalizedNextRules.length === currentRules.length &&
-      normalizedNextRules.every((rule, index) => rule.toLowerCase() === currentRules[index]?.toLowerCase())
-    ) {
-      showToast("info", messages.unchanged);
-      return;
-    }
-
-    const wasRunning = state.agent.running;
-    try {
-      state.busy = true;
-      updateDirectRules(normalizedNextRules, true);
-      await persistConfig();
-
-      if (!wasRunning) {
-        showToast("success", messages.saved);
-        return;
-      }
-
-      state.agent = await invokeOrFallback<AgentState>(
-        "stop_agent",
-        {},
-        () => ({ ...fallbackAgentState(), running: false, pid: null, config_path: state.config?.path })
-      );
-      if (state.agent.running) {
-        throw new Error("直连规则已保存，但 Agent 停止失败");
-      }
-
-      state.agent = await invokeOrFallback<AgentState>(
-        "start_agent",
-        { configPath: state.config.path },
-        () => ({ ...fallbackAgentState(), running: true, managed: true, pid: 4242, config_path: state.config?.path })
-      );
-      await delay(1800);
-      await refreshAgentState();
-      if (!state.agent.running) {
-        throw new Error(latestAgentLog() ?? "直连规则已保存，但 Agent 重启失败");
-      }
-      showToast("success", messages.restarted);
-    } catch (error) {
-      await refreshAgentState();
-      showToast("error", getErrorMessage(error));
-    } finally {
-      state.busy = false;
-    }
-  }
-
-  function addDraftRules() {
-    if (ensureConfigEditable()) {
-      addDirectRules(parseRuleInput(state.ruleDraft));
-    }
-  }
-
-  function removeDirectRule(index: number) {
-    if (!state.config || !Number.isInteger(index) || !ensureConfigEditable()) {
-      return;
-    }
-    const next = normalizeRules(state.config.summary.direct_rules).filter((_, current) => current !== index);
-    updateDirectRules(next);
-  }
-
-  function guardIntegerBeforeInput(event: InputEvent) {
-    const target = event.target;
-    if (isIntegerInputTarget(target) && event.data && !/^\d+$/.test(event.data)) {
-      event.preventDefault();
-    }
-  }
-
-  function guardIntegerPaste(event: ClipboardEvent) {
-    const target = event.target;
-    if (!isIntegerInputTarget(target)) {
-      return;
-    }
-    const text = event.clipboardData?.getData("text") ?? "";
-    const digits = digitsOnly(text);
-    if (digits === text) {
-      return;
-    }
-    event.preventDefault();
-    if (!digits) {
-      return;
-    }
-    const start = target.selectionStart ?? target.value.length;
-    const end = target.selectionEnd ?? target.value.length;
-    target.setRangeText(digits, start, end, "end");
-    target.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function sanitizeIntegerInput(event: Event) {
-    const target = event.target;
-    if (!isIntegerInputTarget(target)) {
-      return;
-    }
-    const sanitized = digitsOnly(target.value);
-    if (sanitized === target.value) {
-      return;
-    }
-    const caret = target.selectionStart ?? sanitized.length;
-    const beforeCaret = target.value.slice(0, caret);
-    const removedBeforeCaret = beforeCaret.length - digitsOnly(beforeCaret).length;
-    const nextCaret = Math.max(0, caret - removedBeforeCaret);
-    target.value = sanitized;
-    target.setSelectionRange(nextCaret, nextCaret);
-    target.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function startTrafficPolling() {
-    void pollTraffic();
-  }
-
-  async function pollTraffic() {
-    if (!pollingActive) {
-      return;
-    }
-    if (!state.busy) {
-      await refreshTraffic();
-    }
-    if (pollingActive) {
-      trafficTimer = window.setTimeout(() => void pollTraffic(), 1000);
-    }
-  }
-
-  async function refreshTraffic() {
-    if (trafficRefreshInFlight) {
-      return;
-    }
-    trafficRefreshInFlight = true;
-    try {
-      updateTraffic(await invokeOrFallback<NetworkTrafficSnapshot>("get_network_traffic_snapshot", {}, fallbackTrafficSnapshot));
-    } catch {
-      // Keep the last visible telemetry sample if the OS counter read fails.
-    } finally {
-      trafficRefreshInFlight = false;
-    }
-  }
-
-  function startAgentPolling() {
-    void pollAgentState();
-  }
-
-  async function pollAgentState() {
-    if (!pollingActive) {
-      return;
-    }
-    if (!state.busy) {
-      await refreshAgentState();
-    }
-    if (pollingActive) {
-      agentTimer = window.setTimeout(() => void pollAgentState(), 1200);
-    }
-  }
-
-  function startConfigPolling() {
-    void pollConfig();
-  }
-
-  async function pollConfig() {
-    if (!pollingActive) {
-      return;
-    }
-    if (!state.busy) {
-      await refreshConfigFromDisk(false);
-    }
-    if (pollingActive) {
-      configTimer = window.setTimeout(() => void pollConfig(), 1000);
-    }
-  }
-
-  async function refreshConfigFromDisk(notify: boolean) {
-    if (configRefreshInFlight || state.dirty || !state.config) {
-      return;
-    }
-    configRefreshInFlight = true;
-    try {
-      const current = state.config;
-      const loaded = await invokeOrFallback<LoadedAgentConfig>(
-        "load_agent_config",
-        { path: current.path },
-        () => current
-      );
-      if (!state.config || state.dirty) {
-        return;
-      }
-      if (loaded.path !== state.config.path || loaded.raw !== state.config.raw) {
-        applyExternalConfig(loaded, notify);
-      }
-    } catch {
-      // External config refresh is best-effort; keep the visible form stable.
-    } finally {
-      configRefreshInFlight = false;
-    }
-  }
-
-  function startDnsPolling() {
-    void pollDnsRecords();
-  }
-
-  async function pollDnsRecords() {
-    if (!pollingActive) {
-      return;
-    }
-    if (!state.busy) {
-      await refreshDnsRecords();
-    }
-    if (pollingActive) {
-      dnsTimer = window.setTimeout(() => void pollDnsRecords(), 2500);
-    }
-  }
-
-  async function refreshDnsRecords() {
-    if (dnsRefreshInFlight) {
-      return;
-    }
-    dnsRefreshInFlight = true;
-    try {
-      const records = await invokeOrFallback<DnsResolutionRecord[]>("get_dns_resolution_records", {}, () => state.dnsRecords);
-      if (Array.isArray(records)) {
-        state.dnsRecords = records;
-      }
-    } catch {
-      // Keep the last visible DNS records if the runtime status read fails.
-    } finally {
-      dnsRefreshInFlight = false;
-    }
-  }
-
-  async function persistConfig() {
-    if (!state.config) {
-      return;
-    }
-    state.config = await invokeOrFallback<LoadedAgentConfig>(
-      "save_agent_config",
-      { path: state.config.path, raw: state.config.raw },
-      () => state.config as LoadedAgentConfig
-    );
-    state.dirty = false;
-  }
-
-  function updateTraffic(snapshot: NetworkTrafficSnapshot) {
-    const previous = state.traffic.snapshot;
-    state.traffic.previous = previous;
-    state.traffic.snapshot = snapshot;
-    if (previous && snapshot.sampled_at_ms > previous.sampled_at_ms) {
-      const elapsedSeconds = (snapshot.sampled_at_ms - previous.sampled_at_ms) / 1000;
-      state.traffic.download_bps = bytesPerSecond(snapshot.total_received_bytes, previous.total_received_bytes, elapsedSeconds);
-      state.traffic.upload_bps = bytesPerSecond(snapshot.total_transmitted_bytes, previous.total_transmitted_bytes, elapsedSeconds);
-    }
-    state.traffic.baseline = ensureTrafficBaseline(snapshot);
-    updateHourlyTraffic(snapshot);
-  }
-
-  function updateHourlyTraffic(snapshot: NetworkTrafficSnapshot) {
-    const store = ensureTrafficHourlyStore(snapshot);
-    const elapsedMs = snapshot.sampled_at_ms - store.last_sampled_at_ms;
-    const currentHour = new Date().getHours();
-    if (
-      elapsedMs > 0 &&
-      elapsedMs <= 90_000 &&
-      snapshot.total_received_bytes >= store.last_received &&
-      snapshot.total_transmitted_bytes >= store.last_transmitted
-    ) {
-      const bucket = store.buckets[currentHour];
-      bucket.download_bytes += snapshot.total_received_bytes - store.last_received;
-      bucket.upload_bytes += snapshot.total_transmitted_bytes - store.last_transmitted;
-    }
-    store.last_received = snapshot.total_received_bytes;
-    store.last_transmitted = snapshot.total_transmitted_bytes;
-    store.last_sampled_at_ms = snapshot.sampled_at_ms;
-    saveTrafficHourlyStore(store);
-    state.traffic.hourly_buckets = store.buckets.map((bucket) => ({ ...bucket }));
-    state.traffic.day_download_bytes = store.buckets.reduce((total, bucket) => total + bucket.download_bytes, 0);
-    state.traffic.day_upload_bytes = store.buckets.reduce((total, bucket) => total + bucket.upload_bytes, 0);
-  }
-
-  function updateDirectRules(rules: string[], allowWhileRunning = false) {
-    if (!state.config || (!allowWhileRunning && !ensureConfigEditable(false))) {
-      return;
-    }
-    const directRules = normalizeRules(rules);
-    state.config = {
-      ...state.config,
-      raw: applyFieldToToml(state.config.raw, "direct_rules", directRules),
-      summary: {
-        ...state.config.summary,
-        direct_rules: directRules
-      }
-    };
-    state.diagnostics = null;
-    state.dirty = true;
-  }
-
-  function ensureConfigEditable(notify = true) {
-    if (!configLocked.value) {
-      return true;
-    }
-    if (notify) {
-      showToast("error", "代理运行中，停止后再修改配置");
-    }
-    return false;
-  }
-
-  function showToast(kind: ToastKind, message: string) {
-    state.toast = { kind, message };
-    window.setTimeout(() => {
-      state.toast = null;
-    }, 2600);
-  }
-
-  function latestAgentLog() {
-    const logs = state.agent.logs ?? [];
-    return logs.length > 0 ? logs[logs.length - 1] : null;
-  }
-
   return {
-    activeForwardingLabel,
-    addDirectRules,
-    addDirectRulesAndRestart,
-    addDraftRules,
-    clearPacketCapture,
-    configLocked,
-    diagnosticsPassed,
-    diagnosticsTotal,
-    directModeLabel,
-    directRuleGroups,
-    dnsCardLabel,
+    activeForwardingLabel: model.activeForwardingLabel,
+    addDirectRules: directRuleController.addDirectRules,
+    addDirectRulesAndRestart:
+      directRuleController.addDirectRulesAndRestart,
+    addDraftRules: directRuleController.addDraftRules,
+    clearPacketCapture: runtimeController.clearPacketCapture,
+    configLocked: model.configLocked,
+    diagnosticsPassed: model.diagnosticsPassed,
+    diagnosticsTotal: model.diagnosticsTotal,
+    directModeLabel: model.directModeLabel,
+    directRuleGroups: directRuleController.directRuleGroups,
+    dnsCardLabel: model.dnsCardLabel,
     guardIntegerBeforeInput,
-    recentDnsRecords,
-    proxyEntryStateLabel,
-    refreshAgentState,
-    reloadAll,
-    removeDirectRule,
-    removeDirectRulesAndRestart,
-    restoreDefaultConfig,
-    runDiagnostics,
-    running,
-    runningLabel,
-    runningSeverity,
+    recentDnsRecords: model.recentDnsRecords,
+    proxyEntryStateLabel: model.proxyEntryStateLabel,
+    refreshAgentState: runtimeController.refreshAgentState,
+    reloadAll: configController.reloadAll,
+    removeDirectRule: directRuleController.removeDirectRule,
+    removeDirectRulesAndRestart:
+      directRuleController.removeDirectRulesAndRestart,
+    restoreDefaultConfig: configController.restoreDefaultConfig,
+    runDiagnostics: runtimeController.runDiagnostics,
+    running: model.running,
+    runningLabel: model.runningLabel,
+    runningSeverity: model.runningSeverity,
     sanitizeIntegerInput,
-    saveConfig,
-    setField,
-    setRawConfig,
-    startAgent,
+    saveConfig: configController.saveConfig,
+    setField: configController.setField,
+    setRawConfig: configController.setRawConfig,
+    startAgent: runtimeController.startAgent,
     state,
-    stopAgent,
-    togglePacketCapture,
-    summary,
+    stopAgent: runtimeController.stopAgent,
+    togglePacketCapture: runtimeController.togglePacketCapture,
+    summary: model.summary,
     tabs,
-    tunDiagnosticsLabel,
-    tunModeLabel,
+    tunDiagnosticsLabel: model.tunDiagnosticsLabel,
+    tunModeLabel: model.tunModeLabel,
     guardIntegerPaste
   };
-}
-
-function buildDirectRuleGroups(rules: string[]) {
-  // 每组规则同时携带“适用模式”文案，UI 可以在已有规则旁直接提示使用场景：
-  // 域名/通配符依赖显式域名入口或 TUN DNS 缓存，IP/CIDR 则适合 TUN 和已解析 IP 目标。
-  const groups: DirectRuleGroup[] = [
-    {
-      key: "wildcard",
-      label: "通配符",
-      icon: "asterisk",
-      modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
-      items: []
-    },
-    {
-      key: "network",
-      label: "IP / CIDR",
-      icon: "hash",
-      modes: ["TUN", "已解析 IP 目标"],
-      items: []
-    },
-    {
-      key: "domain",
-      label: "域名",
-      icon: "globe",
-      modes: ["HTTP/SOCKS5", "TUN + DNS 缓存"],
-      items: []
-    },
-    {
-      key: "other",
-      label: "其他",
-      icon: "ellipsis",
-      modes: ["按规则内容匹配"],
-      items: []
-    }
-  ];
-  const byKey = new Map(groups.map((group) => [group.key, group]));
-  rules.forEach((rule, index) => {
-    byKey.get(ruleGroupKey(rule))?.items.push({ rule, index });
-  });
-  return groups;
-}
-
-function bytesPerSecond(current: number, previous: number, elapsedSeconds: number) {
-  if (elapsedSeconds <= 0 || current < previous) {
-    return 0;
-  }
-  return Math.round((current - previous) / elapsedSeconds);
-}
-
-function clearPollingTimer(timer: number | undefined) {
-  if (timer) {
-    window.clearTimeout(timer);
-  }
-}
-
-function parseRuleInput(value: string) {
-  return value.split(/[\s,，;；]+/);
-}
-
-function normalizeRules(rules: string[]) {
-  const seen = new Set<string>();
-  return rules
-    .map((rule) => rule.trim())
-    .filter(Boolean)
-    .filter((rule) => {
-      const key = rule.toLowerCase();
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
-}
-
-function ruleGroupKey(rule: string) {
-  const normalized = rule.trim().toLowerCase();
-  if (normalized.includes("*")) {
-    return "wildcard";
-  }
-  if (isNetworkRule(normalized)) {
-    return "network";
-  }
-  if (/^[a-z0-9._-]+(\.[a-z0-9._-]+)*$/i.test(normalized)) {
-    return "domain";
-  }
-  return "other";
-}
-
-function isNetworkRule(rule: string) {
-  return (
-    /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(rule) ||
-    /^([0-9a-f]{0,4}:){1,7}[0-9a-f]{0,4}(\/\d{1,3})?$/i.test(rule)
-  );
-}
-
-async function invokeOrFallback<T>(command: string, args: Record<string, unknown>, fallback: () => T): Promise<T> {
-  if (!hasTauri()) {
-    return fallback();
-  }
-  return invoke<T>(command, args);
-}
-
-function hasTauri() {
-  return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-}
-
-function isIntegerInputTarget(target: EventTarget | null): target is HTMLInputElement {
-  return target instanceof HTMLInputElement && Boolean(target.closest(".p-inputnumber"));
-}
-
-function digitsOnly(value: string) {
-  return value.replace(/\D+/g, "");
 }

@@ -28,6 +28,12 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio_yamux::{session::Session, stream::StreamHandle};
 use tracing::{debug, error, info, instrument, warn};
 
+mod protocol_detection;
+mod task_cleanup;
+
+use protocol_detection::{looks_like_yamux_header, peek_connection_header};
+use task_cleanup::{abort_stream_tasks, prune_finished_stream_tasks};
+
 const YAMUX_SESSION_TASK_PRUNE_INTERVAL_SECS: u64 = 5;
 
 pub struct ProxyServer {
@@ -280,36 +286,6 @@ async fn handle_connection(context: ConnectionContext, stream: TcpStream) -> Res
     Ok(())
 }
 
-async fn peek_connection_header(
-    stream: &TcpStream,
-    timeout: Duration,
-) -> io::Result<Option<[u8; 4]>> {
-    tokio::time::timeout(timeout, async {
-        let mut header = [0u8; 4];
-        loop {
-            match stream.peek(&mut header).await {
-                Ok(0) => return Ok(None),
-                Ok(n) if n >= header.len() => return Ok(Some(header)),
-                Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(err) => return Err(err),
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "入站连接首包超时")))
-}
-
-fn looks_like_yamux_header(header: &[u8; 4]) -> bool {
-    let version = header[0];
-    let frame_type = header[1];
-    let flags = u16::from_be_bytes([header[2], header[3]]);
-
-    version == 0 && frame_type <= 3 && (flags & !0x000f) == 0
-}
-
 async fn handle_direct_connection(context: ConnectionContext, stream: TcpStream) -> Result<()> {
     handle_protocol_stream(context, stream, "direct TCP connection").await
 }
@@ -406,53 +382,5 @@ where
     connection.handle_connect_request(&username).await
 }
 
-fn prune_finished_stream_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
-    tasks.retain(|task| !task.is_finished());
-}
-
-async fn abort_stream_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
-    if tasks.is_empty() {
-        return;
-    }
-
-    warn!(
-        "Yamux session 结束时仍有 {} 个活跃子 stream，正在关闭；这些请求的上层 HTTP body 可能被截断",
-        tasks.len()
-    );
-    for task in &tasks {
-        task.abort();
-    }
-    for task in tasks {
-        match task.await {
-            Ok(()) => {}
-            Err(err) if err.is_cancelled() => {}
-            Err(err) => debug!("Yamux 子 stream 任务回收时返回错误：{err}"),
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::looks_like_yamux_header;
-
-    #[test]
-    fn recognizes_yamux_data_syn_header() {
-        assert!(looks_like_yamux_header(&[0, 0, 0, 1]));
-    }
-
-    #[test]
-    fn recognizes_yamux_ping_header() {
-        assert!(looks_like_yamux_header(&[0, 2, 0, 1]));
-    }
-
-    #[test]
-    fn rejects_direct_protocol_length_prefix() {
-        assert!(!looks_like_yamux_header(&[0, 0, 1, 44]));
-        assert!(!looks_like_yamux_header(&[0, 0, 4, 0]));
-    }
-
-    #[test]
-    fn rejects_invalid_yamux_flags() {
-        assert!(!looks_like_yamux_header(&[0, 0, 0x10, 0]));
-    }
-}
+mod tests;

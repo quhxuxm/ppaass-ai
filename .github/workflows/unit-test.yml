@@ -14,6 +14,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enforce source line limit
+        run: ./scripts/check-source-line-limits.sh
+
       - name: Install system dependencies
         run: |
           apt-get update
