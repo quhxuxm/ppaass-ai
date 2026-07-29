@@ -70,13 +70,14 @@ pub(crate) fn restore_desired_agent_on_service_start(runtime: &AgentRuntime) {
     }
 
     let config_path = service_root_config_path();
-    let restored =
-        validate_authorized_service_config_path(&config_path).and_then(|(path, current_login)| {
+    let restored = validate_authorized_service_config_path(&config_path).and_then(
+        |(path, current_login, proxy_addresses)| {
             if current_login != desired_login {
                 return Err("持久运行请求属于另一组登录凭据，拒绝用当前账号自动恢复".to_string());
             }
-            start_agent_inner(runtime, path, false)
-        });
+            start_agent_inner(runtime, path, proxy_addresses, false)
+        },
+    );
     match restored {
         Ok(_) => runtime
             .logs

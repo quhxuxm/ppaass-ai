@@ -193,6 +193,14 @@ impl SqliteUserRepository {
         if schema_version < 6 {
             migrate_key_requests_to_v6(&mut transaction).await?;
         }
+        let removed_deprecated_permissions = if schema_version < 7 {
+            migrate_permissions_to_v7(&mut transaction).await?
+        } else {
+            0
+        };
+        if schema_version < 8 {
+            create_v8_proxy_address_tables(&mut transaction).await?;
+        }
         ensure_v5_indexes(&mut transaction).await?;
         let revoked_compromised_profiles =
             revoke_compromised_bundled_demo_profiles(&mut transaction).await?;
@@ -210,11 +218,17 @@ impl SqliteUserRepository {
 
         if schema_version < SQLITE_SCHEMA_VERSION {
             // 版本号是迁移的提交标记，必须最后写入。
-            sqlx::query("PRAGMA user_version = 6")
+            sqlx::query("PRAGMA user_version = 8")
                 .execute(&mut *transaction)
                 .await?;
         }
         transaction.commit().await?;
+        if removed_deprecated_permissions != 0 {
+            info!(
+                profiles = removed_deprecated_permissions,
+                "已清理停用的 Agent 原始配置查看权限"
+            );
+        }
         if revoked_compromised_profiles != 0 {
             warn!(
                 profiles = revoked_compromised_profiles,

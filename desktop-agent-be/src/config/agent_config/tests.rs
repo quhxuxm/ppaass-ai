@@ -2,7 +2,6 @@ use super::*;
 
 const MINIMAL_AGENT_CONFIG: &str = r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 "#;
@@ -16,7 +15,7 @@ fn compression_mode_defaults_to_none() {
 }
 
 #[test]
-fn proxy_web_url_is_optional_for_standalone_agent() {
+fn proxy_web_url_is_optional_for_backend_library_and_test_harness() {
     let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
     assert_eq!(config.proxy_web_url, None);
@@ -78,6 +77,15 @@ fn udp_session_pool_defaults_to_four_and_is_bounded() {
 fn removed_quic_connection_pool_field_is_rejected() {
     let result = toml::from_str::<AgentConfig>(
         &(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 4\n"),
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn removed_proxy_addrs_config_field_is_rejected() {
+    let result = toml::from_str::<AgentConfig>(
+        &(MINIMAL_AGENT_CONFIG.to_owned() + "proxy_addrs = [\"proxy.example.com:443\"]\n"),
     );
 
     assert!(result.is_err());
@@ -180,6 +188,7 @@ fn checked_in_agent_configs_use_only_current_fields() {
     for raw in [
         include_str!("../../../../config/local/agent.toml"),
         include_str!("../../../../config/remote/agent.toml"),
+        include_str!("../../../../config/local/agent-forward.toml"),
         include_str!("../../../../config/local/agent-yamux-test.toml"),
     ] {
         let mut value = toml::from_str::<toml::Value>(raw).unwrap();

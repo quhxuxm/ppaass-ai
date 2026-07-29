@@ -5,7 +5,6 @@ import Card from "primevue/card";
 import AppIcon from "../components/AppIcon";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
-import Message from "primevue/message";
 import Select from "primevue/select";
 import SelectButton from "primevue/selectbutton";
 import Tag from "primevue/tag";
@@ -51,7 +50,7 @@ function setRuntimeThreads(value: unknown) {
 
 <template>
   <div class="content-grid">
-    <section class="card-group span-12">
+    <section v-if="canEditRuntimeThreads" class="card-group span-12">
       <div class="card-group-heading">
         <div>
           <h2>系统运行参数</h2>
@@ -63,13 +62,6 @@ function setRuntimeThreads(value: unknown) {
         <Card class="panel span-12">
           <template #title><h2>运行参数</h2></template>
           <template #content>
-            <Message
-              v-if="!canEditRuntimeThreads"
-              severity="warn"
-              :closable="false"
-            >
-              当前账户没有修改系统线程数的权限，线程配置仅供查看。
-            </Message>
             <div class="field-pair">
               <label class="field">
                 <span><AppIcon name="scroll-text" />日志</span>
@@ -77,7 +69,7 @@ function setRuntimeThreads(value: unknown) {
               </label>
               <label class="field">
                 <span><AppIcon name="cpu" />线程</span>
-                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked || !canEditRuntimeThreads" :use-grouping="false" @update:model-value="setRuntimeThreads" />
+                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setRuntimeThreads" />
               </label>
             </div>
           </template>

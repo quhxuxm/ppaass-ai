@@ -21,6 +21,9 @@ public class AgentAuthJsonCodecTest {
         assertEquals(
                 AgentPermissions.PACKET_CAPTURE,
                 response.profile.permissions.get(0));
+        assertEquals(
+                "proxy-a.example:80",
+                response.profile.proxy_addresses.get(0));
         assertEquals("private-material", response.private_key_pem);
         assertEquals("access_token_123", response.agent_access_token);
         assertEquals(Long.valueOf(300), response.refresh_after_seconds);
@@ -33,7 +36,8 @@ public class AgentAuthJsonCodecTest {
                 + "\"account\":{\"role\":\"user\",\"status\":\"disabled\","
                 + "\"linked_username\":\"alice\"},"
                 + "\"profile\":{\"username\":\"alice\",\"permissions\":["
-                + "\"agent.config.view\"],\"enabled\":false,"
+                + "\"agent.egress.edit\"],"
+                + "\"proxy_addresses\":[\"proxy-a.example:80\"],\"enabled\":false,"
                 + "\"key_version\":4,\"expires_at\":null},"
                 + "\"key_state\":\"disabled\","
                 + "\"agent_access_token\":\"rotated_token_456\","
@@ -47,7 +51,10 @@ public class AgentAuthJsonCodecTest {
 
         assertEquals("disabled", parsed.accountStatus);
         assertFalse(parsed.profileEnabled);
-        assertTrue(parsed.permissions.contains(AgentPermissions.CONFIG_VIEW));
+        assertTrue(parsed.permissions.contains(AgentPermissions.EGRESS_EDIT));
+        assertEquals(
+                "proxy-a.example:80",
+                parsed.proxyAddresses.get(0));
         assertEquals(AgentAuthResponseParser.MIN_REFRESH_SECONDS,
                 parsed.refreshAfterSeconds);
     }
@@ -97,7 +104,8 @@ public class AgentAuthJsonCodecTest {
                 + "\"account\":{\"role\":\"admin\",\"status\":\"active\","
                 + "\"linked_username\":\"alice\"},"
                 + "\"profile\":{\"username\":\"alice\",\"permissions\":["
-                + "\"agent.packet_capture\"],\"enabled\":true,"
+                + "\"agent.packet_capture\"],"
+                + "\"proxy_addresses\":[\"proxy-a.example:80\"],\"enabled\":true,"
                 + "\"key_version\":4,\"expires_at\":4102444800},"
                 + "\"public_key_pem\":\"public-material\","
                 + "\"private_key_pem\":\"private-material\","

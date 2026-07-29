@@ -13,7 +13,7 @@ pub(crate) fn provision_downloaded_credential(
             .flatten()
             .and_then(|session| session.agent_access_token)
     });
-    let candidate = load_config_from_path(config_path)?;
+    let (candidate, _) = enforce_config_path_for_account(config_path, &downloaded.account)?;
     validate_config_candidate_against_trusted_baseline(runtime, &downloaded.account, &candidate)?;
     #[cfg(windows)]
     activate_windows_service_session(app)?;
@@ -111,6 +111,7 @@ pub(crate) fn provision_downloaded_credential(
         app,
         &account,
         AgentAuthAccountStatus::Active,
+        &downloaded.proxy_addresses,
         agent_access_token.as_ref(),
     ) {
         rollback_downloaded_credential(
@@ -124,10 +125,13 @@ pub(crate) fn provision_downloaded_credential(
     if let Err(error) = runtime.set_authenticated_session(AuthenticatedAgentSession::new(
         account.clone(),
         AgentAuthAccountStatus::Active,
-        private_key_path.clone(),
-        proxy_identity_public_key_path.clone(),
-        downloaded.proxy_web_url,
-        agent_access_token,
+        downloaded.proxy_addresses,
+        AgentSessionCredentials::new(
+            private_key_path.clone(),
+            proxy_identity_public_key_path.clone(),
+            downloaded.proxy_web_url,
+            agent_access_token,
+        ),
         AgentPermissionTrust::ServerVerified,
     )) {
         rollback_downloaded_credential(

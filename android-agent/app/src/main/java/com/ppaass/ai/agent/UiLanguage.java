@@ -27,6 +27,7 @@ final class UiLanguage {
     static {
         put("中文", "Chinese");
         put("状态", "Status"); put("配置", "Configuration"); put("系统", "System"); put("系统状态", "System status");
+        put("出口", "Egress"); put("系统运行参数", "System runtime settings");
         put("外观", "Appearance"); put("界面语言", "Interface language");
         put("选择后立即应用，不影响代理配置和运行状态。", "Applied immediately without affecting proxy configuration or runtime state.");
         put("配色风格", "Color theme"); put("VPN 应用", "VPN apps"); put("选择", "Select");
@@ -155,6 +156,10 @@ final class UiLanguage {
         put("当前没有可用密钥，请先在用户中心提交申请并等待管理员批准",
                 "No key is available; submit a request in the user portal and wait for approval");
         put("用户名或密码错误", "Incorrect username or password");
+        put("管理员尚未为当前账户分配 Proxy 地址",
+                "The administrator has not assigned a Proxy address to this account");
+        put("管理员尚未分配有效 Proxy 地址",
+                "The administrator has not assigned a valid Proxy address");
         put("认证服务 TLS 或证书校验失败，请联系管理员",
                 "Authentication service TLS or certificate validation failed; contact the administrator");
         put("连接认证服务超时，请稍后重试",

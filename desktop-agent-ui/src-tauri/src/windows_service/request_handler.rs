@@ -78,8 +78,9 @@ pub(crate) fn start_service_agent(
     runtime: &AgentRuntime,
     config_path: &str,
 ) -> Result<AgentState, String> {
-    let (config_path, login_binding) = validate_authorized_service_config_path(config_path)?;
-    let state = start_agent_inner(runtime, config_path, false)?;
+    let (config_path, login_binding, proxy_addresses) =
+        validate_authorized_service_config_path(config_path)?;
+    let state = start_agent_inner(runtime, config_path, proxy_addresses, false)?;
     if !state.running {
         return Err("Windows Service 启动 Agent 后未进入运行状态".to_string());
     }
@@ -114,7 +115,7 @@ pub(crate) fn validate_service_config_path(config_path: &str) -> Result<PathBuf,
 
 pub(crate) fn validate_authorized_service_config_path(
     config_path: &str,
-) -> Result<(PathBuf, ServiceLoginBinding), String> {
+) -> Result<(PathBuf, ServiceLoginBinding, Vec<String>), String> {
     let config_root = SERVICE_CONFIG_ROOT
         .get()
         .ok_or_else(|| "Windows Service 未配置受管 Agent 数据目录".to_string())?;
@@ -130,6 +131,7 @@ pub(crate) fn validate_authorized_service_config_path(
     let credentials_dir = service_credentials_dir_for_root(config_root)?;
     let persisted = load_persisted_agent_login_from_dir(&credentials_dir)?
         .ok_or_else(|| "Windows Service 找不到持久登录授权，请重新登录".to_string())?;
+    validate_managed_proxy_addresses(&persisted.proxy_addresses, false)?;
     let config_username = service_config_string(&config, &["username"]).unwrap_or_default();
     if config_username != persisted.account.username {
         return Err("Windows Service 配置用户与持久登录用户不一致".to_string());
@@ -158,6 +160,7 @@ pub(crate) fn validate_authorized_service_config_path(
             username: persisted.account.username,
             key_version: persisted.account.key_version,
         },
+        persisted.proxy_addresses,
     ))
 }
 

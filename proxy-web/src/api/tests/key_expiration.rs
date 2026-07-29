@@ -147,7 +147,11 @@ async fn expired_key_is_hidden_and_can_only_be_restored_by_approval() {
                 .header("x-csrf-token", &admin_csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"expires_at": LATER_FUTURE_EXPIRATION}).to_string(),
+                    json!({
+                        "expires_at": LATER_FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )

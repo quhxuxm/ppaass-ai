@@ -56,6 +56,7 @@ pub(crate) async fn admin_approve_key_request(
             request_id: request.request_id,
             reviewer_account_id: session.account.account_id.clone(),
             expires_at,
+            proxy_address_ids: payload.proxy_address_ids,
             material,
         })
         .await?;

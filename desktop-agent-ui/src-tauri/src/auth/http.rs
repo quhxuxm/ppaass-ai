@@ -71,14 +71,7 @@ pub(crate) async fn decode_json_response<T>(
 where
     T: DeserializeOwned,
 {
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "读取认证服务响应失败".to_string())?;
-    if bytes.len() > maximum_bytes {
-        return Err("Proxy Web 响应过大，已拒绝处理".to_string());
-    }
+    let (status, bytes) = read_bounded_response(response, maximum_bytes).await?;
     if !status.is_success() {
         if let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
             return Err(map_api_error(status, envelope.error));
@@ -86,6 +79,31 @@ where
         return Err(format!("Proxy Web 返回 HTTP {}", status.as_u16()));
     }
     serde_json::from_slice(&bytes).map_err(|_| "Proxy Web 响应格式无效".to_string())
+}
+
+pub(crate) async fn read_bounded_response(
+    mut response: Response,
+    maximum_bytes: usize,
+) -> Result<(StatusCode, Vec<u8>), String> {
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum_bytes as u64)
+    {
+        return Err("Proxy Web 响应过大，已拒绝处理".to_string());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "读取认证服务响应失败".to_string())?
+    {
+        if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
+            return Err("Proxy Web 响应过大，已拒绝处理".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok((status, bytes))
 }
 
 pub(crate) fn map_api_error(status: StatusCode, error: ErrorDetail) -> String {

@@ -7,7 +7,8 @@ async fn admin_key_management_is_redacted_but_owner_can_read_keys() {
     let request_body = json!({
         "username":"bob",
         "password":"bob-secure-password",
-        "expires_at": FUTURE_EXPIRATION
+        "expires_at": FUTURE_EXPIRATION,
+        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
     })
     .to_string();
     let missing_csrf = app
@@ -60,7 +61,8 @@ async fn admin_key_management_is_redacted_but_owner_can_read_keys() {
                     json!({
                         "username":"past-expiry",
                         "password":"safe-user-password",
-                        "expires_at":1
+                        "expires_at":1,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
                     })
                     .to_string(),
                 ))

@@ -113,7 +113,8 @@ pub(crate) async fn approve_agent_device_authorization(
     ensure_visible_agent_authorization(&authorization, &session.account)?;
     // 在 challenge 进入 authorized 之前验证当前密钥可解密，避免 Agent 领取到
     // 一个已知不可用的授权。
-    let (_profile, private_key) = load_agent_credentials(&state, &session.account).await?;
+    let (_profile, private_key, _proxy_addresses) =
+        load_agent_credentials(&state, &session.account).await?;
     drop(private_key);
 
     let decision = state
@@ -272,7 +273,8 @@ pub(crate) async fn poll_agent_device_authorization(
     if require_active_agent_account(&account).is_err() {
         return Err(agent_device_authorization_invalidated());
     }
-    let (profile, private_key) = load_agent_credentials_for_claim(&state, &account).await?;
+    let (profile, private_key, proxy_addresses) =
+        load_agent_credentials_for_claim(&state, &account).await?;
     let claim = AgentDeviceAuthorizationClaim {
         device_code_hash,
         account_id: account.account_id.clone(),
@@ -302,6 +304,7 @@ pub(crate) async fn poll_agent_device_authorization(
         profile: AgentDeviceProfileResponse {
             username: profile.username,
             permissions: profile.permissions,
+            proxy_addresses,
             enabled: profile.enabled,
             key_version: profile.key_version,
             expires_at: profile.expires_at,

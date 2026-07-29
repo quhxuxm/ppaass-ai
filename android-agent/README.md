@@ -82,16 +82,18 @@ Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径
 App 会校验账号状态、密钥版本和有效期，从 Proxy Web 下载当前用户已获管理员批准的
 私钥，并保存到 Android 应用私有的 no-backup 目录；私钥不会在界面中显示，也不能由
 用户手工更改。私钥文件固定为仅应用 UID 可读写，并记录长度与 SHA-256 摘要供每次服务
-启动和进程恢复时校验。`expires_at` 只作为服务端状态展示，不按 Android 本机时间自动
+启动和进程恢复时校验。认证响应中的 `profile.proxy_addresses` 同样由服务端托管并按
+顺序安全持久化；配置页不显示或编辑这些地址，日志也只记录地址数量。原生启动配置只读取
+这份受管列表，不读取旧版 `proxy_addrs` SharedPreferences。`expires_at` 只作为服务端状态展示，不按 Android 本机时间自动
 登出或停止代理。应用同时禁止云备份与设备迁移
 复制登录密码、托管私钥及配置。旧版本留在 SharedPreferences 中的 username 和明文私钥
 会在升级启动时清除。
 
 Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 `http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Web 端口>`
-连接开发机；Debug 的默认 Proxy 地址也会使用 `127.0.0.1:10080` 和全 TCP 模式，可配合
-第二条 `adb reverse` 连接本机 Proxy。Release 构建继续使用 main 目录中的 HTTPS 正式
-地址、正式 Proxy 地址和原生 UDP 默认模式。两种认证地址都不会展示在登录页。
+连接开发机。Proxy 地址不再由 Debug 或 Release 包内置，而由管理员在 Proxy Web 分配；
+本地调试若分配了回环地址，应为相应端口配置第二条 `adb reverse`。Release 构建继续使用
+main 目录中的 HTTPS 正式认证地址和原生 UDP 默认模式。认证地址不会展示在登录页。
 
 登录页只使用用户名和密码登录，并提供记住用户名和密码及新用户注册入口，不提供浏览器或设备
 授权登录。记住的登录信息按产品要求存放在应用私有 SharedPreferences 中；取消“记住”会
@@ -101,11 +103,10 @@ Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 代理。通过已固定 Proxy 身份公钥验证签名、且用户名与当前登录一致的
 `UserExpired`/`UserDisabled` 状态只会显示在界面和前台通知中，Agent 仍保持运行并重试；
 管理员续期后，下一次已验证的成功握手会自动清除提示并恢复代理。只有用户显式退出才会
-清理正常保存的登录凭据。管理员账号不能用于 Agent 登录。
+清理正常保存的登录凭据。管理员账号也可以登录 Agent，并由管理员固有权限使用受控功能。
 
 登录后可以配置：
 
-- proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
 - UDP 代理通道，默认配置值为 `udp`；可选择原生加密 UDP、TCP/Yamux 或自动模式。自动模式按 UDP session 独立回退，一个 session 超时不会影响其他 session。VPN 或 HTTP/SOCKS5 代理运行期间控件会锁定
 - UDP 会话数，对应 `udp_session_pool_size`，默认 4，可配置 1–8；仅原生 UDP 模式显示。每个 flow 会稳定映射到其中一个有状态 UDP 会话
 - 控制连接超时，原生 UDP 会话建立与普通 TCP 连接共用，默认 30 秒
@@ -113,6 +114,16 @@ Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 - direct access mode 和 rules。规则支持精确域名、`*.example.com` 通配符、精确 IP 和 CIDR 网段；默认模式为 `proxy_all`，因此升级后不会自动旁路既有流量。
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
 - 模拟 GEO。可以选择内置城市或自定义经纬度；VPN 运行期间会同时更新 Android GPS、网络定位和 Google 融合定位，VPN 停止后恢复真实定位。首次使用需要开启系统定位、在 Android 开发者选项中把 PPAASS VPN 选为“模拟位置信息应用”，并授予定位权限。
+
+Agent 权限每隔一段时间从 Proxy Web 同步。没有抓包权限时不显示抓包页并强制关闭抓包；
+没有出口修改权限时不显示出口配置区，传输模式、UDP 会话池、连接超时、QUIC、压缩和
+TCP/Yamux 通道参数会在持久化与原生启动层同时回落内置默认值；没有系统运行参数权限时
+不显示对应面板，VPN runtime 线程数回落默认值。其余基础状态、显式代理和直连规则入口
+保持可用。受管 Proxy 地址列表更新时，正在运行的 VPN 与 HTTP/SOCKS5 服务会自动重载；
+服务端明确返回未分配，或成功响应缺失/包含非法地址时，会清空受管地址并停止网络服务，
+但保持用户登录。普通网络失败、5xx 或限流不会清空上次成功同步的地址。
+升级后若恢复的旧会话完全没有受管地址状态，则不会兼容旧 `proxy_addrs`，会立即停网并提示
+重新登录；明确的“未分配”状态则可跨进程恢复，继续保持登录并定期等待管理员完成分配。
 
 ## 运行时抓包
 

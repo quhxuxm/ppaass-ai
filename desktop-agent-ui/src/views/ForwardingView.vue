@@ -58,7 +58,6 @@ const emit = defineEmits<{
               <div class="kv-row"><span>监听</span><strong>{{ summary.listen_addr }}</strong></div>
               <div class="kv-row"><span>协议</span><strong>HTTP / SOCKS5</strong></div>
               <div class="kv-row"><span>状态</span><strong>{{ proxyEntryStateLabel }}</strong></div>
-              <div class="kv-row"><span>公共出口</span><strong>{{ summary.proxy_addrs.length }} 个节点</strong></div>
             </div>
           </template>
         </Card>
@@ -120,27 +119,6 @@ const emit = defineEmits<{
           </template>
         </Card>
 
-        <Card class="panel">
-          <template #title>
-            <div class="panel-heading inline">
-              <h2>明文抓包</h2>
-              <Tag value="抓包页运行时控制" severity="info" />
-            </div>
-          </template>
-          <template #content>
-            <label class="field">
-              <span><AppIcon name="file-down" />PCAP 文件</span>
-              <InputText
-                :model-value="summary.tun_packet_capture_file"
-                :disabled="configLocked"
-                @update:model-value="emit('set-field', 'tun_packet_capture_file', $event)"
-              />
-              <small class="field-help">
-                这里只配置输出路径；开启、关闭和清空均在“抓包”页面运行时完成，无需重启 Agent。
-              </small>
-            </label>
-          </template>
-        </Card>
       </div>
     </section>
   </div>

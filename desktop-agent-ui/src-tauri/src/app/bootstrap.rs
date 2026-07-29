@@ -44,7 +44,13 @@ pub(crate) fn run() {
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs).map_err(io::Error::other)?;
             if let Err(error) = restore_agent_login_on_startup(app.handle(), &setup_runtime) {
-                setup_logs.push(format!("恢复 Agent 长期登录状态失败：{error}"));
+                let message =
+                    format!("恢复 Agent 长期登录状态失败：{error}；旧会话不再兼容，请重新登录");
+                setup_logs.push(message.clone());
+                let _ = setup_runtime.set_permission_sync_error(Some(message));
+                if let Err(stop_error) = stop_agent_inner_command(&setup_runtime) {
+                    setup_logs.push(format!("停止旧 Agent 失败：{stop_error}"));
+                }
             }
             start_agent_permission_sync(app.handle().clone(), setup_runtime.clone());
             start_verified_proxy_auth_status_listener(app.handle().clone(), setup_runtime.clone());

@@ -28,13 +28,35 @@ pub(crate) fn persist_agent_login(
     app: &tauri::AppHandle,
     account: &AgentAuthAccount,
     account_status: AgentAuthAccountStatus,
+    proxy_addresses: &[String],
     agent_access_token: Option<&AgentAccessToken>,
 ) -> Result<(), String> {
-    persist_agent_login_to_dir(
+    persist_agent_login_to_dir_internal(
         &managed_credentials_dir(app)?,
         account,
         account_status,
+        proxy_addresses,
         agent_access_token,
+        false,
+        false,
+    )
+}
+
+pub(crate) fn persist_unassigned_agent_login(
+    app: &tauri::AppHandle,
+    account: &AgentAuthAccount,
+    account_status: AgentAuthAccountStatus,
+    agent_access_token: Option<&AgentAccessToken>,
+    resume_after_proxy_assignment: bool,
+) -> Result<(), String> {
+    persist_agent_login_to_dir_internal(
+        &managed_credentials_dir(app)?,
+        account,
+        account_status,
+        &[],
+        agent_access_token,
+        true,
+        resume_after_proxy_assignment,
     )
 }
 
@@ -74,13 +96,39 @@ pub(crate) fn managed_credentials_dir(app: &tauri::AppHandle) -> Result<PathBuf,
     Ok(app_data_dir.join(CREDENTIALS_DIR))
 }
 
+#[cfg(test)]
 pub(crate) fn persist_agent_login_to_dir(
     credentials_dir: &Path,
     account: &AgentAuthAccount,
     account_status: AgentAuthAccountStatus,
+    proxy_addresses: &[String],
     agent_access_token: Option<&AgentAccessToken>,
 ) -> Result<(), String> {
+    persist_agent_login_to_dir_internal(
+        credentials_dir,
+        account,
+        account_status,
+        proxy_addresses,
+        agent_access_token,
+        false,
+        false,
+    )
+}
+
+fn persist_agent_login_to_dir_internal(
+    credentials_dir: &Path,
+    account: &AgentAuthAccount,
+    account_status: AgentAuthAccountStatus,
+    proxy_addresses: &[String],
+    agent_access_token: Option<&AgentAccessToken>,
+    proxy_assignment_missing: bool,
+    resume_after_proxy_assignment: bool,
+) -> Result<(), String> {
     validate_persisted_account(account)?;
+    validate_managed_proxy_addresses(proxy_addresses, proxy_assignment_missing)?;
+    if proxy_assignment_missing != proxy_addresses.is_empty() {
+        return Err("Agent 登录记录中的 Proxy 地址分配状态无效".to_string());
+    }
     fs::create_dir_all(credentials_dir)
         .map_err(|error| format!("创建 Agent 登录记录目录失败：{error}"))?;
     #[cfg(unix)]
@@ -92,6 +140,9 @@ pub(crate) fn persist_agent_login_to_dir(
     let record = PersistedAgentLoginRecord {
         version: PERSISTED_AGENT_LOGIN_VERSION,
         account: account.clone(),
+        proxy_addresses: proxy_addresses.to_vec(),
+        proxy_assignment_missing,
+        resume_after_proxy_assignment,
         account_status,
         agent_access_token: agent_access_token.map(|token| token.value.to_string()),
         agent_access_token_expires_at: agent_access_token.map(|token| token.expires_at),
@@ -150,6 +201,10 @@ pub(crate) fn load_persisted_agent_login_from_dir(
         return Err("Agent 登录记录版本无效".to_string());
     }
     validate_persisted_account(&record.account)?;
+    validate_managed_proxy_addresses(&record.proxy_addresses, record.proxy_assignment_missing)?;
+    if record.proxy_assignment_missing != record.proxy_addresses.is_empty() {
+        return Err("Agent 登录记录中的 Proxy 地址分配状态无效".to_string());
+    }
     let agent_access_token = match (
         record.agent_access_token,
         record.agent_access_token_expires_at,
@@ -184,6 +239,9 @@ pub(crate) fn load_persisted_agent_login_from_dir(
     Ok(Some(PersistedAgentLogin {
         account: record.account,
         account_status: record.account_status,
+        proxy_addresses: record.proxy_addresses,
+        proxy_assignment_missing: record.proxy_assignment_missing,
+        resume_after_proxy_assignment: record.resume_after_proxy_assignment,
         private_key_path,
         proxy_identity_public_key_path,
         agent_access_token,

@@ -33,6 +33,9 @@ protected void toggleVpn() {
             stopVpnService();
             return;
         }
+        if (!requireManagedProxyAddresses()) {
+            return;
+        }
 
         saveConfig();
         Intent permissionIntent = VpnService.prepare(this);
@@ -46,6 +49,9 @@ protected void toggleVpn() {
 protected void startVpnService() {
         if (!AgentAuthSession.isActive(this)) {
             Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
             return;
         }
         Intent intent = new Intent(this, PpaassVpnService.class);
@@ -75,14 +81,31 @@ protected void toggleHttpProxy() {
             stopHttpProxyService();
             return;
         }
+        if (!requireManagedProxyAddresses()) {
+            return;
+        }
 
         saveConfig();
         startHttpProxyService();
     }
 
+protected boolean requireManagedProxyAddresses() {
+        if (!ManagedProxyAddresses.load(this).isEmpty()) {
+            return true;
+        }
+        Toast.makeText(
+                this,
+                tr("管理员尚未分配有效 Proxy 地址"),
+                Toast.LENGTH_LONG).show();
+        return false;
+}
+
 protected void startHttpProxyService() {
         if (!AgentAuthSession.isActive(this)) {
             Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
             return;
         }
         prefs.edit()

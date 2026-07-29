@@ -27,7 +27,7 @@ public class AgentPermissionsTest {
         assertFalse(AgentPermissions.allows(
                 AgentPermissions.ROLE_USER,
                 Collections.emptySet(),
-                AgentPermissions.CONFIG_VIEW));
+                AgentPermissions.RUNTIME_THREADS_EDIT));
         assertTrue(AgentPermissions.allows(
                 AgentPermissions.ROLE_USER,
                 Set.of(AgentPermissions.EGRESS_EDIT),
@@ -40,7 +40,7 @@ public class AgentPermissionsTest {
 
     @Test
     public void permissionCodesCannotInjectStoredSetSeparators() {
-        assertFalse(AgentPermissions.isValidPermission("agent.config.view\nother"));
+        assertFalse(AgentPermissions.isValidPermission("agent.egress.edit\nother"));
         assertTrue(AgentPermissions.isValidPermission(
                 AgentPermissions.RUNTIME_THREADS_EDIT));
     }

@@ -18,6 +18,7 @@ impl SqliteUserRepository {
             profile,
             encrypted_private_key,
             external_identity,
+            proxy_address_ids,
         } = user;
         let account_id = normalize_account_id(&account_id)?;
         let login_name = normalize_username(&login_name)?;
@@ -88,6 +89,13 @@ impl SqliteUserRepository {
             .execute(&mut *transaction)
             .await?;
         }
+        replace_account_proxy_addresses(
+            &mut transaction,
+            &account_id,
+            &proxy_address_ids,
+            timestamp,
+        )
+        .await?;
 
         let account = fetch_account_by_id(&mut transaction, &account_id)
             .await?

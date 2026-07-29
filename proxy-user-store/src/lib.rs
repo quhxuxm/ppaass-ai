@@ -8,27 +8,33 @@ mod validation;
 
 pub use access_sqlite::SqliteAccessLogRepository;
 pub use model::{
-    AccessLogSettings, AccessProtocol, AccessRecord, AccountRole, AccountStatus,
-    AgentDeviceAuthorization, AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
-    AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus,
-    ApprovedKeyMaterial, BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey,
-    ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
-    KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind, KeyRequestStatus, LoginRecord,
-    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
-    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
-    NewKeyGenerationRequest, NewManagedUser, NewUser, NewUserAccount, PROXY_CONNECT_TCP_PERMISSION,
-    PROXY_CONNECT_UDP_PERMISSION, UserOrigin, UserRecord, UserUpdate, WebAccount,
-    default_proxy_permissions,
+    AGENT_EGRESS_EDIT_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
+    AGENT_RUNTIME_THREADS_EDIT_PERMISSION, AccessLogSettings, AccessProtocol, AccessRecord,
+    AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
+    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
+    AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus, ApprovedKeyMaterial,
+    BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
+    EncryptedPrivateKey, ExternalIdentity, KEY_ROTATE_PERMISSION, KeyEncryptionBinding,
+    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
+    KeyRequestKind, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
+    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
+    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
+    PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION, ProxyAddress, ProxyAddressUpdate,
+    UserOrigin, UserRecord, UserUpdate, WebAccount, default_proxy_permissions,
 };
 pub use repository::{
-    AccessLogRepository, AccountRepository, AgentDeviceAuthorizationRepository, UserRepository,
+    AccessLogRepository, AccountRepository, AgentDeviceAuthorizationRepository,
+    ProxyAddressRepository, UserRepository,
 };
 pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};
 pub use validation::{
     MAX_KEY_REQUEST_MESSAGE_CHARS, MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS,
+    MAX_PROXY_ADDRESS_BYTES, MAX_PROXY_ADDRESS_LABEL_BYTES, MAX_PROXY_ADDRESSES_PER_ACCOUNT,
     MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES, ValidationError, normalize_key_request_message,
-    normalize_permissions, normalize_public_key_pem, normalize_username, parse_expires_at,
-    validate_user,
+    normalize_permissions, normalize_proxy_address, normalize_proxy_address_id,
+    normalize_proxy_address_ids, normalize_proxy_address_label, normalize_public_key_pem,
+    normalize_username, parse_expires_at, validate_user,
 };
 
 use thiserror::Error;
@@ -117,6 +123,27 @@ pub enum UserRepositoryError {
 
     #[error("普通用户账号数量已达到安全上限")]
     UserAccountCapacity,
+
+    #[error("Proxy 地址目录容量已满")]
+    ProxyAddressCapacity,
+
+    #[error("Proxy 地址不存在：{0}")]
+    ProxyAddressNotFound(String),
+
+    #[error("Proxy 地址已存在：{0}")]
+    ProxyAddressConflict(String),
+
+    #[error("Proxy 地址仍被账号分配，必须先重新分配：{0}")]
+    ProxyAddressInUse(String),
+
+    #[error("Proxy 地址已停用，不能分配：{0}")]
+    ProxyAddressDisabled(String),
+
+    #[error("Proxy 地址必须先停用才能删除：{0}")]
+    ProxyAddressMustBeDisabled(String),
+
+    #[error("账号没有分配可用的 Proxy 地址：{0}")]
+    ProxyAddressNotAssigned(String),
 }
 
 pub type Result<T> = std::result::Result<T, UserRepositoryError>;

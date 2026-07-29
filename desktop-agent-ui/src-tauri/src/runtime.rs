@@ -22,6 +22,7 @@ pub(crate) enum AgentPermissionTrust {
 pub(crate) struct AuthenticatedAgentSession {
     pub(crate) account: AgentAuthAccount,
     pub(crate) account_status: AgentAuthAccountStatus,
+    pub(crate) proxy_addresses: Vec<String>,
     pub(crate) permission_trust: AgentPermissionTrust,
     pub(crate) private_key_path: PathBuf,
     pub(crate) proxy_identity_public_key_path: PathBuf,
@@ -29,14 +30,36 @@ pub(crate) struct AuthenticatedAgentSession {
     pub(crate) agent_access_token: Option<AgentAccessToken>,
 }
 
-impl AuthenticatedAgentSession {
+#[derive(Clone)]
+pub(crate) struct AgentSessionCredentials {
+    private_key_path: PathBuf,
+    proxy_identity_public_key_path: PathBuf,
+    proxy_web_url: String,
+    agent_access_token: Option<AgentAccessToken>,
+}
+
+impl AgentSessionCredentials {
     pub(crate) fn new(
-        account: AgentAuthAccount,
-        account_status: AgentAuthAccountStatus,
         private_key_path: PathBuf,
         proxy_identity_public_key_path: PathBuf,
         proxy_web_url: String,
         agent_access_token: Option<AgentAccessToken>,
+    ) -> Self {
+        Self {
+            private_key_path,
+            proxy_identity_public_key_path,
+            proxy_web_url,
+            agent_access_token,
+        }
+    }
+}
+
+impl AuthenticatedAgentSession {
+    pub(crate) fn new(
+        account: AgentAuthAccount,
+        account_status: AgentAuthAccountStatus,
+        proxy_addresses: Vec<String>,
+        credentials: AgentSessionCredentials,
         permission_trust: AgentPermissionTrust,
     ) -> Self {
         let account = match permission_trust {
@@ -46,11 +69,12 @@ impl AuthenticatedAgentSession {
         Self {
             account,
             account_status,
+            proxy_addresses,
             permission_trust,
-            private_key_path,
-            proxy_identity_public_key_path,
-            proxy_web_url,
-            agent_access_token,
+            private_key_path: credentials.private_key_path,
+            proxy_identity_public_key_path: credentials.proxy_identity_public_key_path,
+            proxy_web_url: credentials.proxy_web_url,
+            agent_access_token: credentials.agent_access_token,
         }
     }
 }
@@ -73,6 +97,7 @@ pub(crate) struct AgentRuntime {
     permission_sync_error: Mutex<Option<String>>,
     pub(crate) permission_sync_in_progress: AtomicBool,
     pub(crate) permission_sync_notify: tokio::sync::Notify,
+    pub(crate) resume_after_proxy_assignment: AtomicBool,
     pending_device_authorization: Mutex<Option<PendingAgentDeviceAuthorization>>,
     next_device_authorization_id: AtomicU64,
     #[cfg(windows)]
@@ -100,6 +125,7 @@ impl AgentRuntime {
             permission_sync_error: Mutex::new(None),
             permission_sync_in_progress: AtomicBool::new(false),
             permission_sync_notify: tokio::sync::Notify::new(),
+            resume_after_proxy_assignment: AtomicBool::new(false),
             pending_device_authorization: Mutex::new(None),
             next_device_authorization_id: AtomicU64::new(1),
             #[cfg(windows)]
@@ -179,6 +205,7 @@ impl AgentRuntime {
         expected_token: &str,
         account: AgentAuthAccount,
         account_status: AgentAuthAccountStatus,
+        proxy_addresses: Vec<String>,
         agent_access_token: AgentAccessToken,
     ) -> Result<Option<AuthenticatedAgentSession>, String> {
         let mut authenticated = self
@@ -199,8 +226,34 @@ impl AgentRuntime {
         }
         session.account = account;
         session.account_status = account_status;
+        session.proxy_addresses = proxy_addresses;
         session.agent_access_token = Some(agent_access_token);
         session.permission_trust = AgentPermissionTrust::ServerVerified;
+        Ok(Some(session.clone()))
+    }
+
+    pub(crate) fn clear_authenticated_proxy_addresses(
+        &self,
+        expected_username: &str,
+        expected_token: &str,
+    ) -> Result<Option<AuthenticatedAgentSession>, String> {
+        let mut authenticated = self
+            .authenticated_session
+            .lock()
+            .map_err(|_| "登录状态锁已损坏".to_string())?;
+        let Some(session) = authenticated.as_mut() else {
+            return Ok(None);
+        };
+        if session.account.username != expected_username
+            || session
+                .agent_access_token
+                .as_ref()
+                .map(|token| token.value.as_str())
+                != Some(expected_token)
+        {
+            return Ok(None);
+        }
+        session.proxy_addresses.clear();
         Ok(Some(session.clone()))
     }
 

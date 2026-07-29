@@ -1,8 +1,6 @@
 package com.ppaass.ai.agent;
 
 final class DefaultConfig {
-    static final String PROXY_ADDR =
-            BuildConfig.DEBUG ? "127.0.0.1:10080" : "140.82.30.214:80";
     static final String TUN_IPV4 = "10.10.10.2/24";
     static final String TUN_IPV6 = "";
     static final int TUN_MTU = 1500;

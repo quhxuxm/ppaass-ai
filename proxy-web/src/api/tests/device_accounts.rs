@@ -41,6 +41,7 @@ async fn existing_external_account_session_can_authorize_agent_without_a_passwor
             request_id: request.request_id,
             reviewer_account_id: "acc_admin".to_string(),
             expires_at: FUTURE_EXPIRATION,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Initial {
                 profile,
                 encrypted_private_key: stored_keys.encrypted_private_key,

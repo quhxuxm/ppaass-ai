@@ -87,12 +87,12 @@ the managed key pair and writes the user profile to SQLite; Proxy opens that dat
 
 ### Step 3: Configure the Agent
 
-Edit `config/agent.toml` with the Proxy and Proxy Web endpoints, then sign in from the Agent UI.
-The Agent downloads and applies the approved managed credential automatically.
+Edit `config/agent.toml` with the Proxy Web endpoint, then sign in from the Agent UI. Proxy Web
+assigns the runtime Proxy addresses; they are not stored in `agent.toml`. The Agent downloads and
+applies the approved managed credential automatically.
 
 ```toml
 listen_addr = "127.0.0.1:1080"
-proxy_addrs = ["your.proxy.server:8080"]  # Change to your proxy address
 connection_timeout_secs = 30
 
 [yamux.tcp]
@@ -104,15 +104,8 @@ sessions = 5
 max_streams_per_session = 128
 ```
 
-3. Start the agent:
-
-```bash
-# On Windows
-.\target\release\desktop-agent.exe --config config\agent.toml
-
-# On Linux/macOS
-./target/release/desktop-agent --config config/agent.toml
-```
+3. Open the Desktop Agent UI, sign in, and start the Agent there. The product
+   `desktop-agent` binary no longer accepts a Proxy address or starts normal traffic by itself.
 
 #### TUN helper startup behavior
 
@@ -129,17 +122,8 @@ On Windows, `start-agent.bat` creates a highest-privilege scheduled task the fir
 
 #### Alternative: Use startup scripts (same-folder deployment)
 
-If you deploy the binaries and configs alongside the scripts, use:
-
-```powershell
-# Agent on Windows
-.\start-agent.bat
-```
-
-```bash
-# Agent on macOS
-./start-agent.sh
-```
+Agent traffic is started from the authenticated Desktop Agent UI. Legacy standalone startup
+scripts are not an authentication substitute.
 
 ### Step 4: Configure Your Applications
 
@@ -231,9 +215,7 @@ For issues and questions:
 
 **Start Agent:**
 
-```bash
-./target/release/desktop-agent --config config/agent.toml
-```
+Open the Desktop Agent UI, sign in, and use its Start control.
 
 **Test Connection:**
 

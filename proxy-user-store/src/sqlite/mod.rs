@@ -4,14 +4,17 @@ use crate::{
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
     AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
     AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, BootstrapOutcome,
-    DEFAULT_ACCESS_LOG_RETENTION_DAYS, EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding,
-    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
-    KeyRequestKind, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
-    NewManagedUser, NewUser, NewUserAccount, Result, UserOrigin, UserRecord, UserRepository,
-    UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_key_request_message,
-    normalize_permissions, normalize_public_key_pem, normalize_username, validate_user,
+    DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
+    EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest,
+    KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind,
+    KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate, NewAccessRecord,
+    NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser,
+    NewProxyAddress, NewUser, NewUserAccount, ProxyAddress, ProxyAddressRepository,
+    ProxyAddressUpdate, Result, UserOrigin, UserRecord, UserRepository, UserRepositoryError,
+    UserUpdate, ValidationError, WebAccount, normalize_key_request_message, normalize_permissions,
+    normalize_proxy_address, normalize_proxy_address_id, normalize_proxy_address_ids,
+    normalize_proxy_address_label, normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{
@@ -32,7 +35,7 @@ use tracing::{info, instrument, warn};
 
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 6;
+const SQLITE_SCHEMA_VERSION: i64 = 8;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -49,6 +52,7 @@ const MAX_AGENT_CLIENT_NAME_BYTES: usize = 128;
 const MAX_AGENT_PLATFORM_BYTES: usize = 32;
 const MAX_ACTIVE_DEVICE_AUTHORIZATIONS: i64 = 10_000;
 const MAX_USER_ACCOUNTS: i64 = 100_000;
+const MAX_PROXY_ADDRESS_CATALOG_SIZE: i64 = 10_000;
 const DEVICE_AUTHORIZATION_HISTORY_SECONDS: i64 = 86_400;
 const DEVICE_AUTHORIZATION_MAINTENANCE_SECONDS: i64 = 30;
 // These two legacy demo keypairs were committed to the public repository. Matching legacy
@@ -147,9 +151,12 @@ mod file_permissions;
 mod migration_access;
 mod migration_device;
 mod migration_key_requests;
+mod migration_permissions;
+mod migration_proxy_addresses;
 mod migration_users;
 mod migration_validation;
 mod normalization;
+mod proxy_addresses;
 mod rows;
 mod user_repository;
 
@@ -159,9 +166,12 @@ use file_permissions::*;
 use migration_access::*;
 use migration_device::*;
 use migration_key_requests::*;
+use migration_permissions::*;
+use migration_proxy_addresses::*;
 use migration_users::*;
 use migration_validation::*;
 use normalization::*;
+use proxy_addresses::*;
 use rows::*;
 
 #[cfg(test)]

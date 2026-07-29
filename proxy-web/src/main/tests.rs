@@ -1,6 +1,9 @@
 use super::*;
 use protocol::RsaKeyPair;
-use proxy_user_store::{AccountRole, AccountStatus, NewManagedUser, NewUser, UserOrigin};
+use proxy_user_store::{
+    AccountRole, AccountStatus, NewManagedUser, NewProxyAddress, NewUser, ProxyAddressRepository,
+    UserOrigin,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -92,6 +95,15 @@ async fn key_binding_migrates_existing_envelopes_and_rejects_the_wrong_secret() 
         .public_key_to_pem()
         .unwrap();
     store
+        .create_proxy_address(NewProxyAddress {
+            proxy_address_id: "pxy_main_test".to_string(),
+            label: "Main test proxy".to_string(),
+            address: "127.0.0.1:8080".to_string(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    store
         .create_managed_user(NewManagedUser {
             account_id: "acc_alice".to_string(),
             login_name: "alice".to_string(),
@@ -104,6 +116,7 @@ async fn key_binding_migrates_existing_envelopes_and_rejects_the_wrong_secret() 
             profile: NewUser::new("alice", public_key, UserOrigin::Admin),
             encrypted_private_key: correct.encrypt("alice", 1, "private-pem").unwrap(),
             external_identity: None,
+            proxy_address_ids: vec!["pxy_main_test".to_string()],
         })
         .await
         .unwrap();

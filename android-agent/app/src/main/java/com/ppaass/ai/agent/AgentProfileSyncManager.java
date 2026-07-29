@@ -74,7 +74,12 @@ final class AgentProfileSyncManager {
             if (!isCurrent(expectedGeneration, context)) {
                 return;
             }
-            AgentSessionStore.recordSyncFailure(context, error.failure);
+            if (AgentSyncFailurePolicy.requiresManagedProxyShutdown(error.failure)) {
+                AgentSessionStore.recordManagedProxyAddressFailure(context);
+                AgentPermissionConfigEnforcer.stopRunningAgents(context);
+            } else {
+                AgentSessionStore.recordSyncFailure(context, error.failure);
+            }
             Log.w(TAG, "Agent account permission synchronization failed");
         } catch (IOException | RuntimeException error) {
             if (!isCurrent(expectedGeneration, context)) {

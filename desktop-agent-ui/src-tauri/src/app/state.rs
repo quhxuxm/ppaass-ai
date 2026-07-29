@@ -15,7 +15,7 @@ pub(crate) fn load_agent_config_inner(
             })?,
     };
 
-    let loaded = load_config_from_path(&config_path)?;
+    let (loaded, _) = enforce_managed_config_path_for_account(&config_path, &session.account)?;
     validate_config_candidate_against_trusted_baseline(runtime, &session.account, &loaded)?;
     apply_ui_log_level(runtime, &loaded.summary.log_level);
     remember_trusted_ui_config(runtime, &loaded)?;
@@ -28,9 +28,9 @@ pub(crate) fn save_agent_config_inner(
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
     let session = runtime.require_authenticated_session()?;
-    session
-        .account
-        .require_permission(AGENT_CONFIG_VIEW_PERMISSION)?;
+    if session.account.role != "admin" {
+        return Err("只有管理员可以编辑原始 TOML 配置".to_string());
+    }
     save_agent_config_candidate(runtime, path, raw, &session)
 }
 
@@ -54,9 +54,10 @@ fn save_agent_config_candidate(
 ) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(Path::new(&path));
     let candidate = loaded_config_from_raw(config_path.clone(), raw.clone())?;
+    let (candidate, _) = enforce_loaded_config_for_account(candidate, &session.account)?;
     validate_config_candidate_against_trusted_baseline(runtime, &session.account, &candidate)?;
     let managed_raw = enforce_managed_identity(
-        &raw,
+        &candidate.raw,
         &session.account.username,
         &session.private_key_path,
         &session.proxy_identity_public_key_path,
@@ -142,12 +143,32 @@ pub(crate) fn restore_agent_login_on_startup(
         "持久登录凭据存在，但找不到 Agent 配置文件；将保留凭据并等待下次启动恢复".to_string()
     })?;
     let proxy_web_url = proxy_web_url_from_config(&config_path)?;
-    let loaded = apply_managed_credentials_to_config(
-        &config_path,
-        &persisted.account.username,
-        &persisted.private_key_path,
-        &persisted.proxy_identity_public_key_path,
-    )?;
+    let loaded = if persisted.proxy_assignment_missing {
+        let (loaded, _) = enforce_config_path_for_account(&config_path, &persisted.account)?;
+        let stop_error = stop_agent_inner_command(runtime).err();
+        runtime.resume_after_proxy_assignment.store(
+            persisted.resume_after_proxy_assignment,
+            std::sync::atomic::Ordering::Release,
+        );
+        let message = stop_error.map_or_else(
+            || "管理员未分配 Proxy 地址；已保留登录并停止 Agent，等待管理员分配".to_string(),
+            |error| {
+                format!(
+                    "管理员未分配 Proxy 地址；已保留登录，但停止 Agent 失败并将在同步时重试：{error}"
+                )
+            },
+        );
+        runtime.logs.push(message.clone());
+        let _ = runtime.set_permission_sync_error(Some(message));
+        loaded
+    } else {
+        apply_managed_credentials_to_config(
+            &config_path,
+            &persisted.account.username,
+            &persisted.private_key_path,
+            &persisted.proxy_identity_public_key_path,
+        )?
+    };
     apply_ui_log_level(runtime, &loaded.summary.log_level);
     remember_trusted_ui_config(runtime, &loaded)?;
     #[cfg(windows)]
@@ -155,16 +176,20 @@ pub(crate) fn restore_agent_login_on_startup(
     runtime.set_authenticated_session(AuthenticatedAgentSession::new(
         persisted.account.clone(),
         persisted.account_status,
-        persisted.private_key_path,
-        persisted.proxy_identity_public_key_path,
-        proxy_web_url,
-        persisted.agent_access_token,
+        persisted.proxy_addresses,
+        AgentSessionCredentials::new(
+            persisted.private_key_path,
+            persisted.proxy_identity_public_key_path,
+            proxy_web_url,
+            persisted.agent_access_token,
+        ),
         AgentPermissionTrust::CachedUnverified,
     ))?;
     info!(
         username = %persisted.account.username,
         key_version = persisted.account.key_version,
-        "已从本机受管凭据恢复 Agent 长期登录状态；可选权限等待 Proxy Web 验证"
+        proxy_assignment_missing = persisted.proxy_assignment_missing,
+        "已从本机受管凭据恢复 Agent 长期登录状态；权限与地址等待 Proxy Web 验证"
     );
     Ok(())
 }
@@ -318,6 +343,7 @@ pub(crate) fn report_verified_proxy_auth_status(
         app,
         &session.account,
         status,
+        &session.proxy_addresses,
         session.agent_access_token.as_ref(),
     ) {
         runtime

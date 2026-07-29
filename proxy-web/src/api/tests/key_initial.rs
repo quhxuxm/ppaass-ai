@@ -208,7 +208,13 @@ async fn initial_key_request_requires_approval_before_owner_can_read_keys() {
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"expires_at": 1}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "expires_at": 1,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -225,7 +231,11 @@ async fn initial_key_request_requires_approval_before_owner_can_read_keys() {
                 .header("x-csrf-token", &admin_csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"expires_at": FUTURE_EXPIRATION}).to_string(),
+                    json!({
+                        "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )

@@ -67,6 +67,7 @@ pub(crate) async fn admin_create_user(
             },
             encrypted_private_key: generated.encrypted_private_key,
             external_identity: None,
+            proxy_address_ids: request.proxy_address_ids,
         })
         .await?;
     info!(
@@ -111,11 +112,14 @@ pub(crate) async fn admin_update_user(
         role: request.role,
         status: request.status,
         enabled: request.enabled,
-        permissions: request.permissions,
+        permissions: request
+            .permissions
+            .map(without_deprecated_agent_permissions),
         expires_at,
         display_name: patch_optional(request.display_name),
         email: patch_optional(request.email),
         avatar_url: patch_optional(request.avatar_url),
+        proxy_address_ids: request.proxy_address_ids,
     };
     // Web 托管账号的四项基础能力是不可撤销的；历史导入 profile 没有
     // Web 账号和可恢复私钥，必须保留其原始权限语义。
@@ -161,6 +165,7 @@ pub(crate) async fn admin_update_user(
             || update.display_name.is_some()
             || update.email.is_some()
             || update.avatar_url.is_some()
+            || update.proxy_address_ids.is_some()
         {
             return Err(ApiError::bad_request(
                 "历史 legacy 用户尚未绑定 Web 账号，不能修改账号字段",
@@ -186,6 +191,7 @@ pub(crate) async fn admin_update_user(
             profile: Some(profile),
             has_private_key: false,
             providers: Vec::new(),
+            assigned_proxy_addresses: Vec::new(),
         }
     };
     info!(

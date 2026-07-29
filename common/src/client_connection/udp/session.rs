@@ -17,7 +17,7 @@ where
         match connect_udp_socket_to(config, remote, bind_addr, timeout).await {
             Ok(socket) => return Ok(socket),
             Err(error) => {
-                warn!(%remote, "建立原生 UDP proxy socket 失败：{error}");
+                warn!("建立原生 UDP Proxy socket 失败：{error}");
                 last_error = Some(error);
             }
         }
@@ -26,7 +26,7 @@ where
     Err(last_error.unwrap_or_else(|| {
         io::Error::new(
             io::ErrorKind::AddrNotAvailable,
-            format!("proxy 地址 {remote_name} 没有可用的 UDP 端点"),
+            "远端 Proxy 没有可用的 UDP 端点",
         )
     }))
 }
@@ -47,10 +47,10 @@ where
     )?;
     if let Some(size) = config.udp_socket_buffer_size() {
         if let Err(error) = socket.set_recv_buffer_size(size) {
-            debug!(%remote, "设置原生 UDP SO_RCVBUF 失败：{error}");
+            debug!("设置原生 UDP Proxy SO_RCVBUF 失败：{error}");
         }
         if let Err(error) = socket.set_send_buffer_size(size) {
-            debug!(%remote, "设置原生 UDP SO_SNDBUF 失败：{error}");
+            debug!("设置原生 UDP Proxy SO_SNDBUF 失败：{error}");
         }
     }
 

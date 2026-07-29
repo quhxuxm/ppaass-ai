@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 
 final class AgentAuthSession {
@@ -119,6 +120,7 @@ final class AgentAuthSession {
         if (!isActive(context) || !username.equals(result.username)) {
             throw new IOException("权限同步返回的账号与当前登录不一致");
         }
+        List<String> previousProxyAddresses = ManagedProxyAddresses.load(context);
         long localKeyVersion = keyVersion;
         if (!AgentSessionStore.persistSync(context, result, localKeyVersion)) {
             throw new IOException("无法安全保存同步后的 Agent 权限");
@@ -129,6 +131,14 @@ final class AgentAuthSession {
             expiresAt = result.expiresAt;
         }
         applyProfileServerStatus(context, result);
+        boolean configDefaultsChanged =
+                AgentPermissionConfigEnforcer.enforce(context, false);
+        if (AgentPermissionConfigPolicy.runningAgentsRequireReload(
+                previousProxyAddresses,
+                result.proxyAddresses,
+                configDefaultsChanged)) {
+            AgentPermissionConfigEnforcer.reloadRunningAgents(context);
+        }
         return true;
     }
 

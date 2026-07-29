@@ -2,18 +2,19 @@ use super::*;
 
 #[cfg(target_os = "macos")]
 pub(in crate::tun_handler::route) fn validate_macos_proxy_bypass_next_hop(
-    proxy_ip: IpAddr,
+    _proxy_ip: IpAddr,
     tun_if_index: u32,
     physical_if_index: Option<u32>,
 ) -> Result<()> {
     let physical_if_index = physical_if_index.ok_or_else(|| {
-        AgentError::Connection(format!(
-            "无法确定 proxy {proxy_ip} 的物理出口接口，拒绝安装 split-default 以避免代理连接回环"
-        ))
+        AgentError::Connection(
+            "无法确定受管 Proxy 节点的物理出口接口，拒绝安装 split-default 以避免代理连接回环"
+                .to_string(),
+        )
     })?;
     if physical_if_index == tun_if_index {
         return Err(AgentError::Connection(format!(
-            "proxy {proxy_ip} 的下一跳仍指向当前 TUN if_index={tun_if_index}，拒绝启动以避免代理连接回环"
+            "受管 Proxy 节点的下一跳仍指向当前 TUN if_index={tun_if_index}，拒绝启动以避免代理连接回环"
         )));
     }
     Ok(())

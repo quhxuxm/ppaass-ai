@@ -43,12 +43,14 @@ pub(super) fn prepare_tun(request: &TunStartRequest) -> AgentResult<PreparedTun>
         .map_err(|e| AgentError::Connection(format!("读取 TUN if_index 失败：{e}")))?;
 
     let dns_capture_target = tun_ipv4_peer(ipv4, ipv4_prefix).unwrap_or(ipv4);
+    let mut recovery_request = request.clone();
+    recovery_request.proxy_addrs.clear();
     Ok(PreparedTun {
         device,
         name: name.clone(),
         if_index,
         route_recovery: PersistedRouteRecovery {
-            request: request.clone(),
+            request: recovery_request,
             actual_name: name,
             tun_if_index: if_index,
             tun_ipv4: ipv4,
@@ -64,7 +66,7 @@ pub(super) fn handle_client(
     owner_pid: u32,
 ) -> Result<()> {
     let request: TunHelperRequest = read_frame(stream)?;
-    debug!("收到 helper 请求：{request:?}");
+    debug!("收到 TUN helper 控制请求");
     match request {
         TunHelperRequest::Ping => send_response(stream, &TunHelperResponse::Pong, None)?,
         TunHelperRequest::GetHelperInfo => send_response(

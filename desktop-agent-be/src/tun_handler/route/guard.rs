@@ -142,8 +142,8 @@ impl RouteGuard {
         let (default_v4_gw, default_v4_if) = find_default_route(&routes, false);
         let (default_v6_gw, default_v6_if) = find_default_route(&routes, true);
         info!(
-            "现有默认路由：v4 网关={:?} 接口={:?}，v6 网关={:?} 接口={:?}",
-            default_v4_gw, default_v4_if, default_v6_gw, default_v6_if
+            "已读取现有默认路由：v4 接口={:?}，v6 接口={:?}",
+            default_v4_if, default_v6_if
         );
 
         for ip in proxy_ips {
@@ -180,16 +180,16 @@ impl RouteGuard {
             };
             match guard.mgr.add(&route) {
                 Ok(()) => {
-                    info!("已安装代理旁路路由：{}", route);
+                    info!("已安装受管 Proxy 旁路路由");
                     guard
                         .lease
                         .record_installed(RouteKind::ProxyBypass, &route)?;
                     guard.installed.push(route);
                 }
-                Err(e) => {
+                Err(_e) => {
                     #[cfg(target_os = "macos")]
                     {
-                        let message = e.to_string();
+                        let message = _e.to_string();
                         if route_add_error_is_already_exists(&message)
                             && required_route_exists(
                                 &mut guard.mgr,
@@ -197,19 +197,19 @@ impl RouteGuard {
                                 &route,
                             )?
                         {
-                            info!("代理旁路路由已存在并验证正确，接管到当前 lease：{}", route);
+                            info!("受管 Proxy 旁路路由已存在并验证正确，已接管到当前 lease");
                             guard
                                 .lease
                                 .record_installed(RouteKind::ProxyBypass, &route)?;
                             guard.installed.push(route);
                             continue;
                         }
-                        return Err(AgentError::Connection(format!(
-                            "为 {ip} 安装必要的代理旁路路由 {route} 失败：{message}"
-                        )));
+                        return Err(AgentError::Connection(
+                            "安装必要的受管 Proxy 旁路路由失败".to_string(),
+                        ));
                     }
                     #[cfg(not(target_os = "macos"))]
-                    warn!("为 {ip} 安装旁路路由失败：{e}");
+                    warn!("安装受管 Proxy 旁路路由失败");
                 }
             }
         }

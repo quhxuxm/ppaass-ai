@@ -19,6 +19,7 @@ import Toast from 'primevue/toast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import KeyRequestDialog from './components/KeyRequestDialog.vue'
+import ProxyAddressCatalog from './components/ProxyAddressCatalog.vue'
 import RequestMessage from './components/RequestMessage.vue'
 import {
   ApiError,
@@ -36,6 +37,7 @@ import {
   getSession,
   inspectAgentDeviceAuthorization,
   listPendingKeyRequests,
+  listProxyAddresses,
   listMyAccessRecords,
   listManagedUsers,
   login,
@@ -54,6 +56,7 @@ import {
   type KeyRequest,
   type ManagedUser,
   type ProviderAvailability,
+  type ProxyAddress,
   type SelfView,
   type SessionState,
 } from './api'
@@ -107,28 +110,24 @@ const agentPermissionOptions: PermissionOption[] = [
   {
     code: 'agent.packet_capture',
     label: '抓包',
-    description: '允许 Agent 启动或停止本机网络抓包',
-  },
-  {
-    code: 'agent.config.view',
-    label: '查看原始配置',
-    description: '允许在 Agent 中查看未经隐藏的原始配置内容',
+    description: '允许使用抓包页面；无权限时 Agent 不显示抓包功能',
   },
   {
     code: 'agent.egress.edit',
-    label: '编辑出口设置',
-    description: '允许更改远端地址、连接超时、压缩方式和 UDP 会话数',
+    label: '修改出口配置',
+    description: '允许显示并修改出口；无权限时隐藏出口并使用内置默认值',
   },
   {
     code: 'agent.runtime_threads.edit',
-    label: '编辑系统线程数',
-    description: '允许调整 Agent 运行时使用的系统线程数量',
+    label: '修改系统运行参数',
+    description: '允许显示并修改运行参数；无权限时隐藏面板并使用内置默认值',
   },
 ]
 
 const agentPermissionCodes = new Set(
   agentPermissionOptions.map((permission) => permission.code),
 )
+const retiredPermissionCodes = new Set(['agent.config.view'])
 
 const roleOptions = [
   { label: '普通用户', value: 'user' },
@@ -183,6 +182,7 @@ const accessRecordsFirst = ref(0)
 
 const adminUsers = ref<ManagedUser[]>([])
 const adminKeyRequests = ref<KeyRequest[]>([])
+const proxyAddresses = ref<ProxyAddress[]>([])
 const adminLoading = ref(false)
 const keyRequestsLoading = ref(false)
 const adminSearch = ref('')
@@ -195,6 +195,7 @@ const createForm = reactive({
   expiresAt: defaultExpiry(),
   agentPermissions: [] as string[],
   additionalPermissions: '',
+  proxyAddressIds: [] as string[],
 })
 const editVisible = ref(false)
 const editSaving = ref(false)
@@ -205,6 +206,7 @@ const editForm = reactive({
   enabled: true,
   expiresAt: null as Date | null,
   agentPermissions: [] as string[],
+  proxyAddressIds: [] as string[],
 })
 const editingCustomPermissions = ref<string[]>([])
 const deletingUsername = ref('')
@@ -214,9 +216,13 @@ const approvalSaving = ref(false)
 const approvalRequest = ref<KeyRequest | null>(null)
 const approvalMinimumExpiry = ref(minimumFutureExpiry())
 const approvalExpiresAt = ref<Date | null>(defaultExpiry())
+const approvalProxyAddressIds = ref<string[]>([])
 const rejectingRequestId = ref('')
 const retentionDays = ref<number | null>(7)
 const retentionSaving = ref(false)
+const enabledProxyAddresses = computed(() =>
+  proxyAddresses.value.filter((address) => address.enabled),
+)
 
 const isAuthenticated = computed(
   () => session.value?.authenticated === true && session.value.account !== null,
@@ -230,7 +236,8 @@ const additionalPermissions = computed(() =>
       (profile.value?.permissions ?? []).filter(
         (permission) =>
           !basePermissionCodes.has(permission) &&
-          !agentPermissionCodes.has(permission),
+          !agentPermissionCodes.has(permission) &&
+          !retiredPermissionCodes.has(permission),
       ),
     ),
   ].sort((left, right) => left.localeCompare(right)),
@@ -726,11 +733,12 @@ async function refreshAdminUsers(): Promise<void> {
   adminLoading.value = true
   keyRequestsLoading.value = true
   try {
-    const [usersResult, requestsResult, settingsResult] =
+    const [usersResult, requestsResult, settingsResult, addressesResult] =
       await Promise.allSettled([
         listManagedUsers(),
         listPendingKeyRequests(),
         getAccessLogSettings(),
+        listProxyAddresses(),
       ])
     if (usersResult.status === 'fulfilled') {
       adminUsers.value = usersResult.value
@@ -746,6 +754,11 @@ async function refreshAdminUsers(): Promise<void> {
     }
     if (settingsResult.status === 'fulfilled') {
       retentionDays.value = settingsResult.value.retentionDays
+    }
+    if (addressesResult.status === 'fulfilled') {
+      proxyAddresses.value = addressesResult.value
+    } else {
+      showError('无法读取 Proxy 地址目录', addressesResult.reason)
     }
   } finally {
     adminLoading.value = false
@@ -787,6 +800,7 @@ function openCreate(): void {
   createForm.expiresAt = defaultExpiry()
   createForm.agentPermissions = []
   createForm.additionalPermissions = ''
+  createForm.proxyAddressIds = []
   createMinimumExpiry.value = minimumFutureExpiry()
   createVisible.value = true
 }
@@ -834,6 +848,15 @@ async function submitCreate(): Promise<void> {
   if (!additionalPermissions) {
     return
   }
+  if (!createForm.proxyAddressIds.length) {
+    toast.add({
+      severity: 'warn',
+      summary: '请选择至少一个 Proxy 地址',
+      detail: '新用户必须分配可用的远端 Proxy 地址',
+      life: 3600,
+    })
+    return
+  }
   createSaving.value = true
   try {
     await createManagedUser({
@@ -844,6 +867,7 @@ async function submitCreate(): Promise<void> {
         ...createForm.agentPermissions,
         ...additionalPermissions,
       ],
+      proxy_address_ids: createForm.proxyAddressIds,
     })
     createVisible.value = false
     createForm.password = ''
@@ -871,10 +895,12 @@ function openEdit(user: ManagedUser): void {
   editForm.agentPermissions = agentPermissionOptions
     .filter((permission) => permissions.includes(permission.code))
     .map((permission) => permission.code)
+  editForm.proxyAddressIds = user.proxyAddresses.map((address) => address.id)
   editingCustomPermissions.value = permissions.filter(
     (permission) =>
       !basePermissionCodes.has(permission) &&
-      !agentPermissionCodes.has(permission),
+      !agentPermissionCodes.has(permission) &&
+      !retiredPermissionCodes.has(permission),
   )
   editVisible.value = true
 }
@@ -886,6 +912,19 @@ async function submitEdit(): Promise<void> {
   }
   if (!editingHasEditableFields.value) {
     editVisible.value = false
+    return
+  }
+  if (
+    user.account &&
+    user.profile?.origin !== 'legacy' &&
+    !editForm.proxyAddressIds.length
+  ) {
+    toast.add({
+      severity: 'warn',
+      summary: '请选择至少一个 Proxy 地址',
+      detail: '账号必须保留至少一个可用的远端 Proxy 地址',
+      life: 3600,
+    })
     return
   }
   editSaving.value = true
@@ -907,6 +946,10 @@ async function submitEdit(): Promise<void> {
               ...editForm.agentPermissions,
               ...editingCustomPermissions.value,
             ]
+          : undefined,
+      proxy_address_ids:
+        user.account && user.profile?.origin !== 'legacy'
+          ? editForm.proxyAddressIds
           : undefined,
     })
     editVisible.value = false
@@ -960,6 +1003,11 @@ function openApproval(request: KeyRequest): void {
   approvalRequest.value = request
   approvalMinimumExpiry.value = minimumFutureExpiry()
   approvalExpiresAt.value = defaultExpiry()
+  const managed = adminUsers.value.find(
+    (user) => managedUsername(user) === request.username,
+  )
+  approvalProxyAddressIds.value =
+    managed?.proxyAddresses.map((address) => address.id) ?? []
   approvalVisible.value = true
 }
 
@@ -975,10 +1023,23 @@ async function submitApproval(): Promise<void> {
     })
     return
   }
+  if (!approvalProxyAddressIds.value.length) {
+    toast.add({
+      severity: 'warn',
+      summary: '请选择至少一个 Proxy 地址',
+      detail: '批准密钥申请时必须给账号分配可用地址',
+      life: 3600,
+    })
+    return
+  }
 
   approvalSaving.value = true
   try {
-    await approveKeyRequest(request.id, expiresAt.toISOString())
+    await approveKeyRequest(
+      request.id,
+      expiresAt.toISOString(),
+      approvalProxyAddressIds.value,
+    )
     approvalVisible.value = false
     approvalRequest.value = null
     await refreshAdminUsers()
@@ -1182,7 +1243,8 @@ function parseAdditionalPermissions(
   ].filter(
     (permission) =>
       !basePermissionCodes.has(permission) &&
-      !agentPermissionCodes.has(permission),
+      !agentPermissionCodes.has(permission) &&
+      !retiredPermissionCodes.has(permission),
   )
 
   const invalid = permissions.find(
@@ -1805,7 +1867,7 @@ function clearAgentAuthorizationLocation(): void {
                   <small>决定 Agent 中可使用的本机管理功能。</small>
                 </span>
                 <Tag
-                  :value="isAdmin ? '全部可用' : `${grantedAgentPermissions.length} / 4`"
+                  :value="isAdmin ? '全部可用' : `${grantedAgentPermissions.length} / ${agentPermissionOptions.length}`"
                   :severity="grantedAgentPermissions.length ? 'info' : 'secondary'"
                   rounded
                 />
@@ -2316,6 +2378,12 @@ function clearAgentAuthorizationLocation(): void {
           </div>
         </section>
 
+        <ProxyAddressCatalog
+          :addresses="proxyAddresses"
+          :loading="adminLoading"
+          @changed="refreshAdminUsers"
+        />
+
         <section class="content-card retention-card">
           <div class="retention-copy">
             <span class="retention-icon"><i class="pi pi-history" /></span>
@@ -2445,6 +2513,22 @@ function clearAgentAuthorizationLocation(): void {
             <Column header="有效期" style="min-width: 12rem">
               <template #body="{ data }">
                 <span>{{ data.profile ? formatExpiry(data.profile.expiresAt) : '—' }}</span>
+              </template>
+            </Column>
+            <Column header="Proxy 地址" style="min-width: 10rem">
+              <template #body="{ data }">
+                <div v-if="data.proxyAddresses.length" class="permission-tags">
+                  <Tag
+                    v-for="address in data.proxyAddresses.slice(0, 2)"
+                    :key="address.id"
+                    :value="address.label"
+                    severity="info"
+                  />
+                  <small v-if="data.proxyAddresses.length > 2">
+                    +{{ data.proxyAddresses.length - 2 }}
+                  </small>
+                </div>
+                <Tag v-else value="未分配" severity="danger" />
               </template>
             </Column>
             <Column header="权限" style="min-width: 14rem">
@@ -2584,6 +2668,42 @@ function clearAgentAuthorizationLocation(): void {
         />
         <small>必填，且必须晚于当前时间。</small>
       </div>
+      <section
+        class="agent-permission-picker"
+        aria-labelledby="create-proxy-addresses-title"
+      >
+        <div class="permission-picker-heading">
+          <div>
+            <strong id="create-proxy-addresses-title">可用 Proxy 地址</strong>
+            <small>至少选择一个；地址只会下发给 Agent，不在 Agent 界面显示。</small>
+          </div>
+          <Tag
+            :value="`${createForm.proxyAddressIds.length} 项`"
+            :severity="createForm.proxyAddressIds.length ? 'info' : 'danger'"
+            rounded
+          />
+        </div>
+        <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
+          <label
+            v-for="address in enabledProxyAddresses"
+            :key="address.id"
+            class="permission-choice"
+            :class="{ selected: createForm.proxyAddressIds.includes(address.id) }"
+            :for="`create-proxy-${address.id}`"
+          >
+            <Checkbox
+              v-model="createForm.proxyAddressIds"
+              :input-id="`create-proxy-${address.id}`"
+              :value="address.id"
+            />
+            <span>
+              <strong>{{ address.label }}</strong>
+              <small>{{ address.address }}</small>
+            </span>
+          </label>
+        </div>
+        <small v-else class="form-warning">请先在 Proxy 地址目录中新增并启用地址。</small>
+      </section>
       <section class="fixed-capabilities" aria-labelledby="create-capabilities-title">
         <div class="fixed-capabilities-heading">
           <span class="summary-icon blue"><i class="pi pi-shield" /></span>
@@ -2612,10 +2732,10 @@ function clearAgentAuthorizationLocation(): void {
         <div class="permission-picker-heading">
           <div>
             <strong id="create-agent-permissions-title">Agent 管理权限</strong>
-            <small>按需分配；未勾选的功能会在 Agent 中禁用。</small>
+            <small>按需分配；未勾选时 Agent 隐藏对应功能，并使用内置默认值。</small>
           </div>
           <Tag
-            :value="`${createForm.agentPermissions.length} / 4`"
+            :value="`${createForm.agentPermissions.length} / ${agentPermissionOptions.length}`"
             severity="info"
             rounded
           />
@@ -2651,7 +2771,7 @@ function clearAgentAuthorizationLocation(): void {
           fluid
         />
         <small id="additional-permissions-help">
-          可选。使用逗号、空格或换行分隔 permission code；基础能力和上方四项 Agent 权限会自动排除。
+          可选。使用逗号、空格或换行分隔 permission code；基础能力和上方三项 Agent 权限会自动排除。
         </small>
       </div>
     </form>
@@ -2717,6 +2837,43 @@ function clearAgentAuthorizationLocation(): void {
           该 legacy 配置没有 Web 登录账号；这里只能启用或停用代理配置，有效期、权限和密钥保持只读。
         </span>
       </div>
+      <section
+        v-if="editingUser?.account"
+        class="agent-permission-picker"
+        aria-labelledby="edit-proxy-addresses-title"
+      >
+        <div class="permission-picker-heading">
+          <div>
+            <strong id="edit-proxy-addresses-title">可用 Proxy 地址</strong>
+            <small>至少保留一个；保存后 Agent 会在定期同步时应用。</small>
+          </div>
+          <Tag
+            :value="`${editForm.proxyAddressIds.length} 项`"
+            :severity="editForm.proxyAddressIds.length ? 'info' : 'danger'"
+            rounded
+          />
+        </div>
+        <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
+          <label
+            v-for="address in enabledProxyAddresses"
+            :key="address.id"
+            class="permission-choice"
+            :class="{ selected: editForm.proxyAddressIds.includes(address.id) }"
+            :for="`edit-proxy-${address.id}`"
+          >
+            <Checkbox
+              v-model="editForm.proxyAddressIds"
+              :input-id="`edit-proxy-${address.id}`"
+              :value="address.id"
+            />
+            <span>
+              <strong>{{ address.label }}</strong>
+              <small>{{ address.address }}</small>
+            </span>
+          </label>
+        </div>
+        <small v-else class="form-warning">请先在 Proxy 地址目录中新增并启用地址。</small>
+      </section>
       <template v-if="editingUser?.profile">
         <div
           v-if="editingProfileReadOnly && editingUser.profile.origin !== 'legacy'"
@@ -2790,10 +2947,10 @@ function clearAgentAuthorizationLocation(): void {
           <div class="permission-picker-heading">
             <div>
               <strong id="edit-agent-permissions-title">Agent 管理权限</strong>
-              <small>可随时勾选或取消；保存后 Agent 会按最新权限限制功能。</small>
+              <small>可随时勾选或取消；无权限时 Agent 隐藏功能并使用内置默认值。</small>
             </div>
             <Tag
-              :value="`${editForm.agentPermissions.length} / 4`"
+              :value="`${editForm.agentPermissions.length} / ${agentPermissionOptions.length}`"
               severity="info"
               rounded
             />
@@ -2907,6 +3064,42 @@ function clearAgentAuthorizationLocation(): void {
         批准后服务端会生成新密钥，连接凭据只能由该用户授权的 Agent 领取。
       </span>
     </div>
+    <section
+      class="agent-permission-picker"
+      aria-labelledby="approval-proxy-addresses-title"
+    >
+      <div class="permission-picker-heading">
+        <div>
+          <strong id="approval-proxy-addresses-title">分配 Proxy 地址</strong>
+          <small>至少选择一个；轮换申请会预选账号当前的地址。</small>
+        </div>
+        <Tag
+          :value="`${approvalProxyAddressIds.length} 项`"
+          :severity="approvalProxyAddressIds.length ? 'info' : 'danger'"
+          rounded
+        />
+      </div>
+      <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
+        <label
+          v-for="address in enabledProxyAddresses"
+          :key="address.id"
+          class="permission-choice"
+          :class="{ selected: approvalProxyAddressIds.includes(address.id) }"
+          :for="`approval-proxy-${address.id}`"
+        >
+          <Checkbox
+            v-model="approvalProxyAddressIds"
+            :input-id="`approval-proxy-${address.id}`"
+            :value="address.id"
+          />
+          <span>
+            <strong>{{ address.label }}</strong>
+            <small>{{ address.address }}</small>
+          </span>
+        </label>
+      </div>
+      <small v-else class="form-warning">请先关闭对话框并新增可用地址。</small>
+    </section>
     <div class="form-field approval-expiry-field">
       <label for="approval-expiry">新密钥过期时间</label>
       <DatePicker
@@ -2933,6 +3126,7 @@ function clearAgentAuthorizationLocation(): void {
         label="批准并生成密钥"
         icon="pi pi-check"
         :loading="approvalSaving"
+        :disabled="!approvalProxyAddressIds.length"
         @click="submitApproval"
       />
     </template>

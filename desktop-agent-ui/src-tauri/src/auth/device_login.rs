@@ -186,6 +186,8 @@ pub(crate) fn validate_device_token(
     {
         return Err("密钥已经过期，请先申请新密钥并等待管理员批准".to_string());
     }
+    let proxy_addresses = profile.proxy_addresses.unwrap_or_default();
+    validate_managed_proxy_addresses(&proxy_addresses, false)?;
     validate_key_pair(&private_key_pem, &public_key_pem)?;
     validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
     let agent_access_token = validated_agent_access_token(
@@ -194,6 +196,7 @@ pub(crate) fn validate_device_token(
         refresh_after_seconds,
     )?;
     Ok(DownloadedCredential {
+        proxy_addresses,
         account: AgentAuthAccount {
             username: profile.username,
             role: account.role,
@@ -220,13 +223,7 @@ pub(crate) async fn decode_device_authorization_error(
         .and_then(|value| value.parse::<u32>().ok())
         .filter(|value| (1..=MAX_DEVICE_POLL_SECONDS).contains(value))
         .unwrap_or_else(|| default_interval_seconds.clamp(1, MAX_DEVICE_POLL_SECONDS));
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "读取认证服务响应失败".to_string())?;
-    if bytes.len() > MAX_NORMAL_RESPONSE_BYTES {
-        return Err("Proxy Web 响应过大，已拒绝处理".to_string());
-    }
+    let (_, bytes) = read_bounded_response(response, MAX_NORMAL_RESPONSE_BYTES).await?;
     let envelope = serde_json::from_slice::<ErrorEnvelope>(&bytes)
         .map_err(|_| format!("Proxy Web 返回 HTTP {}", status.as_u16()))?;
     match envelope.error.code.as_str() {

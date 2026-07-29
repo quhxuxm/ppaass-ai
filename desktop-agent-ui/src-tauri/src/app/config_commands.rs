@@ -91,7 +91,7 @@ pub(crate) async fn start_agent(
         let session = runtime.require_authenticated_session()?;
         let config_path = current_ui_config_path(&runtime)
             .unwrap_or_else(|| make_absolute_path(Path::new(&config_path)));
-        let candidate = load_config_from_path(&config_path)?;
+        let (candidate, _) = enforce_config_path_for_account(&config_path, &session.account)?;
         validate_config_candidate_against_trusted_baseline(&runtime, &session.account, &candidate)?;
         let loaded = apply_managed_credentials_to_config(
             &config_path,

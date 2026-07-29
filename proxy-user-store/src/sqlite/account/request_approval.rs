@@ -16,10 +16,12 @@ impl SqliteUserRepository {
             request_id,
             reviewer_account_id,
             expires_at,
+            proxy_address_ids,
             material,
         } = approval;
         let request_id = normalize_request_id(&request_id)?;
         let reviewer_account_id = normalize_account_id(&reviewer_account_id)?;
+        let proxy_address_ids = normalize_proxy_address_ids(&proxy_address_ids)?;
 
         let material = match material {
             ApprovedKeyMaterial::Initial {
@@ -230,6 +232,13 @@ impl SqliteUserRepository {
                 status: KeyRequestStatus::Pending,
             });
         }
+        replace_account_proxy_addresses(
+            &mut transaction,
+            &account.account_id,
+            &proxy_address_ids,
+            timestamp,
+        )
+        .await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)
             .await?
             .ok_or_else(|| {

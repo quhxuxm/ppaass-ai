@@ -14,6 +14,7 @@ import {
   decodeManagedUser,
   decodeSelf,
 } from './decoders/users'
+import { decodeProxyAddress } from './decoders/proxyAddresses'
 import { clearClientSession, request } from './transport'
 import {
   ApiError,
@@ -24,14 +25,17 @@ import type {
   AccessRecordsResult,
   AgentDeviceAuthorizationInspection,
   ChangePasswordPayload,
+  CreateProxyAddressPayload,
   CreateManagedUserPayload,
   KeyRequest,
   ManagedUser,
   ProviderAvailability,
+  ProxyAddress,
   RegisterPayload,
   SelfView,
   SessionState,
   UpdateManagedUserPayload,
+  UpdateProxyAddressPayload,
 } from './types'
 import { asRecord, boolValue, numberValue } from './values'
 
@@ -278,12 +282,16 @@ export async function listPendingKeyRequests(): Promise<KeyRequest[]> {
 export async function approveKeyRequest(
   requestId: string,
   expiresAt: string,
+  proxyAddressIds: string[],
 ): Promise<void> {
   await request<unknown>(
     `/api/v1/admin/key-requests/${encodeURIComponent(requestId)}/approve`,
     {
       method: 'POST',
-      body: JSON.stringify({ expires_at: expiresAt }),
+      body: JSON.stringify({
+        expires_at: expiresAt,
+        proxy_address_ids: proxyAddressIds,
+      }),
     },
   )
 }
@@ -315,4 +323,51 @@ export async function updateAccessLogSettings(
     },
   )
   return decodeAccessLogSettings(body, retentionDays)
+}
+
+export async function listProxyAddresses(): Promise<ProxyAddress[]> {
+  const body = await request<unknown>('/api/v1/admin/proxy-addresses')
+  const root = asRecord(body)
+  const values = Array.isArray(root?.proxy_addresses)
+    ? root.proxy_addresses
+    : Array.isArray(body)
+      ? body
+      : null
+  if (!values) {
+    throw new ApiError('服务器返回的 Proxy 地址目录格式无效', 502)
+  }
+  return values.map(decodeProxyAddress)
+}
+
+export async function createProxyAddress(
+  payload: CreateProxyAddressPayload,
+): Promise<ProxyAddress> {
+  return decodeProxyAddress(
+    await request<unknown>('/api/v1/admin/proxy-addresses', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  )
+}
+
+export async function updateProxyAddress(
+  id: string,
+  payload: UpdateProxyAddressPayload,
+): Promise<ProxyAddress> {
+  return decodeProxyAddress(
+    await request<unknown>(
+      `/api/v1/admin/proxy-addresses/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+    ),
+  )
+}
+
+export function deleteProxyAddress(id: string): Promise<void> {
+  return request<void>(
+    `/api/v1/admin/proxy-addresses/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )
 }

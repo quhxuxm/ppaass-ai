@@ -67,7 +67,7 @@ impl fmt::Debug for AndroidAgentConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AndroidAgentConfig")
-            .field("proxy_addrs", &self.proxy_addrs)
+            .field("proxy_address_count", &self.proxy_addrs.len())
             .field("username", &self.username)
             .field("private_key_pem", &RedactedPrivateKey)
             .field(
@@ -308,7 +308,9 @@ mod tests {
 
         let rendered = format!("{config:?}");
         assert!(rendered.contains("private_key_pem: <redacted>"));
+        assert!(rendered.contains("proxy_address_count: 1"));
         assert!(!rendered.contains("super-secret-private-key"));
+        assert!(!rendered.contains("127.0.0.1:8080"));
     }
 
     #[test]

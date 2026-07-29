@@ -18,8 +18,18 @@ pub(crate) fn start_agent_command(
     config_path: String,
 ) -> Result<AgentState, String> {
     let session = runtime.require_authenticated_session()?;
-    let candidate = load_config_from_path(Path::new(&config_path))?;
+    validate_managed_proxy_addresses(&session.proxy_addresses, false)?;
+    let (candidate, _) =
+        enforce_managed_config_path_for_account(Path::new(&config_path), &session.account)?;
     validate_config_candidate_against_trusted_baseline(runtime, &session.account, &candidate)?;
+    if !session
+        .account
+        .has_permission(AGENT_PACKET_CAPTURE_PERMISSION)
+    {
+        runtime
+            .packet_capture_enabled
+            .store(false, Ordering::Release);
+    }
 
     #[cfg(windows)]
     {
@@ -27,14 +37,21 @@ pub(crate) fn start_agent_command(
     }
 
     #[cfg(not(windows))]
-    start_agent_inner(runtime, PathBuf::from(config_path), true)
+    start_agent_inner(
+        runtime,
+        PathBuf::from(config_path),
+        session.proxy_addresses,
+        true,
+    )
 }
 
 pub(crate) fn start_agent_inner(
     runtime: &AgentRuntime,
     config_path: PathBuf,
+    proxy_addresses: Vec<String>,
     allow_elevation: bool,
 ) -> Result<AgentState, String> {
+    validate_managed_proxy_addresses(&proxy_addresses, false)?;
     apply_log_level_from_config_path(runtime, &config_path)?;
 
     let (running, _) = process_status(runtime)?;
@@ -55,6 +72,7 @@ pub(crate) fn start_agent_inner(
     }
     let embedded = spawn_embedded_agent(
         config_path.clone(),
+        proxy_addresses,
         runtime.logs.clone(),
         runtime.last_error.clone(),
         runtime.packet_capture_enabled.load(Ordering::Acquire),
@@ -90,6 +108,38 @@ pub(crate) fn stop_agent_inner_command(runtime: &AgentRuntime) -> Result<AgentSt
     {
         stop_embedded_agent(runtime)?;
         agent_state(runtime)
+    }
+}
+
+pub(crate) fn restart_agent_after_managed_config_update(
+    runtime: &AgentRuntime,
+    config_path: &Path,
+    start_when_stopped: bool,
+) -> Result<AgentState, String> {
+    let current = get_agent_state_inner(runtime)?;
+    if !current.running && !start_when_stopped {
+        return Ok(current);
+    }
+    if current.running {
+        let stopped = stop_agent_inner_command(runtime)?;
+        if stopped.running {
+            return Err("Agent 未能停止，无法应用最新受管配置".to_string());
+        }
+    }
+    #[cfg(windows)]
+    {
+        start_agent_via_windows_service(config_path.to_string_lossy().to_string(), &runtime.logs)
+    }
+    #[cfg(not(windows))]
+    {
+        // 权限同步不得触发 helper 安装或升级；仅复用当前产品运行路径。
+        let session = runtime.require_authenticated_session()?;
+        start_agent_inner(
+            runtime,
+            config_path.to_path_buf(),
+            session.proxy_addresses,
+            false,
+        )
     }
 }
 
@@ -207,6 +257,7 @@ pub(crate) fn process_status(runtime: &AgentRuntime) -> Result<(bool, Option<u32
 
 pub(crate) fn spawn_embedded_agent(
     config_path: PathBuf,
+    proxy_addresses: Vec<String>,
     logs: UiLogBuffer,
     last_error: Arc<Mutex<Option<String>>>,
     resume_packet_capture: bool,
@@ -272,6 +323,7 @@ pub(crate) fn spawn_embedded_agent(
                 Ok(runtime) => {
                     let result = runtime.block_on(desktop_agent_be::run_agent_with_packet_capture(
                         config,
+                        proxy_addresses,
                         shutdown_for_thread,
                         thread_packet_capture,
                     ));

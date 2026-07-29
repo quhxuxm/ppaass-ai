@@ -44,6 +44,7 @@ impl YamuxSessionManager {
             ProxyStreamRoute::DirectTcp => {
                 let (stream, stream_id) = new_direct_tcp_target_stream(
                     &self.config,
+                    &self.proxy_addrs,
                     self.get_proxy_bind_ip(),
                     self.get_proxy_bind_interface(),
                     address,
@@ -123,6 +124,7 @@ impl YamuxSessionManager {
                 {
                     let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new(
                         &self.config,
+                        &self.proxy_addrs,
                         self.get_proxy_bind_ip(),
                         self.get_proxy_bind_interface(),
                     );

@@ -68,6 +68,7 @@ pub(crate) struct AgentDeviceTokenResponse {
 pub(crate) struct AgentDeviceProfileResponse {
     pub(crate) username: String,
     pub(crate) permissions: Vec<String>,
+    pub(crate) proxy_addresses: Vec<String>,
     pub(crate) enabled: bool,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,
@@ -119,6 +120,7 @@ pub(crate) struct MeProfileResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) public_key_pem: Option<String>,
     pub(crate) permissions: Vec<String>,
+    pub(crate) proxy_addresses: Vec<String>,
     pub(crate) enabled: bool,
     pub(crate) origin: UserOrigin,
     pub(crate) key_version: i64,
@@ -203,6 +205,7 @@ pub(crate) struct AdminManagedUserResponse {
     pub(crate) profile: Option<AdminUserProfileResponse>,
     pub(crate) has_private_key: bool,
     pub(crate) providers: Vec<ExternalIdentity>,
+    pub(crate) proxy_addresses: Vec<ProxyAddressResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -215,6 +218,21 @@ pub(crate) struct AdminUserProfileResponse {
     pub(crate) expires_at: Option<i64>,
     pub(crate) created_at: i64,
     pub(crate) updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProxyAddressResponse {
+    pub(crate) proxy_address_id: String,
+    pub(crate) label: String,
+    pub(crate) address: String,
+    pub(crate) enabled: bool,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProxyAddressesResponse {
+    pub(crate) proxy_addresses: Vec<ProxyAddressResponse>,
 }
 
 #[derive(Serialize)]
@@ -240,11 +258,30 @@ pub(crate) struct AdminKeyRotationResponse {
 
 impl From<ManagedUser> for AdminManagedUserResponse {
     fn from(user: ManagedUser) -> Self {
+        let proxy_addresses = user
+            .assigned_proxy_addresses
+            .into_iter()
+            .map(ProxyAddressResponse::from)
+            .collect();
         Self {
             account: user.account,
             profile: user.profile.map(AdminUserProfileResponse::from),
             has_private_key: user.has_private_key,
             providers: user.providers,
+            proxy_addresses,
+        }
+    }
+}
+
+impl From<ProxyAddress> for ProxyAddressResponse {
+    fn from(address: ProxyAddress) -> Self {
+        Self {
+            proxy_address_id: address.proxy_address_id,
+            label: address.label,
+            address: address.address,
+            enabled: address.enabled,
+            created_at: address.created_at,
+            updated_at: address.updated_at,
         }
     }
 }

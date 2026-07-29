@@ -75,6 +75,7 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v8_proxy_address_tables(&store).await;
     sqlx::query("PRAGMA user_version = 4")
         .execute(&store.pool)
         .await
@@ -198,6 +199,7 @@ async fn migrates_v2_database_to_key_request_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v8_proxy_address_tables(&store).await;
     sqlx::query("PRAGMA user_version = 2")
         .execute(&store.pool)
         .await
@@ -305,6 +307,7 @@ async fn migrates_v3_duplicate_access_rows_into_address_counts() {
         .await
         .unwrap();
     }
+    drop_v8_proxy_address_tables(&store).await;
     sqlx::query("PRAGMA user_version = 3")
         .execute(&store.pool)
         .await
@@ -350,7 +353,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 7")
+    sqlx::query("PRAGMA user_version = 9")
         .execute(&pool)
         .await
         .unwrap();
@@ -369,5 +372,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 9);
 }

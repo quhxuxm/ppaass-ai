@@ -67,6 +67,7 @@ async fn failed_initial_approval_rolls_back_and_request_remains_pending() {
             request_id: "request-initial".to_string(),
             reviewer_account_id: "admin-one".to_string(),
             expires_at: now() + 3600,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Rotate {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"wrong-kind-envelope".to_vec(),

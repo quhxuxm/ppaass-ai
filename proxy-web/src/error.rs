@@ -240,6 +240,30 @@ impl From<UserRepositoryError> for ApiError {
                 message: "当前账号容量已满，请联系管理员".to_string(),
                 retry_after_seconds: None,
             },
+            UserRepositoryError::ProxyAddressCapacity => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "proxy_address_capacity",
+                message: "Proxy 地址目录容量已满".to_string(),
+                retry_after_seconds: None,
+            },
+            UserRepositoryError::ProxyAddressNotFound(_) => Self::not_found("Proxy 地址不存在"),
+            UserRepositoryError::ProxyAddressConflict(_) => {
+                Self::conflict("proxy_address_exists", "Proxy 地址或 ID 已存在")
+            }
+            UserRepositoryError::ProxyAddressInUse(_) => Self::conflict(
+                "proxy_address_in_use",
+                "该 Proxy 地址仍被账号分配，请先重新分配相关账号",
+            ),
+            UserRepositoryError::ProxyAddressDisabled(_) => {
+                Self::conflict("proxy_address_disabled", "不能分配已停用的 Proxy 地址")
+            }
+            UserRepositoryError::ProxyAddressMustBeDisabled(_) => {
+                Self::conflict("proxy_address_not_disabled", "Proxy 地址必须先停用才能删除")
+            }
+            UserRepositoryError::ProxyAddressNotAssigned(_) => Self::conflict(
+                "proxy_address_not_assigned",
+                "账号尚未分配可用的 Proxy 地址，请联系管理员",
+            ),
             UserRepositoryError::AgentDeviceAuthorizationConflict => Self::internal(),
             error => {
                 error!(error = %error, "用户管理 API 数据库操作失败");

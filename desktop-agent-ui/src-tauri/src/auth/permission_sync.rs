@@ -13,6 +13,7 @@ struct AgentPermissionSyncResponse {
 pub(crate) struct AgentPermissionSnapshot {
     pub(crate) role: String,
     pub(crate) permissions: Option<Vec<String>>,
+    pub(crate) proxy_addresses: Vec<String>,
     pub(crate) profile_enabled: Option<bool>,
     pub(crate) key_version: Option<i64>,
     pub(crate) expires_at: Option<i64>,
@@ -24,6 +25,7 @@ pub(crate) struct AgentPermissionSnapshot {
 pub(crate) struct AgentPermissionSyncFailure {
     pub(crate) message: String,
     pub(crate) credentials_invalid: bool,
+    pub(crate) proxy_address_not_assigned: bool,
 }
 
 pub(crate) async fn fetch_agent_permission_snapshot(
@@ -43,22 +45,48 @@ pub(crate) async fn fetch_agent_permission_snapshot(
         return Err(AgentPermissionSyncFailure {
             message: "权限同步凭据失效，请重新登录以恢复同步".to_string(),
             credentials_invalid: true,
+            proxy_address_not_assigned: false,
         });
     }
     if !response.status().is_success() {
+        let status = response.status();
+        let proxy_address_not_assigned = if status == StatusCode::CONFLICT {
+            read_bounded_response(response, MAX_NORMAL_RESPONSE_BYTES)
+                .await
+                .ok()
+                .and_then(|(_, bytes)| serde_json::from_slice::<ErrorEnvelope>(&bytes).ok())
+                .is_some_and(|envelope| envelope.error.code == "proxy_address_not_assigned")
+        } else {
+            false
+        };
         return Err(AgentPermissionSyncFailure {
-            message: format!(
-                "权限同步暂时失败（HTTP {}），将保留上次已验证权限",
-                response.status().as_u16()
-            ),
+            message: if proxy_address_not_assigned {
+                "管理员未分配 Proxy 地址".to_string()
+            } else {
+                format!(
+                    "权限同步暂时失败（HTTP {}），将保留上次已验证权限",
+                    status.as_u16()
+                )
+            },
             credentials_invalid: false,
+            proxy_address_not_assigned,
         });
     }
     let response =
         decode_json_response::<AgentPermissionSyncResponse>(response, MAX_NORMAL_RESPONSE_BYTES)
             .await
             .map_err(transient_error)?;
-    validate_permission_sync_response(response, expected_username).map_err(transient_error)
+    validate_permission_sync_response(response, expected_username).map_err(|message| {
+        if message == "管理员未分配 Proxy 地址" {
+            AgentPermissionSyncFailure {
+                message,
+                credentials_invalid: false,
+                proxy_address_not_assigned: true,
+            }
+        } else {
+            transient_error(message)
+        }
+    })
 }
 
 fn validate_permission_sync_response(
@@ -79,6 +107,10 @@ fn validate_permission_sync_response(
             return Err("权限同步返回了其他 Proxy 用户的数据".to_string());
         }
         validate_permissions(&profile.permissions)?;
+        let proxy_addresses = profile.proxy_addresses.as_deref().unwrap_or_default();
+        if validate_managed_proxy_addresses(proxy_addresses, false).is_err() {
+            return Err("管理员未分配 Proxy 地址".to_string());
+        }
     } else if response.key_state == "active" {
         return Err("权限同步缺少 active 用户配置".to_string());
     }
@@ -102,6 +134,10 @@ fn validate_permission_sync_response(
     Ok(AgentPermissionSnapshot {
         role: response.account.role,
         permissions: profile.as_ref().map(|profile| profile.permissions.clone()),
+        proxy_addresses: profile
+            .as_ref()
+            .and_then(|profile| profile.proxy_addresses.clone())
+            .unwrap_or_default(),
         profile_enabled: profile.as_ref().map(|profile| profile.enabled),
         key_version: profile.as_ref().map(|profile| profile.key_version),
         expires_at: profile.as_ref().and_then(|profile| profile.expires_at),
@@ -159,6 +195,7 @@ fn transient_error(message: String) -> AgentPermissionSyncFailure {
     AgentPermissionSyncFailure {
         message,
         credentials_invalid: false,
+        proxy_address_not_assigned: false,
     }
 }
 
@@ -181,6 +218,7 @@ mod tests {
         let snapshot = AgentPermissionSnapshot {
             role: "user".to_string(),
             permissions: Some(vec!["agent.packet_capture".to_string()]),
+            proxy_addresses: vec!["proxy.example.com:443".to_string()],
             profile_enabled: Some(true),
             key_version: Some(7),
             expires_at: Some(4_100_000_000),
@@ -200,6 +238,7 @@ mod tests {
         let snapshot = AgentPermissionSnapshot {
             role: "admin".to_string(),
             permissions: Some(Vec::new()),
+            proxy_addresses: vec!["proxy.example.com:443".to_string()],
             profile_enabled: Some(true),
             key_version: Some(8),
             expires_at: None,
@@ -218,6 +257,7 @@ mod tests {
         let snapshot = AgentPermissionSnapshot {
             role: "user".to_string(),
             permissions: None,
+            proxy_addresses: Vec::new(),
             profile_enabled: None,
             key_version: None,
             expires_at: None,

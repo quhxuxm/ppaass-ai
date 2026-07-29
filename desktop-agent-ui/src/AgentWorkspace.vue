@@ -87,6 +87,8 @@ const visibleTabs = computed(() =>
     (tab) =>
       (tab.key !== "capture" ||
         capabilities.value.canCapturePackets) &&
+      (tab.key !== "egress" ||
+        capabilities.value.canEditEgress) &&
       (tab.key !== "toml" ||
         capabilities.value.canViewRawConfig)
   )
@@ -216,7 +218,10 @@ function setLanguage(language: AppLocale) {
         />
 
         <EgressView
-          v-else-if="state.activeTab === 'egress'"
+          v-else-if="
+            state.activeTab === 'egress' &&
+            capabilities.canEditEgress
+          "
           :summary="summary"
           :config-locked="configLocked"
           :can-edit-egress="capabilities.canEditEgress"
@@ -258,12 +263,14 @@ function setLanguage(language: AppLocale) {
           "
           :summary="summary"
           :config-path="state.config.path"
+          :config-locked="configLocked"
           :agent-running="running"
           :capture-enabled="state.packetCapture.enabled"
           :refresh-token="state.packetCaptureRefreshToken"
           :busy="state.busy"
           @toggle-capture="togglePermittedPacketCapture"
           @clear-capture="clearPermittedPacketCapture"
+          @set-field="setField"
         />
 
         <LogsView

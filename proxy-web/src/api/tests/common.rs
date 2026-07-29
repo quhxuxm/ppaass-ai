@@ -16,6 +16,7 @@ pub(super) use tower::ServiceExt;
 pub(super) const MASTER_SECRET: &str = "test-only-private-key-secret-with-32-plus-bytes";
 pub(super) const FUTURE_EXPIRATION: i64 = 4_102_444_800;
 pub(super) const LATER_FUTURE_EXPIRATION: i64 = 4_102_531_200;
+pub(super) const TEST_PROXY_ADDRESS_ID: &str = "pxy_web_test";
 
 pub(super) fn test_proxy_identity_public_key() -> Arc<str> {
     static KEY: std::sync::OnceLock<Arc<str>> = std::sync::OnceLock::new();
@@ -83,6 +84,15 @@ pub(super) async fn test_app_with_components() -> (
         .await
         .unwrap();
     store
+        .create_proxy_address(NewProxyAddress {
+            proxy_address_id: TEST_PROXY_ADDRESS_ID.to_string(),
+            label: "Web test proxy".to_string(),
+            address: "127.0.0.1:8080".to_string(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    store
         .bootstrap_admin_if_absent(NewAdminAccount {
             account_id: "acc_admin".to_string(),
             login_name: "admin".to_string(),
@@ -101,6 +111,7 @@ pub(super) async fn test_app_with_components() -> (
         accounts: store.clone(),
         access_logs: store.clone(),
         device_authorizations: store.clone(),
+        proxy_addresses: store.clone(),
         passwords,
         sessions: sessions.clone(),
         agent_tokens,
@@ -275,7 +286,8 @@ pub(super) async fn create_approved_user(
                     json!({
                         "username": username,
                         "password": password,
-                        "expires_at": FUTURE_EXPIRATION
+                        "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
                     })
                     .to_string(),
                 ))

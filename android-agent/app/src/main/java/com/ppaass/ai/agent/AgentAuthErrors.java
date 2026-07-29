@@ -18,6 +18,10 @@ final class AgentAuthErrors {
             return new AgentAuthClient.AuthException(
                     "当前没有可用密钥，请先在用户中心提交申请并等待管理员批准");
         }
+        if ("proxy_address_not_assigned".equals(code)) {
+            return new AgentAuthClient.AuthException(
+                    "管理员尚未为当前账户分配 Proxy 地址");
+        }
         if ("unauthorized".equals(code)) {
             return new AgentAuthClient.AuthException(
                     "Agent 权限同步凭据已失效");

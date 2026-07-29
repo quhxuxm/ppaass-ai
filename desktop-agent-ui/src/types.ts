@@ -5,7 +5,6 @@ export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
   listen_addr: string;
-  proxy_addrs: string[];
   transport_mode: AgentTransportMode;
   udp_session_pool_size: number;
   connect_timeout_secs: number;
@@ -206,7 +205,7 @@ export type DirectRuleGroup = {
   items: Array<{ rule: string; index: number }>;
 };
 
-export type OverviewCardKey = "status" | "proxy" | "egress" | "speed" | "traffic" | "dns" | "tun" | "policy";
+export type OverviewCardKey = "status" | "proxy" | "speed" | "traffic" | "dns" | "tun" | "policy";
 
 export type OverviewCardDefinition = {
   key: OverviewCardKey;

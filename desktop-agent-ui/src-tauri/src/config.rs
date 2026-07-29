@@ -36,12 +36,14 @@ const MAX_UDP_SESSION_POOL_SIZE: u64 = 8;
 
 static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+mod account_defaults;
 mod edit;
 mod paths;
 mod permissions;
 mod storage;
 mod summary;
 
+pub(crate) use account_defaults::*;
 pub(crate) use edit::*;
 pub(crate) use paths::*;
 pub(crate) use permissions::*;

@@ -56,6 +56,14 @@ export interface ManagedUser {
   profile: ManagedProxyProfile | null
   hasPrivateKey: boolean
   keyState: KeyState
+  proxyAddresses: ProxyAddress[]
+}
+
+export interface ProxyAddress {
+  id: string
+  label: string
+  address: string
+  enabled: boolean
 }
 
 export interface KeyRequest {
@@ -115,6 +123,7 @@ export interface ChangePasswordPayload {
 export interface CreateManagedUserPayload extends RegisterPayload {
   expires_at: string
   permissions?: string[]
+  proxy_address_ids: string[]
 }
 
 export interface UpdateManagedUserPayload {
@@ -123,6 +132,19 @@ export interface UpdateManagedUserPayload {
   enabled?: boolean
   expires_at?: string | null
   permissions?: string[]
+  proxy_address_ids?: string[]
+}
+
+export interface CreateProxyAddressPayload {
+  label?: string
+  address: string
+  enabled?: boolean
+}
+
+export interface UpdateProxyAddressPayload {
+  label?: string
+  address?: string
+  enabled?: boolean
 }
 
 export class ApiError extends Error {

@@ -2,10 +2,8 @@
 import Card from "primevue/card";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import AppIcon from "../components/AppIcon";
-import Message from "primevue/message";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
-import Textarea from "primevue/textarea";
 import { compressionOptions, transportModeOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
@@ -20,10 +18,16 @@ const emit = defineEmits<{
 }>();
 
 const protectedEgressFields = new Set<keyof AgentConfigSummary>([
-  "proxy_addrs",
+  "transport_mode",
   "connect_timeout_secs",
   "compression_mode",
-  "udp_session_pool_size"
+  "udp_session_pool_size",
+  "udp_yamux_sessions",
+  "udp_yamux_max_streams_per_session",
+  "udp_yamux_open_stream_timeout_secs",
+  "udp_yamux_keepalive_interval_secs",
+  "udp_yamux_connection_write_timeout_secs",
+  "udp_yamux_stream_window_size_kb"
 ]);
 
 function setEgressField(
@@ -39,37 +43,7 @@ function setEgressField(
 
 <template>
   <div class="content-grid egress-grid">
-    <Message
-      v-if="!canEditEgress"
-      class="span-12"
-      severity="warn"
-      :closable="false"
-    >
-      当前账户没有出口配置编辑权限。远端出口地址、连接超时、消息压缩格式和 UDP 会话数仅供查看。
-    </Message>
-
-    <Card class="panel span-5 egress-endpoints-panel">
-      <template #title>
-        <div class="panel-heading inline">
-          <h2>公共远端出口</h2>
-          <span>{{ summary.proxy_addrs.length }} 个节点</span>
-        </div>
-      </template>
-      <template #content>
-        <label class="field">
-          <span><AppIcon name="server" />节点</span>
-          <Textarea
-            :model-value="summary.proxy_addrs.join('\n')"
-            :disabled="configLocked || !canEditEgress"
-            rows="5"
-            auto-resize
-            @update:model-value="setEgressField('proxy_addrs', $event)"
-          />
-        </label>
-      </template>
-    </Card>
-
-    <Card class="panel span-7 egress-transport-panel">
+    <Card class="panel span-12 egress-transport-panel">
       <template #title>
         <div class="panel-heading inline">
           <h2>传输策略</h2>
@@ -85,8 +59,8 @@ function setEgressField(
               :options="transportModeOptions"
               option-label="label"
               option-value="value"
-              :disabled="configLocked"
-              @update:model-value="emit('set-field', 'transport_mode', $event)"
+              :disabled="configLocked || !canEditEgress"
+              @update:model-value="setEgressField('transport_mode', $event)"
             />
             <small>自动：原生 UDP 超时后仅该 session 转 TCP/Yamux；TCP 始终走 TCP。</small>
           </label>
@@ -202,36 +176,36 @@ function setEgressField(
           <div class="field-pair">
             <label class="field">
               <span><AppIcon name="share" />外层连接</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_sessions', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_sessions" :min="1" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_sessions', $event)" />
               <small>Yamux 外层连接上限。</small>
             </label>
             <label class="field">
               <span><AppIcon name="network" />并发子流</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_max_streams_per_session', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_max_streams_per_session" :min="1" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_max_streams_per_session', $event)" />
               <small>单连接最大 UDP 子流数。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><AppIcon name="timer" />打开子流超时</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_open_stream_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_open_stream_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_open_stream_timeout_secs', $event)" />
               <small>申请 Yamux 子流的超时。</small>
             </label>
             <label class="field">
               <span><AppIcon name="heart-pulse" />Keepalive</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_keepalive_interval_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_keepalive_interval_secs" suffix=" s" :min="0" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_keepalive_interval_secs', $event)" />
               <small>Yamux 保活间隔；0 为关闭。</small>
             </label>
           </div>
           <div class="field-pair">
             <label class="field">
               <span><AppIcon name="send" />写超时</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_connection_write_timeout_secs', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_connection_write_timeout_secs" suffix=" s" :min="1" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_connection_write_timeout_secs', $event)" />
               <small>Yamux 写入超时。</small>
             </label>
             <label class="field">
               <span><AppIcon name="panels" />流控窗口</span>
-              <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'udp_yamux_stream_window_size_kb', $event)" />
+              <ConfigNumberInput :model-value="summary.udp_yamux_stream_window_size_kb" suffix=" KB" :min="256" :allow-empty="false" :disabled="configLocked || !canEditEgress" :use-grouping="false" @update:model-value="setEgressField('udp_yamux_stream_window_size_kb', $event)" />
               <small>单个 UDP 子流缓冲窗口。</small>
             </label>
           </div>

@@ -97,6 +97,7 @@ pub struct KeyRequestApproval {
     pub request_id: String,
     pub reviewer_account_id: String,
     pub expires_at: i64,
+    pub proxy_address_ids: Vec<String>,
     pub material: ApprovedKeyMaterial,
 }
 

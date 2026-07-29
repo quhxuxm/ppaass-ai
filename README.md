@@ -70,11 +70,9 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Web.
 
-5. Start the agent:
-
-```bash
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
-```
+5. Start the Agent from the authenticated Desktop Agent UI. The standalone
+   `desktop-agent` product binary intentionally refuses normal proxy traffic because it has no
+   authenticated profile/session.
 
 6. Configure your applications to use the proxy at `127.0.0.1:1080`
 
@@ -110,8 +108,7 @@ macOS TUN mode can run the existing `desktop-agent` binary in a privileged helpe
 
 ```toml
 listen_addr = "127.0.0.1:1080"      # Local proxy address
-proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
-username = "local-test"                    # Legacy CLI compatibility username
+username = "local-test"                    # Managed account identity written by the authenticated UI
 private_key_path = "keys/local-test.pem"  # Local-only private key; never commit it
 transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
 udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
@@ -130,6 +127,12 @@ quic_policy = "allow"               # application UDP/443 policy: allow direct/p
 [tun.packet_capture]
 file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
 ```
+
+When using the Desktop Agent UI, Proxy addresses are assigned by Proxy Web after login and are
+kept out of `agent.toml`, the UI, and logs. Product traffic requires an authenticated runtime
+session; the removed `proxy_addrs` TOML field and the old public `--proxy` CLI argument are
+intentionally rejected. The separate headless harness is built only behind the
+`integration-test-harness` feature for CI.
 
 Desktop packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It covers TUN traffic plus local HTTP and SOCKS5 proxy connections, including SOCKS5 UDP, in both directions over IPv4 and IPv6. The output opens directly in Wireshark. TUN packets are recorded at the PPAASS tunnel boundary; explicit proxy streams are represented as valid raw IP packets between the real client and agent listener endpoints. Application-level encryption such as TLS remains encrypted.
 PCAP writes run on a dedicated buffered writer thread. The packet path uses a bounded non-blocking queue; if storage cannot keep up, capture copies are dropped instead of slowing proxy traffic.
@@ -207,7 +210,7 @@ Set log level via environment variable:
 
 ```bash
 RUST_LOG=info cargo run -p proxy
-RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent
+cd desktop-agent-ui && RUST_LOG=debug npm run tauri dev
 RUST_LOG=proxy_web=debug,proxy_user_store=debug cargo run -p proxy-web
 ```
 

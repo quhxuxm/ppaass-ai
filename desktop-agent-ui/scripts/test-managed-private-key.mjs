@@ -24,8 +24,8 @@ try {
   assert.doesNotMatch(egressView, /身份凭据|managed-credential-status/);
   assert.doesNotMatch(egressView, /凭据已由 Proxy Web 托管|Agent 不展示或接受手工更改/);
   assert.match(egressView, /class="content-grid egress-grid"/);
-  assert.match(egressView, /class="panel span-5 egress-endpoints-panel"/);
-  assert.match(egressView, /class="panel span-7 egress-transport-panel"/);
+  assert.doesNotMatch(egressView, /egress-endpoints-panel|proxy_addrs|远端出口地址/);
+  assert.match(egressView, /class="panel span-12 egress-transport-panel"/);
   assert.match(egressView, /summary\.transport_mode === 'tcp' \? 'span-12' : 'span-5'/);
   assert.match(egressView, /class="panel span-7 egress-native-udp-panel"/);
   assert.match(egressView, /class="panel span-12 egress-yamux-panel"/);
@@ -188,6 +188,7 @@ try {
   assert.doesNotMatch(packagedAgentConfig, /proxy_web_url = "http:\/\/127\.0\.0\.1:8787"/);
   assert.doesNotMatch(packagedAgentConfig, /^\s*username\s*=/m);
   assert.doesNotMatch(packagedAgentConfig, /^\s*private_key_path\s*=/m);
+  assert.doesNotMatch(packagedAgentConfig, /^\s*proxy_addrs\s*=/m);
 
   const {
     fallbackRawConfig,

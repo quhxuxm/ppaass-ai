@@ -11,7 +11,7 @@ pub(crate) async fn agent_login(
     validate_native_agent_request(&headers)?;
     let request = payload.map_err(ApiError::from_json_rejection)?.0;
     let account = authenticate_password_account(&state, &headers, peer, request).await?;
-    let (profile, private_key) = load_agent_credentials(&state, &account).await?;
+    let (profile, private_key, proxy_addresses) = load_agent_credentials(&state, &account).await?;
     state
         .accounts
         .update_last_login(&account.account_id, current_timestamp())
@@ -31,6 +31,7 @@ pub(crate) async fn agent_login(
     Ok(Json(agent_credential_response(
         account,
         profile,
+        proxy_addresses,
         private_key,
         issued,
     )))
@@ -49,7 +50,15 @@ pub(crate) async fn get_agent_profile(
         .await?
         .ok_or_else(ApiError::unauthorized)?;
     let key_state = key_state(&managed, current_timestamp());
-    let profile = managed.profile.map(agent_profile_response);
+    let proxy_addresses = managed
+        .profile
+        .as_ref()
+        .map(|_| assigned_proxy_addresses(&managed, &account))
+        .transpose()?;
+    let profile = managed
+        .profile
+        .zip(proxy_addresses)
+        .map(|(profile, addresses)| agent_profile_response(profile, addresses));
     let issued = state
         .agent_tokens
         .issue(&account.account_id)
@@ -99,12 +108,13 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 fn agent_credential_response(
     account: WebAccount,
     profile: UserRecord,
+    proxy_addresses: Vec<String>,
     private_key: PrivateKeyResponse,
     issued: crate::agent_tokens::IssuedAgentAccessToken,
 ) -> AgentCredentialResponse {
     AgentCredentialResponse {
         account,
-        profile: agent_profile_response(profile),
+        profile: agent_profile_response(profile, proxy_addresses),
         public_key_pem: private_key.public_key_pem,
         proxy_identity_public_key_pem: private_key.proxy_identity_public_key_pem,
         private_key_pem: private_key.private_key_pem,
@@ -114,10 +124,14 @@ fn agent_credential_response(
     }
 }
 
-pub(crate) fn agent_profile_response(profile: UserRecord) -> AgentDeviceProfileResponse {
+pub(crate) fn agent_profile_response(
+    profile: UserRecord,
+    proxy_addresses: Vec<String>,
+) -> AgentDeviceProfileResponse {
     AgentDeviceProfileResponse {
         username: profile.username,
         permissions: profile.permissions,
+        proxy_addresses,
         enabled: profile.enabled,
         key_version: profile.key_version,
         expires_at: profile.expires_at,

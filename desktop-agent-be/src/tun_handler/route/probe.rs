@@ -59,7 +59,7 @@ pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterf
 fn list_routes() -> Option<Vec<Route>> {
     let mut manager = RouteManager::new().ok()?;
     let routes = manager.list().ok()?;
-    debug!("当前系统路由表：\n{routes:?}");
+    debug!(route_count = routes.len(), "已读取当前系统路由表");
     Some(routes)
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                         let ip = sa.ip();
                         // loopback proxy 不需要旁路路由，安装反而可能干扰本机访问。
                         if ip.is_loopback() {
-                            debug!("代理地址 {entry} 解析为回环地址 {ip}；跳过 TUN 旁路路由");
+                            debug!("受管 Proxy 节点解析为回环地址；跳过 TUN 旁路路由");
                             continue;
                         }
                         if !out.contains(&ip) {
@@ -98,11 +98,11 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                         resolved = true;
                     }
                 }
-                Err(e) => debug!("解析代理地址 {entry} 失败：{e}"),
+                Err(_) => debug!("解析一个受管 Proxy 节点失败"),
             }
         }
         if !resolved {
-            warn!("无法解析代理地址 {entry}；旁路路由已跳过");
+            warn!("无法解析一个受管 Proxy 节点；旁路路由已跳过");
         }
     }
     out

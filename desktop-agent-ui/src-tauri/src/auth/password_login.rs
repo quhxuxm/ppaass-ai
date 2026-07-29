@@ -145,6 +145,11 @@ pub(crate) async fn authenticate_rotate_and_download(
         best_effort_logout(&client, &base_url, &csrf_token).await;
         return Err("密钥已经过期，请先申请新密钥并等待管理员批准".to_string());
     }
+    let proxy_addresses = profile.proxy_addresses.clone().unwrap_or_default();
+    if let Err(error) = validate_managed_proxy_addresses(&proxy_addresses, false) {
+        best_effort_logout(&client, &base_url, &csrf_token).await;
+        return Err(error);
+    }
 
     let rotate_response = match client
         .post(endpoint(&base_url, "api/v1/me/rotate-key")?)
@@ -189,6 +194,7 @@ pub(crate) async fn authenticate_rotate_and_download(
         "Agent 用户密钥已轮换并校验成功"
     );
     Ok(DownloadedCredential {
+        proxy_addresses,
         account: AgentAuthAccount {
             username: profile.username.clone(),
             role: login.account.role,

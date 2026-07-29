@@ -19,6 +19,10 @@ final class AgentSessionStore {
     static final String PREF_ACCOUNT_STATUS = "managed_account_status";
     static final String PREF_KEY_STATE = "managed_key_state";
     static final String PREF_PERMISSION_REVISION = "managed_permission_revision";
+    static final String PREF_PROXY_ASSIGNMENT_STATE =
+            "managed_proxy_assignment_state";
+    static final String PROXY_ASSIGNMENT_ASSIGNED = "assigned";
+    static final String PROXY_ASSIGNMENT_MISSING = "missing";
 
     private static final String STATE_CURRENT = "current";
     private static final String STATE_LEGACY = "legacy";
@@ -34,6 +38,12 @@ final class AgentSessionStore {
             AgentAuthClient.LoginResult result) {
         editor.putString(PREF_ROLE, result.role)
                 .putStringSet(PREF_PERMISSIONS, new HashSet<>(result.permissions))
+                .putString(
+                        ManagedProxyAddresses.PREF_PROXY_ADDRESSES,
+                        ManagedProxyAddresses.serialize(result.proxyAddresses))
+                .putString(
+                        PREF_PROXY_ASSIGNMENT_STATE,
+                        PROXY_ASSIGNMENT_ASSIGNED)
                 .putString(PREF_ACCESS_TOKEN, result.accessToken)
                 .putLong(PREF_ACCESS_TOKEN_EXPIRES_AT, result.accessTokenExpiresAt)
                 .putInt(PREF_REFRESH_SECONDS, result.refreshAfterSeconds)
@@ -81,6 +91,12 @@ final class AgentSessionStore {
         SharedPreferences.Editor editor = preferences.edit()
                 .putString(PREF_ROLE, result.role)
                 .putStringSet(PREF_PERMISSIONS, new HashSet<>(result.permissions))
+                .putString(
+                        ManagedProxyAddresses.PREF_PROXY_ADDRESSES,
+                        ManagedProxyAddresses.serialize(result.proxyAddresses))
+                .putString(
+                        PREF_PROXY_ASSIGNMENT_STATE,
+                        PROXY_ASSIGNMENT_ASSIGNED)
                 .putString(PREF_ACCESS_TOKEN, result.accessToken)
                 .putLong(PREF_ACCESS_TOKEN_EXPIRES_AT, result.accessTokenExpiresAt)
                 .putInt(PREF_REFRESH_SECONDS, result.refreshAfterSeconds)
@@ -130,6 +146,45 @@ final class AgentSessionStore {
                 .commit();
     }
 
+    static boolean recordManagedProxyAddressFailure(Context context) {
+        SharedPreferences preferences = preferences(context);
+        return preferences.edit()
+                .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
+                .putString(
+                        PREF_PROXY_ASSIGNMENT_STATE,
+                        PROXY_ASSIGNMENT_MISSING)
+                .putString(PREF_SYNC_STATE, STATE_UNAVAILABLE)
+                .putString(
+                        PREF_SYNC_MESSAGE,
+                        "管理员尚未分配有效 Proxy 地址；Agent 保持登录，网络服务已停止")
+                .putInt(PREF_PERMISSION_REVISION, nextRevision(preferences))
+                .commit();
+    }
+
+    static boolean recordLegacyManagedProxyAddressFailure(Context context) {
+        SharedPreferences preferences = preferences(context);
+        return preferences.edit()
+                .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
+                .putString(PREF_SYNC_STATE, STATE_UNAVAILABLE)
+                .putString(
+                        PREF_SYNC_MESSAGE,
+                        "旧版登录没有受管 Proxy 地址，网络服务已停止；请重新登录")
+                .putInt(PREF_PERMISSION_REVISION, nextRevision(preferences))
+                .commit();
+    }
+
+    static String proxyAssignmentState(Context context) {
+        String state;
+        try {
+            state = preferences(context).getString(
+                    PREF_PROXY_ASSIGNMENT_STATE,
+                    "");
+        } catch (ClassCastException error) {
+            return "";
+        }
+        return state == null ? "" : state;
+    }
+
     static String syncMessage(Context context) {
         String message = preferences(context).getString(PREF_SYNC_MESSAGE, "");
         return message == null ? "" : message;
@@ -145,6 +200,8 @@ final class AgentSessionStore {
     static void clearFrom(SharedPreferences.Editor editor) {
         editor.remove(PREF_ROLE)
                 .remove(PREF_PERMISSIONS)
+                .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
+                .remove(PREF_PROXY_ASSIGNMENT_STATE)
                 .remove(PREF_ACCESS_TOKEN)
                 .remove(PREF_ACCESS_TOKEN_EXPIRES_AT)
                 .remove(PREF_REFRESH_SECONDS)

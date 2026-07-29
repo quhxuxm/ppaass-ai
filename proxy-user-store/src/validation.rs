@@ -8,6 +8,9 @@ pub const MAX_PUBLIC_KEY_PEM_BYTES: usize = 16 * 1024;
 pub const MAX_PERMISSIONS: usize = 32;
 pub const MAX_PERMISSION_CODE_BYTES: usize = 64;
 pub const MAX_KEY_REQUEST_MESSAGE_CHARS: usize = 500;
+pub const MAX_PROXY_ADDRESS_BYTES: usize = 512;
+pub const MAX_PROXY_ADDRESS_LABEL_BYTES: usize = 128;
+pub const MAX_PROXY_ADDRESSES_PER_ACCOUNT: usize = 32;
 const MIN_RSA_BITS: usize = 2048;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -53,6 +56,21 @@ pub enum ValidationError {
 
     #[error("密钥申请留言包含不允许的控制字符")]
     InvalidKeyRequestMessage,
+
+    #[error("Proxy 地址 ID 无效")]
+    InvalidProxyAddressId,
+
+    #[error("Proxy 地址名称必须为 1..={MAX_PROXY_ADDRESS_LABEL_BYTES} 字节且不能包含控制字符")]
+    InvalidProxyAddressLabel,
+
+    #[error("Proxy 地址必须为 hostname:port、IPv4:port 或 [IPv6]:port，不能包含 URL、路径或空白")]
+    InvalidProxyAddress,
+
+    #[error("每个账号必须分配 1..={MAX_PROXY_ADDRESSES_PER_ACCOUNT} 个 Proxy 地址")]
+    InvalidProxyAddressCount,
+
+    #[error("Proxy 地址分配不能包含重复 ID")]
+    DuplicateProxyAddressId,
 
     #[error("账号字段无效：{0}")]
     InvalidAccountField(String),
@@ -159,6 +177,100 @@ pub fn normalize_permissions(
     }
     normalized.sort_unstable();
     normalized.dedup();
+    Ok(normalized)
+}
+
+pub fn normalize_proxy_address_id(
+    proxy_address_id: &str,
+) -> std::result::Result<String, ValidationError> {
+    let value = proxy_address_id.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(ValidationError::InvalidProxyAddressId);
+    }
+    Ok(value.to_string())
+}
+
+pub fn normalize_proxy_address_label(label: &str) -> std::result::Result<String, ValidationError> {
+    let label = label.trim();
+    if label.is_empty()
+        || label.len() > MAX_PROXY_ADDRESS_LABEL_BYTES
+        || label.chars().any(char::is_control)
+    {
+        return Err(ValidationError::InvalidProxyAddressLabel);
+    }
+    Ok(label.to_string())
+}
+
+pub fn normalize_proxy_address(address: &str) -> std::result::Result<String, ValidationError> {
+    use std::{net::SocketAddr, str::FromStr};
+
+    if address.is_empty()
+        || address.len() > MAX_PROXY_ADDRESS_BYTES
+        || address.chars().any(char::is_whitespace)
+        || address.contains(['/', '\\', '?', '#', '@'])
+        || address.contains("://")
+    {
+        return Err(ValidationError::InvalidProxyAddress);
+    }
+    if let Ok(socket_address) = SocketAddr::from_str(address) {
+        if socket_address.port() == 0 {
+            return Err(ValidationError::InvalidProxyAddress);
+        }
+        return Ok(socket_address.to_string());
+    }
+
+    let (host, port_text) = address
+        .rsplit_once(':')
+        .ok_or(ValidationError::InvalidProxyAddress)?;
+    let port = port_text
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or(ValidationError::InvalidProxyAddress)?;
+    if host.is_empty() || host.len() > 253 || host.contains(':') || !host.is_ascii() {
+        return Err(ValidationError::InvalidProxyAddress);
+    }
+    if !host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+    }) {
+        return Err(ValidationError::InvalidProxyAddress);
+    }
+    Ok(format!("{}:{port}", host.to_ascii_lowercase()))
+}
+
+pub fn normalize_proxy_address_ids(
+    proxy_address_ids: &[String],
+) -> std::result::Result<Vec<String>, ValidationError> {
+    if proxy_address_ids.is_empty() || proxy_address_ids.len() > MAX_PROXY_ADDRESSES_PER_ACCOUNT {
+        return Err(ValidationError::InvalidProxyAddressCount);
+    }
+    let mut normalized = proxy_address_ids
+        .iter()
+        .map(|value| normalize_proxy_address_id(value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    normalized.sort_unstable();
+    let original_len = normalized.len();
+    normalized.dedup();
+    if normalized.len() != original_len {
+        return Err(ValidationError::DuplicateProxyAddressId);
+    }
     Ok(normalized)
 }
 

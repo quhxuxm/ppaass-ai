@@ -36,7 +36,10 @@ use crate::agent::{
     agent_state, clear_packet_capture_runtime_local, packet_capture_runtime_status_local,
     set_packet_capture_runtime_enabled_local, start_agent_inner, stop_embedded_agent,
 };
-use crate::auth::{load_persisted_agent_login_from_dir, set_windows_restricted_acl};
+use crate::auth::{
+    load_persisted_agent_login_from_dir, set_windows_restricted_acl,
+    validate_managed_proxy_addresses,
+};
 use crate::logging::UiLogBuffer;
 use crate::models::{
     AgentAuthAccountStatus, AgentState, ServiceRequest, ServiceResponse, VerifiedProxyAuthStatus,

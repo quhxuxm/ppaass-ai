@@ -56,7 +56,6 @@ fn summarize_config_preserves_udp_yamux_settings() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 
@@ -83,7 +82,6 @@ stream_window_size_kb = 1024
 fn summarize_config_defaults_to_udp_and_clamps_udp_session_pool_size() {
     let base = r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 "#;
@@ -143,11 +141,17 @@ fn summarize_config_rejects_removed_tun_helper_fields() {
 }
 
 #[test]
+fn summarize_config_rejects_removed_proxy_addresses_field() {
+    let error = summarize_config("proxy_addrs = [\"proxy.example.com:443\"]\n").unwrap_err();
+
+    assert!(error.contains("proxy_addrs 已移除"));
+}
+
+#[test]
 fn summarize_config_allows_tun_quic_by_default() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 "#,
@@ -162,7 +166,6 @@ fn summarize_config_proxies_tun_udp_by_default() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 "#,
@@ -177,7 +180,6 @@ fn summarize_config_uses_default_tun_dns_proxy() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 
 [tun]
 enabled = true
@@ -194,7 +196,6 @@ fn summarize_config_preserves_explicitly_disabled_tun_dns_proxy() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 
 [tun]
 enabled = true
@@ -212,7 +213,6 @@ fn summarize_config_reads_disabled_tun_udp_proxy() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 
@@ -230,7 +230,6 @@ fn summarize_config_reads_block_policy() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 
@@ -248,7 +247,6 @@ fn summarize_config_reads_packet_capture() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 

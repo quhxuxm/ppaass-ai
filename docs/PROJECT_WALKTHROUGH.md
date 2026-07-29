@@ -303,7 +303,8 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 常见字段：
 
 - `listen_addr`: 本地 HTTP/SOCKS5 监听地址。
-- `proxy_addrs`: 远端 Proxy 地址列表，连接时随机选择。
+- 远端 Proxy 地址在用户认证后由 Proxy Web 作为受管运行时数据分配，连接时随机选择；
+  `agent.toml` 不再接受旧的 `proxy_addrs` 字段。
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
 - `transport_mode`: 只接受 `udp`/`tcp`；`udp` 是 TCP direct framed + 原生加密 UDP，`tcp` 是 TCP direct framed + UDP TCP/Yamux。旧值 `quic` 不兼容且会被拒绝，不做别名或自动迁移。
@@ -443,8 +444,8 @@ cargo build --release --workspace
 # 终端 2
 cargo run --release -p proxy -- --config config/local/proxy.toml
 
-# 终端 3
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/local/agent.toml
+# 终端 3：启动 Desktop Agent UI，登录后由认证 session 下发运行时 Proxy 地址
+cd desktop-agent-ui && npm run tauri dev
 
 # 终端 4
 ./run-tests.sh integration

@@ -33,7 +33,11 @@ async fn admin_with_an_active_profile_can_manage_keys_records_and_authorize_agen
                 .header("x-csrf-token", &admin_csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"expires_at": FUTURE_EXPIRATION}).to_string(),
+                    json!({
+                        "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )

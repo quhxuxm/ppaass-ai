@@ -6,8 +6,9 @@
 - Vue 3 + PrimeVue 4 提供普通用户中心与管理员控制台。
 - 本地密码使用 Argon2id 哈希；登录态使用服务端不透明会话、HttpOnly Cookie 和 CSRF Token。
 - RSA 私钥使用部署主密钥 AES-256-GCM 加密后写入数据库，公钥与私钥按版本原子更新。
-- `proxy-user-store::UserRepository`、`AccountRepository`、`AccessLogRepository` 和
-  `AgentDeviceAuthorizationRepository` 是数据库无关接口；当前适配器使用 SQLite。
+- `proxy-user-store::UserRepository`、`AccountRepository`、`ProxyAddressRepository`、
+  `AccessLogRepository` 和 `AgentDeviceAuthorizationRepository` 是数据库无关接口；
+  当前适配器使用 SQLite。
 - Web 读写用户 SQLite，Proxy 仅只读该库；访问记录使用单独的共享 SQLite。全部服务
   日志使用 `tracing`，不会记录密码、Cookie 或私钥。
 
@@ -204,6 +205,8 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/admin/users` | 管理员创建已批准用户并生成密钥，必须指定未来有效期 |
 | `GET/PATCH/DELETE` | `/api/v1/admin/users/{username}` | 管理员查询、修改或删除用户（删除前必须先停用，密钥字段始终脱敏） |
 | `POST` | `/api/v1/admin/users/{username}/rotate-key` | 管理员轮换仍有效的密钥（不返回密钥材料） |
+| `GET/POST` | `/api/v1/admin/proxy-addresses` | 管理员查询或新增 Agent 可用的 Proxy 地址 |
+| `PATCH/DELETE` | `/api/v1/admin/proxy-addresses/{proxy_address_id}` | 管理员修改、停用或删除 Proxy 地址 |
 | `GET` | `/api/v1/admin/key-requests` | 管理员列出待审批密钥申请 |
 | `POST` | `/api/v1/admin/key-requests/{request_id}/approve` | 批准申请并生成密钥，必须指定未来有效期 |
 | `POST` | `/api/v1/admin/key-requests/{request_id}/reject` | 拒绝密钥申请 |
@@ -223,8 +226,9 @@ X-CSRF-Token: <csrf_token>
 
 Desktop、Windows 和 Android Agent 的登录页直接向配置文件中的 Proxy Web 地址发送
 `POST /api/v1/agent/login`，地址不会展示给用户。该原生端点拒绝带浏览器 `Origin` 的
-请求，不创建 Web Cookie；认证成功后一次返回当前账号角色、Proxy profile 权限、同一
-版本的连接密钥，以及仅供 Agent 使用的 `agent_access_token`。
+请求，不创建 Web Cookie；认证成功后一次返回当前账号角色、Proxy profile 权限、管理员
+分配的 Proxy 地址、同一版本的连接密钥，以及仅供 Agent 使用的
+`agent_access_token`。
 
 Agent access token 使用部署主密钥派生的独立 AES-256-GCM key 加密认证，服务重启后仍可
 验证。Agent 把 token 与受管私钥一起保存到仅当前系统用户可读的本机凭据目录，绝不传给
@@ -241,6 +245,18 @@ Agent 界面和 Rust/原生命令层约束，不要求退出或重启。临时�
 清除登录、私钥或停止代理；Agent 保留最后一次成功验证的权限并显示同步错误。账号被
 停用或密钥过期时，接口仍返回 200 和权威状态，Agent 保留登录但显示明确错误。连续
 30 天未成功刷新而导致 token 过期时，需要重新登录才能恢复权限同步。
+
+密码登录、设备 token 领取和 `GET /api/v1/agent/me` 的成功响应都会在
+`profile.proxy_addresses` 返回 1 到 32 个已启用的规范地址。该字段按地址稳定排序并
+去重；Agent 只在原生后端使用，不在界面、日志或 `agent.toml` 中展示或持久化。
+`GET /api/v1/me` 也返回同一字段，供原生 Agent 轮换密钥后继续使用；Web 用户中心故意
+忽略它。已迁移账号尚未分配地址时，Agent 凭据端点返回 HTTP 409：
+
+```json
+{"error":{"code":"proxy_address_not_assigned","message":"..."}}
+```
+
+客户端收到该错误后应停止 Agent 网络运行并保留登录态，等待管理员完成地址分配。
 
 ## 设备授权 API（可选）
 
@@ -359,27 +375,52 @@ TCP 承载的共享 UDP relay 只在真正创建新 flow 前复核授权，Exist
 - `key.private.read`
 - `key.rotate`
 - `agent.packet_capture`
-- `agent.config.view`
 - `agent.egress.edit`
 - `agent.runtime_threads.edit`
 
 本地注册账号或管理员自身的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
-配置都会强制拥有前四项基础能力（TCP、UDP、领取和轮换密钥）。后四项是管理员可给
+配置都会强制拥有前四项基础能力（TCP、UDP、领取和轮换密钥）。后三项是管理员可给
 普通用户分配的 Agent 管理权限，默认不授予；管理员创建或编辑用户时可独立勾选，并会
 保留数据库中的其他自定义权限。管理员后续通过 PATCH 更新权限时，不能移除基础能力。
 
-Agent 管理员角色天然拥有全部四项 Agent 管理权限，不要求把它们重复写入管理员 profile。
+Agent 管理员角色天然拥有全部三项 Agent 管理权限，不要求把它们重复写入管理员 profile。
 普通用户的权限在界面和原生命令层同时执行：
 
-- `agent.packet_capture` 控制抓包入口以及读取、启停和清空命令。
-- `agent.config.view` 控制原始 TOML 配置的读取和编辑。
-- `agent.egress.edit` 控制远端出口地址、连接超时、压缩格式和 UDP 会话数。
-- `agent.runtime_threads.edit` 控制系统运行线程数。
+- `agent.packet_capture` 控制抓包页面以及读取、启停和清空命令；没有权限时整个抓包
+  页面均不显示，转发中的明文抓包也统一放在抓包页面。
+- `agent.egress.edit` 控制整个出口页面；没有权限时页面不显示，Agent 使用内置出口
+  默认值，不使用本机持久化的出口配置。
+- `agent.runtime_threads.edit` 控制系统运行参数面板；没有权限时面板不显示，Agent
+  使用内置系统运行参数，不使用本机持久化的相关配置。
+
+数据库升级到 schema v7 时会移除已经停用的 `agent.config.view` 权限；查看配置不再是
+管理员可分配的 Agent 权限。
 
 管理员角色不绕过 Proxy 数据面的权限校验，其 TCP/UDP 流量仍使用该管理员自身 profile
 中的基础连接权限。
 
 Proxy 会在认证及 CONNECT/原生 UDP 边界实际执行 TCP/UDP 权限，不只是把权限展示在页面上。
+
+## Proxy 地址目录与账号分配
+
+schema v8 新增 `proxy_addresses` 地址目录和 `account_proxy_addresses` 账号分配关系。
+迁移只创建空表并保留原账号、profile 和密钥，不会从开发配置或历史运行参数猜测、导入
+任何生产地址。升级后管理员必须先在管理控制台建立地址目录，再为已有账号分配至少一个
+已启用地址；完成前这些账号的 Agent 登录和同步会按上述稳定 409 错误失败。
+
+目录项使用服务端生成且不会随地址修改而变化的不透明 ID。标签可省略或留空，此时响应和
+控制台使用规范地址作为标签。地址只接受 `hostname:port`、`IPv4:port` 或
+`[IPv6]:port`，拒绝 URL、路径和空白字符；主机名转为小写，端口转为无前导零的十进制
+形式后再执行严格唯一约束。
+
+管理员创建用户、编辑用户或批准密钥申请时，都必须通过 `proxy_address_ids` 选择
+1 到 32 个不同的已启用目录项。重复 ID 会被拒绝，不会静默去重；账号变更、审批生成
+密钥和地址关系替换在同一 repository 事务中提交。仍被账号引用的地址不能停用；目录项
+必须先停用且没有任何引用后才能删除。
+
+管理员用户列表显示每个账号当前分配的目录项，Agent UI 则从不展示远端地址。业务层只
+依赖 `ProxyAddressRepository` 和账号 repository；SQLite 表和 SQL 不进入 Axum handler，
+后续增加其他数据库时可以用新适配器保持同一事务语义和 API 契约。
 
 ## Proxy 与数据库边界
 

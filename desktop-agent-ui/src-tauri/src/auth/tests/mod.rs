@@ -287,6 +287,7 @@ async fn device_authorization_validates_key_pair_and_logs_out_temporary_session(
             "profile": {
                 "username": "alice",
                 "permissions": ["key.private.read"],
+                "proxy_addresses": ["proxy.example.com:443"],
                 "key_version": 9,
                 "expires_at": 4_000_000_000_i64
             },

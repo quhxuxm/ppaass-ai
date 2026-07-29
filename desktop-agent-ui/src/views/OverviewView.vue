@@ -179,7 +179,6 @@ function overviewCardTitle(key: OverviewCardKey) {
   const titles: Record<OverviewCardKey, string> = {
     status: "运行状态",
     proxy: "HTTP / SOCKS5",
-    egress: "公共远端出口",
     speed: "实时网速",
     traffic: "今日流量",
     dns: "代理 DNS",
@@ -467,11 +466,6 @@ function onDnsListFocusOut(event: FocusEvent) {
               :severity="agent.running ? 'success' : 'secondary'"
             />
             <Tag v-else-if="card.key === 'proxy'" :value="proxyEntryStateLabel" severity="success" />
-            <Tag
-              v-else-if="card.key === 'egress'"
-              :value="transportModeLabel"
-              severity="info"
-            />
             <Tag v-else-if="card.key === 'speed'" value="系统" severity="info" />
             <span v-else-if="card.key === 'traffic'">{{ traffic.baseline?.date ?? localDateKey() }}</span>
             <Tag v-else-if="card.key === 'dns'" :value="dnsCardLabel" :severity="summary.tun_proxy_dns ? 'info' : 'secondary'" />
@@ -505,11 +499,6 @@ function onDnsListFocusOut(event: FocusEvent) {
             <strong>{{ summary.listen_addr }}</strong>
           </div>
           <div class="metric-tile">
-            <AppIcon name="server" />
-            <span>公共出口</span>
-            <strong>{{ summary.proxy_addrs.length }}</strong>
-          </div>
-          <div class="metric-tile">
             <AppIcon name="activity" />
             <span>传输策略</span>
             <strong>{{ transportModeLabel }}</strong>
@@ -528,17 +517,6 @@ function onDnsListFocusOut(event: FocusEvent) {
         <div v-else-if="card.key === 'proxy'" class="kv-list">
           <div class="kv-row"><span>监听</span><strong>{{ summary.listen_addr }}</strong></div>
           <div class="kv-row"><span>协议</span><strong>HTTP / SOCKS5</strong></div>
-          <div class="kv-row"><span>公共出口</span><strong>{{ summary.proxy_addrs.length }} 个节点</strong></div>
-        </div>
-        <div v-else-if="card.key === 'egress'" class="endpoint-list">
-          <div v-for="proxy in summary.proxy_addrs" :key="proxy" class="endpoint-row">
-            <AppIcon name="server" />
-            <span>{{ proxy }}</span>
-          </div>
-          <div v-if="!summary.proxy_addrs.length" class="endpoint-row muted">
-            <AppIcon name="server" />
-            <span>未配置</span>
-          </div>
         </div>
         <div v-else-if="card.key === 'speed'" class="speed-gauges">
           <div class="speed-gauge">

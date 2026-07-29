@@ -74,7 +74,7 @@ pub(super) fn load_persisted_leases(path: &Path) -> Result<Vec<PersistedTunLease
                 .with_context(|| format!("读取 TUN helper lease 状态失败：{}", path.display()));
         }
     };
-    let state: PersistedLeaseState = serde_json::from_slice(&content)
+    let mut state: PersistedLeaseState = serde_json::from_slice(&content)
         .with_context(|| format!("解析 TUN helper lease 状态失败：{}", path.display()))?;
     if state.version != HELPER_LEASE_STATE_VERSION {
         anyhow::bail!(
@@ -84,6 +84,9 @@ pub(super) fn load_persisted_leases(path: &Path) -> Result<Vec<PersistedTunLease
             HELPER_LEASE_STATE_VERSION
         );
     }
+    for lease in &mut state.leases {
+        lease.clear_runtime_proxy_addresses();
+    }
     Ok(state.leases)
 }
 
@@ -92,7 +95,11 @@ pub(super) fn persist_lease_state(path: &Path, state: &PersistedLeaseState) -> R
         fs::create_dir_all(parent)
             .with_context(|| format!("创建 helper lease 状态目录失败：{}", parent.display()))?;
     }
-    let data = serde_json::to_vec_pretty(state).context("序列化 TUN helper lease 状态失败")?;
+    let mut sanitized = state.clone();
+    for lease in &mut sanitized.leases {
+        lease.clear_runtime_proxy_addresses();
+    }
+    let data = serde_json::to_vec_pretty(&sanitized).context("序列化 TUN helper lease 状态失败")?;
     let tmp_path = path.with_extension(format!(
         "json.tmp.{}.{}",
         std::process::id(),

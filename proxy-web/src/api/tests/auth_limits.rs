@@ -64,7 +64,8 @@ async fn registration_and_admin_creation_share_the_eight_character_password_mini
                     json!({
                         "username": "short-admin-password",
                         "password": "1234567",
-                        "expires_at": FUTURE_EXPIRATION
+                        "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
                     })
                     .to_string(),
                 ))

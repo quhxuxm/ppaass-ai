@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{NewUser, UserRecord};
+use super::{NewUser, ProxyAddress, UserRecord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,6 +78,7 @@ pub struct ManagedUser {
     pub profile: Option<UserRecord>,
     pub has_private_key: bool,
     pub providers: Vec<ExternalIdentity>,
+    pub assigned_proxy_addresses: Vec<ProxyAddress>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -90,6 +91,7 @@ pub struct ManagedUserUpdate {
     pub display_name: Option<Option<String>>,
     pub email: Option<Option<String>>,
     pub avatar_url: Option<Option<String>>,
+    pub proxy_address_ids: Option<Vec<String>>,
 }
 
 impl ManagedUserUpdate {
@@ -102,6 +104,7 @@ impl ManagedUserUpdate {
             && self.display_name.is_none()
             && self.email.is_none()
             && self.avatar_url.is_none()
+            && self.proxy_address_ids.is_none()
     }
 }
 
@@ -142,6 +145,7 @@ pub struct NewManagedUser {
     pub profile: NewUser,
     pub encrypted_private_key: Vec<u8>,
     pub external_identity: Option<ExternalIdentity>,
+    pub proxy_address_ids: Vec<String>,
 }
 
 /// 首次启动创建管理员账号所需的数据。管理员可以不绑定 Proxy profile。

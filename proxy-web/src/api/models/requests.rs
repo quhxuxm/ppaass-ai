@@ -60,6 +60,7 @@ pub(crate) struct AdminCreateUserRequest {
     pub(crate) expires_at: ExpiresAtValue,
     #[serde(default)]
     pub(crate) permissions: Option<Vec<String>>,
+    pub(crate) proxy_address_ids: Vec<String>,
     #[serde(default = "enabled_by_default")]
     pub(crate) enabled: bool,
 }
@@ -76,6 +77,8 @@ pub(crate) struct AdminUpdateUserRequest {
     #[serde(default)]
     pub(crate) permissions: Option<Vec<String>>,
     #[serde(default)]
+    pub(crate) proxy_address_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub(crate) expires_at: PatchField<ExpiresAtValue>,
     #[serde(default)]
     pub(crate) display_name: PatchField<String>,
@@ -89,6 +92,28 @@ pub(crate) struct AdminUpdateUserRequest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApproveKeyRequest {
     pub(crate) expires_at: ExpiresAtValue,
+    pub(crate) proxy_address_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CreateProxyAddressRequest {
+    #[serde(default)]
+    pub(crate) label: Option<String>,
+    pub(crate) address: String,
+    #[serde(default = "enabled_by_default")]
+    pub(crate) enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpdateProxyAddressRequest {
+    #[serde(default)]
+    pub(crate) label: Option<String>,
+    #[serde(default)]
+    pub(crate) address: Option<String>,
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

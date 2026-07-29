@@ -85,15 +85,9 @@ protected void buildUi() {
             disablePacketCaptureForRevokedPermission();
         }
 
-        if (hasAgentPermission(AgentPermissions.CONFIG_VIEW)) {
-            LinearLayout configScreen = screenPage(pages);
-            addScreenTab(screenTabs, "配置", configScreen);
-            buildConfigScreen(configScreen);
-        } else {
-            LinearLayout detachedConfig = new LinearLayout(this);
-            detachedConfig.setOrientation(LinearLayout.VERTICAL);
-            buildConfigScreen(detachedConfig);
-        }
+        LinearLayout configScreen = screenPage(pages);
+        addScreenTab(screenTabs, "配置", configScreen);
+        buildConfigScreen(configScreen);
 
         if (screenTabButtons.size() == 1) {
             screenTabs.setVisibility(View.GONE);

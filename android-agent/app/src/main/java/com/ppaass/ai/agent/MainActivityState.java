@@ -63,7 +63,6 @@ protected static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
 protected static final int QUIC_RESERVED_VERSION = 0x0a0a0a0a;
 protected SharedPreferences prefs;
 protected boolean activityResumed;
-protected EditText proxyAddrs;
 protected EditText httpProxyPort;
 protected EditText httpProxyThreads;
 protected EditText httpProxyMaxConcurrentConnects;
@@ -192,7 +191,6 @@ protected final Runnable statusRefresh = new Runnable() {
 
     protected String agentPermissionFingerprint() {
         return (hasAgentPermission(AgentPermissions.PACKET_CAPTURE) ? "1" : "0")
-                + (hasAgentPermission(AgentPermissions.CONFIG_VIEW) ? "1" : "0")
                 + (hasAgentPermission(AgentPermissions.EGRESS_EDIT) ? "1" : "0")
                 + (hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT) ? "1" : "0");
     }

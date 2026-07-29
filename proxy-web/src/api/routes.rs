@@ -4,6 +4,7 @@ mod agent_session;
 mod authentication;
 mod device_authorization;
 mod me;
+mod proxy_addresses;
 
 pub(super) use admin_requests::*;
 pub(super) use admin_users::*;
@@ -11,3 +12,4 @@ pub(super) use agent_session::*;
 pub(super) use authentication::*;
 pub(super) use device_authorization::*;
 pub(super) use me::*;
+pub(super) use proxy_addresses::*;

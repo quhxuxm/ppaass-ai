@@ -73,10 +73,18 @@ struct PersistedRouteRecovery {
     proxy_ips: Vec<IpAddr>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedLeaseState {
     version: u8,
     leases: Vec<PersistedTunLease>,
+}
+
+impl PersistedTunLease {
+    fn clear_runtime_proxy_addresses(&mut self) {
+        if let Some(recovery) = self.route_recovery.as_mut() {
+            recovery.request.proxy_addrs.clear();
+        }
+    }
 }
 
 struct LeaseRegistry {

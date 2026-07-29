@@ -7,7 +7,6 @@ import java.util.Set;
 
 final class AgentPermissions {
     static final String PACKET_CAPTURE = "agent.packet_capture";
-    static final String CONFIG_VIEW = "agent.config.view";
     static final String EGRESS_EDIT = "agent.egress.edit";
     static final String RUNTIME_THREADS_EDIT = "agent.runtime_threads.edit";
 

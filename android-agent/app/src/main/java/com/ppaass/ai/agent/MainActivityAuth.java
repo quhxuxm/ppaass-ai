@@ -300,6 +300,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
             AgentAuthSession.applyVerifiedServerStatus(
                     this,
                     NativeAgent.AUTHENTICATION_VERIFIED_ACTIVE);
+            AgentPermissionConfigEnforcer.enforce(this, false);
             AgentProfileSyncManager.start(this);
         } catch (IOException | RuntimeException error) {
             AgentAuthSession.clear();
@@ -390,7 +391,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
                 tr("登录状态或代理凭据已过期，请重新登录"),
                 Toast.LENGTH_LONG).show();
     }
-
     @Override
     protected void onDestroy() {
         AgentAuthenticationCoordinator.cancel(authenticationAttempt);

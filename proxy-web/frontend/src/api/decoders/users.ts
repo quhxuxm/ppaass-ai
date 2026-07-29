@@ -20,6 +20,7 @@ import {
   decodeKeyState,
   decodeNullableKeyRequest,
 } from './keys'
+import { decodeProxyAddress } from './proxyAddresses'
 
 export function decodeSelf(value: unknown): SelfView {
   const root = asRecord(value)
@@ -96,6 +97,9 @@ export function decodeManagedUser(value: unknown): ManagedUser {
       profile,
       hasPrivateKey,
     ),
+    proxyAddresses: Array.isArray(root.proxy_addresses)
+      ? root.proxy_addresses.map(decodeProxyAddress)
+      : [],
   }
 }
 

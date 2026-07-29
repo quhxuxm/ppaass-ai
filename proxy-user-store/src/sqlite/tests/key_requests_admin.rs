@@ -20,6 +20,7 @@ async fn active_admin_can_receive_initial_key_and_rotate_it_after_expiration() {
             request_id: initial.request_id,
             reviewer_account_id: "admin-with-proxy".to_string(),
             expires_at: first_expiration,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Initial {
                 profile: NewUser::new("admin-proxy-profile", public_key(), UserOrigin::Local),
                 encrypted_private_key: b"admin-initial-envelope".to_vec(),
@@ -63,6 +64,7 @@ async fn active_admin_can_receive_initial_key_and_rotate_it_after_expiration() {
             request_id: rotation.request_id,
             reviewer_account_id: "admin-with-proxy".to_string(),
             expires_at: second_expiration,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Rotate {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"admin-rotated-envelope".to_vec(),

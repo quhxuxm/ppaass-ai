@@ -32,7 +32,7 @@ where
     let remote_addr = config.remote_addr();
     let timeout = config.timeout_duration();
 
-    debug!("正在连接远端代理: {}", remote_addr);
+    debug!("正在连接远端 Proxy");
 
     // TCP 连接 — 可选绑定到指定本地地址，以绕过可能存在的 TUN 默认路由。
     let stream = if let Some(bind) = config.bind_addr() {
@@ -85,20 +85,20 @@ where
         {
             Ok(s) => s,
             Err(e) => {
-                warn!("创建 TcpSocket 失败 (dst={}): {e}", dst);
+                warn!("创建远端 Proxy TcpSocket 失败：{e}");
                 last_error = Some(e);
                 continue;
             }
         };
         if let Err(e) = config.protect_socket(&socket, *dst) {
-            warn!("保护代理连接 socket 失败 (dst={}): {e}", dst);
+            warn!("保护远端 Proxy socket 失败：{e}");
             last_error = Some(e);
             continue;
         }
         tune_proxy_socket(config, &socket, *dst);
         tune_proxy_keepalive(&socket, *dst);
         if let Err(e) = bind_socket_to_interface(&socket, bind_interface.as_ref(), *dst) {
-            warn!("绑定代理连接到物理接口失败 (dst={}): {e}", dst);
+            warn!("绑定远端 Proxy 连接到物理接口失败：{e}");
             last_error = Some(e);
             continue;
         }
@@ -108,7 +108,7 @@ where
             continue;
         }
         if let Err(e) = socket.set_nonblocking(true) {
-            warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
+            warn!("设置远端 Proxy socket 非阻塞失败：{e}");
             last_error = Some(e);
             continue;
         }
@@ -116,18 +116,18 @@ where
         let socket = TcpSocket::from_std_stream(socket.into());
         match tokio::time::timeout(timeout, socket.connect(*dst)).await {
             Ok(Ok(stream)) => {
-                debug!("已通过绑定套接字连接到 {dst} (本地={bind})");
+                debug!("已通过绑定套接字连接到远端 Proxy（本地={bind}）");
                 return Ok(stream);
             }
             Ok(Err(e)) => {
-                warn!("绑定连接到 {dst} 失败: {e}");
+                warn!("绑定连接到远端 Proxy 失败：{e}");
                 last_error = Some(e);
             }
             Err(_) => {
-                warn!("绑定连接到 {dst} 超时");
+                warn!("绑定连接到远端 Proxy 超时");
                 last_error = Some(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!("绑定连接到 {dst} 超时"),
+                    "绑定连接到远端 Proxy 超时",
                 ));
             }
         }
@@ -136,13 +136,12 @@ where
     if !has_matching_addr {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
-            format!("代理地址 {remote_addr} 没有与绑定地址 {bind} 匹配的 IP 版本"),
+            format!("远端 Proxy 没有与绑定地址 {bind} 匹配的 IP 版本"),
         ));
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        std::io::Error::other(format!("所有到 {remote_addr} 的绑定连接尝试均失败"))
-    }))
+    Err(last_error
+        .unwrap_or_else(|| std::io::Error::other("所有到远端 Proxy 的绑定连接尝试均失败")))
 }
 
 async fn connect_unbound<C>(
@@ -161,20 +160,20 @@ where
         {
             Ok(socket) => socket,
             Err(e) => {
-                warn!("创建 TcpSocket 失败 (dst={}): {e}", dst);
+                warn!("创建远端 Proxy TcpSocket 失败：{e}");
                 last_error = Some(e);
                 continue;
             }
         };
         if let Err(e) = config.protect_socket(&socket, dst) {
-            warn!("保护代理连接 socket 失败 (dst={}): {e}", dst);
+            warn!("保护远端 Proxy socket 失败：{e}");
             last_error = Some(e);
             continue;
         }
         tune_proxy_socket(config, &socket, dst);
         tune_proxy_keepalive(&socket, dst);
         if let Err(e) = socket.set_nonblocking(true) {
-            warn!("设置代理连接 socket 非阻塞失败 (dst={}): {e}", dst);
+            warn!("设置远端 Proxy socket 非阻塞失败：{e}");
             last_error = Some(e);
             continue;
         }
@@ -182,28 +181,27 @@ where
         let socket = TcpSocket::from_std_stream(socket.into());
         match tokio::time::timeout(timeout, socket.connect(dst)).await {
             Ok(Ok(stream)) => {
-                debug!("已连接到远端代理 {dst}");
+                debug!("已连接到远端 Proxy");
                 return Ok(stream);
             }
             Ok(Err(e)) => {
-                warn!("连接到远端代理 {dst} 失败: {e}");
+                warn!("连接到远端 Proxy 失败：{e}");
                 last_error = Some(e);
             }
             Err(_) => {
-                warn!("连接到远端代理 {dst} 超时");
+                warn!("连接到远端 Proxy 超时");
                 last_error = Some(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    format!("连接到远端代理 {dst} 超时"),
+                    "连接到远端 Proxy 超时",
                 ));
             }
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| std::io::Error::other(format!("所有到 {remote_addr} 的连接尝试均失败"))))
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("所有到远端 Proxy 的连接尝试均失败")))
 }
 
-fn tune_proxy_socket<C>(config: &C, socket: &Socket, dst: SocketAddr)
+fn tune_proxy_socket<C>(config: &C, socket: &Socket, _dst: SocketAddr)
 where
     C: ClientConnectionConfig,
 {
@@ -211,15 +209,15 @@ where
         return;
     };
     if let Err(err) = socket.set_recv_buffer_size(buffer_size) {
-        warn!("设置代理连接 socket 接收缓冲失败 (dst={}): {err}", dst);
+        warn!("设置远端 Proxy socket 接收缓冲失败：{err}");
     }
     if let Err(err) = socket.set_send_buffer_size(buffer_size) {
-        warn!("设置代理连接 socket 发送缓冲失败 (dst={}): {err}", dst);
+        warn!("设置远端 Proxy socket 发送缓冲失败：{err}");
     }
 }
 
-fn tune_proxy_keepalive(socket: &Socket, dst: SocketAddr) {
+fn tune_proxy_keepalive(socket: &Socket, _dst: SocketAddr) {
     if let Err(err) = configure_proxy_tcp_socket(socket) {
-        debug!("设置代理 TCP keepalive 失败 (dst={}): {err}", dst);
+        debug!("设置远端 Proxy TCP keepalive 失败：{err}");
     }
 }

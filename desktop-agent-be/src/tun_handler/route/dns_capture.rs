@@ -29,7 +29,7 @@ pub(super) fn install_dns_capture_routes(
 
     for ip in dns_ips {
         if proxy_ips.contains(ip) {
-            debug!("系统 DNS {ip} 同时也是代理地址，跳过 DNS 捕获路由");
+            debug!("系统 DNS 同时也是受管 Proxy 地址，跳过 DNS 捕获路由");
             continue;
         }
         if dns_capture_route_targets_default_gateway(*ip, default_v4_gateway, default_v6_gateway) {

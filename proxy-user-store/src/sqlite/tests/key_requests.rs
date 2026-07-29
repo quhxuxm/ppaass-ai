@@ -87,6 +87,7 @@ async fn expired_key_can_request_and_receive_atomic_rotation() {
             request_id: request.request_id,
             reviewer_account_id: "admin-one".to_string(),
             expires_at,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Rotate {
                 public_key_pem: new_public_key.clone(),
                 encrypted_private_key: b"rotated-envelope".to_vec(),
@@ -206,6 +207,7 @@ async fn rotation_approval_rechecks_disabled_profile_inside_transaction() {
             request_id: "request-disabled".to_string(),
             reviewer_account_id: "admin-one".to_string(),
             expires_at: now() + 3600,
+            proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
             material: ApprovedKeyMaterial::Rotate {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"must-not-commit".to_vec(),
@@ -266,6 +268,7 @@ async fn concurrent_approval_only_commits_one_keypair() {
                 request_id: "request-race".to_string(),
                 reviewer_account_id: "admin-one".to_string(),
                 expires_at,
+                proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
                 material: ApprovedKeyMaterial::Initial {
                     profile: NewUser::new("alice", first_public, UserOrigin::Local),
                     encrypted_private_key: b"first-envelope".to_vec(),
@@ -279,6 +282,7 @@ async fn concurrent_approval_only_commits_one_keypair() {
                 request_id: "request-race".to_string(),
                 reviewer_account_id: "admin-one".to_string(),
                 expires_at,
+                proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
                 material: ApprovedKeyMaterial::Initial {
                     profile: NewUser::new("alice", second_public, UserOrigin::Local),
                     encrypted_private_key: b"second-envelope".to_vec(),

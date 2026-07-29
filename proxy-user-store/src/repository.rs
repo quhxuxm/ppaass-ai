@@ -6,8 +6,8 @@ use crate::{
     AgentDeviceAuthorizationPoll, BootstrapOutcome, EncryptedPrivateKey, KeyEncryptionBinding,
     KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
     LoginRecord, ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount,
-    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewUserAccount, Result,
-    UserRecord, UserUpdate, WebAccount,
+    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress,
+    NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord, UserUpdate, WebAccount,
 };
 
 /// 数据库无关的用户 CRUD 接口。
@@ -137,6 +137,24 @@ pub trait AccountRepository: Send + Sync {
     async fn delete_managed_user(&self, account_id: &str) -> Result<()>;
 
     async fn active_admin_count(&self) -> Result<u64>;
+}
+
+/// 管理员维护的 Proxy 地址目录。
+///
+/// 接口只暴露稳定领域对象；具体数据库、SQL 和事务实现由适配器负责。
+#[async_trait]
+pub trait ProxyAddressRepository: Send + Sync {
+    async fn list_proxy_addresses(&self) -> Result<Vec<ProxyAddress>>;
+
+    async fn create_proxy_address(&self, address: NewProxyAddress) -> Result<ProxyAddress>;
+
+    async fn update_proxy_address(
+        &self,
+        proxy_address_id: &str,
+        update: ProxyAddressUpdate,
+    ) -> Result<ProxyAddress>;
+
+    async fn delete_proxy_address(&self, proxy_address_id: &str) -> Result<()>;
 }
 
 /// Proxy 访问记录及其保留策略的数据库无关接口。

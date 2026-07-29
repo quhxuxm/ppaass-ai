@@ -30,20 +30,28 @@ pub fn run_tun_helper_service(
     tun_handler::helper_service::run(socket, allowed_uid, log_level)
 }
 
-pub async fn run_agent(config: AgentConfig, shutdown: CancellationToken) -> Result<()> {
+pub async fn run_agent(
+    config: AgentConfig,
+    proxy_addrs: Vec<String>,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let packet_capture =
         PacketCaptureController::new(PathBuf::from(&config.tun.packet_capture.file));
-    run_agent_with_packet_capture(config, shutdown, packet_capture).await
+    run_agent_with_packet_capture(config, proxy_addrs, shutdown, packet_capture).await
 }
 
 pub async fn run_agent_with_packet_capture(
     config: AgentConfig,
+    proxy_addrs: Vec<String>,
     shutdown: CancellationToken,
     packet_capture: PacketCaptureController,
 ) -> Result<()> {
+    if proxy_addrs.is_empty() {
+        anyhow::bail!("未分配受管 Proxy 地址");
+    }
     info!("PPAASS Desktop Agent 启动中");
     info!("监听地址：    {}", config.listen_addr);
-    info!("代理地址列表：[{}]", config.proxy_addrs.join(", "));
+    info!("已载入 {} 个受管 Proxy 节点", proxy_addrs.len());
     info!("用户名：      {}", config.username);
     info!("压缩模式：    {}", config.get_compression_mode());
     info!("日志级别：    {}", config.log_level);
@@ -58,7 +66,7 @@ pub async fn run_agent_with_packet_capture(
         );
     }
 
-    match AgentServer::new(config, packet_capture).await {
+    match AgentServer::new(config, proxy_addrs, packet_capture).await {
         Ok(server) => {
             if let Err(err) = server.run(shutdown).await {
                 error!("Agent 服务器异常停止：{}", err);

@@ -17,9 +17,24 @@ final class AgentConfigJson {
 
     static JSONObject build(Context context) throws JSONException {
         SharedPreferences prefs = context.getSharedPreferences("ppaass_agent", Context.MODE_PRIVATE);
-        String quicPolicy = selectedQuicPolicy(prefs);
+        boolean canEditEgress = AgentAuthSession.hasPermission(
+                context,
+                AgentPermissions.EGRESS_EDIT);
+        boolean canEditRuntime = AgentAuthSession.hasPermission(
+                context,
+                AgentPermissions.RUNTIME_THREADS_EDIT);
+        List<String> proxyAddresses = ManagedProxyAddresses.load(context);
+        if (proxyAddresses.isEmpty()) {
+            throw new JSONException(
+                    "Proxy Web 未为当前账户分配可用的 Proxy 地址，请重新登录或联系管理员");
+        }
+        String quicPolicy = selectedQuicPolicy(prefs, canEditEgress);
         String transportMode = normalizeTransportMode(
-                prefs.getString("transport_mode", DefaultConfig.TRANSPORT_MODE));
+                controlledString(
+                        prefs,
+                        "transport_mode",
+                        DefaultConfig.TRANSPORT_MODE,
+                        canEditEgress));
         int configuredTunMtu = parseInt(
                 prefs.getString("mtu", String.valueOf(DefaultConfig.TUN_MTU)),
                 DefaultConfig.TUN_MTU);
@@ -34,7 +49,7 @@ final class AgentConfigJson {
                 .put("proxy_dns", true)
                 .put("quic_policy", quicPolicy);
         JSONObject yamuxJson = new JSONObject()
-                .put("udp", buildUdpYamuxTransportJson(prefs));
+                .put("udp", buildUdpYamuxTransportJson(prefs, canEditEgress));
         JSONObject directAccessJson = new JSONObject()
                 .put("mode", normalizeDirectAccessMode(
                         prefs.getString("direct_access_mode", DefaultConfig.DIRECT_ACCESS_MODE)))
@@ -53,26 +68,34 @@ final class AgentConfigJson {
         }
 
         return new JSONObject()
-                .put("proxy_addrs", new JSONArray(tokens(prefs.getString("proxy_addrs", DefaultConfig.PROXY_ADDR))))
+                .put("proxy_addrs", new JSONArray(proxyAddresses))
                 .put("username", username)
                 .put("private_key_pem", privateKeyPem)
                 .put("proxy_identity_public_key_pem", proxyIdentityPublicKeyPem)
                 .put("transport_mode", transportMode)
                 .put("udp_session_pool_size", parseClampedInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 "udp_session_pool_size",
-                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE)),
+                                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE),
+                                canEditEgress),
                         DefaultConfig.UDP_SESSION_POOL_SIZE,
                         DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
                         DefaultConfig.MAX_UDP_SESSION_POOL_SIZE))
                 .put("async_runtime_stack_size_mb", DefaultConfig.ASYNC_RUNTIME_STACK_SIZE_MB)
                 .put("runtime_threads", parsePositiveInt(
-                        prefs.getString("runtime_threads", String.valueOf(DefaultConfig.RUNTIME_THREADS)),
+                        controlledString(
+                                prefs,
+                                "runtime_threads",
+                                String.valueOf(DefaultConfig.RUNTIME_THREADS),
+                                canEditRuntime),
                         DefaultConfig.RUNTIME_THREADS))
                 .put("connect_timeout_secs", parsePositiveInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 "connect_timeout_secs",
-                                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS)),
+                                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS),
+                                canEditEgress),
                         DefaultConfig.CONNECT_TIMEOUT_SECS))
                 .put("http_proxy_max_concurrent_connects", parsePositiveInt(
                         prefs.getString(
@@ -80,7 +103,11 @@ final class AgentConfigJson {
                                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS)),
                         DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS))
                 .put("compression_mode", normalizeCompressionMode(
-                        prefs.getString("compression_mode", DefaultConfig.COMPRESSION_MODE)))
+                        controlledString(
+                                prefs,
+                                "compression_mode",
+                                DefaultConfig.COMPRESSION_MODE,
+                                canEditEgress)))
                 .put("yamux", yamuxJson)
                 .put("direct_access", directAccessJson)
                 .put("tun", tunJson);
@@ -96,7 +123,9 @@ final class AgentConfigJson {
                         DefaultConfig.HTTP_PROXY_THREADS));
     }
 
-    private static JSONObject buildUdpYamuxTransportJson(SharedPreferences prefs) throws JSONException {
+    private static JSONObject buildUdpYamuxTransportJson(
+            SharedPreferences prefs,
+            boolean canEditEgress) throws JSONException {
         String prefix = "yamux_udp_";
         int defaultSessions = DefaultConfig.UDP_YAMUX_SESSIONS;
         int defaultMaxStreams = DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION;
@@ -107,34 +136,59 @@ final class AgentConfigJson {
 
         return new JSONObject()
                 .put("sessions", parsePositiveInt(
-                        prefs.getString(prefix + "sessions", String.valueOf(defaultSessions)),
+                        controlledString(
+                                prefs,
+                                prefix + "sessions",
+                                String.valueOf(defaultSessions),
+                                canEditEgress),
                         defaultSessions))
                 .put("max_streams_per_session", parsePositiveInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 prefix + "max_streams_per_session",
-                                String.valueOf(defaultMaxStreams)),
+                                String.valueOf(defaultMaxStreams),
+                                canEditEgress),
                         defaultMaxStreams))
                 .put("open_stream_timeout_secs", parsePositiveInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 prefix + "open_stream_timeout_secs",
-                                String.valueOf(defaultOpenTimeout)),
+                                String.valueOf(defaultOpenTimeout),
+                                canEditEgress),
                         defaultOpenTimeout))
                 .put("keepalive_interval_secs", parseNonNegativeInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 prefix + "keepalive_interval_secs",
-                                String.valueOf(defaultKeepalive)),
+                                String.valueOf(defaultKeepalive),
+                                canEditEgress),
                         defaultKeepalive))
                 .put("connection_write_timeout_secs", parsePositiveInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 prefix + "connection_write_timeout_secs",
-                                String.valueOf(defaultWriteTimeout)),
+                                String.valueOf(defaultWriteTimeout),
+                                canEditEgress),
                         defaultWriteTimeout))
                 .put("stream_window_size_kb", parseMinInt(
-                        prefs.getString(
+                        controlledString(
+                                prefs,
                                 prefix + "stream_window_size_kb",
-                                String.valueOf(defaultWindowSize)),
+                                String.valueOf(defaultWindowSize),
+                                canEditEgress),
                         defaultWindowSize,
                         DefaultConfig.MIN_YAMUX_STREAM_WINDOW_SIZE_KB));
+    }
+
+    private static String controlledString(
+            SharedPreferences preferences,
+            String key,
+            String defaultValue,
+            boolean allowed) {
+        if (!allowed) {
+            return defaultValue;
+        }
+        return preferences.getString(key, defaultValue);
     }
 
     private static int parseInt(String value, int fallback) {
@@ -200,12 +254,14 @@ final class AgentConfigJson {
         return DefaultConfig.DIRECT_ACCESS_MODE;
     }
 
-    private static String selectedQuicPolicy(SharedPreferences prefs) {
-        String stored = prefs.getString("quic_policy", null);
-        if (stored != null) {
-            return normalizeQuicPolicy(stored);
-        }
-        return DefaultConfig.QUIC_POLICY;
+    private static String selectedQuicPolicy(
+            SharedPreferences prefs,
+            boolean canEditEgress) {
+        return normalizeQuicPolicy(controlledString(
+                prefs,
+                "quic_policy",
+                DefaultConfig.QUIC_POLICY,
+                canEditEgress));
     }
 
     private static String normalizeQuicPolicy(String value) {

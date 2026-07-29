@@ -56,6 +56,10 @@ try {
   assert.equal(fullTcpSummary.transport_mode, "tcp");
   assert.throws(() => coerceField("transport_mode", "unknown"), /auto、udp 或 tcp/);
   assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /auto、udp 或 tcp/);
+  assert.throws(
+    () => summarizeRaw('proxy_addrs = ["proxy.example.com:443"]\n'),
+    /Proxy 地址只能由登录会话下发/
+  );
   assert.throws(() => summarizeRaw("quic_connection_pool_size = 4\n"), /已移除/);
   assert.throws(
     () => summarizeRaw("[tun]\nhelper_enabled = true\n"),

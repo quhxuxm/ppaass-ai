@@ -1,6 +1,5 @@
 import type { AgentConfigSummary, AgentTransportMode } from "./types";
 const fallbackRawConfigSource = `listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 transport_mode = "udp"
 udp_session_pool_size = 4
 connect_timeout_secs = 30
@@ -36,7 +35,6 @@ export const fallbackRawConfig = redactManagedIdentityFromToml(fallbackRawConfig
 
 const defaultFieldValues = {
   listen_addr: "0.0.0.0:10080",
-  proxy_addrs: ["127.0.0.1:8080"],
   transport_mode: "udp",
   udp_session_pool_size: 4,
   connect_timeout_secs: 30,
@@ -100,7 +98,7 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
     const normalized = Number.isFinite(parsed) ? Math.max(minimum, parsed) : minimum;
     return field === "udp_session_pool_size" ? Math.min(8, normalized) : normalized;
   }
-  if (field === "proxy_addrs" || field === "direct_rules") {
+  if (field === "direct_rules") {
     return String(value)
       .split(/\r?\n/)
       .map((item) => item.trim())
@@ -112,7 +110,6 @@ export function coerceField(field: keyof AgentConfigSummary, value: unknown): un
 export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, value: unknown) {
   const mapping: Record<string, { section: string | null; key: string; kind: "string" | "number" | "bool" | "array" }> = {
     listen_addr: { section: null, key: "listen_addr", kind: "string" },
-    proxy_addrs: { section: null, key: "proxy_addrs", kind: "array" },
     transport_mode: { section: null, key: "transport_mode", kind: "string" },
     udp_session_pool_size: { section: null, key: "udp_session_pool_size", kind: "number" },
     connect_timeout_secs: { section: null, key: "connect_timeout_secs", kind: "number" },
@@ -159,7 +156,6 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
   const tunQuicPolicy = normalizeQuicPolicy(matchString(raw, "tun", "quic_policy") ?? "allow");
   return {
     listen_addr: stringOrDefault(matchString(raw, null, "listen_addr"), "listen_addr"),
-    proxy_addrs: arrayOrDefault(matchStringArray(raw, "proxy_addrs"), "proxy_addrs"),
     transport_mode: normalizeTransportMode(matchString(raw, null, "transport_mode") ?? "udp"),
     udp_session_pool_size: normalizeUdpSessionPoolSize(matchNumber(raw, null, "udp_session_pool_size")),
     connect_timeout_secs: matchNumber(raw, null, "connect_timeout_secs") ?? defaultValueForField<number>("connect_timeout_secs"),
@@ -193,7 +189,7 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
 
 export function redactManagedIdentityFromToml(raw: string) {
   return raw.replace(
-    /^[ \t]*(?:(?:"(?:username|private_key_path|proxy_web_url)")|(?:'(?:username|private_key_path|proxy_web_url)')|(?:username|private_key_path|proxy_web_url))[ \t]*=.*(?:\r?\n|$)/gm,
+    /^[ \t]*(?:(?:"(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url)")|(?:'(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url)')|(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url))[ \t]*=.*(?:\r?\n|$)/gm,
     ""
   );
 }
@@ -293,10 +289,6 @@ function stringOrDefault(value: string | undefined, field: keyof AgentConfigSumm
   return value && value.trim() ? value : defaultValueForField<string>(field);
 }
 
-function arrayOrDefault(value: string[], field: keyof AgentConfigSummary) {
-  return value.length > 0 ? value : defaultValueForField<string[]>(field);
-}
-
 function minimumNumberForField(field: keyof AgentConfigSummary) {
   if (
     field === "udp_session_pool_size" ||
@@ -329,6 +321,9 @@ function normalizeTransportMode(value: string): AgentTransportMode {
 }
 
 function rejectRemovedDesktopTransportFields(raw: string) {
+  if (hasAssignment(raw, null, "proxy_addrs")) {
+    throw new Error("配置字段 proxy_addrs 已移除，Proxy 地址只能由登录会话下发");
+  }
   if (hasAssignment(raw, null, "quic_connection_pool_size")) {
     throw new Error("配置字段 quic_connection_pool_size 已移除，请使用 udp_session_pool_size");
   }

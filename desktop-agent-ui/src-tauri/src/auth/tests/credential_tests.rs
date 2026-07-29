@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::{AgentPermissionTrust, AuthenticatedAgentSession};
+use crate::runtime::{AgentPermissionTrust, AgentSessionCredentials, AuthenticatedAgentSession};
 
 #[test]
 fn device_authorization_rejects_malformed_codes_and_cross_origin_verification_urls() {
@@ -129,6 +129,7 @@ fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
         &credentials_dir,
         &account,
         AgentAuthAccountStatus::Expired,
+        &["proxy.example.com:443".to_string()],
         Some(&token),
     )
     .unwrap();
@@ -147,13 +148,30 @@ fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
         restored.proxy_identity_public_key_path,
         credentials_dir.join(PROXY_IDENTITY_PUBLIC_KEY_FILE)
     );
+    assert!(!restored.proxy_assignment_missing);
+    assert!(!restored.resume_after_proxy_assignment);
+
+    let record_path = credentials_dir.join(super::super::PERSISTED_AGENT_LOGIN_FILE);
+    let mut unassigned =
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&record_path).unwrap()).unwrap();
+    unassigned["proxy_addresses"] = serde_json::json!([]);
+    unassigned["proxy_assignment_missing"] = serde_json::json!(true);
+    unassigned["resume_after_proxy_assignment"] = serde_json::json!(true);
+    fs::write(&record_path, serde_json::to_vec(&unassigned).unwrap()).unwrap();
+    let restored_unassigned = load_persisted_agent_login_from_dir(&credentials_dir)
+        .unwrap()
+        .expect("unassigned login remains authenticated");
+    assert!(restored_unassigned.proxy_addresses.is_empty());
+    assert!(restored_unassigned.proxy_assignment_missing);
+    assert!(restored_unassigned.resume_after_proxy_assignment);
+    assert!(restored_unassigned.agent_access_token.is_some());
+
+    unassigned["version"] = serde_json::json!(1);
+    fs::write(&record_path, serde_json::to_vec(&unassigned).unwrap()).unwrap();
+    assert!(load_persisted_agent_login_from_dir(&credentials_dir).is_err());
     #[cfg(unix)]
     assert_eq!(
-        fs::metadata(credentials_dir.join(super::super::PERSISTED_AGENT_LOGIN_FILE))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
+        fs::metadata(&record_path).unwrap().permissions().mode() & 0o777,
         0o600
     );
 }
@@ -173,6 +191,7 @@ fn persisted_login_requires_untampered_managed_credential_files() {
         &credentials_dir,
         &account,
         AgentAuthAccountStatus::Active,
+        &["proxy.example.com:443".to_string()],
         None,
     )
     .unwrap();
@@ -222,6 +241,7 @@ fn tampered_persisted_role_and_permissions_restore_as_unverified() {
         &credentials_dir,
         &account,
         AgentAuthAccountStatus::Active,
+        &["proxy.example.com:443".to_string()],
         Some(&token),
     )
     .unwrap();
@@ -232,7 +252,6 @@ fn tampered_persisted_role_and_permissions_restore_as_unverified() {
     record["account"]["role"] = serde_json::json!("admin");
     record["account"]["permissions"] = serde_json::json!([
         "agent.packet_capture",
-        "agent.config.view",
         "agent.egress.edit",
         "agent.runtime_threads.edit"
     ]);
@@ -244,10 +263,13 @@ fn tampered_persisted_role_and_permissions_restore_as_unverified() {
     let session = AuthenticatedAgentSession::new(
         restored.account,
         restored.account_status,
-        restored.private_key_path,
-        restored.proxy_identity_public_key_path,
-        "https://proxy.example.com".to_string(),
-        restored.agent_access_token,
+        restored.proxy_addresses,
+        AgentSessionCredentials::new(
+            restored.private_key_path,
+            restored.proxy_identity_public_key_path,
+            "https://proxy.example.com".to_string(),
+            restored.agent_access_token,
+        ),
         AgentPermissionTrust::CachedUnverified,
     );
 

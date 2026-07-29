@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 
 pub const PROXY_CONNECT_TCP_PERMISSION: &str = "proxy.connect.tcp";
 pub const PROXY_CONNECT_UDP_PERMISSION: &str = "proxy.connect.udp";
+pub const PRIVATE_KEY_READ_PERMISSION: &str = "key.private.read";
+pub const KEY_ROTATE_PERMISSION: &str = "key.rotate";
+pub const AGENT_PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
+pub const AGENT_EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
+pub const AGENT_RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
+pub const DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION: &str = "agent.config.view";
 
 pub fn default_proxy_permissions() -> Vec<String> {
     vec![

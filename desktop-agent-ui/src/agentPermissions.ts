@@ -2,7 +2,6 @@ import type { AgentAuthAccount } from "./types";
 
 export const AGENT_PERMISSION_CODES = {
   packetCapture: "agent.packet_capture",
-  configView: "agent.config.view",
   egressEdit: "agent.egress.edit",
   runtimeThreadsEdit: "agent.runtime_threads.edit"
 } as const;
@@ -36,10 +35,8 @@ export function resolveAgentCapabilities(
       account,
       AGENT_PERMISSION_CODES.packetCapture
     ),
-    canViewRawConfig: hasAgentPermission(
-      account,
-      AGENT_PERMISSION_CODES.configView
-    ),
+    // 原始 TOML 不是可分配的普通用户功能，只对管理员开放。
+    canViewRawConfig: account.role === "admin",
     canEditEgress: hasAgentPermission(
       account,
       AGENT_PERMISSION_CODES.egressEdit

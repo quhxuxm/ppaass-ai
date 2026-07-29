@@ -3,6 +3,7 @@ package com.ppaass.ai.agent;
 import android.content.Context;
 import android.util.Log;
 
+import java.util.List;
 import java.util.Set;
 
 final class AgentAuthClient {
@@ -62,9 +63,14 @@ final class AgentAuthClient {
                     "Agent 权限同步凭据已失效");
         }
         if (!response.isSuccessful()) {
-            SyncFailure failure = response.status >= 500
-                    ? SyncFailure.TRANSIENT
-                    : SyncFailure.SERVICE_REJECTED;
+            String code = errorCode(response.body);
+            SyncFailure failure =
+                    AgentSyncFailurePolicy.forResponse(response.status, code);
+            if (failure == SyncFailure.PROXY_ADDRESS_REQUIRED) {
+                throw new SyncException(
+                        failure,
+                        "管理员尚未为当前账户分配 Proxy 地址");
+            }
             throw new SyncException(
                     failure,
                     "权限同步服务返回 HTTP " + response.status);
@@ -275,6 +281,7 @@ final class AgentAuthClient {
         final String username;
         final String role;
         final Set<String> permissions;
+        final List<String> proxyAddresses;
         final long keyVersion;
         final long expiresAt;
         final String privateKeyPem;
@@ -287,6 +294,7 @@ final class AgentAuthClient {
                 String username,
                 String role,
                 Set<String> permissions,
+                List<String> proxyAddresses,
                 long keyVersion,
                 long expiresAt,
                 String privateKeyPem,
@@ -297,6 +305,7 @@ final class AgentAuthClient {
             this.username = username;
             this.role = role;
             this.permissions = permissions;
+            this.proxyAddresses = proxyAddresses;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
             this.privateKeyPem = privateKeyPem;
@@ -312,6 +321,7 @@ final class AgentAuthClient {
         final String role;
         final String accountStatus;
         final Set<String> permissions;
+        final List<String> proxyAddresses;
         final boolean profileEnabled;
         final long keyVersion;
         final long expiresAt;
@@ -325,6 +335,7 @@ final class AgentAuthClient {
                 String role,
                 String accountStatus,
                 Set<String> permissions,
+                List<String> proxyAddresses,
                 boolean profileEnabled,
                 long keyVersion,
                 long expiresAt,
@@ -336,6 +347,7 @@ final class AgentAuthClient {
             this.role = role;
             this.accountStatus = accountStatus;
             this.permissions = permissions;
+            this.proxyAddresses = proxyAddresses;
             this.profileEnabled = profileEnabled;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
@@ -349,6 +361,7 @@ final class AgentAuthClient {
     enum SyncFailure {
         UNAUTHORIZED,
         TRANSIENT,
+        PROXY_ADDRESS_REQUIRED,
         SERVICE_REJECTED,
         INVALID_RESPONSE
     }

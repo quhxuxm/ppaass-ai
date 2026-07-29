@@ -13,16 +13,17 @@ use common::tun_control::{TUN_HELPER_DNS_STATE_FILE_NAME, TUN_HELPER_ROUTE_STATE
 use desktop_agent_be::PacketCaptureController;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::validate_managed_proxy_addresses;
 use crate::config::{
-    load_config_from_path, locate_config_path, make_absolute_path, summarize_config,
-    validate_config_candidate_against_trusted_baseline,
+    enforce_managed_config_path_for_account, locate_config_path, make_absolute_path,
+    summarize_config, validate_config_candidate_against_trusted_baseline,
 };
 use crate::logging::UiLogBuffer;
 #[cfg(target_os = "macos")]
 use crate::macos_helper::ensure_macos_tun_helper_for_config;
 #[cfg(windows)]
 use crate::models::ServiceRequest;
-use crate::models::{AgentState, PacketCaptureRuntimeStatus};
+use crate::models::{AgentState, PacketCaptureRuntimeStatus, AGENT_PACKET_CAPTURE_PERMISSION};
 use crate::network::connect_addr;
 #[cfg(target_os = "windows")]
 use crate::process_util::hide_child_console;

@@ -114,7 +114,7 @@ pub fn bind_socket_to_interface(
         return Err(std::io::Error::last_os_error());
     }
 
-    debug!("已将 socket 绑定到 Windows if_index={index} (dst={dst})");
+    debug!("已将远端 Proxy socket 绑定到 Windows if_index={index}");
     Ok(())
 }
 

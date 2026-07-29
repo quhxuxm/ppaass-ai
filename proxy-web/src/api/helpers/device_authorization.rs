@@ -4,7 +4,13 @@ pub(crate) fn default_web_permissions() -> Vec<String> {
     with_required_web_permissions(Vec::new())
 }
 
-pub(crate) fn with_required_web_permissions(mut permissions: Vec<String>) -> Vec<String> {
+pub(crate) fn without_deprecated_agent_permissions(mut permissions: Vec<String>) -> Vec<String> {
+    permissions.retain(|permission| permission != DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION);
+    permissions
+}
+
+pub(crate) fn with_required_web_permissions(permissions: Vec<String>) -> Vec<String> {
+    let mut permissions = without_deprecated_agent_permissions(permissions);
     permissions.extend(REQUIRED_WEB_USER_PERMISSIONS.map(str::to_string));
     permissions.sort_unstable();
     permissions.dedup();
@@ -108,9 +114,24 @@ pub(crate) fn require_active_agent_account(account: &WebAccount) -> Result<(), A
 pub(crate) async fn load_agent_credentials(
     state: &AppState,
     account: &WebAccount,
-) -> Result<(UserRecord, PrivateKeyResponse), ApiError> {
+) -> Result<(UserRecord, PrivateKeyResponse, Vec<String>), ApiError> {
     require_active_agent_account(account)?;
-    let profile = require_active_key_profile(state, account).await?;
+    let managed = state
+        .accounts
+        .get_managed_user(&account.account_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("账号不存在"))?;
+    let profile = match key_state(&managed, current_timestamp()) {
+        KeyState::Active => managed.profile.clone().ok_or_else(ApiError::internal)?,
+        KeyState::Disabled => return Err(ApiError::forbidden("Proxy 用户已停用")),
+        KeyState::Missing | KeyState::Expired => {
+            return Err(ApiError::conflict(
+                "key_request_required",
+                "当前没有可用密钥，请先提交密钥申请",
+            ));
+        }
+    };
+    let proxy_addresses = assigned_proxy_addresses(&managed, account)?;
     require_profile_permission(&profile, PRIVATE_KEY_READ_PERMISSION)?;
     let private_key = load_private_key(state, profile.clone()).await?;
     if private_key.private_key_pem.len() > MAX_AGENT_PRIVATE_KEY_BYTES {
@@ -121,13 +142,13 @@ pub(crate) async fn load_agent_credentials(
         );
         return Err(ApiError::internal());
     }
-    Ok((profile, private_key))
+    Ok((profile, private_key, proxy_addresses))
 }
 
 pub(crate) async fn load_agent_credentials_for_claim(
     state: &AppState,
     account: &WebAccount,
-) -> Result<(UserRecord, PrivateKeyResponse), ApiError> {
+) -> Result<(UserRecord, PrivateKeyResponse, Vec<String>), ApiError> {
     let managed = state
         .accounts
         .get_managed_user(&account.account_id)
@@ -136,6 +157,7 @@ pub(crate) async fn load_agent_credentials_for_claim(
     let profile = match key_state(&managed, current_timestamp()) {
         KeyState::Active => managed
             .profile
+            .clone()
             .ok_or_else(agent_device_authorization_invalidated)?,
         KeyState::Missing | KeyState::Expired | KeyState::Disabled => {
             return Err(agent_device_authorization_invalidated());
@@ -144,6 +166,7 @@ pub(crate) async fn load_agent_credentials_for_claim(
     if require_profile_permission(&profile, PRIVATE_KEY_READ_PERMISSION).is_err() {
         return Err(agent_device_authorization_invalidated());
     }
+    let proxy_addresses = assigned_proxy_addresses(&managed, account)?;
     let private_key = load_private_key(state, profile.clone()).await?;
     if private_key.private_key_pem.len() > MAX_AGENT_PRIVATE_KEY_BYTES {
         warn!(
@@ -153,7 +176,27 @@ pub(crate) async fn load_agent_credentials_for_claim(
         );
         return Err(ApiError::internal());
     }
-    Ok((profile, private_key))
+    Ok((profile, private_key, proxy_addresses))
+}
+
+pub(crate) fn assigned_proxy_addresses(
+    managed: &ManagedUser,
+    account: &WebAccount,
+) -> Result<Vec<String>, ApiError> {
+    let mut addresses = managed
+        .assigned_proxy_addresses
+        .iter()
+        .filter(|address| address.enabled)
+        .map(|address| address.address.clone())
+        .collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(
+            UserRepositoryError::ProxyAddressNotAssigned(account.account_id.clone()).into(),
+        );
+    }
+    Ok(addresses)
 }
 
 pub(crate) fn ensure_visible_agent_authorization(

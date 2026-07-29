@@ -74,6 +74,7 @@ pub(crate) fn key_state(managed: &ManagedUser, timestamp: i64) -> KeyState {
 pub(crate) fn me_profile_response(
     profile: UserRecord,
     expose_public_key: bool,
+    proxy_addresses: Vec<String>,
 ) -> MeProfileResponse {
     let UserRecord {
         username,
@@ -90,6 +91,7 @@ pub(crate) fn me_profile_response(
         username,
         public_key_pem: expose_public_key.then_some(public_key_pem),
         permissions,
+        proxy_addresses,
         enabled,
         origin,
         key_version,

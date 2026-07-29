@@ -64,7 +64,8 @@ impl LeaseRegistry {
         )
     }
 
-    pub(super) fn stage(&mut self, metadata: PersistedTunLease) -> Result<()> {
+    pub(super) fn stage(&mut self, mut metadata: PersistedTunLease) -> Result<()> {
+        metadata.clear_runtime_proxy_addresses();
         let lease_id = metadata.lease_id.clone();
         self.leases.insert(
             lease_id.clone(),

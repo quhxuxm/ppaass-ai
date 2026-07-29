@@ -17,11 +17,19 @@ pub(crate) async fn get_me(
         .map(SelfKeyRequestResponse::from_request);
     let key_state = key_state(&managed, current_timestamp());
     let expose_public_key = key_state == KeyState::Active;
+    let mut proxy_addresses = managed
+        .assigned_proxy_addresses
+        .iter()
+        .filter(|address| address.enabled)
+        .map(|address| address.address.clone())
+        .collect::<Vec<_>>();
+    proxy_addresses.sort_unstable();
+    proxy_addresses.dedup();
     Ok(Json(MeResponse {
         account: session.account,
         profile: managed
             .profile
-            .map(|profile| me_profile_response(profile, expose_public_key)),
+            .map(|profile| me_profile_response(profile, expose_public_key, proxy_addresses)),
         key_state,
         pending_request,
     }))

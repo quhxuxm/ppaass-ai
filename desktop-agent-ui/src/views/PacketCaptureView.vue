@@ -29,6 +29,7 @@ const AUTO_REFRESH_MAX_FILE_BYTES = 32 * 1024 * 1024;
 const props = defineProps<{
   summary: AgentConfigSummary;
   configPath: string;
+  configLocked: boolean;
   agentRunning: boolean;
   captureEnabled: boolean;
   refreshToken: number;
@@ -38,6 +39,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "toggle-capture": [enabled: boolean];
   "clear-capture": [];
+  "set-field": [field: keyof AgentConfigSummary, value: unknown];
 }>();
 
 const state = reactive({
@@ -320,6 +322,30 @@ function hasTauri() {
 
 <template>
   <div class="content-grid capture-page">
+    <Card class="panel span-12 capture-settings">
+      <template #title>
+        <div class="panel-heading inline">
+          <h2>明文抓包</h2>
+          <Tag value="输出设置" severity="info" />
+        </div>
+      </template>
+      <template #content>
+        <label class="field">
+          <span><AppIcon name="file-down" />PCAP 文件</span>
+          <InputText
+            :model-value="summary.tun_packet_capture_file"
+            :disabled="configLocked"
+            @update:model-value="
+              emit('set-field', 'tun_packet_capture_file', $event)
+            "
+          />
+          <small class="field-help">
+            配置抓包输出路径；开启、关闭和清空均在本页立即完成，无需重启 Agent。
+          </small>
+        </label>
+      </template>
+    </Card>
+
     <Card class="panel span-12 capture-hero">
       <template #title>
         <div class="panel-heading inline">

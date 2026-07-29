@@ -13,3 +13,5 @@ mod key_expiration;
 mod key_initial;
 mod password;
 mod permissions;
+mod proxy_address_assignment_errors;
+mod proxy_addresses;

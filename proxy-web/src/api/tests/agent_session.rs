@@ -2,7 +2,6 @@ use super::common::*;
 use crate::agent_tokens::AGENT_PROFILE_REFRESH_SECONDS;
 
 const PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
-const CONFIG_VIEW_PERMISSION: &str = "agent.config.view";
 const EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
 const RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
 
@@ -30,6 +29,10 @@ async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_change
     assert_eq!(login["account"]["role"], "user");
     assert_eq!(login["profile"]["username"], "sync-user");
     assert_eq!(
+        login["profile"]["proxy_addresses"],
+        json!(["127.0.0.1:8080"])
+    );
+    assert_eq!(
         login["refresh_after_seconds"],
         AGENT_PROFILE_REFRESH_SECONDS
     );
@@ -54,7 +57,6 @@ async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_change
                     json!({
                         "permissions": [
                             PACKET_CAPTURE_PERMISSION,
-                            CONFIG_VIEW_PERMISSION,
                             EGRESS_EDIT_PERMISSION,
                             RUNTIME_THREADS_EDIT_PERMISSION,
                             "custom.keep"
@@ -72,9 +74,12 @@ async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_change
     assert_eq!(response.status(), StatusCode::OK);
     let synced = json_body(response).await;
     let permissions = synced["profile"]["permissions"].as_array().unwrap();
+    assert_eq!(
+        synced["profile"]["proxy_addresses"],
+        json!(["127.0.0.1:8080"])
+    );
     for permission in [
         PACKET_CAPTURE_PERMISSION,
-        CONFIG_VIEW_PERMISSION,
         EGRESS_EDIT_PERMISSION,
         RUNTIME_THREADS_EDIT_PERMISSION,
         "custom.keep",

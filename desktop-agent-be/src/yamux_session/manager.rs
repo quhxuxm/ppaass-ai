@@ -38,6 +38,7 @@ struct UdpSessionHandle {
 
 pub struct YamuxSessionManager {
     config: Arc<AgentConfig>,
+    proxy_addrs: Arc<Vec<String>>,
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
@@ -57,16 +58,27 @@ pub struct YamuxSessionManager {
 }
 
 impl YamuxSessionManager {
-    pub fn new(config: Arc<AgentConfig>) -> Self {
-        Self::new_for_transport(config, TransportProtocol::Tcp, "tcp_direct_connections")
+    pub fn new(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_for_transport(
+            config,
+            proxy_addrs,
+            TransportProtocol::Tcp,
+            "tcp_direct_connections",
+        )
     }
 
-    pub fn new_udp(config: Arc<AgentConfig>) -> Self {
-        Self::new_for_transport(config, TransportProtocol::Udp, "udp_yamux_sessions")
+    pub fn new_udp(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_for_transport(
+            config,
+            proxy_addrs,
+            TransportProtocol::Udp,
+            "udp_yamux_sessions",
+        )
     }
 
     fn new_for_transport(
         config: Arc<AgentConfig>,
+        proxy_addrs: Arc<Vec<String>>,
         yamux_transport: TransportProtocol,
         manager_name: &'static str,
     ) -> Self {
@@ -79,6 +91,7 @@ impl YamuxSessionManager {
         };
         Self {
             config,
+            proxy_addrs,
             manager_name,
             yamux_transport,
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
@@ -152,7 +165,6 @@ mod tests {
 
     const MINIMAL_AGENT_CONFIG: &str = r#"
 listen_addr = "127.0.0.1:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 username = "user1"
 private_key_path = "keys/user1.pem"
 "#;
@@ -179,8 +191,9 @@ private_key_path = "keys/user1.pem"
     fn only_udp_manager_allocates_native_udp_pool() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
         let config = Arc::new(config);
-        let tcp_manager = YamuxSessionManager::new(config.clone());
-        let udp_manager = YamuxSessionManager::new_udp(config);
+        let proxy_addrs = Arc::new(vec!["127.0.0.1:8080".to_string()]);
+        let tcp_manager = YamuxSessionManager::new(config.clone(), proxy_addrs.clone());
+        let udp_manager = YamuxSessionManager::new_udp(config, proxy_addrs);
 
         assert!(tcp_manager.udp_sessions.is_empty());
         assert_eq!(udp_manager.udp_sessions.len(), 4);
@@ -195,7 +208,10 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig =
             toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
                 .unwrap();
-        let manager = YamuxSessionManager::new_udp(Arc::new(config));
+        let manager = YamuxSessionManager::new_udp(
+            Arc::new(config),
+            Arc::new(vec!["127.0.0.1:8080".to_string()]),
+        );
 
         assert!(manager.udp_sessions.is_empty());
     }
@@ -205,7 +221,10 @@ private_key_path = "keys/user1.pem"
         let config: AgentConfig =
             toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
                 .unwrap();
-        let manager = YamuxSessionManager::new_udp(Arc::new(config));
+        let manager = YamuxSessionManager::new_udp(
+            Arc::new(config),
+            Arc::new(vec!["127.0.0.1:8080".to_string()]),
+        );
 
         assert_eq!(manager.auto_udp_fallback_to_yamux.len(), 4);
         manager.auto_udp_fallback_to_yamux[1].store(true, Ordering::Release);

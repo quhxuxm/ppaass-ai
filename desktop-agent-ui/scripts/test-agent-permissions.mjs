@@ -29,7 +29,6 @@ try {
 
   assert.deepEqual(Object.values(AGENT_PERMISSION_CODES), [
     "agent.packet_capture",
-    "agent.config.view",
     "agent.egress.edit",
     "agent.runtime_threads.edit"
   ]);
@@ -115,6 +114,7 @@ try {
   );
   assert.match(workspace, /resolveAgentCapabilities\(props\.account\)/);
   assert.match(workspace, /tab\.key !== "capture"/);
+  assert.match(workspace, /tab\.key !== "egress"/);
   assert.match(workspace, /tab\.key !== "toml"/);
   assert.match(workspace, /@update:active-tab="setActiveTab"/);
   assert.match(workspace, /togglePermittedPacketCapture/);
@@ -152,13 +152,20 @@ try {
     "utf8"
   );
   for (const field of [
-    "proxy_addrs",
+    "transport_mode",
     "connect_timeout_secs",
     "compression_mode",
-    "udp_session_pool_size"
+    "udp_session_pool_size",
+    "udp_yamux_sessions",
+    "udp_yamux_max_streams_per_session",
+    "udp_yamux_open_stream_timeout_secs",
+    "udp_yamux_keepalive_interval_secs",
+    "udp_yamux_connection_write_timeout_secs",
+    "udp_yamux_stream_window_size_kb"
   ]) {
     assert.match(egress, new RegExp(`"${field}"`));
   }
+  assert.doesNotMatch(egress, /proxy_addrs|远端出口地址/);
   assert.match(
     egress,
     /protectedEgressFields\.has\(field\)/
@@ -167,18 +174,31 @@ try {
     egress.match(/:disabled="configLocked \|\| !canEditEgress"/g)
       ?.length >= 4
   );
-  assert.match(egress, /没有出口配置编辑权限/);
+  assert.doesNotMatch(egress, /没有出口配置编辑权限/);
 
   const routing = await readFile(
     new URL("../src/views/RoutingView.vue", import.meta.url),
     "utf8"
   );
-  assert.match(routing, /if \(props\.canEditRuntimeThreads\)/);
+  assert.match(routing, /v-if="canEditRuntimeThreads"/);
   assert.match(
     routing,
-    /:disabled="configLocked \|\| !canEditRuntimeThreads"/
+    /:disabled="configLocked"/
   );
-  assert.match(routing, /没有修改系统线程数的权限/);
+  assert.doesNotMatch(routing, /没有修改系统线程数的权限/);
+
+  const forwarding = await readFile(
+    new URL("../src/views/ForwardingView.vue", import.meta.url),
+    "utf8"
+  );
+  const capture = await readFile(
+    new URL("../src/views/PacketCaptureView.vue", import.meta.url),
+    "utf8"
+  );
+  assert.doesNotMatch(forwarding, /明文抓包|tun_packet_capture_file/);
+  assert.match(capture, /<h2>明文抓包<\/h2>/);
+  assert.match(capture, /summary\.tun_packet_capture_file/);
+  assert.match(capture, /emit\('set-field', 'tun_packet_capture_file'/);
 
   const configController = await readFile(
     new URL(

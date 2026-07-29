@@ -2,7 +2,6 @@
 # UI 登录成功后会写入托管用户名和应用私有目录中的密钥路径。
 
 listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
 proxy_web_url = "http://127.0.0.1:8787"
 # 远程部署地址应只放在 config/remote/agent.toml。
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
@@ -55,7 +54,7 @@ stream_window_size_kb = 8192
 # SOCKS5/HTTP 监听器会保持可用，便于 TUN 和手动浏览器代理并行测试。
 #
 # agent 启动时会自动改写系统路由表：
-#   * 每个 `proxy_addrs` 条目都会通过当前默认网关安装一条 /32（或 /128）
+#   * 服务端分配的每个受管 Proxy 地址都会通过当前默认网关安装一条 /32（或 /128）
 #     旁路路由，确保代理流量不会回环进入 TUN。
 #   * 添加两条指向 TUN 的 split-default 路由（0.0.0.0/1 和 128.0.0.0/1），
 #     它们优先级高于现有默认路由。原默认路由不会被修改。

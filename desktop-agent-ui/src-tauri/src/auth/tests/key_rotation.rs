@@ -76,6 +76,7 @@ async fn password_login_accepts_active_user_and_admin_profiles() {
                 "profile": {
                     "username": "alice",
                     "permissions": ["key.private.read", "key.rotate"],
+                    "proxy_addresses": ["proxy.example.com:443"],
                     "enabled": true,
                     "key_version": 8,
                     "expires_at": 4_000_000_000_i64
@@ -135,6 +136,7 @@ async fn rotation_uses_csrf_and_returns_only_validated_next_version() {
             "profile": {
                 "username": "alice",
                 "permissions": ["key.private.read", "key.rotate"],
+                "proxy_addresses": ["proxy.example.com:443"],
                 "enabled": true,
                 "key_version": 8,
                 "expires_at": 4_000_000_000_i64
@@ -190,6 +192,7 @@ fn device_token_accepts_an_admin_with_an_active_profile() {
             profile: AgentDeviceProfile {
                 username: "admin-proxy".to_string(),
                 permissions: vec!["key.private.read".to_string(), "key.rotate".to_string()],
+                proxy_addresses: Some(vec!["proxy.example.com:443".to_string()]),
                 enabled: true,
                 key_version: 3,
                 expires_at: Some(4_000_000_000),
@@ -237,6 +240,7 @@ async fn expired_key_rotation_directs_the_user_to_admin_approval() {
             "profile": {
                 "username": "alice",
                 "permissions": ["key.private.read", "key.rotate"],
+                "proxy_addresses": ["proxy.example.com:443"],
                 "enabled": true,
                 "key_version": 8,
                 "expires_at": 1

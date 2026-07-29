@@ -61,9 +61,18 @@ fn persisted_lease_survives_helper_restart_round_trip() {
     .unwrap();
 
     let loaded = load_persisted_leases(&path).unwrap();
+    let mut expected = expected;
+    for lease in &mut expected {
+        lease.clear_runtime_proxy_addresses();
+    }
     assert_eq!(
         serde_json::to_value(loaded).unwrap(),
         serde_json::to_value(expected).unwrap()
+    );
+    assert!(
+        !fs::read_to_string(&path)
+            .unwrap()
+            .contains("127.0.0.1:8080")
     );
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -103,12 +112,16 @@ fn lease_owner_identity_rejects_pid_reuse() {
 }
 
 #[test]
-fn restart_metadata_contains_full_start_request_and_actual_tun_identity() {
-    let recovery = route_recovery();
+fn restart_metadata_keeps_route_recovery_without_server_address() {
+    let mut metadata = lease("redacted", 42);
+    metadata.route_recovery = Some(route_recovery());
+    metadata.clear_runtime_proxy_addresses();
+    let recovery = metadata.route_recovery.unwrap();
     let value = serde_json::to_value(&recovery).unwrap();
 
     assert_eq!(value["request"]["ipv4"], "198.18.0.1/15");
     assert_eq!(value["request"]["proxy_dns"], true);
+    assert_eq!(value["request"]["proxy_addrs"], serde_json::json!([]));
     assert_eq!(value["actual_name"], "utun42");
     assert_eq!(value["tun_if_index"], 42);
     assert_eq!(value["proxy_ips"][0], "127.0.0.1");

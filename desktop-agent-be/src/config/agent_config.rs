@@ -1,6 +1,6 @@
 //! Desktop Agent 配置模型。
 //!
-//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、
+//! 这里定义 agent.toml 的运行时结构：本地监听、认证私钥、
 //! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
@@ -15,9 +15,8 @@ use std::path::Path;
 pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
-    pub proxy_addrs: Vec<String>,
     /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Web 地址。
-    /// 独立运行的 Agent 不消费该 UI 配置，因此它仍是可选项。
+    /// 后端库和 CI 集成测试工具不消费该 UI 控制面配置，因此它仍是可选项。
     #[serde(default)]
     pub proxy_web_url: Option<String>,
     pub username: String,

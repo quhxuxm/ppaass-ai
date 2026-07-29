@@ -3,9 +3,20 @@ use crate::default_proxy_permissions;
 use protocol::RsaKeyPair;
 use tempfile::TempDir;
 
+pub(super) const TEST_PROXY_ADDRESS_ID: &str = "pxy_test";
+
 pub(super) async fn test_store() -> (TempDir, SqliteUserRepository) {
     let directory = TempDir::new().unwrap();
     let store = SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
+        .await
+        .unwrap();
+    store
+        .create_proxy_address(NewProxyAddress {
+            proxy_address_id: TEST_PROXY_ADDRESS_ID.to_string(),
+            label: "Test Proxy".to_string(),
+            address: "127.0.0.1:8080".to_string(),
+            enabled: true,
+        })
         .await
         .unwrap();
     (directory, store)
@@ -16,6 +27,17 @@ pub(super) fn public_key() -> String {
         .unwrap()
         .public_key_to_pem()
         .unwrap()
+}
+
+pub(super) async fn drop_v8_proxy_address_tables(store: &SqliteUserRepository) {
+    sqlx::query("DROP TABLE account_proxy_addresses")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE proxy_addresses")
+        .execute(&store.pool)
+        .await
+        .unwrap();
 }
 
 pub(super) fn managed_user(
@@ -37,6 +59,7 @@ pub(super) fn managed_user(
         profile: NewUser::new(username, public_key(), UserOrigin::Admin),
         encrypted_private_key: b"encrypted-private-key".to_vec(),
         external_identity,
+        proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
     }
 }
 
@@ -77,6 +100,7 @@ pub(super) fn initial_approval(
         request_id: request_id.to_string(),
         reviewer_account_id: reviewer_account_id.to_string(),
         expires_at,
+        proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
         material: ApprovedKeyMaterial::Initial {
             profile: NewUser::new(username, public_key(), UserOrigin::Local),
             encrypted_private_key: b"encrypted-private-key".to_vec(),
@@ -93,5 +117,8 @@ mod key_requests;
 mod key_requests_admin;
 mod migrations;
 mod permissions;
+mod permissions_migration;
+mod proxy_address_migration;
+mod proxy_addresses;
 mod read_only;
 mod users;

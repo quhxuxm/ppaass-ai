@@ -29,6 +29,8 @@ final class AgentAuthResponseParser {
             throw new AgentAuthClient.AuthException("Proxy 用户已停用");
         }
         Set<String> permissions = permissions(profile.permissions);
+        List<String> proxyAddresses =
+                ManagedProxyAddresses.require(profile.proxy_addresses);
         long keyVersion = requireLong(profile.key_version);
         long expiresAt = optionalEpoch(profile.expires_at);
         if (keyVersion < 1 || expiresAt == 0 || expiresAt < -1) {
@@ -46,6 +48,7 @@ final class AgentAuthResponseParser {
                 username,
                 role,
                 permissions,
+                proxyAddresses,
                 keyVersion,
                 expiresAt,
                 privateKeyPem,
@@ -70,6 +73,7 @@ final class AgentAuthResponseParser {
 
         String username = expectedUsername;
         Set<String> permissions = Collections.emptySet();
+        List<String> proxyAddresses = Collections.emptyList();
         boolean profileEnabled = false;
         long keyVersion = -1;
         long expiresAt = -1;
@@ -82,6 +86,8 @@ final class AgentAuthResponseParser {
             }
             requireLinkedUsername(account.linked_username, username);
             permissions = permissions(profile.permissions);
+            proxyAddresses =
+                    ManagedProxyAddresses.require(profile.proxy_addresses);
             profileEnabled = requireBoolean(profile.enabled);
             keyVersion = requireLong(profile.key_version);
             expiresAt = optionalEpoch(profile.expires_at);
@@ -95,6 +101,7 @@ final class AgentAuthResponseParser {
                 role,
                 account.status,
                 permissions,
+                proxyAddresses,
                 profileEnabled,
                 keyVersion,
                 expiresAt,

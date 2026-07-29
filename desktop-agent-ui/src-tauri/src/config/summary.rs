@@ -7,6 +7,9 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
             "配置字段 quic_connection_pool_size 已移除，请使用 udp_session_pool_size".to_string(),
         );
     }
+    if value_at(&value, &["proxy_addrs"]).is_some() {
+        return Err("配置字段 proxy_addrs 已移除；Proxy 地址只能由认证服务分配".to_string());
+    }
     for (removed, current) in [
         ("helper_enabled", "macos_helper_enabled"),
         ("helper_socket", "macos_helper_socket"),
@@ -34,7 +37,6 @@ pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> 
 
     Ok(AgentConfigSummary {
         listen_addr: string_or(&value, &["listen_addr"], "0.0.0.0:10080"),
-        proxy_addrs: string_array_at(&value, &["proxy_addrs"]),
         username: string_or(&value, &["username"], ""),
         private_key_path: string_or(&value, &["private_key_path"], ""),
         transport_mode,

@@ -203,6 +203,7 @@ impl SqliteUserRepository {
                 profile: Some(profile),
                 has_private_key,
                 providers: Vec::new(),
+                assigned_proxy_addresses: Vec::new(),
             });
         }
         Ok(users)
@@ -252,6 +253,7 @@ impl SqliteUserRepository {
                 profile: Some(profile),
                 has_private_key,
                 providers: Vec::new(),
+                assigned_proxy_addresses: Vec::new(),
             }))
         }
     }

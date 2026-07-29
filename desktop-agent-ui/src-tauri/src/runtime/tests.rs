@@ -2,10 +2,12 @@ use std::path::PathBuf;
 
 use zeroize::Zeroizing;
 
-use super::{AgentPermissionTrust, AgentRuntime, AuthenticatedAgentSession};
+use super::{
+    AgentPermissionTrust, AgentRuntime, AgentSessionCredentials, AuthenticatedAgentSession,
+};
 use crate::auth::validated_agent_access_token;
 use crate::models::{
-    AgentAuthAccount, AgentAuthAccountStatus, AGENT_CONFIG_VIEW_PERMISSION,
+    AgentAuthAccount, AgentAuthAccountStatus, AGENT_EGRESS_EDIT_PERMISSION,
     AGENT_PACKET_CAPTURE_PERMISSION,
 };
 
@@ -46,14 +48,17 @@ fn tampered_cached_admin_permissions_are_fail_closed_until_server_sync() {
                 "admin",
                 &[
                     AGENT_PACKET_CAPTURE_PERMISSION,
-                    AGENT_CONFIG_VIEW_PERMISSION,
+                    AGENT_EGRESS_EDIT_PERMISSION,
                 ],
             ),
             AgentAuthAccountStatus::Active,
-            PathBuf::from("private.pem"),
-            PathBuf::from("proxy.pem"),
-            "https://proxy.example.com".to_string(),
-            Some(token("A")),
+            managed_proxy_addresses(),
+            AgentSessionCredentials::new(
+                PathBuf::from("private.pem"),
+                PathBuf::from("proxy.pem"),
+                "https://proxy.example.com".to_string(),
+                Some(token("A")),
+            ),
             AgentPermissionTrust::CachedUnverified,
         ))
         .unwrap();
@@ -75,10 +80,13 @@ fn successful_sync_restores_server_verified_role_and_permissions() {
         .set_authenticated_session(AuthenticatedAgentSession::new(
             account("admin", &[AGENT_PACKET_CAPTURE_PERMISSION]),
             AgentAuthAccountStatus::Active,
-            PathBuf::from("private.pem"),
-            PathBuf::from("proxy.pem"),
-            "https://proxy.example.com".to_string(),
-            Some(token("A")),
+            managed_proxy_addresses(),
+            AgentSessionCredentials::new(
+                PathBuf::from("private.pem"),
+                PathBuf::from("proxy.pem"),
+                "https://proxy.example.com".to_string(),
+                Some(token("A")),
+            ),
             AgentPermissionTrust::CachedUnverified,
         ))
         .unwrap();
@@ -91,10 +99,11 @@ fn successful_sync_restores_server_verified_role_and_permissions() {
                 "admin",
                 &[
                     AGENT_PACKET_CAPTURE_PERMISSION,
-                    AGENT_CONFIG_VIEW_PERMISSION,
+                    AGENT_EGRESS_EDIT_PERMISSION,
                 ],
             ),
             AgentAuthAccountStatus::Active,
+            managed_proxy_addresses(),
             token("B"),
         )
         .unwrap()
@@ -105,7 +114,7 @@ fn successful_sync_restores_server_verified_role_and_permissions() {
         synced.account.permissions,
         [
             AGENT_PACKET_CAPTURE_PERMISSION,
-            AGENT_CONFIG_VIEW_PERMISSION
+            AGENT_EGRESS_EDIT_PERMISSION
         ]
     );
     assert_eq!(
@@ -122,10 +131,13 @@ fn sync_errors_and_stale_tokens_preserve_the_authenticated_session() {
         .set_authenticated_session(AuthenticatedAgentSession::new(
             account.clone(),
             AgentAuthAccountStatus::Active,
-            PathBuf::from("private.pem"),
-            PathBuf::from("proxy.pem"),
-            "https://proxy.example.com".to_string(),
-            Some(token("A")),
+            managed_proxy_addresses(),
+            AgentSessionCredentials::new(
+                PathBuf::from("private.pem"),
+                PathBuf::from("proxy.pem"),
+                "https://proxy.example.com".to_string(),
+                Some(token("A")),
+            ),
             AgentPermissionTrust::CachedUnverified,
         ))
         .unwrap();
@@ -141,6 +153,7 @@ fn sync_errors_and_stale_tokens_preserve_the_authenticated_session() {
                 ..account
             },
             AgentAuthAccountStatus::Disabled,
+            managed_proxy_addresses(),
             token("B"),
         )
         .unwrap()
@@ -157,6 +170,10 @@ fn sync_errors_and_stale_tokens_preserve_the_authenticated_session() {
         runtime.permission_sync_error().unwrap(),
         Some("暂时无法同步".to_string())
     );
+}
+
+fn managed_proxy_addresses() -> Vec<String> {
+    vec!["proxy.example.com:443".to_string()]
 }
 
 fn account(role: &str, permissions: &[&str]) -> AgentAuthAccount {

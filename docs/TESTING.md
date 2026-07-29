@@ -63,13 +63,19 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
+cargo run --release -p desktop-agent-be --features integration-test-harness \
+  --bin desktop-agent-integration-harness -- \
+  --config config/local/agent-forward.toml \
+  --managed-proxy-address 127.0.0.1:8080
 ```
+
+This binary is a CI/test-only harness. Product traffic must be started after login from the
+Desktop Agent UI; neither `agent.toml` nor the product CLI accepts a Proxy address.
 
 **Expected Output:**
 ```
 [2024-01-31T02:00:00Z INFO  desktop_agent] Starting agent server
-[2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7070
+[2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7080
 ```
 
 ### Terminal 4: Run Integration Tests
@@ -102,7 +108,7 @@ cd /path/to/ppaass-ai
 **Expected Output:**
 ```
 === Starting Performance Tests ===
-Agent: 127.0.0.1:7070, Concurrency: 100, Duration: 60s
+Agent: 127.0.0.1:7080, Concurrency: 100, Duration: 60s
 [Running tests for 60 seconds...]
 === Performance Tests Complete ===
 Total Requests: 12543
@@ -159,7 +165,7 @@ The HTML report includes:
 
 ```bash
 # For remote testing
-AGENT_ADDR=10.0.0.1:7070 PROXY_ADDR=10.0.0.2:8080 ./run-tests.sh integration
+AGENT_ADDR=10.0.0.1:7080 PROXY_ADDR=10.0.0.2:8080 ./run-tests.sh integration
 
 # For custom ports
 AGENT_ADDR=127.0.0.1:9000 ./run-tests.sh performance 200 120
@@ -195,9 +201,9 @@ cargo build --release -p integration-tests
 
 # Use the binary
 ./target/release/integration-tests mock-target
-./target/release/integration-tests integration --agent-addr 127.0.0.1:7070
+./target/release/integration-tests integration --agent-addr 127.0.0.1:7080
 ./target/release/integration-tests performance \
-    --agent-addr 127.0.0.1:7070 \
+    --agent-addr 127.0.0.1:7080 \
     --concurrency 100 \
     --duration 60 \
     --output my-report.html
@@ -210,7 +216,7 @@ cargo build --release -p integration-tests
 **Solution:** Make sure all three components are running:
 1. Check mock target servers: `curl http://127.0.0.1:9090/health`
 2. Check proxy logs and confirm the proxy listen port is open
-3. Check agent is listening: `netstat -an | grep 7070`
+3. Check agent is listening: `netstat -an | grep 7080`
 
 ### Issue: "Authentication failed"
 
@@ -299,8 +305,8 @@ jobs:
       - name: Start proxy
         run: cargo run --release -p proxy -- --config config/proxy.toml &
         
-      - name: Start agent
-        run: cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml &
+      - name: Start test-only agent harness
+        run: cargo run --release -p desktop-agent-be --features integration-test-harness --bin desktop-agent-integration-harness -- --config config/local/agent-forward.toml --managed-proxy-address 127.0.0.1:8080 &
         
       - name: Run integration tests
         run: ./run-tests.sh integration

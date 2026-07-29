@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 pub(crate) const AGENT_PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
-pub(crate) const AGENT_CONFIG_VIEW_PERMISSION: &str = "agent.config.view";
 pub(crate) const AGENT_EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
 pub(crate) const AGENT_RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
 
@@ -112,10 +111,9 @@ pub(crate) struct PacketCaptureRuntimeStatus {
     pub(crate) file: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub(crate) struct AgentConfigSummary {
     pub(crate) listen_addr: String,
-    pub(crate) proxy_addrs: Vec<String>,
     #[serde(default, skip_serializing)]
     pub(crate) username: String,
     #[serde(default, skip_serializing)]

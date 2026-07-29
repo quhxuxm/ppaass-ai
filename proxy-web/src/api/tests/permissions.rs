@@ -18,6 +18,7 @@ async fn admin_permission_updates_cannot_remove_required_web_capabilities() {
                         "username": "permission-user",
                         "password": "permission-user-password",
                         "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
                         "permissions": ["audit.read"]
                     })
                     .to_string(),
@@ -64,6 +65,57 @@ async fn admin_permission_updates_cannot_remove_required_web_capabilities() {
 }
 
 #[tokio::test]
+async fn deprecated_config_view_permission_is_not_assignable() {
+    let (_directory, app) = test_app().await;
+    let (cookie, csrf) = login_admin(&app).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/admin/users")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "username": "deprecated-permission-user",
+                        "password": "deprecated-permission-password",
+                        "expires_at": FUTURE_EXPIRATION,
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "permissions": [
+                            "agent.config.view",
+                            "agent.egress.edit",
+                            "agent.packet_capture",
+                            "agent.runtime_threads.edit"
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let permissions = json_body(response).await["user"]["profile"]["permissions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        !permissions
+            .iter()
+            .any(|permission| permission == "agent.config.view")
+    );
+    for permission in [
+        "agent.egress.edit",
+        "agent.packet_capture",
+        "agent.runtime_threads.edit",
+    ] {
+        assert!(permissions.iter().any(|candidate| candidate == permission));
+    }
+}
+
+#[tokio::test]
 async fn legacy_database_permission_update_does_not_gain_private_key_capabilities() {
     let (directory, app) = test_app().await;
     let store = SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
@@ -89,7 +141,10 @@ async fn legacy_database_permission_update_does_not_gain_private_key_capabilitie
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"permissions": ["legacy.audit"]}).to_string(),
+                    json!({
+                        "permissions": ["agent.config.view", "legacy.audit"]
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -100,6 +155,24 @@ async fn legacy_database_permission_update_does_not_gain_private_key_capabilitie
     assert_eq!(body["profile"]["origin"], "legacy");
     assert_eq!(body["profile"]["permissions"], json!(["legacy.audit"]));
     assert_admin_response_is_redacted(&body);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/admin/users/legacy-user")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"proxy_address_ids": [TEST_PROXY_ADDRESS_ID]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let response = app
         .oneshot(

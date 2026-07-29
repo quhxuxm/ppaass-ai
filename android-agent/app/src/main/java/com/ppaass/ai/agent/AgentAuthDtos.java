@@ -60,6 +60,7 @@ final class AgentAuthDtos {
     static final class Profile {
         public String username;
         public List<String> permissions;
+        public List<String> proxy_addresses;
         public Boolean enabled;
         public Long key_version;
         public Long expires_at;

@@ -13,10 +13,7 @@ const ROUTE_CLEANUP_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
     if !should_delete_recorded_route(record) {
-        debug!(
-            "保留 macOS scoped default bypass，不在 TUN 关闭时删除：destination={}/{} gateway={:?} if_name={:?}",
-            record.destination, record.prefix, record.gateway, record.if_name
-        );
+        debug!("保留 macOS scoped default bypass，不在 TUN 关闭时删除");
         return true;
     }
 
@@ -24,7 +21,7 @@ pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord
     if let Some(matches) = matching_routes(mgr, record)
         && matches.is_empty()
     {
-        debug!("TUN 路由已不存在：{}", route);
+        debug!("TUN 路由已不存在");
         return true;
     }
 
@@ -36,16 +33,13 @@ pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord
     match mgr.delete(&route) {
         Ok(()) => {
             if !recorded_route_exists(mgr, record) {
-                debug!("已清理 TUN 路由：{}", route);
+                debug!("已清理 TUN 路由");
                 return true;
             }
-            debug!("删除 TUN 路由 {} 返回成功，但路由表中仍存在匹配条目", route);
+            debug!("删除 TUN 路由返回成功，但路由表中仍存在匹配条目");
         }
-        Err(e) => {
-            debug!(
-                "按状态文件直接删除路由 {} 失败，将检查当前路由表：{e}",
-                route
-            );
+        Err(_) => {
+            debug!("按状态文件直接删除路由失败，将检查当前路由表");
         }
     }
 
@@ -58,7 +52,7 @@ pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord
         return true;
     }
 
-    warn!("删除 TUN 路由失败，路由表中仍存在匹配条目：{}", route);
+    warn!("删除 TUN 路由失败，路由表中仍存在匹配条目");
     false
 }
 
@@ -96,24 +90,23 @@ fn matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> Option<Vec<R
 }
 
 fn delete_matching_routes(mgr: &mut RouteManager, record: &RouteRecord) -> bool {
-    let route = record.to_route();
     let matches = match matching_routes(mgr, record) {
         Some(matches) => matches,
         None => return false,
     };
 
     if matches.is_empty() {
-        debug!("TUN 路由已不存在：{}", route);
+        debug!("TUN 路由已不存在");
         return true;
     }
 
     let mut deleted_all = true;
     for candidate in matches {
         match mgr.delete(&candidate) {
-            Ok(()) => debug!("已按当前路由表条目清理 TUN 路由：{}", candidate),
-            Err(e) => {
+            Ok(()) => debug!("已按当前路由表条目清理 TUN 路由"),
+            Err(_) => {
                 deleted_all = false;
-                warn!("删除当前路由表中的 TUN 路由 {} 失败：{e}", candidate);
+                warn!("删除当前路由表中的 TUN 路由失败");
             }
         }
     }
@@ -353,7 +346,7 @@ fn delete_route_with_platform_tool(_record: &RouteRecord) -> bool {
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn run_route_cleanup_command(mut command: Command) -> bool {
-    debug!("运行路由清理命令：{:?}", command);
+    debug!("运行路由清理命令");
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -29,7 +29,7 @@ use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
 
 const CREDENTIALS_DIR: &str = "credentials";
 const PERSISTED_AGENT_LOGIN_FILE: &str = "agent-login.json";
-const PERSISTED_AGENT_LOGIN_VERSION: u8 = 1;
+const PERSISTED_AGENT_LOGIN_VERSION: u8 = 2;
 const MAX_PERSISTED_AGENT_LOGIN_BYTES: u64 = 16 * 1024;
 const PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
 const MAX_NORMAL_RESPONSE_BYTES: usize = 64 * 1024;
@@ -41,6 +41,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(crate) struct DownloadedCredential {
     pub(crate) account: AgentAuthAccount,
+    pub(crate) proxy_addresses: Vec<String>,
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) proxy_identity_public_key_pem: String,
     pub(crate) proxy_web_url: String,
@@ -57,6 +58,9 @@ pub(crate) struct AgentAccessToken {
 pub(crate) struct PersistedAgentLogin {
     pub(crate) account: AgentAuthAccount,
     pub(crate) account_status: AgentAuthAccountStatus,
+    pub(crate) proxy_addresses: Vec<String>,
+    pub(crate) proxy_assignment_missing: bool,
+    pub(crate) resume_after_proxy_assignment: bool,
     pub(crate) private_key_path: PathBuf,
     pub(crate) proxy_identity_public_key_path: PathBuf,
     pub(crate) agent_access_token: Option<AgentAccessToken>,
@@ -67,6 +71,11 @@ pub(crate) struct PersistedAgentLogin {
 struct PersistedAgentLoginRecord {
     version: u8,
     account: AgentAuthAccount,
+    proxy_addresses: Vec<String>,
+    #[serde(default)]
+    proxy_assignment_missing: bool,
+    #[serde(default)]
+    resume_after_proxy_assignment: bool,
     #[serde(default)]
     account_status: AgentAuthAccountStatus,
     #[serde(default)]
@@ -138,6 +147,7 @@ pub(crate) struct MeResponse {
 pub(crate) struct MeProfile {
     username: String,
     permissions: Vec<String>,
+    proxy_addresses: Option<Vec<String>>,
     enabled: bool,
     key_version: i64,
     expires_at: Option<i64>,
@@ -200,6 +210,7 @@ pub(crate) struct AgentDeviceTokenResponse {
 pub(crate) struct AgentDeviceProfile {
     username: String,
     permissions: Vec<String>,
+    proxy_addresses: Option<Vec<String>>,
     #[serde(default = "enabled_by_default")]
     enabled: bool,
     key_version: i64,
@@ -228,6 +239,7 @@ mod http;
 mod key_store;
 mod password_login;
 mod permission_sync;
+mod proxy_addresses;
 
 pub(crate) use credential_store::*;
 pub(crate) use device_login::*;
@@ -235,6 +247,7 @@ pub(crate) use http::*;
 pub(crate) use key_store::*;
 pub(crate) use password_login::*;
 pub(crate) use permission_sync::*;
+pub(crate) use proxy_addresses::*;
 
 #[cfg(test)]
 mod tests;

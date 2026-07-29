@@ -16,6 +16,11 @@ impl SqliteUserRepository {
             .as_deref()
             .map(normalize_permissions)
             .transpose()?;
+        let proxy_address_ids = update
+            .proxy_address_ids
+            .as_deref()
+            .map(normalize_proxy_address_ids)
+            .transpose()?;
         let display_name = update
             .display_name
             .map(|value| {
@@ -122,6 +127,15 @@ impl SqliteUserRepository {
                 .execute(&mut *transaction)
                 .await?;
             }
+        }
+        if let Some(proxy_address_ids) = proxy_address_ids {
+            replace_account_proxy_addresses(
+                &mut transaction,
+                &account.account_id,
+                &proxy_address_ids,
+                now(),
+            )
+            .await?;
         }
 
         let managed = fetch_managed_for_account(&mut transaction, account).await?;

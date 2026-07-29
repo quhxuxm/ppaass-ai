@@ -2,7 +2,7 @@ use toml_edit::Array;
 
 use super::*;
 use crate::models::{
-    AgentAuthAccount, AGENT_CONFIG_VIEW_PERMISSION, AGENT_EGRESS_EDIT_PERMISSION,
+    AgentAuthAccount, AGENT_EGRESS_EDIT_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
     AGENT_RUNTIME_THREADS_EDIT_PERMISSION,
 };
 use crate::runtime::AgentRuntime;
@@ -11,19 +11,12 @@ pub(crate) fn prepare_config_for_account(
     loaded: LoadedAgentConfig,
     account: &AgentAuthAccount,
 ) -> Result<LoadedAgentConfig, String> {
+    let (loaded, _) = enforce_loaded_config_for_account(loaded, account)?;
     let mut loaded = redact_managed_identity(loaded)?;
-    if !account.has_permission(AGENT_CONFIG_VIEW_PERMISSION) {
+    if account.role != "admin" {
         loaded.raw.clear();
-        loaded.summary = unprivileged_config_status(&loaded.summary);
     }
     Ok(loaded)
-}
-
-fn unprivileged_config_status(summary: &AgentConfigSummary) -> AgentConfigSummary {
-    AgentConfigSummary {
-        tun_enabled: summary.tun_enabled,
-        ..AgentConfigSummary::default()
-    }
 }
 
 #[cfg(test)]
@@ -39,22 +32,22 @@ pub(crate) fn validate_config_update_permissions(
 
 pub(crate) fn validate_config_summary_update_permissions(
     account: &AgentAuthAccount,
-    existing: &AgentConfigSummary,
+    _existing: &AgentConfigSummary,
     candidate: &AgentConfigSummary,
 ) -> Result<(), String> {
-    if !account.has_permission(AGENT_EGRESS_EDIT_PERMISSION)
-        && (existing.proxy_addrs != candidate.proxy_addrs
-            || existing.connect_timeout_secs != candidate.connect_timeout_secs
-            || existing.compression_mode != candidate.compression_mode
-            || existing.udp_session_pool_size != candidate.udp_session_pool_size)
-    {
+    let mut normalized = candidate.clone();
+    let applied = apply_account_config_defaults(&mut normalized, account)?;
+    if applied.egress {
         return Err(format!("当前账号缺少权限：{AGENT_EGRESS_EDIT_PERMISSION}"));
     }
-    if !account.has_permission(AGENT_RUNTIME_THREADS_EDIT_PERMISSION)
-        && existing.runtime_threads != candidate.runtime_threads
-    {
+    if applied.runtime {
         return Err(format!(
             "当前账号缺少权限：{AGENT_RUNTIME_THREADS_EDIT_PERMISSION}"
+        ));
+    }
+    if applied.packet_capture {
+        return Err(format!(
+            "当前账号缺少权限：{AGENT_PACKET_CAPTURE_PERMISSION}"
         ));
     }
     Ok(())
@@ -107,7 +100,6 @@ pub(crate) fn merge_config_summary(
         .parse::<DocumentMut>()
         .map_err(|error| format!("配置 TOML 解析失败：{error}"))?;
     document["listen_addr"] = value(summary.listen_addr.clone());
-    document["proxy_addrs"] = value(string_array(&summary.proxy_addrs));
     document["transport_mode"] = value(summary.transport_mode.clone());
     document["udp_session_pool_size"] = value(as_i64(summary.udp_session_pool_size)?);
     document["connect_timeout_secs"] = value(as_i64(summary.connect_timeout_secs)?);
@@ -205,7 +197,6 @@ mod tests {
     fn raw() -> String {
         [
             "listen_addr = \"0.0.0.0:10080\"",
-            "proxy_addrs = [\"127.0.0.1:8080\"]",
             "transport_mode = \"udp\"",
             "udp_session_pool_size = 4",
             "connect_timeout_secs = 30",
@@ -218,44 +209,39 @@ mod tests {
     }
 
     #[test]
-    fn raw_config_is_fail_closed_for_users_without_view_permission() {
+    fn raw_config_is_admin_only_but_users_receive_safe_structured_config() {
         let mut sensitive_raw = raw();
         sensitive_raw.push_str("\n[tun]\nenabled = true\nname = \"sensitive-tun\"\n");
         let loaded = loaded_config_from_raw(PathBuf::from("agent.toml"), sensitive_raw).unwrap();
         let hidden = prepare_config_for_account(loaded.clone(), &account("user", &[])).unwrap();
         assert!(hidden.raw.is_empty());
         assert!(hidden.summary.tun_enabled);
-        assert!(hidden.summary.listen_addr.is_empty());
-        assert!(hidden.summary.proxy_addrs.is_empty());
-        assert_eq!(hidden.summary.connect_timeout_secs, 0);
-        assert!(hidden.summary.compression_mode.is_empty());
-        assert_eq!(hidden.summary.udp_session_pool_size, 0);
-        assert!(hidden.summary.runtime_threads.is_none());
-        assert_eq!(hidden.summary.effective_runtime_threads, 0);
-        assert!(hidden.summary.tun_name.is_empty());
+        assert_eq!(hidden.summary.listen_addr, "0.0.0.0:10080");
+        assert_eq!(hidden.summary.tun_name, "sensitive-tun");
 
         let serialized = serde_json::to_string(&hidden).unwrap();
-        for sensitive in [
-            "0.0.0.0:10080",
-            "127.0.0.1:8080",
-            "sensitive-tun",
-            "\"runtime_threads\":2",
-        ] {
-            assert!(!serialized.contains(sensitive));
-        }
+        assert!(serialized.contains("sensitive-tun"));
+        assert!(!serialized.contains("\"runtime_threads\":2"));
 
-        let visible =
-            prepare_config_for_account(loaded, &account("user", &[AGENT_CONFIG_VIEW_PERMISSION]))
-                .unwrap();
+        let visible = prepare_config_for_account(loaded, &account("admin", &[])).unwrap();
         assert!(visible.raw.contains("listen_addr"));
     }
 
     #[test]
     fn restricted_config_fields_require_permissions_but_other_fields_remain_editable() {
         let existing = raw();
-        let unrestricted = existing.replace("log_level = \"info\"", "log_level = \"debug\"");
+        let unrestricted = existing.replace(
+            "listen_addr = \"0.0.0.0:10080\"",
+            "listen_addr = \"127.0.0.1:10080\"",
+        );
         assert!(validate_config_update_permissions(
-            &account("user", &[]),
+            &account(
+                "user",
+                &[
+                    AGENT_EGRESS_EDIT_PERMISSION,
+                    AGENT_RUNTIME_THREADS_EDIT_PERMISSION,
+                ],
+            ),
             &existing,
             &unrestricted
         )
@@ -272,7 +258,8 @@ mod tests {
             &existing,
             &egress
         )
-        .is_ok());
+        .unwrap_err()
+        .contains(AGENT_RUNTIME_THREADS_EDIT_PERMISSION));
 
         let threads = existing.replace("runtime_threads = 2", "runtime_threads = 4");
         assert!(

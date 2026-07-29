@@ -2,6 +2,9 @@ use super::*;
 
 const DEFAULT_PERMISSION_SYNC_SECONDS: u64 = 300;
 
+mod managed_config;
+use managed_config::*;
+
 pub(crate) fn start_agent_permission_sync(app: tauri::AppHandle, runtime: Arc<AgentRuntime>) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -55,6 +58,10 @@ pub(crate) async fn sync_agent_permissions_once(
             if failure.credentials_invalid {
                 warn!(username = %session.account.username, "Agent 权限同步凭据已失效");
             }
+            if failure.proxy_address_not_assigned {
+                fail_closed_unassigned_proxy_address(app, runtime, &session).await;
+                return;
+            }
             record_sync_error(app, runtime, failure.message);
             return;
         }
@@ -73,8 +80,16 @@ pub(crate) async fn sync_agent_permissions_once(
         }
         _ => return,
     };
-    let (account, account_status, warning) = apply_permission_snapshot(&current.account, &snapshot);
-    if let Err(error) = persist_agent_login(app, &account, account_status, Some(&snapshot.token)) {
+    let (account, account_status, mut warning) =
+        apply_permission_snapshot(&current.account, &snapshot);
+    let proxy_addresses_changed = current.proxy_addresses != snapshot.proxy_addresses;
+    if let Err(error) = persist_agent_login(
+        app,
+        &account,
+        account_status,
+        &snapshot.proxy_addresses,
+        Some(&snapshot.token),
+    ) {
         record_sync_error(
             app,
             runtime,
@@ -87,6 +102,7 @@ pub(crate) async fn sync_agent_permissions_once(
         expected_token.as_str(),
         account,
         account_status,
+        snapshot.proxy_addresses.clone(),
         snapshot.token,
     ) {
         Ok(Some(updated)) => updated,
@@ -97,6 +113,10 @@ pub(crate) async fn sync_agent_permissions_once(
         }
     };
     disable_packet_capture_if_revoked(runtime, &updated.account);
+    warning = combine_sync_warnings(
+        warning,
+        apply_account_defaults_after_sync(app, runtime, &updated.account, proxy_addresses_changed),
+    );
     let _ = runtime.set_permission_sync_error(warning.clone());
     info!(
         username = %updated.account.username,
@@ -112,6 +132,14 @@ pub(crate) async fn sync_agent_permissions_once(
             AgentAuthAccountStatus::Disabled => "user_disabled",
         };
         let _ = app.emit("agent-auth-status", status);
+    }
+}
+
+fn combine_sync_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}；{second}")),
+        (Some(message), None) | (None, Some(message)) => Some(message),
+        (None, None) => None,
     }
 }
 
