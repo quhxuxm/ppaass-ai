@@ -356,3 +356,4 @@ async fn device_authorization_validates_key_pair_and_logs_out_temporary_session(
 mod credential_tests;
 mod key_rotation;
 mod permission_sync;
+mod web_handoff;

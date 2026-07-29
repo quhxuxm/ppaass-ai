@@ -6,8 +6,8 @@ use proxy_user_store::{
     NewAdminAccount, SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
 };
 use proxy_web::{
-    AgentAccessTokenService, AgentDeviceAuthorizationGuard, AppState, PasswordService,
-    PrivateKeyCipher, SessionStore, build_router,
+    AgentAccessTokenService, AgentDeviceAuthorizationGuard, AgentWebSessionHandoffStore, AppState,
+    PasswordService, PrivateKeyCipher, SessionStore, build_router,
 };
 use rsa::traits::PublicKeyParts;
 use std::{
@@ -159,6 +159,7 @@ async fn main() -> Result<()> {
         passwords,
         sessions: SessionStore::new(secure_cookies),
         agent_tokens,
+        web_session_handoffs: AgentWebSessionHandoffStore::new(),
         private_keys,
         proxy_identity_public_key_pem,
         allow_registration,

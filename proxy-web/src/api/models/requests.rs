@@ -52,6 +52,12 @@ pub(crate) struct AgentDeviceTokenRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct AgentWebSessionHandoffQuery {
+    pub(crate) code: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AdminCreateUserRequest {
     pub(crate) username: String,
     pub(crate) password: String,

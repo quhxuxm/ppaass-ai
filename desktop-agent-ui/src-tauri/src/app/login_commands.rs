@@ -12,27 +12,47 @@ pub(crate) async fn open_user_account_management(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
 ) -> Result<(), String> {
+    let runtime = runtime.inner().clone();
+    let _operation = runtime.auth_operation.lock().await;
+    let account_management_url = match runtime.authenticated_session()? {
+        Some(session) => {
+            let access_token = session
+                .agent_access_token
+                .as_ref()
+                .ok_or_else(|| "当前 Agent 登录缺少账户交接凭据，请重新登录".to_string())?;
+            request_account_management_handoff(&session.proxy_web_url, access_token.value.as_str())
+                .await?
+        }
+        None => {
+            let config_path = current_ui_config_path(&runtime)
+                .or_else(locate_config_path)
+                .ok_or_else(|| {
+                    "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。"
+                        .to_string()
+                })?;
+            let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+            account_management_page_url(&proxy_web_url)
+                .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?
+        }
+    };
+    rebuild_account_management_window(&app, account_management_url)?;
+    info!("已打开注册和账户管理窗口");
+    Ok(())
+}
+
+fn rebuild_account_management_window(
+    app: &tauri::AppHandle,
+    account_management_url: url::Url,
+) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("user-account-management") {
         window
-            .show()
-            .and_then(|_| window.unminimize())
-            .and_then(|_| window.set_focus())
-            .map_err(|_| "无法显示注册和账户管理窗口".to_string())?;
-        return Ok(());
+            .destroy()
+            .map_err(|_| "无法重建注册和账户管理窗口".to_string())?;
     }
-
-    let config_path = current_ui_config_path(runtime.inner())
-        .or_else(locate_config_path)
-        .ok_or_else(|| {
-            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?;
-    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
-    let account_management_url = account_management_page_url(&proxy_web_url)
-        .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?;
     let account_management_origin = account_management_url.origin();
 
     tauri::WebviewWindowBuilder::new(
-        &app,
+        app,
         "user-account-management",
         tauri::WebviewUrl::External(account_management_url),
     )
@@ -45,8 +65,6 @@ pub(crate) async fn open_user_account_management(
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .build()
     .map_err(|_| "无法打开注册和账户管理窗口".to_string())?;
-
-    info!("已打开注册和账户管理窗口");
     Ok(())
 }
 

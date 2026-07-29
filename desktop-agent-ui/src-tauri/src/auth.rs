@@ -240,6 +240,7 @@ mod key_store;
 mod password_login;
 mod permission_sync;
 mod proxy_addresses;
+mod web_handoff;
 
 pub(crate) use credential_store::*;
 pub(crate) use device_login::*;
@@ -248,6 +249,7 @@ pub(crate) use key_store::*;
 pub(crate) use password_login::*;
 pub(crate) use permission_sync::*;
 pub(crate) use proxy_addresses::*;
+pub(crate) use web_handoff::*;
 
 #[cfg(test)]
 mod tests;

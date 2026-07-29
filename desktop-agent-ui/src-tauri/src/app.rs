@@ -16,8 +16,9 @@ use crate::auth::{
     destroy_managed_private_key, destroy_managed_proxy_identity_public_key,
     destroy_persisted_agent_login, fetch_agent_permission_snapshot, load_persisted_agent_login,
     open_system_browser, persist_agent_login, persist_unassigned_agent_login,
-    poll_device_authorization, start_device_authorization, write_managed_private_key,
-    write_managed_proxy_identity_public_key, DeviceAuthorizationPoll, DownloadedCredential,
+    poll_device_authorization, request_account_management_handoff, start_device_authorization,
+    write_managed_private_key, write_managed_proxy_identity_public_key, DeviceAuthorizationPoll,
+    DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,

@@ -137,7 +137,8 @@ async fn agent_device_flow_rate_limits_and_delivers_credentials_once() {
 
 #[tokio::test]
 async fn failed_credential_construction_does_not_burn_device_code() {
-    let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
     create_approved_user(
         &app,
@@ -176,6 +177,7 @@ async fn failed_credential_construction_does_not_burn_device_code() {
             passwords: PasswordService::new(1).await.unwrap(),
             sessions: SessionStore::new(false),
             agent_tokens: AgentAccessTokenService::new(MASTER_SECRET).unwrap(),
+            web_session_handoffs: AgentWebSessionHandoffStore::new(),
             private_keys: PrivateKeyCipher::new(
                 "different-test-secret-that-cannot-decrypt-existing-keys",
             )

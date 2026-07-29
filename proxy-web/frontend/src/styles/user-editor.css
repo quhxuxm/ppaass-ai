@@ -216,8 +216,19 @@
   gap: 10px;
 }
 
+.user-editor-runtime-grid > .form-field {
+  grid-template-rows: auto 42px auto;
+  align-content: start;
+}
+
 .user-editor-runtime-grid .p-datepicker {
+  height: 42px;
   min-height: 42px;
+}
+
+.user-editor-runtime-grid .p-datepicker .p-inputtext,
+.user-editor-runtime-grid .p-datepicker .p-datepicker-dropdown {
+  height: 100%;
 }
 
 .user-editor-dialog .form-field > label,
@@ -228,12 +239,13 @@
 }
 
 .proxy-toggle-card {
+  height: 42px;
   min-height: 42px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 0 10px;
   border: 1px solid #d0d5dd;
   border-radius: 9px;
   background: #ffffff;

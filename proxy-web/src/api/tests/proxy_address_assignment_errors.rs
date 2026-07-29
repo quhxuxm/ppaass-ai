@@ -3,7 +3,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 #[tokio::test]
 async fn migrated_unassigned_profile_fails_agent_login_and_sync_with_stable_code() {
-    let (_directory, store, _sessions, _keys, app) = test_app_with_components().await;
+    let (_directory, store, _sessions, _handoffs, _keys, app) = test_app_with_components().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
     create_approved_user(
         &app,

@@ -88,6 +88,12 @@ pub(crate) struct AgentCredentialResponse {
 }
 
 #[derive(Serialize)]
+pub(crate) struct AgentWebSessionHandoffResponse {
+    pub(crate) handoff_path: String,
+    pub(crate) expires_in: i64,
+}
+
+#[derive(Serialize)]
 pub(crate) struct AgentProfileSyncResponse {
     pub(crate) account: WebAccount,
     pub(crate) profile: Option<AgentDeviceProfileResponse>,

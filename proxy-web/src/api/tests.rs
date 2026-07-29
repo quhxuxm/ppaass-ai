@@ -15,3 +15,4 @@ mod password;
 mod permissions;
 mod proxy_address_assignment_errors;
 mod proxy_addresses;
+mod web_session_handoff;

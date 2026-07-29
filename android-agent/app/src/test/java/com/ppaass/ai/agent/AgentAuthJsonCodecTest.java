@@ -99,6 +99,21 @@ public class AgentAuthJsonCodecTest {
                 AgentAuthErrors.apiError(401, body).getMessage());
     }
 
+    @Test
+    public void webSessionHandoffUsesTypedJacksonDto() throws Exception {
+        byte[] body = ("{\"handoff_path\":\"/api/v1/auth/agent-handoff?code=once\","
+                + "\"expires_in\":90}").getBytes(StandardCharsets.UTF_8);
+
+        AgentAuthDtos.WebSessionHandoffResponse response = AgentAuthJsonCodec.decode(
+                body,
+                AgentAuthDtos.WebSessionHandoffResponse.class);
+
+        assertEquals(
+                "/api/v1/auth/agent-handoff?code=once",
+                response.handoff_path);
+        assertEquals(Long.valueOf(90), response.expires_in);
+    }
+
     private static String loginJson() {
         return "{"
                 + "\"account\":{\"role\":\"admin\",\"status\":\"active\","

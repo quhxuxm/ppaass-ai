@@ -21,7 +21,7 @@ import java.security.*;
 import java.text.*;
 import java.util.*;
 
-public class MainActivity extends MainActivityAuth {
+public class MainActivity extends MainActivityAccountManagement {
     private SharedPreferences agentSessionPreferences;
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {

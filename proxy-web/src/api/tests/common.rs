@@ -44,7 +44,8 @@ pub(super) fn http_trace_path_excludes_sensitive_query_parameters() {
 }
 
 pub(super) async fn test_app() -> (TempDir, Router) {
-    let (directory, _store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (directory, _store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     (directory, app)
 }
 
@@ -69,6 +70,7 @@ pub(super) async fn test_app_with_components() -> (
     TempDir,
     Arc<SqliteUserRepository>,
     SessionStore,
+    AgentWebSessionHandoffStore,
     PrivateKeyCipher,
     Router,
 ) {
@@ -104,6 +106,7 @@ pub(super) async fn test_app_with_components() -> (
         .await
         .unwrap();
     let sessions = SessionStore::new(false);
+    let web_session_handoffs = AgentWebSessionHandoffStore::new();
     let private_keys = PrivateKeyCipher::new(MASTER_SECRET).unwrap();
     let agent_tokens = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
     let state = AppState {
@@ -115,6 +118,7 @@ pub(super) async fn test_app_with_components() -> (
         passwords,
         sessions: sessions.clone(),
         agent_tokens,
+        web_session_handoffs: web_session_handoffs.clone(),
         private_keys: private_keys.clone(),
         proxy_identity_public_key_pem: test_proxy_identity_public_key(),
         allow_registration: true,
@@ -124,6 +128,7 @@ pub(super) async fn test_app_with_components() -> (
         directory,
         store,
         sessions,
+        web_session_handoffs,
         private_keys,
         build_router(state, None),
     )

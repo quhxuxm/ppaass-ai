@@ -36,6 +36,19 @@ assert.doesNotMatch(
   composable,
   /verification_uri|device_code|proxy_web_url|private_key_pem/
 );
+
+const loginCommands = await readFile(
+  new URL("../src-tauri/src/app/login_commands.rs", import.meta.url),
+  "utf8"
+);
+assert.match(loginCommands, /request_account_management_handoff/);
+assert.match(loginCommands, /session\.proxy_web_url/);
+assert.match(loginCommands, /session\s*\.\s*agent_access_token/);
+assert.match(loginCommands, /\.destroy\(\)/);
+assert.doesNotMatch(
+  loginCommands,
+  /get_webview_window\("user-account-management"\)[\s\S]{0,240}set_focus/
+);
 const refreshFunction = composable.match(
   /async function refresh\(\)[\s\S]*?(?=\n  async function login)/
 )?.[0];

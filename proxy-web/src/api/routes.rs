@@ -5,6 +5,7 @@ mod authentication;
 mod device_authorization;
 mod me;
 mod proxy_addresses;
+mod web_session_handoff;
 
 pub(super) use admin_requests::*;
 pub(super) use admin_users::*;
@@ -13,3 +14,4 @@ pub(super) use authentication::*;
 pub(super) use device_authorization::*;
 pub(super) use me::*;
 pub(super) use proxy_addresses::*;
+pub(super) use web_session_handoff::*;

@@ -2,7 +2,8 @@ use super::common::*;
 
 #[tokio::test]
 async fn admin_with_an_active_profile_can_manage_keys_records_and_authorize_agent() {
-    let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
 
     let response = app

@@ -66,26 +66,42 @@ protected void buildStatusScreen(LinearLayout root) {
         headerRow.addView(vpnToggle, toggleParams);
         header.addView(headerRow, matchWrap());
 
-        LinearLayout accountRow = horizontalRow();
-        accountRow.setPadding(0, dp(14), 0, 0);
+        LinearLayout accountBlock = new LinearLayout(this);
+        accountBlock.setOrientation(LinearLayout.VERTICAL);
+        accountBlock.setPadding(0, dp(14), 0, 0);
         accountSummary = mutedText(authenticatedAccountSummary(), 12.5f);
         accountSummary.setSingleLine(false);
         accountSummary.setMaxLines(4);
         accountSummary.setLineSpacing(dp(2), 1f);
         accountSummary.setEllipsize(TextUtils.TruncateAt.END);
         accountSummary.setContentDescription(tr("当前登录用户"));
-        accountRow.addView(accountSummary, new LinearLayout.LayoutParams(
-                0,
+        accountBlock.addView(accountSummary, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
+                0f));
+
+        LinearLayout accountActions = horizontalRow();
+        accountManagementButton = secondaryButton(
+                accountManagementInProgress ? "正在打开" : "账户管理");
+        accountManagementButton.setEnabled(!accountManagementInProgress);
+        accountManagementButton.setOnClickListener(view -> openAccountManagementPage());
+        accountActions.addView(accountManagementButton, new LinearLayout.LayoutParams(
+                0,
+                dp(40),
                 1f));
+
         Button logoutButton = secondaryButton("退出登录");
         logoutButton.setOnClickListener(view -> logoutAgentAccount());
         LinearLayout.LayoutParams logoutParams = new LinearLayout.LayoutParams(
-                dp(96),
-                dp(40));
+                0,
+                dp(40),
+                1f);
         logoutParams.setMargins(dp(10), 0, 0, 0);
-        accountRow.addView(logoutButton, logoutParams);
-        header.addView(accountRow, matchWrap());
+        accountActions.addView(logoutButton, logoutParams);
+        LinearLayout.LayoutParams actionParams = matchWrap();
+        actionParams.setMargins(0, dp(10), 0, 0);
+        accountBlock.addView(accountActions, actionParams);
+        header.addView(accountBlock, matchWrap());
 
         LinearLayout apps = panel(root);
         sectionTitle(apps, "VPN 应用");

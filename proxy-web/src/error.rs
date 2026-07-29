@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::rejection::{BytesRejection, JsonRejection},
+    extract::rejection::{BytesRejection, JsonRejection, QueryRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -164,6 +164,20 @@ impl ApiError {
             } else {
                 "无法读取请求体".to_string()
             },
+            retry_after_seconds: None,
+        }
+    }
+
+    pub fn from_query_rejection(rejection: QueryRejection) -> Self {
+        let status = rejection.status();
+        tracing::debug!(
+            status = status.as_u16(),
+            "拒绝无效查询参数；不记录解析错误文本以免泄露一次性交接码"
+        );
+        Self {
+            status,
+            code: "invalid_request",
+            message: "查询参数格式无效".to_string(),
             retry_after_seconds: None,
         }
     }

@@ -97,6 +97,14 @@ final class AgentAuthDtos {
         }
     }
 
+    static final class WebSessionHandoffResponse {
+        public String handoff_path;
+        public Long expires_in;
+
+        public WebSessionHandoffResponse() {
+        }
+    }
+
     static final class ApiErrorEnvelope {
         public ApiError error;
 

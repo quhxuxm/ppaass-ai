@@ -151,7 +151,8 @@ async fn public_registration_is_strictly_limited_by_trusted_peer_address() {
 
 #[tokio::test]
 async fn password_login_limits_ip_and_account_without_account_enumeration() {
-    let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     register_user(&app, "disabled-user", "disabled-user-password").await;
     let disabled = store
         .get_account_by_login("disabled-user")

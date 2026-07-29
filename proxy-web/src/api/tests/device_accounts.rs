@@ -2,7 +2,8 @@ use super::common::*;
 
 #[tokio::test]
 async fn existing_external_account_session_can_authorize_agent_without_a_password() {
-    let (_directory, store, sessions, private_keys, app) = test_app_with_components().await;
+    let (_directory, store, sessions, _handoffs, private_keys, app) =
+        test_app_with_components().await;
     let account = store
         .create_user_account(NewUserAccount {
             account_id: "acc_external_only".to_string(),
@@ -110,7 +111,8 @@ async fn existing_external_account_session_can_authorize_agent_without_a_passwor
 
 #[tokio::test]
 async fn agent_device_approval_rejects_admin_missing_keys_and_cross_origin_clients() {
-    let (_directory, store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let response = app
         .clone()
         .oneshot(

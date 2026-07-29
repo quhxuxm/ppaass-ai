@@ -103,6 +103,8 @@ protected AlertDialog appSelectorDialog;
 protected Button vpnToggle;
 protected TextView vpnStatus;
 protected TextView accountSummary;
+protected Button accountManagementButton;
+protected boolean accountManagementInProgress;
 protected Button httpProxyToggle;
 protected Button httpProxyClientsButton;
 protected LinearLayout httpProxyEndpointList;
@@ -175,6 +177,8 @@ protected final Runnable statusRefresh = new Runnable() {
     protected abstract boolean isHttpProxyRunning();
 
     protected abstract void logoutAgentAccount();
+
+    protected abstract void openAccountManagementPage();
 
     protected abstract void onAgentSessionInvalidated();
 

@@ -51,7 +51,8 @@ async fn session_is_authenticated(app: &Router, cookie: &str) -> bool {
 
 #[tokio::test]
 async fn user_changes_password_and_all_old_sessions_are_invalidated() {
-    let (_directory, store, sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, store, sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let old_password = "original-password";
     let new_password = "replacement-password";
     let (first_cookie, first_csrf) = register_user(&app, "password-user", old_password).await;

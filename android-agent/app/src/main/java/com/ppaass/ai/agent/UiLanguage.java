@@ -84,6 +84,13 @@ final class UiLanguage {
         put("记住用户名和密码", "Remember username and password");
         put("登录并配置 Agent", "Sign in and configure Agent");
         put("正在登录", "Signing in");
+        put("账户管理", "Account management");
+        put("正在打开", "Opening");
+        put("账户管理登录凭据已失效，请重新登录 Agent",
+                "Account management sign-in expired; sign in to Agent again");
+        put("Proxy Web 返回的账户管理登录地址无效",
+                "Proxy Web returned an invalid account management sign-in URL");
+        put("无法打开账户管理页面", "Could not open account management");
         put("设备登录已取消", "Device sign-in cancelled");
         put("无法创建设备登录请求", "Could not create the device sign-in request");
         put("无法创建设备登录轮询请求", "Could not create the device sign-in poll request");

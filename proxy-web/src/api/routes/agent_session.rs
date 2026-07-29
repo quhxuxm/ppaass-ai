@@ -76,7 +76,7 @@ pub(crate) async fn get_agent_profile(
     }))
 }
 
-async fn authenticate_agent_token(
+pub(crate) async fn authenticate_agent_token(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<WebAccount, ApiError> {

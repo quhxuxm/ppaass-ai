@@ -1062,6 +1062,30 @@ a:focus-visible {
   width: fit-content;
 }
 
+.account-status-indicator {
+  width: 10px;
+  height: 10px;
+  display: block;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: #98a2b3;
+  box-shadow: 0 0 0 1px #d0d5dd;
+}
+
+.account-status-indicator.active {
+  background: #12b76a;
+  box-shadow: 0 0 0 1px #6ce9a6;
+}
+
+.key-expiry-value {
+  white-space: nowrap;
+}
+
+.key-expiry-value.expired {
+  color: #d92d20;
+  font-weight: 700;
+}
+
 .permission-tags,
 .row-actions {
   display: flex;
@@ -1071,19 +1095,38 @@ a:focus-visible {
 
 .user-permission-tags {
   min-width: 0;
-  flex-wrap: wrap;
-  align-content: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 6px;
   padding-block: 2px;
 }
 
-.user-permission-tags .p-tag {
+.user-list-tag-summary {
+  min-width: 0;
   max-width: 100%;
-  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
-.user-permission-tags .p-tag-label {
+.user-list-tag-summary .p-tag {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.user-list-tag-summary .p-tag-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.user-list-tag-summary-primary {
+  max-width: 8.5rem;
+  overflow: hidden;
+}
+
+.user-list-tag-summary-count {
+  flex: 0 0 auto !important;
 }
 
 .row-action-tooltip {

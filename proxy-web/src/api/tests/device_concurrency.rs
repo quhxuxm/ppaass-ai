@@ -2,7 +2,8 @@ use super::common::*;
 
 #[tokio::test]
 async fn concurrent_device_claim_returns_credentials_to_exactly_one_request() {
-    let (_directory, _store, sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, _store, sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
     create_approved_user(
         &app,
@@ -58,7 +59,8 @@ async fn concurrent_device_claim_returns_credentials_to_exactly_one_request() {
 
 #[tokio::test]
 async fn public_device_start_flood_is_bounded_and_returns_429() {
-    let (_directory, _store, _sessions, _private_keys, app) = test_app_with_components().await;
+    let (_directory, _store, _sessions, _handoffs, _private_keys, app) =
+        test_app_with_components().await;
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..64 {
         let app = app.clone();

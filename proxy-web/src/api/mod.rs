@@ -40,6 +40,10 @@ use crate::{
     error::ApiError,
     rate_limit::{AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint},
     secrets::PrivateKeyCipher,
+    web_handoffs::{
+        AGENT_WEB_SESSION_HANDOFF_TTL_SECONDS, AgentWebSessionHandoffConsumeError,
+        AgentWebSessionHandoffIssueError, AgentWebSessionHandoffStore,
+    },
 };
 
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024;
@@ -81,6 +85,7 @@ pub struct AppState {
     pub passwords: PasswordService,
     pub sessions: SessionStore,
     pub agent_tokens: AgentAccessTokenService,
+    pub web_session_handoffs: AgentWebSessionHandoffStore,
     pub private_keys: PrivateKeyCipher,
     pub proxy_identity_public_key_pem: Arc<str>,
     pub allow_registration: bool,
@@ -122,8 +127,16 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route(
+            "/auth/agent-handoff",
+            get(consume_agent_web_session_handoff),
+        )
         .route("/agent/login", post(agent_login))
         .route("/agent/me", get(get_agent_profile))
+        .route(
+            "/agent/web-session-handoffs",
+            post(create_agent_web_session_handoff),
+        )
         .route(
             "/agent/device-authorizations",
             post(start_agent_device_authorization),
