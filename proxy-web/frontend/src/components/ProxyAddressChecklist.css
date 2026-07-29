@@ -1,0 +1,229 @@
+.proxy-checklist {
+  overflow: hidden;
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 1rem;
+  background: var(--p-surface-0, #fff);
+}
+
+.proxy-checklist__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.125rem;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-surface-50, #f8fafc);
+}
+
+.proxy-checklist__heading-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.proxy-checklist__heading-copy strong {
+  color: var(--p-surface-800, #1e293b);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.proxy-checklist__heading-copy small {
+  color: var(--p-surface-500, #64748b);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.proxy-checklist__table {
+  display: grid;
+  max-height: 230px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.proxy-checklist__columns,
+.proxy-checklist__row {
+  display: grid;
+  grid-template-columns: 3rem minmax(9rem, 0.9fr) minmax(12rem, 1.4fr);
+  align-items: center;
+}
+
+.proxy-checklist__columns {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
+  background: var(--p-surface-50, #f8fafc);
+  color: var(--p-surface-500, #64748b);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.proxy-checklist__row {
+  position: relative;
+  min-height: 3.75rem;
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--p-surface-100, #f1f5f9);
+  color: var(--p-surface-700, #334155);
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.proxy-checklist__row:last-child {
+  border-bottom: 0;
+}
+
+.proxy-checklist__row:hover {
+  background: var(--p-primary-50, #eff6ff);
+}
+
+.proxy-checklist__row--selected {
+  background: var(--p-primary-50, #eff6ff);
+  box-shadow: inset 3px 0 0 var(--p-primary-500, #3b82f6);
+}
+
+.proxy-checklist__row--selected:hover {
+  background: color-mix(in srgb, var(--p-primary-50, #eff6ff) 76%, white);
+}
+
+.proxy-checklist__row--disabled {
+  background: var(--p-surface-50, #f8fafc);
+  color: var(--p-surface-400, #94a3b8);
+  cursor: not-allowed;
+}
+
+.proxy-checklist__row--disabled:hover {
+  background: var(--p-surface-50, #f8fafc);
+}
+
+.proxy-checklist__check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.proxy-checklist__name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.5rem;
+  padding-right: 1rem;
+}
+
+.proxy-checklist__name strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-checklist__address {
+  overflow: hidden;
+  min-width: 0;
+  padding: 0.4rem 0.625rem;
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 0.5rem;
+  background: var(--p-surface-50, #f8fafc);
+  color: var(--p-surface-600, #475569);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-checklist__row--selected .proxy-checklist__address {
+  border-color: var(--p-primary-200, #bfdbfe);
+  background: var(--p-surface-0, #fff);
+  color: var(--p-primary-700, #1d4ed8);
+}
+
+.proxy-checklist__row--disabled .proxy-checklist__address {
+  color: var(--p-surface-400, #94a3b8);
+}
+
+.proxy-checklist__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.875rem;
+  min-height: 8rem;
+  padding: 1.5rem;
+  color: var(--p-surface-500, #64748b);
+  text-align: left;
+}
+
+.proxy-checklist__empty-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border-radius: 0.75rem;
+  background: var(--p-surface-100, #f1f5f9);
+  color: var(--p-surface-400, #94a3b8);
+  font-size: 1.125rem;
+}
+
+.proxy-checklist__empty > span:last-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.proxy-checklist__empty strong {
+  color: var(--p-surface-700, #334155);
+  font-size: 0.9375rem;
+}
+
+.proxy-checklist__empty small {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .proxy-checklist__heading {
+    padding: 0.875rem;
+  }
+
+  .proxy-checklist__columns {
+    display: none;
+  }
+
+  .proxy-checklist__row {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    min-height: 4.75rem;
+    padding: 0.75rem 0.875rem;
+  }
+
+  .proxy-checklist__check {
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  .proxy-checklist__name {
+    padding-right: 0;
+  }
+
+  .proxy-checklist__address {
+    grid-column: 2;
+    justify-self: start;
+    max-width: 100%;
+    margin-top: 0.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proxy-checklist__row {
+    transition: none;
+  }
+}

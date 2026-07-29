@@ -112,6 +112,7 @@ pub(crate) fn map_api_error(status: StatusCode, error: ErrorDetail) -> String {
         "key_request_required" => {
             "当前没有可用密钥，请先在用户中心提交申请并等待管理员批准".to_string()
         }
+        "proxy_address_not_assigned" => "管理员尚未为当前账号分配 Proxy 地址".to_string(),
         "unauthorized" => "Proxy Web 会话已失效，请重新登录".to_string(),
         _ => format!("认证服务返回 HTTP {}", status.as_u16()),
     }

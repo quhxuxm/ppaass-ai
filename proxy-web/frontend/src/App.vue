@@ -20,6 +20,7 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import KeyRequestDialog from './components/KeyRequestDialog.vue'
 import ProxyAddressCatalog from './components/ProxyAddressCatalog.vue'
+import ProxyAddressChecklist from './components/ProxyAddressChecklist.vue'
 import RequestMessage from './components/RequestMessage.vue'
 import {
   ApiError,
@@ -2668,42 +2669,13 @@ function clearAgentAuthorizationLocation(): void {
         />
         <small>必填，且必须晚于当前时间。</small>
       </div>
-      <section
-        class="agent-permission-picker"
-        aria-labelledby="create-proxy-addresses-title"
-      >
-        <div class="permission-picker-heading">
-          <div>
-            <strong id="create-proxy-addresses-title">可用 Proxy 地址</strong>
-            <small>至少选择一个；地址只会下发给 Agent，不在 Agent 界面显示。</small>
-          </div>
-          <Tag
-            :value="`${createForm.proxyAddressIds.length} 项`"
-            :severity="createForm.proxyAddressIds.length ? 'info' : 'danger'"
-            rounded
-          />
-        </div>
-        <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
-          <label
-            v-for="address in enabledProxyAddresses"
-            :key="address.id"
-            class="permission-choice"
-            :class="{ selected: createForm.proxyAddressIds.includes(address.id) }"
-            :for="`create-proxy-${address.id}`"
-          >
-            <Checkbox
-              v-model="createForm.proxyAddressIds"
-              :input-id="`create-proxy-${address.id}`"
-              :value="address.id"
-            />
-            <span>
-              <strong>{{ address.label }}</strong>
-              <small>{{ address.address }}</small>
-            </span>
-          </label>
-        </div>
-        <small v-else class="form-warning">请先在 Proxy 地址目录中新增并启用地址。</small>
-      </section>
+      <ProxyAddressChecklist
+        v-model="createForm.proxyAddressIds"
+        :addresses="enabledProxyAddresses"
+        input-prefix="create-proxy"
+        description="至少选择一个；地址只会下发给 Agent，不在 Agent 界面显示。"
+        empty-message="请先在 Proxy 地址目录中新增并启用地址。"
+      />
       <section class="fixed-capabilities" aria-labelledby="create-capabilities-title">
         <div class="fixed-capabilities-heading">
           <span class="summary-icon blue"><i class="pi pi-shield" /></span>
@@ -2790,130 +2762,169 @@ function clearAgentAuthorizationLocation(): void {
   <Dialog
     v-model:visible="editVisible"
     modal
-    :header="`编辑 ${editingUser ? managedUsername(editingUser) : ''}`"
-    class="form-dialog"
-    :style="{ width: 'min(92vw, 650px)' }"
+    class="form-dialog user-editor-dialog"
+    :style="{ width: 'min(94vw, 760px)' }"
   >
-    <form id="edit-user-form" class="dialog-form" @submit.prevent="submitEdit">
-      <div v-if="editingUser?.account" class="form-row">
-        <div class="form-field">
-          <label for="edit-role">账户角色</label>
-          <Select
-            id="edit-role"
-            v-model="editForm.role"
-            :options="roleOptions"
-            option-label="label"
-            option-value="value"
-            :disabled="editingRootAdmin"
-            fluid
-          />
+    <template #header>
+      <div class="user-editor-header">
+        <span class="user-editor-header-icon">
+          <i class="pi pi-user-edit" />
+        </span>
+        <div class="user-editor-header-copy">
+          <small>用户配置</small>
+          <h2 :title="editingUser ? managedUsername(editingUser) : ''">
+            {{ editingUser ? managedUsername(editingUser) : '' }}
+          </h2>
         </div>
-        <div class="form-field">
-          <label for="edit-status">Web 登录账号状态</label>
-          <Select
-            id="edit-status"
-            v-model="editForm.status"
-            :options="statusOptions"
-            option-label="label"
-            option-value="value"
-            :disabled="editingRootAdmin"
-            fluid
-          />
-          <small>
-            停用账号会禁止 Proxy Web 和 Agent 登录；不会单独改变下方代理配置开关。
+        <Tag
+          v-if="editingUser?.account"
+          :value="
+            editingRootAdmin
+              ? '根管理员'
+              : editForm.role === 'admin'
+                ? '管理员'
+                : '普通用户'
+          "
+          :severity="editForm.role === 'admin' ? 'info' : 'secondary'"
+          rounded
+        />
+      </div>
+    </template>
+    <form
+      id="edit-user-form"
+      class="dialog-form user-editor-form"
+      @submit.prevent="submitEdit"
+    >
+      <section v-if="editingUser?.account" class="user-editor-section">
+        <div class="user-editor-section-heading">
+          <span><i class="pi pi-id-card" /></span>
+          <div>
+            <strong>账号与登录</strong>
+            <small>设置用户在 Proxy Web 和 Agent 中的账号身份。</small>
+          </div>
+        </div>
+        <div v-if="!editingRootAdmin" class="form-row user-editor-account-grid">
+          <div class="form-field">
+            <label for="edit-role">账户角色</label>
+            <Select
+              id="edit-role"
+              v-model="editForm.role"
+              :options="roleOptions"
+              option-label="label"
+              option-value="value"
+              fluid
+            />
+          </div>
+          <div class="form-field">
+            <label for="edit-status">登录状态</label>
+            <Select
+              id="edit-status"
+              v-model="editForm.status"
+              :options="statusOptions"
+              option-label="label"
+              option-value="value"
+              fluid
+            />
+          </div>
+          <small class="user-editor-account-help">
+            停用账号后，该用户将无法登录 Proxy Web 和 Agent，但不会修改代理配置开关。
           </small>
         </div>
-      </div>
-      <div v-if="editingRootAdmin" class="root-admin-notice">
-        <i class="pi pi-lock" />
-        <span>
-          <strong>根管理员账号受保护</strong>
-          <small>根管理员 admin 不能停用、降级或删除。</small>
-        </span>
-      </div>
+        <div v-else class="protected-account-summary">
+          <div>
+            <span>账户角色</span>
+            <strong><i class="pi pi-shield" /> 管理员</strong>
+          </div>
+          <div>
+            <span>登录状态</span>
+            <strong><i class="pi pi-check-circle" /> 已启用</strong>
+          </div>
+        </div>
+        <div v-if="editingRootAdmin" class="root-admin-notice">
+          <i class="pi pi-lock" />
+          <span>
+            <strong>根管理员账号受保护</strong>
+            <small>admin 不能停用、降级或删除，其他代理配置仍可正常调整。</small>
+          </span>
+        </div>
+      </section>
       <div v-if="!editingUser?.account" class="legacy-notice">
         <i class="pi pi-info-circle" />
         <span>
           该 legacy 配置没有 Web 登录账号；这里只能启用或停用代理配置，有效期、权限和密钥保持只读。
         </span>
       </div>
-      <section
-        v-if="editingUser?.account"
-        class="agent-permission-picker"
-        aria-labelledby="edit-proxy-addresses-title"
-      >
-        <div class="permission-picker-heading">
-          <div>
-            <strong id="edit-proxy-addresses-title">可用 Proxy 地址</strong>
-            <small>至少保留一个；保存后 Agent 会在定期同步时应用。</small>
-          </div>
-          <Tag
-            :value="`${editForm.proxyAddressIds.length} 项`"
-            :severity="editForm.proxyAddressIds.length ? 'info' : 'danger'"
-            rounded
-          />
-        </div>
-        <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
-          <label
-            v-for="address in enabledProxyAddresses"
-            :key="address.id"
-            class="permission-choice"
-            :class="{ selected: editForm.proxyAddressIds.includes(address.id) }"
-            :for="`edit-proxy-${address.id}`"
-          >
-            <Checkbox
-              v-model="editForm.proxyAddressIds"
-              :input-id="`edit-proxy-${address.id}`"
-              :value="address.id"
-            />
-            <span>
-              <strong>{{ address.label }}</strong>
-              <small>{{ address.address }}</small>
-            </span>
-          </label>
-        </div>
-        <small v-else class="form-warning">请先在 Proxy 地址目录中新增并启用地址。</small>
-      </section>
+      <ProxyAddressChecklist
+        v-if="editingUser?.account && editingUser.profile"
+        v-model="editForm.proxyAddressIds"
+        :addresses="enabledProxyAddresses"
+        input-prefix="edit-proxy"
+        description="至少保留一个；保存后 Agent 会在定期同步时应用。"
+        empty-message="请先在 Proxy 地址目录中新增并启用地址。"
+      />
       <template v-if="editingUser?.profile">
-        <div
-          v-if="editingProfileReadOnly && editingUser.profile.origin !== 'legacy'"
-          class="approval-required-notice"
-        >
-          <i class="pi pi-lock" />
-          <span>
-            <strong>密钥生命周期已锁定</strong>
-            <small>
-              缺失或过期密钥不能在编辑页直接恢复有效期。用户提交申请后，请在待审批列表中设置新的未来有效期。
-            </small>
-          </span>
-        </div>
-        <div class="form-field">
-          <label for="edit-expiry">代理有效期</label>
-          <DatePicker
-            id="edit-expiry"
-            v-model="editForm.expiresAt"
-            :disabled="editingProfileReadOnly"
-            show-time
-            hour-format="24"
-            show-icon
-            fluid
-          />
-          <small v-if="editingProfileReadOnly">
-            代理有效期为只读状态，不能从这里延长或恢复。
-          </small>
-          <small v-else>清空表示永久有效。</small>
-        </div>
-        <label class="switch-line" for="edit-enabled">
-          <Checkbox
-            v-model="editForm.enabled"
-            input-id="edit-enabled"
-            binary
-          />
-          <span>
-            <strong>启用代理配置</strong>
-            <small>仅控制新代理连接；不会启用或停用 Web 登录账号。</small>
-          </span>
-        </label>
+        <section class="user-editor-section">
+          <div class="user-editor-section-heading">
+            <span><i class="pi pi-clock" /></span>
+            <div>
+              <strong>代理状态</strong>
+              <small>管理代理配置开关及该用户当前的有效期限。</small>
+            </div>
+          </div>
+          <div
+            v-if="editingProfileReadOnly && editingUser.profile.origin !== 'legacy'"
+            class="approval-required-notice"
+          >
+            <i class="pi pi-lock" />
+            <span>
+              <strong>密钥生命周期已锁定</strong>
+              <small>
+                缺失或过期密钥不能在编辑页直接恢复有效期。用户提交申请后，请在待审批列表中设置新的未来有效期。
+              </small>
+            </span>
+          </div>
+          <div class="user-editor-runtime-grid">
+            <div class="form-field">
+              <label for="edit-expiry">代理有效期</label>
+              <DatePicker
+                id="edit-expiry"
+                v-model="editForm.expiresAt"
+                :disabled="editingProfileReadOnly"
+                show-time
+                hour-format="24"
+                show-icon
+                fluid
+              />
+              <small v-if="editingProfileReadOnly">
+                只读状态，不能从这里延长或恢复。
+              </small>
+              <small v-else>清空表示永久有效。</small>
+            </div>
+            <div class="form-field">
+              <span class="form-field-label">代理开关</span>
+              <label
+                class="proxy-toggle-card"
+                :class="{ selected: editForm.enabled }"
+                for="edit-enabled"
+              >
+                <Checkbox
+                  v-model="editForm.enabled"
+                  input-id="edit-enabled"
+                  binary
+                />
+                <span>
+                  <strong>启用代理配置</strong>
+                  <small>控制新代理连接，不影响账号登录状态。</small>
+                </span>
+                <Tag
+                  :value="editForm.enabled ? '已启用' : '已停用'"
+                  :severity="editForm.enabled ? 'success' : 'secondary'"
+                  rounded
+                />
+              </label>
+            </div>
+          </div>
+        </section>
         <section
           v-if="editingUser?.account && editForm.role === 'user'"
           class="fixed-capabilities"
@@ -3064,42 +3075,14 @@ function clearAgentAuthorizationLocation(): void {
         批准后服务端会生成新密钥，连接凭据只能由该用户授权的 Agent 领取。
       </span>
     </div>
-    <section
-      class="agent-permission-picker"
-      aria-labelledby="approval-proxy-addresses-title"
-    >
-      <div class="permission-picker-heading">
-        <div>
-          <strong id="approval-proxy-addresses-title">分配 Proxy 地址</strong>
-          <small>至少选择一个；轮换申请会预选账号当前的地址。</small>
-        </div>
-        <Tag
-          :value="`${approvalProxyAddressIds.length} 项`"
-          :severity="approvalProxyAddressIds.length ? 'info' : 'danger'"
-          rounded
-        />
-      </div>
-      <div v-if="enabledProxyAddresses.length" class="permission-picker-grid">
-        <label
-          v-for="address in enabledProxyAddresses"
-          :key="address.id"
-          class="permission-choice"
-          :class="{ selected: approvalProxyAddressIds.includes(address.id) }"
-          :for="`approval-proxy-${address.id}`"
-        >
-          <Checkbox
-            v-model="approvalProxyAddressIds"
-            :input-id="`approval-proxy-${address.id}`"
-            :value="address.id"
-          />
-          <span>
-            <strong>{{ address.label }}</strong>
-            <small>{{ address.address }}</small>
-          </span>
-        </label>
-      </div>
-      <small v-else class="form-warning">请先关闭对话框并新增可用地址。</small>
-    </section>
+    <ProxyAddressChecklist
+      v-model="approvalProxyAddressIds"
+      :addresses="enabledProxyAddresses"
+      input-prefix="approval-proxy"
+      title="分配 Proxy 地址"
+      description="至少选择一个；轮换申请会预选账号当前的地址。"
+      empty-message="请先关闭对话框并新增可用地址。"
+    />
     <div class="form-field approval-expiry-field">
       <label for="approval-expiry">新密钥过期时间</label>
       <DatePicker

@@ -5,17 +5,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use protocol::RsaKeyPair;
+use reqwest::StatusCode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
 use super::{
     account_management_page_url, build_proxy_web_client, device_verification_url,
-    load_persisted_agent_login_from_dir, managed_private_key_file_name, normalize_proxy_web_url,
-    persist_agent_login_to_dir, poll_device_authorization, remove_other_managed_private_keys,
-    start_device_authorization, validate_device_code, validate_key_pair,
-    validate_proxy_identity_public_key, write_private_key_to_dir, DeviceAuthorizationPoll,
-    PROXY_IDENTITY_PUBLIC_KEY_FILE,
+    load_persisted_agent_login_from_dir, managed_private_key_file_name, map_api_error,
+    normalize_proxy_web_url, persist_agent_login_to_dir, poll_device_authorization,
+    remove_other_managed_private_keys, start_device_authorization, validate_device_code,
+    validate_key_pair, validate_proxy_identity_public_key, write_private_key_to_dir,
+    DeviceAuthorizationPoll, ErrorDetail, PROXY_IDENTITY_PUBLIC_KEY_FILE,
 };
 use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
 
@@ -36,6 +37,18 @@ impl ProxyEnvironmentGuard {
         std::env::remove_var("no_proxy");
         Self { previous }
     }
+}
+
+#[test]
+fn proxy_assignment_conflict_has_an_actionable_login_message() {
+    let message = map_api_error(
+        StatusCode::CONFLICT,
+        ErrorDetail {
+            code: "proxy_address_not_assigned".to_string(),
+            _message: "server detail is not trusted".to_string(),
+        },
+    );
+    assert_eq!(message, "管理员尚未为当前账号分配 Proxy 地址");
 }
 
 impl Drop for ProxyEnvironmentGuard {
