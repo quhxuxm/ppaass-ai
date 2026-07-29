@@ -41,6 +41,7 @@ export type ManagedProxyProfile = ProfileSummary
 export interface SessionState {
   authenticated: boolean
   account: AccountSummary | null
+  agentHandoff: boolean
 }
 
 export interface SelfView {

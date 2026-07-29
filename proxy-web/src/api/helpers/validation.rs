@@ -52,6 +52,24 @@ pub(crate) fn validate_browser_mutation(headers: &HeaderMap) -> Result<(), ApiEr
     Ok(())
 }
 
+pub(crate) fn validate_browser_navigation(headers: &HeaderMap) -> Result<(), ApiError> {
+    if let Some(mode) = headers
+        .get("sec-fetch-mode")
+        .and_then(|value| value.to_str().ok())
+        && mode != "navigate"
+    {
+        return Err(ApiError::forbidden("账户管理交接只允许浏览器页面导航"));
+    }
+    if let Some(destination) = headers
+        .get("sec-fetch-dest")
+        .and_then(|value| value.to_str().ok())
+        && destination != "document"
+    {
+        return Err(ApiError::forbidden("账户管理交接只允许浏览器页面导航"));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_native_agent_request(headers: &HeaderMap) -> Result<(), ApiError> {
     if headers.contains_key(header::ORIGIN) {
         return Err(ApiError::forbidden(

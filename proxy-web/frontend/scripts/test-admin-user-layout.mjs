@@ -10,6 +10,14 @@ const editorStyles = readFileSync(
   new URL('../src/styles/user-editor.css', import.meta.url),
   'utf8',
 )
+const sessionTypes = readFileSync(
+  new URL('../src/api/types.ts', import.meta.url),
+  'utf8',
+)
+const sessionDecoder = readFileSync(
+  new URL('../src/api/decoders/session.ts', import.meta.url),
+  'utf8',
+)
 
 assert.match(app, /table-style="min-width: 72rem"/)
 assert.doesNotMatch(app, /header="代理 \/ 密钥"/)
@@ -97,6 +105,55 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   app,
   /grantedAgentPermissions\.length\} \/ \$\{agentPermissionOptions\.length\}/,
+)
+assert.match(sessionTypes, /agentHandoff: boolean/)
+assert.match(
+  sessionDecoder,
+  /boolValue\(source\.agent_handoff\)[\s\S]*?return \{ authenticated, account, agentHandoff \}/,
+)
+assert.match(
+  app,
+  /const isAgentHandoffSession = computed\([\s\S]*?session\.value\?\.agentHandoff === true/,
+)
+assert.match(
+  app,
+  /agentHandoff: session\.value\?\.agentHandoff \?\? false/,
+)
+assert.match(
+  app,
+  /<Button\s+v-if="!isAgentHandoffSession"[\s\S]*?aria-label="退出登录"/,
+)
+assert.match(
+  app,
+  /const displayedEditAgentPermissions = computed\(\{[\s\S]*?editForm\.role === 'admin'[\s\S]*?allAgentPermissionCodes/,
+)
+assert.match(
+  app,
+  /<section\s+v-if="\s*editingUser\?\.account &&\s*\(editingUser\.profile \|\| editForm\.role === 'admin'\)\s*"[\s\S]*?id="edit-agent-permissions-title">Agent 权限/,
+)
+assert.match(
+  app,
+  /管理员自动拥有以下全部权限，不能单独取消。/,
+)
+assert.match(
+  app,
+  /v-model="displayedEditAgentPermissions"[\s\S]*?:disabled="\s*editForm\.role === 'admin'/,
+)
+assert.doesNotMatch(
+  app,
+  /v-if="editingUser\.account && editForm\.role === 'admin'"\s+value="Agent 全权限"/,
+)
+assert.match(
+  styles,
+  /\.topbar\s*\{[^}]*grid-template-columns:\s*auto minmax\(0, 1fr\) auto;[^}]*gap:\s*clamp\(20px, 3vw, 42px\);/s,
+)
+assert.match(
+  styles,
+  /\.main-nav\s*\{[^}]*justify-self:\s*start;[^}]*border-radius:\s*12px;[^}]*background:\s*#f8fafc;/s,
+)
+assert.match(
+  styles,
+  /\.main-nav button\.active\s*\{[^}]*background:\s*#fff;[^}]*box-shadow:/s,
 )
 
 console.log('Proxy Web 管理员用户列表与编辑弹窗布局回归检查通过')

@@ -19,8 +19,14 @@ export function decodeSession(
     boolValue(source.authenticated) ??
     boolValue(root.authenticated) ??
     (assumeAuthenticated || account !== null)
+  const agentHandoff =
+    boolValue(source.agent_handoff) ??
+    boolValue(source.agentHandoff) ??
+    boolValue(root.agent_handoff) ??
+    boolValue(root.agentHandoff) ??
+    false
 
-  return { authenticated, account }
+  return { authenticated, account, agentHandoff }
 }
 
 export function decodeAgentDeviceAuthorization(

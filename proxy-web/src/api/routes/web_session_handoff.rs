@@ -38,7 +38,7 @@ pub(crate) async fn consume_agent_web_session_handoff(
     headers: HeaderMap,
     payload: Result<Query<AgentWebSessionHandoffQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
-    validate_browser_mutation(&headers)?;
+    validate_browser_navigation(&headers)?;
     let Query(request) = payload.map_err(ApiError::from_query_rejection)?;
     let claim = state
         .web_session_handoffs
@@ -79,7 +79,7 @@ pub(crate) async fn consume_agent_web_session_handoff(
         .update_last_login(&account.account_id, current_timestamp())
         .await?;
     state.sessions.clear(&headers);
-    let (_session, cookie) = state.sessions.issue(&account);
+    let (_session, cookie) = state.sessions.issue_agent_handoff(&account);
     let mut response = StatusCode::SEE_OTHER.into_response();
     response
         .headers_mut()

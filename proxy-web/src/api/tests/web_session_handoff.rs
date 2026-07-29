@@ -9,11 +9,17 @@ async fn agent_handoff_establishes_web_session_once_and_rejects_tampering() {
     let (_directory, _store, sessions, _handoffs, _private_keys, app) =
         test_app_with_components().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
+    assert_session_source(&app, &admin_cookie, false, "admin").await;
     create_approved_user(&app, &admin_cookie, &admin_csrf, USERNAME, PASSWORD).await;
     let token = agent_access_token(&app, USERNAME, PASSWORD).await;
     let handoff_path = issue_handoff(&app, &token).await;
     assert!(handoff_path.starts_with(HANDOFF_PREFIX));
     assert_eq!(handoff_path.len(), HANDOFF_PREFIX.len() + 43);
+    assert_eq!(sessions.active_session_count(), 1);
+
+    let response = consume_handoff_as_fetch(&app, &handoff_path).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
     assert_eq!(sessions.active_session_count(), 1);
 
     let mut tampered = handoff_path[HANDOFF_PREFIX.len()..].as_bytes().to_vec();
@@ -65,6 +71,7 @@ async fn agent_handoff_establishes_web_session_once_and_rejects_tampering() {
     let session = json_body(response).await;
     assert_eq!(session["authenticated"], true);
     assert_eq!(session["account"]["login_name"], USERNAME);
+    assert_eq!(session["agent_handoff"], true);
 
     let replay = consume_handoff(&app, &handoff_path).await;
     assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
@@ -192,10 +199,46 @@ async fn consume_handoff(app: &Router, path: &str) -> Response {
         .oneshot(
             Request::builder()
                 .uri(path)
-                .header("sec-fetch-site", "none")
+                .header("sec-fetch-site", "cross-site")
+                .header("sec-fetch-mode", "navigate")
+                .header("sec-fetch-dest", "document")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap()
+}
+
+async fn consume_handoff_as_fetch(app: &Router, path: &str) -> Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("sec-fetch-site", "cross-site")
+                .header("sec-fetch-mode", "cors")
+                .header("sec-fetch-dest", "empty")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn assert_session_source(app: &Router, cookie: &str, agent_handoff: bool, username: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session = json_body(response).await;
+    assert_eq!(session["authenticated"], true);
+    assert_eq!(session["account"]["login_name"], username);
+    assert_eq!(session["agent_handoff"], agent_handoff);
 }

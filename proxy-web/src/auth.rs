@@ -154,6 +154,7 @@ pub struct SessionStore {
 struct Session {
     account_id: String,
     auth_version: i64,
+    agent_handoff: bool,
     csrf_token: String,
     expires_at: i64,
     issue_sequence: u64,
@@ -163,6 +164,7 @@ struct Session {
 pub struct AuthenticatedSession {
     pub token: String,
     pub account: WebAccount,
+    pub agent_handoff: bool,
     pub csrf_token: String,
     pub expires_at: i64,
 }
@@ -195,11 +197,28 @@ impl SessionStore {
         self.issue_at(&account.account_id, account.auth_version, now())
     }
 
+    pub fn issue_agent_handoff(
+        &self,
+        account: &WebAccount,
+    ) -> (AuthenticatedSessionToken, HeaderValue) {
+        self.issue_at_with_source(&account.account_id, account.auth_version, now(), true)
+    }
+
     fn issue_at(
         &self,
         account_id: &str,
         auth_version: i64,
         issued_at: i64,
+    ) -> (AuthenticatedSessionToken, HeaderValue) {
+        self.issue_at_with_source(account_id, auth_version, issued_at, false)
+    }
+
+    fn issue_at_with_source(
+        &self,
+        account_id: &str,
+        auth_version: i64,
+        issued_at: i64,
+        agent_handoff: bool,
     ) -> (AuthenticatedSessionToken, HeaderValue) {
         // 只有 issue 会增加集合大小。串行化这一小段内存操作，确保并发成功登录
         // 也绝不会越过全局或单账号硬上限。
@@ -230,6 +249,7 @@ impl SessionStore {
             Session {
                 account_id: account_id.to_string(),
                 auth_version,
+                agent_handoff,
                 csrf_token: csrf_token.clone(),
                 expires_at,
                 issue_sequence,
@@ -284,6 +304,7 @@ impl SessionStore {
         Ok(AuthenticatedSession {
             token: token.to_string(),
             account,
+            agent_handoff: session.agent_handoff,
             csrf_token: session.csrf_token,
             expires_at: session.expires_at,
         })

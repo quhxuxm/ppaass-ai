@@ -15,6 +15,7 @@ pub(crate) struct ProvidersResponse {
 pub(crate) struct SessionResponse {
     pub(crate) authenticated: bool,
     pub(crate) account: Option<WebAccount>,
+    pub(crate) agent_handoff: bool,
     pub(crate) csrf_token: Option<String>,
     pub(crate) expires_at: Option<i64>,
 }

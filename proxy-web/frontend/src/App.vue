@@ -125,9 +125,10 @@ const agentPermissionOptions: PermissionOption[] = [
   },
 ]
 
-const agentPermissionCodes = new Set(
-  agentPermissionOptions.map((permission) => permission.code),
+const allAgentPermissionCodes = agentPermissionOptions.map(
+  (permission) => permission.code,
 )
+const agentPermissionCodes = new Set(allAgentPermissionCodes)
 const retiredPermissionCodes = new Set(['agent.config.view'])
 
 const roleOptions = [
@@ -209,6 +210,17 @@ const editForm = reactive({
   agentPermissions: [] as string[],
   proxyAddressIds: [] as string[],
 })
+const displayedEditAgentPermissions = computed({
+  get: () =>
+    editForm.role === 'admin'
+      ? allAgentPermissionCodes
+      : editForm.agentPermissions,
+  set: (permissions: string[]) => {
+    if (editForm.role === 'user') {
+      editForm.agentPermissions = permissions
+    }
+  },
+})
 const editingCustomPermissions = ref<string[]>([])
 const deletingUsername = ref('')
 const rotatingUsername = ref('')
@@ -227,6 +239,9 @@ const enabledProxyAddresses = computed(() =>
 
 const isAuthenticated = computed(
   () => session.value?.authenticated === true && session.value.account !== null,
+)
+const isAgentHandoffSession = computed(
+  () => session.value?.agentHandoff === true,
 )
 const isAdmin = computed(() => session.value?.account?.role === 'admin')
 const account = computed(() => self.value?.account ?? session.value?.account ?? null)
@@ -611,6 +626,7 @@ async function refreshSelf(): Promise<void> {
       session.value = {
         authenticated: true,
         account: nextSelf.account,
+        agentHandoff: session.value?.agentHandoff ?? false,
       }
     }
     if (nextSelf.account.role === 'admin') {
@@ -888,9 +904,12 @@ function openEdit(user: ManagedUser): void {
   editForm.enabled = user.profile?.enabled ?? true
   editForm.expiresAt = parseDate(user.profile?.expiresAt ?? null)
   const permissions = user.profile?.permissions ?? []
-  editForm.agentPermissions = agentPermissionOptions
-    .filter((permission) => permissions.includes(permission.code))
-    .map((permission) => permission.code)
+  editForm.agentPermissions =
+    user.account?.role === 'admin'
+      ? [...allAgentPermissionCodes]
+      : agentPermissionOptions
+          .filter((permission) => permissions.includes(permission.code))
+          .map((permission) => permission.code)
   editForm.proxyAddressIds = user.proxyAddresses.map((address) => address.id)
   editingCustomPermissions.value = permissions.filter(
     (permission) =>
@@ -1728,6 +1747,7 @@ function clearAgentAuthorizationLocation(): void {
           <small>{{ account?.role === 'admin' ? '管理员' : '普通用户' }}</small>
         </span>
         <Button
+          v-if="!isAgentHandoffSession"
           v-tooltip.bottom="'退出登录'"
           icon="pi pi-sign-out"
           severity="secondary"
@@ -2864,12 +2884,6 @@ function clearAgentAuthorizationLocation(): void {
               <strong>代理连接</strong>
               <small>控制流量访问、有效期以及 Agent 可以连接的 Proxy 节点。</small>
             </div>
-            <Tag
-              v-if="editingUser.account && editForm.role === 'admin'"
-              value="Agent 全权限"
-              severity="info"
-              rounded
-            />
           </div>
           <div
             v-if="editingProfileReadOnly && editingUser.profile.origin !== 'legacy'"
@@ -2941,16 +2955,23 @@ function clearAgentAuthorizationLocation(): void {
             compact
           />
         </section>
-        <section
-          v-if="editingUser?.account && editForm.role === 'user'"
-          class="user-editor-section user-editor-permission-section"
-          aria-labelledby="edit-agent-permissions-title"
-        >
+      </template>
+      <section
+        v-if="
+          editingUser?.account &&
+          (editingUser.profile || editForm.role === 'admin')
+        "
+        class="user-editor-section user-editor-permission-section"
+        aria-labelledby="edit-agent-permissions-title"
+      >
           <div class="user-editor-section-heading">
             <span><i class="pi pi-shield" /></span>
             <div>
               <strong id="edit-agent-permissions-title">Agent 权限</strong>
-              <small>基础代理能力固定授予，管理功能可按需开启。</small>
+              <small v-if="editForm.role === 'admin'">
+                管理员自动拥有以下全部权限，不能单独取消。
+              </small>
+              <small v-else>基础代理能力固定授予，管理功能可按需开启。</small>
             </div>
           </div>
           <div class="base-capability-strip" aria-label="固定基础能力">
@@ -2964,14 +2985,19 @@ function clearAgentAuthorizationLocation(): void {
               v-for="permission in agentPermissionOptions"
               :key="permission.code"
               class="permission-choice"
-              :class="{ selected: editForm.agentPermissions.includes(permission.code) }"
+              :class="{
+                selected: displayedEditAgentPermissions.includes(permission.code),
+              }"
               :for="`edit-${permission.code}`"
             >
               <Checkbox
-                v-model="editForm.agentPermissions"
+                v-model="displayedEditAgentPermissions"
                 :input-id="`edit-${permission.code}`"
                 :value="permission.code"
-                :disabled="editingUser.profile.origin === 'legacy'"
+                :disabled="
+                  editForm.role === 'admin' ||
+                  editingUser.profile?.origin === 'legacy'
+                "
               />
               <span>
                 <strong>{{ permission.label }}</strong>
@@ -2997,8 +3023,7 @@ function clearAgentAuthorizationLocation(): void {
               />
             </div>
           </div>
-        </section>
-      </template>
+      </section>
     </form>
     <template #footer>
       <Button

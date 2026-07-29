@@ -152,12 +152,14 @@ pub(crate) async fn get_session(
         Ok(session) => SessionResponse {
             authenticated: true,
             account: Some(session.account),
+            agent_handoff: session.agent_handoff,
             csrf_token: Some(session.csrf_token),
             expires_at: Some(session.expires_at),
         },
         Err(error) if error.is_unauthorized() => SessionResponse {
             authenticated: false,
             account: None,
+            agent_handoff: false,
             csrf_token: None,
             expires_at: None,
         },
