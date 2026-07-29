@@ -49,9 +49,10 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Proxy Web frontend
+      - name: Test and build Proxy Web frontend
         run: |
           npm ci --prefix proxy-web/frontend --no-audit --no-fund
+          npm test --prefix proxy-web/frontend
           npm run build --prefix proxy-web/frontend
 
       - name: Build Proxy services (Linux)
@@ -72,6 +73,8 @@ jobs:
           cp start-proxy-web.sh .deploy-proxy/start-proxy-web.sh
           mkdir -p .deploy-proxy/proxy-web-frontend
           cp -R proxy-web/frontend/dist/. .deploy-proxy/proxy-web-frontend/
+          printf '%s\n' "$GITHUB_SHA" \
+            > .deploy-proxy/proxy-web-frontend/deploy-version.txt
 
           {
             echo "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USERNAME=admin"
@@ -1525,6 +1528,36 @@ jobs:
           done
           if [ "$public_web_healthy" != true ]; then
             echo "Public Proxy Web HTTPS health check failed for $WEB_PUBLIC_HOST:443" >&2
+            exit 1
+          fi
+
+          public_web_html="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "https://$WEB_PUBLIC_HOST/"
+          )"
+          if ! printf '%s' "$public_web_html" | grep -q '<div id="app"></div>'; then
+            echo "Public Proxy Web frontend entry page is invalid" >&2
+            exit 1
+          fi
+
+          deployed_version="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "https://$WEB_PUBLIC_HOST/deploy-version.txt"
+          )"
+          if [ "$deployed_version" != "$GITHUB_SHA" ]; then
+            echo "Public Proxy Web frontend version does not match this deployment" >&2
             exit 1
           fi
 

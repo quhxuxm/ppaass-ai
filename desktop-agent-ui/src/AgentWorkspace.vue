@@ -158,7 +158,7 @@ function setLanguage(language: AppLocale) {
         @logout="emit('logout')"
       />
 
-      <section :class="['workspace', { 'capture-workspace': state.activeTab === 'capture' }]">
+      <section class="workspace">
         <AppTopbar
           :subtitle="summary.listen_addr || state.statusText"
           :running="running"

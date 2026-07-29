@@ -1226,9 +1226,34 @@ function keyRequestKindLabel(request: KeyRequest): string {
   return request.kind === 'rotate' ? '过期重生成' : '首次申请'
 }
 
-function permissionLabel(code: string): string {
-  return [...basePermissionOptions, ...agentPermissionOptions]
-    .find((permission) => permission.code === code)?.label ?? code
+function managedAgentPermissions(user: ManagedUser): PermissionOption[] {
+  const permissions = new Set(user.profile?.permissions ?? [])
+  return agentPermissionOptions.filter((permission) =>
+    permissions.has(permission.code),
+  )
+}
+
+function managedCustomPermissions(user: ManagedUser): string[] {
+  return (user.profile?.permissions ?? []).filter(
+    (permission) =>
+      !basePermissionCodes.has(permission) &&
+      !agentPermissionCodes.has(permission) &&
+      !retiredPermissionCodes.has(permission),
+  )
+}
+
+function managedPermissionsTitle(user: ManagedUser): string {
+  if (user.account?.role === 'admin') {
+    return '管理员拥有全部 Agent 权限'
+  }
+
+  const permissions = [
+    ...managedAgentPermissions(user).map((permission) => permission.label),
+    ...managedCustomPermissions(user),
+  ]
+  return permissions.length
+    ? permissions.join('、')
+    : '仅包含固定授予的 Agent 基础功能'
 }
 
 function hasEffectivePermission(code: string): boolean {
@@ -2460,7 +2485,7 @@ function clearAgentAuthorizationLocation(): void {
             :rows="10"
             :rows-per-page-options="[10, 25, 50]"
             scrollable
-            table-style="min-width: 78rem"
+            table-style="min-width: 80.5rem"
             paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
             current-page-report-template="第 {first}–{last} 条，共 {totalRecords} 条"
           >
@@ -2470,7 +2495,7 @@ function clearAgentAuthorizationLocation(): void {
                 <span>{{ adminSearch ? '没有匹配的用户' : '还没有用户' }}</span>
               </div>
             </template>
-            <Column header="用户" frozen style="min-width: 13rem">
+            <Column header="用户" frozen style="min-width: 11.5rem">
               <template #body="{ data }">
                 <div class="user-cell">
                   <Avatar :label="managedUsername(data).slice(0, 1).toUpperCase()" shape="circle" />
@@ -2481,7 +2506,7 @@ function clearAgentAuthorizationLocation(): void {
                 </div>
               </template>
             </Column>
-            <Column header="角色 / 来源" style="min-width: 10rem">
+            <Column header="角色 / 来源" style="min-width: 8rem">
               <template #body="{ data }">
                 <div class="tag-stack">
                   <Tag
@@ -2498,7 +2523,7 @@ function clearAgentAuthorizationLocation(): void {
                 </div>
               </template>
             </Column>
-            <Column header="Web 账号" style="min-width: 9rem">
+            <Column header="Web 账号" style="min-width: 7.5rem">
               <template #body="{ data }">
                 <Tag
                   :value="accountStatusLabel(data)"
@@ -2507,27 +2532,35 @@ function clearAgentAuthorizationLocation(): void {
                 />
               </template>
             </Column>
-            <Column header="代理访问" style="min-width: 10rem">
+            <Column header="代理 / 密钥" style="min-width: 9.5rem">
               <template #body="{ data }">
-                <Tag
-                  :value="profileStatusLabel(data)"
-                  :severity="profileStatusSeverity(data)"
-                  rounded
-                />
+                <div class="tag-stack">
+                  <Tag
+                    :value="profileStatusLabel(data)"
+                    :severity="profileStatusSeverity(data)"
+                    rounded
+                  />
+                  <Tag
+                    :value="managedKeyStateLabel(data)"
+                    :severity="managedKeyStateSeverity(data)"
+                    rounded
+                  />
+                </div>
               </template>
             </Column>
-            <Column header="有效期" style="min-width: 12rem">
+            <Column header="有效期" style="min-width: 9.5rem">
               <template #body="{ data }">
                 <span>{{ data.profile ? formatExpiry(data.profile.expiresAt) : '—' }}</span>
               </template>
             </Column>
-            <Column header="Proxy 地址" style="min-width: 10rem">
+            <Column header="Proxy 地址" style="min-width: 8rem">
               <template #body="{ data }">
                 <div v-if="data.proxyAddresses.length" class="permission-tags">
                   <Tag
                     v-for="address in data.proxyAddresses.slice(0, 2)"
                     :key="address.id"
                     :value="address.label"
+                    :title="address.label"
                     severity="info"
                   />
                   <small v-if="data.proxyAddresses.length > 2">
@@ -2537,34 +2570,51 @@ function clearAgentAuthorizationLocation(): void {
                 <Tag v-else value="未分配" severity="danger" />
               </template>
             </Column>
-            <Column header="权限" style="min-width: 14rem">
+            <Column header="Agent 权限" style="min-width: 18rem">
               <template #body="{ data }">
-                <div v-if="data.account?.role === 'admin'" class="permission-tags">
+                <div
+                  v-if="data.account?.role === 'admin'"
+                  class="permission-tags user-permission-tags"
+                  :title="managedPermissionsTitle(data)"
+                  :aria-label="managedPermissionsTitle(data)"
+                >
                   <Tag value="Agent 全权限" severity="info" />
                 </div>
-                <div v-else-if="data.profile?.permissions.length" class="permission-tags">
+                <div
+                  v-else-if="data.profile"
+                  class="permission-tags user-permission-tags"
+                  :title="managedPermissionsTitle(data)"
+                  :aria-label="managedPermissionsTitle(data)"
+                >
                   <Tag
-                    v-for="permission in data.profile.permissions.slice(0, 2)"
-                    :key="permission"
-                    :value="permissionLabel(permission)"
+                    v-for="permission in managedAgentPermissions(data)"
+                    :key="permission.code"
+                    :value="permission.label"
                     severity="secondary"
                   />
-                  <small v-if="data.profile.permissions.length > 2">
-                    +{{ data.profile.permissions.length - 2 }}
-                  </small>
+                  <Tag
+                    v-if="managedCustomPermissions(data).length"
+                    :value="`附加权限 ${managedCustomPermissions(data).length} 项`"
+                    severity="secondary"
+                  />
+                  <Tag
+                    v-if="
+                      !managedAgentPermissions(data).length &&
+                      !managedCustomPermissions(data).length
+                    "
+                    value="Agent 基础功能"
+                    severity="secondary"
+                  />
                 </div>
                 <span v-else>—</span>
               </template>
             </Column>
-            <Column header="密钥" style="min-width: 8rem">
-              <template #body="{ data }">
-                <Tag
-                  :value="managedKeyStateLabel(data)"
-                  :severity="managedKeyStateSeverity(data)"
-                />
-              </template>
-            </Column>
-            <Column header="操作" frozen align-frozen="right" style="min-width: 10rem">
+            <Column
+              header="操作"
+              frozen
+              align-frozen="right"
+              style="min-width: 8.5rem"
+            >
               <template #body="{ data }">
                 <div class="row-actions">
                   <Button
@@ -2917,7 +2967,6 @@ function clearAgentAuthorizationLocation(): void {
                 />
                 <span>
                   <strong>允许代理连接</strong>
-                  <small>关闭后停止 Agent 代理，Web 账户仍可登录。</small>
                 </span>
                 <Tag
                   :value="editForm.enabled ? '已允许' : '已暂停'"
@@ -2925,6 +2974,7 @@ function clearAgentAuthorizationLocation(): void {
                   rounded
                 />
               </label>
+              <small>关闭后停止 Agent 代理，Web 账户仍可登录。</small>
             </div>
           </div>
           <ProxyAddressChecklist

@@ -8358,41 +8358,50 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 }
 /* Packet capture result explorer. */
-.workspace.capture-workspace {
-  display: flex;
-  flex-direction: column;
-}
-
-.capture-workspace > .topbar {
-  flex: 0 0 auto;
-}
-
 .capture-page {
-  flex: 1 1 auto;
-  min-height: 0;
-  grid-template-rows: auto auto minmax(280px, 1fr);
+  --capture-table-header: color-mix(in srgb, var(--app-surface) 78%, var(--app-bg));
+  --capture-table-stripe: color-mix(in srgb, var(--app-muted-surface) 34%, transparent);
+  --capture-table-hover: color-mix(in srgb, var(--app-primary) 8%, transparent);
+  --capture-upload-background: rgba(245, 158, 11, 0.14);
+  --capture-upload-text: #b45309;
+  --capture-download-background: rgba(16, 185, 129, 0.14);
+  --capture-download-text: #047857;
+  align-items: start;
 }
 
-.capture-results {
-  min-height: 0;
+html.app-dark .capture-page {
+  --capture-table-header: #111a22;
+  --capture-table-stripe: rgba(121, 151, 170, 0.045);
+  --capture-table-hover: rgba(72, 232, 255, 0.075);
+  --capture-upload-background: rgba(255, 174, 92, 0.12);
+  --capture-upload-text: #ffad69;
+  --capture-download-background: rgba(98, 245, 166, 0.1);
+  --capture-download-text: #62f5a6;
 }
 
-.capture-results.p-card .p-card-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
+.capture-console.p-card .p-card-title {
+  margin-bottom: 12px;
 }
 
-.capture-results.p-card .p-card-title {
-  flex: 0 0 auto;
+.capture-console-heading {
+  gap: 16px;
 }
 
-.capture-results.p-card .p-card-content {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: 0;
+.capture-console-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 2fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.capture-output-setting {
+  align-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: var(--app-muted-surface);
 }
 
 .capture-heading-actions,
@@ -8404,8 +8413,12 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--app-border-soft);
 }
 
 .capture-metrics .metric-tile {
@@ -8417,6 +8430,13 @@ html.app-dark .dns-record-frame .dns-record-row {
   padding: 9px 11px;
 }
 
+.capture-console .capture-metrics .metric-tile {
+  border: 0;
+  border-radius: 0;
+  background: var(--app-surface);
+  box-shadow: none;
+}
+
 .capture-metrics .metric-tile > .app-icon {
   grid-row: 1 / 3;
   align-self: center;
@@ -8424,7 +8444,10 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-metrics .metric-tile > span {
   align-self: end;
+  overflow: hidden;
   line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .capture-metric-value {
@@ -8450,16 +8473,16 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-metrics .metric-tile small {
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
 }
 
 .capture-notice {
-  margin: 14px 0 0;
+  margin: 10px 0 0;
   padding: 10px 12px;
   border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 9px;
   background: rgba(59, 130, 246, 0.08);
-  color: var(--text-secondary, #475569);
+  color: var(--app-text);
 }
 
 .capture-notice.warning {
@@ -8516,12 +8539,11 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-table-wrap {
-  flex: 1 1 0;
-  min-height: 0;
-  max-height: none;
+  max-height: min(520px, 55vh);
   overflow: auto;
-  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border: 1px solid var(--app-border-soft);
   border-radius: 10px;
+  background: color-mix(in srgb, var(--app-surface) 72%, transparent);
 }
 
 .capture-table {
@@ -8529,6 +8551,7 @@ html.app-dark .dns-record-frame .dns-record-row {
   min-width: 1040px;
   border-collapse: separate;
   border-spacing: 0;
+  color: var(--app-text);
   font-size: 0.76rem;
 }
 
@@ -8537,11 +8560,13 @@ html.app-dark .dns-record-frame .dns-record-row {
   top: 0;
   z-index: 2;
   padding: 7px 9px;
-  background: var(--surface-raised, rgba(248, 250, 252, 0.96));
-  color: var(--text-muted, #64748b);
+  background: var(--capture-table-header);
+  color: var(--app-text-muted);
   text-align: left;
   font-weight: 700;
-  border-bottom: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.22));
+  border-bottom: 1px solid var(--app-border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--app-border-soft) 72%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .capture-sort-button {
@@ -8558,7 +8583,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-sort-button span:last-child {
-  color: var(--text-muted, #94a3b8);
+  color: var(--app-text-muted);
   font-size: 0.72rem;
 }
 
@@ -8574,8 +8599,10 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-table td {
   padding: 6px 9px;
+  color: var(--app-text);
+  vertical-align: middle;
   white-space: nowrap;
-  border-bottom: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.14));
+  border-bottom: 1px solid var(--app-border-soft);
 }
 
 .capture-table tbody tr {
@@ -8583,9 +8610,13 @@ html.app-dark .dns-record-frame .dns-record-row {
   transition: background 0.14s ease;
 }
 
+.capture-table tbody tr:nth-child(even) {
+  background: var(--capture-table-stripe);
+}
+
 .capture-table tbody tr:hover,
 .capture-table tbody tr:focus {
-  background: rgba(124, 58, 237, 0.08);
+  background: var(--capture-table-hover);
 }
 
 .capture-table tbody tr:focus-visible {
@@ -8595,7 +8626,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-table code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  color: var(--text-primary, #1e293b);
+  color: var(--app-text-strong);
 }
 
 .capture-time {
@@ -8622,13 +8653,13 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-direction.upload {
-  background: rgba(245, 158, 11, 0.14);
-  color: #b45309;
+  background: var(--capture-upload-background);
+  color: var(--capture-upload-text);
 }
 
 .capture-direction.download {
-  background: rgba(16, 185, 129, 0.14);
-  color: #047857;
+  background: var(--capture-download-background);
+  color: var(--capture-download-text);
 }
 
 .capture-protocol-stack {
@@ -8639,23 +8670,23 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-protocol-stack > span:not(.p-tag) {
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
   font-size: 0.72rem;
 }
 
 .capture-empty {
   display: grid;
-  flex: 1 1 0;
   align-content: center;
   justify-items: center;
-  gap: 8px;
-  padding: 54px 20px;
-  color: var(--text-muted, #64748b);
+  gap: 6px;
+  min-height: 128px;
+  padding: 22px 16px;
+  color: var(--app-text-muted);
 }
 
 .capture-empty .app-icon {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
 }
 
 .capture-detail-grid {
@@ -8676,7 +8707,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-dialog-subtitle {
   margin: 0 0 14px;
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
   font-size: 0.84rem;
 }
 
@@ -8686,9 +8717,9 @@ html.app-dark .dns-record-frame .dns-record-row {
   gap: 7px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  border: 1px solid var(--app-border-soft);
   border-radius: 9px;
-  background: rgba(148, 163, 184, 0.06);
+  background: color-mix(in srgb, var(--app-muted-surface) 58%, transparent);
 }
 
 .capture-payload > div {
@@ -8698,14 +8729,14 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-detail-grid span,
 .capture-payload span {
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
   font-size: 0.76rem;
   font-weight: 700;
 }
 
 .capture-detail-grid code {
   overflow: hidden;
-  color: var(--text-primary, #1e293b);
+  color: var(--app-text-strong);
   text-overflow: ellipsis;
 }
 
@@ -8722,9 +8753,9 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-protocol-analysis details {
   overflow: hidden;
-  border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
+  border: 1px solid var(--app-border-soft);
   border-radius: 8px;
-  background: rgba(148, 163, 184, 0.04);
+  background: color-mix(in srgb, var(--app-muted-surface) 46%, transparent);
 }
 
 .capture-protocol-analysis summary {
@@ -8738,7 +8769,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 
 .capture-protocol-analysis summary span {
   overflow: hidden;
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -8752,7 +8783,7 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .capture-protocol-analysis dt {
-  color: var(--text-muted, #64748b);
+  color: var(--app-text-muted);
 }
 
 .capture-protocol-analysis dd {
@@ -8774,7 +8805,7 @@ html.app-dark .dns-record-frame .dns-record-row {
   max-height: 360px;
   margin: 0;
   overflow: auto;
-  color: var(--text-primary, #1e293b);
+  color: var(--app-text-strong);
   font: 0.8rem/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -8782,17 +8813,18 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 @media (max-width: 1050px) {
-  .capture-metrics,
   .capture-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 720px) {
-  .capture-page {
-    grid-template-rows: auto auto minmax(520px, 1fr);
+@media (max-width: 900px) {
+  .capture-console-grid {
+    grid-template-columns: 1fr;
   }
+}
 
+@media (max-width: 720px) {
   .capture-heading-actions {
     flex-wrap: wrap;
     align-items: stretch;

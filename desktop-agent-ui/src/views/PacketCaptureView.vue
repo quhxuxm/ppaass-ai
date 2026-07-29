@@ -9,7 +9,7 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import AppIcon from "../components/AppIcon";
-import { formatBytes, shortPath } from "../formatters";
+import { formatBytes } from "../formatters";
 import type { AgentConfigSummary, CapturedPacket, PacketCaptureReport } from "../types";
 
 type SortKey =
@@ -107,6 +107,19 @@ watch(
     void refresh();
   }
 );
+
+const hasCapturedPackets = computed(() => (state.report?.packets.length ?? 0) > 0);
+const captureFileHint = computed(() => {
+  if (!state.report) {
+    return "尚未读取";
+  }
+  if (!state.report.exists) {
+    return "未生成";
+  }
+  return state.report.total_packets === 0 && state.report.file_size > 0
+    ? "仅文件头"
+    : "磁盘占用";
+});
 
 const filteredPackets = computed(() => {
   const normalizedQuery = query.value.trim().toLowerCase();
@@ -319,7 +332,10 @@ function formatCaptureBytes(bytes?: number | null) {
   if (bytes == null) {
     return "—";
   }
-  return bytes > 0 ? formatBytes(bytes) : "0 字节";
+  if (bytes < 1024) {
+    return `${Math.max(0, Math.round(bytes))} 字节`;
+  }
+  return formatBytes(bytes);
 }
 
 function hasTauri() {
@@ -329,39 +345,10 @@ function hasTauri() {
 
 <template>
   <div class="content-grid capture-page">
-    <Card class="panel span-12 capture-settings">
+    <Card class="panel span-12 capture-console">
       <template #title>
-        <div class="panel-heading inline">
+        <div class="panel-heading inline capture-console-heading">
           <h2>明文抓包</h2>
-          <Tag value="输出设置" severity="info" />
-        </div>
-      </template>
-      <template #content>
-        <label class="field">
-          <span><AppIcon name="file-down" />PCAP 文件</span>
-          <InputText
-            :model-value="summary.tun_packet_capture_file"
-            :disabled="configLocked"
-            @update:model-value="
-              emit('set-field', 'tun_packet_capture_file', $event)
-            "
-          />
-          <small class="field-help">
-            配置抓包输出路径；开启、关闭和清空均在本页立即完成，无需重启 Agent。
-          </small>
-        </label>
-      </template>
-    </Card>
-
-    <Card class="panel span-12 capture-hero">
-      <template #title>
-        <div class="panel-heading inline">
-          <div>
-            <h2>明文抓包结果</h2>
-            <p :title="state.report?.file || summary.tun_packet_capture_file">
-              {{ shortPath(state.report?.file || summary.tun_packet_capture_file) }}
-            </p>
-          </div>
           <div class="capture-heading-actions">
             <Tag :value="captureStatus.label" :severity="captureStatus.severity" />
             <Button
@@ -400,37 +387,54 @@ function hasTauri() {
         </div>
       </template>
       <template #content>
-        <div class="capture-metrics">
-          <div class="metric-tile">
-            <AppIcon name="file-down" />
-            <span>数据包总数</span>
-            <div class="capture-metric-value">
-              <strong>{{ state.report?.total_packets ?? 0 }}</strong>
-              <small>包</small>
+        <div class="capture-console-grid">
+          <label class="field capture-output-setting">
+            <span><AppIcon name="file-down" />PCAP 输出文件</span>
+            <InputText
+              id="capture-output-file"
+              :model-value="summary.tun_packet_capture_file"
+              :disabled="configLocked"
+              @update:model-value="
+                emit('set-field', 'tun_packet_capture_file', $event)
+              "
+            />
+            <small class="field-help">
+              保存抓包数据的磁盘路径；开关与清空立即生效，无需重启 Agent。
+            </small>
+          </label>
+
+          <div class="capture-metrics">
+            <div class="metric-tile">
+              <AppIcon name="file-down" />
+              <span>数据包总数</span>
+              <div class="capture-metric-value">
+                <strong>{{ state.report?.total_packets ?? "—" }}</strong>
+                <small>{{ state.report ? "包" : "尚未读取" }}</small>
+              </div>
             </div>
-          </div>
-          <div class="metric-tile">
-            <AppIcon name="send" />
-            <span>上传流量</span>
-            <div class="capture-metric-value">
-              <strong>{{ formatCaptureBytes(state.report?.upload_bytes) }}</strong>
-              <small>{{ state.report?.upload_packets ?? 0 }} 包</small>
+            <div class="metric-tile">
+              <AppIcon name="send" />
+              <span>上传流量</span>
+              <div class="capture-metric-value">
+                <strong>{{ formatCaptureBytes(state.report?.upload_bytes) }}</strong>
+                <small>{{ state.report?.upload_packets ?? 0 }} 包</small>
+              </div>
             </div>
-          </div>
-          <div class="metric-tile">
-            <AppIcon name="cloud" />
-            <span>下载流量</span>
-            <div class="capture-metric-value">
-              <strong>{{ formatCaptureBytes(state.report?.download_bytes) }}</strong>
-              <small>{{ state.report?.download_packets ?? 0 }} 包</small>
+            <div class="metric-tile">
+              <AppIcon name="cloud" />
+              <span>下载流量</span>
+              <div class="capture-metric-value">
+                <strong>{{ formatCaptureBytes(state.report?.download_bytes) }}</strong>
+                <small>{{ state.report?.download_packets ?? 0 }} 包</small>
+              </div>
             </div>
-          </div>
-          <div class="metric-tile">
-            <AppIcon name="database" />
-            <span>PCAP 文件大小</span>
-            <div class="capture-metric-value">
-              <strong>{{ formatCaptureBytes(state.report?.file_size) }}</strong>
-              <small>磁盘文件</small>
+            <div class="metric-tile">
+              <AppIcon name="database" />
+              <span>文件大小</span>
+              <div class="capture-metric-value">
+                <strong>{{ formatCaptureBytes(state.report?.file_size) }}</strong>
+                <small>{{ captureFileHint }}</small>
+              </div>
             </div>
           </div>
         </div>
@@ -456,16 +460,18 @@ function hasTauri() {
           <div>
             <h2>数据包列表</h2>
             <p>
-              显示 {{ filteredPackets.length }} 包
-              · 双击一行查看内容
-              <template v-if="state.report?.truncated"> · PCAP 较大，仅载入最近 {{ state.report.returned_packets }} 包</template>
-              <template v-if="(state.report?.file_size ?? 0) > AUTO_REFRESH_MAX_FILE_BYTES"> · 大文件已暂停自动刷新</template>
+              <template v-if="hasCapturedPackets">
+                显示 {{ filteredPackets.length }} 包 · 双击一行查看内容
+                <template v-if="state.report?.truncated"> · PCAP 较大，仅载入最近 {{ state.report.returned_packets }} 包</template>
+                <template v-if="(state.report?.file_size ?? 0) > AUTO_REFRESH_MAX_FILE_BYTES"> · 大文件已暂停自动刷新</template>
+              </template>
+              <template v-else>捕获到的数据包会显示在这里</template>
             </p>
           </div>
         </div>
       </template>
       <template #content>
-        <div class="capture-filters">
+        <div v-if="hasCapturedPackets" class="capture-filters">
           <label class="capture-search">
             <AppIcon name="search" />
             <InputText v-model="query" placeholder="搜索 IP、端口、协议或内容" />
@@ -555,8 +561,22 @@ function hasTauri() {
         </div>
         <div v-else class="capture-empty">
           <AppIcon name="file-down" />
-          <strong>{{ state.loading ? "正在读取抓包结果" : "没有符合条件的数据包" }}</strong>
-          <span>产生 TUN、HTTP 或 SOCKS5 流量，或调整筛选条件后再查看。</span>
+          <strong>
+            {{
+              state.loading
+                ? "正在读取抓包结果"
+                : hasCapturedPackets
+                  ? "没有符合筛选条件的数据包"
+                  : "还没有捕获到数据包"
+            }}
+          </strong>
+          <span>
+            {{
+              hasCapturedPackets
+                ? "调整筛选条件后再查看。"
+                : "启动 Agent 并开启抓包后，TUN、HTTP 或 SOCKS5 流量会显示在这里。"
+            }}
+          </span>
         </div>
       </template>
     </Card>
