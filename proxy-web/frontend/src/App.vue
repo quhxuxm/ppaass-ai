@@ -516,6 +516,10 @@ async function refreshSelf(): Promise<void> {
     }
     if (nextSelf.account.role === 'user') {
       await refreshAccessRecords(false)
+    } else if (nextSelf.account.role === 'admin') {
+      // 管理员登录完成后立即读取待审批申请。不能只依赖切换到“用户管理”
+      // 页面的 watch；页面状态被保留或申请刚刚提交时，watch 不一定再次触发。
+      await refreshAdminUsers()
     }
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
