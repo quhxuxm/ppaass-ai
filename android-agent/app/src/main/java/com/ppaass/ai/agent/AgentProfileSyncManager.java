@@ -34,6 +34,16 @@ final class AgentProfileSyncManager {
         cancelScheduled();
     }
 
+    static synchronized void requestImmediateSync(Context context) {
+        applicationContext = context.getApplicationContext();
+        if (!AgentAuthSession.isActive(applicationContext) || scheduled == null) {
+            return;
+        }
+        generation++;
+        cancelScheduled();
+        schedule(generation, 0);
+    }
+
     static int boundedInterval(int seconds) {
         return AgentSessionStore.clampedRefresh(seconds);
     }

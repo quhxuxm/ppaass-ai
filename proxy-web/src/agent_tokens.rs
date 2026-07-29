@@ -14,7 +14,7 @@ const NONCE_BYTES: usize = 12;
 const MIN_MASTER_SECRET_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 const TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
-pub const AGENT_PROFILE_REFRESH_SECONDS: u32 = 5 * 60;
+pub const AGENT_PROFILE_REFRESH_SECONDS: u32 = 60;
 const KEY_DERIVATION_DOMAIN: &[u8] = b"ppaass-agent-access-token-key-v1\0";
 const TOKEN_AAD: &[u8] = b"ppaass-agent-access-token-v1";
 
@@ -173,6 +173,11 @@ mod tests {
     use super::*;
 
     const MASTER_SECRET: &str = "test-only-agent-token-secret-with-32-bytes";
+
+    #[test]
+    fn profile_refresh_interval_keeps_permission_changes_prompt() {
+        assert_eq!(AGENT_PROFILE_REFRESH_SECONDS, 60);
+    }
 
     #[test]
     fn token_survives_service_recreation_and_rejects_tampering() {

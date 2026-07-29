@@ -11,6 +11,7 @@ interface Props {
   description?: string
   emptyMessage?: string
   required?: boolean
+  compact?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -18,6 +19,7 @@ const props = withDefaults(defineProps<Props>(), {
   description: '',
   emptyMessage: '暂无可分配的 Proxy 地址。',
   required: true,
+  compact: false,
 })
 
 const selectedIds = defineModel<string[]>({ default: () => [] })
@@ -34,6 +36,7 @@ function inputId(addressId: string): string {
 <template>
   <section
     class="proxy-checklist"
+    :class="{ 'proxy-checklist--compact': compact }"
     :aria-labelledby="`${inputPrefix}-title`"
     :aria-describedby="description ? `${inputPrefix}-description` : undefined"
   >

@@ -1,6 +1,6 @@
 use super::*;
 
-const DEFAULT_PERMISSION_SYNC_SECONDS: u64 = 300;
+const DEFAULT_PERMISSION_SYNC_SECONDS: u64 = 60;
 
 mod managed_config;
 use managed_config::*;

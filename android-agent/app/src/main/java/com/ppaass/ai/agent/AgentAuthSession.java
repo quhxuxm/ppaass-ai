@@ -102,7 +102,7 @@ final class AgentAuthSession {
     }
 
     static synchronized boolean hasPermission(Context context, String permission) {
-        if (!isActive(context) || AgentSessionStore.serverDisabled(context)) {
+        if (!isActive(context) || isServerDisabled(context)) {
             return false;
         }
         return AgentPermissions.allows(role, permissions, permission);
@@ -110,7 +110,7 @@ final class AgentAuthSession {
 
     static synchronized boolean isAdmin(Context context) {
         return isActive(context)
-                && !AgentSessionStore.serverDisabled(context)
+                && !isServerDisabled(context)
                 && AgentPermissions.ROLE_ADMIN.equals(role);
     }
 

@@ -90,6 +90,38 @@ async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_change
         );
     }
     assert_ne!(synced["agent_access_token"].as_str().unwrap(), first_token);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/admin/users/sync-user")
+                .header(header::COOKIE, &admin_cookie)
+                .header("x-csrf-token", &admin_csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"permissions": []}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = agent_profile(&app, &first_token).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let revoked = json_body(response).await;
+    let permissions = revoked["profile"]["permissions"].as_array().unwrap();
+    for permission in [
+        PACKET_CAPTURE_PERMISSION,
+        EGRESS_EDIT_PERMISSION,
+        RUNTIME_THREADS_EDIT_PERMISSION,
+        "custom.keep",
+    ] {
+        assert!(
+            !permissions.iter().any(|candidate| candidate == permission),
+            "revoked permission still returned: {permission}: {permissions:?}"
+        );
+    }
 }
 
 #[tokio::test]

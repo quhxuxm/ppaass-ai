@@ -190,6 +190,50 @@
   line-height: 1.45;
 }
 
+.proxy-checklist--compact {
+  border-radius: 0.75rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__heading {
+  padding: 0.65rem 0.8rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__heading-copy {
+  gap: 0.125rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__heading-copy strong {
+  font-size: 0.82rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__heading-copy small {
+  font-size: 0.68rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__table {
+  max-height: 160px;
+}
+
+.proxy-checklist--compact .proxy-checklist__columns {
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  font-size: 0.66rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__row {
+  min-height: 3rem;
+  padding: 0.4rem 0.8rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__name strong {
+  font-size: 0.8rem;
+}
+
+.proxy-checklist--compact .proxy-checklist__address {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+}
+
 @media (max-width: 640px) {
   .proxy-checklist__heading {
     padding: 0.875rem;
@@ -219,6 +263,11 @@
     justify-self: start;
     max-width: 100%;
     margin-top: 0.25rem;
+  }
+
+  .proxy-checklist--compact .proxy-checklist__row {
+    min-height: 4rem;
+    padding: 0.6rem 0.75rem;
   }
 }
 

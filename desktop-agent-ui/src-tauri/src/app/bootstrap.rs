@@ -68,6 +68,12 @@ pub(crate) fn run() {
         .on_window_event(|window, event| {
             #[cfg(not(any(windows, target_os = "macos")))]
             let _ = (window, event);
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                window
+                    .state::<Arc<AgentRuntime>>()
+                    .permission_sync_notify
+                    .notify_one();
+            }
             #[cfg(any(windows, target_os = "macos"))]
             if window.label() == "main"
                 && matches!(

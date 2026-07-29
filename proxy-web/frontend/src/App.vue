@@ -1148,7 +1148,7 @@ function deleteBlockedReason(user: ManagedUser): string | null {
     return user.account.status === 'disabled' ? null : '请先停用账号'
   }
   if (user.profile?.origin === 'legacy') {
-    return user.profile.enabled ? '请先停用代理配置' : null
+    return user.profile.enabled ? '请先暂停代理连接' : null
   }
   return '该用户没有可删除的 Web 账号或 legacy 配置'
 }
@@ -1172,12 +1172,12 @@ function accountStatusSeverity(
 
 function profileStatusLabel(user: ManagedUser): string {
   if (!user.profile) {
-    return '无代理配置'
+    return '未生成代理凭据'
   }
   if (!user.profile.enabled) {
-    return '代理配置已停用'
+    return '代理连接已暂停'
   }
-  return isExpired(user.profile.expiresAt) ? '代理配置已过期' : '代理配置已启用'
+  return isExpired(user.profile.expiresAt) ? '代理权限已过期' : '允许代理连接'
 }
 
 function profileStatusSeverity(
@@ -2022,7 +2022,7 @@ function clearAgentAuthorizationLocation(): void {
                 在有效期内可以直接更新。更新后，已授权 Agent 会自动领取新的连接凭据。
               </p>
               <p v-else>
-                当前账户没有更新密钥的权限，或代理配置已被停用。
+                当前账户没有更新密钥的权限，或代理连接已被暂停。
               </p>
             </div>
             <Button
@@ -2072,7 +2072,7 @@ function clearAgentAuthorizationLocation(): void {
               </h2>
               <h2 v-else-if="keyState === 'expired'">密钥已过期，请申请续期</h2>
               <h2 v-else-if="keyState === 'missing'">申请你的第一组代理密钥</h2>
-              <h2 v-else-if="keyState === 'disabled'">代理配置已被停用</h2>
+              <h2 v-else-if="keyState === 'disabled'">代理连接已被暂停</h2>
               <h2 v-else>密钥信息暂不可用</h2>
               <p
                 v-if="
@@ -2261,7 +2261,7 @@ function clearAgentAuthorizationLocation(): void {
           <div>
             <p class="eyebrow">ADMIN CONSOLE</p>
             <h1>用户管理</h1>
-            <p>管理账户、代理配置和有效期，并可触发密钥生成；连接凭据只由账户本人授权的 Agent 领取。</p>
+            <p>管理账户、代理连接和有效期，并可触发密钥生成；连接凭据只由账户本人授权的 Agent 领取。</p>
           </div>
           <Button label="新建普通用户" icon="pi pi-user-plus" @click="openCreate" />
         </div>
@@ -2507,7 +2507,7 @@ function clearAgentAuthorizationLocation(): void {
                 />
               </template>
             </Column>
-            <Column header="代理配置" style="min-width: 10rem">
+            <Column header="代理访问" style="min-width: 10rem">
               <template #body="{ data }">
                 <Tag
                   :value="profileStatusLabel(data)"
@@ -2832,7 +2832,7 @@ function clearAgentAuthorizationLocation(): void {
             />
           </div>
           <small class="user-editor-account-help">
-            停用账号后，该用户将无法登录 Proxy Web 和 Agent，但不会修改代理配置开关。
+            停用账号后，该用户将无法登录 Proxy Web 和 Agent；不会自动改变代理连接权限。
           </small>
         </div>
         <div v-else class="protected-account-summary">
@@ -2849,39 +2849,30 @@ function clearAgentAuthorizationLocation(): void {
           <i class="pi pi-lock" />
           <span>
             <strong>根管理员账号受保护</strong>
-            <small>admin 不能停用、降级或删除，其他代理配置仍可正常调整。</small>
+            <small>admin 不能停用、降级或删除，代理连接设置仍可正常调整。</small>
           </span>
         </div>
       </section>
       <div v-if="!editingUser?.account" class="legacy-notice">
         <i class="pi pi-info-circle" />
         <span>
-          该 legacy 配置没有 Web 登录账号；这里只能启用或停用代理配置，有效期、权限和密钥保持只读。
+          该 legacy 配置没有 Web 登录账号；这里只能允许或暂停代理连接，有效期、权限和密钥保持只读。
         </span>
       </div>
-      <ProxyAddressChecklist
-        v-if="editingUser?.account && editingUser.profile"
-        v-model="editForm.proxyAddressIds"
-        :addresses="enabledProxyAddresses"
-        input-prefix="edit-proxy"
-        :description="
-          editForm.status === 'disabled' && !editingUser.proxyAddresses.length
-            ? '账号停用时可以暂不分配；重新启用前至少选择一个。'
-            : '至少保留一个；保存后 Agent 会在定期同步时应用。'
-        "
-        :required="
-          editForm.status !== 'disabled' || editingUser.proxyAddresses.length > 0
-        "
-        empty-message="请先在 Proxy 地址目录中新增并启用地址。"
-      />
       <template v-if="editingUser?.profile">
-        <section class="user-editor-section">
+        <section class="user-editor-section proxy-access-section">
           <div class="user-editor-section-heading">
             <span><i class="pi pi-clock" /></span>
             <div>
-              <strong>代理状态</strong>
-              <small>管理代理配置开关及该用户当前的有效期限。</small>
+              <strong>代理连接</strong>
+              <small>控制流量访问、有效期以及 Agent 可以连接的 Proxy 节点。</small>
             </div>
+            <Tag
+              v-if="editingUser.account && editForm.role === 'admin'"
+              value="Agent 全权限"
+              severity="info"
+              rounded
+            />
           </div>
           <div
             v-if="editingProfileReadOnly && editingUser.profile.origin !== 'legacy'"
@@ -2913,7 +2904,7 @@ function clearAgentAuthorizationLocation(): void {
               <small v-else>清空表示永久有效。</small>
             </div>
             <div class="form-field">
-              <span class="form-field-label">代理开关</span>
+              <span class="form-field-label">流量权限</span>
               <label
                 class="proxy-toggle-card"
                 :class="{ selected: editForm.enabled }"
@@ -2925,58 +2916,56 @@ function clearAgentAuthorizationLocation(): void {
                   binary
                 />
                 <span>
-                  <strong>启用代理配置</strong>
-                  <small>控制新代理连接，不影响账号登录状态。</small>
+                  <strong>允许代理连接</strong>
+                  <small>关闭后停止 Agent 代理，Web 账户仍可登录。</small>
                 </span>
                 <Tag
-                  :value="editForm.enabled ? '已启用' : '已停用'"
+                  :value="editForm.enabled ? '已允许' : '已暂停'"
                   :severity="editForm.enabled ? 'success' : 'secondary'"
                   rounded
                 />
               </label>
             </div>
           </div>
+          <ProxyAddressChecklist
+            v-if="editingUser.account"
+            v-model="editForm.proxyAddressIds"
+            :addresses="enabledProxyAddresses"
+            input-prefix="edit-proxy"
+            :description="
+              editForm.status === 'disabled' && !editingUser.proxyAddresses.length
+                ? '账号停用时可以暂不分配；重新启用前至少选择一个。'
+                : '至少保留一个；保存后 Agent 会在定期同步时应用。'
+            "
+            :required="
+              editForm.status !== 'disabled' || editingUser.proxyAddresses.length > 0
+            "
+            empty-message="请先在 Proxy 地址目录中新增并启用地址。"
+            compact
+          />
         </section>
         <section
           v-if="editingUser?.account && editForm.role === 'user'"
-          class="fixed-capabilities"
-          aria-labelledby="edit-capabilities-title"
-        >
-          <div class="fixed-capabilities-heading">
-            <span class="summary-icon blue"><i class="pi pi-shield" /></span>
-            <div>
-              <strong id="edit-capabilities-title">普通用户基础能力</strong>
-              <small>这些能力不可单独撤销；可通过“启用代理配置”开关整体控制。</small>
-            </div>
-          </div>
-          <ul>
-            <li
-              v-for="permission in basePermissionOptions"
-              :key="permission.code"
-            >
-              <i class="pi pi-check-circle" />
-              <span>
-                <strong>{{ permission.label }}</strong>
-                <small>{{ permission.description }}</small>
-              </span>
-            </li>
-          </ul>
-        </section>
-        <section
-          v-if="editingUser?.account && editForm.role === 'user'"
-          class="agent-permission-picker"
+          class="user-editor-section user-editor-permission-section"
           aria-labelledby="edit-agent-permissions-title"
         >
-          <div class="permission-picker-heading">
+          <div class="user-editor-section-heading">
+            <span><i class="pi pi-shield" /></span>
             <div>
-              <strong id="edit-agent-permissions-title">Agent 管理权限</strong>
-              <small>可随时勾选或取消；无权限时 Agent 隐藏功能并使用内置默认值。</small>
+              <strong id="edit-agent-permissions-title">Agent 权限</strong>
+              <small>基础代理能力固定授予，管理功能可按需开启。</small>
             </div>
             <Tag
               :value="`${editForm.agentPermissions.length} / ${agentPermissionOptions.length}`"
               severity="info"
               rounded
             />
+          </div>
+          <div class="base-capability-strip" aria-label="固定基础能力">
+            <span v-for="permission in basePermissionOptions" :key="permission.code">
+              <i class="pi pi-check-circle" />
+              {{ permission.label }}
+            </span>
           </div>
           <div class="permission-picker-grid">
             <label
@@ -3017,16 +3006,6 @@ function clearAgentAuthorizationLocation(): void {
             </div>
           </div>
         </section>
-        <div
-          v-else-if="editingUser?.account && editForm.role === 'admin'"
-          class="admin-permission-notice"
-        >
-          <i class="pi pi-shield" />
-          <span>
-            <strong>管理员 Agent 自动拥有全部管理权限</strong>
-            <small>无需勾选；管理员身份会在 Agent 端直接启用全部受控功能。</small>
-          </span>
-        </div>
       </template>
     </form>
     <template #footer>

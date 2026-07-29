@@ -315,6 +315,13 @@ function resetFilters() {
   minimumPacketSizeKb.value = null;
 }
 
+function formatCaptureBytes(bytes?: number | null) {
+  if (bytes == null) {
+    return "—";
+  }
+  return bytes > 0 ? formatBytes(bytes) : "0 字节";
+}
+
 function hasTauri() {
   return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 }
@@ -396,25 +403,35 @@ function hasTauri() {
         <div class="capture-metrics">
           <div class="metric-tile">
             <AppIcon name="file-down" />
-            <span>数据包</span>
-            <strong>{{ state.report?.total_packets ?? 0 }}</strong>
+            <span>数据包总数</span>
+            <div class="capture-metric-value">
+              <strong>{{ state.report?.total_packets ?? 0 }}</strong>
+              <small>包</small>
+            </div>
           </div>
           <div class="metric-tile">
             <AppIcon name="send" />
-            <span>Client → Agent / 目标</span>
-            <strong>{{ formatBytes(state.report?.upload_bytes ?? 0) }}</strong>
-            <small>{{ state.report?.upload_packets ?? 0 }} 包</small>
+            <span>上传流量</span>
+            <div class="capture-metric-value">
+              <strong>{{ formatCaptureBytes(state.report?.upload_bytes) }}</strong>
+              <small>{{ state.report?.upload_packets ?? 0 }} 包</small>
+            </div>
           </div>
           <div class="metric-tile">
             <AppIcon name="cloud" />
-            <span>Agent / 目标 → Client</span>
-            <strong>{{ formatBytes(state.report?.download_bytes ?? 0) }}</strong>
-            <small>{{ state.report?.download_packets ?? 0 }} 包</small>
+            <span>下载流量</span>
+            <div class="capture-metric-value">
+              <strong>{{ formatCaptureBytes(state.report?.download_bytes) }}</strong>
+              <small>{{ state.report?.download_packets ?? 0 }} 包</small>
+            </div>
           </div>
           <div class="metric-tile">
             <AppIcon name="database" />
-            <span>PCAP 大小</span>
-            <strong>{{ formatBytes(state.report?.file_size ?? 0) }}</strong>
+            <span>PCAP 文件大小</span>
+            <div class="capture-metric-value">
+              <strong>{{ formatCaptureBytes(state.report?.file_size) }}</strong>
+              <small>磁盘文件</small>
+            </div>
           </div>
         </div>
         <p v-if="agentRunning && !captureEnabled" class="capture-notice warning">

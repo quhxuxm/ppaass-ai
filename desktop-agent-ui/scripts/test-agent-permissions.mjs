@@ -147,6 +147,13 @@ try {
   assert.match(app, /account\.role/);
   assert.match(app, /\.\.\.account\.permissions/);
 
+  const bootstrap = await readFile(
+    new URL("../src-tauri/src/app/bootstrap.rs", import.meta.url),
+    "utf8"
+  );
+  assert.match(bootstrap, /WindowEvent::Focused\(true\)/);
+  assert.match(bootstrap, /permission_sync_notify\s*\.notify_one\(\)/);
+
   const egress = await readFile(
     new URL("../src/views/EgressView.vue", import.meta.url),
     "utf8"

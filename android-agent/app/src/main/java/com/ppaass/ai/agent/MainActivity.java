@@ -25,7 +25,8 @@ public class MainActivity extends MainActivityAuth {
     private SharedPreferences agentSessionPreferences;
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
-                if (AgentSessionStore.PREF_PERMISSION_REVISION.equals(key)) {
+                if (AgentSessionStore.PREF_PERMISSION_REVISION.equals(key)
+                        || AgentAuthSession.PREF_SERVER_AUTHENTICATION_STATUS.equals(key)) {
                     runOnUiThread(this::refreshAgentPermissionUi);
                     return;
                 }
@@ -120,6 +121,7 @@ public class MainActivity extends MainActivityAuth {
             }
             return;
         }
+        AgentProfileSyncManager.requestImmediateSync(this);
         cleanupStaleMockGeoState();
         restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
