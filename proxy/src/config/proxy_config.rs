@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
     pub listen_addr: String,
 
@@ -331,6 +332,33 @@ users_database_path = "users.sqlite3"
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn removed_users_toml_path_is_rejected() {
+        let result = toml::from_str::<ProxyConfig>(
+            r#"
+listen_addr = "127.0.0.1:0"
+users_path = "users.toml"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
+"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checked_in_proxy_configs_use_only_current_fields() {
+        for raw in [
+            include_str!("../../../config/local/proxy.toml"),
+            include_str!("../../../config/remote/proxy.toml"),
+            include_str!("../../../config/local/proxy-forward.toml"),
+            include_str!("../../../config/local/proxy-yamux-test.toml"),
+            include_str!("../../../config/proxy-e2e.local.toml"),
+        ] {
+            toml::from_str::<ProxyConfig>(raw).unwrap();
+        }
     }
 
     #[test]

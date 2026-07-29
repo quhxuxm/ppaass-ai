@@ -74,6 +74,9 @@ protected void applyToggleButtonState(String label, int color, boolean enabled) 
     }
 
 protected void updateStatusMetrics() {
+        if (accountSummary != null) {
+            accountSummary.setText(tr(authenticatedAccountSummary()));
+        }
         long rxBytes = currentVpnDownloadBytes();
         long txBytes = currentVpnUploadBytes();
         long nowMs = SystemClock.elapsedRealtime();
@@ -188,6 +191,26 @@ protected void loadHourlyTraffic(String key, long[] target) {
             }
         }
     }
+
+protected String authenticatedAccountSummary() {
+        StringBuilder summary = new StringBuilder()
+                .append("已登录：")
+                .append(AgentAuthSession.username());
+        if (AgentAuthSession.isServerExpired(this)) {
+            summary.append(" · 账号已过期，等待管理员续期");
+        } else if (AgentAuthSession.isServerDisabled(this)) {
+            summary.append(" · 账号已停用");
+        }
+        summary.append(" · 密钥版本 ")
+                .append(AgentAuthSession.keyVersion());
+        long expiresAt = AgentAuthSession.expiresAt();
+        if (expiresAt > 0) {
+            summary.append(" · 有效期至 ")
+                    .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                            .format(new Date(expiresAt * 1000L)));
+        }
+        return summary.toString();
+}
 
 protected String serializeHourlyTraffic(long[] values) {
         StringBuilder builder = new StringBuilder();

@@ -4,14 +4,14 @@ mod unix {
     use crate::error::{AgentError, Result};
     use common::BindInterface;
     use common::tun_control::{
-        TUN_HELPER_DNS_STATE_FILE_NAME, TUN_HELPER_ROUTE_STATE_FILE_NAME, TunHelperRequest,
-        TunHelperResponse, TunStartRequest, TunStartedResponse,
+        TunHelperRequest, TunHelperResponse, TunStartRequest, TunStartedResponse,
+        tun_helper_dns_state_path, tun_helper_route_state_path,
     };
     use nix::sys::socket::{ControlMessageOwned, MsgFlags, recvmsg};
     use std::io::{IoSliceMut, Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
+    use std::path::Path;
     use std::time::Duration;
     use tun_rs::AsyncDevice;
 
@@ -28,11 +28,18 @@ mod unix {
     pub(crate) struct HelperTunLease {
         socket_path: String,
         lease_id: String,
+        route_state_file: Option<String>,
+        dns_state_file: Option<String>,
     }
 
     impl Drop for HelperTunLease {
         fn drop(&mut self) {
-            if let Err(err) = stop_tun(&self.socket_path, &self.lease_id) {
+            if let Err(err) = stop_tun(
+                &self.socket_path,
+                &self.lease_id,
+                self.route_state_file.as_deref(),
+                self.dns_state_file.as_deref(),
+            ) {
                 tracing::warn!("通知 TUN helper 清理 lease={} 失败：{}", self.lease_id, err);
             }
         }
@@ -43,6 +50,23 @@ mod unix {
         proxy_addrs: &[String],
         proxy_bind_interface: Option<&BindInterface>,
     ) -> Result<HelperTunDevice> {
+        let helper_socket = Path::new(&config.macos_helper_socket);
+        if !helper_socket.is_absolute() {
+            return Err(AgentError::Connection(format!(
+                "TUN helper socket 必须使用绝对路径：{}",
+                helper_socket.display()
+            )));
+        }
+        let route_state_file = Some(
+            tun_helper_route_state_path(helper_socket)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let dns_state_file = Some(
+            tun_helper_dns_state_path(helper_socket)
+                .to_string_lossy()
+                .into_owned(),
+        );
         let request = TunHelperRequest::StartTun(TunStartRequest {
             name: config.name.clone(),
             ipv4: config.ipv4.clone(),
@@ -51,14 +75,8 @@ mod unix {
             proxy_addrs: proxy_addrs.to_vec(),
             proxy_dns: config.proxy_dns,
             proxy_bind_interface: proxy_bind_interface.cloned(),
-            route_state_file: Some(resolve_state_file(
-                config.route_state_file.as_deref(),
-                TUN_HELPER_ROUTE_STATE_FILE_NAME,
-            )?),
-            dns_state_file: Some(resolve_state_file(
-                config.dns_state_file.as_deref(),
-                TUN_HELPER_DNS_STATE_FILE_NAME,
-            )?),
+            route_state_file: route_state_file.clone(),
+            dns_state_file: dns_state_file.clone(),
         });
 
         let mut stream = connect_helper(&config.macos_helper_socket, HELPER_START_TIMEOUT)?;
@@ -84,6 +102,8 @@ mod unix {
                     lease: HelperTunLease {
                         socket_path: config.macos_helper_socket.clone(),
                         lease_id,
+                        route_state_file,
+                        dns_state_file,
                     },
                 })
             }
@@ -113,12 +133,19 @@ mod unix {
         }
     }
 
-    fn stop_tun(socket_path: &str, lease_id: &str) -> Result<()> {
+    fn stop_tun(
+        socket_path: &str,
+        lease_id: &str,
+        route_state_file: Option<&str>,
+        dns_state_file: Option<&str>,
+    ) -> Result<()> {
         let mut stream = connect_helper(socket_path, HELPER_CONTROL_TIMEOUT)?;
         write_frame(
             &mut stream,
             &TunHelperRequest::StopTun {
                 lease_id: lease_id.to_string(),
+                route_state_file: route_state_file.map(ToOwned::to_owned),
+                dns_state_file: dns_state_file.map(ToOwned::to_owned),
             },
         )?;
         let _ = recv_fd_marker(&stream)?;
@@ -149,22 +176,6 @@ mod unix {
             ))
         })?;
         Ok(stream)
-    }
-
-    fn resolve_state_file(configured: Option<&str>, default_name: &str) -> Result<String> {
-        let path = configured
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(default_name));
-        let path = if path.is_absolute() {
-            path
-        } else {
-            std::env::current_dir()
-                .map_err(|e| AgentError::Connection(format!("读取当前目录失败：{e}")))?
-                .join(path)
-        };
-        Ok(path.to_string_lossy().into_owned())
     }
 
     fn write_frame(stream: &mut UnixStream, request: &TunHelperRequest) -> Result<()> {

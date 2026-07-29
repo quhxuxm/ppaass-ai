@@ -6,11 +6,17 @@ use crate::error::{AgentError, Result};
 use common::BindInterface;
 use route_manager::{Route, RouteManager};
 use serde::{Deserialize, Serialize};
-use std::fs;
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
@@ -39,19 +45,27 @@ use dns_capture::{
     dns_capture_route_targets_default_gateway, should_capture_default_gateway_dns_route,
 };
 pub(super) use guard::RouteGuard;
+#[cfg(target_os = "macos")]
+pub(super) use guard::RouteGuardInstall;
+#[cfg(target_os = "macos")]
+pub(super) use macos_dns::cleanup_macos_pf_dns_capture_with_token;
 #[cfg(all(test, target_os = "macos"))]
 use macos_dns::macos_pf_dns_rules;
 #[cfg(target_os = "macos")]
 use macos_dns::{MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces};
+use probe::find_default_route;
 #[cfg(target_os = "macos")]
 use probe::interface_name_for_index;
 #[cfg(all(test, target_os = "macos"))]
 use probe::parse_macos_route_get_next_hop;
+#[cfg(not(target_os = "macos"))]
+use probe::route_next_hop;
 pub(super) use probe::{
-    ProxyRoute, detect_default_route_interface, detect_proxy_route, resolve_proxy_ips,
+    ProxyRoute, detect_default_route_interface, detect_proxy_route, resolve_proxy_ips_checked,
 };
-use probe::{find_default_route, route_next_hop};
 pub(super) use state::cleanup_stale_routes;
+#[cfg(target_os = "macos")]
+pub(super) use state::cleanup_stale_routes_checked;
 #[cfg(target_os = "macos")]
 use state::now_unix_secs;
 use state::{RouteKind, RouteLease, RouteRecord, is_unspecified_gateway};

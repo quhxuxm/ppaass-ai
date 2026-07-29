@@ -48,23 +48,9 @@ export type AgentAuthAccount = {
 export type AgentAuthState = {
   authenticated: boolean;
   account: AgentAuthAccount | null;
+  account_status: "active" | "expired" | "disabled" | null;
   config: LoadedAgentConfig | null;
 };
-
-export type AgentDeviceLoginStatus =
-  | "authorization_pending"
-  | "slow_down"
-  | "authenticated";
-
-export type AgentDeviceLoginProgress = {
-  status: AgentDeviceLoginStatus;
-  user_code: string;
-  expires_at: number;
-  retry_after_seconds: number;
-  auth_state: AgentAuthState | null;
-};
-
-export type AgentDeviceLoginViewState = AgentDeviceLoginProgress;
 
 export type AgentLoginRequest = {
   username: string;
@@ -76,8 +62,6 @@ export type AgentAuthPhase =
   | "checking"
   | "anonymous"
   | "authenticating"
-  | "starting-device-login"
-  | "device-authorizing"
   | "authenticated"
   | "logging-out";
 

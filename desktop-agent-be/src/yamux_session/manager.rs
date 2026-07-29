@@ -118,6 +118,16 @@ impl YamuxSessionManager {
         guard.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn proxy_bind_ip_for_test(&self) -> Option<IpAddr> {
+        self.get_proxy_bind_ip()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn proxy_bind_interface_for_test(&self) -> Option<BindInterface> {
+        self.get_proxy_bind_interface()
+    }
+
     fn next_udp_session_slot(&self) -> usize {
         // 只有 UDP manager 会进入此路径，AgentConfig 已把 pool size 夹到至少 1。
         debug_assert_eq!(self.yamux_transport, TransportProtocol::Udp);

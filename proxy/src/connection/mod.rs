@@ -39,9 +39,9 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthRequest, AuthResponse, CipherState, CompressionMode, ConnectRequest,
-    ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol, UdpRelayPacket,
-    crypto::RsaKeyPair,
+    Address, AuthFailureCode, AuthRequest, AuthResponse, CipherState, CompressionMode,
+    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
+    UdpRelayPacket, crypto::RsaKeyPair,
 };
 use std::io;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ pub struct ServerConnection {
     // 握手身份与共享用户源组成的持续授权上下文；active relay 以它处理
     // 停用、撤权、提前过期与密钥轮换。
     authorization: Option<ConnectionAuthorization>,
-    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v2 Auth，
+    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v3 Auth，
     // 认证后一次性设置方向独立的 AEAD 记录层。
     cipher_state: Arc<CipherState>,
     // `peek_auth_username` 会先读走 AuthRequest，这里暂存给后续 authenticate 继续校验。
@@ -86,7 +86,7 @@ pub struct ServerConnection {
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     user_manager: Arc<UserManager>,
-    // 独立的 Proxy TCP/Yamux 传输身份，仅用于成功握手响应 PSS 签名。
+    // 独立的 Proxy TCP/Yamux 传输身份，用于成功和失败握手响应的 PSS 签名。
     transport_identity: Arc<RsaKeyPair>,
 }
 
@@ -104,7 +104,7 @@ impl ServerConnection {
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         // 每条 Yamux 子 stream 都有独立的编解码器和加密状态。
-        // compression_mode 在 stream 创建时确定，v2 记录层在认证成功后写入同一个 state。
+        // compression_mode 在 stream 创建时确定，v3 记录层在认证成功后写入同一个 state。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = proxy_framed_stream(stream, ProxyCodec::new(cipher_state.clone()));
         let (writer, reader) = framed.split();

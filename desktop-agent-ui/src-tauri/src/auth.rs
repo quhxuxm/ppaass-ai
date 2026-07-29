@@ -13,7 +13,7 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use protocol::{RsaKeyPair, crypto::validate_rsa_public_key_size};
+use protocol::{crypto::validate_rsa_public_key_size, RsaKeyPair};
 use reqwest::{redirect::Policy, Client, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,9 +25,12 @@ use url::Url;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use zeroize::Zeroizing;
 
-use crate::models::AgentAuthAccount;
+use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
 
 const CREDENTIALS_DIR: &str = "credentials";
+const PERSISTED_AGENT_LOGIN_FILE: &str = "agent-login.json";
+const PERSISTED_AGENT_LOGIN_VERSION: u8 = 1;
+const MAX_PERSISTED_AGENT_LOGIN_BYTES: u64 = 16 * 1024;
 const PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
 const MAX_NORMAL_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_PRIVATE_KEY_RESPONSE_BYTES: usize = 256 * 1024;
@@ -41,6 +44,23 @@ pub(crate) struct DownloadedCredential {
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) proxy_identity_public_key_pem: String,
     pub(crate) proxy_web_url: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct PersistedAgentLogin {
+    pub(crate) account: AgentAuthAccount,
+    pub(crate) account_status: AgentAuthAccountStatus,
+    pub(crate) private_key_path: PathBuf,
+    pub(crate) proxy_identity_public_key_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedAgentLoginRecord {
+    version: u8,
+    account: AgentAuthAccount,
+    #[serde(default)]
+    account_status: AgentAuthAccountStatus,
 }
 
 pub(crate) struct StartedDeviceAuthorization {
@@ -614,6 +634,36 @@ pub(crate) fn write_managed_proxy_identity_public_key(
     )
 }
 
+pub(crate) fn persist_agent_login(
+    app: &tauri::AppHandle,
+    account: &AgentAuthAccount,
+    account_status: AgentAuthAccountStatus,
+) -> Result<(), String> {
+    persist_agent_login_to_dir(&managed_credentials_dir(app)?, account, account_status)
+}
+
+pub(crate) fn load_persisted_agent_login(
+    app: &tauri::AppHandle,
+) -> Result<Option<PersistedAgentLogin>, String> {
+    load_persisted_agent_login_from_dir(&managed_credentials_dir(app)?)
+}
+
+pub(crate) fn destroy_persisted_agent_login(app: &tauri::AppHandle) -> Result<(), String> {
+    let path = managed_credentials_dir(app)?.join(PERSISTED_AGENT_LOGIN_FILE);
+    match fs::remove_file(&path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                if let Ok(directory) = fs::File::open(parent) {
+                    let _ = directory.sync_all();
+                }
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("删除 Agent 持久登录记录失败：{error}")),
+    }
+}
+
 fn managed_credentials_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     #[cfg(windows)]
     let app_data_dir = app
@@ -626,6 +676,123 @@ fn managed_credentials_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|error| format!("定位 Agent 数据目录失败：{error}"))?;
     Ok(app_data_dir.join(CREDENTIALS_DIR))
+}
+
+fn persist_agent_login_to_dir(
+    credentials_dir: &Path,
+    account: &AgentAuthAccount,
+    account_status: AgentAuthAccountStatus,
+) -> Result<(), String> {
+    validate_persisted_account(account)?;
+    fs::create_dir_all(credentials_dir)
+        .map_err(|error| format!("创建 Agent 登录记录目录失败：{error}"))?;
+    #[cfg(unix)]
+    fs::set_permissions(credentials_dir, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("设置 Agent 登录记录目录权限失败：{error}"))?;
+    #[cfg(windows)]
+    set_windows_restricted_acl(credentials_dir, true)?;
+
+    let record = PersistedAgentLoginRecord {
+        version: PERSISTED_AGENT_LOGIN_VERSION,
+        account: account.clone(),
+        account_status,
+    };
+    let serialized =
+        serde_json::to_vec(&record).map_err(|error| format!("编码 Agent 登录记录失败：{error}"))?;
+    let destination = credentials_dir.join(PERSISTED_AGENT_LOGIN_FILE);
+    let mut temporary = Builder::new()
+        .prefix(".agent-login-")
+        .tempfile_in(credentials_dir)
+        .map_err(|error| format!("创建 Agent 登录记录临时文件失败：{error}"))?;
+    #[cfg(unix)]
+    temporary
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("设置 Agent 登录记录权限失败：{error}"))?;
+    temporary
+        .write_all(&serialized)
+        .map_err(|error| format!("写入 Agent 登录记录失败：{error}"))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("同步 Agent 登录记录失败：{error}"))?;
+    temporary
+        .persist(&destination)
+        .map_err(|error| format!("保存 Agent 登录记录失败：{}", error.error))?;
+    #[cfg(unix)]
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("设置 Agent 登录记录权限失败：{error}"))?;
+    #[cfg(windows)]
+    set_windows_restricted_acl(&destination, false)?;
+    if let Ok(directory) = fs::File::open(credentials_dir) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
+}
+
+pub(crate) fn load_persisted_agent_login_from_dir(
+    credentials_dir: &Path,
+) -> Result<Option<PersistedAgentLogin>, String> {
+    let record_path = credentials_dir.join(PERSISTED_AGENT_LOGIN_FILE);
+    let metadata = match fs::symlink_metadata(&record_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 Agent 登录记录元数据失败：{error}")),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_PERSISTED_AGENT_LOGIN_BYTES {
+        return Err("Agent 登录记录文件无效".to_string());
+    }
+    let record = serde_json::from_slice::<PersistedAgentLoginRecord>(
+        &fs::read(&record_path).map_err(|error| format!("读取 Agent 登录记录失败：{error}"))?,
+    )
+    .map_err(|_| "Agent 登录记录格式无效".to_string())?;
+    if record.version != PERSISTED_AGENT_LOGIN_VERSION {
+        return Err("Agent 登录记录版本无效".to_string());
+    }
+    validate_persisted_account(&record.account)?;
+
+    let private_key_path = credentials_dir.join(managed_private_key_file_name(
+        &record.account.username,
+        record.account.key_version,
+    ));
+    let proxy_identity_public_key_path = credentials_dir.join(PROXY_IDENTITY_PUBLIC_KEY_FILE);
+    validate_persisted_credential_file(&private_key_path, MAX_PRIVATE_KEY_RESPONSE_BYTES as u64)?;
+    validate_persisted_credential_file(
+        &proxy_identity_public_key_path,
+        MAX_PRIVATE_KEY_RESPONSE_BYTES as u64,
+    )?;
+    let private_key_pem = fs::read_to_string(&private_key_path)
+        .map_err(|error| format!("读取持久登录私钥失败：{error}"))?;
+    RsaKeyPair::from_private_key_pem(&private_key_pem)
+        .map_err(|_| "持久登录私钥格式无效".to_string())?;
+    let proxy_identity_public_key_pem = fs::read_to_string(&proxy_identity_public_key_path)
+        .map_err(|error| format!("读取持久登录 Proxy 身份公钥失败：{error}"))?;
+    validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
+
+    Ok(Some(PersistedAgentLogin {
+        account: record.account,
+        account_status: record.account_status,
+        private_key_path,
+        proxy_identity_public_key_path,
+    }))
+}
+
+fn validate_persisted_account(account: &AgentAuthAccount) -> Result<(), String> {
+    if account.username.trim().is_empty() || account.key_version < 1 {
+        return Err("Agent 登录记录中的账号信息无效".to_string());
+    }
+    // `expires_at` is display-only local metadata. It must never be compared
+    // with the local clock to revoke a long-running Agent session.
+    Ok(())
+}
+
+fn validate_persisted_credential_file(path: &Path, maximum_bytes: u64) -> Result<(), String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| "Agent 持久登录凭据缺失，请重新登录".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > maximum_bytes {
+        return Err("Agent 持久登录凭据文件无效，请重新登录".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn destroy_managed_private_key(path: &Path) -> Result<(), String> {
@@ -654,9 +821,7 @@ pub(crate) fn destroy_managed_private_key(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn destroy_managed_proxy_identity_public_key(path: &Path) -> Result<(), String> {
-    if path.file_name().and_then(|value| value.to_str())
-        != Some(PROXY_IDENTITY_PUBLIC_KEY_FILE)
-    {
+    if path.file_name().and_then(|value| value.to_str()) != Some(PROXY_IDENTITY_PUBLIC_KEY_FILE) {
         return Err("拒绝删除非托管 Proxy 身份公钥文件".to_string());
     }
     if path.exists() {
@@ -993,12 +1158,14 @@ mod tests {
     use tokio::time::timeout;
 
     use super::{
-        build_proxy_web_client, device_verification_url, managed_private_key_file_name,
-        normalize_proxy_web_url, poll_device_authorization, registration_page_url,
-        remove_other_managed_private_keys, start_device_authorization, validate_device_code,
-        validate_key_pair, validate_proxy_identity_public_key, write_private_key_to_dir,
-        DeviceAuthorizationPoll,
+        build_proxy_web_client, device_verification_url, load_persisted_agent_login_from_dir,
+        managed_private_key_file_name, normalize_proxy_web_url, persist_agent_login_to_dir,
+        poll_device_authorization, registration_page_url, remove_other_managed_private_keys,
+        start_device_authorization, validate_device_code, validate_key_pair,
+        validate_proxy_identity_public_key, write_private_key_to_dir, DeviceAuthorizationPoll,
+        PROXY_IDENTITY_PUBLIC_KEY_FILE,
     };
+    use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
 
     struct ProxyEnvironmentGuard {
         previous: Vec<(&'static str, Option<OsString>)>,
@@ -1346,9 +1513,15 @@ mod tests {
 
     #[test]
     fn validates_proxy_identity_public_key_strength() {
-        let valid = RsaKeyPair::generate(2048).unwrap().public_key_to_pem().unwrap();
+        let valid = RsaKeyPair::generate(2048)
+            .unwrap()
+            .public_key_to_pem()
+            .unwrap();
         assert!(validate_proxy_identity_public_key(&valid).is_ok());
-        let weak = RsaKeyPair::generate(1024).unwrap().public_key_to_pem().unwrap();
+        let weak = RsaKeyPair::generate(1024)
+            .unwrap()
+            .public_key_to_pem()
+            .unwrap();
         assert!(validate_proxy_identity_public_key(&weak).is_err());
         assert!(validate_proxy_identity_public_key("not a key").is_err());
     }
@@ -1407,5 +1580,71 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let credentials_dir = temp.path().join("credentials");
+        let account = AgentAuthAccount {
+            username: "alice".to_string(),
+            key_version: 7,
+            // This timestamp is deliberately in the past. It is cached display
+            // metadata, not authority for a local automatic logout.
+            expires_at: Some(1),
+        };
+        let user_key = RsaKeyPair::generate(2048).unwrap();
+        let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+        let private_key_path = write_private_key_to_dir(
+            &credentials_dir,
+            &managed_private_key_file_name(&account.username, account.key_version),
+            &user_key.private_key_to_pem().unwrap(),
+        )
+        .unwrap();
+        write_private_key_to_dir(
+            &credentials_dir,
+            PROXY_IDENTITY_PUBLIC_KEY_FILE,
+            &proxy_identity.public_key_to_pem().unwrap(),
+        )
+        .unwrap();
+
+        persist_agent_login_to_dir(&credentials_dir, &account, AgentAuthAccountStatus::Expired)
+            .unwrap();
+        let restored = load_persisted_agent_login_from_dir(&credentials_dir)
+            .unwrap()
+            .expect("persisted login");
+
+        assert_eq!(restored.account, account);
+        assert_eq!(restored.account_status, AgentAuthAccountStatus::Expired);
+        assert_eq!(restored.private_key_path, private_key_path);
+        assert_eq!(
+            restored.proxy_identity_public_key_path,
+            credentials_dir.join(PROXY_IDENTITY_PUBLIC_KEY_FILE)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(credentials_dir.join(super::PERSISTED_AGENT_LOGIN_FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn persisted_login_requires_untampered_managed_credential_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let credentials_dir = temp.path().join("credentials");
+        let account = AgentAuthAccount {
+            username: "alice".to_string(),
+            key_version: 1,
+            expires_at: None,
+        };
+        persist_agent_login_to_dir(&credentials_dir, &account, AgentAuthAccountStatus::Active)
+            .unwrap();
+
+        let error = load_persisted_agent_login_from_dir(&credentials_dir).unwrap_err();
+        assert!(error.contains("凭据缺失"));
     }
 }

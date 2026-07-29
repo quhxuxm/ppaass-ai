@@ -1242,6 +1242,7 @@ dependencies = [
 name = "desktop-agent-ui"
 version = "0.1.1"
 dependencies = [
+ "common",
  "desktop-agent-be",
  "getrandom 0.3.4",
  "protocol",

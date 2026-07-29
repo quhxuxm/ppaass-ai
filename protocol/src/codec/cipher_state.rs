@@ -4,7 +4,7 @@ use crate::{ProtocolError, Result};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
-/// TCP v2 会话加密与压缩模式的共享状态。
+/// TCP v3 会话加密与压缩模式的共享状态。
 #[derive(Debug, Default)]
 pub struct CipherState {
     session_cipher: OnceLock<Arc<TcpSessionCipher>>,

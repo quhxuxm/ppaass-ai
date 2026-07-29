@@ -235,9 +235,6 @@ final class AgentAuthClient {
             }
 
             long expiresAt = requiredLong(profile, "expires_at");
-            if (expiresAt <= System.currentTimeMillis() / 1000L) {
-                throw new AuthException("密钥已经过期，请先申请新密钥并等待管理员批准");
-            }
             long keyVersion = requiredLong(profile, "key_version");
 
             JSONObject privateKey = requestJson(
@@ -295,13 +292,7 @@ final class AgentAuthClient {
         if (keyVersion < 1) {
             throw new AuthException("Proxy Web 返回的密钥版本无效");
         }
-        if (expiresAt <= System.currentTimeMillis() / 1000L) {
-            throw new AuthException("密钥已经过期，请先申请新密钥并等待管理员批准");
-        }
-        long sessionExpiresAt = requiredLong(response, "session_expires_at");
-        if (sessionExpiresAt <= System.currentTimeMillis() / 1000L) {
-            throw new AuthException("Proxy Web 返回的登录会话已经过期");
-        }
+        requiredLong(response, "session_expires_at");
 
         String privateKeyPem = requiredString(response, "private_key_pem");
         String publicKeyPem = requiredString(response, "public_key_pem");

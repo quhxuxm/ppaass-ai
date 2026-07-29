@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -29,10 +29,6 @@ use windows_service::{
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, STILL_ACTIVE};
-use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 use windows_sys::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -40,9 +36,11 @@ use crate::agent::{
     agent_state, clear_packet_capture_runtime_local, packet_capture_runtime_status_local,
     set_packet_capture_runtime_enabled_local, start_agent_inner, stop_embedded_agent,
 };
-use crate::auth::set_windows_restricted_acl;
+use crate::auth::{load_persisted_agent_login_from_dir, set_windows_restricted_acl};
 use crate::logging::UiLogBuffer;
-use crate::models::{AgentState, ServiceRequest, ServiceResponse};
+use crate::models::{
+    AgentAuthAccountStatus, AgentState, ServiceRequest, ServiceResponse, VerifiedProxyAuthStatus,
+};
 use crate::runtime::AgentRuntime;
 use crate::telemetry::agent_traffic_snapshot;
 
@@ -63,6 +61,9 @@ const SERVICE_SESSION_FILE_VERSION: u8 = 1;
 const SERVICE_SESSION_TOKEN_BYTES: usize = 32;
 const SERVICE_SESSION_TOKEN_HEX_LEN: usize = SERVICE_SESSION_TOKEN_BYTES * 2;
 const MAX_SERVICE_SESSION_FILE_BYTES: u64 = 4 * 1024;
+const SERVICE_DESIRED_STATE_FILE_NAME: &str = "service-runtime-state.json";
+const SERVICE_DESIRED_STATE_FILE_VERSION: u8 = 1;
+const MAX_SERVICE_DESIRED_STATE_FILE_BYTES: u64 = 1024;
 const MANAGED_PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
 
 static SERVICE_CONFIG_ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -86,9 +87,24 @@ struct ServiceRequestEnvelope {
 struct ServiceSessionAuthorization {
     version: u8,
     token: String,
-    ui_process_id: u32,
-    ui_process_creation_time: u64,
-    expires_at: Option<i64>,
+    #[serde(
+        default,
+        rename = "ui_process_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    _legacy_ui_process_id: Option<u32>,
+    #[serde(
+        default,
+        rename = "ui_process_creation_time",
+        skip_serializing_if = "Option::is_none"
+    )]
+    _legacy_ui_process_creation_time: Option<u64>,
+    #[serde(
+        default,
+        rename = "expires_at",
+        skip_serializing_if = "Option::is_none"
+    )]
+    _legacy_expires_at: Option<i64>,
 }
 
 impl Drop for ServiceSessionAuthorization {
@@ -97,12 +113,26 @@ impl Drop for ServiceSessionAuthorization {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServiceLoginBinding {
+    username: String,
+    key_version: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ServiceDesiredState {
+    version: u8,
+    desired_running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key_version: Option<i64>,
+}
+
 define_windows_service!(ffi_service_main, windows_service_main);
 
-pub(crate) fn activate_windows_service_session(
-    app: &tauri::AppHandle,
-    expires_at: Option<i64>,
-) -> Result<(), String> {
+pub(crate) fn activate_windows_service_session(app: &tauri::AppHandle) -> Result<(), String> {
     let mut random = [0_u8; SERVICE_SESSION_TOKEN_BYTES];
     getrandom::fill(&mut random)
         .map_err(|error| format!("生成 Windows Service 会话令牌失败：{error}"))?;
@@ -123,10 +153,15 @@ pub(crate) fn activate_windows_service_session(
     let authorization = ServiceSessionAuthorization {
         version: SERVICE_SESSION_FILE_VERSION,
         token: token.clone(),
-        ui_process_id: std::process::id(),
-        ui_process_creation_time: windows_live_process_creation_time(std::process::id())
-            .ok_or_else(|| "无法读取 Agent UI 进程创建时间".to_string())?,
-        expires_at,
+        // Older files bound authorization to one UI PID. These fields are
+        // decoded below only so an in-place upgrade can keep the already
+        // authenticated Service running. The token now belongs to the durable
+        // login and is revoked only by explicit logout.
+        _legacy_ui_process_id: None,
+        _legacy_ui_process_creation_time: None,
+        // Kept for backwards-compatible decoding of existing files only.
+        // Account/key expiry is decided by Proxy, never by the local clock.
+        _legacy_expires_at: None,
     };
     let mut serialized = serde_json::to_vec(&authorization)
         .map_err(|error| format!("编码 Windows Service 会话失败：{error}"))?;
@@ -162,12 +197,20 @@ pub(crate) fn activate_windows_service_session(
 }
 
 pub(crate) fn invalidate_windows_service_session(app: &tauri::AppHandle) -> Result<(), String> {
-    let path = ui_service_session_file_path(app)?;
-    let result = revoke_service_session_file(&path);
+    let desired_result = clear_ui_service_desired_running(app);
+    let session_result =
+        ui_service_session_file_path(app).and_then(|path| revoke_service_session_file(&path));
     if let Ok(mut token) = UI_SERVICE_SESSION_TOKEN.lock() {
         token.take();
     }
-    result
+    match (desired_result, session_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(desired_error), Ok(())) => Err(desired_error),
+        (Ok(()), Err(session_error)) => Err(session_error),
+        (Err(desired_error), Err(session_error)) => Err(format!(
+            "{desired_error}；同时吊销 Windows Service 会话失败：{session_error}"
+        )),
+    }
 }
 
 fn ui_service_session_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -175,6 +218,22 @@ fn ui_service_session_file_path(app: &tauri::AppHandle) -> Result<PathBuf, Strin
         .app_local_data_dir()
         .map(|path| path.join("credentials").join(SERVICE_SESSION_FILE_NAME))
         .map_err(|error| format!("定位 Windows Service 会话目录失败：{error}"))
+}
+
+fn clear_ui_service_desired_running(app: &tauri::AppHandle) -> Result<(), String> {
+    let path = app
+        .path()
+        .app_local_data_dir()
+        .map(|path| {
+            path.join("credentials")
+                .join(SERVICE_DESIRED_STATE_FILE_NAME)
+        })
+        .map_err(|error| format!("定位 Windows Service 运行状态目录失败：{error}"))?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => persist_service_desired_state(&path, None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("读取 Windows Service 运行状态失败：{error}")),
+    }
 }
 
 fn revoke_service_session_file(path: &Path) -> Result<(), String> {
@@ -224,6 +283,22 @@ pub(crate) fn stop_agent_via_windows_service() -> Result<AgentState, String> {
 pub(crate) fn windows_service_state() -> Result<AgentState, String> {
     let response = send_service_request(&ServiceRequest::State)?;
     service_state_response(response)
+}
+
+pub(crate) fn windows_service_auth_status() -> Result<Option<VerifiedProxyAuthStatus>, String> {
+    if !windows_service_matches_current_exe().unwrap_or(false)
+        || !windows_service_is_running().unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let response = send_service_request(&ServiceRequest::State)?;
+    if response.ok {
+        Ok(response.auth_status)
+    } else {
+        Err(response
+            .error
+            .unwrap_or_else(|| "Agent 服务请求失败".to_string()))
+    }
 }
 
 pub(crate) fn windows_service_is_running() -> Result<bool, String> {
@@ -340,13 +415,20 @@ pub(crate) fn install_and_start_windows_service(config_root: PathBuf) -> Result<
             "binPath=",
             &bin_path,
             "start=",
-            "demand",
+            "auto",
             "DisplayName=",
             SERVICE_DISPLAY_NAME,
         ])?;
     } else {
         stop_windows_service_if_running()?;
-        run_sc(["config", SERVICE_NAME, "binPath=", &bin_path])?;
+        run_sc([
+            "config",
+            SERVICE_NAME,
+            "binPath=",
+            &bin_path,
+            "start=",
+            "auto",
+        ])?;
     }
 
     match run_sc(["start", SERVICE_NAME]) {
@@ -465,7 +547,18 @@ fn windows_service_matches_installation(config_root: &Path) -> Result<bool, Stri
         return Ok(false);
     };
     Ok(normalized_path_for_compare(config_root)
-        == normalized_path_for_compare(Path::new(&service_config_root)))
+        == normalized_path_for_compare(Path::new(&service_config_root))
+        && sc_service_is_auto_start(&output))
+}
+
+fn sc_service_is_auto_start(output: &str) -> bool {
+    output.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("START_TYPE")
+                && (value.trim_start().starts_with('2')
+                    || value.to_ascii_uppercase().contains("AUTO_START"))
+        })
+    })
 }
 
 fn wide_null(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
@@ -679,6 +772,11 @@ fn run_windows_service_inner() -> Result<(), String> {
 
     set_service_status(&status_handle, ServiceState::Running)?;
 
+    let auth_failure_thread =
+        spawn_service_auth_failure_listener(runtime.clone(), shutdown.clone())
+            .map_err(|err| format!("启动 Proxy 账号状态监听失败：{err}"))?;
+    restore_desired_agent_on_service_start(&runtime);
+
     let ipc_runtime = runtime.clone();
     let ipc_shutdown = shutdown.clone();
     let ipc_thread = thread::Builder::new()
@@ -686,41 +784,112 @@ fn run_windows_service_inner() -> Result<(), String> {
         .spawn(move || run_service_ipc(ipc_runtime, ipc_shutdown))
         .map_err(|err| format!("启动服务 IPC 失败：{err}"))?;
 
-    let mut session_invalid_reported = false;
     while !shutdown.is_cancelled() {
         std::thread::sleep(Duration::from_millis(300));
-        if service_session_authorization().is_ok() {
-            session_invalid_reported = false;
-            continue;
-        }
-        if !session_invalid_reported {
-            if let Some(config_root) = SERVICE_CONFIG_ROOT.get() {
-                if let Ok(path) = service_session_file_path_for_root(config_root) {
-                    let _ = revoke_service_session_file(&path);
-                }
-            }
-        }
-        if agent_state(&runtime).is_ok_and(|state| state.running) {
-            if let Err(error) = stop_embedded_agent(&runtime) {
-                if !session_invalid_reported {
-                    runtime.logs.push(format!(
-                        "Windows Service 会话失效后停止 Agent 失败：{error}"
-                    ));
-                    session_invalid_reported = true;
-                }
-            } else if !session_invalid_reported {
-                runtime
-                    .logs
-                    .push("Windows Service 会话已失效，Agent 已停止");
-                session_invalid_reported = true;
-            }
-        }
     }
 
     let _ = stop_embedded_agent(&runtime);
     let _ = ipc_thread.join();
+    let _ = auth_failure_thread.join();
     set_service_status(&status_handle, ServiceState::Stopped)?;
     Ok(())
+}
+
+fn restore_desired_agent_on_service_start(runtime: &AgentRuntime) {
+    let desired_login = match service_desired_running() {
+        Ok(desired_login) => desired_login,
+        Err(error) => {
+            runtime.logs.push(format!(
+                "读取 Windows Service 持久运行状态失败，已安全跳过自动恢复：{error}"
+            ));
+            return;
+        }
+    };
+    let Some(desired_login) = desired_login else {
+        return;
+    };
+
+    if let Err(error) = service_session_authorization() {
+        runtime.logs.push(format!(
+            "Windows Service 存在持久运行请求，但登录授权无效，已安全跳过自动恢复：{error}"
+        ));
+        return;
+    }
+
+    let config_path = service_root_config_path();
+    let restored =
+        validate_authorized_service_config_path(&config_path).and_then(|(path, current_login)| {
+            if current_login != desired_login {
+                return Err("持久运行请求属于另一组登录凭据，拒绝用当前账号自动恢复".to_string());
+            }
+            start_agent_inner(runtime, path, false)
+        });
+    match restored {
+        Ok(_) => runtime
+            .logs
+            .push("Windows Service 已恢复上次显式启动的 Agent"),
+        Err(error) => runtime.logs.push(format!(
+            "Windows Service 无法恢复上次显式启动的 Agent；保留运行请求以便修复后重试：{error}"
+        )),
+    }
+}
+
+fn spawn_service_auth_failure_listener(
+    runtime: Arc<AgentRuntime>,
+    shutdown: CancellationToken,
+) -> Result<thread::JoinHandle<()>, String> {
+    let mut statuses = common::subscribe_verified_proxy_auth_statuses();
+    thread::Builder::new()
+        .name("ppaass-agent-service-auth-status".to_string())
+        .spawn(move || {
+            let async_runtime = match Builder::new_current_thread().enable_all().build() {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    runtime
+                        .logs
+                        .push(format!("创建 Proxy 账号状态监听 runtime 失败：{error}"));
+                    return;
+                }
+            };
+            async_runtime.block_on(async move {
+                loop {
+                    let status = tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        status = statuses.recv() => match status {
+                            Ok(status) => status,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        },
+                    };
+                    let status = match status {
+                        common::VerifiedProxyAuthStatus::Active { username } => {
+                            VerifiedProxyAuthStatus {
+                                username,
+                                status: AgentAuthAccountStatus::Active,
+                            }
+                        }
+                        common::VerifiedProxyAuthStatus::UserExpired { username } => {
+                            VerifiedProxyAuthStatus {
+                                username,
+                                status: AgentAuthAccountStatus::Expired,
+                            }
+                        }
+                        common::VerifiedProxyAuthStatus::UserDisabled { username } => {
+                            VerifiedProxyAuthStatus {
+                                username,
+                                status: AgentAuthAccountStatus::Disabled,
+                            }
+                        }
+                    };
+                    if let Err(error) = runtime.set_verified_proxy_auth_status(status) {
+                        runtime
+                            .logs
+                            .push(format!("保存 Proxy 账号状态失败：{error}"));
+                    }
+                }
+            });
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn set_service_status(
@@ -880,9 +1049,9 @@ fn service_session_authorization() -> Result<ServiceSessionAuthorization, String
 }
 
 fn read_service_session_authorization(path: &Path) -> Result<ServiceSessionAuthorization, String> {
-    let metadata =
-        fs::metadata(path).map_err(|_| "Windows Service 会话不存在或已经退出".to_string())?;
-    if !metadata.is_file() || metadata.len() > MAX_SERVICE_SESSION_FILE_BYTES {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Windows Service 会话不存在或已经退出".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_SERVICE_SESSION_FILE_BYTES {
         return Err("Windows Service 会话文件无效".to_string());
     }
     let mut raw = fs::read(path).map_err(|_| "无法读取 Windows Service 会话".to_string())?;
@@ -894,21 +1063,18 @@ fn read_service_session_authorization(path: &Path) -> Result<ServiceSessionAutho
         return Err("Windows Service 会话版本无效".to_string());
     }
     validate_service_token_format(&authorization.token)?;
-    if authorization
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= current_unix_timestamp())
-    {
-        return Err("Windows Service 会话对应的密钥已经过期".to_string());
-    }
-    if windows_live_process_creation_time(authorization.ui_process_id)
-        != Some(authorization.ui_process_creation_time)
-    {
-        return Err("Windows Service 会话所属 UI 已退出".to_string());
-    }
     Ok(authorization)
 }
 
 fn service_session_file_path_for_root(config_root: &Path) -> Result<PathBuf, String> {
+    Ok(service_credentials_dir_for_root(config_root)?.join(SERVICE_SESSION_FILE_NAME))
+}
+
+fn service_desired_state_file_path_for_root(config_root: &Path) -> Result<PathBuf, String> {
+    Ok(service_credentials_dir_for_root(config_root)?.join(SERVICE_DESIRED_STATE_FILE_NAME))
+}
+
+fn service_credentials_dir_for_root(config_root: &Path) -> Result<PathBuf, String> {
     let roaming_or_local = config_root
         .parent()
         .ok_or_else(|| "Windows Service 受管目录缺少 AppData 类型目录".to_string())?;
@@ -918,8 +1084,108 @@ fn service_session_file_path_for_root(config_root: &Path) -> Result<PathBuf, Str
     Ok(app_data
         .join("Local")
         .join("com.ppaass.agent")
-        .join("credentials")
-        .join(SERVICE_SESSION_FILE_NAME))
+        .join("credentials"))
+}
+
+fn service_desired_running() -> Result<Option<ServiceLoginBinding>, String> {
+    let config_root = SERVICE_CONFIG_ROOT
+        .get()
+        .ok_or_else(|| "Windows Service 未配置受管 Agent 数据目录".to_string())?;
+    read_service_desired_state(&service_desired_state_file_path_for_root(config_root)?)
+}
+
+fn read_service_desired_state(path: &Path) -> Result<Option<ServiceLoginBinding>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 Windows Service 运行状态元数据失败：{error}")),
+    };
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_SERVICE_DESIRED_STATE_FILE_BYTES
+    {
+        return Err("Windows Service 运行状态文件无效".to_string());
+    }
+    let state = serde_json::from_slice::<ServiceDesiredState>(
+        &fs::read(path).map_err(|error| format!("读取 Windows Service 运行状态失败：{error}"))?,
+    )
+    .map_err(|_| "Windows Service 运行状态格式无效".to_string())?;
+    if state.version != SERVICE_DESIRED_STATE_FILE_VERSION {
+        return Err("Windows Service 运行状态版本无效".to_string());
+    }
+    match (state.desired_running, state.username, state.key_version) {
+        (false, None, None) => Ok(None),
+        (true, Some(username), Some(key_version))
+            if !username.trim().is_empty() && key_version >= 1 =>
+        {
+            Ok(Some(ServiceLoginBinding {
+                username,
+                key_version,
+            }))
+        }
+        _ => Err("Windows Service 运行状态与登录绑定不一致".to_string()),
+    }
+}
+
+fn persist_service_desired_running(
+    login_binding: Option<&ServiceLoginBinding>,
+) -> Result<(), String> {
+    let config_root = SERVICE_CONFIG_ROOT
+        .get()
+        .ok_or_else(|| "Windows Service 未配置受管 Agent 数据目录".to_string())?;
+    persist_service_desired_state(
+        &service_desired_state_file_path_for_root(config_root)?,
+        login_binding,
+    )
+}
+
+fn persist_service_desired_state(
+    path: &Path,
+    login_binding: Option<&ServiceLoginBinding>,
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Windows Service 运行状态文件缺少父目录".to_string())?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .map_err(|error| format!("Windows Service 受管凭据目录不可用：{error}"))?;
+    if !parent_metadata.file_type().is_dir() {
+        return Err("Windows Service 受管凭据目录无效".to_string());
+    }
+    if let Ok(existing) = fs::symlink_metadata(path) {
+        if !existing.file_type().is_file() {
+            return Err("Windows Service 运行状态文件不是普通文件".to_string());
+        }
+    }
+
+    let state = ServiceDesiredState {
+        version: SERVICE_DESIRED_STATE_FILE_VERSION,
+        desired_running: login_binding.is_some(),
+        username: login_binding.map(|binding| binding.username.clone()),
+        key_version: login_binding.map(|binding| binding.key_version),
+    };
+    let serialized = serde_json::to_vec(&state)
+        .map_err(|error| format!("编码 Windows Service 运行状态失败：{error}"))?;
+    let mut temporary = TempFileBuilder::new()
+        .prefix(".service-runtime-state-")
+        .tempfile_in(parent)
+        .map_err(|error| format!("创建 Windows Service 运行状态临时文件失败：{error}"))?;
+    // The login flow restricts the credentials directory to the signed-in user
+    // and SYSTEM. A file created by the SYSTEM service inherits that exact ACL;
+    // recomputing it as SYSTEM would accidentally remove the user's access.
+    temporary
+        .write_all(&serialized)
+        .map_err(|error| format!("写入 Windows Service 运行状态失败：{error}"))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("同步 Windows Service 运行状态失败：{error}"))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("保存 Windows Service 运行状态失败：{}", error.error))?;
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
 }
 
 fn validate_service_token_format(token: &str) -> Result<(), String> {
@@ -944,46 +1210,6 @@ fn constant_time_token_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 
-fn current_unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn windows_live_process_creation_time(process_id: u32) -> Option<u64> {
-    if process_id == 0 {
-        return None;
-    }
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
-    if process.is_null() {
-        return None;
-    }
-    let mut exit_code = 0_u32;
-    let mut creation_time = FILETIME::default();
-    let mut exit_time = FILETIME::default();
-    let mut kernel_time = FILETIME::default();
-    let mut user_time = FILETIME::default();
-    let process_is_alive = unsafe { GetExitCodeProcess(process, &mut exit_code) } != 0
-        && exit_code == STILL_ACTIVE as u32;
-    let read_times = unsafe {
-        GetProcessTimes(
-            process,
-            &mut creation_time,
-            &mut exit_time,
-            &mut kernel_time,
-            &mut user_time,
-        )
-    } != 0;
-    unsafe {
-        CloseHandle(process);
-    }
-    if !process_is_alive || !read_times {
-        return None;
-    }
-    Some(((creation_time.dwHighDateTime as u64) << 32) | creation_time.dwLowDateTime as u64)
-}
-
 fn service_request_is_mutating(request: &ServiceRequest) -> bool {
     matches!(
         request,
@@ -997,26 +1223,16 @@ fn service_request_is_mutating(request: &ServiceRequest) -> bool {
 
 fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> ServiceResponse {
     match request {
-        ServiceRequest::Start { config_path } => {
-            match validate_service_config_path(&config_path)
-                .and_then(|path| start_agent_inner(runtime, path, false))
-            {
-                Ok(state) => service_state_ok(state),
-                Err(err) => service_error(err),
-            }
-        }
-        ServiceRequest::Stop => {
-            let state = match stop_embedded_agent(runtime) {
-                Ok(()) => agent_state(runtime),
-                Err(err) => Err(err),
-            };
-            match state {
-                Ok(state) => service_state_ok(state),
-                Err(err) => service_error(err),
-            }
-        }
+        ServiceRequest::Start { config_path } => match start_service_agent(runtime, &config_path) {
+            Ok(state) => service_state_ok(runtime, state),
+            Err(err) => service_error(err),
+        },
+        ServiceRequest::Stop => match stop_service_agent(runtime) {
+            Ok(state) => service_state_ok(runtime, state),
+            Err(err) => service_error(err),
+        },
         ServiceRequest::State => match agent_state(runtime) {
-            Ok(state) => service_state_ok(state),
+            Ok(state) => service_state_ok(runtime, state),
             Err(err) => service_error(err),
         },
         ServiceRequest::Traffic => ServiceResponse {
@@ -1025,6 +1241,7 @@ fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> Se
             traffic: Some(agent_traffic_snapshot()),
             dns_records: None,
             packet_capture: None,
+            auth_status: None,
             error: None,
         },
         ServiceRequest::DnsRecords => ServiceResponse {
@@ -1033,11 +1250,12 @@ fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> Se
             traffic: None,
             dns_records: Some(desktop_agent_be::telemetry::dns_resolution_records()),
             packet_capture: None,
+            auth_status: None,
             error: None,
         },
         ServiceRequest::SetLogLevel { log_level } => match runtime.logs.set_log_level(&log_level) {
             Ok(()) => match agent_state(runtime) {
-                Ok(state) => service_state_ok(state),
+                Ok(state) => service_state_ok(runtime, state),
                 Err(err) => service_error(err),
             },
             Err(err) => service_error(err),
@@ -1063,11 +1281,114 @@ fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> Se
     }
 }
 
+fn start_service_agent(runtime: &AgentRuntime, config_path: &str) -> Result<AgentState, String> {
+    let (config_path, login_binding) = validate_authorized_service_config_path(config_path)?;
+    let state = start_agent_inner(runtime, config_path, false)?;
+    if !state.running {
+        return Err("Windows Service 启动 Agent 后未进入运行状态".to_string());
+    }
+    if let Err(persist_error) = persist_service_desired_running(Some(&login_binding)) {
+        return match stop_embedded_agent(runtime) {
+            Ok(()) => Err(format!(
+                "无法持久保存 Agent 运行请求，已回滚本次启动：{persist_error}"
+            )),
+            Err(stop_error) => Err(format!(
+                "无法持久保存 Agent 运行请求（{persist_error}），且回滚 Agent 失败（{stop_error}）"
+            )),
+        };
+    }
+    Ok(state)
+}
+
+fn stop_service_agent(runtime: &AgentRuntime) -> Result<AgentState, String> {
+    // Persist the user's explicit stop before touching the running process. If
+    // the Service crashes at any later point it must never resurrect an Agent
+    // that the user already asked to stop.
+    persist_service_desired_running(None)?;
+    stop_embedded_agent(runtime)?;
+    agent_state(runtime)
+}
+
 fn validate_service_config_path(config_path: &str) -> Result<PathBuf, String> {
     let config_root = SERVICE_CONFIG_ROOT
         .get()
         .ok_or_else(|| "Windows Service 未配置受管 Agent 数据目录".to_string())?;
     validate_service_config_path_for_root(config_path, config_root)
+}
+
+fn validate_authorized_service_config_path(
+    config_path: &str,
+) -> Result<(PathBuf, ServiceLoginBinding), String> {
+    let config_root = SERVICE_CONFIG_ROOT
+        .get()
+        .ok_or_else(|| "Windows Service 未配置受管 Agent 数据目录".to_string())?;
+    let canonical = validate_service_config_path_for_root(config_path, config_root)?;
+    let app_data_dir = canonical
+        .parent()
+        .ok_or_else(|| "Windows Service Agent 配置缺少父目录".to_string())?;
+    let raw = fs::read_to_string(&canonical)
+        .map_err(|error| format!("读取 Windows Service Agent 配置失败：{error}"))?;
+    let config = toml::from_str::<toml::Value>(&raw)
+        .map_err(|error| format!("Windows Service Agent 配置格式无效：{error}"))?;
+
+    let credentials_dir = service_credentials_dir_for_root(config_root)?;
+    let persisted = load_persisted_agent_login_from_dir(&credentials_dir)?
+        .ok_or_else(|| "Windows Service 找不到持久登录授权，请重新登录".to_string())?;
+    let config_username = service_config_string(&config, &["username"]).unwrap_or_default();
+    if config_username != persisted.account.username {
+        return Err("Windows Service 配置用户与持久登录用户不一致".to_string());
+    }
+
+    let configured_private_key = service_config_string(&config, &["private_key_path"])
+        .ok_or_else(|| "Windows Service Agent 配置缺少托管私钥，请先登录".to_string())?;
+    let configured_proxy_identity =
+        service_config_string(&config, &["proxy_identity_public_key_path"]).ok_or_else(|| {
+            "Windows Service Agent 配置缺少托管 Proxy 身份公钥，请先登录".to_string()
+        })?;
+    ensure_same_canonical_path(
+        &resolve_configured_path(app_data_dir, configured_private_key),
+        &persisted.private_key_path,
+        "私钥",
+    )?;
+    ensure_same_canonical_path(
+        &resolve_configured_path(app_data_dir, configured_proxy_identity),
+        &persisted.proxy_identity_public_key_path,
+        "Proxy 身份公钥",
+    )?;
+
+    Ok((
+        canonical,
+        ServiceLoginBinding {
+            username: persisted.account.username,
+            key_version: persisted.account.key_version,
+        },
+    ))
+}
+
+fn resolve_configured_path(app_data_dir: &Path, configured_path: &str) -> PathBuf {
+    let configured_path = Path::new(configured_path);
+    if configured_path.is_absolute() {
+        configured_path.to_path_buf()
+    } else {
+        app_data_dir.join(configured_path)
+    }
+}
+
+fn ensure_same_canonical_path(
+    configured: &Path,
+    persisted: &Path,
+    credential_name: &str,
+) -> Result<(), String> {
+    let configured = fs::canonicalize(configured)
+        .map_err(|error| format!("无法定位 Windows Service 配置中的{credential_name}：{error}"))?;
+    let persisted = fs::canonicalize(persisted)
+        .map_err(|error| format!("无法定位 Windows Service 持久登录{credential_name}：{error}"))?;
+    if normalized_path_for_compare(&configured) != normalized_path_for_compare(&persisted) {
+        return Err(format!(
+            "Windows Service 配置中的{credential_name}与持久登录凭据不一致"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_service_config_path_for_root(
@@ -1358,19 +1679,21 @@ fn service_packet_capture_result(
             traffic: None,
             dns_records: None,
             packet_capture: Some(status),
+            auth_status: None,
             error: None,
         },
         Err(error) => service_error(error),
     }
 }
 
-fn service_state_ok(state: AgentState) -> ServiceResponse {
+fn service_state_ok(runtime: &AgentRuntime, state: AgentState) -> ServiceResponse {
     ServiceResponse {
         ok: true,
         state: Some(state),
         traffic: None,
         dns_records: None,
         packet_capture: None,
+        auth_status: runtime.verified_proxy_auth_status().ok().flatten(),
         error: None,
     }
 }
@@ -1382,6 +1705,7 @@ fn service_error(error: String) -> ServiceResponse {
         traffic: None,
         dns_records: None,
         packet_capture: None,
+        auth_status: None,
         error: Some(error),
     }
 }
@@ -1413,10 +1737,46 @@ mod tests {
     }
 
     #[test]
+    fn service_reports_typed_verified_proxy_account_status() {
+        let runtime = AgentRuntime::new();
+        runtime
+            .set_verified_proxy_auth_status(VerifiedProxyAuthStatus {
+                username: "alice".to_string(),
+                status: AgentAuthAccountStatus::Expired,
+            })
+            .unwrap();
+
+        let response = handle_service_request(&runtime, ServiceRequest::State);
+        assert_eq!(
+            response.auth_status,
+            Some(VerifiedProxyAuthStatus {
+                username: "alice".to_string(),
+                status: AgentAuthAccountStatus::Expired,
+            })
+        );
+
+        runtime
+            .set_verified_proxy_auth_status(VerifiedProxyAuthStatus {
+                username: "alice".to_string(),
+                status: AgentAuthAccountStatus::Active,
+            })
+            .unwrap();
+        let response = handle_service_request(&runtime, ServiceRequest::State);
+        assert_eq!(
+            response.auth_status,
+            Some(VerifiedProxyAuthStatus {
+                username: "alice".to_string(),
+                status: AgentAuthAccountStatus::Active,
+            })
+        );
+    }
+
+    #[test]
     fn only_state_changing_service_requests_are_serialized() {
         assert!(service_request_is_mutating(&ServiceRequest::Start {
             config_path: "agent.toml".to_string(),
         }));
+        assert!(service_request_is_mutating(&ServiceRequest::Stop));
         assert!(service_request_is_mutating(
             &ServiceRequest::SetPacketCapture { enabled: true }
         ));
@@ -1595,6 +1955,12 @@ mod tests {
             Path::new(r"C:\Users\Alice\AppData\Local\com.ppaass.agent-copy"),
             Path::new(r"C:\Users\Alice\AppData\Local\com.ppaass.agent")
         ));
+        assert!(sc_service_is_auto_start(
+            "START_TYPE         : 2   AUTO_START"
+        ));
+        assert!(!sc_service_is_auto_start(
+            "START_TYPE         : 3   DEMAND_START"
+        ));
     }
 
     #[test]
@@ -1625,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn service_session_binds_token_to_live_process_instance_and_expiry() {
+    fn service_session_survives_ui_process_exit_and_ignores_local_expiry_metadata() {
         let temp = tempfile::tempdir().unwrap();
         let config_root = temp
             .path()
@@ -1636,38 +2002,82 @@ mod tests {
         let session_path = service_session_file_path_for_root(&config_root).unwrap();
         fs::create_dir_all(session_path.parent().unwrap()).unwrap();
         let token = "ab".repeat(SERVICE_SESSION_TOKEN_BYTES);
-        let current_process_id = std::process::id();
-        let current_creation_time = windows_live_process_creation_time(current_process_id).unwrap();
 
         let active = ServiceSessionAuthorization {
             version: SERVICE_SESSION_FILE_VERSION,
             token: token.clone(),
-            ui_process_id: current_process_id,
-            ui_process_creation_time: current_creation_time,
-            expires_at: Some(current_unix_timestamp() + 60),
+            _legacy_ui_process_id: None,
+            _legacy_ui_process_creation_time: None,
+            _legacy_expires_at: None,
         };
         fs::write(&session_path, serde_json::to_vec(&active).unwrap()).unwrap();
         let loaded = read_service_session_authorization(&session_path).unwrap();
         assert_eq!(loaded.token, token);
 
-        let reused_pid = ServiceSessionAuthorization {
+        let exited_legacy_ui = ServiceSessionAuthorization {
             version: SERVICE_SESSION_FILE_VERSION,
             token: token.clone(),
-            ui_process_id: current_process_id,
-            ui_process_creation_time: current_creation_time.saturating_sub(1),
-            expires_at: Some(current_unix_timestamp() + 60),
+            _legacy_ui_process_id: Some(u32::MAX),
+            _legacy_ui_process_creation_time: Some(1),
+            _legacy_expires_at: None,
         };
-        fs::write(&session_path, serde_json::to_vec(&reused_pid).unwrap()).unwrap();
-        assert!(read_service_session_authorization(&session_path).is_err());
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&exited_legacy_ui).unwrap(),
+        )
+        .unwrap();
+        assert!(read_service_session_authorization(&session_path).is_ok());
 
-        let expired = ServiceSessionAuthorization {
+        let legacy_locally_expired = ServiceSessionAuthorization {
             version: SERVICE_SESSION_FILE_VERSION,
             token,
-            ui_process_id: current_process_id,
-            ui_process_creation_time: current_creation_time,
-            expires_at: Some(current_unix_timestamp() - 1),
+            _legacy_ui_process_id: Some(u32::MAX),
+            _legacy_ui_process_creation_time: Some(1),
+            _legacy_expires_at: Some(1),
         };
-        fs::write(&session_path, serde_json::to_vec(&expired).unwrap()).unwrap();
-        assert!(read_service_session_authorization(&session_path).is_err());
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&legacy_locally_expired).unwrap(),
+        )
+        .unwrap();
+        assert!(read_service_session_authorization(&session_path).is_ok());
+    }
+
+    #[test]
+    fn desired_running_state_is_atomic_strict_and_independent_of_local_time() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(SERVICE_DESIRED_STATE_FILE_NAME);
+        let alice = ServiceLoginBinding {
+            username: "alice".to_string(),
+            key_version: 7,
+        };
+
+        assert_eq!(read_service_desired_state(&path).unwrap(), None);
+
+        persist_service_desired_state(&path, Some(&alice)).unwrap();
+        assert_eq!(
+            read_service_desired_state(&path).unwrap(),
+            Some(alice.clone())
+        );
+
+        persist_service_desired_state(&path, None).unwrap();
+        assert_eq!(read_service_desired_state(&path).unwrap(), None);
+
+        fs::write(
+            &path,
+            br#"{"version":1,"desired_running":true,"username":"alice","key_version":7,"expires_at":1}"#,
+        )
+        .unwrap();
+        assert!(read_service_desired_state(&path).is_err());
+
+        fs::write(
+            &path,
+            br#"{"version":2,"desired_running":true,"username":"alice","key_version":7}"#,
+        )
+        .unwrap();
+        assert!(read_service_desired_state(&path).is_err());
+
+        fs::write(&path, br#"{"version":1,"desired_running":true}"#).unwrap();
+        assert!(read_service_desired_state(&path).is_err());
     }
 }

@@ -17,9 +17,10 @@ pub use message::{
     MessageType, ProxyRequest, ProxyResponse, TransportProtocol, UdpRelayPacket,
 };
 pub use tcp_transport::{
-    TcpDirectionalKeyMaterial, TcpFrameDirection, TcpSessionCipher, TcpSessionRole,
-    TcpSessionSecret, decode_tcp_session_secret, encode_tcp_session_secret,
-    tcp_auth_request_transcript, tcp_auth_response_signature_transcript, tcp_auth_transcript_hash,
+    AuthFailureCode, TcpDirectionalKeyMaterial, TcpFrameDirection, TcpSessionCipher,
+    TcpSessionRole, TcpSessionSecret, decode_tcp_session_secret, encode_tcp_session_secret,
+    tcp_auth_failure_signature_transcript, tcp_auth_request_transcript,
+    tcp_auth_response_signature_transcript, tcp_auth_transcript_hash,
 };
 pub use udp_transport::{
     FragmentReassembler, ReassemblyConfig, ReplayWindow, UdpAuthInit, UdpAuthOk,

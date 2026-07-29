@@ -43,12 +43,12 @@ public class AgentAuthConfigTest {
     }
 
     @Test
-    public void browserAuthorizationUrlMustStayRelativeToConfiguredService() {
+    public void serviceRelativeUrlsCannotEscapeConfiguredService() {
         assertEquals(
-                "https://proxy.example.com/#agent-authorize=ABCD-EFGH-JKLM",
+                "https://proxy.example.com/api/agent/auth/device/authorize?code=ABCD-EFGH-JKLM",
                 AgentAuthConfig.resolveServiceRelativeUrl(
                         "https://proxy.example.com/",
-                        "/#agent-authorize=ABCD-EFGH-JKLM"));
+                        "/api/agent/auth/device/authorize?code=ABCD-EFGH-JKLM"));
         assertEquals(
                 "http://127.0.0.1:8787/?mode=register",
                 AgentAuthConfig.resolveServiceRelativeUrl(
@@ -59,16 +59,16 @@ public class AgentAuthConfigTest {
                 IllegalArgumentException.class,
                 () -> AgentAuthConfig.resolveServiceRelativeUrl(
                         "https://proxy.example.com",
-                        "https://attacker.example/#agent-authorize"));
+                        "https://attacker.example/api/agent/auth/device/authorize"));
         assertThrows(
                 IllegalArgumentException.class,
                 () -> AgentAuthConfig.resolveServiceRelativeUrl(
                         "https://proxy.example.com",
-                        "//attacker.example/#agent-authorize"));
+                        "//attacker.example/api/agent/auth/device/authorize"));
         assertThrows(
                 IllegalArgumentException.class,
                 () -> AgentAuthConfig.resolveServiceRelativeUrl(
                         "https://proxy.example.com",
-                        "relative/#agent-authorize"));
+                        "relative/api/agent/auth/device/authorize"));
     }
 }

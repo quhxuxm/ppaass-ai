@@ -48,11 +48,12 @@ use futures::FutureExt;
 use netstack::{spawn_netstack_supervisor, wait_tun_task};
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
-use proxy_routing::{bind_interface_is_usable, configure_proxy_routing, install_route_guard};
+use proxy_routing::{
+    ProxySessionBindGuard, bind_interface_is_usable, configure_proxy_routing, install_route_guard,
+};
 use route::{
     RouteGuard, cleanup_stale_routes, detect_default_route_interface, detect_proxy_route,
     refresh_macos_scoped_default_bypass as refresh_macos_scoped_default_bypass_local,
-    resolve_proxy_ips,
 };
 use std::net::IpAddr;
 use std::panic::AssertUnwindSafe;
@@ -364,6 +365,10 @@ pub async fn run_tun_mode(
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
     // 这个顺序非常关键：先固定控制连接出口，再安装 TUN/split-default 路由。
+    // guard 必须先于配置绑定创建：从这里开始的取消、设备/路由/netstack
+    // 初始化错误或任务 abort 都会自动恢复共享 HTTP/SOCKS manager 的普通路由。
+    let proxy_session_bind_guard =
+        ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
     let proxy_bind_interface = configure_proxy_routing(
         &config,
         &proxy_addrs,
@@ -392,7 +397,6 @@ pub async fn run_tun_mode(
         proxy_bind_interface.as_ref(),
     )?;
     let helper_managed_network = system_guard.is_some();
-    let device = Arc::new(device);
     info!(
         "TUN 设备已创建：名称={} if_index={} helper_managed={}",
         tun_name, tun_if_index, helper_managed_network
@@ -402,6 +406,20 @@ pub async fn run_tun_mode(
         packet_capture.file().display()
     );
 
+    // 必要路由必须在 netstack 任务启动前安装成功。否则 TUN 设备虽然显示已启动，
+    // 实际流量却没有进入 TUN，或 proxy 控制连接被 split-default 回环劫持。
+    let route_guard = if helper_managed_network {
+        None
+    } else {
+        Some(install_route_guard(
+            &config,
+            ipv4,
+            ipv4_prefix,
+            tun_if_index,
+            &proxy_addrs,
+        )?)
+    };
+    let device = Arc::new(device);
     let direct_egress = Arc::new(TunDirectEgress::new(
         proxy_addrs.clone(),
         proxy_bind_interface.clone(),
@@ -426,11 +444,6 @@ pub async fn run_tun_mode(
         packet_capture,
         shutdown.clone(),
     )?;
-    let route_guard = if helper_managed_network {
-        None
-    } else {
-        install_route_guard(&config, ipv4, ipv4_prefix, tun_if_index, &proxy_addrs)
-    };
     #[cfg(windows)]
     let dns_guard = if helper_managed_network {
         None
@@ -453,10 +466,7 @@ pub async fn run_tun_mode(
     info!("收到 TUN 模式关闭请求");
 
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
-    tcp_sessions.set_proxy_bind_ip(None);
-    tcp_sessions.set_proxy_bind_interface(None);
-    udp_sessions.set_proxy_bind_ip(None);
-    udp_sessions.set_proxy_bind_interface(None);
+    proxy_session_bind_guard.clear();
     // Windows DNS Client 会按接口发送查询，仅安装 DNS 服务器的 /32 TUN
     // 路由无法可靠捕获这类流量。先恢复接口 DNS，再撤销 TUN 路由，避免
     // 退出窗口内系统查询仍指向已经不可达的虚拟 DNS 地址。

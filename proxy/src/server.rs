@@ -35,7 +35,7 @@ pub struct ProxyServer {
     config: Arc<ProxyConfig>,
     // 用户表在认证路径读取，内部用锁保证并发读安全。
     user_manager: Arc<UserManager>,
-    // TCP/Yamux 成功认证响应由该独立传输身份签名；Agent pin 对应公钥。
+    // TCP/Yamux 成功与失败认证响应由该独立传输身份签名；Agent pin 对应公钥。
     transport_identity: Arc<RsaKeyPair>,
     // 出站连接状态在启动时初始化，避免每次 CONNECT 都重新解析出站策略。
     egress_state: Arc<EgressState>,
@@ -373,12 +373,12 @@ where
             Ok(Some(config)) => config,
             Ok(None) => {
                 error!("用户不存在：{}", username);
-                connection.send_auth_error("User not found").await?;
+                connection.send_auth_error().await?;
                 return Err(crate::error::ProxyError::UserNotFound(username));
             }
             Err(e) => {
                 error!("查找用户配置时出错：{}", e);
-                connection.send_auth_error("Internal error").await?;
+                connection.send_auth_error().await?;
                 return Err(e);
             }
         };

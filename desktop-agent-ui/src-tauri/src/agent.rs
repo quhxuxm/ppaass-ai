@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use common::tun_control::{TUN_HELPER_DNS_STATE_FILE_NAME, TUN_HELPER_ROUTE_STATE_FILE_NAME};
 use desktop_agent_be::PacketCaptureController;
 use tokio_util::sync::CancellationToken;
 
@@ -487,23 +488,16 @@ fn normalize_agent_config_paths(
         }
     }
 
-    if let Some(route_state_file) = config.tun.route_state_file.as_mut() {
-        let trimmed = route_state_file.trim();
-        if !trimmed.is_empty() {
-            *route_state_file = resolve_agent_path(base_dir, trimmed)
-                .to_string_lossy()
-                .into();
-        }
-    }
-
-    if let Some(dns_state_file) = config.tun.dns_state_file.as_mut() {
-        let trimmed = dns_state_file.trim();
-        if !trimmed.is_empty() {
-            *dns_state_file = resolve_agent_path(base_dir, trimmed)
-                .to_string_lossy()
-                .into();
-        }
-    }
+    config.tun.route_state_file = Some(resolve_agent_state_path(
+        base_dir,
+        config.tun.route_state_file.as_deref(),
+        TUN_HELPER_ROUTE_STATE_FILE_NAME,
+    ));
+    config.tun.dns_state_file = Some(resolve_agent_state_path(
+        base_dir,
+        config.tun.dns_state_file.as_deref(),
+        TUN_HELPER_DNS_STATE_FILE_NAME,
+    ));
 
     let capture_file = config.tun.packet_capture.file.trim();
     if !capture_file.is_empty() {
@@ -511,6 +505,20 @@ fn normalize_agent_config_paths(
             .to_string_lossy()
             .into();
     }
+}
+
+fn resolve_agent_state_path(
+    base_dir: &Path,
+    configured: Option<&str>,
+    default_name: &str,
+) -> String {
+    let configured = configured
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_name);
+    resolve_agent_path(base_dir, configured)
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn resolve_agent_output_path(config_path: &Path, value: &str) -> PathBuf {
@@ -706,6 +714,65 @@ fn stop_external_agent_on_port(_port: u16) -> Result<bool, String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn missing_or_empty_state_files_resolve_under_the_agent_base_directory() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../agent.toml");
+        let mut config =
+            desktop_agent_be::config::AgentConfig::load(&config_path).expect("local config");
+        let base_dir = tempfile::tempdir().unwrap();
+        config.tun.route_state_file = None;
+        config.tun.dns_state_file = Some("   ".to_string());
+
+        normalize_agent_config_paths(&mut config, base_dir.path());
+
+        assert_eq!(
+            config.tun.route_state_file.as_deref(),
+            Some(
+                base_dir
+                    .path()
+                    .join(TUN_HELPER_ROUTE_STATE_FILE_NAME)
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert_eq!(
+            config.tun.dns_state_file.as_deref(),
+            Some(
+                base_dir
+                    .path()
+                    .join(TUN_HELPER_DNS_STATE_FILE_NAME)
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+    }
+
+    #[test]
+    fn configured_state_files_preserve_absolute_paths_and_resolve_relative_paths() {
+        let base_dir = tempfile::tempdir().unwrap();
+        let absolute = base_dir.path().join("absolute-routes.json");
+
+        assert_eq!(
+            resolve_agent_state_path(
+                base_dir.path(),
+                Some(absolute.to_string_lossy().as_ref()),
+                TUN_HELPER_ROUTE_STATE_FILE_NAME,
+            ),
+            absolute.to_string_lossy()
+        );
+        assert_eq!(
+            resolve_agent_state_path(
+                base_dir.path(),
+                Some("state/custom-dns.json"),
+                TUN_HELPER_DNS_STATE_FILE_NAME,
+            ),
+            base_dir
+                .path()
+                .join("state/custom-dns.json")
+                .to_string_lossy()
+        );
+    }
 
     #[test]
     fn runtime_capture_defaults_off_and_toggles_and_clears_without_replacing_agent() {

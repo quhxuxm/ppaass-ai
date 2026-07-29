@@ -55,9 +55,6 @@ async_runtime_stack_size_mb = 2
 # 而不是直接连接目标。
 forward_mode = true
 
-# 上游代理地址（forward_mode = true 时必填）
-upstream_proxy_addr = "127.0.0.1:9090"
-
 # 连接上游代理时使用的认证用户名
 upstream_username = "local-upstream"
 
@@ -67,7 +64,7 @@ upstream_private_key_path = "keys/local-upstream.pem"
 # 固定校验上游 Proxy 的 TCP/Yamux 传输身份公钥。
 upstream_proxy_identity_public_key_path = "data/proxy-identity-public.pem"
 
-# 上游代理地址列表，用于负载均衡和故障切换
+# 上游代理地址列表（forward_mode = true 时必填），用于负载均衡和故障切换
 # 指定多个地址时，每个连接会随机选择其中一个
 upstream_proxy_addrs = ["127.0.0.1:8080"]
 

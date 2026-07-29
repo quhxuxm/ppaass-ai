@@ -13,7 +13,7 @@ pub(super) fn install_dns_capture_routes(
     context: DnsCaptureRouteContext<'_>,
     installed: &mut Vec<Route>,
     lease: &mut RouteLease,
-) {
+) -> Result<()> {
     let DnsCaptureRouteContext {
         tun_if_index,
         dns_ips,
@@ -24,7 +24,7 @@ pub(super) fn install_dns_capture_routes(
 
     if dns_ips.is_empty() {
         debug!("TUN proxy_dns 未发现可捕获的系统 DNS 服务器地址");
-        return;
+        return Ok(());
     }
 
     for ip in dns_ips {
@@ -51,12 +51,13 @@ pub(super) fn install_dns_capture_routes(
         match mgr.add(&route) {
             Ok(()) => {
                 info!("已安装系统 DNS 捕获路由（不修改系统 DNS）：{}", route);
-                lease.record_installed(RouteKind::DnsCapture, &route);
+                lease.record_installed(RouteKind::DnsCapture, &route)?;
                 installed.push(route);
             }
             Err(e) => warn!("安装系统 DNS 捕获路由 {} 失败：{e}", route),
         }
     }
+    Ok(())
 }
 
 pub(super) fn dns_capture_route_targets_default_gateway(

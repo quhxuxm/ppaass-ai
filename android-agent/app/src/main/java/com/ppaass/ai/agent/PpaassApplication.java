@@ -9,11 +9,10 @@ public final class PpaassApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
-        AgentAuthSession.clear();
-        if (!ManagedCredentials.clear(this)) {
-            Log.e(
-                    TAG,
-                    "Failed to completely remove stale managed credentials during process start");
+        if (AgentAuthSession.restore(this)) {
+            Log.i(TAG, "Restored persistent Agent login");
+        } else {
+            Log.i(TAG, "No persistent Agent login to restore");
         }
     }
 }

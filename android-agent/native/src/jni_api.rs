@@ -4,8 +4,12 @@ use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::{Env, EnvUnowned};
 use protocol::RsaKeyPair;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use crate::authentication::{
+    VerifiedAuthenticationState, monitor_verified_authentication_statuses,
+};
 use crate::config::AndroidAgentConfig;
 use crate::fd_device::RawFd;
 use crate::http_proxy::run_android_http_proxy;
@@ -21,6 +25,7 @@ struct AgentHandle {
     shutdown: CancellationToken,
     thread: Option<std::thread::JoinHandle<()>>,
     clear_socket_protector_on_stop: bool,
+    authentication_state: Arc<VerifiedAuthenticationState>,
 }
 
 #[unsafe(no_mangle)]
@@ -111,6 +116,9 @@ fn start_agent<'local>(
     let runtime_threads = config.runtime_threads.max(1);
     let shutdown = CancellationToken::new();
     let task_shutdown = shutdown.clone();
+    let authentication_state = Arc::new(VerifiedAuthenticationState::default());
+    let task_authentication_state = authentication_state.clone();
+    let authentication_username = config.username.clone();
     let raw_fd = tun_fd as RawFd;
     let thread = match std::thread::Builder::new()
         .name("ppaass-android-agent".to_string())
@@ -130,7 +138,22 @@ fn start_agent<'local>(
                 }
             };
 
-            if let Err(err) = runtime.block_on(run_android_agent(raw_fd, config, task_shutdown)) {
+            let monitor_shutdown = task_shutdown.clone();
+            let authentication_statuses = common::subscribe_verified_proxy_auth_statuses();
+            let result = runtime.block_on(async move {
+                let authentication_monitor =
+                    tokio::spawn(monitor_verified_authentication_statuses(
+                        task_authentication_state,
+                        authentication_username,
+                        authentication_statuses,
+                        monitor_shutdown,
+                    ));
+                let result = run_android_agent(raw_fd, config, task_shutdown.clone()).await;
+                task_shutdown.cancel();
+                let _ = authentication_monitor.await;
+                result
+            });
+            if let Err(err) = result {
                 tracing::error!(error = %err, "Android Agent stopped");
             }
         }) {
@@ -146,6 +169,7 @@ fn start_agent<'local>(
         shutdown,
         thread: Some(thread),
         clear_socket_protector_on_stop: true,
+        authentication_state,
     })) as jlong
 }
 
@@ -196,6 +220,9 @@ fn start_http_proxy<'local>(
     let runtime_threads = config.runtime_threads.max(1);
     let shutdown = CancellationToken::new();
     let task_shutdown = shutdown.clone();
+    let authentication_state = Arc::new(VerifiedAuthenticationState::default());
+    let task_authentication_state = authentication_state.clone();
+    let authentication_username = config.username.clone();
     let port = listen_port as u16;
     let thread = match std::thread::Builder::new()
         .name("ppaass-android-http-proxy".to_string())
@@ -218,8 +245,22 @@ fn start_http_proxy<'local>(
                 }
             };
 
-            if let Err(err) = runtime.block_on(run_android_http_proxy(config, port, task_shutdown))
-            {
+            let monitor_shutdown = task_shutdown.clone();
+            let authentication_statuses = common::subscribe_verified_proxy_auth_statuses();
+            let result = runtime.block_on(async move {
+                let authentication_monitor =
+                    tokio::spawn(monitor_verified_authentication_statuses(
+                        task_authentication_state,
+                        authentication_username,
+                        authentication_statuses,
+                        monitor_shutdown,
+                    ));
+                let result = run_android_http_proxy(config, port, task_shutdown.clone()).await;
+                task_shutdown.cancel();
+                let _ = authentication_monitor.await;
+                result
+            });
+            if let Err(err) = result {
                 tracing::error!(error = %err, "Android HTTP proxy stopped");
             }
         }) {
@@ -237,6 +278,7 @@ fn start_http_proxy<'local>(
         shutdown,
         thread: Some(thread),
         clear_socket_protector_on_stop: false,
+        authentication_state,
     })) as jlong
 }
 
@@ -252,6 +294,20 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_isRunning<'local>(
 
     let handle = unsafe { &*(handle as *const AgentHandle) };
     matches!(handle.thread.as_ref(), Some(thread) if !thread.is_finished())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_authenticationStatus<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jint {
+    if handle == 0 {
+        return crate::authentication::AUTHENTICATION_UNCONFIRMED as jint;
+    }
+
+    let handle = unsafe { &*(handle as *const AgentHandle) };
+    handle.authentication_state.status() as jint
 }
 
 #[unsafe(no_mangle)]

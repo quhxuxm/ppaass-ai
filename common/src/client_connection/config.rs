@@ -26,7 +26,7 @@ pub trait ClientConnectionConfig: Debug {
 
     /// Pinned Proxy transport identity public key (SubjectPublicKeyInfo PEM).
     ///
-    /// This is mandatory for TCP/Yamux v2. It must come from an authenticated
+    /// This is mandatory for TCP/Yamux v3. It must come from an authenticated
     /// provisioning channel, never from the untrusted handshake peer.
     fn proxy_identity_public_key_pem(&self) -> Result<String, String>;
 

@@ -103,6 +103,7 @@ protected Button restoreDefaultsButton;
 protected AlertDialog appSelectorDialog;
 protected Button vpnToggle;
 protected TextView vpnStatus;
+protected TextView accountSummary;
 protected Button httpProxyToggle;
 protected Button httpProxyClientsButton;
 protected LinearLayout httpProxyEndpointList;

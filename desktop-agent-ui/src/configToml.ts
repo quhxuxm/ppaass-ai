@@ -22,7 +22,7 @@ name = "ppaass-tun"
 ipv4 = "10.10.10.1/24"
 mtu = 1500
 proxy_udp = true
-proxy_dns = false
+proxy_dns = true
 quic_policy = "allow"
 
 [tun.packet_capture]
@@ -56,7 +56,7 @@ const defaultFieldValues = {
   tun_ipv4: "10.10.10.1/24",
   tun_mtu: 1500,
   tun_proxy_udp: true,
-  tun_proxy_dns: false,
+  tun_proxy_dns: true,
   tun_quic_policy: "allow",
   tun_packet_capture_file: "captures/ppaass-tun.pcap",
   direct_mode: "proxy_all",
@@ -155,6 +155,7 @@ export function applyFieldToToml(raw: string, field: keyof AgentConfigSummary, v
 
 export function summarizeRaw(raw: string): AgentConfigSummary {
   rejectRemovedDesktopTransportFields(raw);
+  rejectRemovedTunHelperFields(raw);
   const runtimeThreads = normalizeRuntimeThreads(matchNumber(raw, null, "runtime_threads"));
   const tunQuicPolicy = normalizeQuicPolicy(matchString(raw, "tun", "quic_policy") ?? "allow");
   return {
@@ -331,6 +332,19 @@ function normalizeTransportMode(value: string): AgentTransportMode {
 function rejectRemovedDesktopTransportFields(raw: string) {
   if (hasAssignment(raw, null, "quic_connection_pool_size")) {
     throw new Error("配置字段 quic_connection_pool_size 已移除，请使用 udp_session_pool_size");
+  }
+}
+
+function rejectRemovedTunHelperFields(raw: string) {
+  const removedFields = [
+    ["helper_enabled", "macos_helper_enabled"],
+    ["helper_socket", "macos_helper_socket"],
+    ["helper_fallback_to_privilege", "macos_helper_fallback_to_privilege"]
+  ] as const;
+  for (const [removed, current] of removedFields) {
+    if (hasAssignment(raw, "tun", removed)) {
+      throw new Error(`配置字段 tun.${removed} 已移除，请使用 tun.${current}`);
+    }
   }
 }
 

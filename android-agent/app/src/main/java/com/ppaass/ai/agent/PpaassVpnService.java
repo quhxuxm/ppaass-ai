@@ -87,8 +87,17 @@ public class PpaassVpnService extends VpnService {
             if (!vpnWork && !mockGeoWork) {
                 return;
             }
+            if (vpnWork) {
+                int authenticationStatus = NativeAgent.authenticationStatus(nativeHandle);
+                if (AgentAuthSession.applyVerifiedServerStatus(
+                        PpaassVpnService.this,
+                        authenticationStatus)) {
+                    Log.i(TAG, "Updated the verified Proxy account status");
+                    refreshNotification();
+                }
+            }
             if (!AgentAuthSession.isActive(PpaassVpnService.this)) {
-                Log.w(TAG, "Agent login expired; stopping VPN and mock GEO");
+                Log.w(TAG, "Agent login is unavailable; stopping VPN and mock GEO");
                 stopForInvalidAuthentication();
                 return;
             }
@@ -1003,6 +1012,11 @@ public class PpaassVpnService extends VpnService {
             contentText = "模拟 GEO 未生效";
         } else {
             contentText = "后台服务运行中";
+        }
+        if (AgentAuthSession.isServerExpired(this)) {
+            contentText = "账号已过期 · 保持运行并等待管理员续期";
+        } else if (AgentAuthSession.isServerDisabled(this)) {
+            contentText = "账号已停用 · 代理保持运行";
         }
 
         return builder

@@ -2,7 +2,6 @@ package com.ppaass.ai.agent;
 
 import android.content.Intent;
 import android.net.Uri;
-import android.os.SystemClock;
 import android.text.InputType;
 import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
@@ -24,24 +23,17 @@ abstract class MainActivityAuth extends MainActivityScreens {
     private EditText loginPassword;
     private CheckBox rememberCredentials;
     private Button loginButton;
-    private Button deviceAuthorizationButton;
-    private Button cancelDeviceAuthorizationButton;
     private Button registrationButton;
-    private TextView deviceAuthorizationStatus;
     private TextView loginError;
     private boolean authenticationInProgress;
-    private boolean deviceAuthorizationInProgress;
     private boolean loginUiVisible;
     private long authenticationAttempt;
-    private volatile AgentAuthClient deviceAuthorizationClient;
-    private volatile Thread deviceAuthorizationThread;
 
     protected void showAgentEntry() {
         if (AgentAuthSession.isActive(this)) {
             loginUiVisible = false;
             buildUi();
         } else {
-            cancelDeviceAuthorizationWorker();
             AgentAuthenticationCoordinator.cancelAll();
             AgentAuthSession.clear();
             boolean credentialsCleared = ManagedCredentials.clear(this);
@@ -64,7 +56,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
     private void buildLoginUi() {
         loginUiVisible = true;
         authenticationInProgress = false;
-        deviceAuthorizationInProgress = false;
         editableControls.clear();
 
         ScrollView scroll = new ScrollView(this);
@@ -166,29 +157,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
         loginParams.setMargins(0, dp(16), 0, 0);
         card.addView(loginButton, loginParams);
 
-        deviceAuthorizationButton = secondaryButton("使用浏览器登录");
-        deviceAuthorizationButton.setOnClickListener(view -> beginDeviceAuthorization());
-        LinearLayout.LayoutParams deviceAuthorizationParams = matchWrap();
-        deviceAuthorizationParams.height = dp(48);
-        deviceAuthorizationParams.setMargins(0, dp(10), 0, 0);
-        card.addView(deviceAuthorizationButton, deviceAuthorizationParams);
-
-        deviceAuthorizationStatus = mutedText("", 13f);
-        deviceAuthorizationStatus.setGravity(Gravity.CENTER);
-        deviceAuthorizationStatus.setVisibility(View.GONE);
-        LinearLayout.LayoutParams deviceStatusParams = matchWrap();
-        deviceStatusParams.setMargins(0, dp(12), 0, 0);
-        card.addView(deviceAuthorizationStatus, deviceStatusParams);
-
-        cancelDeviceAuthorizationButton = secondaryButton("取消第三方登录");
-        cancelDeviceAuthorizationButton.setVisibility(View.GONE);
-        cancelDeviceAuthorizationButton.setOnClickListener(
-                view -> cancelDeviceAuthorizationFromUi());
-        LinearLayout.LayoutParams cancelAuthorizationParams = matchWrap();
-        cancelAuthorizationParams.height = dp(44);
-        cancelAuthorizationParams.setMargins(0, dp(8), 0, 0);
-        card.addView(cancelDeviceAuthorizationButton, cancelAuthorizationParams);
-
         registrationButton = secondaryButton("新用户注册");
         registrationButton.setOnClickListener(view -> openRegistrationPage());
         LinearLayout.LayoutParams registrationParams = matchWrap();
@@ -256,7 +224,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
 
         long attempt = AgentAuthenticationCoordinator.begin();
         authenticationAttempt = attempt;
-        deviceAuthorizationInProgress = false;
         setAuthenticationBusy(true);
         new Thread(() -> {
             try {
@@ -295,209 +262,9 @@ abstract class MainActivityAuth extends MainActivityScreens {
         }, "ppaass-agent-auth").start();
     }
 
-    private void beginDeviceAuthorization() {
-        if (authenticationInProgress) {
-            return;
-        }
-
-        long attempt = AgentAuthenticationCoordinator.begin();
-        authenticationAttempt = attempt;
-        deviceAuthorizationInProgress = true;
-        setAuthenticationBusy(true);
-        updateDeviceAuthorizationStatus("正在创建安全的浏览器登录请求…");
-
-        final AgentAuthClient client;
-        try {
-            client = new AgentAuthClient(this, AgentAuthConfig.proxyWebUrl(this));
-        } catch (IOException | RuntimeException error) {
-            AgentAuthenticationCoordinator.cancel(attempt);
-            authenticationAttempt = 0;
-            deviceAuthorizationInProgress = false;
-            setAuthenticationBusy(false);
-            showLoginError(error.getMessage() == null
-                    ? "Agent 认证服务配置无效，请联系管理员"
-                    : error.getMessage());
-            return;
-        }
-        deviceAuthorizationClient = client;
-
-        Thread worker = new Thread(
-                () -> runDeviceAuthorization(attempt, client),
-                "ppaass-agent-device-auth");
-        deviceAuthorizationThread = worker;
-        worker.start();
-    }
-
-    private void runDeviceAuthorization(long attempt, AgentAuthClient client) {
-        try {
-            AgentAuthClient.DeviceAuthorization authorization =
-                    client.startDeviceAuthorization();
-            if (!isCurrentAuthenticationAttempt(attempt) || client.isCancelled()) {
-                return;
-            }
-
-            runOnUiThread(() -> {
-                if (!isCurrentAuthenticationAttempt(attempt)
-                        || client.isCancelled()
-                        || isFinishing()
-                        || isDestroyed()) {
-                    return;
-                }
-                updateDeviceAuthorizationStatus(
-                        "请在浏览器完成登录并批准此设备，然后返回 Agent。");
-                openDeviceAuthorizationPage(attempt, authorization.verificationUrl);
-            });
-
-            long deadline = SystemClock.elapsedRealtime()
-                    + authorization.expiresInSeconds * 1000L;
-            int pollDelaySeconds = authorization.intervalSeconds;
-            while (isCurrentAuthenticationAttempt(attempt) && !client.isCancelled()) {
-                waitForDevicePoll(attempt, client, deadline, pollDelaySeconds);
-                AgentAuthClient.DevicePollResult poll =
-                        client.pollDeviceAuthorization(
-                                authorization.deviceCode,
-                                pollDelaySeconds);
-                if (poll.status == AgentAuthClient.DevicePollResult.Status.AUTHORIZED) {
-                    if (poll.loginResult == null) {
-                        throw new AgentAuthClient.AuthException(
-                                "Proxy Web 返回的设备登录结果无效");
-                    }
-                    boolean committed = AgentAuthenticationCoordinator.commitIfCurrent(
-                            attempt,
-                            () -> commitAuthenticatedResult(
-                                    poll.loginResult,
-                                    "",
-                                    "",
-                                    false));
-                    if (!committed) {
-                        return;
-                    }
-                    clearDeviceAuthorizationWorker(client, false);
-                    runOnUiThread(() -> completeAuthenticationUi(attempt));
-                    return;
-                }
-
-                pollDelaySeconds = poll.nextPollDelaySeconds;
-                if (poll.status == AgentAuthClient.DevicePollResult.Status.SLOW_DOWN) {
-                    runOnUiThread(() -> {
-                        if (isCurrentAuthenticationAttempt(attempt)) {
-                            updateDeviceAuthorizationStatus(
-                                    "浏览器授权仍在处理中，Agent 已降低检查频率。");
-                        }
-                    });
-                }
-            }
-        } catch (AgentAuthClient.CancelledException error) {
-            // User cancellation and Activity destruction intentionally produce no error UI.
-        } catch (AgentAuthClient.AuthException | IOException | RuntimeException error) {
-            AgentAuthenticationCoordinator.cancel(attempt);
-            runOnUiThread(() -> {
-                if (!isCurrentAuthenticationAttempt(attempt)
-                        || isFinishing()
-                        || isDestroyed()) {
-                    return;
-                }
-                authenticationAttempt = 0;
-                clearDeviceAuthorizationWorker(client, false);
-                deviceAuthorizationInProgress = false;
-                setAuthenticationBusy(false);
-                String message = error instanceof RuntimeException
-                        ? "浏览器登录或应用 Agent 凭据失败"
-                        : error.getMessage();
-                showLoginError(message == null
-                        ? "浏览器登录或应用 Agent 凭据失败"
-                        : message);
-            });
-        } finally {
-            if (deviceAuthorizationThread == Thread.currentThread()) {
-                deviceAuthorizationThread = null;
-            }
-            if (deviceAuthorizationClient == client
-                    && (!isCurrentAuthenticationAttempt(attempt)
-                    || client.isCancelled())) {
-                deviceAuthorizationClient = null;
-            }
-        }
-    }
-
-    private void waitForDevicePoll(
-            long attempt,
-            AgentAuthClient client,
-            long deadline,
-            int delaySeconds) throws AgentAuthClient.AuthException {
-        long remaining = deadline - SystemClock.elapsedRealtime();
-        if (remaining <= 0) {
-            throw new AgentAuthClient.AuthException(
-                    "浏览器登录请求已过期，请重新开始");
-        }
-        long delayMillis = Math.min(remaining, Math.max(1, delaySeconds) * 1000L);
-        try {
-            Thread.sleep(delayMillis);
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            throw new AgentAuthClient.CancelledException();
-        }
-        if (!isCurrentAuthenticationAttempt(attempt) || client.isCancelled()) {
-            throw new AgentAuthClient.CancelledException();
-        }
-        if (SystemClock.elapsedRealtime() >= deadline) {
-            throw new AgentAuthClient.AuthException(
-                    "浏览器登录请求已过期，请重新开始");
-        }
-    }
-
     private boolean isCurrentAuthenticationAttempt(long attempt) {
         return attempt == authenticationAttempt
                 && AgentAuthenticationCoordinator.isLatest(attempt);
-    }
-
-    private void openDeviceAuthorizationPage(long attempt, String verificationUrl) {
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(verificationUrl));
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
-            startActivity(intent);
-        } catch (RuntimeException error) {
-            AgentAuthenticationCoordinator.cancel(attempt);
-            authenticationAttempt = 0;
-            cancelDeviceAuthorizationWorker();
-            deviceAuthorizationInProgress = false;
-            setAuthenticationBusy(false);
-            showLoginError("无法打开第三方登录页面");
-        }
-    }
-
-    private void cancelDeviceAuthorizationFromUi() {
-        if (!deviceAuthorizationInProgress) {
-            return;
-        }
-        AgentAuthenticationCoordinator.cancel(authenticationAttempt);
-        authenticationAttempt = 0;
-        cancelDeviceAuthorizationWorker();
-        deviceAuthorizationInProgress = false;
-        setAuthenticationBusy(false);
-        Toast.makeText(this, tr("第三方登录已取消"), Toast.LENGTH_SHORT).show();
-    }
-
-    private void cancelDeviceAuthorizationWorker() {
-        clearDeviceAuthorizationWorker(deviceAuthorizationClient, true);
-    }
-
-    private void clearDeviceAuthorizationWorker(
-            AgentAuthClient expectedClient,
-            boolean cancel) {
-        AgentAuthClient client = deviceAuthorizationClient;
-        if (expectedClient != null && client != expectedClient) {
-            return;
-        }
-        deviceAuthorizationClient = null;
-        if (cancel && client != null) {
-            client.cancel();
-        }
-        Thread worker = deviceAuthorizationThread;
-        deviceAuthorizationThread = null;
-        if (cancel && worker != null && worker != Thread.currentThread()) {
-            worker.interrupt();
-        }
     }
 
     private void completeAuthenticationUi(long attempt) {
@@ -507,7 +274,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
             return;
         }
         authenticationAttempt = 0;
-        deviceAuthorizationInProgress = false;
         stopAgentsForCredentialReplacement();
         setAuthenticationBusy(false);
         loginUiVisible = false;
@@ -516,11 +282,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
         if (activityResumed) {
             startStatusRefresh();
         }
-    }
-
-    private void updateDeviceAuthorizationStatus(String status) {
-        deviceAuthorizationStatus.setText(tr(status));
-        deviceAuthorizationStatus.setVisibility(View.VISIBLE);
     }
 
     private void commitAuthenticatedResult(
@@ -547,6 +308,9 @@ abstract class MainActivityAuth extends MainActivityScreens {
                     result.username,
                     result.keyVersion,
                     result.expiresAt);
+            AgentAuthSession.applyVerifiedServerStatus(
+                    this,
+                    NativeAgent.AUTHENTICATION_VERIFIED_ACTIVE);
         } catch (IOException | RuntimeException error) {
             AgentAuthSession.clear();
             boolean credentialsCleared = ManagedCredentials.clear(this);
@@ -585,19 +349,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
         rememberCredentials.setEnabled(!busy);
         registrationButton.setEnabled(!busy);
         loginButton.setEnabled(!busy);
-        deviceAuthorizationButton.setEnabled(!busy);
-        loginButton.setText(tr(busy && !deviceAuthorizationInProgress
-                ? "正在登录"
-                : "登录并配置 Agent"));
-        deviceAuthorizationButton.setText(tr(
-                busy && deviceAuthorizationInProgress
-                        ? "正在等待浏览器授权"
-                        : "使用浏览器登录"));
-        deviceAuthorizationStatus.setVisibility(
-                busy && deviceAuthorizationInProgress ? View.VISIBLE : View.GONE);
-        cancelDeviceAuthorizationButton.setVisibility(
-                busy && deviceAuthorizationInProgress ? View.VISIBLE : View.GONE);
-        cancelDeviceAuthorizationButton.setEnabled(busy && deviceAuthorizationInProgress);
+        loginButton.setText(tr(busy ? "正在登录" : "登录并配置 Agent"));
         if (busy) {
             loginError.setVisibility(View.GONE);
         }
@@ -621,7 +373,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
 
     @Override
     protected void logoutAgentAccount() {
-        cancelDeviceAuthorizationWorker();
         AgentAuthenticationCoordinator.cancelAll();
         authenticationAttempt = 0;
         authenticationInProgress = false;
@@ -643,7 +394,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
     @Override
     protected void onAgentSessionInvalidated() {
         statusHandler.removeCallbacks(statusRefresh);
-        cancelDeviceAuthorizationWorker();
         AgentAuthenticationCoordinator.cancelAll();
         authenticationAttempt = 0;
         authenticationInProgress = false;
@@ -669,7 +419,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
 
     @Override
     protected void onDestroy() {
-        cancelDeviceAuthorizationWorker();
         AgentAuthenticationCoordinator.cancel(authenticationAttempt);
         authenticationAttempt = 0;
         super.onDestroy();

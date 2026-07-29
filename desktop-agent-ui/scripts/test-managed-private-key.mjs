@@ -76,6 +76,19 @@ try {
 
   const appSource = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
   assert.doesNotMatch(appSource, /default-proxy-web-url|default_proxy_web_url/);
+  const tauriAppSource = await readFile(
+    new URL("../src-tauri/src/app.rs", import.meta.url),
+    "utf8"
+  );
+  const statusReporter = tauriAppSource.slice(
+    tauriAppSource.indexOf("fn report_verified_proxy_auth_status"),
+    tauriAppSource.indexOf("fn current_ui_config_path")
+  );
+  assert.match(statusReporter, /保留登录状态和本机凭据/);
+  assert.doesNotMatch(
+    statusReporter,
+    /stop_agent_inner_command|take_authenticated_session|destroy_managed|destroy_persisted/
+  );
 
   const authComposable = await readFile(
     new URL("../src/composables/useAgentAuth.ts", import.meta.url),
@@ -86,6 +99,10 @@ try {
     /LOCAL_PROXY_WEB_URL|proxyWebUrl|proxy_web_url|default_proxy_web_url|127\.0\.0\.1:8787/
   );
   assert.match(authComposable, /invoke\("open_user_registration"\)/);
+  assert.match(authComposable, /listen<string>\("agent-auth-status"/);
+  assert.match(authComposable, /event\.payload === "user_disabled"/);
+  assert.match(authComposable, /登录状态和本机凭据已保留/);
+  assert.doesNotMatch(authComposable, /account\.value\?\.expires_at[\s\S]{0,120}(?:setTimeout|logout)/);
   assert.doesNotMatch(styles, /\.auth-server-settings/);
   assert.match(styles, /\.auth-login-options\s*\{/);
 

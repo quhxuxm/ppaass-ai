@@ -83,16 +83,6 @@ final class UiLanguage {
         put("记住用户名和密码", "Remember username and password");
         put("登录并配置 Agent", "Sign in and configure Agent");
         put("正在登录", "Signing in");
-        put("使用浏览器登录", "Sign in with browser");
-        put("正在等待浏览器授权", "Waiting for browser approval");
-        put("取消第三方登录", "Cancel third-party sign-in");
-        put("正在创建安全的浏览器登录请求…",
-                "Creating a secure browser sign-in request…");
-        put("请在浏览器完成登录并批准此设备，然后返回 Agent。",
-                "Sign in and approve this device in the browser, then return to Agent.");
-        put("浏览器授权仍在处理中，Agent 已降低检查频率。",
-                "Browser approval is still pending; Agent is checking less frequently.");
-        put("第三方登录已取消", "Third-party sign-in cancelled");
         put("设备登录已取消", "Device sign-in cancelled");
         put("无法创建设备登录请求", "Could not create the device sign-in request");
         put("无法创建设备登录轮询请求", "Could not create the device sign-in poll request");
@@ -141,6 +131,12 @@ final class UiLanguage {
         put("已登录：", "Signed in: ");
         put("密钥版本 ", "key version ");
         put("有效期至 ", "expires ");
+        put("账号已过期，等待管理员续期",
+                "Account expired; waiting for administrator renewal");
+        put("账号已过期 · 保持运行并等待管理员续期",
+                "Account expired · running while waiting for renewal");
+        put("账号已停用 · 代理保持运行",
+                "Account disabled · proxy remains running");
         put("管理员账号不能用于 Agent，请使用普通用户账号登录",
                 "Administrator accounts cannot use Agent; sign in with a regular user account");
         put("账号已停用", "This account is disabled");

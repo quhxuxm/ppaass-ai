@@ -59,9 +59,6 @@ final class ManagedCredentials {
         if (normalizedUsername.isEmpty() || keyVersion < 0) {
             throw new IOException("Proxy Web 返回的用户凭据无效");
         }
-        if (expiresAt <= System.currentTimeMillis() / 1000L) {
-            throw new IOException("Proxy Web 返回的用户凭据已经过期");
-        }
         byte[] privateKeyBytes = privateKeyPem == null
                 ? new byte[0]
                 : privateKeyPem.getBytes(StandardCharsets.UTF_8);
@@ -185,10 +182,6 @@ final class ManagedCredentials {
         if (fileName == null || fileName.isEmpty()) {
             throw new IOException("请先登录 Agent");
         }
-        long expiresAt = preferences.getLong(PREF_EXPIRES_AT, -1);
-        if (expiresAt <= System.currentTimeMillis() / 1000L) {
-            throw new IOException("Agent 托管私钥已经过期，请重新登录");
-        }
         long expectedLength = preferences.getLong(PREF_PRIVATE_KEY_LENGTH, -1);
         String expectedSha256 = preferences.getString(PREF_PRIVATE_KEY_SHA256, "");
         File directory = credentialsDirectory(context);
@@ -246,6 +239,24 @@ final class ManagedCredentials {
         }
     }
 
+    static Metadata loadMetadata(Context context) {
+        SharedPreferences preferences = preferences(context);
+        String username = preferences.getString(PREF_USERNAME, "");
+        long keyVersion = preferences.getLong(PREF_KEY_VERSION, -1);
+        long expiresAt = preferences.getLong(PREF_EXPIRES_AT, -1);
+        if (!isRestorableMetadata(username, keyVersion, expiresAt)
+                || !matches(context, username.trim(), keyVersion, expiresAt)) {
+            return null;
+        }
+        return new Metadata(username.trim(), keyVersion, expiresAt);
+    }
+
+    static boolean isRestorableMetadata(String username, long keyVersion, long expiresAt) {
+        // expiresAt is server-owned metadata. The pinned Proxy, rather than the
+        // Android wall clock, decides when it becomes a terminal account state.
+        return username != null && !username.trim().isEmpty() && keyVersion >= 0;
+    }
+
     static boolean clear(Context context) {
         boolean cleared = true;
         File directory = credentialsDirectory(context);
@@ -262,6 +273,7 @@ final class ManagedCredentials {
                 .remove(PREF_PRIVATE_KEY_LENGTH)
                 .remove(PREF_PRIVATE_KEY_SHA256)
                 .remove(PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM)
+                .remove(AgentAuthSession.PREF_SERVER_AUTHENTICATION_STATUS)
                 .remove("username")
                 .remove("private_key_pem")
                 .commit();
@@ -334,6 +346,18 @@ final class ManagedCredentials {
     static String sha256Hex(byte[] value) {
         byte[] digest = sha256(value);
         return toHex(digest, digest.length);
+    }
+
+    static final class Metadata {
+        final String username;
+        final long keyVersion;
+        final long expiresAt;
+
+        Metadata(String username, long keyVersion, long expiresAt) {
+            this.username = username;
+            this.keyVersion = keyVersion;
+            this.expiresAt = expiresAt;
+        }
     }
 
     private static String toHex(byte[] value, int length) {

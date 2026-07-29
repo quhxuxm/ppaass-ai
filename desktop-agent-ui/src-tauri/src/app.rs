@@ -1,8 +1,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::Manager;
-use tracing::info;
+use tauri::{Emitter, Manager};
+use tracing::{info, warn};
 
 use crate::agent::{
     apply_ui_log_level, clear_packet_capture_runtime, get_agent_state_inner,
@@ -11,9 +11,11 @@ use crate::agent::{
 };
 use crate::auth::{
     authenticate_and_download, cleanup_old_managed_private_keys, destroy_managed_private_key,
-    destroy_managed_proxy_identity_public_key, open_system_browser, poll_device_authorization,
-    registration_page_url, start_device_authorization, write_managed_private_key,
-    write_managed_proxy_identity_public_key, DeviceAuthorizationPoll, DownloadedCredential,
+    destroy_managed_proxy_identity_public_key, destroy_persisted_agent_login,
+    load_persisted_agent_login, open_system_browser, persist_agent_login,
+    poll_device_authorization, registration_page_url, start_device_authorization,
+    write_managed_private_key, write_managed_proxy_identity_public_key, DeviceAuthorizationPoll,
+    DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,
@@ -30,8 +32,9 @@ use crate::macos_helper::{
 #[cfg(windows)]
 use crate::models::ServiceRequest;
 use crate::models::{
-    AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest, AgentState, ConnectivityReport,
-    LoadedAgentConfig, NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
+    AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest,
+    AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
+    PacketCaptureRuntimeStatus,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
@@ -47,7 +50,7 @@ use crate::tray::{
 use crate::windows_service::{
     activate_windows_service_session, install_and_start_windows_service,
     invalidate_windows_service_session, run_windows_service, send_service_request,
-    service_config_root_from_args, INSTALL_SERVICE_ARG, SERVICE_ARG,
+    service_config_root_from_args, windows_service_auth_status, INSTALL_SERVICE_ARG, SERVICE_ARG,
 };
 
 #[tauri::command]
@@ -272,7 +275,7 @@ fn provision_downloaded_credential(
     downloaded: DownloadedCredential,
 ) -> Result<AgentAuthState, String> {
     #[cfg(windows)]
-    activate_windows_service_session(app, downloaded.account.expires_at)?;
+    activate_windows_service_session(app)?;
     let agent_state = match get_agent_state_inner(runtime) {
         Ok(state) => state,
         Err(error) => {
@@ -363,8 +366,18 @@ fn provision_downloaded_credential(
     }
 
     let account = downloaded.account;
+    if let Err(error) = persist_agent_login(app, &account, AgentAuthAccountStatus::Active) {
+        rollback_downloaded_credential(
+            app,
+            config_path,
+            &private_key_path,
+            &proxy_identity_public_key_path,
+        );
+        return Err(error);
+    }
     if let Err(error) = runtime.set_authenticated_session(
         account.clone(),
+        AgentAuthAccountStatus::Active,
         private_key_path.clone(),
         proxy_identity_public_key_path.clone(),
         downloaded.proxy_web_url,
@@ -390,6 +403,7 @@ fn provision_downloaded_credential(
     Ok(AgentAuthState {
         authenticated: true,
         account: Some(account),
+        account_status: Some(AgentAuthAccountStatus::Active),
         config: Some(ui_config),
     })
 }
@@ -400,6 +414,7 @@ fn rollback_downloaded_credential(
     private_key_path: &Path,
     proxy_identity_public_key_path: &Path,
 ) {
+    let _ = destroy_persisted_agent_login(app);
     let _ = clear_managed_credentials_from_config(config_path);
     let _ = destroy_managed_private_key(private_key_path);
     let _ = destroy_managed_proxy_identity_public_key(proxy_identity_public_key_path);
@@ -437,6 +452,9 @@ async fn logout_agent(
             cleanup_errors.push(error);
         }
     }
+    if let Err(error) = destroy_persisted_agent_login(&app) {
+        cleanup_errors.push(error);
+    }
     #[cfg(windows)]
     if let Err(error) = invalidate_windows_service_session(&app) {
         cleanup_errors.push(error);
@@ -453,6 +471,7 @@ async fn logout_agent(
     Ok(AgentAuthState {
         authenticated: false,
         account: None,
+        account_status: None,
         config: None,
     })
 }
@@ -710,21 +729,236 @@ fn remember_ui_config_path(runtime: &AgentRuntime, path: &str) -> Result<(), Str
 fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState, String> {
     let session = runtime.authenticated_session()?;
     let config = if session.is_some() {
-        current_ui_config_path(runtime)
-            .or_else(locate_config_path)
-            .map(|path| load_config_from_path(&path))
-            .transpose()?
-            .map(redact_managed_identity)
-            .transpose()?
+        match current_ui_config_path(runtime).or_else(locate_config_path) {
+            Some(path) => match load_config_from_path(&path).and_then(redact_managed_identity) {
+                Ok(config) => Some(config),
+                Err(error) => {
+                    let message =
+                        format!("读取 Agent 配置失败，保留当前登录状态并暂不返回配置：{error}");
+                    warn!(config_path = %path.display(), "{message}");
+                    runtime.logs.push(message);
+                    None
+                }
+            },
+            None => {
+                let message = "找不到 Agent 配置文件，保留当前登录状态并暂不返回配置".to_string();
+                warn!("{message}");
+                runtime.logs.push(message);
+                None
+            }
+        }
     } else {
         None
     };
-    let account = session.map(|session| session.account);
+    let account = session.as_ref().map(|session| session.account.clone());
+    let account_status = session.map(|session| session.account_status);
     Ok(AgentAuthState {
         authenticated: account.is_some(),
         account,
+        account_status,
         config,
     })
+}
+
+fn restore_agent_login_on_startup(
+    app: &tauri::AppHandle,
+    runtime: &Arc<AgentRuntime>,
+) -> Result<(), String> {
+    let Some(persisted) = load_persisted_agent_login(app)? else {
+        return Ok(());
+    };
+    let config_path = locate_config_path().ok_or_else(|| {
+        "持久登录凭据存在，但找不到 Agent 配置文件；将保留凭据并等待下次启动恢复".to_string()
+    })?;
+    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let loaded = apply_managed_credentials_to_config(
+        &config_path,
+        &persisted.account.username,
+        &persisted.private_key_path,
+        &persisted.proxy_identity_public_key_path,
+    )?;
+    apply_ui_log_level(runtime, &loaded.summary.log_level);
+    remember_ui_config_path(runtime, &loaded.path)?;
+    #[cfg(windows)]
+    activate_windows_service_session(app)?;
+    runtime.set_authenticated_session(
+        persisted.account.clone(),
+        persisted.account_status,
+        persisted.private_key_path,
+        persisted.proxy_identity_public_key_path,
+        proxy_web_url,
+    )?;
+    info!(
+        username = %persisted.account.username,
+        key_version = persisted.account.key_version,
+        "已从本机受管凭据恢复 Agent 长期登录状态"
+    );
+    Ok(())
+}
+
+fn start_verified_proxy_auth_status_listener(app: tauri::AppHandle, runtime: Arc<AgentRuntime>) {
+    let mut statuses = common::subscribe_verified_proxy_auth_statuses();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let status = match statuses.recv().await {
+                Ok(status) => status,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            let _operation = runtime.auth_operation.lock().await;
+            let current_username = match runtime.authenticated_session() {
+                Ok(Some(session)) => session.account.username,
+                Ok(None) => continue,
+                Err(error) => {
+                    runtime
+                        .logs
+                        .push(format!("读取 Agent 登录状态失败：{error}"));
+                    continue;
+                }
+            };
+            let reason = match status {
+                common::VerifiedProxyAuthStatus::Active { username }
+                    if username == current_username =>
+                {
+                    Some("active")
+                }
+                common::VerifiedProxyAuthStatus::UserExpired { username } => {
+                    verified_auth_failure_reason(
+                        protocol::AuthFailureCode::UserExpired,
+                        &username,
+                        &current_username,
+                    )
+                }
+                common::VerifiedProxyAuthStatus::UserDisabled { username } => {
+                    verified_auth_failure_reason(
+                        protocol::AuthFailureCode::UserDisabled,
+                        &username,
+                        &current_username,
+                    )
+                }
+                _ => None,
+            };
+            let Some(reason) = reason else {
+                continue;
+            };
+            report_verified_proxy_auth_status(&app, &runtime, &current_username, reason);
+        }
+    });
+}
+
+fn verified_auth_failure_reason(
+    code: protocol::AuthFailureCode,
+    failure_username: &str,
+    current_username: &str,
+) -> Option<&'static str> {
+    if failure_username != current_username {
+        return None;
+    }
+    match code {
+        protocol::AuthFailureCode::UserExpired => Some("user_expired"),
+        protocol::AuthFailureCode::UserDisabled => Some("user_disabled"),
+        protocol::AuthFailureCode::Other => None,
+    }
+}
+
+#[cfg(windows)]
+fn start_windows_service_auth_failure_listener(app: tauri::AppHandle, runtime: Arc<AgentRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if !runtime.is_authenticated() {
+                continue;
+            }
+            let service_status =
+                match tauri::async_runtime::spawn_blocking(windows_service_auth_status).await {
+                    Ok(Ok(status)) => status,
+                    // A stopped/upgrading Service, an IPC timeout, and an invalid
+                    // local Service session are not authoritative account state.
+                    Ok(Err(_)) | Err(_) => continue,
+                };
+            let Some(service_status) = service_status else {
+                continue;
+            };
+            let _operation = runtime.auth_operation.lock().await;
+            let current_username = match runtime.authenticated_session() {
+                Ok(Some(session)) => session.account.username,
+                Ok(None) | Err(_) => continue,
+            };
+            if service_status.username != current_username {
+                continue;
+            }
+            let Some(reason) = verified_auth_failure_reason(
+                match service_status.status {
+                    AgentAuthAccountStatus::Active => {
+                        report_verified_proxy_auth_status(
+                            &app,
+                            &runtime,
+                            &current_username,
+                            "active",
+                        );
+                        continue;
+                    }
+                    AgentAuthAccountStatus::Expired => protocol::AuthFailureCode::UserExpired,
+                    AgentAuthAccountStatus::Disabled => protocol::AuthFailureCode::UserDisabled,
+                },
+                &current_username,
+                &current_username,
+            ) else {
+                continue;
+            };
+            report_verified_proxy_auth_status(&app, &runtime, &current_username, reason);
+        }
+    });
+}
+
+fn report_verified_proxy_auth_status(
+    app: &tauri::AppHandle,
+    runtime: &AgentRuntime,
+    username: &str,
+    reason: &'static str,
+) {
+    let status = match reason {
+        "active" => AgentAuthAccountStatus::Active,
+        "user_expired" => AgentAuthAccountStatus::Expired,
+        "user_disabled" => AgentAuthAccountStatus::Disabled,
+        _ => return,
+    };
+    let session = match runtime.set_authenticated_account_status(username, status) {
+        Ok(Some(session)) => session,
+        Ok(None) => return,
+        Err(error) => {
+            runtime
+                .logs
+                .push(format!("更新 Proxy 账号状态失败：{error}"));
+            return;
+        }
+    };
+    if let Err(error) = persist_agent_login(app, &session.account, status) {
+        runtime
+            .logs
+            .push(format!("保存 Proxy 账号状态失败：{error}"));
+    }
+    if reason == "active" {
+        runtime
+            .logs
+            .push(format!("Proxy 已确认用户 {username} 的账号状态已恢复"));
+    } else {
+        runtime.logs.push(format!(
+            "Proxy 已确认用户 {username} {}；保留登录状态和本机凭据，Agent 将继续等待账号恢复",
+            if reason == "user_expired" {
+                "已过期"
+            } else {
+                "已停用"
+            }
+        ));
+    }
+    if let Err(error) = app.emit("agent-auth-status", reason) {
+        runtime
+            .logs
+            .push(format!("通知界面 Proxy 账号状态失败：{error}"));
+    }
 }
 
 fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {
@@ -777,7 +1011,6 @@ pub(crate) fn run() {
     let runtime = Arc::new(AgentRuntime::new());
     runtime.logs.install_tracing();
     let setup_logs = runtime.logs.clone();
-    #[cfg(any(windows, target_os = "macos"))]
     let setup_runtime = runtime.clone();
 
     tauri::Builder::default()
@@ -786,6 +1019,15 @@ pub(crate) fn run() {
         }))
         .setup(move |app| {
             install_bundled_agent_assets(app, &setup_logs).map_err(io::Error::other)?;
+            if let Err(error) = restore_agent_login_on_startup(app.handle(), &setup_runtime) {
+                setup_logs.push(format!("恢复 Agent 长期登录状态失败：{error}"));
+            }
+            start_verified_proxy_auth_status_listener(app.handle().clone(), setup_runtime.clone());
+            #[cfg(windows)]
+            start_windows_service_auth_failure_listener(
+                app.handle().clone(),
+                setup_runtime.clone(),
+            );
             #[cfg(any(windows, target_os = "macos"))]
             setup_system_tray(app, setup_runtime.clone()).map_err(io::Error::other)?;
             #[cfg(target_os = "macos")]
@@ -837,4 +1079,97 @@ pub(crate) fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running PPAASS Desktop Agent UI");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    use super::{agent_auth_state, verified_auth_failure_reason};
+    use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
+    use crate::runtime::AgentRuntime;
+    use protocol::AuthFailureCode;
+
+    #[test]
+    fn only_matching_verified_terminal_proxy_states_are_reported() {
+        assert_eq!(
+            verified_auth_failure_reason(AuthFailureCode::UserExpired, "alice", "alice"),
+            Some("user_expired")
+        );
+        assert_eq!(
+            verified_auth_failure_reason(AuthFailureCode::UserDisabled, "alice", "alice"),
+            Some("user_disabled")
+        );
+        assert_eq!(
+            verified_auth_failure_reason(AuthFailureCode::Other, "alice", "alice"),
+            None
+        );
+        assert_eq!(
+            verified_auth_failure_reason(AuthFailureCode::UserExpired, "old-user", "new-user"),
+            None
+        );
+    }
+
+    #[test]
+    fn auth_state_keeps_session_when_config_cannot_be_loaded() {
+        let runtime = AgentRuntime::new();
+        runtime
+            .set_authenticated_session(
+                AgentAuthAccount {
+                    username: "alice".to_string(),
+                    key_version: 7,
+                    expires_at: Some(1_900_000_000),
+                },
+                AgentAuthAccountStatus::Expired,
+                PathBuf::from("managed/alice.pem"),
+                PathBuf::from("managed/proxy.pem"),
+                "https://proxy.example.com".to_string(),
+            )
+            .unwrap();
+        *runtime.ui_config_path.lock().unwrap() =
+            Some(PathBuf::from("/definitely/missing/agent.toml"));
+
+        let state = agent_auth_state(&runtime).unwrap();
+
+        assert!(state.authenticated);
+        assert_eq!(state.account.unwrap().username, "alice");
+        assert_eq!(state.account_status, Some(AgentAuthAccountStatus::Expired));
+        assert!(state.config.is_none());
+        assert!(runtime
+            .logs
+            .snapshot()
+            .iter()
+            .any(|line| line.contains("保留当前登录状态")));
+    }
+
+    #[test]
+    fn auth_state_keeps_session_when_config_cannot_be_parsed() {
+        let mut invalid_config = tempfile::NamedTempFile::new().unwrap();
+        invalid_config
+            .write_all(b"this is not = valid [toml")
+            .unwrap();
+        let runtime = AgentRuntime::new();
+        runtime
+            .set_authenticated_session(
+                AgentAuthAccount {
+                    username: "bob".to_string(),
+                    key_version: 2,
+                    expires_at: None,
+                },
+                AgentAuthAccountStatus::Active,
+                PathBuf::from("managed/bob.pem"),
+                PathBuf::from("managed/proxy.pem"),
+                "https://proxy.example.com".to_string(),
+            )
+            .unwrap();
+        *runtime.ui_config_path.lock().unwrap() = Some(invalid_config.path().to_path_buf());
+
+        let state = agent_auth_state(&runtime).unwrap();
+
+        assert!(state.authenticated);
+        assert_eq!(state.account.unwrap().username, "bob");
+        assert_eq!(state.account_status, Some(AgentAuthAccountStatus::Active));
+        assert!(state.config.is_none());
+    }
 }

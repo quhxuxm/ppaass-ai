@@ -41,3 +41,9 @@ open_stream_timeout_secs = 10
 keepalive_interval_secs = 30
 connection_write_timeout_secs = 300
 stream_window_size_kb = 8192
+
+[tun]
+# 正式客户端默认不自动启动 TUN；用户可从托盘开启。
+enabled = false
+# 新启用 TUN 时默认由 Proxy 解析 DNS。
+proxy_dns = true

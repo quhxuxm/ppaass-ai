@@ -1,7 +1,11 @@
 #[cfg(target_os = "macos")]
 use super::guard::macos_scoped_default_command;
-use super::guard::{local_network_bypass_routes, route_add_error_is_already_exists};
+use super::guard::{
+    local_network_bypass_routes, proxy_bypass_next_hop_from_routes,
+    route_add_error_is_already_exists, route_list_contains_expected,
+};
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn record(
     destination: IpAddr,
@@ -17,6 +21,64 @@ fn record(
         if_name: None,
         if_index,
     }
+}
+
+#[test]
+fn route_state_persist_failure_is_fatal_and_keeps_rollback_record() {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let parent_file = std::env::temp_dir().join(format!(
+        "ppaass-route-state-parent-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&parent_file, b"not a directory").unwrap();
+    let state_path = parent_file.join("routes.json");
+    let state_path_string = state_path.to_string_lossy().into_owned();
+    let mut lease = RouteLease::new(Some(&state_path_string));
+    let route = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1).with_if_index(42);
+
+    let error = lease
+        .record_installed(RouteKind::Ipv4SplitDefault, &route)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("拒绝继续修改路由表"));
+    assert_eq!(lease.state.routes.len(), 1);
+    assert!(lease.state.routes[0].matches_route(&route));
+    fs::remove_file(parent_file).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn route_state_is_private_atomic_and_round_trips_adopted_bypass() {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let state_path = std::env::temp_dir().join(format!(
+        "ppaass-route-state-durable-{}-{}.json",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let state_path_string = state_path.to_string_lossy().into_owned();
+    let mut lease = RouteLease::new(Some(&state_path_string));
+    let route = Route::new(IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214)), 32)
+        .with_gateway(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1)))
+        .with_if_index(11);
+
+    lease
+        .record_installed(RouteKind::ProxyBypass, &route)
+        .unwrap();
+
+    let metadata = fs::metadata(&state_path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert_eq!(persisted["routes"].as_array().unwrap().len(), 1);
+    assert_eq!(persisted["routes"][0]["kind"], "ProxyBypass");
+    assert_eq!(persisted["routes"][0]["destination"], "140.82.30.214");
+    let temp_path = state_path.with_extension(format!("json.tmp.{}", std::process::id()));
+    assert!(!temp_path.exists());
+
+    lease.clear().unwrap();
+    assert!(!state_path.exists());
 }
 
 #[test]
@@ -137,11 +199,104 @@ fn local_network_bypass_record_matches_windows_on_link_gateway() {
 #[test]
 fn route_add_error_already_exists_matches_windows_messages() {
     assert!(route_add_error_is_already_exists(
+        "route: writing to routing socket: File exists"
+    ));
+    assert!(route_add_error_is_already_exists(
         "The object already exists. (os error 5010)"
     ));
     assert!(route_add_error_is_already_exists(
         "Cannot create a file when that file already exists. (os error 183)"
     ));
+}
+
+#[test]
+fn existing_proxy_bypass_must_match_gateway_and_interface() {
+    let proxy_ip = IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214));
+    let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+    let expected = Route::new(proxy_ip, 32)
+        .with_gateway(gateway)
+        .with_if_index(11);
+    let exact = Route::new(proxy_ip, 32)
+        .with_gateway(gateway)
+        .with_if_index(11);
+    let wrong_gateway = Route::new(proxy_ip, 32)
+        .with_gateway(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 254)))
+        .with_if_index(11);
+    let wrong_interface = Route::new(proxy_ip, 32)
+        .with_gateway(gateway)
+        .with_if_index(12);
+
+    assert!(route_list_contains_expected(
+        RouteKind::ProxyBypass,
+        &expected,
+        &[exact]
+    ));
+    assert!(!route_list_contains_expected(
+        RouteKind::ProxyBypass,
+        &expected,
+        &[wrong_gateway]
+    ));
+    assert!(!route_list_contains_expected(
+        RouteKind::ProxyBypass,
+        &expected,
+        &[wrong_interface]
+    ));
+}
+
+#[test]
+fn existing_proxy_bypass_rejects_same_next_hop_for_another_host() {
+    let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+    let expected = Route::new(IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214)), 32)
+        .with_gateway(gateway)
+        .with_if_index(11);
+    let another_host = Route::new(IpAddr::V4(Ipv4Addr::new(140, 82, 30, 215)), 32)
+        .with_gateway(gateway)
+        .with_if_index(11);
+
+    assert!(!route_list_contains_expected(
+        RouteKind::ProxyBypass,
+        &expected,
+        &[another_host]
+    ));
+}
+
+#[test]
+fn proxy_bypass_next_hop_ignores_stale_host_and_split_routes() {
+    let proxy_ip = IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214));
+    let stale_gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+    let current_gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+    let routes = vec![
+        Route::new(proxy_ip, 32)
+            .with_gateway(stale_gateway)
+            .with_if_index(7),
+        Route::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)), 1).with_if_index(99),
+        Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+            .with_gateway(current_gateway)
+            .with_if_index(11),
+    ];
+
+    assert_eq!(
+        proxy_bypass_next_hop_from_routes(&routes, proxy_ip, Some(current_gateway), Some(11)),
+        (Some(current_gateway), Some(11))
+    );
+}
+
+#[test]
+fn checked_proxy_resolution_allows_loopback_only_but_rejects_empty_config() {
+    assert!(
+        resolve_proxy_ips_checked(&["127.0.0.1:8080".to_string()])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(resolve_proxy_ips_checked(&[]).is_err());
+}
+
+#[test]
+fn checked_proxy_resolution_returns_non_loopback_literal() {
+    assert_eq!(
+        resolve_proxy_ips_checked(&["192.0.2.1:8080".to_string()]).unwrap(),
+        vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))]
+    );
 }
 
 #[cfg(windows)]

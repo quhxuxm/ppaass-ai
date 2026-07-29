@@ -7,22 +7,26 @@
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
-    Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
-    TransportProtocol,
+    Address, AgentCodec, AuthFailureCode, AuthRequest, CipherState, ConnectRequest, ProxyRequest,
+    ProxyResponse, TransportProtocol,
     crypto::{RsaKeyPair, verify_pss_sha256},
     tcp_transport::{
         TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
-        TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
-        tcp_auth_response_signature_transcript, tcp_auth_transcript_hash,
+        TcpSessionRole, decode_tcp_session_secret, tcp_auth_failure_signature_transcript,
+        tcp_auth_request_transcript, tcp_auth_response_signature_transcript,
+        tcp_auth_transcript_hash,
     },
 };
 use rand::Rng;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpSocket, TcpStream};
+use tokio::sync::broadcast;
 use tokio_util::codec::Framed;
 use tracing::{debug, info, warn};
 
@@ -35,6 +39,200 @@ use super::yamux::YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE;
 
 type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
 type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
+
+/// An authentication failure asserted by the pinned Proxy identity.
+///
+/// This error is only constructed after verifying a signature that binds the
+/// current Agent authentication request, the stable code and the message.
+/// Callers may downcast the inner error of [`std::io::Error`] to this type.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("Proxy authentication failed for {username} ({code:?}): {message}")]
+pub struct AuthenticationFailure {
+    username: String,
+    code: AuthFailureCode,
+    message: String,
+}
+
+impl AuthenticationFailure {
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub fn code(&self) -> AuthFailureCode {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Current Proxy account status established by a pinned, signed TCP
+/// authentication response.
+///
+/// Consumers should use this only for status display. Agent connectivity and
+/// stored credentials remain active so a later successful authentication can
+/// recover automatically after an administrator renews the user.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerifiedProxyAuthStatus {
+    Active { username: String },
+    UserExpired { username: String },
+    UserDisabled { username: String },
+}
+
+impl VerifiedProxyAuthStatus {
+    pub fn username(&self) -> &str {
+        match self {
+            Self::Active { username }
+            | Self::UserExpired { username }
+            | Self::UserDisabled { username } => username,
+        }
+    }
+}
+
+const VERIFIED_AUTH_STATUS_CHANNEL_CAPACITY: usize = 32;
+static VERIFIED_AUTH_STATUSES: OnceLock<broadcast::Sender<VerifiedProxyAuthStatus>> =
+    OnceLock::new();
+static VERIFIED_AUTH_STATUS_ORDERING: OnceLock<Mutex<VerifiedAuthStatusOrdering>> = OnceLock::new();
+
+#[derive(Default)]
+struct VerifiedAuthStatusOrdering {
+    next_sequence: u128,
+    users: HashMap<String, UserAuthStatusOrdering>,
+}
+
+#[derive(Default)]
+struct UserAuthStatusOrdering {
+    active_attempts: usize,
+    max_published_sequence: Option<u128>,
+}
+
+struct VerifiedAuthAttempt {
+    username: String,
+    sequence: u128,
+}
+
+impl VerifiedAuthAttempt {
+    fn begin(username: String) -> Self {
+        let mut ordering = lock_verified_auth_status_ordering();
+        let sequence = ordering.next_sequence;
+        // A process cannot perform 2^128 authentication attempts during its
+        // lifetime, so exhaustion indicates an internal invariant violation.
+        ordering.next_sequence = ordering
+            .next_sequence
+            .checked_add(1)
+            .expect("verified authentication attempt sequence exhausted");
+        let user = ordering.users.entry(username.clone()).or_default();
+        // Every live attempt owns memory and a future, so usize concurrent
+        // attempts cannot be reached before the process exhausts resources.
+        user.active_attempts = user
+            .active_attempts
+            .checked_add(1)
+            .expect("active authentication attempt count exhausted");
+        Self { username, sequence }
+    }
+
+    fn publish(&self, status: VerifiedProxyAuthStatus) -> bool {
+        debug_assert_eq!(status.username(), self.username);
+        let mut ordering = lock_verified_auth_status_ordering();
+        let Some(user) = ordering.users.get_mut(&self.username) else {
+            debug_assert!(false, "authentication attempt ordering state is missing");
+            return false;
+        };
+        if user
+            .max_published_sequence
+            .is_some_and(|published| self.sequence < published)
+        {
+            debug!(
+                username = %self.username,
+                attempt_sequence = self.sequence,
+                max_published_sequence = ?user.max_published_sequence,
+                "忽略晚于新认证结果返回的旧认证状态"
+            );
+            return false;
+        }
+        user.max_published_sequence = Some(self.sequence);
+        // Keep ordering validation and broadcast publication in the same
+        // critical section so receivers observe the same sequence ordering.
+        let _ = verified_auth_status_sender().send(status);
+        true
+    }
+}
+
+impl Drop for VerifiedAuthAttempt {
+    fn drop(&mut self) {
+        let mut ordering = lock_verified_auth_status_ordering();
+        let remove_user = if let Some(user) = ordering.users.get_mut(&self.username) {
+            debug_assert!(user.active_attempts > 0);
+            user.active_attempts = user.active_attempts.saturating_sub(1);
+            user.active_attempts == 0
+        } else {
+            debug_assert!(false, "authentication attempt ordering state is missing");
+            false
+        };
+        if remove_user {
+            // No older attempt remains that could publish late. A future
+            // attempt receives a greater process-wide sequence, so retaining
+            // inactive usernames is unnecessary.
+            ordering.users.remove(&self.username);
+        }
+    }
+}
+
+fn verified_auth_status_ordering() -> &'static Mutex<VerifiedAuthStatusOrdering> {
+    VERIFIED_AUTH_STATUS_ORDERING.get_or_init(|| Mutex::new(VerifiedAuthStatusOrdering::default()))
+}
+
+fn lock_verified_auth_status_ordering() -> std::sync::MutexGuard<'static, VerifiedAuthStatusOrdering>
+{
+    verified_auth_status_ordering()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn verified_auth_status_sender() -> &'static broadcast::Sender<VerifiedProxyAuthStatus> {
+    VERIFIED_AUTH_STATUSES.get_or_init(|| {
+        let (sender, _) = broadcast::channel(VERIFIED_AUTH_STATUS_CHANNEL_CAPACITY);
+        sender
+    })
+}
+
+/// Subscribe to account status established with the configured pinned Proxy
+/// transport identity.
+///
+/// No event is emitted for network errors, unsigned responses, invalid
+/// signatures, or signed non-terminal `Other` failures.
+pub fn subscribe_verified_proxy_auth_statuses() -> broadcast::Receiver<VerifiedProxyAuthStatus> {
+    verified_auth_status_sender().subscribe()
+}
+
+/// Extract a verified authentication failure code from the `io::Error`
+/// returned directly by [`AuthenticatedConnection::authenticate_stream`].
+pub fn auth_failure_code(error: &std::io::Error) -> Option<AuthFailureCode> {
+    error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<AuthenticationFailure>())
+        .map(AuthenticationFailure::code)
+}
+
+fn publish_verified_failure_status(attempt: &VerifiedAuthAttempt, failure: &AuthenticationFailure) {
+    let status = match failure.code {
+        AuthFailureCode::UserExpired => VerifiedProxyAuthStatus::UserExpired {
+            username: failure.username.clone(),
+        },
+        AuthFailureCode::UserDisabled => VerifiedProxyAuthStatus::UserDisabled {
+            username: failure.username.clone(),
+        },
+        AuthFailureCode::Other => return,
+    };
+    attempt.publish(status);
+}
+
+fn publish_verified_active_status(attempt: &VerifiedAuthAttempt, username: &str) {
+    attempt.publish(VerifiedProxyAuthStatus::Active {
+        username: username.to_string(),
+    });
+}
 
 /// 已认证的客户端连接，用于连接远端代理
 /// 可用于发送连接请求到远端代理，或转换为流
@@ -55,15 +253,16 @@ where
     /// 在一条已经建立的双向流上执行 PPAASS 认证。
     ///
     /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功并完成上下文
-    /// 校验后才启用 v2 方向独立的记录层密钥。
+    /// 校验后才启用 v3 方向独立的记录层密钥。
     pub async fn authenticate_stream<C>(stream: S, config: &C) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
     {
         let username = config.username();
+        let auth_status_attempt = VerifiedAuthAttempt::begin(username.clone());
         let timeout = config.timeout_duration();
 
-        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v2 记录层。
+        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v3 记录层。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
         let framed = Framed::new(stream, AgentCodec::new(cipher_state.clone()));
         let (mut writer, mut reader) = framed.split();
@@ -104,7 +303,7 @@ where
 
         let auth_request = AuthRequest {
             version: TCP_HANDSHAKE_VERSION,
-            username,
+            username: username.clone(),
             timestamp,
             client_nonce,
             signature,
@@ -139,9 +338,50 @@ where
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "认证服务返回了无效响应")
             })?;
             if !auth_resp.success {
+                let Some(failure_code) = auth_resp.failure_code else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "认证失败",
+                    ));
+                };
+                if auth_resp.proxy_signature.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "认证失败",
+                    ));
+                }
+                let failure_transcript = tcp_auth_failure_signature_transcript(
+                    auth_resp.version,
+                    &transcript_hash,
+                    failure_code,
+                    &auth_resp.message,
+                )
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "认证服务返回了无效的失败响应签名上下文",
+                    )
+                })?;
+                verify_pss_sha256(
+                    &proxy_identity_public_key,
+                    &failure_transcript,
+                    &auth_resp.proxy_signature,
+                )
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Proxy 认证失败响应身份验证失败",
+                    )
+                })?;
+                let failure = AuthenticationFailure {
+                    username,
+                    code: failure_code,
+                    message: auth_resp.message,
+                };
+                publish_verified_failure_status(&auth_status_attempt, &failure);
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    "认证失败",
+                    failure,
                 ));
             }
             let proxy_signature_transcript = tcp_auth_response_signature_transcript(
@@ -209,6 +449,7 @@ where
                 .map_err(|_| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "认证会话记录层重复初始化")
                 })?;
+            publish_verified_active_status(&auth_status_attempt, &username);
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -554,8 +795,246 @@ mod tests {
         }
     }
 
+    #[test]
+    fn older_authentication_result_cannot_replace_newer_status_for_same_user() {
+        let username = "ordering-same-user".to_string();
+        let mut statuses = subscribe_verified_proxy_auth_statuses();
+        let older = VerifiedAuthAttempt::begin(username.clone());
+        let newer = VerifiedAuthAttempt::begin(username.clone());
+
+        assert!(newer.publish(VerifiedProxyAuthStatus::UserExpired {
+            username: username.clone(),
+        }));
+        assert!(!older.publish(VerifiedProxyAuthStatus::Active {
+            username: username.clone(),
+        }));
+
+        assert_eq!(
+            collect_statuses_for(&mut statuses, &[&username]),
+            vec![VerifiedProxyAuthStatus::UserExpired { username }]
+        );
+    }
+
+    #[test]
+    fn authentication_result_ordering_is_independent_per_user() {
+        let older_username = "ordering-older-user".to_string();
+        let newer_username = "ordering-newer-user".to_string();
+        let mut statuses = subscribe_verified_proxy_auth_statuses();
+        let older = VerifiedAuthAttempt::begin(older_username.clone());
+        let newer = VerifiedAuthAttempt::begin(newer_username.clone());
+
+        assert!(newer.publish(VerifiedProxyAuthStatus::UserExpired {
+            username: newer_username.clone(),
+        }));
+        assert!(older.publish(VerifiedProxyAuthStatus::Active {
+            username: older_username.clone(),
+        }));
+
+        assert_eq!(
+            collect_statuses_for(&mut statuses, &[&older_username, &newer_username]),
+            vec![
+                VerifiedProxyAuthStatus::UserExpired {
+                    username: newer_username,
+                },
+                VerifiedProxyAuthStatus::Active {
+                    username: older_username,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn authentication_attempt_without_verified_result_does_not_publish_status() {
+        let username = "ordering-network-error".to_string();
+        let mut statuses = subscribe_verified_proxy_auth_statuses();
+
+        drop(VerifiedAuthAttempt::begin(username.clone()));
+
+        assert!(collect_statuses_for(&mut statuses, &[&username]).is_empty());
+    }
+
+    fn collect_statuses_for(
+        statuses: &mut broadcast::Receiver<VerifiedProxyAuthStatus>,
+        usernames: &[&str],
+    ) -> Vec<VerifiedProxyAuthStatus> {
+        let mut matching = Vec::new();
+        loop {
+            match statuses.try_recv() {
+                Ok(status) if usernames.contains(&status.username()) => matching.push(status),
+                Ok(_) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => break,
+            }
+        }
+        matching
+    }
+
+    #[derive(Clone, Copy)]
+    enum FailureResponseMode {
+        Signed(AuthFailureCode),
+        UnsignedExpired,
+        TamperedCode,
+        WrongRequestContext,
+    }
+
+    async fn authenticate_against_failure(mode: FailureResponseMode) -> std::io::Error {
+        let user_identity = RsaKeyPair::generate(2048).unwrap();
+        let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+        let config = TestClientConfig {
+            username: "failure-alice".to_string(),
+            private_key_pem: user_identity.private_key_to_pem().unwrap(),
+            proxy_identity_public_key_pem: proxy_identity.public_key_to_pem().unwrap(),
+        };
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+
+        let server_flow = async move {
+            let cipher_state = Arc::new(CipherState::new());
+            let framed = Framed::new(server_io, ProxyCodec::new(cipher_state));
+            let (mut writer, mut reader) = framed.split();
+            let auth = match reader.next().await.unwrap().unwrap() {
+                ProxyRequest::Auth(auth) => auth,
+                other => panic!("expected Auth request, got {other:?}"),
+            };
+            let transcript = tcp_auth_request_transcript(
+                auth.version,
+                &auth.username,
+                auth.timestamp,
+                &auth.client_nonce,
+            )
+            .unwrap();
+            let request_hash = tcp_auth_transcript_hash(&transcript);
+            let response = match mode {
+                FailureResponseMode::Signed(code) => {
+                    let message = match code {
+                        AuthFailureCode::UserExpired => "User expired",
+                        AuthFailureCode::UserDisabled => "User disabled",
+                        AuthFailureCode::Other => "Authentication failed",
+                    };
+                    let failure_transcript = tcp_auth_failure_signature_transcript(
+                        TCP_HANDSHAKE_VERSION,
+                        &request_hash,
+                        code,
+                        message,
+                    )
+                    .unwrap();
+                    AuthResponse::signed_failure(
+                        code,
+                        message,
+                        proxy_identity.sign_pss_sha256(&failure_transcript).unwrap(),
+                    )
+                }
+                FailureResponseMode::UnsignedExpired => AuthResponse::signed_failure(
+                    AuthFailureCode::UserExpired,
+                    "User expired",
+                    Vec::new(),
+                ),
+                FailureResponseMode::TamperedCode => {
+                    let failure_transcript = tcp_auth_failure_signature_transcript(
+                        TCP_HANDSHAKE_VERSION,
+                        &request_hash,
+                        AuthFailureCode::UserExpired,
+                        "User expired",
+                    )
+                    .unwrap();
+                    AuthResponse::signed_failure(
+                        AuthFailureCode::UserDisabled,
+                        "User expired",
+                        proxy_identity.sign_pss_sha256(&failure_transcript).unwrap(),
+                    )
+                }
+                FailureResponseMode::WrongRequestContext => {
+                    let mut wrong_request_hash = request_hash;
+                    wrong_request_hash[0] ^= 1;
+                    let failure_transcript = tcp_auth_failure_signature_transcript(
+                        TCP_HANDSHAKE_VERSION,
+                        &wrong_request_hash,
+                        AuthFailureCode::UserExpired,
+                        "User expired",
+                    )
+                    .unwrap();
+                    AuthResponse::signed_failure(
+                        AuthFailureCode::UserExpired,
+                        "User expired",
+                        proxy_identity.sign_pss_sha256(&failure_transcript).unwrap(),
+                    )
+                }
+            };
+            writer.send(ProxyResponse::Auth(response)).await.unwrap();
+        };
+        let client_flow = AuthenticatedConnection::authenticate_stream(client_io, &config);
+        let (_, result) = tokio::join!(server_flow, client_flow);
+        match result {
+            Ok(_) => panic!("failed authentication unexpectedly succeeded"),
+            Err(error) => error,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_pinned_proxy_terminal_failure_changes_verified_status() {
+        let mut statuses = subscribe_verified_proxy_auth_statuses();
+
+        for (code, expected) in [
+            (
+                AuthFailureCode::UserExpired,
+                VerifiedProxyAuthStatus::UserExpired {
+                    username: "failure-alice".to_string(),
+                },
+            ),
+            (
+                AuthFailureCode::UserDisabled,
+                VerifiedProxyAuthStatus::UserDisabled {
+                    username: "failure-alice".to_string(),
+                },
+            ),
+        ] {
+            let error = authenticate_against_failure(FailureResponseMode::Signed(code)).await;
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(auth_failure_code(&error), Some(code));
+            let typed = error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<AuthenticationFailure>())
+                .unwrap();
+            assert_eq!(typed.username(), "failure-alice");
+            assert_eq!(typed.code(), code);
+            loop {
+                let published = statuses.recv().await.unwrap();
+                if published.username() == "failure-alice" {
+                    assert_eq!(published, expected);
+                    break;
+                }
+            }
+        }
+
+        let other =
+            authenticate_against_failure(FailureResponseMode::Signed(AuthFailureCode::Other)).await;
+        assert_eq!(auth_failure_code(&other), Some(AuthFailureCode::Other));
+        assert_no_status_for(&mut statuses, "failure-alice");
+
+        for mode in [
+            FailureResponseMode::UnsignedExpired,
+            FailureResponseMode::TamperedCode,
+            FailureResponseMode::WrongRequestContext,
+        ] {
+            let error = authenticate_against_failure(mode).await;
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(auth_failure_code(&error), None);
+            assert_no_status_for(&mut statuses, "failure-alice");
+        }
+    }
+
+    fn assert_no_status_for(
+        statuses: &mut broadcast::Receiver<VerifiedProxyAuthStatus>,
+        username: &str,
+    ) {
+        while let Ok(status) = statuses.try_recv() {
+            assert_ne!(status.username(), username);
+        }
+    }
+
     #[tokio::test]
     async fn framed_stream_switches_from_clear_auth_to_encrypted_connect() {
+        let mut statuses = subscribe_verified_proxy_auth_statuses();
         let user_identity = RsaKeyPair::generate(2048).unwrap();
         let user_public_key =
             RsaKeyPair::from_public_key_pem(&user_identity.public_key_to_pem().unwrap()).unwrap();
@@ -676,5 +1155,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(server_request_id, client_request_id);
+        loop {
+            let status = statuses.recv().await.unwrap();
+            if status.username() == "alice" {
+                assert_eq!(
+                    status,
+                    VerifiedProxyAuthStatus::Active {
+                        username: "alice".to_string(),
+                    }
+                );
+                break;
+            }
+        }
     }
 }

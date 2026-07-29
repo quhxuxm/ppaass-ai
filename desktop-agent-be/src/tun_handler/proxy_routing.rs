@@ -7,6 +7,42 @@
 use super::device::tun_ipv4_peer;
 use super::route;
 use super::*;
+use std::sync::Arc;
+
+/// Restores the shared HTTP/SOCKS session managers to normal routing whenever
+/// TUN setup exits, including cancellation, setup errors, task aborts, and
+/// unwinding. The managers are shared with the non-TUN listeners, so leaving a
+/// physical-interface bind behind after TUN startup fails would break their
+/// later proxy connections.
+pub(super) struct ProxySessionBindGuard {
+    tcp_sessions: Arc<YamuxSessionManager>,
+    udp_sessions: Arc<YamuxSessionManager>,
+}
+
+impl ProxySessionBindGuard {
+    pub(super) fn new(
+        tcp_sessions: Arc<YamuxSessionManager>,
+        udp_sessions: Arc<YamuxSessionManager>,
+    ) -> Self {
+        Self {
+            tcp_sessions,
+            udp_sessions,
+        }
+    }
+
+    pub(super) fn clear(&self) {
+        self.tcp_sessions.set_proxy_bind_ip(None);
+        self.tcp_sessions.set_proxy_bind_interface(None);
+        self.udp_sessions.set_proxy_bind_ip(None);
+        self.udp_sessions.set_proxy_bind_interface(None);
+    }
+}
+
+impl Drop for ProxySessionBindGuard {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 
 pub(super) async fn configure_proxy_routing(
     config: &TunConfig,
@@ -142,12 +178,12 @@ pub(super) fn install_route_guard(
     tun_ipv4_prefix: u8,
     tun_if_index: u32,
     proxy_addrs: &[String],
-) -> Option<RouteGuard> {
-    // 解析 proxy IP 后安装旁路和 split-default 路由；失败时继续运行但不接管全局路由。
-    // route guard 的 Drop 会负责恢复路由状态。
-    let proxy_ips = resolve_proxy_ips(proxy_addrs);
+) -> Result<RouteGuard> {
+    // 解析 proxy IP 后安装旁路和 split-default 路由。必要路由安装失败时必须
+    // 中止 TUN 启动；RouteGuard::install 会回滚本次已经安装的路由。
+    let proxy_ips = route::resolve_proxy_ips_checked(proxy_addrs)?;
     let dns_capture_target = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix).unwrap_or(tun_ipv4);
-    match RouteGuard::install(
+    RouteGuard::install(
         tun_if_index,
         tun_ipv4,
         dns_capture_target,
@@ -155,14 +191,56 @@ pub(super) fn install_route_guard(
         config.route_state_file.as_deref(),
         &proxy_ips,
         config.proxy_dns,
-    ) {
-        Ok(guard) => Some(guard),
-        Err(e) => {
-            warn!(
-                "安装 TUN 路由失败（继续运行但不劫持路由）：{e}。\
-                 可能需要手动配置路由或以提升权限运行。"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AgentConfig;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    const MINIMAL_AGENT_CONFIG: &str = r#"
+listen_addr = "127.0.0.1:10080"
+proxy_addrs = ["127.0.0.1:8080"]
+username = "user1"
+private_key_path = "keys/user1.pem"
+"#;
+
+    #[test]
+    fn proxy_session_bind_guard_clears_both_shared_managers_on_drop() {
+        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+        let config = Arc::new(config);
+        let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
+        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config));
+        let bind_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
+        let bind_interface = common::BindInterface {
+            name: Some("physical0".to_string()),
+            index: Some(7),
+        };
+
+        {
+            let _guard = ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
+            tcp_sessions.set_proxy_bind_ip(Some(bind_ip));
+            tcp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
+            udp_sessions.set_proxy_bind_ip(Some(bind_ip));
+            udp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
+
+            assert_eq!(tcp_sessions.proxy_bind_ip_for_test(), Some(bind_ip));
+            assert_eq!(
+                tcp_sessions.proxy_bind_interface_for_test(),
+                Some(bind_interface.clone())
             );
-            None
+            assert_eq!(udp_sessions.proxy_bind_ip_for_test(), Some(bind_ip));
+            assert_eq!(
+                udp_sessions.proxy_bind_interface_for_test(),
+                Some(bind_interface)
+            );
         }
+
+        assert_eq!(tcp_sessions.proxy_bind_ip_for_test(), None);
+        assert_eq!(tcp_sessions.proxy_bind_interface_for_test(), None);
+        assert_eq!(udp_sessions.proxy_bind_ip_for_test(), None);
+        assert_eq!(udp_sessions.proxy_bind_interface_for_test(), None);
     }
 }

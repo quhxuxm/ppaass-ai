@@ -7,17 +7,27 @@ pub(crate) struct AgentLoginRequest {
     pub(crate) password: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AgentAuthAccount {
     pub(crate) username: String,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentAuthAccountStatus {
+    #[default]
+    Active,
+    Expired,
+    Disabled,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct AgentAuthState {
     pub(crate) authenticated: bool,
     pub(crate) account: Option<AgentAuthAccount>,
+    pub(crate) account_status: Option<AgentAuthAccountStatus>,
     pub(crate) config: Option<LoadedAgentConfig>,
 }
 
@@ -129,14 +139,6 @@ pub(crate) struct NetworkInterfaceTraffic {
     pub(crate) transmitted_bytes: u64,
 }
 
-#[cfg(target_os = "macos")]
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum MacosTunHelperProbeResponse {
-    Pong,
-    Error { message: String },
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 #[cfg(windows)]
@@ -160,12 +162,24 @@ pub(crate) struct ServiceResponse {
     pub(crate) traffic: Option<NetworkTrafficSnapshot>,
     pub(crate) dns_records: Option<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>>,
     pub(crate) packet_capture: Option<PacketCaptureRuntimeStatus>,
+    #[serde(default)]
+    pub(crate) auth_status: Option<VerifiedProxyAuthStatus>,
     pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg(windows)]
+pub(crate) struct VerifiedProxyAuthStatus {
+    pub(crate) username: String,
+    pub(crate) status: AgentAuthAccountStatus,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentAuthAccount, AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest};
+    use super::{
+        AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress,
+        AgentLoginRequest,
+    };
 
     #[test]
     fn agent_login_request_rejects_frontend_endpoint_override() {
@@ -192,6 +206,7 @@ mod tests {
                 key_version: 1,
                 expires_at: Some(1_800_000_000),
             }),
+            account_status: Some(AgentAuthAccountStatus::Active),
             config: None,
         };
 

@@ -108,6 +108,41 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
     out
 }
 
+/// TUN 路由安装要求至少获得一个非回环 proxy IP。唯一例外是所有配置项都
+/// 明确解析为回环地址，此时 proxy 本就在本机，不需要安装物理出口旁路。
+pub(crate) fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> {
+    let proxy_ips = resolve_proxy_ips(proxy_addrs);
+    if !proxy_ips.is_empty() {
+        return Ok(proxy_ips);
+    }
+    if proxy_addrs_resolve_to_loopback_only(proxy_addrs) {
+        debug!("所有代理地址均解析为回环地址；TUN 模式无需安装 proxy 物理出口旁路");
+        return Ok(proxy_ips);
+    }
+    Err(AgentError::Connection(
+        "TUN 启动前未能解析任何非回环 proxy IP，拒绝安装 split-default 以避免代理连接回环"
+            .to_string(),
+    ))
+}
+
+fn proxy_addrs_resolve_to_loopback_only(proxy_addrs: &[String]) -> bool {
+    if proxy_addrs.is_empty() {
+        return false;
+    }
+    proxy_addrs.iter().all(|entry| {
+        let candidate = if entry.contains(':') {
+            entry.clone()
+        } else {
+            format!("{entry}:0")
+        };
+        let Ok(addresses) = candidate.to_socket_addrs() else {
+            return false;
+        };
+        let addresses = addresses.collect::<Vec<_>>();
+        !addresses.is_empty() && addresses.iter().all(|address| address.ip().is_loopback())
+    })
+}
+
 /// 记录所有已安装的路由，以便在 drop 时删除。
 /// 在 `routes` 中找到第一条非 TUN 的默认路由。
 /// 返回 (网关, if_index) 以供安装旁路路由使用。
@@ -137,39 +172,19 @@ fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
         .max_by(|left, right| left.cmp(right))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(super) fn route_next_hop(
     routes: &[Route],
     dst: IpAddr,
     fallback_gateway: Option<IpAddr>,
     fallback_if_index: Option<u32>,
 ) -> (Option<IpAddr>, Option<u32>) {
-    #[cfg(target_os = "macos")]
-    if let Some(next_hop) = macos_route_get_next_hop(dst) {
-        return next_hop;
-    }
-
     best_route(routes, dst)
         .map(|route| (route.gateway(), route.if_index()))
         .unwrap_or((fallback_gateway, fallback_if_index))
 }
 
-#[cfg(target_os = "macos")]
-fn macos_route_get_next_hop(dst: IpAddr) -> Option<(Option<IpAddr>, Option<u32>)> {
-    let output = Command::new("/sbin/route")
-        .args(["-n", "get", &dst.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        debug!(
-            "route -n get {dst} 失败：{}",
-            command_output_message(&output)
-        );
-        return None;
-    }
-    parse_macos_route_get_next_hop(&String::from_utf8_lossy(&output.stdout))
-}
-
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 pub(super) fn parse_macos_route_get_next_hop(
     output: &str,
 ) -> Option<(Option<IpAddr>, Option<u32>)> {
@@ -253,7 +268,7 @@ pub(super) fn interface_name_for_index(if_index: Option<u32>) -> Option<String> 
         .map(|interface| interface.name)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 pub(super) fn interface_index_for_name(name: &str) -> Option<u32> {
     let interface = if_addrs::get_if_addrs()
         .ok()?

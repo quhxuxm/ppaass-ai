@@ -8,7 +8,10 @@ pub mod udp;
 pub mod yamux;
 
 // 重新导出公共项
-pub use authenticated::AuthenticatedConnection;
+pub use authenticated::{
+    AuthenticatedConnection, AuthenticationFailure, VerifiedProxyAuthStatus, auth_failure_code,
+    subscribe_verified_proxy_auth_statuses,
+};
 pub use config::{BindInterface, ClientConnectionConfig};
 pub use socket_bind::bind_socket_to_interface;
 pub use stream::ClientStream;

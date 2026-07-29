@@ -17,7 +17,7 @@ pub struct AgentConfig {
     pub listen_addr: String,
     pub proxy_addrs: Vec<String>,
     /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Web 地址。
-    /// 独立运行的 Agent 不依赖该字段，因此旧配置缺省时保持兼容。
+    /// 独立运行的 Agent 不消费该 UI 配置，因此它仍是可选项。
     #[serde(default)]
     pub proxy_web_url: Option<String>,
     pub username: String,
@@ -81,6 +81,7 @@ pub struct AgentConfig {
 /// TCP 流通过 direct framed TCP 转发到代理；UDP 可通过单独的
 /// Yamux session manager 转发，也可由 agent 本地 UDP socket 直连目标。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TunConfig {
     /// 启用 TUN 模式
     #[serde(default)]
@@ -104,8 +105,8 @@ pub struct TunConfig {
     pub mtu: u16,
 
     /// TUN 模式下是否将 DNS 请求交给 proxy 端默认 DNS 处理。
-    /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy。
-    #[serde(default)]
+    /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy，默认启用。
+    #[serde(default = "default_tun_proxy_dns")]
     pub proxy_dns: bool,
 
     /// TUN 模式下是否通过 proxy 转发普通 UDP。
@@ -139,18 +140,15 @@ pub struct TunConfig {
     pub dns_state_file: Option<String>,
 
     /// macOS 是否优先使用已安装的本地特权 helper 创建 TUN 和改写系统网络状态。
-    #[serde(default = "default_macos_tun_helper_enabled", alias = "helper_enabled")]
+    #[serde(default = "default_macos_tun_helper_enabled")]
     pub macos_helper_enabled: bool,
 
     /// macOS 本地特权 helper 的 Unix socket 路径。
-    #[serde(default = "default_macos_tun_helper_socket", alias = "helper_socket")]
+    #[serde(default = "default_macos_tun_helper_socket")]
     pub macos_helper_socket: String,
 
     /// macOS helper 不可用时是否回退到旧的整进程提权路径。
-    #[serde(
-        default = "default_macos_tun_helper_fallback_to_privilege",
-        alias = "helper_fallback_to_privilege"
-    )]
+    #[serde(default = "default_macos_tun_helper_fallback_to_privilege")]
     pub macos_helper_fallback_to_privilege: bool,
 }
 
@@ -162,7 +160,7 @@ impl Default for TunConfig {
             ipv4: default_tun_ipv4(),
             ipv6: None,
             mtu: default_tun_mtu(),
-            proxy_dns: false,
+            proxy_dns: default_tun_proxy_dns(),
             proxy_udp: default_tun_proxy_udp(),
             packet_capture: PacketCaptureConfig::default(),
             quic_policy: None,
@@ -219,6 +217,10 @@ fn default_tun_mtu() -> u16 {
 }
 
 fn default_tun_proxy_udp() -> bool {
+    true
+}
+
+fn default_tun_proxy_dns() -> bool {
     true
 }
 
@@ -315,7 +317,7 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn proxy_web_url_is_optional() {
+    fn proxy_web_url_is_optional_for_standalone_agent() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert_eq!(config.proxy_web_url, None);
@@ -403,10 +405,41 @@ private_key_path = "keys/user1.pem"
     }
 
     #[test]
-    fn tun_proxies_udp_by_default_for_backward_compatibility() {
+    fn tun_proxies_udp_by_default() {
         let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
         assert!(config.tun.proxy_udp);
+    }
+
+    #[test]
+    fn tun_proxies_dns_by_default() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+enabled = true
+"#),
+        )
+        .unwrap();
+
+        assert!(config.tun.enabled);
+        assert!(config.tun.proxy_dns);
+    }
+
+    #[test]
+    fn tun_preserves_explicitly_disabled_dns_proxy() {
+        let config: AgentConfig = toml::from_str(
+            &(MINIMAL_AGENT_CONFIG.to_owned()
+                + r#"
+[tun]
+enabled = true
+proxy_dns = false
+"#),
+        )
+        .unwrap();
+
+        assert!(config.tun.enabled);
+        assert!(!config.tun.proxy_dns);
     }
 
     #[test]
@@ -421,6 +454,53 @@ proxy_udp = false
         .unwrap();
 
         assert!(!config.tun.proxy_udp);
+    }
+
+    #[test]
+    fn tun_rejects_removed_helper_field_names() {
+        for removed_field in [
+            "helper_enabled = true",
+            "helper_socket = \"/tmp/legacy-helper.sock\"",
+            "helper_fallback_to_privilege = true",
+        ] {
+            let result = toml::from_str::<AgentConfig>(
+                &(MINIMAL_AGENT_CONFIG.to_owned()
+                    + &format!(
+                        r#"
+[tun]
+proxy_dns = true
+{removed_field}
+"#
+                    )),
+            );
+
+            assert!(
+                result.is_err(),
+                "removed TUN helper field must be rejected: {removed_field}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_in_agent_configs_use_only_current_fields() {
+        for raw in [
+            include_str!("../../../config/local/agent.toml"),
+            include_str!("../../../config/remote/agent.toml"),
+            include_str!("../../../config/local/agent-yamux-test.toml"),
+        ] {
+            let mut value = toml::from_str::<toml::Value>(raw).unwrap();
+            let root = value.as_table_mut().unwrap();
+            root.insert(
+                "username".to_string(),
+                toml::Value::String("config-test".to_string()),
+            );
+            root.insert(
+                "private_key_path".to_string(),
+                toml::Value::String("keys/config-test.pem".to_string()),
+            );
+
+            toml::from_str::<AgentConfig>(&toml::to_string(&value).unwrap()).unwrap();
+        }
     }
 
     #[test]

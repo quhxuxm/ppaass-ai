@@ -1,4 +1,5 @@
 mod android_log;
+mod authentication;
 mod config;
 mod direct_access;
 mod error;

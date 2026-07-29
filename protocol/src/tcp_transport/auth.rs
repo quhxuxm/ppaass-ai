@@ -13,12 +13,33 @@ pub const TCP_MAX_USERNAME_LEN: usize = 256;
 pub const TCP_MAX_RSA_FIELD_LEN: usize = 1_024;
 pub const TCP_MAX_AUTH_ERROR_LEN: usize = 512;
 pub const TCP_SESSION_SECRET_MAX_SIZE: usize = 512;
-pub const TCP_OAEP_LABEL: &str = "ppaass/tcp-yamux/auth-response/v2";
+pub const TCP_OAEP_LABEL: &str = "ppaass/tcp-yamux/auth-response/v3";
 
-const AUTH_REQUEST_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-request/v2\0";
-const AUTH_RESPONSE_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-response-signature/v2\0";
-const AUTH_REPLAY_KEY_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-key/v2\0";
-const AUTH_REPLAY_USER_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-user/v2\0";
+const AUTH_REQUEST_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-request/v3\0";
+const AUTH_RESPONSE_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-response-signature/v3\0";
+const AUTH_REPLAY_KEY_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-key/v3\0";
+const AUTH_REPLAY_USER_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-user/v3\0";
+
+/// Stable, machine-readable reason carried by a failed TCP authentication response.
+///
+/// A client must only act on this value after verifying the accompanying Proxy
+/// transport-identity signature. An unsigned or invalidly signed value is
+/// untrusted input and must not be treated as an account state transition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum AuthFailureCode {
+    UserExpired = 1,
+    UserDisabled = 2,
+    #[default]
+    Other = 255,
+}
+
+impl AuthFailureCode {
+    fn transcript_value(self) -> u8 {
+        self as u8
+    }
+}
 
 /// Secret response encrypted to the authenticated user's public key.
 ///
@@ -167,6 +188,53 @@ pub fn tcp_auth_response_signature_transcript(
     Ok(transcript)
 }
 
+/// Canonical transcript signed by the Proxy transport identity for a failed
+/// authentication response.
+///
+/// The request transcript hash prevents replaying a genuine terminal account
+/// status into another Agent login attempt. The stable failure code and the
+/// human-readable message are both covered by the signature.
+pub fn tcp_auth_failure_signature_transcript(
+    version: u8,
+    auth_transcript_hash: &[u8; 32],
+    code: AuthFailureCode,
+    message: &str,
+) -> Result<Vec<u8>> {
+    if version != TCP_HANDSHAKE_VERSION {
+        return Err(ProtocolError::VersionMismatch);
+    }
+    validate_tcp_auth_response_message(message)?;
+    let message_len = u16::try_from(message.len()).map_err(|_| {
+        ProtocolError::InvalidMessage("authentication response message is too long".to_string())
+    })?;
+    let mut transcript =
+        Vec::with_capacity(AUTH_RESPONSE_DOMAIN.len() + 1 + 1 + 32 + 1 + 2 + message.len());
+    transcript.extend_from_slice(AUTH_RESPONSE_DOMAIN);
+    transcript.push(version);
+    // Success signatures use 1. Keeping the discriminator in the shared
+    // domain makes the two transcript forms impossible to reinterpret.
+    transcript.push(0);
+    transcript.extend_from_slice(auth_transcript_hash);
+    transcript.push(code.transcript_value());
+    transcript.extend_from_slice(&message_len.to_be_bytes());
+    transcript.extend_from_slice(message.as_bytes());
+    Ok(transcript)
+}
+
+pub(crate) fn validate_tcp_auth_response_message(message: &str) -> Result<()> {
+    if message.len() > TCP_MAX_AUTH_ERROR_LEN {
+        return Err(ProtocolError::InvalidMessage(
+            "authentication response message is too long".to_string(),
+        ));
+    }
+    if message.chars().any(char::is_control) {
+        return Err(ProtocolError::InvalidMessage(
+            "authentication response message contains control characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn encode_tcp_session_secret(secret: &TcpSessionSecret) -> Result<Vec<u8>> {
     if secret.version != TCP_HANDSHAKE_VERSION {
         return Err(ProtocolError::VersionMismatch);
@@ -287,6 +355,51 @@ mod tests {
         )
         .unwrap();
         assert!(verify_pss_sha256(&proxy_public, &changed_response, &signature).is_err());
+    }
+
+    #[test]
+    fn failure_signature_binds_request_code_and_message() {
+        let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+        let proxy_public =
+            RsaKeyPair::from_public_key_pem(&proxy_identity.public_key_to_pem().unwrap()).unwrap();
+        let request_hash = [21_u8; 32];
+        let transcript = tcp_auth_failure_signature_transcript(
+            TCP_HANDSHAKE_VERSION,
+            &request_hash,
+            AuthFailureCode::UserExpired,
+            "User expired",
+        )
+        .unwrap();
+        let signature = proxy_identity.sign_pss_sha256(&transcript).unwrap();
+        verify_pss_sha256(&proxy_public, &transcript, &signature).unwrap();
+
+        let mut changed_hash = request_hash;
+        changed_hash[0] ^= 1;
+        for changed in [
+            tcp_auth_failure_signature_transcript(
+                TCP_HANDSHAKE_VERSION,
+                &changed_hash,
+                AuthFailureCode::UserExpired,
+                "User expired",
+            )
+            .unwrap(),
+            tcp_auth_failure_signature_transcript(
+                TCP_HANDSHAKE_VERSION,
+                &request_hash,
+                AuthFailureCode::UserDisabled,
+                "User expired",
+            )
+            .unwrap(),
+            tcp_auth_failure_signature_transcript(
+                TCP_HANDSHAKE_VERSION,
+                &request_hash,
+                AuthFailureCode::UserExpired,
+                "User expired today",
+            )
+            .unwrap(),
+        ] {
+            assert!(verify_pss_sha256(&proxy_public, &changed, &signature).is_err());
+        }
     }
 
     #[test]

@@ -1,6 +1,11 @@
 package com.ppaass.ai.agent;
 
 final class NativeAgent {
+    static final int AUTHENTICATION_UNCONFIRMED = 0;
+    static final int AUTHENTICATION_USER_EXPIRED = 1;
+    static final int AUTHENTICATION_USER_DISABLED = 2;
+    static final int AUTHENTICATION_VERIFIED_ACTIVE = 3;
+
     static {
         System.loadLibrary("android_agent");
     }
@@ -15,6 +20,8 @@ final class NativeAgent {
     static native boolean validateKeyPair(String privateKeyPem, String publicKeyPem);
 
     static native boolean isRunning(long handle);
+
+    static native int authenticationStatus(long handle);
 
     static native void stop(long handle);
 

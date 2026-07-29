@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_envelope_has_no_fallback() {
+    fn previous_tcp_protocol_envelope_has_no_fallback() {
         let legacy = Message {
             version: PROTOCOL_VERSION - 1,
             message_type: MessageType::AuthRequest,
