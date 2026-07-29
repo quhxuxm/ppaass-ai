@@ -350,7 +350,7 @@ mod bypass;
 mod macos;
 mod split;
 
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "macos"))]
 use bypass::route_add_error_is_already_exists;
 #[cfg(target_os = "macos")]
 use bypass::validate_macos_proxy_bypass_next_hop;
@@ -365,6 +365,8 @@ use macos::install_macos_scoped_default_bypass;
 #[cfg(all(test, target_os = "macos"))]
 pub(super) use macos::macos_scoped_default_command;
 pub(super) use macos::refresh_macos_scoped_default_bypass;
+#[cfg(target_os = "macos")]
+use split::required_route_exists;
 #[cfg(test)]
 pub(super) use split::route_list_contains_expected;
-use split::{install_ipv4_split_routes, install_ipv6_split_routes, required_route_exists};
+use split::{install_ipv4_split_routes, install_ipv6_split_routes};

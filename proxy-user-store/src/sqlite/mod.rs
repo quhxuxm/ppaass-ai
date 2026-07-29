@@ -154,6 +154,7 @@ mod rows;
 mod user_repository;
 
 use database_queries::*;
+#[cfg(unix)]
 use file_permissions::*;
 use migration_access::*;
 use migration_device::*;

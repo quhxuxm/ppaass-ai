@@ -11,8 +11,10 @@ use sqlx::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
     },
 };
+#[cfg(unix)]
+use std::io;
 use std::{
-    fs, io,
+    fs,
     path::{Path, PathBuf},
     time::Duration,
 };

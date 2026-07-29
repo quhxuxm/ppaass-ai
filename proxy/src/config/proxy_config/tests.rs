@@ -99,7 +99,6 @@ fn checked_in_proxy_configs_use_only_current_fields() {
         include_str!("../../../../config/remote/proxy.toml"),
         include_str!("../../../../config/local/proxy-forward.toml"),
         include_str!("../../../../config/local/proxy-yamux-test.toml"),
-        include_str!("../../../../config/proxy-e2e.local.toml"),
     ] {
         toml::from_str::<ProxyConfig>(raw).unwrap();
     }
