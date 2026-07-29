@@ -10,12 +10,14 @@ interface Props {
   title?: string
   description?: string
   emptyMessage?: string
+  required?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   title: '可用 Proxy 地址',
   description: '',
   emptyMessage: '暂无可分配的 Proxy 地址。',
+  required: true,
 })
 
 const selectedIds = defineModel<string[]>({ default: () => [] })
@@ -44,7 +46,7 @@ function inputId(addressId: string): string {
       </div>
       <Tag
         :value="`${selectedCount} / ${addresses.length} 已选`"
-        :severity="selectedCount ? 'info' : 'danger'"
+        :severity="selectedCount ? 'info' : required ? 'danger' : 'secondary'"
         rounded
       />
     </header>

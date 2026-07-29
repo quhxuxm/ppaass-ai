@@ -61,6 +61,30 @@ async fn non_root_admin_can_be_disabled_and_deleted() {
 }
 
 #[tokio::test]
+async fn unapproved_user_without_proxy_addresses_can_be_disabled_and_deleted() {
+    let (_directory, app) = test_app().await;
+    let (admin_cookie, admin_csrf) = login_admin(&app).await;
+    register_user(&app, "unassigned-user", "unassigned-user-password").await;
+
+    let response = patch_user(
+        &app,
+        &admin_cookie,
+        &admin_csrf,
+        "unassigned-user",
+        json!({"status": "disabled"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["account"]["status"], "disabled");
+    assert!(body["profile"].is_null());
+    assert_eq!(body["proxy_addresses"], json!([]));
+
+    let response = delete_user(&app, &admin_cookie, &admin_csrf, "unassigned-user").await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn root_admin_cannot_be_disabled_demoted_or_deleted() {
     let (_directory, app) = test_app().await;
     let (cookie, csrf) = login_admin(&app).await;

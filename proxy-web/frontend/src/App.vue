@@ -917,7 +917,9 @@ async function submitEdit(): Promise<void> {
   }
   if (
     user.account &&
-    user.profile?.origin !== 'legacy' &&
+    user.profile &&
+    user.profile.origin !== 'legacy' &&
+    (editForm.status !== 'disabled' || user.proxyAddresses.length > 0) &&
     !editForm.proxyAddressIds.length
   ) {
     toast.add({
@@ -949,7 +951,10 @@ async function submitEdit(): Promise<void> {
             ]
           : undefined,
       proxy_address_ids:
-        user.account && user.profile?.origin !== 'legacy'
+        user.account &&
+        user.profile &&
+        user.profile.origin !== 'legacy' &&
+        editForm.proxyAddressIds.length
           ? editForm.proxyAddressIds
           : undefined,
     })
@@ -2859,7 +2864,14 @@ function clearAgentAuthorizationLocation(): void {
         v-model="editForm.proxyAddressIds"
         :addresses="enabledProxyAddresses"
         input-prefix="edit-proxy"
-        description="至少保留一个；保存后 Agent 会在定期同步时应用。"
+        :description="
+          editForm.status === 'disabled' && !editingUser.proxyAddresses.length
+            ? '账号停用时可以暂不分配；重新启用前至少选择一个。'
+            : '至少保留一个；保存后 Agent 会在定期同步时应用。'
+        "
+        :required="
+          editForm.status !== 'disabled' || editingUser.proxyAddresses.length > 0
+        "
         empty-message="请先在 Proxy 地址目录中新增并启用地址。"
       />
       <template v-if="editingUser?.profile">
