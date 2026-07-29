@@ -131,6 +131,12 @@ pub struct ProxyConfig {
     #[serde(default = "default_udp_session_limit")]
     pub udp_session_limit: usize,
 
+    /// 单个用户名同时存在的已认证原生 UDP 会话上限。Agent 每个实例可维护
+    /// 1..=8 个会话，因此该值需要为多设备和快速重启期间尚未回收的旧会话
+    /// 留出余量。运行时仍会取它与全局 udp_session_limit 的较小值。
+    #[serde(default = "default_udp_session_limit_per_username")]
+    pub udp_session_limit_per_username: usize,
+
     /// 每个原生 UDP 会话从 listener 到会话任务的有界数据报队列大小。
     #[serde(default = "default_udp_session_channel_size")]
     pub udp_session_channel_size: usize,
@@ -203,6 +209,10 @@ fn default_udp_session_limit() -> usize {
     4096
 }
 
+fn default_udp_session_limit_per_username() -> usize {
+    64
+}
+
 fn default_udp_session_channel_size() -> usize {
     256
 }
@@ -252,6 +262,11 @@ impl ProxyConfig {
         // 未知压缩值回退到协议默认值，避免错误配置直接导致启动失败。
         self.compression_mode.parse().unwrap_or_default()
     }
+
+    pub fn effective_udp_session_limit_per_username(&self) -> usize {
+        self.udp_session_limit_per_username
+            .min(self.udp_session_limit)
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +304,8 @@ access_log_database_path = "access.sqlite3"
         assert_eq!(config.udp_relay_channel_size, 64);
         assert_eq!(config.udp_relay_max_flows, 256);
         assert_eq!(config.udp_session_limit, 4096);
+        assert_eq!(config.udp_session_limit_per_username, 64);
+        assert_eq!(config.effective_udp_session_limit_per_username(), 64);
         assert_eq!(config.udp_session_channel_size, 256);
         assert_eq!(config.udp_session_max_flows, 256);
         assert_eq!(config.udp_session_authorization_recheck_secs, 5);
@@ -374,6 +391,23 @@ udp_session_max_flows = 17
         .unwrap();
 
         assert_eq!(config.udp_session_max_flows, 17);
+    }
+
+    #[test]
+    fn per_username_udp_session_limit_is_configurable_and_capped_globally() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+listen_addr = "127.0.0.1:0"
+users_database_path = "users.sqlite3"
+access_log_database_path = "access.sqlite3"
+udp_session_limit = 32
+udp_session_limit_per_username = 64
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.udp_session_limit_per_username, 64);
+        assert_eq!(config.effective_udp_session_limit_per_username(), 32);
     }
 
     #[test]

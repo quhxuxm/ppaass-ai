@@ -301,8 +301,9 @@ fn checked_proxy_resolution_returns_non_loopback_literal() {
 
 #[cfg(windows)]
 #[test]
-fn windows_captures_default_gateway_dns_route() {
-    assert!(should_capture_default_gateway_dns_route());
+fn windows_does_not_capture_dns_servers_with_host_routes() {
+    assert!(!should_install_dns_capture_host_routes());
+    assert!(!should_capture_default_gateway_dns_route());
 }
 
 #[cfg(not(windows))]

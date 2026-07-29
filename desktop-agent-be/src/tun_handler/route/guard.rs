@@ -234,7 +234,7 @@ impl RouteGuard {
                     &mut guard.lease,
                 )?;
             } else {
-                debug!("macOS TUN DNS 捕获使用 PF route-to，不安装 DNS host route");
+                debug!("当前平台使用专用 DNS 接管机制，不安装系统 DNS host route");
             }
             #[cfg(target_os = "macos")]
             {

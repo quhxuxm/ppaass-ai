@@ -19,17 +19,16 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, trace, warn};
 
 const NATIVE_UDP_SOCKET_BUFFER_SIZE: usize = 4 * 1024 * 1024;
-const MAX_NATIVE_UDP_SESSIONS_PER_USERNAME: usize = 8;
-
 fn username_session_limit_reached<'a>(
     usernames: impl Iterator<Item = &'a str>,
     username: &str,
+    limit: usize,
 ) -> bool {
     usernames
         .filter(|candidate| *candidate == username)
-        .take(MAX_NATIVE_UDP_SESSIONS_PER_USERNAME)
+        .take(limit)
         .count()
-        >= MAX_NATIVE_UDP_SESSIONS_PER_USERNAME
+        >= limit
 }
 
 pub(crate) async fn run_listener(
@@ -182,15 +181,17 @@ impl NativeUdpListener {
             );
             return;
         }
+        let username_session_limit = self.config.effective_udp_session_limit_per_username();
         if username_session_limit_reached(
             self.sessions.values().map(|route| route.username.as_str()),
             &auth.username,
+            username_session_limit,
         ) {
             warn!(
                 username = %auth.username,
-                limit = MAX_NATIVE_UDP_SESSIONS_PER_USERNAME,
+                limit = username_session_limit,
                 peer = %peer,
-                "该用户的原生 UDP 会话数已达硬上限，拒绝新认证"
+                "该用户的原生 UDP 会话数已达上限，拒绝新认证"
             );
             return;
         }
@@ -340,23 +341,23 @@ impl Drop for SessionCleanupGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_NATIVE_UDP_SESSIONS_PER_USERNAME, username_session_limit_reached};
+    use super::username_session_limit_reached;
 
     #[test]
     fn per_username_session_limit_is_exact_and_does_not_count_other_users() {
+        let limit = 64;
         let mut usernames = vec!["bob"; 20];
-        usernames.extend(std::iter::repeat_n(
-            "alice",
-            MAX_NATIVE_UDP_SESSIONS_PER_USERNAME - 1,
-        ));
+        usernames.extend(std::iter::repeat_n("alice", limit - 1));
         assert!(!username_session_limit_reached(
             usernames.iter().copied(),
-            "alice"
+            "alice",
+            limit,
         ));
         usernames.push("alice");
         assert!(username_session_limit_reached(
             usernames.iter().copied(),
-            "alice"
+            "alice",
+            limit,
         ));
     }
 }

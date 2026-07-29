@@ -148,6 +148,7 @@ access_log_database_path = "data/proxy-access.sqlite3" # Required, separate writ
 transport_identity_private_key_path = "data/proxy-identity-private.pem" # Required PKCS#8 identity
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
+udp_session_limit_per_username = 64        # Per-user sessions for multiple devices/restarts
 udp_session_channel_size = 256             # Datagrams queued per native UDP session
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```

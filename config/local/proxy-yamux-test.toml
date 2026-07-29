@@ -21,6 +21,7 @@ udp_relay_idle_timeout_secs = 60
 udp_relay_channel_size = 64
 udp_relay_max_flows = 256
 udp_session_limit = 4096
+udp_session_limit_per_username = 64
 udp_session_channel_size = 256
 udp_session_max_flows = 256
 

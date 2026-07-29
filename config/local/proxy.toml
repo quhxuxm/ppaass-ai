@@ -100,6 +100,7 @@ udp_relay_max_flows = 256
 # 已认证原生 UDP session 的全局上限与每 session 资源上限。
 # 队列满时丢弃单个数据报；flow 满时拒绝新 Connect，已有 flow 不受影响。
 udp_session_limit = 4096
+udp_session_limit_per_username = 64
 udp_session_channel_size = 256
 udp_session_max_flows = 256
 udp_session_authorization_recheck_secs = 5

@@ -80,6 +80,7 @@ udp_relay_max_flows = 256
 
 # 原生 UDP session 及每 session 外层 flow 的资源上限。
 udp_session_limit = 4096
+udp_session_limit_per_username = 64
 udp_session_channel_size = 256
 udp_session_max_flows = 256
 
