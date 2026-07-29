@@ -74,15 +74,15 @@ fn parses_cookie_without_matching_prefixes() {
 #[test]
 fn session_store_evicts_oldest_sessions_at_account_and_global_limits() {
     let sessions = SessionStore::with_limits(false, 3, 2);
-    let (alice_one, _) = sessions.issue_at("alice", 1_000);
-    let (alice_two, _) = sessions.issue_at("alice", 1_001);
-    let (alice_three, _) = sessions.issue_at("alice", 1_002);
+    let (alice_one, _) = sessions.issue_at("alice", 1, 1_000);
+    let (alice_two, _) = sessions.issue_at("alice", 1, 1_001);
+    let (alice_three, _) = sessions.issue_at("alice", 1, 1_002);
     assert!(!sessions.sessions.contains_key(&alice_one._token));
     assert!(sessions.sessions.contains_key(&alice_two._token));
     assert!(sessions.sessions.contains_key(&alice_three._token));
 
-    let (bob_one, _) = sessions.issue_at("bob", 1_003);
-    let (bob_two, _) = sessions.issue_at("bob", 1_004);
+    let (bob_one, _) = sessions.issue_at("bob", 1, 1_003);
+    let (bob_two, _) = sessions.issue_at("bob", 1, 1_004);
     assert_eq!(sessions.active_session_count(), 3);
     assert!(!sessions.sessions.contains_key(&alice_two._token));
     assert!(sessions.sessions.contains_key(&alice_three._token));
@@ -93,8 +93,8 @@ fn session_store_evicts_oldest_sessions_at_account_and_global_limits() {
 #[test]
 fn session_store_prunes_expired_entries_before_capacity_eviction() {
     let sessions = SessionStore::with_limits(false, 2, 2);
-    let (expired, _) = sessions.issue_at("alice", 0);
-    let (current, _) = sessions.issue_at("bob", SESSION_TTL.as_secs() as i64 + 1);
+    let (expired, _) = sessions.issue_at("alice", 1, 0);
+    let (current, _) = sessions.issue_at("bob", 1, SESSION_TTL.as_secs() as i64 + 1);
     assert!(!sessions.sessions.contains_key(&expired._token));
     assert!(sessions.sessions.contains_key(&current._token));
     assert_eq!(sessions.active_session_count(), 1);

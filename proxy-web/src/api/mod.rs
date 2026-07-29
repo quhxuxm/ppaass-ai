@@ -1,13 +1,14 @@
 use axum::{
     Json, Router,
+    body::{Body, Bytes},
     extract::{
-        ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, Query, State,
-        rejection::{JsonRejection, QueryRejection},
+        ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, State,
+        rejection::{BytesRejection, JsonRejection, QueryRejection},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, get, post, put},
 };
 use protocol::RsaKeyPair;
 use proxy_user_store::{
@@ -32,6 +33,7 @@ use tracing::{info, instrument, warn};
 use zeroize::Zeroizing;
 
 use crate::{
+    agent_tokens::AgentAccessTokenService,
     auth::{AuthenticatedSession, PasswordService, SessionStore, append_set_cookie, random_token},
     error::ApiError,
     rate_limit::{AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint},
@@ -77,6 +79,7 @@ pub struct AppState {
     pub device_authorizations: Arc<dyn AgentDeviceAuthorizationRepository>,
     pub passwords: PasswordService,
     pub sessions: SessionStore,
+    pub agent_tokens: AgentAccessTokenService,
     pub private_keys: PrivateKeyCipher,
     pub proxy_identity_public_key_pem: Arc<str>,
     pub allow_registration: bool,
@@ -118,6 +121,8 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route("/agent/login", post(agent_login))
+        .route("/agent/me", get(get_agent_profile))
         .route(
             "/agent/device-authorizations",
             post(start_agent_device_authorization),
@@ -140,6 +145,7 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         )
         .route("/session", get(get_session))
         .route("/me", get(get_me))
+        .route("/me/password", put(change_my_password))
         .route("/me/private-key", get(get_my_private_key))
         .route("/me/rotate-key", post(rotate_my_key))
         .route("/me/key-request", get(get_my_key_request))

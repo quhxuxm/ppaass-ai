@@ -65,7 +65,10 @@ impl SqliteUserRepository {
         let Some(account) = fetch_account_by_id(&mut transaction, &account_id).await? else {
             return Err(UserRepositoryError::NotFound(account_id));
         };
-        guard_last_admin(&mut transaction, &account, None, None).await?;
+        guard_root_admin(&account, None, None)?;
+        if account.status != AccountStatus::Disabled {
+            return Err(UserRepositoryError::AccountMustBeDisabled(account_id));
+        }
 
         sqlx::query("DELETE FROM web_accounts WHERE account_id = ?")
             .bind(&account.account_id)

@@ -28,8 +28,14 @@ pub(crate) fn persist_agent_login(
     app: &tauri::AppHandle,
     account: &AgentAuthAccount,
     account_status: AgentAuthAccountStatus,
+    agent_access_token: Option<&AgentAccessToken>,
 ) -> Result<(), String> {
-    persist_agent_login_to_dir(&managed_credentials_dir(app)?, account, account_status)
+    persist_agent_login_to_dir(
+        &managed_credentials_dir(app)?,
+        account,
+        account_status,
+        agent_access_token,
+    )
 }
 
 pub(crate) fn load_persisted_agent_login(
@@ -72,6 +78,7 @@ pub(crate) fn persist_agent_login_to_dir(
     credentials_dir: &Path,
     account: &AgentAuthAccount,
     account_status: AgentAuthAccountStatus,
+    agent_access_token: Option<&AgentAccessToken>,
 ) -> Result<(), String> {
     validate_persisted_account(account)?;
     fs::create_dir_all(credentials_dir)
@@ -86,6 +93,9 @@ pub(crate) fn persist_agent_login_to_dir(
         version: PERSISTED_AGENT_LOGIN_VERSION,
         account: account.clone(),
         account_status,
+        agent_access_token: agent_access_token.map(|token| token.value.to_string()),
+        agent_access_token_expires_at: agent_access_token.map(|token| token.expires_at),
+        refresh_after_seconds: agent_access_token.map(|token| token.refresh_after_seconds),
     };
     let serialized =
         serde_json::to_vec(&record).map_err(|error| format!("编码 Agent 登录记录失败：{error}"))?;
@@ -140,6 +150,18 @@ pub(crate) fn load_persisted_agent_login_from_dir(
         return Err("Agent 登录记录版本无效".to_string());
     }
     validate_persisted_account(&record.account)?;
+    let agent_access_token = match (
+        record.agent_access_token,
+        record.agent_access_token_expires_at,
+        record.refresh_after_seconds,
+    ) {
+        (Some(value), Some(expires_at), Some(refresh_after_seconds)) => Some(
+            validated_agent_access_token(value, expires_at, refresh_after_seconds)
+                .map_err(|_| "Agent 权限同步凭据无效，请重新登录".to_string())?,
+        ),
+        (None, None, None) => None,
+        _ => return Err("Agent 权限同步凭据记录不完整，请重新登录".to_string()),
+    };
 
     let private_key_path = credentials_dir.join(managed_private_key_file_name(
         &record.account.username,
@@ -164,6 +186,7 @@ pub(crate) fn load_persisted_agent_login_from_dir(
         account_status: record.account_status,
         private_key_path,
         proxy_identity_public_key_path,
+        agent_access_token,
     }))
 }
 

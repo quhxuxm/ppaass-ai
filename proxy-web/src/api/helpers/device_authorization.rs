@@ -98,10 +98,7 @@ pub(crate) fn hash_agent_code(domain: &[u8], value: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.finalize())
 }
 
-pub(crate) fn require_agent_user_account(account: &WebAccount) -> Result<(), ApiError> {
-    if account.role != AccountRole::User {
-        return Err(ApiError::forbidden("管理员账号不能授权 Agent 普通用户登录"));
-    }
+pub(crate) fn require_active_agent_account(account: &WebAccount) -> Result<(), ApiError> {
     if account.status != AccountStatus::Active {
         return Err(ApiError::forbidden("账号已停用"));
     }
@@ -112,7 +109,7 @@ pub(crate) async fn load_agent_credentials(
     state: &AppState,
     account: &WebAccount,
 ) -> Result<(UserRecord, PrivateKeyResponse), ApiError> {
-    require_agent_user_account(account)?;
+    require_active_agent_account(account)?;
     let profile = require_active_key_profile(state, account).await?;
     require_profile_permission(&profile, PRIVATE_KEY_READ_PERMISSION)?;
     let private_key = load_private_key(state, profile.clone()).await?;

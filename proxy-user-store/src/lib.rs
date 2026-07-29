@@ -25,9 +25,10 @@ pub use repository::{
 };
 pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};
 pub use validation::{
-    MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS, MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES,
-    ValidationError, normalize_permissions, normalize_public_key_pem, normalize_username,
-    parse_expires_at, validate_user,
+    MAX_KEY_REQUEST_MESSAGE_CHARS, MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS,
+    MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES, ValidationError, normalize_key_request_message,
+    normalize_permissions, normalize_public_key_pem, normalize_username, parse_expires_at,
+    validate_user,
 };
 
 use thiserror::Error;
@@ -58,12 +59,22 @@ pub enum UserRepositoryError {
     #[error("用户数据库 schema 不兼容：{0}")]
     InvalidSchema(String),
 
-    #[error("不能停用、降级或删除最后一个启用的管理员")]
-    LastAdmin,
+    #[error("账号必须先停用才能删除：{0}")]
+    AccountMustBeDisabled(String),
+
+    #[error("根管理员 admin 不能被停用、降级或删除")]
+    RootAdminProtected,
 
     #[error("用户 {username} 的密钥版本冲突：期望 {expected}，实际 {actual}")]
     VersionConflict {
         username: String,
+        expected: i64,
+        actual: i64,
+    },
+
+    #[error("账号 {account_id} 的认证版本冲突：期望 {expected}，实际 {actual}")]
+    AccountVersionConflict {
+        account_id: String,
         expected: i64,
         actual: i64,
     },

@@ -72,7 +72,7 @@ impl SqliteUserRepository {
         let mut account = fetch_account_by_id(&mut transaction, &request.account_id)
             .await?
             .ok_or_else(|| UserRepositoryError::NotFound(request.account_id.clone()))?;
-        ensure_active_normal_account(&account)?;
+        ensure_active_key_account(&account)?;
 
         match (request.kind, material) {
             (

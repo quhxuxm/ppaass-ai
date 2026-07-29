@@ -1408,9 +1408,9 @@ jobs:
           require_active_service ppaass-proxy-web.service
           wait_for_proxy_web_internal
 
-          # The password only bootstraps the first enabled admin. Once the Web
-          # process is healthy, remove it and restart so it is absent from both
-          # the filesystem and the long-running process environment.
+          # The password only bootstraps the fixed root admin account. Once the
+          # Web process is healthy, remove it and restart so it is absent from
+          # both the filesystem and the long-running process environment.
           rm -f "$ADMIN_PASSWORD_FILE"
           systemctl restart ppaass-proxy-web.service
           require_active_service ppaass-proxy-web.service

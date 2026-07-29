@@ -143,6 +143,8 @@ protected final List<View> screenPages = new ArrayList<>();
 protected final List<Button> configTabButtons = new ArrayList<>();
 protected final List<View> configTabPages = new ArrayList<>();
 protected int selectedScreenIndex;
+protected int captureScreenIndex = -1;
+protected String appliedAgentPermissionFingerprint = "";
 protected boolean screenSwitchAnimating;
 protected float screenSwipeStartX;
 protected float screenSwipeStartY;
@@ -176,6 +178,24 @@ protected final Runnable statusRefresh = new Runnable() {
     protected abstract void logoutAgentAccount();
 
     protected abstract void onAgentSessionInvalidated();
+
+    protected boolean hasAgentPermission(String permission) {
+        return AgentAuthSession.hasPermission(this, permission);
+    }
+
+    protected void showAgentPermissionDenied() {
+        Toast.makeText(
+                this,
+                tr("当前账户没有使用此功能的权限"),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    protected String agentPermissionFingerprint() {
+        return (hasAgentPermission(AgentPermissions.PACKET_CAPTURE) ? "1" : "0")
+                + (hasAgentPermission(AgentPermissions.CONFIG_VIEW) ? "1" : "0")
+                + (hasAgentPermission(AgentPermissions.EGRESS_EDIT) ? "1" : "0")
+                + (hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT) ? "1" : "0");
+    }
 
     protected void reloadUiPalette() {
         COLOR_BACKGROUND = UiPalette.BACKGROUND;

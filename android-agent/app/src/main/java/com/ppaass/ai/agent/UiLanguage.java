@@ -127,6 +127,9 @@ final class UiLanguage {
         put("登录状态或代理凭据已过期，请重新登录",
                 "Your sign-in or proxy credential expired; sign in again");
         put("当前登录用户", "Current signed-in user");
+        put("当前账户没有使用此功能的权限",
+                "This account does not have permission to use this feature");
+        put("●  当前账户无抓包权限", "●  Packet capture is not permitted");
         put("退出登录", "Sign out");
         put("已登录：", "Signed in: ");
         put("密钥版本 ", "key version ");
@@ -167,6 +170,12 @@ final class UiLanguage {
         put("HTTP/SOCKS5 工作线程，重启后生效。", "HTTP/SOCKS5 worker threads; effective after restart.");
         put("HTTP/SOCKS5 最大并发连接数。", "Maximum concurrent HTTP/SOCKS5 connections.");
         put("运行参数", "Runtime settings"); put("VPN 线程", "VPN threads");
+        put("出口参数为只读；管理员可分配出口修改权限。",
+                "Egress settings are read-only; an administrator can grant edit access.");
+        put("VPN 线程数为只读；管理员可分配线程数修改权限。",
+                "VPN thread count is read-only; an administrator can grant edit access.");
+        put("消息压缩格式为只读；管理员可分配出口修改权限。",
+                "Message compression is read-only; an administrator can grant egress edit access.");
         put("仅用于 Android VPN。", "Used only by Android VPN."); put("压缩模式", "Compression mode");
         put("QUIC 策略", "QUIC policy"); put("按规则处理，未命中走代理", "Use rules; unmatched traffic uses proxy");
         put("阻断 UDP/443", "Block UDP/443"); put("允许：UDP/443 按规则转发；阻断：回退 TCP/TLS。", "Allow routes UDP/443 by rules; block falls back to TCP/TLS.");

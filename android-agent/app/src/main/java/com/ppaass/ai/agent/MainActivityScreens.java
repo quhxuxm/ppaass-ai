@@ -25,6 +25,7 @@ import java.util.*;
 abstract class MainActivityScreens extends MainActivityPacketCapture {
 
 protected void buildUi() {
+        preparePacketCaptureUiForBuild();
         editableControls.clear();
         screenTabButtons.clear();
         screenPages.clear();
@@ -32,6 +33,7 @@ protected void buildUi() {
         screenSwitchAnimating = false;
         configTabButtons.clear();
         configTabPages.clear();
+        captureScreenIndex = -1;
         transportModeButtons.clear();
         udpSessionPoolConfig = null;
         udpYamuxConfig = null;
@@ -71,16 +73,38 @@ protected void buildUi() {
 
         FrameLayout pages = screenPageHost(root);
         LinearLayout statusScreen = screenPage(pages);
-        LinearLayout captureScreen = screenPage(pages);
-        LinearLayout configScreen = screenPage(pages);
         addScreenTab(screenTabs, "状态", statusScreen);
-        addScreenTab(screenTabs, "抓包", captureScreen);
-        addScreenTab(screenTabs, "配置", configScreen);
-
         buildStatusScreen(statusScreen);
-        buildPacketCaptureScreen(captureScreen);
-        buildConfigScreen(configScreen);
 
+        if (hasAgentPermission(AgentPermissions.PACKET_CAPTURE)) {
+            LinearLayout captureScreen = screenPage(pages);
+            captureScreenIndex = screenPages.size() - 1;
+            addScreenTab(screenTabs, "抓包", captureScreen);
+            buildPacketCaptureScreen(captureScreen);
+        } else {
+            disablePacketCaptureForRevokedPermission();
+        }
+
+        if (hasAgentPermission(AgentPermissions.CONFIG_VIEW)) {
+            LinearLayout configScreen = screenPage(pages);
+            addScreenTab(screenTabs, "配置", configScreen);
+            buildConfigScreen(configScreen);
+        } else {
+            LinearLayout detachedConfig = new LinearLayout(this);
+            detachedConfig.setOrientation(LinearLayout.VERTICAL);
+            buildConfigScreen(detachedConfig);
+        }
+
+        if (screenTabButtons.size() == 1) {
+            screenTabs.setVisibility(View.GONE);
+            ViewGroup.LayoutParams pageHostParams = pages.getLayoutParams();
+            if (pageHostParams instanceof LinearLayout.LayoutParams) {
+                ((LinearLayout.LayoutParams) pageHostParams).topMargin = 0;
+                pages.setLayoutParams(pageHostParams);
+            }
+        }
+
+        appliedAgentPermissionFingerprint = agentPermissionFingerprint();
         selectScreen(0);
         updateVpnToggle();
         updateHttpProxyToggle();

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import ProgressSpinner from "primevue/progressspinner";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppIcon from "./components/AppIcon";
@@ -16,16 +16,26 @@ import PacketCaptureView from "./views/PacketCaptureView.vue";
 import TomlView from "./views/TomlView.vue";
 import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
 import { languageOptions, useI18n, type AppLocale } from "./i18n";
-import type { AgentAuthAccount } from "./types";
+import { resolveAgentCapabilities } from "./agentPermissions";
+import type { AgentAuthAccount, TabKey } from "./types";
 
-defineProps<{
+const props = defineProps<{
   account: AgentAuthAccount;
+  accountManagementBusy: boolean;
+  canRotateKey: boolean;
+  keyRotationBusy: boolean;
   logoutBusy: boolean;
 }>();
 
 const emit = defineEmits<{
+  manageAccount: [];
+  rotateKey: [];
   logout: [];
 }>();
+
+const capabilities = computed(() =>
+  resolveAgentCapabilities(props.account)
+);
 
 const {
   activeForwardingLabel,
@@ -59,14 +69,56 @@ const {
   stopAgent,
   togglePacketCapture,
   summary,
-  tabs,
+  tabs: allTabs,
   tunDiagnosticsLabel,
   tunModeLabel
-} = useDesktopAgent();
+} = useDesktopAgent({
+  canUsePacketCapture: () =>
+    capabilities.value.canCapturePackets,
+  canViewRawConfig: () =>
+    capabilities.value.canViewRawConfig
+});
 
 const sidebarCollapsed = ref(false);
 const colorTheme = ref<ColorTheme>(loadColorTheme());
 const { locale, setLocale } = useI18n();
+const visibleTabs = computed(() =>
+  allTabs.filter(
+    (tab) =>
+      (tab.key !== "capture" ||
+        capabilities.value.canCapturePackets) &&
+      (tab.key !== "toml" ||
+        capabilities.value.canViewRawConfig)
+  )
+);
+
+watchEffect(() => {
+  if (
+    !visibleTabs.value.some(
+      (tab) => tab.key === state.activeTab
+    )
+  ) {
+    state.activeTab = "overview";
+  }
+});
+
+function setActiveTab(tab: TabKey) {
+  if (visibleTabs.value.some((candidate) => candidate.key === tab)) {
+    state.activeTab = tab;
+  }
+}
+
+function togglePermittedPacketCapture(enabled: boolean) {
+  if (capabilities.value.canCapturePackets) {
+    void togglePacketCapture(enabled);
+  }
+}
+
+function clearPermittedPacketCapture() {
+  if (capabilities.value.canCapturePackets) {
+    void clearPacketCapture();
+  }
+}
 
 function setColorTheme(theme: ColorTheme) {
   colorTheme.value = theme;
@@ -87,14 +139,20 @@ function setLanguage(language: AppLocale) {
   >
     <div :class="['shell', { 'sidebar-collapsed': sidebarCollapsed }]">
       <AppSidebar
-        :tabs="tabs"
+        :tabs="visibleTabs"
         :active-tab="state.activeTab"
         :collapsed="sidebarCollapsed"
         :account-username="account.username"
+        :account-role="account.role"
+        :account-management-busy="accountManagementBusy"
+        :can-rotate-key="canRotateKey"
+        :key-rotation-busy="keyRotationBusy"
         :logout-busy="logoutBusy"
         :busy="state.busy"
-        @update:active-tab="state.activeTab = $event"
+        @update:active-tab="setActiveTab"
         @update:collapsed="sidebarCollapsed = $event"
+        @manage-account="emit('manageAccount')"
+        @rotate-key="emit('rotateKey')"
         @logout="emit('logout')"
       />
 
@@ -104,6 +162,7 @@ function setLanguage(language: AppLocale) {
           :running="running"
           :config-locked="configLocked"
           :config-available="Boolean(state.config)"
+          :can-restore-default-config="capabilities.canViewRawConfig"
           :dirty="state.dirty"
           :busy="state.busy"
           :color-theme="colorTheme"
@@ -160,6 +219,7 @@ function setLanguage(language: AppLocale) {
           v-else-if="state.activeTab === 'egress'"
           :summary="summary"
           :config-locked="configLocked"
+          :can-edit-egress="capabilities.canEditEgress"
           @set-field="setField"
         />
 
@@ -167,6 +227,7 @@ function setLanguage(language: AppLocale) {
           v-else-if="state.activeTab === 'routing'"
           :summary="summary"
           :config-locked="configLocked"
+          :can-edit-runtime-threads="capabilities.canEditRuntimeThreads"
           :direct-mode-label="directModeLabel"
           :active-forwarding-label="activeForwardingLabel"
           :tun-mode-label="tunModeLabel"
@@ -191,15 +252,18 @@ function setLanguage(language: AppLocale) {
         />
 
         <PacketCaptureView
-          v-else-if="state.activeTab === 'capture'"
+          v-else-if="
+            state.activeTab === 'capture' &&
+            capabilities.canCapturePackets
+          "
           :summary="summary"
           :config-path="state.config.path"
           :agent-running="running"
           :capture-enabled="state.packetCapture.enabled"
           :refresh-token="state.packetCaptureRefreshToken"
           :busy="state.busy"
-          @toggle-capture="togglePacketCapture"
-          @clear-capture="clearPacketCapture"
+          @toggle-capture="togglePermittedPacketCapture"
+          @clear-capture="clearPermittedPacketCapture"
         />
 
         <LogsView
@@ -209,7 +273,10 @@ function setLanguage(language: AppLocale) {
         />
 
         <TomlView
-          v-else-if="state.activeTab === 'toml'"
+          v-else-if="
+            state.activeTab === 'toml' &&
+            capabilities.canViewRawConfig
+          "
           :raw="state.config?.raw ?? ''"
           :path="state.config?.path"
           :config-locked="configLocked"

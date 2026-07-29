@@ -38,11 +38,13 @@ static DEPLOYED_AGENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 mod edit;
 mod paths;
+mod permissions;
 mod storage;
 mod summary;
 
 pub(crate) use edit::*;
 pub(crate) use paths::*;
+pub(crate) use permissions::*;
 pub(crate) use storage::*;
 pub(crate) use summary::*;
 

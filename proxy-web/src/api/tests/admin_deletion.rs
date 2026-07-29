@@ -1,0 +1,122 @@
+use super::common::*;
+
+#[tokio::test]
+async fn active_user_must_be_disabled_before_admin_can_delete_it() {
+    let (_directory, app) = test_app().await;
+    let (cookie, csrf) = login_admin(&app).await;
+    create_approved_user(&app, &cookie, &csrf, "delete-user", "delete-user-password").await;
+
+    let response = delete_user(&app, &cookie, &csrf, "delete-user").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "account_not_disabled"
+    );
+
+    let response = patch_user(
+        &app,
+        &cookie,
+        &csrf,
+        "delete-user",
+        json!({"status": "disabled"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = delete_user(&app, &cookie, &csrf, "delete-user").await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn non_root_admin_can_be_disabled_and_deleted() {
+    let (_directory, app) = test_app().await;
+    let (bootstrap_cookie, bootstrap_csrf) = login_admin(&app).await;
+    create_approved_user(
+        &app,
+        &bootstrap_cookie,
+        &bootstrap_csrf,
+        "second-admin",
+        "second-admin-password",
+    )
+    .await;
+    let response = patch_user(
+        &app,
+        &bootstrap_cookie,
+        &bootstrap_csrf,
+        "second-admin",
+        json!({"role": "admin"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = patch_user(
+        &app,
+        &bootstrap_cookie,
+        &bootstrap_csrf,
+        "second-admin",
+        json!({"status": "disabled"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = delete_user(&app, &bootstrap_cookie, &bootstrap_csrf, "second-admin").await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn root_admin_cannot_be_disabled_demoted_or_deleted() {
+    let (_directory, app) = test_app().await;
+    let (cookie, csrf) = login_admin(&app).await;
+    for body in [
+        json!({"status": "disabled"}),
+        json!({"role": "user"}),
+        json!({"role": "user", "status": "disabled"}),
+    ] {
+        let response = patch_user(&app, &cookie, &csrf, "admin", body).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_body(response).await["error"]["code"],
+            "root_admin_protected"
+        );
+    }
+    let response = delete_user(&app, &cookie, &csrf, "admin").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "root_admin_protected"
+    );
+}
+
+async fn patch_user(
+    app: &Router,
+    cookie: &str,
+    csrf: &str,
+    username: &str,
+    body: Value,
+) -> Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/admin/users/{username}"))
+                .header(header::COOKIE, cookie)
+                .header("x-csrf-token", csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn delete_user(app: &Router, cookie: &str, csrf: &str, username: &str) -> Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/admin/users/{username}"))
+                .header(header::COOKIE, cookie)
+                .header("x-csrf-token", csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}

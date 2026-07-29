@@ -46,6 +46,7 @@ pub(crate) fn run() {
             if let Err(error) = restore_agent_login_on_startup(app.handle(), &setup_runtime) {
                 setup_logs.push(format!("恢复 Agent 长期登录状态失败：{error}"));
             }
+            start_agent_permission_sync(app.handle().clone(), setup_runtime.clone());
             start_verified_proxy_auth_status_listener(app.handle().clone(), setup_runtime.clone());
             #[cfg(windows)]
             start_windows_service_auth_failure_listener(
@@ -81,14 +82,16 @@ pub(crate) fn run() {
         .manage(runtime)
         .invoke_handler(tauri::generate_handler![
             get_agent_auth_state,
-            open_user_registration,
+            open_user_account_management,
             login_and_provision_agent,
+            rotate_agent_key,
             start_agent_device_login,
             poll_agent_device_login,
             cancel_agent_device_login,
             logout_agent,
             load_agent_config,
             save_agent_config,
+            save_agent_config_summary,
             load_default_agent_config,
             get_agent_state,
             start_agent,

@@ -1,184 +1,25 @@
 package com.ppaass.ai.agent;
 
 import android.content.Context;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
 import android.util.Log;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.ConnectException;
-import java.net.HttpURLConnection;
-import java.net.NoRouteToHostException;
-import java.net.Proxy;
-import java.net.SocketTimeoutException;
-import java.net.URL;
-import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.security.KeyFactory;
-import java.security.interfaces.RSAPublicKey;
-import java.security.spec.X509EncodedKeySpec;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
-
-import javax.net.ssl.SSLException;
+import java.util.Set;
 
 final class AgentAuthClient {
     private static final String TAG = "PpaassAgentAuth";
-    private static final int CONNECT_TIMEOUT_MS = 8_000;
-    private static final int READ_TIMEOUT_MS = 20_000;
     private static final int MAX_NORMAL_RESPONSE_BYTES = 64 * 1024;
-    private static final int MAX_PRIVATE_KEY_RESPONSE_BYTES = 256 * 1024;
-    private static final int MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES = 64 * 1024;
-    private static final String SESSION_COOKIE_NAME = "ppaass_session";
-    private static final int MAX_SESSION_COOKIE_BYTES = 4 * 1024;
+    private static final int MAX_CREDENTIAL_RESPONSE_BYTES = 256 * 1024;
     private static final int MAX_DEVICE_AUTHORIZATION_SECONDS = 60 * 60;
     private static final int MAX_DEVICE_POLL_DELAY_SECONDS = 5 * 60;
 
-    private final Context context;
     private final String baseUrl;
-    private final Object connectionLock = new Object();
-    private volatile boolean cancelled;
-    private HttpURLConnection activeConnection;
-    private String sessionCookie;
+    private final AgentAuthHttpTransport transport;
 
     AgentAuthClient(Context context, String baseUrl) {
-        this.context = context.getApplicationContext();
         this.baseUrl = AgentAuthConfig.normalizeProxyWebUrl(baseUrl);
-    }
-
-    DeviceAuthorization startDeviceAuthorization() throws AuthException {
-        JSONObject body = new JSONObject();
-        try {
-            body.put("platform", "android");
-            body.put("client_name", "PPAASS Android Agent");
-        } catch (JSONException error) {
-            throw new AuthException("无法创建设备登录请求", error);
-        }
-
-        JSONObject response = requestJson(
-                "POST",
-                "/api/v1/agent/device-authorizations",
-                body,
-                null,
-                MAX_NORMAL_RESPONSE_BYTES);
-        String deviceCode = requiredString(response, "device_code");
-        String userCode = requiredString(response, "user_code");
-        String verificationUri = requiredString(response, "verification_uri");
-        String verificationUriComplete =
-                requiredString(response, "verification_uri_complete");
-        long expiresIn = requiredLong(response, "expires_in");
-        long interval = requiredLong(response, "interval");
-        if (deviceCode.length() != 43
-                || !isUrlSafeToken(deviceCode)
-                || userCode.length() > 64
-                || expiresIn < 1
-                || expiresIn > MAX_DEVICE_AUTHORIZATION_SECONDS
-                || interval < 1
-                || interval > MAX_DEVICE_POLL_DELAY_SECONDS) {
-            throw new AuthException("Proxy Web 返回的设备登录参数无效");
-        }
-
-        final String verificationUrl;
-        try {
-            AgentAuthConfig.resolveServiceRelativeUrl(baseUrl, verificationUri);
-            verificationUrl =
-                    AgentAuthConfig.resolveServiceRelativeUrl(baseUrl, verificationUriComplete);
-        } catch (IllegalArgumentException error) {
-            throw new AuthException("Proxy Web 返回的设备登录地址无效", error);
-        }
-        return new DeviceAuthorization(
-                deviceCode,
-                verificationUrl,
-                (int) expiresIn,
-                (int) interval);
-    }
-
-    DevicePollResult pollDeviceAuthorization(
-            String deviceCode,
-            int currentIntervalSeconds) throws AuthException {
-        JSONObject body = new JSONObject();
-        try {
-            body.put("device_code", deviceCode);
-        } catch (JSONException error) {
-            throw new AuthException("无法创建设备登录轮询请求", error);
-        }
-
-        Response response = requestAllowingHttpErrors(
-                "POST",
-                "/api/v1/agent/device-authorizations/token",
-                body,
-                null,
-                MAX_PRIVATE_KEY_RESPONSE_BYTES);
-        JSONObject json = parseJsonResponse(response.body);
-        if (response.status >= 200 && response.status < 300) {
-            String csrfToken = nullableString(json, "csrf_token");
-            try {
-                LoginResult result = parseDeviceLoginResult(json);
-                if (cancelled) {
-                    throw new CancelledException();
-                }
-                return DevicePollResult.authorized(result);
-            } finally {
-                if (csrfToken != null && !csrfToken.isEmpty()) {
-                    bestEffortLogout(csrfToken);
-                }
-            }
-        }
-
-        JSONObject error = json.optJSONObject("error");
-        String code = error == null ? "" : error.optString("code");
-        if (response.status == 428 && "authorization_pending".equals(code)) {
-            return DevicePollResult.pending(devicePollDelaySeconds(
-                    currentIntervalSeconds,
-                    response.retryAfterSeconds,
-                    false));
-        }
-        int rateLimitDelaySeconds = devicePollRateLimitDelaySeconds(
-                response.status,
-                code,
-                currentIntervalSeconds,
-                response.retryAfterSeconds);
-        if (rateLimitDelaySeconds > 0) {
-            return "slow_down".equals(code)
-                    ? DevicePollResult.slowDown(rateLimitDelaySeconds)
-                    : DevicePollResult.pending(rateLimitDelaySeconds);
-        }
-        if (response.status == 403 && "access_denied".equals(code)) {
-            throw new AuthException("你已在浏览器中拒绝这次 Agent 登录");
-        }
-        if (response.status == 403 && "authorization_invalidated".equals(code)) {
-            throw new AuthException("账号状态已变化，请重新开始登录");
-        }
-        if (response.status == 400 && "expired_token".equals(code)) {
-            throw new AuthException("浏览器登录请求已过期，请重新开始");
-        }
-        if (response.status == 400 && "invalid_device_code".equals(code)) {
-            throw new AuthException("浏览器登录请求无效或已被使用，请重新开始");
-        }
-        throw apiError(response.status, response.body);
-    }
-
-    void cancel() {
-        cancelled = true;
-        synchronized (connectionLock) {
-            if (activeConnection != null) {
-                activeConnection.disconnect();
-            }
-        }
-    }
-
-    boolean isCancelled() {
-        return cancelled;
+        this.transport = new AgentAuthHttpTransport(
+                context,
+                this.baseUrl);
     }
 
     LoginResult authenticate(String username, String password) throws AuthException {
@@ -189,457 +30,169 @@ final class AgentAuthClient {
         if (password == null || password.length() < 8) {
             throw new AuthException("密码至少需要 8 位");
         }
-
-        JSONObject loginBody = new JSONObject();
-        try {
-            loginBody.put("username", normalizedUsername);
-            loginBody.put("password", password);
-        } catch (JSONException error) {
-            throw new AuthException("无法创建认证请求", error);
-        }
-
-        JSONObject login = requestJson(
+        AgentAuthDtos.CredentialResponse response = transport.requestObject(
                 "POST",
-                "/api/v1/auth/login",
-                loginBody,
+                "/api/v1/agent/login",
+                new AgentAuthDtos.PasswordLoginRequest(normalizedUsername, password),
                 null,
-                MAX_NORMAL_RESPONSE_BYTES);
-        String csrfToken = requiredString(login, "csrf_token");
+                MAX_CREDENTIAL_RESPONSE_BYTES,
+                AgentAuthDtos.CredentialResponse.class);
+        LoginResult result = AgentAuthResponseParser.parseLogin(response);
+        Log.i(TAG, "Native Agent login and managed key validation succeeded");
+        return result;
+    }
 
+    ProfileSyncResult syncProfile(String accessToken, String expectedUsername)
+            throws SyncException {
+        final AgentAuthHttpTransport.Response response;
         try {
-            JSONObject account = requiredObject(login, "account");
-            if (!"user".equals(requiredString(account, "role"))) {
-                throw new AuthException("管理员账号不能用于 Agent，请使用普通用户账号登录");
-            }
-            if (!"active".equals(requiredString(account, "status"))) {
-                throw new AuthException("账号已停用");
-            }
-            String linkedUsername = nullableString(account, "linked_username");
-
-            JSONObject me = requestJson(
+            response = transport.execute(
                     "GET",
-                    "/api/v1/me",
+                    "/api/v1/agent/me",
                     null,
                     null,
+                    accessToken,
                     MAX_NORMAL_RESPONSE_BYTES);
-            JSONObject profile = requireActiveProfile(me);
-            String profileUsername = requiredString(profile, "username");
-            if (linkedUsername != null && !linkedUsername.equals(profileUsername)) {
-                throw new AuthException("账号与 Proxy 用户绑定关系不一致，请联系管理员");
-            }
-            if (!profile.optBoolean("enabled", false)) {
-                throw new AuthException("Proxy 用户已停用");
-            }
-            if (!contains(requiredArray(profile, "permissions"), "key.private.read")) {
-                throw new AuthException("当前账号没有读取私钥的权限");
-            }
-
-            long expiresAt = requiredLong(profile, "expires_at");
-            long keyVersion = requiredLong(profile, "key_version");
-
-            JSONObject privateKey = requestJson(
-                    "GET",
-                    "/api/v1/me/private-key",
-                    null,
-                    null,
-                    MAX_PRIVATE_KEY_RESPONSE_BYTES);
-            String returnedUsername = requiredString(privateKey, "username");
-            long returnedKeyVersion = requiredLong(privateKey, "key_version");
-            if (!profileUsername.equals(returnedUsername)
-                    || keyVersion != returnedKeyVersion) {
-                throw new AuthException("Proxy Web 返回的密钥与当前账号版本不一致");
-            }
-
-            String privateKeyPem = requiredString(privateKey, "private_key_pem");
-            String publicKeyPem = requiredString(privateKey, "public_key_pem");
-            String proxyIdentityPublicKeyPem =
-                    requiredString(privateKey, "proxy_identity_public_key_pem");
-            validateMatchingKeyPair(privateKeyPem, publicKeyPem);
-            validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);
-
-            Log.i(TAG, "Agent user authenticated and managed key validated");
-            return new LoginResult(
-                    profileUsername,
-                    keyVersion,
-                    expiresAt,
-                    privateKeyPem,
-                    proxyIdentityPublicKeyPem);
-        } finally {
-            bestEffortLogout(csrfToken);
+        } catch (AuthException error) {
+            throw new SyncException(SyncFailure.TRANSIENT, error.getMessage(), error);
         }
-    }
-
-    private LoginResult parseDeviceLoginResult(JSONObject response) throws AuthException {
-        JSONObject account = requiredObject(response, "account");
-        if (!"user".equals(requiredString(account, "role"))) {
-            throw new AuthException("管理员账号不能用于 Agent，请使用普通用户账号登录");
+        if (response.status == 401) {
+            throw new SyncException(
+                    SyncFailure.UNAUTHORIZED,
+                    "Agent 权限同步凭据已失效");
         }
-        if (!"active".equals(requiredString(account, "status"))) {
-            throw new AuthException("账号已停用");
+        if (!response.isSuccessful()) {
+            SyncFailure failure = response.status >= 500
+                    ? SyncFailure.TRANSIENT
+                    : SyncFailure.SERVICE_REJECTED;
+            throw new SyncException(
+                    failure,
+                    "权限同步服务返回 HTTP " + response.status);
         }
-
-        JSONObject profile = requiredObject(response, "profile");
-        String username = requiredString(profile, "username");
-        String linkedUsername = nullableString(account, "linked_username");
-        if (linkedUsername != null && !linkedUsername.equals(username)) {
-            throw new AuthException("账号与 Proxy 用户绑定关系不一致，请联系管理员");
-        }
-        if (!contains(requiredArray(profile, "permissions"), "key.private.read")) {
-            throw new AuthException("当前账号没有读取私钥的权限");
-        }
-        long keyVersion = requiredLong(profile, "key_version");
-        long expiresAt = requiredLong(profile, "expires_at");
-        if (keyVersion < 1) {
-            throw new AuthException("Proxy Web 返回的密钥版本无效");
-        }
-        requiredLong(response, "session_expires_at");
-
-        String privateKeyPem = requiredString(response, "private_key_pem");
-        String publicKeyPem = requiredString(response, "public_key_pem");
-        String proxyIdentityPublicKeyPem =
-                requiredString(response, "proxy_identity_public_key_pem");
-        validateMatchingKeyPair(privateKeyPem, publicKeyPem);
-        validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);
-        Log.i(TAG, "Browser-authorized Agent key validated");
-        return new LoginResult(
-                username,
-                keyVersion,
-                expiresAt,
-                privateKeyPem,
-                proxyIdentityPublicKeyPem);
-    }
-
-    private static void validateMatchingKeyPair(
-            String privateKeyPem,
-            String publicKeyPem) throws AuthException {
-        final boolean matchingKeyPair;
         try {
-            matchingKeyPair = NativeAgent.validateKeyPair(privateKeyPem, publicKeyPem);
-        } catch (RuntimeException | UnsatisfiedLinkError error) {
-            throw new AuthException("无法校验 Proxy Web 返回的私钥", error);
+            AgentAuthDtos.ProfileSyncResponse body = AgentAuthJsonCodec.decode(
+                    response.body,
+                    AgentAuthDtos.ProfileSyncResponse.class);
+            return AgentAuthResponseParser.parseProfileSync(body, expectedUsername);
+        } catch (AuthException error) {
+            throw new SyncException(
+                    SyncFailure.INVALID_RESPONSE,
+                    error.getMessage(),
+                    error);
         }
-        if (!matchingKeyPair) {
-            throw new AuthException("Proxy Web 返回的公钥和私钥不匹配");
+    }
+
+    AgentDeviceAuthModels.Authorization startDeviceAuthorization() throws AuthException {
+        AgentAuthDtos.DeviceStartResponse response = transport.requestObject(
+                "POST",
+                "/api/v1/agent/device-authorizations",
+                new AgentAuthDtos.DeviceStartRequest(
+                        "android",
+                        "PPAASS Android Agent"),
+                null,
+                MAX_NORMAL_RESPONSE_BYTES,
+                AgentAuthDtos.DeviceStartResponse.class);
+        String deviceCode = requireText(response.device_code);
+        String userCode = requireText(response.user_code);
+        String verificationUri = requireText(response.verification_uri);
+        String verificationUriComplete = requireText(response.verification_uri_complete);
+        long expiresIn = requireLong(response.expires_in);
+        long interval = requireLong(response.interval);
+        if (deviceCode.length() != 43
+                || !isUrlSafeToken(deviceCode)
+                || userCode.length() > 64
+                || expiresIn < 1
+                || expiresIn > MAX_DEVICE_AUTHORIZATION_SECONDS
+                || interval < 1
+                || interval > MAX_DEVICE_POLL_DELAY_SECONDS) {
+            throw new AuthException("Proxy Web 返回的设备登录参数无效");
         }
+        try {
+            AgentAuthConfig.resolveServiceRelativeUrl(baseUrl, verificationUri);
+            String verificationUrl = AgentAuthConfig.resolveServiceRelativeUrl(
+                    baseUrl,
+                    verificationUriComplete);
+            return new AgentDeviceAuthModels.Authorization(
+                    deviceCode,
+                    verificationUrl,
+                    (int) expiresIn,
+                    (int) interval);
+        } catch (IllegalArgumentException error) {
+            throw new AuthException("Proxy Web 返回的设备登录地址无效", error);
+        }
+    }
+
+    AgentDeviceAuthModels.PollResult pollDeviceAuthorization(
+            String deviceCode,
+            int currentIntervalSeconds) throws AuthException {
+        AgentAuthHttpTransport.Response response = transport.execute(
+                "POST",
+                "/api/v1/agent/device-authorizations/token",
+                new AgentAuthDtos.DeviceTokenRequest(deviceCode),
+                null,
+                null,
+                MAX_CREDENTIAL_RESPONSE_BYTES);
+        if (response.isSuccessful()) {
+            AgentAuthDtos.CredentialResponse body = AgentAuthJsonCodec.decode(
+                    response.body,
+                    AgentAuthDtos.CredentialResponse.class);
+            try {
+                LoginResult result = AgentAuthResponseParser.parseLogin(body);
+                if (transport.isCancelled()) {
+                    throw new CancelledException();
+                }
+                return AgentDeviceAuthModels.PollResult.authorized(result);
+            } finally {
+                if (body.csrf_token != null && !body.csrf_token.isEmpty()) {
+                    transport.bestEffortLogout(
+                            body.csrf_token,
+                            MAX_NORMAL_RESPONSE_BYTES);
+                }
+            }
+        }
+
+        String code = errorCode(response.body);
+        if (response.status == 428 && "authorization_pending".equals(code)) {
+            return AgentDeviceAuthModels.PollResult.pending(devicePollDelaySeconds(
+                    currentIntervalSeconds,
+                    response.retryAfterSeconds,
+                    false));
+        }
+        int rateLimitDelay = devicePollRateLimitDelaySeconds(
+                response.status,
+                code,
+                currentIntervalSeconds,
+                response.retryAfterSeconds);
+        if (rateLimitDelay > 0) {
+            return "slow_down".equals(code)
+                    ? AgentDeviceAuthModels.PollResult.slowDown(rateLimitDelay)
+                    : AgentDeviceAuthModels.PollResult.pending(rateLimitDelay);
+        }
+        if (response.status == 403 && "access_denied".equals(code)) {
+            throw new AuthException("你已拒绝这次 Agent 登录");
+        }
+        if (response.status == 403 && "authorization_invalidated".equals(code)) {
+            throw new AuthException("账号状态已变化，请重新开始登录");
+        }
+        if (response.status == 400 && "expired_token".equals(code)) {
+            throw new AuthException("设备登录请求已过期，请重新开始");
+        }
+        if (response.status == 400 && "invalid_device_code".equals(code)) {
+            throw new AuthException("设备登录请求无效或已被使用，请重新开始");
+        }
+        throw AgentAuthErrors.apiError(response.status, response.body);
+    }
+
+    void cancel() {
+        transport.cancel();
+    }
+
+    boolean isCancelled() {
+        return transport.isCancelled();
     }
 
     static void validateProxyIdentityPublicKey(String publicKeyPem) throws AuthException {
-        if (publicKeyPem == null
-                || publicKeyPem.isEmpty()
-                || publicKeyPem.getBytes(StandardCharsets.UTF_8).length
-                > MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES) {
-            throw new AuthException("Proxy Web 返回的 Proxy 身份公钥大小无效");
-        }
-        final String begin = "-----BEGIN PUBLIC KEY-----";
-        final String end = "-----END PUBLIC KEY-----";
-        String normalized = publicKeyPem.trim();
-        if (!normalized.startsWith(begin) || !normalized.endsWith(end)) {
-            throw new AuthException("Proxy Web 返回的 Proxy 身份公钥格式无效");
-        }
-        String encoded = normalized.substring(
-                begin.length(),
-                normalized.length() - end.length()).replaceAll("\\s", "");
-        try {
-            byte[] der = Base64.getDecoder().decode(encoded);
-            RSAPublicKey publicKey = (RSAPublicKey) KeyFactory.getInstance("RSA")
-                    .generatePublic(new X509EncodedKeySpec(der));
-            int bits = publicKey.getModulus().bitLength();
-            if (bits < 2048 || bits > 8192) {
-                throw new AuthException("Proxy Web 返回的 Proxy 身份公钥强度无效");
-            }
-        } catch (IllegalArgumentException
-                 | GeneralSecurityException
-                 | ClassCastException error) {
-            throw new AuthException("Proxy Web 返回的 Proxy 身份公钥格式无效", error);
-        }
-    }
-
-    private JSONObject requireActiveProfile(JSONObject me) throws AuthException {
-        String keyState = requiredString(me, "key_state");
-        if ("active".equals(keyState)) {
-            return requiredObject(me, "profile");
-        }
-        if ("missing".equals(keyState) || "expired".equals(keyState)) {
-            JSONObject pending = me.optJSONObject("pending_request");
-            if (pending != null && "pending".equals(pending.optString("status"))) {
-                throw new AuthException("密钥申请正在等待管理员审批");
-            }
-            throw new AuthException(
-                    "当前没有可用密钥，请先在用户中心提交申请并等待管理员批准");
-        }
-        if ("disabled".equals(keyState)) {
-            throw new AuthException("Proxy 用户已停用");
-        }
-        throw new AuthException("Proxy Web 返回了未知的密钥状态");
-    }
-
-    private JSONObject requestJson(
-            String method,
-            String path,
-            JSONObject body,
-            String csrfToken,
-            int maximumBytes) throws AuthException {
-        Response response = request(method, path, body, csrfToken, maximumBytes);
-        return parseJsonResponse(response.body);
-    }
-
-    private static JSONObject parseJsonResponse(byte[] responseBody) throws AuthException {
-        if (responseBody.length == 0) {
-            throw new AuthException("Proxy Web 响应格式无效");
-        }
-        try {
-            return new JSONObject(new String(responseBody, StandardCharsets.UTF_8));
-        } catch (JSONException error) {
-            throw new AuthException("Proxy Web 响应格式无效", error);
-        }
-    }
-
-    private Response request(
-            String method,
-            String path,
-            JSONObject body,
-            String csrfToken,
-            int maximumBytes) throws AuthException {
-        Response response = executeRequest(
-                method,
-                path,
-                body,
-                csrfToken,
-                maximumBytes,
-                false);
-        if (response.status < 200 || response.status >= 300) {
-            throw apiError(response.status, response.body);
-        }
-        return response;
-    }
-
-    private Response requestAllowingHttpErrors(
-            String method,
-            String path,
-            JSONObject body,
-            String csrfToken,
-            int maximumBytes) throws AuthException {
-        return executeRequest(method, path, body, csrfToken, maximumBytes, false);
-    }
-
-    private Response executeRequest(
-            String method,
-            String path,
-            JSONObject body,
-            String csrfToken,
-            int maximumBytes,
-            boolean ignoreCancellation) throws AuthException {
-        HttpURLConnection connection = null;
-        try {
-            throwIfCancelled(ignoreCancellation);
-            URL url = new URL(baseUrl + path);
-            connection = openConnection(url);
-            synchronized (connectionLock) {
-                throwIfCancelled(ignoreCancellation);
-                activeConnection = connection;
-            }
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestMethod(method);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty(
-                    "User-Agent",
-                    "ppaass-android-agent/" + BuildConfig.VERSION_NAME);
-            applySessionCookie(connection);
-            if (csrfToken != null && !csrfToken.isEmpty()) {
-                connection.setRequestProperty("X-CSRF-Token", csrfToken);
-            }
-            if (body != null) {
-                byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
-                connection.setDoOutput(true);
-                connection.setFixedLengthStreamingMode(payload.length);
-                connection.setRequestProperty("Content-Type", "application/json");
-                try (OutputStream output = connection.getOutputStream()) {
-                    output.write(payload);
-                }
-            }
-
-            int status = connection.getResponseCode();
-            adoptSessionCookie(connection);
-            int retryAfterSeconds =
-                    parseRetryAfterSeconds(connection.getHeaderField("Retry-After"));
-            byte[] responseBody = readBounded(
-                    status >= 400 ? connection.getErrorStream() : connection.getInputStream(),
-                    maximumBytes);
-            throwIfCancelled(ignoreCancellation);
-            return new Response(status, responseBody, retryAfterSeconds);
-        } catch (AuthException error) {
-            throw error;
-        } catch (SSLException error) {
-            throwIfCancelled(ignoreCancellation);
-            throw new AuthException("认证服务 TLS 或证书校验失败，请联系管理员", error);
-        } catch (SocketTimeoutException error) {
-            throwIfCancelled(ignoreCancellation);
-            throw new AuthException("连接认证服务超时，请稍后重试", error);
-        } catch (ConnectException | UnknownHostException | NoRouteToHostException error) {
-            throwIfCancelled(ignoreCancellation);
-            throw new AuthException(
-                    "无法连接认证服务，请联系管理员检查 Agent 配置和服务状态",
-                    error);
-        } catch (IOException | RuntimeException error) {
-            throwIfCancelled(ignoreCancellation);
-            Log.w(TAG, "Authentication service request failed", error);
-            throw new AuthException("认证服务请求失败，请稍后重试", error);
-        } finally {
-            synchronized (connectionLock) {
-                if (activeConnection == connection) {
-                    activeConnection = null;
-                }
-            }
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private void throwIfCancelled(boolean ignoreCancellation) throws CancelledException {
-        if (!ignoreCancellation && cancelled) {
-            throw new CancelledException();
-        }
-    }
-
-    @SuppressWarnings("deprecation")
-    private HttpURLConnection openConnection(URL url) throws IOException {
-        if (AgentAuthConfig.isLoopbackHost(url.getHost())) {
-            return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
-        }
-        ConnectivityManager manager =
-                (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (manager != null) {
-            Network active = manager.getActiveNetwork();
-            if (isUsableUnderlyingNetwork(manager, active)) {
-                return (HttpURLConnection) active.openConnection(url, Proxy.NO_PROXY);
-            }
-
-            Network validatedFallback = null;
-            Network unvalidatedFallback = null;
-            for (Network network : manager.getAllNetworks()) {
-                if (!isUsableUnderlyingNetwork(manager, network)) {
-                    continue;
-                }
-                NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
-                if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                            || capabilities.hasTransport(
-                            NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                        return (HttpURLConnection) network.openConnection(url, Proxy.NO_PROXY);
-                    }
-                    if (validatedFallback == null) {
-                        validatedFallback = network;
-                    }
-                } else if (unvalidatedFallback == null) {
-                    unvalidatedFallback = network;
-                }
-            }
-            Network fallback =
-                    validatedFallback == null ? unvalidatedFallback : validatedFallback;
-            if (fallback != null) {
-                return (HttpURLConnection) fallback.openConnection(url, Proxy.NO_PROXY);
-            }
-        }
-        return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
-    }
-
-    private static boolean isUsableUnderlyingNetwork(
-            ConnectivityManager manager,
-            Network network) {
-        if (network == null) {
-            return false;
-        }
-        NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
-        return capabilities != null
-                && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
-    }
-
-    private void applySessionCookie(HttpURLConnection connection) {
-        if (sessionCookie != null) {
-            connection.setRequestProperty("Cookie", sessionCookie);
-        }
-    }
-
-    private void adoptSessionCookie(HttpURLConnection connection) throws AuthException {
-        for (Map.Entry<String, List<String>> header :
-                connection.getHeaderFields().entrySet()) {
-            if (header.getKey() == null
-                    || !"Set-Cookie".equalsIgnoreCase(header.getKey())) {
-                continue;
-            }
-            for (String value : header.getValue()) {
-                int separator = value.indexOf(';');
-                String pair = (separator < 0 ? value : value.substring(0, separator)).trim();
-                String prefix = SESSION_COOKIE_NAME + "=";
-                if (!pair.startsWith(prefix)) {
-                    continue;
-                }
-                String token = pair.substring(prefix.length());
-                if (token.isEmpty()) {
-                    sessionCookie = null;
-                    continue;
-                }
-                if (token.getBytes(StandardCharsets.US_ASCII).length
-                        > MAX_SESSION_COOKIE_BYTES
-                        || !isUrlSafeToken(token)) {
-                    throw new AuthException("Proxy Web 会话响应无效");
-                }
-                sessionCookie = pair;
-            }
-        }
-    }
-
-    private static boolean isUrlSafeToken(String value) {
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if ((character >= 'a' && character <= 'z')
-                    || (character >= 'A' && character <= 'Z')
-                    || (character >= '0' && character <= '9')
-                    || character == '-'
-                    || character == '_') {
-                continue;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    private void bestEffortLogout(String csrfToken) {
-        try {
-            Response response = executeRequest(
-                    "POST",
-                    "/api/v1/auth/logout",
-                    null,
-                    csrfToken,
-                    MAX_NORMAL_RESPONSE_BYTES,
-                    true);
-            if (response.status < 200 || response.status >= 300) {
-                throw apiError(response.status, response.body);
-            }
-        } catch (AuthException error) {
-            Log.w(TAG, "Failed to clear temporary Proxy Web session");
-        }
-    }
-
-    private static int parseRetryAfterSeconds(String value) {
-        if (value == null || value.isEmpty()) {
-            return 0;
-        }
-        try {
-            long seconds = Long.parseLong(value.trim());
-            if (seconds < 1) {
-                return 0;
-            }
-            return (int) Math.min(seconds, MAX_DEVICE_POLL_DELAY_SECONDS);
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
+        AgentKeyValidator.validateProxyIdentityPublicKey(publicKeyPem);
     }
 
     static int devicePollDelaySeconds(
@@ -683,168 +236,134 @@ final class AgentAuthClient {
         return 0;
     }
 
-    private static byte[] readBounded(InputStream stream, int maximumBytes)
-            throws IOException, AuthException {
-        if (stream == null) {
-            return new byte[0];
-        }
-        try (InputStream input = stream;
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int total = 0;
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > maximumBytes) {
-                    throw new AuthException("Proxy Web 响应过大，已拒绝处理");
-                }
-                output.write(buffer, 0, read);
-            }
-            return output.toByteArray();
-        }
+    private static String errorCode(byte[] body) {
+        AgentAuthDtos.ApiErrorEnvelope envelope = AgentAuthJsonCodec.decodeError(
+                body,
+                AgentAuthDtos.ApiErrorEnvelope.class);
+        return envelope == null || envelope.error == null || envelope.error.code == null
+                ? ""
+                : envelope.error.code;
     }
 
-    private static AuthException apiError(int status, byte[] responseBody) {
-        try {
-            JSONObject root = new JSONObject(new String(responseBody, StandardCharsets.UTF_8));
-            JSONObject error = root.optJSONObject("error");
-            String code = error == null ? "" : error.optString("code");
-            if ("invalid_credentials".equals(code)) {
-                return new AuthException("用户名或密码错误");
-            }
-            if ("key_request_required".equals(code)) {
-                return new AuthException(
-                        "当前没有可用密钥，请先在用户中心提交申请并等待管理员批准");
-            }
-            if ("unauthorized".equals(code)) {
-                return new AuthException("Proxy Web 会话已失效，请重新登录");
-            }
-        } catch (JSONException ignored) {
-        }
-        return new AuthException("认证服务返回 HTTP " + status);
-    }
-
-    private static JSONObject requiredObject(JSONObject source, String key) throws AuthException {
-        JSONObject value = source.optJSONObject(key);
-        if (value == null) {
-            throw new AuthException("Proxy Web 响应格式无效");
-        }
-        return value;
-    }
-
-    private static JSONArray requiredArray(JSONObject source, String key) throws AuthException {
-        JSONArray value = source.optJSONArray(key);
-        if (value == null) {
-            throw new AuthException("Proxy Web 响应格式无效");
-        }
-        return value;
-    }
-
-    private static String requiredString(JSONObject source, String key) throws AuthException {
-        String value = nullableString(source, key);
+    private static String requireText(String value) throws AuthException {
         if (value == null || value.isEmpty()) {
             throw new AuthException("Proxy Web 响应格式无效");
         }
         return value;
     }
 
-    private static String nullableString(JSONObject source, String key) {
-        if (!source.has(key) || source.isNull(key)) {
-            return null;
-        }
-        Object value = source.opt(key);
-        return value instanceof String ? (String) value : null;
-    }
-
-    private static long requiredLong(JSONObject source, String key) throws AuthException {
-        if (!source.has(key) || source.isNull(key)) {
+    private static long requireLong(Long value) throws AuthException {
+        if (value == null) {
             throw new AuthException("Proxy Web 响应格式无效");
         }
-        try {
-            return source.getLong(key);
-        } catch (JSONException error) {
-            throw new AuthException("Proxy Web 响应格式无效", error);
-        }
+        return value;
     }
 
-    private static boolean contains(JSONArray values, String expected) {
-        for (int index = 0; index < values.length(); index++) {
-            if (expected.equals(values.optString(index))) {
-                return true;
+    private static boolean isUrlSafeToken(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (!(Character.isLetterOrDigit(character)
+                    || character == '-'
+                    || character == '_')) {
+                return false;
             }
         }
-        return false;
-    }
-
-    static final class DeviceAuthorization {
-        final String deviceCode;
-        final String verificationUrl;
-        final int expiresInSeconds;
-        final int intervalSeconds;
-
-        DeviceAuthorization(
-                String deviceCode,
-                String verificationUrl,
-                int expiresInSeconds,
-                int intervalSeconds) {
-            this.deviceCode = deviceCode;
-            this.verificationUrl = verificationUrl;
-            this.expiresInSeconds = expiresInSeconds;
-            this.intervalSeconds = intervalSeconds;
-        }
-    }
-
-    static final class DevicePollResult {
-        enum Status {
-            AUTHORIZED,
-            PENDING,
-            SLOW_DOWN
-        }
-
-        final Status status;
-        final int nextPollDelaySeconds;
-        final LoginResult loginResult;
-
-        private DevicePollResult(
-                Status status,
-                int nextPollDelaySeconds,
-                LoginResult loginResult) {
-            this.status = status;
-            this.nextPollDelaySeconds = nextPollDelaySeconds;
-            this.loginResult = loginResult;
-        }
-
-        static DevicePollResult authorized(LoginResult result) {
-            return new DevicePollResult(Status.AUTHORIZED, 0, result);
-        }
-
-        static DevicePollResult pending(int nextPollDelaySeconds) {
-            return new DevicePollResult(Status.PENDING, nextPollDelaySeconds, null);
-        }
-
-        static DevicePollResult slowDown(int nextPollDelaySeconds) {
-            return new DevicePollResult(Status.SLOW_DOWN, nextPollDelaySeconds, null);
-        }
+        return true;
     }
 
     static final class LoginResult {
         final String username;
+        final String role;
+        final Set<String> permissions;
         final long keyVersion;
         final long expiresAt;
         final String privateKeyPem;
         final String proxyIdentityPublicKeyPem;
+        final String accessToken;
+        final long accessTokenExpiresAt;
+        final int refreshAfterSeconds;
 
         LoginResult(
                 String username,
+                String role,
+                Set<String> permissions,
                 long keyVersion,
                 long expiresAt,
                 String privateKeyPem,
-                String proxyIdentityPublicKeyPem) {
+                String proxyIdentityPublicKeyPem,
+                String accessToken,
+                long accessTokenExpiresAt,
+                int refreshAfterSeconds) {
             this.username = username;
+            this.role = role;
+            this.permissions = permissions;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
             this.privateKeyPem = privateKeyPem;
             this.proxyIdentityPublicKeyPem = proxyIdentityPublicKeyPem;
+            this.accessToken = accessToken;
+            this.accessTokenExpiresAt = accessTokenExpiresAt;
+            this.refreshAfterSeconds = refreshAfterSeconds;
+        }
+    }
+
+    static final class ProfileSyncResult {
+        final String username;
+        final String role;
+        final String accountStatus;
+        final Set<String> permissions;
+        final boolean profileEnabled;
+        final long keyVersion;
+        final long expiresAt;
+        final String keyState;
+        final String accessToken;
+        final long accessTokenExpiresAt;
+        final int refreshAfterSeconds;
+
+        ProfileSyncResult(
+                String username,
+                String role,
+                String accountStatus,
+                Set<String> permissions,
+                boolean profileEnabled,
+                long keyVersion,
+                long expiresAt,
+                String keyState,
+                String accessToken,
+                long accessTokenExpiresAt,
+                int refreshAfterSeconds) {
+            this.username = username;
+            this.role = role;
+            this.accountStatus = accountStatus;
+            this.permissions = permissions;
+            this.profileEnabled = profileEnabled;
+            this.keyVersion = keyVersion;
+            this.expiresAt = expiresAt;
+            this.keyState = keyState;
+            this.accessToken = accessToken;
+            this.accessTokenExpiresAt = accessTokenExpiresAt;
+            this.refreshAfterSeconds = refreshAfterSeconds;
+        }
+    }
+
+    enum SyncFailure {
+        UNAUTHORIZED,
+        TRANSIENT,
+        SERVICE_REJECTED,
+        INVALID_RESPONSE
+    }
+
+    static final class SyncException extends Exception {
+        final SyncFailure failure;
+
+        SyncException(SyncFailure failure, String message) {
+            super(message);
+            this.failure = failure;
+        }
+
+        SyncException(SyncFailure failure, String message, Throwable cause) {
+            super(message, cause);
+            this.failure = failure;
         }
     }
 
@@ -861,18 +380,6 @@ final class AgentAuthClient {
 
         AuthException(String message, Throwable cause) {
             super(message, cause);
-        }
-    }
-
-    private static final class Response {
-        final int status;
-        final byte[] body;
-        final int retryAfterSeconds;
-
-        Response(int status, byte[] body, int retryAfterSeconds) {
-            this.status = status;
-            this.body = body;
-            this.retryAfterSeconds = retryAfterSeconds;
         }
     }
 }

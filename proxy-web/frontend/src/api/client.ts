@@ -3,7 +3,6 @@ import {
   decodeAccessRecord,
 } from './decoders/access'
 import {
-  decodeKeyMaterial,
   decodeKeyRequest,
   decodeNullableKeyRequest,
 } from './decoders/keys'
@@ -16,13 +15,16 @@ import {
   decodeSelf,
 } from './decoders/users'
 import { clearClientSession, request } from './transport'
-import { ApiError } from './types'
+import {
+  ApiError,
+  KEY_REQUEST_MESSAGE_MAX_LENGTH,
+} from './types'
 import type {
   AccessLogSettings,
   AccessRecordsResult,
   AgentDeviceAuthorizationInspection,
+  ChangePasswordPayload,
   CreateManagedUserPayload,
-  KeyMaterial,
   KeyRequest,
   ManagedUser,
   ProviderAvailability,
@@ -113,6 +115,15 @@ export async function getMe(): Promise<SelfView> {
   return decodeSelf(await request<unknown>('/api/v1/me'))
 }
 
+export async function changeMyPassword(
+  payload: ChangePasswordPayload,
+): Promise<void> {
+  await request<unknown>('/api/v1/me/password', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function getMyKeyRequest(
   username?: string,
 ): Promise<KeyRequest | null> {
@@ -129,9 +140,21 @@ export async function getMyKeyRequest(
 
 export async function submitMyKeyRequest(
   username?: string,
+  message: string | null = null,
 ): Promise<KeyRequest> {
+  const normalizedMessage = message?.trim() || null
+  if (
+    normalizedMessage &&
+    Array.from(normalizedMessage).length > KEY_REQUEST_MESSAGE_MAX_LENGTH
+  ) {
+    throw new ApiError(
+      `申请留言不能超过 ${KEY_REQUEST_MESSAGE_MAX_LENGTH} 字`,
+      400,
+    )
+  }
   const body = await request<unknown>('/api/v1/me/key-requests', {
     method: 'POST',
+    body: JSON.stringify({ message: normalizedMessage }),
   })
   const keyRequest = decodeNullableKeyRequest(body, username)
   if (!keyRequest) {
@@ -140,17 +163,10 @@ export async function submitMyKeyRequest(
   return keyRequest
 }
 
-export async function getMyPrivateKey(): Promise<KeyMaterial> {
-  return decodeKeyMaterial(
-    await request<unknown>('/api/v1/me/private-key'),
-  )
-}
-
-export async function rotateMyKey(): Promise<KeyMaterial> {
-  const body = await request<unknown>('/api/v1/me/rotate-key', {
+export async function rotateMyKey(): Promise<void> {
+  await request<unknown>('/api/v1/me/rotate-key', {
     method: 'POST',
   })
-  return decodeKeyMaterial(body)
 }
 
 export async function listMyAccessRecords(): Promise<AccessRecordsResult> {

@@ -18,10 +18,13 @@ import Textarea from 'primevue/textarea'
 import Toast from 'primevue/toast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
+import KeyRequestDialog from './components/KeyRequestDialog.vue'
+import RequestMessage from './components/RequestMessage.vue'
 import {
   ApiError,
   approveAgentDeviceAuthorization,
   approveKeyRequest,
+  changeMyPassword,
   clearClientSession,
   createManagedUser,
   deleteManagedUser,
@@ -29,7 +32,6 @@ import {
   getAccessLogSettings,
   getMe,
   getMyKeyRequest,
-  getMyPrivateKey,
   getProviders,
   getSession,
   inspectAgentDeviceAuthorization,
@@ -49,7 +51,6 @@ import {
   type AgentDeviceAuthorizationInspection,
   type AccountRole,
   type AccountStatus,
-  type KeyMaterial,
   type KeyRequest,
   type ManagedUser,
   type ProviderAvailability,
@@ -75,7 +76,7 @@ interface PermissionOption {
   description: string
 }
 
-const permissionOptions: PermissionOption[] = [
+const basePermissionOptions: PermissionOption[] = [
   {
     code: 'proxy.connect.tcp',
     label: 'TCP 代理',
@@ -88,8 +89,8 @@ const permissionOptions: PermissionOption[] = [
   },
   {
     code: 'key.private.read',
-    label: '查看私钥',
-    description: '允许用户读取自己的私钥',
+    label: 'Agent 凭据领取',
+    description: '允许本人授权的 Agent 安全领取连接凭据',
   },
   {
     code: 'key.rotate',
@@ -99,7 +100,34 @@ const permissionOptions: PermissionOption[] = [
 ]
 
 const basePermissionCodes = new Set(
-  permissionOptions.map((permission) => permission.code),
+  basePermissionOptions.map((permission) => permission.code),
+)
+
+const agentPermissionOptions: PermissionOption[] = [
+  {
+    code: 'agent.packet_capture',
+    label: '抓包',
+    description: '允许 Agent 启动或停止本机网络抓包',
+  },
+  {
+    code: 'agent.config.view',
+    label: '查看原始配置',
+    description: '允许在 Agent 中查看未经隐藏的原始配置内容',
+  },
+  {
+    code: 'agent.egress.edit',
+    label: '编辑出口设置',
+    description: '允许更改远端地址、连接超时、压缩方式和 UDP 会话数',
+  },
+  {
+    code: 'agent.runtime_threads.edit',
+    label: '编辑系统线程数',
+    description: '允许调整 Agent 运行时使用的系统线程数量',
+  },
+]
+
+const agentPermissionCodes = new Set(
+  agentPermissionOptions.map((permission) => permission.code),
 )
 
 const roleOptions = [
@@ -108,8 +136,8 @@ const roleOptions = [
 ]
 
 const statusOptions = [
-  { label: '正常', value: 'active' },
-  { label: '已停用', value: 'disabled' },
+  { label: '启用账号（允许登录）', value: 'active' },
+  { label: '停用账号（禁止登录）', value: 'disabled' },
 ]
 
 const toast = useToast()
@@ -118,8 +146,7 @@ const currentTime = ref(Date.now())
 let clockTimer: ReturnType<typeof setInterval> | undefined
 
 const booting = ref(true)
-const initialAuthMode = requestedAuthMode()
-const authMode = ref<AuthMode>(initialAuthMode)
+const authMode = ref<AuthMode>(requestedAuthMode())
 const authLoading = ref(false)
 const providers = ref<ProviderAvailability>({
   localRegistration: true,
@@ -139,11 +166,15 @@ const agentAuthorizationDecisionLoading = ref<'approve' | 'deny' | null>(null)
 const agentAuthorizationOutcome = ref<'authorized' | 'denied' | null>(null)
 const agentAuthorizationError = ref('')
 
-const ownKey = ref<KeyMaterial | null>(null)
-const ownKeyVisible = ref(false)
-const ownKeyLoading = ref(false)
 const keyRequestLoading = ref(false)
-let ownKeyTimer: ReturnType<typeof setTimeout> | undefined
+const keyRequestDialogVisible = ref(false)
+const keyRotationLoading = ref(false)
+const passwordSaving = ref(false)
+const passwordForm = reactive({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+})
 const accessRecords = ref<AccessRecord[]>([])
 const accessRecordsLoading = ref(false)
 const accessRetentionDays = ref(7)
@@ -162,6 +193,7 @@ const createForm = reactive({
   username: '',
   password: '',
   expiresAt: defaultExpiry(),
+  agentPermissions: [] as string[],
   additionalPermissions: '',
 })
 const editVisible = ref(false)
@@ -172,7 +204,9 @@ const editForm = reactive({
   status: 'active' as AccountStatus,
   enabled: true,
   expiresAt: null as Date | null,
+  agentPermissions: [] as string[],
 })
+const editingCustomPermissions = ref<string[]>([])
 const deletingUsername = ref('')
 const rotatingUsername = ref('')
 const approvalVisible = ref(false)
@@ -194,10 +228,17 @@ const additionalPermissions = computed(() =>
   [
     ...new Set(
       (profile.value?.permissions ?? []).filter(
-        (permission) => !basePermissionCodes.has(permission),
+        (permission) =>
+          !basePermissionCodes.has(permission) &&
+          !agentPermissionCodes.has(permission),
       ),
     ),
   ].sort((left, right) => left.localeCompare(right)),
+)
+const grantedAgentPermissions = computed(() =>
+  agentPermissionOptions.filter((permission) =>
+    hasEffectivePermission(permission.code),
+  ),
 )
 const keyState = computed(() => {
   const state = self.value?.keyState ?? 'missing'
@@ -207,22 +248,12 @@ const keyState = computed(() => {
 })
 const pendingKeyRequest = computed(() => self.value?.pendingKeyRequest ?? null)
 const profileExpired = computed(() => isExpired(profile.value?.expiresAt ?? null))
-const hasActiveVisibleKey = computed(
-  () => keyState.value === 'active' && Boolean(profile.value?.publicKeyPem),
-)
-const canReadOwnPrivate = computed(
-  () =>
-    keyState.value === 'active' &&
-    hasActiveVisibleKey.value &&
-    Boolean(self.value?.hasPrivateKey) &&
-    Boolean(profile.value?.permissions.includes('key.private.read')),
-)
 const canRotateOwnKey = computed(
   () =>
     keyState.value === 'active' &&
     Boolean(profile.value?.enabled) &&
     !profileExpired.value &&
-    Boolean(profile.value?.permissions.includes('key.rotate')),
+    hasEffectivePermission('key.rotate'),
 )
 const filteredAccessRecords = computed(() => {
   const query = accessHostFilter.value.trim().toLocaleLowerCase()
@@ -252,19 +283,19 @@ const filteredAdminUsers = computed(() => {
   })
 })
 const adminMetrics = computed(() => {
-  let active = 0
-  let disabled = 0
+  let activeAccounts = 0
+  let disabledAccounts = 0
   for (const user of adminUsers.value) {
-    if (managedState(user) === 'active') {
-      active += 1
-    } else {
-      disabled += 1
+    if (user.account?.status === 'active') {
+      activeAccounts += 1
+    } else if (user.account?.status === 'disabled') {
+      disabledAccounts += 1
     }
   }
   return {
     total: adminUsers.value.length,
-    active,
-    disabled,
+    activeAccounts,
+    disabledAccounts,
     pending: adminKeyRequests.value.length,
   }
 })
@@ -277,15 +308,12 @@ const editingProfileReadOnly = computed(() => {
     user.keyState === 'expired'
   )
 })
+const editingRootAdmin = computed(() => isRootAdmin(editingUser.value))
 const editingHasEditableFields = computed(
   () =>
-    Boolean(editingUser.value?.account) ||
-    (Boolean(editingUser.value?.profile) && !editingProfileReadOnly.value),
+    (Boolean(editingUser.value?.account) && !editingRootAdmin.value) ||
+    Boolean(editingUser.value?.profile),
 )
-const registrationOnly = computed(
-  () => initialAuthMode === 'register' && providers.value.localRegistration,
-)
-
 onMounted(async () => {
   clockTimer = setInterval(() => {
     currentTime.value = Date.now()
@@ -320,11 +348,12 @@ onUnmounted(() => {
   if (clockTimer) {
     clearInterval(clockTimer)
   }
-  clearOwnKey()
 })
 
 watch(activePage, async (page) => {
-  clearOwnKey()
+  if (page !== 'account') {
+    resetPasswordForm()
+  }
   if (page === 'admin' && isAdmin.value) {
     await refreshAdminUsers()
   }
@@ -333,12 +362,6 @@ watch(activePage, async (page) => {
 watch(createVisible, (visible) => {
   if (!visible) {
     createForm.password = ''
-  }
-})
-
-watch(keyState, (state) => {
-  if (state !== 'active') {
-    clearOwnKey()
   }
 })
 
@@ -356,6 +379,81 @@ function showError(summary: string, error: unknown): void {
     detail: errorMessage(error),
     life: 5000,
   })
+}
+
+function resetPasswordForm(): void {
+  passwordForm.currentPassword = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+}
+
+async function submitPasswordChange(): Promise<void> {
+  const currentPassword = passwordForm.currentPassword
+  const newPassword = passwordForm.newPassword
+  const loginUsername = account.value?.username ?? ''
+  if (!currentPassword || !newPassword || !passwordForm.confirmPassword) {
+    toast.add({
+      severity: 'warn',
+      summary: '请完整填写三个密码字段',
+      life: 2800,
+    })
+    return
+  }
+  if (Array.from(newPassword).length < PASSWORD_MIN_CHARACTERS) {
+    toast.add({
+      severity: 'warn',
+      summary: `新密码至少需要 ${PASSWORD_MIN_CHARACTERS} 个字符`,
+      life: 3200,
+    })
+    return
+  }
+  if (newPassword !== passwordForm.confirmPassword) {
+    toast.add({
+      severity: 'warn',
+      summary: '两次输入的新密码不一致',
+      life: 3000,
+    })
+    return
+  }
+  if (newPassword === currentPassword) {
+    toast.add({
+      severity: 'warn',
+      summary: '新密码不能与当前密码相同',
+      life: 3000,
+    })
+    return
+  }
+
+  passwordSaving.value = true
+  try {
+    await changeMyPassword({
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+    resetPasswordForm()
+    clearClientSession()
+    session.value = null
+    self.value = null
+    adminUsers.value = []
+    adminKeyRequests.value = []
+    accessRecords.value = []
+    accessHostFilter.value = ''
+    accessRecordsFirst.value = 0
+    keyRequestDialogVisible.value = false
+    activePage.value = 'account'
+    authMode.value = 'login'
+    authForm.username = loginUsername
+    authForm.password = ''
+    toast.add({
+      severity: 'success',
+      summary: '密码已更新，请使用新密码重新登录',
+      life: 5000,
+    })
+  } catch (error) {
+    showError('修改密码失败', error)
+  } finally {
+    passwordSaving.value = false
+  }
 }
 
 async function submitAuth(): Promise<void> {
@@ -406,7 +504,7 @@ async function submitAuth(): Promise<void> {
 }
 
 async function performLogout(): Promise<void> {
-  clearOwnKey()
+  resetPasswordForm()
   try {
     await logout()
   } catch {
@@ -419,6 +517,7 @@ async function performLogout(): Promise<void> {
   accessRecords.value = []
   accessHostFilter.value = ''
   accessRecordsFirst.value = 0
+  keyRequestDialogVisible.value = false
   activePage.value = 'account'
   authForm.password = ''
   agentAuthorization.value = null
@@ -504,9 +603,6 @@ async function refreshSelf(): Promise<void> {
       // /me already carries the pending request; keep it if the refresh endpoint
       // is temporarily unavailable.
     }
-    if (nextSelf.keyState !== 'active') {
-      clearOwnKey()
-    }
     self.value = nextSelf
     if (nextSelf.account) {
       session.value = {
@@ -514,17 +610,21 @@ async function refreshSelf(): Promise<void> {
         account: nextSelf.account,
       }
     }
-    if (nextSelf.account.role === 'user') {
-      await refreshAccessRecords(false)
-    } else if (nextSelf.account.role === 'admin') {
+    if (nextSelf.account.role === 'admin') {
       // 管理员登录完成后立即读取待审批申请。不能只依赖切换到“用户管理”
       // 页面的 watch；页面状态被保留或申请刚刚提交时，watch 不一定再次触发。
-      await refreshAdminUsers()
+      await Promise.all([
+        refreshAccessRecords(false),
+        refreshAdminUsers(),
+      ])
+    } else {
+      await refreshAccessRecords(false)
     }
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       session.value = null
       self.value = null
+      keyRequestDialogVisible.value = false
       clearClientSession()
     } else {
       showError('无法读取账户信息', error)
@@ -549,19 +649,25 @@ async function refreshAccessRecords(showFailure = true): Promise<void> {
   }
 }
 
-async function submitKeyRequest(): Promise<void> {
+function openKeyRequestDialog(): void {
+  keyRequestDialogVisible.value = true
+}
+
+async function submitKeyRequest(message: string | null): Promise<void> {
   keyRequestLoading.value = true
   try {
     const request = await submitMyKeyRequest(
       profile.value?.username ?? account.value?.username,
+      message,
     )
     if (self.value) {
       self.value.pendingKeyRequest = request
     }
+    keyRequestDialogVisible.value = false
     toast.add({
       severity: 'success',
       summary: '密钥申请已提交',
-      detail: '管理员批准并设置有效期后，你可以在这里查看新密钥',
+      detail: '管理员批准并设置有效期后，已授权 Agent 可以领取新凭据',
       life: 5000,
     })
   } catch (error) {
@@ -580,72 +686,11 @@ async function refreshKeyRequest(): Promise<void> {
   }
 }
 
-async function revealOwnKey(): Promise<void> {
-  ownKeyLoading.value = true
-  try {
-    ownKey.value = await getMyPrivateKey()
-    ownKeyVisible.value = true
-    armOwnKeyTimer()
-  } catch (error) {
-    showError('无法读取私钥', error)
-  } finally {
-    ownKeyLoading.value = false
-  }
-}
-
-function hideOwnKey(): void {
-  clearOwnKey()
-}
-
-function clearOwnKey(): void {
-  if (ownKeyTimer) {
-    clearTimeout(ownKeyTimer)
-    ownKeyTimer = undefined
-  }
-  ownKey.value = null
-  ownKeyVisible.value = false
-}
-
-function armOwnKeyTimer(): void {
-  if (ownKeyTimer) {
-    clearTimeout(ownKeyTimer)
-  }
-  ownKeyTimer = setTimeout(clearOwnKey, 5 * 60 * 1000)
-}
-
-function downloadOwnPrivateKey(): void {
-  if (!ownKey.value || keyState.value !== 'active') {
-    return
-  }
-  const safeUsername = (profile.value?.username ?? account.value?.username ?? 'user')
-    .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '') || 'user'
-  const blob = new Blob([ownKey.value.privateKeyPem], {
-    type: 'application/x-pem-file;charset=utf-8',
-  })
-  const objectUrl = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = objectUrl
-  anchor.download = `${safeUsername}-private-key.pem`
-  anchor.rel = 'noopener'
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
-  armOwnKeyTimer()
-  toast.add({
-    severity: 'success',
-    summary: '私钥文件已下载',
-    detail: '请将 PEM 文件保存在安全位置，不要通过不可信渠道传输',
-    life: 4200,
-  })
-}
-
 function confirmRotateOwnKey(): void {
   confirm.require({
     header: '重新生成密钥对',
     message:
-      '旧私钥会立即失效。已经建立的连接不会被强制断开，但之后的新连接必须使用新私钥。',
+      '旧连接凭据会立即失效。已经建立的连接不会被强制断开，但之后的新连接必须使用新凭据。',
     icon: 'pi pi-refresh',
     acceptLabel: '生成新密钥',
     rejectLabel: '取消',
@@ -657,26 +702,20 @@ function confirmRotateOwnKey(): void {
 }
 
 async function rotateOwnKey(): Promise<void> {
-  ownKeyLoading.value = true
+  keyRotationLoading.value = true
   try {
-    const key = await rotateMyKey()
+    await rotateMyKey()
     await refreshSelf()
-    ownKey.value = {
-      ...key,
-      publicKeyPem: key.publicKeyPem || profile.value?.publicKeyPem || '',
-    }
-    ownKeyVisible.value = true
-    armOwnKeyTimer()
     toast.add({
       severity: 'success',
       summary: '新密钥对已生成',
-      detail: '请立即保存新私钥',
+      detail: '已授权 Agent 将在下次认证时领取新的连接凭据',
       life: 5000,
     })
   } catch (error) {
     showError('密钥更新失败', error)
   } finally {
-    ownKeyLoading.value = false
+    keyRotationLoading.value = false
   }
 }
 
@@ -746,6 +785,7 @@ function openCreate(): void {
   createForm.username = ''
   createForm.password = ''
   createForm.expiresAt = defaultExpiry()
+  createForm.agentPermissions = []
   createForm.additionalPermissions = ''
   createMinimumExpiry.value = minimumFutureExpiry()
   createVisible.value = true
@@ -789,6 +829,7 @@ async function submitCreate(): Promise<void> {
   }
   const additionalPermissions = parseAdditionalPermissions(
     createForm.additionalPermissions,
+    createForm.agentPermissions.length,
   )
   if (!additionalPermissions) {
     return
@@ -799,7 +840,10 @@ async function submitCreate(): Promise<void> {
       username,
       password: createForm.password,
       expires_at: createForm.expiresAt.toISOString(),
-      permissions: additionalPermissions,
+      permissions: [
+        ...createForm.agentPermissions,
+        ...additionalPermissions,
+      ],
     })
     createVisible.value = false
     createForm.password = ''
@@ -807,7 +851,7 @@ async function submitCreate(): Promise<void> {
     toast.add({
       severity: 'success',
       summary: '用户和密钥对已创建',
-      detail: '密钥已安全生成，公钥仅供服务端认证，只有该用户本人可以查看私钥',
+      detail: '连接凭据已加密存储，只能由该用户授权的 Agent 领取',
       life: 6000,
     })
   } catch (error) {
@@ -823,6 +867,15 @@ function openEdit(user: ManagedUser): void {
   editForm.status = user.account?.status ?? 'active'
   editForm.enabled = user.profile?.enabled ?? true
   editForm.expiresAt = parseDate(user.profile?.expiresAt ?? null)
+  const permissions = user.profile?.permissions ?? []
+  editForm.agentPermissions = agentPermissionOptions
+    .filter((permission) => permissions.includes(permission.code))
+    .map((permission) => permission.code)
+  editingCustomPermissions.value = permissions.filter(
+    (permission) =>
+      !basePermissionCodes.has(permission) &&
+      !agentPermissionCodes.has(permission),
+  )
   editVisible.value = true
 }
 
@@ -838,16 +891,23 @@ async function submitEdit(): Promise<void> {
   editSaving.value = true
   try {
     await updateManagedUser(managedUsername(user), {
-      role: user.account ? editForm.role : undefined,
-      status: user.account ? editForm.status : undefined,
-      enabled:
-        user.profile && !editingProfileReadOnly.value
-          ? editForm.enabled
-          : undefined,
+      role: user.account && !isRootAdmin(user) ? editForm.role : undefined,
+      status: user.account && !isRootAdmin(user) ? editForm.status : undefined,
+      enabled: user.profile ? editForm.enabled : undefined,
       expires_at:
         user.profile && !editingProfileReadOnly.value
         ? editForm.expiresAt?.toISOString() ?? null
         : undefined,
+      permissions:
+        user.profile &&
+        user.profile.origin !== 'legacy' &&
+        user.account &&
+        editForm.role === 'user'
+          ? [
+              ...editForm.agentPermissions,
+              ...editingCustomPermissions.value,
+            ]
+          : undefined,
     })
     editVisible.value = false
     editingUser.value = null
@@ -886,7 +946,7 @@ async function rotateAdminKey(user: ManagedUser): Promise<void> {
     toast.add({
       severity: 'success',
       summary: '用户密钥已重新生成',
-      detail: '公钥仅供服务端认证，只有该用户本人可以查看新的私钥',
+      detail: '新的连接凭据只能由该用户授权的 Agent 领取',
       life: 5000,
     })
   } catch (error) {
@@ -967,6 +1027,16 @@ async function performRejectKeyRequest(request: KeyRequest): Promise<void> {
 }
 
 function confirmDelete(user: ManagedUser): void {
+  const blockedReason = deleteBlockedReason(user)
+  if (blockedReason) {
+    toast.add({
+      severity: 'warn',
+      summary: '暂不能删除用户',
+      detail: blockedReason,
+      life: 3600,
+    })
+    return
+  }
   const username = managedUsername(user)
   confirm.require({
     header: '删除用户',
@@ -994,20 +1064,6 @@ async function performDelete(username: string): Promise<void> {
   }
 }
 
-async function copyText(value: string, label: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value)
-    toast.add({ severity: 'success', summary: `${label}已复制`, life: 1800 })
-  } catch {
-    toast.add({
-      severity: 'warn',
-      summary: '复制失败',
-      detail: '请手动选择并复制',
-      life: 3200,
-    })
-  }
-}
-
 function managedUsername(user: ManagedUser): string {
   return (
     user.profile?.username ??
@@ -1017,17 +1073,53 @@ function managedUsername(user: ManagedUser): string {
   )
 }
 
-function managedState(user: ManagedUser): 'active' | 'disabled' | 'expired' {
-  if (
-    user.account?.status === 'disabled' ||
-    user.profile?.enabled === false
-  ) {
-    return 'disabled'
+function deleteBlockedReason(user: ManagedUser): string | null {
+  if (isRootAdmin(user)) {
+    return '根管理员 admin 不能停用、降级或删除'
   }
-  if (isExpired(user.profile?.expiresAt ?? null)) {
-    return 'expired'
+  if (user.account) {
+    return user.account.status === 'disabled' ? null : '请先停用账号'
   }
-  return 'active'
+  if (user.profile?.origin === 'legacy') {
+    return user.profile.enabled ? '请先停用代理配置' : null
+  }
+  return '该用户没有可删除的 Web 账号或 legacy 配置'
+}
+
+function isRootAdmin(user: ManagedUser | null): boolean {
+  return user?.account?.username === 'admin'
+}
+
+function accountStatusLabel(user: ManagedUser): string {
+  if (!user.account) {
+    return '无 Web 账号'
+  }
+  return user.account.status === 'active' ? '账号已启用' : '账号已停用'
+}
+
+function accountStatusSeverity(
+  user: ManagedUser,
+): 'success' | 'secondary' {
+  return user.account?.status === 'active' ? 'success' : 'secondary'
+}
+
+function profileStatusLabel(user: ManagedUser): string {
+  if (!user.profile) {
+    return '无代理配置'
+  }
+  if (!user.profile.enabled) {
+    return '代理配置已停用'
+  }
+  return isExpired(user.profile.expiresAt) ? '代理配置已过期' : '代理配置已启用'
+}
+
+function profileStatusSeverity(
+  user: ManagedUser,
+): 'success' | 'warn' | 'secondary' {
+  if (!user.profile || !user.profile.enabled) {
+    return 'secondary'
+  }
+  return isExpired(user.profile.expiresAt) ? 'warn' : 'success'
 }
 
 function canAdminRotateDirectly(user: ManagedUser): boolean {
@@ -1067,26 +1159,19 @@ function keyRequestKindLabel(request: KeyRequest): string {
   return request.kind === 'rotate' ? '过期重生成' : '首次申请'
 }
 
-function stateLabel(user: ManagedUser): string {
-  const state = managedState(user)
-  return state === 'active' ? '正常' : state === 'expired' ? '已过期' : '已停用'
-}
-
-function stateSeverity(
-  user: ManagedUser,
-): 'success' | 'warn' | 'danger' | 'secondary' {
-  const state = managedState(user)
-  return state === 'active' ? 'success' : state === 'expired' ? 'warn' : 'danger'
-}
-
 function permissionLabel(code: string): string {
-  return permissionOptions.find((permission) => permission.code === code)?.label ?? code
+  return [...basePermissionOptions, ...agentPermissionOptions]
+    .find((permission) => permission.code === code)?.label ?? code
 }
 
-function parseAdditionalPermissions(value: string): string[] | null {
-  const baseCodes = new Set(
-    permissionOptions.map((permission) => permission.code),
-  )
+function hasEffectivePermission(code: string): boolean {
+  return isAdmin.value || Boolean(profile.value?.permissions.includes(code))
+}
+
+function parseAdditionalPermissions(
+  value: string,
+  selectedAgentPermissionCount = 0,
+): string[] | null {
   const permissions = [
     ...new Set(
       value
@@ -1094,7 +1179,11 @@ function parseAdditionalPermissions(value: string): string[] | null {
         .map((permission) => permission.trim())
         .filter(Boolean),
     ),
-  ].filter((permission) => !baseCodes.has(permission))
+  ].filter(
+    (permission) =>
+      !basePermissionCodes.has(permission) &&
+      !agentPermissionCodes.has(permission),
+  )
 
   const invalid = permissions.find(
     (permission) =>
@@ -1110,11 +1199,12 @@ function parseAdditionalPermissions(value: string): string[] | null {
     })
     return null
   }
-  if (permissions.length > 28) {
+  const maximumCustomPermissions = 28 - selectedAgentPermissionCount
+  if (permissions.length > maximumCustomPermissions) {
     toast.add({
       severity: 'warn',
       summary: '附加权限过多',
-      detail: '除四项基础能力外，最多可以分配 28 项附加权限',
+      detail: `当前已选择 ${selectedAgentPermissionCount} 项 Agent 权限，最多还能分配 ${maximumCustomPermissions} 项自定义权限`,
       life: 4200,
     })
     return null
@@ -1275,29 +1365,21 @@ function clearAgentAuthorizationLocation(): void {
       </a>
       <div class="intro-copy">
         <p class="eyebrow">SECURE ACCESS</p>
-        <template v-if="registrationOnly">
-          <h1 id="auth-title">创建你的<br />代理账户。</h1>
-          <p>
-            注册后提交密钥申请；管理员批准并分配有效期后，即可使用代理服务。
-          </p>
-        </template>
-        <template v-else>
-          <h1 id="auth-title">你的代理身份，<br />由你掌控。</h1>
-          <p>
-            登录后查看私钥、有效期与权限。私钥仅在需要时显示，并会自动从页面中清除。
-          </p>
-        </template>
+        <h1 id="auth-title">你的代理身份，<br />由你掌控。</h1>
+        <p>
+          登录后管理账户密码，并查看代理有效期、权限与密钥状态。
+        </p>
       </div>
       <div class="intro-security">
         <span><i class="pi pi-database" /> SQLite 加密存储</span>
-        <span><i class="pi pi-clock" /> 私钥自动隐藏</span>
+        <span><i class="pi pi-desktop" /> Agent 安全领取凭据</span>
         <span><i class="pi pi-lock" /> HttpOnly 安全会话</span>
       </div>
     </section>
 
     <section
       class="auth-panel"
-      :aria-label="registrationOnly ? '用户注册' : '账户登录'"
+      aria-label="账户登录和注册"
     >
       <div class="auth-card">
         <div
@@ -1321,17 +1403,12 @@ function clearAgentAuthorizationLocation(): void {
             {{
               authMode === 'login'
                 ? '使用用户名和密码继续。'
-                : '注册后可以提交密钥申请；管理员批准有效期后，密钥仅向你本人显示。'
+                : '注册后可以提交密钥申请；管理员批准有效期后，即可通过 Agent 使用代理。'
             }}
           </p>
         </div>
 
-        <div
-          v-if="!registrationOnly"
-          class="auth-tabs"
-          role="tablist"
-          aria-label="登录或注册"
-        >
+        <div class="auth-tabs" role="tablist" aria-label="登录或注册">
           <button
             type="button"
             role="tab"
@@ -1622,10 +1699,10 @@ function clearAgentAuthorizationLocation(): void {
           <div>
             <p class="eyebrow">ACCOUNT OVERVIEW</p>
             <h1>我的代理身份</h1>
-            <p>查看当前身份状态、连接权限和密钥材料。</p>
+            <p>查看当前身份状态、连接权限和账户安全设置。</p>
           </div>
           <Tag
-            :value="account?.status === 'active' ? '账户正常' : '账户已停用'"
+            :value="account?.status === 'active' ? '账号已启用' : '账号已停用'"
             :severity="account?.status === 'active' ? 'success' : 'danger'"
             rounded
           />
@@ -1636,7 +1713,7 @@ function clearAgentAuthorizationLocation(): void {
           <span>正在读取账户信息…</span>
         </div>
 
-        <template v-else-if="account?.role === 'user'">
+        <template v-else>
           <div v-if="profile" class="summary-grid">
             <article class="summary-card">
               <span class="summary-icon blue"><i class="pi pi-user" /></span>
@@ -1689,18 +1766,22 @@ function clearAgentAuthorizationLocation(): void {
                 <h2>我的权限</h2>
                 <p>服务端会在每次连接和密钥操作时校验这些权限。</p>
               </div>
-              <Tag :value="`${profile.permissions.length} 项`" severity="info" rounded />
+              <Tag
+                :value="isAdmin ? '管理员全权限' : `${profile.permissions.length} 项`"
+                severity="info"
+                rounded
+              />
             </div>
             <div class="permission-list">
               <div
-                v-for="permission in permissionOptions"
+                v-for="permission in basePermissionOptions"
                 :key="permission.code"
                 class="permission-item"
-                :class="{ granted: profile.permissions.includes(permission.code) }"
+                :class="{ granted: hasEffectivePermission(permission.code) }"
               >
                 <i
                   :class="
-                    profile.permissions.includes(permission.code)
+                    hasEffectivePermission(permission.code)
                       ? 'pi pi-check-circle'
                       : 'pi pi-minus-circle'
                   "
@@ -1710,13 +1791,56 @@ function clearAgentAuthorizationLocation(): void {
                   <small>{{ permission.description }}</small>
                 </span>
                 <Tag
-                  :value="
-                    profile.permissions.includes(permission.code) ? '已授权' : '未授权'
-                  "
+                  :value="isAdmin ? '管理员固有' : hasEffectivePermission(permission.code) ? '已授权' : '未授权'"
                   :severity="
-                    profile.permissions.includes(permission.code) ? 'success' : 'secondary'
+                    hasEffectivePermission(permission.code) ? 'success' : 'secondary'
                   "
                 />
+              </div>
+            </div>
+            <div class="agent-permissions-overview">
+              <div class="additional-permissions-heading">
+                <span>
+                  <strong>Agent 管理权限</strong>
+                  <small>决定 Agent 中可使用的本机管理功能。</small>
+                </span>
+                <Tag
+                  :value="isAdmin ? '全部可用' : `${grantedAgentPermissions.length} / 4`"
+                  :severity="grantedAgentPermissions.length ? 'info' : 'secondary'"
+                  rounded
+                />
+              </div>
+              <div class="permission-list">
+                <div
+                  v-for="permission in agentPermissionOptions"
+                  :key="permission.code"
+                  class="permission-item"
+                  :class="{ granted: hasEffectivePermission(permission.code) }"
+                >
+                  <i
+                    :class="
+                      hasEffectivePermission(permission.code)
+                        ? 'pi pi-check-circle'
+                        : 'pi pi-minus-circle'
+                    "
+                  />
+                  <span>
+                    <strong>{{ permission.label }}</strong>
+                    <small>{{ permission.description }}</small>
+                  </span>
+                  <Tag
+                    :value="
+                      isAdmin
+                        ? '管理员固有'
+                        : hasEffectivePermission(permission.code)
+                          ? '已授权'
+                          : '未授权'
+                    "
+                    :severity="
+                      hasEffectivePermission(permission.code) ? 'success' : 'secondary'
+                    "
+                  />
+                </div>
               </div>
             </div>
             <div class="additional-permissions">
@@ -1751,95 +1875,98 @@ function clearAgentAuthorizationLocation(): void {
             </div>
           </section>
 
-          <template v-if="hasActiveVisibleKey && profile">
-            <section class="key-grid private-only-key-grid">
-              <article class="content-card key-card private-card">
-                <div class="card-heading">
-                  <div>
-                    <h2>私钥</h2>
-                    <p>请勿分享。显示后会在五分钟内自动清除。</p>
-                  </div>
-                  <Tag value="敏感信息" severity="warn" rounded />
-                </div>
-                <div v-if="!ownKeyVisible" class="secret-placeholder">
-                  <i class="pi pi-eye-slash" />
-                  <strong>私钥当前已隐藏</strong>
-                  <span v-if="canReadOwnPrivate">点击后会从加密存储中临时读取。</span>
-                  <span v-else>当前账户没有查看私钥的权限或可用私钥。</span>
-                  <Button
-                    class="secret-reveal-button"
-                    label="显示私钥"
-                    icon="pi pi-eye"
-                    severity="secondary"
-                    outlined
-                    size="small"
-                    :loading="ownKeyLoading"
-                    :disabled="!canReadOwnPrivate"
-                    :aria-busy="ownKeyLoading"
-                    @click="revealOwnKey"
-                  />
-                </div>
-                <template v-else-if="ownKey">
-                  <Textarea
-                    class="private-key-textarea"
-                    :model-value="ownKey.privateKeyPem"
-                    readonly
-                    wrap="off"
-                    aria-label="代理私钥"
-                  />
-                  <div class="secret-actions">
-                    <span><i class="pi pi-clock" /> 五分钟后自动隐藏</span>
-                    <Button
-                      label="复制私钥"
-                      icon="pi pi-copy"
-                      severity="secondary"
-                      outlined
-                      size="small"
-                      @click="copyText(ownKey.privateKeyPem, '私钥')"
-                    />
-                    <Button
-                      label="下载私钥"
-                      icon="pi pi-download"
-                      severity="secondary"
-                      outlined
-                      size="small"
-                      @click="downloadOwnPrivateKey"
-                    />
-                    <Button
-                      label="立即隐藏"
-                      icon="pi pi-eye-slash"
-                      severity="secondary"
-                      text
-                      size="small"
-                      @click="hideOwnKey"
-                    />
-                  </div>
-                </template>
-              </article>
-            </section>
-
-            <section class="rotate-banner" :class="{ unavailable: !canRotateOwnKey }">
-              <div class="rotate-icon"><i class="pi pi-refresh" /></div>
+          <section class="content-card account-security-card">
+            <div class="card-heading">
               <div>
-                <h2>重新生成密钥对</h2>
-                <p v-if="canRotateOwnKey">
-                  在有效期内可以直接更新。更新后，旧私钥将不能用于建立新连接。
-                </p>
-                <p v-else>
-                  当前账户没有更新密钥的权限，或代理配置已被停用。
-                </p>
+                <h2>登录安全</h2>
+                <p>修改用于登录 Proxy Web 和 Agent 的账户密码。</p>
               </div>
-              <Button
-                label="生成新密钥"
-                icon="pi pi-refresh"
-                severity="danger"
-                outlined
-                :loading="ownKeyLoading"
-                :disabled="!canRotateOwnKey"
-                @click="confirmRotateOwnKey"
-              />
-            </section>
-          </template>
+              <Tag value="密码保护" severity="success" rounded />
+            </div>
+            <form class="password-change-form" @submit.prevent="submitPasswordChange">
+              <div class="password-fields">
+                <div class="form-field">
+                  <label for="account-current-password">当前密码</label>
+                  <Password
+                    v-model="passwordForm.currentPassword"
+                    input-id="account-current-password"
+                    :feedback="false"
+                    :toggle-mask="true"
+                    :input-props="{ autocomplete: 'current-password' }"
+                    placeholder="输入当前密码"
+                    fluid
+                  />
+                </div>
+                <div class="form-field">
+                  <label for="account-new-password">新密码</label>
+                  <Password
+                    v-model="passwordForm.newPassword"
+                    input-id="account-new-password"
+                    :feedback="true"
+                    :toggle-mask="true"
+                    :input-props="{
+                      autocomplete: 'new-password',
+                      minlength: PASSWORD_MIN_CHARACTERS,
+                    }"
+                    :placeholder="`至少 ${PASSWORD_MIN_CHARACTERS} 个字符`"
+                    fluid
+                  />
+                </div>
+                <div class="form-field">
+                  <label for="account-confirm-password">确认新密码</label>
+                  <Password
+                    v-model="passwordForm.confirmPassword"
+                    input-id="account-confirm-password"
+                    :feedback="false"
+                    :toggle-mask="true"
+                    :input-props="{
+                      autocomplete: 'new-password',
+                      minlength: PASSWORD_MIN_CHARACTERS,
+                    }"
+                    placeholder="再次输入新密码"
+                    fluid
+                  />
+                </div>
+              </div>
+              <div class="password-change-actions">
+                <small>
+                  修改后会退出全部 Web 会话，请使用新密码重新登录。
+                </small>
+                <Button
+                  type="submit"
+                  label="更新登录密码"
+                  icon="pi pi-lock"
+                  :loading="passwordSaving"
+                />
+              </div>
+            </form>
+          </section>
+
+          <section
+            v-if="keyState === 'active' && profile"
+            class="rotate-banner"
+            :class="{ unavailable: !canRotateOwnKey }"
+          >
+            <div class="rotate-icon"><i class="pi pi-refresh" /></div>
+            <div>
+              <h2>重新生成密钥对</h2>
+              <p v-if="canRotateOwnKey">
+                在有效期内可以直接更新。更新后，已授权 Agent 会自动领取新的连接凭据。
+              </p>
+              <p v-else>
+                当前账户没有更新密钥的权限，或代理配置已被停用。
+              </p>
+            </div>
+            <Button
+              label="生成新密钥"
+              icon="pi pi-refresh"
+              severity="danger"
+              outlined
+              :loading="keyRotationLoading"
+              :disabled="!canRotateOwnKey"
+              @click="confirmRotateOwnKey"
+            />
+          </section>
 
           <section
             v-else
@@ -1887,7 +2014,7 @@ function clearAgentAuthorizationLocation(): void {
               >
                 申请于
                 {{ pendingKeyRequest.createdAt ? formatExpiry(pendingKeyRequest.createdAt) : '刚刚' }}
-                提交。管理员批准并设置新的有效期后，私钥只会向你本人显示。
+                提交。管理员批准并设置新的有效期后，已授权 Agent 会领取新的连接凭据。
               </p>
               <p v-else-if="keyState === 'expired'">
                 旧密钥已失效，不能继续用于新连接。提交申请后，管理员将审核并设置新的有效期。
@@ -1901,6 +2028,14 @@ function clearAgentAuthorizationLocation(): void {
               <p v-else>
                 当前状态显示密钥有效，但未返回完整的密钥状态。请刷新后重试。
               </p>
+              <RequestMessage
+                v-if="
+                  keyState !== 'disabled' &&
+                  pendingKeyRequest?.status === 'pending'
+                "
+                :message="pendingKeyRequest.requestMessage"
+                label="我的留言"
+              />
               <div class="key-request-actions">
                 <Button
                   v-if="
@@ -1911,7 +2046,7 @@ function clearAgentAuthorizationLocation(): void {
                   icon="pi pi-send"
                   :loading="keyRequestLoading"
                   :disabled="account?.status !== 'active' || profile?.enabled === false"
-                  @click="submitKeyRequest"
+                  @click="openKeyRequestDialog"
                 />
                 <Button
                   label="刷新状态"
@@ -2051,18 +2186,6 @@ function clearAgentAuthorizationLocation(): void {
           </section>
         </template>
 
-        <section v-else class="empty-state content-card">
-          <i class="pi pi-shield" />
-          <h2>此管理员没有代理身份</h2>
-          <p>管理员账户可以管理用户，但不会自动拥有代理密钥。</p>
-          <Button
-            v-if="isAdmin"
-            label="前往用户管理"
-            icon="pi pi-arrow-right"
-            icon-pos="right"
-            @click="activePage = 'admin'"
-          />
-        </section>
       </section>
 
       <section v-else-if="activePage === 'admin' && isAdmin" class="page-section">
@@ -2070,7 +2193,7 @@ function clearAgentAuthorizationLocation(): void {
           <div>
             <p class="eyebrow">ADMIN CONSOLE</p>
             <h1>用户管理</h1>
-            <p>管理账户、代理配置和有效期，并可触发密钥生成；密钥内容仅用户本人可见。</p>
+            <p>管理账户、代理配置和有效期，并可触发密钥生成；连接凭据只由账户本人授权的 Agent 领取。</p>
           </div>
           <Button label="新建普通用户" icon="pi pi-user-plus" @click="openCreate" />
         </div>
@@ -2082,11 +2205,17 @@ function clearAgentAuthorizationLocation(): void {
           </article>
           <article class="summary-card">
             <span class="summary-icon green"><i class="pi pi-check" /></span>
-            <div><small>正常可用</small><strong>{{ adminMetrics.active }}</strong></div>
+            <div>
+              <small>启用账号</small>
+              <strong>{{ adminMetrics.activeAccounts }}</strong>
+            </div>
           </article>
           <article class="summary-card">
             <span class="summary-icon red"><i class="pi pi-ban" /></span>
-            <div><small>停用或过期</small><strong>{{ adminMetrics.disabled }}</strong></div>
+            <div>
+              <small>停用账号</small>
+              <strong>{{ adminMetrics.disabledAccounts }}</strong>
+            </div>
           </article>
           <article class="summary-card pending-metric">
             <span class="summary-icon orange"><i class="pi pi-bell" /></span>
@@ -2100,7 +2229,7 @@ function clearAgentAuthorizationLocation(): void {
               <span class="approval-title-icon"><i class="pi pi-key" /></span>
               <div>
                 <h2>密钥申请审批</h2>
-                <p>批准时只设置有效期并触发生成，公钥仅供服务端认证，管理员不会看到私钥 PEM。</p>
+                <p>批准时只设置有效期并触发生成，连接凭据只能由用户授权的 Agent 领取。</p>
               </div>
             </div>
             <div class="approval-heading-actions">
@@ -2136,12 +2265,18 @@ function clearAgentAuthorizationLocation(): void {
                 :label="request.username.slice(0, 1).toUpperCase()"
                 shape="circle"
               />
-              <div class="approval-user">
-                <strong>{{ request.displayName || request.username }}</strong>
-                <span>
-                  {{ request.username }}
-                  <template v-if="request.email"> · {{ request.email }}</template>
-                </span>
+              <div class="approval-request-main">
+                <div class="approval-user">
+                  <strong>{{ request.displayName || request.username }}</strong>
+                  <span>
+                    {{ request.username }}
+                    <template v-if="request.email"> · {{ request.email }}</template>
+                  </span>
+                </div>
+                <RequestMessage
+                  :message="request.requestMessage"
+                  compact
+                />
               </div>
               <Tag
                 :value="keyRequestKindLabel(request)"
@@ -2251,7 +2386,7 @@ function clearAgentAuthorizationLocation(): void {
             :rows="10"
             :rows-per-page-options="[10, 25, 50]"
             scrollable
-            table-style="min-width: 68rem"
+            table-style="min-width: 78rem"
             paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
             current-page-report-template="第 {first}–{last} 条，共 {totalRecords} 条"
           >
@@ -2276,16 +2411,35 @@ function clearAgentAuthorizationLocation(): void {
               <template #body="{ data }">
                 <div class="tag-stack">
                   <Tag
-                    :value="data.account?.role === 'admin' ? '管理员' : '普通用户'"
+                    :value="
+                      isRootAdmin(data)
+                        ? '根管理员'
+                        : data.account?.role === 'admin'
+                          ? '管理员'
+                          : '普通用户'
+                    "
                     :severity="data.account?.role === 'admin' ? 'info' : 'secondary'"
                   />
                   <small>{{ originLabel(data.profile?.origin) }}</small>
                 </div>
               </template>
             </Column>
-            <Column header="状态" style="min-width: 7rem">
+            <Column header="Web 账号" style="min-width: 9rem">
               <template #body="{ data }">
-                <Tag :value="stateLabel(data)" :severity="stateSeverity(data)" rounded />
+                <Tag
+                  :value="accountStatusLabel(data)"
+                  :severity="accountStatusSeverity(data)"
+                  rounded
+                />
+              </template>
+            </Column>
+            <Column header="代理配置" style="min-width: 10rem">
+              <template #body="{ data }">
+                <Tag
+                  :value="profileStatusLabel(data)"
+                  :severity="profileStatusSeverity(data)"
+                  rounded
+                />
               </template>
             </Column>
             <Column header="有效期" style="min-width: 12rem">
@@ -2295,7 +2449,10 @@ function clearAgentAuthorizationLocation(): void {
             </Column>
             <Column header="权限" style="min-width: 14rem">
               <template #body="{ data }">
-                <div v-if="data.profile?.permissions.length" class="permission-tags">
+                <div v-if="data.account?.role === 'admin'" class="permission-tags">
+                  <Tag value="Agent 全权限" severity="info" />
+                </div>
+                <div v-else-if="data.profile?.permissions.length" class="permission-tags">
                   <Tag
                     v-for="permission in data.profile.permissions.slice(0, 2)"
                     :key="permission"
@@ -2340,16 +2497,23 @@ function clearAgentAuthorizationLocation(): void {
                     aria-label="编辑用户"
                     @click="openEdit(data)"
                   />
-                  <Button
-                    v-tooltip.top="'删除'"
-                    icon="pi pi-trash"
-                    severity="danger"
-                    text
-                    rounded
-                    aria-label="删除用户"
-                    :loading="deletingUsername === managedUsername(data)"
-                    @click="confirmDelete(data)"
-                  />
+                  <span
+                    class="row-action-tooltip"
+                    v-tooltip.top="deleteBlockedReason(data) || '删除用户'"
+                  >
+                    <Button
+                      icon="pi pi-trash"
+                      severity="danger"
+                      text
+                      rounded
+                      :aria-label="
+                        deleteBlockedReason(data) || '删除用户'
+                      "
+                      :loading="deletingUsername === managedUsername(data)"
+                      :disabled="Boolean(deleteBlockedReason(data))"
+                      @click="confirmDelete(data)"
+                    />
+                  </span>
                 </div>
               </template>
             </Column>
@@ -2367,7 +2531,7 @@ function clearAgentAuthorizationLocation(): void {
     :style="{ width: 'min(92vw, 650px)' }"
   >
     <p class="dialog-lead">
-      保存后服务端会生成 RSA 密钥对并加密存储。公钥仅供服务端认证，私钥只有用户本人登录后可以查看。
+      保存后服务端会生成 RSA 密钥对并加密存储，连接凭据只能由该用户授权的 Agent 领取。
     </p>
     <form id="create-user-form" class="dialog-form" @submit.prevent="submitCreate">
       <div class="form-field">
@@ -2430,7 +2594,7 @@ function clearAgentAuthorizationLocation(): void {
         </div>
         <ul>
           <li
-            v-for="permission in permissionOptions"
+            v-for="permission in basePermissionOptions"
             :key="permission.code"
           >
             <i class="pi pi-check-circle" />
@@ -2441,8 +2605,43 @@ function clearAgentAuthorizationLocation(): void {
           </li>
         </ul>
       </section>
+      <section
+        class="agent-permission-picker"
+        aria-labelledby="create-agent-permissions-title"
+      >
+        <div class="permission-picker-heading">
+          <div>
+            <strong id="create-agent-permissions-title">Agent 管理权限</strong>
+            <small>按需分配；未勾选的功能会在 Agent 中禁用。</small>
+          </div>
+          <Tag
+            :value="`${createForm.agentPermissions.length} / 4`"
+            severity="info"
+            rounded
+          />
+        </div>
+        <div class="permission-picker-grid">
+          <label
+            v-for="permission in agentPermissionOptions"
+            :key="permission.code"
+            class="permission-choice"
+            :class="{ selected: createForm.agentPermissions.includes(permission.code) }"
+            :for="`create-${permission.code}`"
+          >
+            <Checkbox
+              v-model="createForm.agentPermissions"
+              :input-id="`create-${permission.code}`"
+              :value="permission.code"
+            />
+            <span>
+              <strong>{{ permission.label }}</strong>
+              <small>{{ permission.description }}</small>
+            </span>
+          </label>
+        </div>
+      </section>
       <div class="form-field">
-        <label for="create-additional-permissions">附加权限</label>
+        <label for="create-additional-permissions">自定义权限</label>
         <Textarea
           id="create-additional-permissions"
           v-model="createForm.additionalPermissions"
@@ -2452,7 +2651,7 @@ function clearAgentAuthorizationLocation(): void {
           fluid
         />
         <small id="additional-permissions-help">
-          可选。使用逗号、空格或换行分隔 permission code；重复项和上方四项基础能力会自动排除，服务端会自动合并基础能力。
+          可选。使用逗号、空格或换行分隔 permission code；基础能力和上方四项 Agent 权限会自动排除。
         </small>
       </div>
     </form>
@@ -2485,24 +2684,38 @@ function clearAgentAuthorizationLocation(): void {
             :options="roleOptions"
             option-label="label"
             option-value="value"
+            :disabled="editingRootAdmin"
             fluid
           />
         </div>
         <div class="form-field">
-          <label for="edit-status">登录状态</label>
+          <label for="edit-status">Web 登录账号状态</label>
           <Select
             id="edit-status"
             v-model="editForm.status"
             :options="statusOptions"
             option-label="label"
             option-value="value"
+            :disabled="editingRootAdmin"
             fluid
           />
+          <small>
+            停用账号会禁止 Proxy Web 和 Agent 登录；不会单独改变下方代理配置开关。
+          </small>
         </div>
       </div>
-      <div v-else class="legacy-notice">
+      <div v-if="editingRootAdmin" class="root-admin-notice">
+        <i class="pi pi-lock" />
+        <span>
+          <strong>根管理员账号受保护</strong>
+          <small>根管理员 admin 不能停用、降级或删除。</small>
+        </span>
+      </div>
+      <div v-if="!editingUser?.account" class="legacy-notice">
         <i class="pi pi-info-circle" />
-        <span>这是历史导入的只读配置，Web 控制台不会修改其有效期、权限或密钥。</span>
+        <span>
+          该 legacy 配置没有 Web 登录账号；这里只能启用或停用代理配置，有效期、权限和密钥保持只读。
+        </span>
       </div>
       <template v-if="editingUser?.profile">
         <div
@@ -2529,7 +2742,7 @@ function clearAgentAuthorizationLocation(): void {
             fluid
           />
           <small v-if="editingProfileReadOnly">
-            当前为只读状态，不能从这里延长或恢复有效期。
+            代理有效期为只读状态，不能从这里延长或恢复。
           </small>
           <small v-else>清空表示永久有效。</small>
         </div>
@@ -2538,12 +2751,14 @@ function clearAgentAuthorizationLocation(): void {
             v-model="editForm.enabled"
             input-id="edit-enabled"
             binary
-            :disabled="editingProfileReadOnly"
           />
-          <span><strong>允许代理连接</strong><small>关闭后会拒绝该用户建立新连接。</small></span>
+          <span>
+            <strong>启用代理配置</strong>
+            <small>仅控制新代理连接；不会启用或停用 Web 登录账号。</small>
+          </span>
         </label>
         <section
-          v-if="editingUser?.account"
+          v-if="editingUser?.account && editForm.role === 'user'"
           class="fixed-capabilities"
           aria-labelledby="edit-capabilities-title"
         >
@@ -2551,12 +2766,12 @@ function clearAgentAuthorizationLocation(): void {
             <span class="summary-icon blue"><i class="pi pi-shield" /></span>
             <div>
               <strong id="edit-capabilities-title">普通用户基础能力</strong>
-              <small>这些能力不可单独撤销；可通过上方开关整体停用代理连接。</small>
+              <small>这些能力不可单独撤销；可通过“启用代理配置”开关整体控制。</small>
             </div>
           </div>
           <ul>
             <li
-              v-for="permission in permissionOptions"
+              v-for="permission in basePermissionOptions"
               :key="permission.code"
             >
               <i class="pi pi-check-circle" />
@@ -2567,6 +2782,71 @@ function clearAgentAuthorizationLocation(): void {
             </li>
           </ul>
         </section>
+        <section
+          v-if="editingUser?.account && editForm.role === 'user'"
+          class="agent-permission-picker"
+          aria-labelledby="edit-agent-permissions-title"
+        >
+          <div class="permission-picker-heading">
+            <div>
+              <strong id="edit-agent-permissions-title">Agent 管理权限</strong>
+              <small>可随时勾选或取消；保存后 Agent 会按最新权限限制功能。</small>
+            </div>
+            <Tag
+              :value="`${editForm.agentPermissions.length} / 4`"
+              severity="info"
+              rounded
+            />
+          </div>
+          <div class="permission-picker-grid">
+            <label
+              v-for="permission in agentPermissionOptions"
+              :key="permission.code"
+              class="permission-choice"
+              :class="{ selected: editForm.agentPermissions.includes(permission.code) }"
+              :for="`edit-${permission.code}`"
+            >
+              <Checkbox
+                v-model="editForm.agentPermissions"
+                :input-id="`edit-${permission.code}`"
+                :value="permission.code"
+                :disabled="editingUser.profile.origin === 'legacy'"
+              />
+              <span>
+                <strong>{{ permission.label }}</strong>
+                <small>{{ permission.description }}</small>
+              </span>
+            </label>
+          </div>
+          <div
+            v-if="editingCustomPermissions.length"
+            class="preserved-permissions"
+          >
+            <span>
+              <strong>保留的自定义权限</strong>
+              <small>保存时会原样保留，不会因勾选 Agent 权限而丢失。</small>
+            </span>
+            <div class="additional-permission-tags">
+              <Tag
+                v-for="permission in editingCustomPermissions"
+                :key="permission"
+                :value="permission"
+                severity="secondary"
+                rounded
+              />
+            </div>
+          </div>
+        </section>
+        <div
+          v-else-if="editingUser?.account && editForm.role === 'admin'"
+          class="admin-permission-notice"
+        >
+          <i class="pi pi-shield" />
+          <span>
+            <strong>管理员 Agent 自动拥有全部管理权限</strong>
+            <small>无需勾选；管理员身份会在 Agent 端直接启用全部受控功能。</small>
+          </span>
+        </div>
       </template>
     </form>
     <template #footer>
@@ -2586,6 +2866,13 @@ function clearAgentAuthorizationLocation(): void {
       />
     </template>
   </Dialog>
+
+  <KeyRequestDialog
+    v-model:visible="keyRequestDialogVisible"
+    :loading="keyRequestLoading"
+    :renewal="keyState === 'expired'"
+    @submit="submitKeyRequest"
+  />
 
   <Dialog
     v-model:visible="approvalVisible"
@@ -2608,10 +2895,16 @@ function clearAgentAuthorizationLocation(): void {
         :severity="approvalRequest.kind === 'rotate' ? 'warn' : 'info'"
       />
     </div>
+    <RequestMessage
+      v-if="approvalRequest"
+      class="approval-dialog-message"
+      :message="approvalRequest.requestMessage"
+      label="用户留言"
+    />
     <div class="privacy-notice">
       <i class="pi pi-eye-slash" />
       <span>
-        批准后服务端会生成新密钥。公钥仅供服务端认证，私钥仅用户本人登录后可见。
+        批准后服务端会生成新密钥，连接凭据只能由该用户授权的 Agent 领取。
       </span>
     </div>
     <div class="form-field approval-expiry-field">

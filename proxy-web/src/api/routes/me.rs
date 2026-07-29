@@ -27,6 +27,56 @@ pub(crate) async fn get_me(
     }))
 }
 
+#[instrument(skip(state, headers, payload))]
+pub(crate) async fn change_my_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<ChangePasswordRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    validate_browser_mutation(&headers)?;
+    let session = authenticate(&state, &headers).await?;
+    state.sessions.require_csrf(&session, &headers)?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let login = state
+        .accounts
+        .get_login_record(&session.account.login_name)
+        .await?
+        .filter(|record| record.account.account_id == session.account.account_id)
+        .ok_or_else(ApiError::unauthorized)?;
+    let current_password_valid = state
+        .passwords
+        .verify_password(request.current_password, login.password_hash)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    if !current_password_valid {
+        return Err(ApiError::invalid_current_password());
+    }
+    let password_hash = state
+        .passwords
+        .hash_password(request.new_password)
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let account = state
+        .accounts
+        .update_password_hash(
+            &session.account.account_id,
+            session.account.auth_version,
+            password_hash,
+        )
+        .await?;
+
+    state.sessions.revoke_account(&account.account_id);
+    let cookie = state.sessions.clear(&headers);
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    append_set_cookie(response.headers_mut(), cookie);
+    info!(
+        account_id = account.account_id,
+        auth_version = account.auth_version,
+        "用户修改登录密码，旧 Web 会话已撤销"
+    );
+    Ok(response)
+}
+
 pub(crate) async fn get_my_private_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -65,14 +115,16 @@ pub(crate) async fn get_my_key_request(
     Ok(Json(MyKeyRequestResponse { request }))
 }
 
-#[instrument(skip(state, headers))]
+#[instrument(skip(state, headers, payload))]
 pub(crate) async fn submit_my_key_request(
     State(state): State<AppState>,
     headers: HeaderMap,
+    payload: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
     let session = authenticate(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
+    let request_message = parse_optional_key_request_payload(&headers, payload).await?;
 
     if let Some(existing) = state
         .accounts
@@ -103,6 +155,7 @@ pub(crate) async fn submit_my_key_request(
     let request = NewKeyGenerationRequest {
         request_id: new_key_request_id(),
         account_id: session.account.account_id.clone(),
+        request_message,
     };
     let (status, request) = match state.accounts.submit_key_generation_request(request).await {
         Ok(request) => (StatusCode::CREATED, request),
@@ -123,6 +176,23 @@ pub(crate) async fn submit_my_key_request(
         "用户提交密钥申请"
     );
     Ok((status, Json(SelfKeyRequestResponse::from_request(request))).into_response())
+}
+
+async fn parse_optional_key_request_payload(
+    headers: &HeaderMap,
+    payload: Result<Bytes, BytesRejection>,
+) -> Result<Option<String>, ApiError> {
+    let payload = payload.map_err(ApiError::from_bytes_rejection)?;
+    if payload.is_empty() {
+        return Ok(None);
+    }
+
+    let mut request = axum::extract::Request::new(Body::from(payload));
+    *request.headers_mut() = headers.clone();
+    let Json(payload) = Json::<SubmitKeyRequest>::from_request(request, &())
+        .await
+        .map_err(ApiError::from_json_rejection)?;
+    Ok(payload.message)
 }
 
 pub(crate) async fn get_my_access_records(

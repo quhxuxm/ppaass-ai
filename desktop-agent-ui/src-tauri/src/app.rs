@@ -10,18 +10,21 @@ use crate::agent::{
     start_agent_command, stop_agent_inner_command,
 };
 use crate::auth::{
-    authenticate_and_download, cleanup_old_managed_private_keys, destroy_managed_private_key,
-    destroy_managed_proxy_identity_public_key, destroy_persisted_agent_login,
-    load_persisted_agent_login, open_system_browser, persist_agent_login,
-    poll_device_authorization, registration_page_url, start_device_authorization,
-    write_managed_private_key, write_managed_proxy_identity_public_key, DeviceAuthorizationPoll,
-    DownloadedCredential,
+    account_management_page_url, apply_permission_snapshot, authenticate_and_download,
+    authenticate_rotate_and_download, cleanup_old_managed_private_keys,
+    destroy_managed_private_key, destroy_managed_proxy_identity_public_key,
+    destroy_persisted_agent_login, fetch_agent_permission_snapshot, load_persisted_agent_login,
+    open_system_browser, persist_agent_login, poll_device_authorization,
+    start_device_authorization, write_managed_private_key, write_managed_proxy_identity_public_key,
+    DeviceAuthorizationPoll, DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,
     enforce_managed_identity, install_bundled_agent_assets, load_config_from_path,
-    load_default_config, locate_config_path, make_absolute_path, primary_agent_config_path,
-    proxy_web_url_from_config, redact_managed_identity, write_config_file,
+    load_default_config, loaded_config_from_raw, locate_config_path, make_absolute_path,
+    merge_config_summary, prepare_config_for_account, primary_agent_config_path,
+    proxy_web_url_from_config, remember_trusted_config_baseline,
+    validate_config_candidate_against_trusted_baseline, write_config_file,
 };
 use crate::diagnostics::run_connectivity_tests_blocking;
 #[cfg(target_os = "macos")]
@@ -32,13 +35,14 @@ use crate::macos_helper::{
 #[cfg(windows)]
 use crate::models::ServiceRequest;
 use crate::models::{
-    AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress, AgentLoginRequest,
-    AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
-    PacketCaptureRuntimeStatus,
+    AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState, AgentConfigSummary,
+    AgentDeviceLoginProgress, AgentKeyRotationRequest, AgentLoginRequest, AgentState,
+    ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
+    AGENT_CONFIG_VIEW_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
-use crate::runtime::AgentRuntime;
+use crate::runtime::{AgentPermissionTrust, AgentRuntime, AuthenticatedAgentSession};
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
 use crate::tray::restore_main_window;
 #[cfg(any(windows, target_os = "macos"))]
@@ -56,6 +60,7 @@ use crate::windows_service::{
 mod bootstrap;
 mod config_commands;
 mod login_commands;
+mod permission_sync;
 mod provisioning;
 mod state;
 mod telemetry_commands;
@@ -63,6 +68,7 @@ mod telemetry_commands;
 pub(crate) use bootstrap::*;
 pub(crate) use config_commands::*;
 pub(crate) use login_commands::*;
+pub(crate) use permission_sync::*;
 pub(crate) use provisioning::*;
 pub(crate) use state::*;
 pub(crate) use telemetry_commands::*;

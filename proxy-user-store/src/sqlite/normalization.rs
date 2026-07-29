@@ -146,13 +146,7 @@ pub(super) fn parse_retention_days(value: &str) -> Result<u16> {
     Ok(retention_days)
 }
 
-pub(super) fn ensure_active_normal_account(account: &WebAccount) -> Result<()> {
-    if account.role != AccountRole::User {
-        return Err(UserRepositoryError::KeyRequestNotEligible {
-            account_id: account.account_id.clone(),
-            reason: "管理员账号不能申请普通用户 Proxy 密钥".to_string(),
-        });
-    }
+pub(super) fn ensure_active_key_account(account: &WebAccount) -> Result<()> {
     if account.status != AccountStatus::Active {
         return Err(UserRepositoryError::KeyRequestNotEligible {
             account_id: account.account_id.clone(),

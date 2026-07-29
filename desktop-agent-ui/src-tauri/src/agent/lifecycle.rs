@@ -17,6 +17,10 @@ pub(crate) fn start_agent_command(
     runtime: &AgentRuntime,
     config_path: String,
 ) -> Result<AgentState, String> {
+    let session = runtime.require_authenticated_session()?;
+    let candidate = load_config_from_path(Path::new(&config_path))?;
+    validate_config_candidate_against_trusted_baseline(runtime, &session.account, &candidate)?;
+
     #[cfg(windows)]
     {
         start_agent_via_windows_service(config_path, &runtime.logs)

@@ -69,7 +69,9 @@ protected void buildStatusScreen(LinearLayout root) {
         LinearLayout accountRow = horizontalRow();
         accountRow.setPadding(0, dp(14), 0, 0);
         accountSummary = mutedText(authenticatedAccountSummary(), 12.5f);
-        accountSummary.setSingleLine(true);
+        accountSummary.setSingleLine(false);
+        accountSummary.setMaxLines(4);
+        accountSummary.setLineSpacing(dp(2), 1f);
         accountSummary.setEllipsize(TextUtils.TruncateAt.END);
         accountSummary.setContentDescription(tr("当前登录用户"));
         accountRow.addView(accountSummary, new LinearLayout.LayoutParams(

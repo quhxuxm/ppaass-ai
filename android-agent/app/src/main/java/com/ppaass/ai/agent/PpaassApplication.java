@@ -11,8 +11,10 @@ public final class PpaassApplication extends Application {
         super.onCreate();
         if (AgentAuthSession.restore(this)) {
             Log.i(TAG, "Restored persistent Agent login");
+            AgentProfileSyncManager.start(this);
         } else {
             Log.i(TAG, "No persistent Agent login to restore");
+            AgentProfileSyncManager.stop();
         }
     }
 }

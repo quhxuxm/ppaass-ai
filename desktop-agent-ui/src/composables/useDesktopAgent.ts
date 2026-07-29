@@ -23,7 +23,19 @@ import {
 import { createPollingController } from "./desktopAgent/pollingController";
 import { createRuntimeController } from "./desktopAgent/runtimeController";
 
-export function useDesktopAgent() {
+export interface DesktopAgentAccess {
+  canUsePacketCapture: () => boolean;
+  canViewRawConfig: () => boolean;
+}
+
+const unrestrictedDesktopAgentAccess: DesktopAgentAccess = {
+  canUsePacketCapture: () => true,
+  canViewRawConfig: () => true
+};
+
+export function useDesktopAgent(
+  access: DesktopAgentAccess = unrestrictedDesktopAgentAccess
+) {
   const model = createDesktopAgentModel();
   const { state } = model;
   const notify = (kind: ToastKind, message: string) =>
@@ -31,10 +43,12 @@ export function useDesktopAgent() {
 
   let configController: ConfigController;
   const runtimeController = createRuntimeController(model, {
+    canUsePacketCapture: access.canUsePacketCapture,
     persistConfig: () => configController.persistConfig(),
     showToast: notify
   });
   configController = createConfigController(model, {
+    canViewRawConfig: access.canViewRawConfig,
     refreshAgentState: runtimeController.refreshAgentState,
     showToast: notify
   });

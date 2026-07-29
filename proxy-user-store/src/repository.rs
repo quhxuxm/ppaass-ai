@@ -42,8 +42,8 @@ pub trait AccountRepository: Send + Sync {
     /// 仅在尚未绑定时写入主密钥校验值，并始终返回数据库中的实际值。
     async fn initialize_key_encryption_verifier(&self, verifier: &str) -> Result<String>;
 
-    /// 当数据库还没有管理员时原子创建首个管理员。
-    async fn bootstrap_admin_if_none(&self, admin: NewAdminAccount) -> Result<BootstrapOutcome>;
+    /// 当指定登录名不存在时原子创建 bootstrap 管理员。
+    async fn bootstrap_admin_if_absent(&self, admin: NewAdminAccount) -> Result<BootstrapOutcome>;
 
     async fn get_account_by_login(&self, login_name: &str) -> Result<Option<WebAccount>>;
 
@@ -57,6 +57,16 @@ pub trait AccountRepository: Send + Sync {
 
     /// 登录校验专用查询；返回值含密码哈希，调用方不得记录。
     async fn get_login_record(&self, login_name: &str) -> Result<Option<LoginRecord>>;
+
+    /// 以账号认证版本为 CAS 条件更新密码哈希，并递增认证版本。
+    ///
+    /// 调用方必须先校验当前密码；存储层只负责原子替换哈希，绝不接触明文密码。
+    async fn update_password_hash(
+        &self,
+        account_id: &str,
+        expected_auth_version: i64,
+        password_hash: String,
+    ) -> Result<WebAccount>;
 
     /// 同时列出有 Web 账号的托管用户与数据库中保留的历史 legacy 用户。
     async fn list_managed_users(&self) -> Result<Vec<ManagedUser>>;
@@ -89,7 +99,7 @@ pub trait AccountRepository: Send + Sync {
     /// 以 profile 的 `key_version` 为 CAS 条件原子轮换公钥和私钥信封。
     async fn rotate_keypair(&self, rotation: KeyPairRotation) -> Result<UserRecord>;
 
-    /// 为普通账号提交密钥申请；类型和期望版本由存储层按当前状态推导。
+    /// 为启用的用户或管理员账号提交密钥申请；类型和期望版本由存储层按当前状态推导。
     async fn submit_key_generation_request(
         &self,
         request: NewKeyGenerationRequest,
@@ -123,7 +133,7 @@ pub trait AccountRepository: Send + Sync {
         reviewer_account_id: &str,
     ) -> Result<KeyGenerationRequest>;
 
-    /// 原子删除 Web 账号及其关联的 Proxy profile。
+    /// 仅当账号已经停用时，原子删除 Web 账号及其关联的 Proxy profile。
     async fn delete_managed_user(&self, account_id: &str) -> Result<()>;
 
     async fn active_admin_count(&self) -> Result<u64>;

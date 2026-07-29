@@ -28,7 +28,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
     private boolean authenticationInProgress;
     private boolean loginUiVisible;
     private long authenticationAttempt;
-
     protected void showAgentEntry() {
         if (AgentAuthSession.isActive(this)) {
             loginUiVisible = false;
@@ -52,7 +51,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
     protected boolean isAgentAuthenticationInProgress() {
         return authenticationInProgress;
     }
-
     private void buildLoginUi() {
         loginUiVisible = true;
         authenticationInProgress = false;
@@ -157,7 +155,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
         loginParams.setMargins(0, dp(16), 0, 0);
         card.addView(loginButton, loginParams);
 
-        registrationButton = secondaryButton("新用户注册");
+        registrationButton = secondaryButton("注册和账户管理");
         registrationButton.setOnClickListener(view -> openRegistrationPage());
         LinearLayout.LayoutParams registrationParams = matchWrap();
         registrationParams.height = dp(48);
@@ -290,13 +288,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
             String password,
             boolean rememberLogin) throws IOException {
         try {
-            ManagedCredentials.install(
-                    this,
-                    result.username,
-                    result.keyVersion,
-                    result.expiresAt,
-                    result.privateKeyPem,
-                    result.proxyIdentityPublicKeyPem);
+            ManagedCredentials.install(this, result);
             if (rememberLogin) {
                 if (!RememberedLoginStore.save(this, username, password)) {
                     throw new IOException("无法保存已记住的登录信息");
@@ -304,13 +296,11 @@ abstract class MainActivityAuth extends MainActivityScreens {
             } else if (!RememberedLoginStore.clear(this)) {
                 throw new IOException("无法清除已记住的登录信息");
             }
-            AgentAuthSession.authenticate(
-                    result.username,
-                    result.keyVersion,
-                    result.expiresAt);
+            AgentAuthSession.authenticate(result);
             AgentAuthSession.applyVerifiedServerStatus(
                     this,
                     NativeAgent.AUTHENTICATION_VERIFIED_ACTIVE);
+            AgentProfileSyncManager.start(this);
         } catch (IOException | RuntimeException error) {
             AgentAuthSession.clear();
             boolean credentialsCleared = ManagedCredentials.clear(this);
@@ -321,24 +311,6 @@ abstract class MainActivityAuth extends MainActivityScreens {
                 error.addSuppressed(new IOException("无法清理失败登录遗留的 Agent 私钥"));
             }
             throw error;
-        }
-    }
-
-    private void stopAgentsForCredentialReplacement() {
-        if (PpaassVpnService.isRunningInProcess()
-                || prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false)) {
-            stopVpnService();
-        }
-        if (PpaassHttpProxyService.isRunningInProcess()
-                || prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false)
-                || prefs.getBoolean(PpaassHttpProxyService.PREF_ENABLED, false)) {
-            stopHttpProxyService();
-        }
-        if (PpaassVpnService.isMockGeoRunningInProcess()
-                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
-                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
-                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)) {
-            stopMockGeoService();
         }
     }
 
@@ -367,13 +339,14 @@ abstract class MainActivityAuth extends MainActivityScreens {
                     Uri.parse(AgentAuthConfig.registrationUrl(this)));
             startActivity(intent);
         } catch (IOException | RuntimeException error) {
-            showLoginError("无法打开新用户注册页面");
+            showLoginError("无法打开注册和账户管理页面");
         }
     }
 
     @Override
     protected void logoutAgentAccount() {
         AgentAuthenticationCoordinator.cancelAll();
+        AgentProfileSyncManager.stop();
         authenticationAttempt = 0;
         authenticationInProgress = false;
         stopAgentsForCredentialReplacement();
@@ -395,6 +368,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
     protected void onAgentSessionInvalidated() {
         statusHandler.removeCallbacks(statusRefresh);
         AgentAuthenticationCoordinator.cancelAll();
+        AgentProfileSyncManager.stop();
         authenticationAttempt = 0;
         authenticationInProgress = false;
         AgentAuthSession.clear();

@@ -6,18 +6,53 @@ use std::thread::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+use crate::auth::AgentAccessToken;
 use crate::logging::UiLogBuffer;
 #[cfg(windows)]
 use crate::models::VerifiedProxyAuthStatus;
-use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
+use crate::models::{AgentAuthAccount, AgentAuthAccountStatus, AgentConfigSummary};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentPermissionTrust {
+    CachedUnverified,
+    ServerVerified,
+}
 
 #[derive(Clone)]
 pub(crate) struct AuthenticatedAgentSession {
     pub(crate) account: AgentAuthAccount,
     pub(crate) account_status: AgentAuthAccountStatus,
+    pub(crate) permission_trust: AgentPermissionTrust,
     pub(crate) private_key_path: PathBuf,
     pub(crate) proxy_identity_public_key_path: PathBuf,
     pub(crate) proxy_web_url: String,
+    pub(crate) agent_access_token: Option<AgentAccessToken>,
+}
+
+impl AuthenticatedAgentSession {
+    pub(crate) fn new(
+        account: AgentAuthAccount,
+        account_status: AgentAuthAccountStatus,
+        private_key_path: PathBuf,
+        proxy_identity_public_key_path: PathBuf,
+        proxy_web_url: String,
+        agent_access_token: Option<AgentAccessToken>,
+        permission_trust: AgentPermissionTrust,
+    ) -> Self {
+        let account = match permission_trust {
+            AgentPermissionTrust::CachedUnverified => account.unverified_cache_projection(),
+            AgentPermissionTrust::ServerVerified => account,
+        };
+        Self {
+            account,
+            account_status,
+            permission_trust,
+            private_key_path,
+            proxy_identity_public_key_path,
+            proxy_web_url,
+            agent_access_token,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -35,12 +70,16 @@ pub(crate) struct AgentRuntime {
     pub(crate) agent: Mutex<Option<EmbeddedAgent>>,
     pub(crate) auth_operation: tokio::sync::Mutex<()>,
     authenticated_session: Mutex<Option<AuthenticatedAgentSession>>,
+    permission_sync_error: Mutex<Option<String>>,
+    pub(crate) permission_sync_in_progress: AtomicBool,
+    pub(crate) permission_sync_notify: tokio::sync::Notify,
     pending_device_authorization: Mutex<Option<PendingAgentDeviceAuthorization>>,
     next_device_authorization_id: AtomicU64,
     #[cfg(windows)]
     verified_proxy_auth_status: Mutex<Option<VerifiedProxyAuthStatus>>,
     pub(crate) config_path: Mutex<Option<PathBuf>>,
     pub(crate) ui_config_path: Mutex<Option<PathBuf>>,
+    pub(crate) trusted_config_baseline: Mutex<Option<AgentConfigSummary>>,
     pub(crate) packet_capture_enabled: AtomicBool,
     pub(crate) logs: UiLogBuffer,
     pub(crate) last_error: Arc<Mutex<Option<String>>>,
@@ -58,12 +97,16 @@ impl AgentRuntime {
             agent: Mutex::new(None),
             auth_operation: tokio::sync::Mutex::new(()),
             authenticated_session: Mutex::new(None),
+            permission_sync_error: Mutex::new(None),
+            permission_sync_in_progress: AtomicBool::new(false),
+            permission_sync_notify: tokio::sync::Notify::new(),
             pending_device_authorization: Mutex::new(None),
             next_device_authorization_id: AtomicU64::new(1),
             #[cfg(windows)]
             verified_proxy_auth_status: Mutex::new(None),
             config_path: Mutex::new(None),
             ui_config_path: Mutex::new(None),
+            trusted_config_baseline: Mutex::new(None),
             packet_capture_enabled: AtomicBool::new(false),
             logs: UiLogBuffer::new(1200),
             last_error: Arc::new(Mutex::new(None)),
@@ -101,32 +144,78 @@ impl AgentRuntime {
 
     pub(crate) fn set_authenticated_session(
         &self,
-        account: AgentAuthAccount,
-        account_status: AgentAuthAccountStatus,
-        private_key_path: PathBuf,
-        proxy_identity_public_key_path: PathBuf,
-        proxy_web_url: String,
+        session: AuthenticatedAgentSession,
     ) -> Result<(), String> {
         *self
             .authenticated_session
             .lock()
-            .map_err(|_| "登录状态锁已损坏".to_string())? = Some(AuthenticatedAgentSession {
-            account,
-            account_status,
-            private_key_path,
-            proxy_identity_public_key_path,
-            proxy_web_url,
-        });
+            .map_err(|_| "登录状态锁已损坏".to_string())? = Some(session);
+        *self
+            .permission_sync_error
+            .lock()
+            .map_err(|_| "权限同步状态锁已损坏".to_string())? = None;
+        self.permission_sync_notify.notify_one();
         Ok(())
+    }
+
+    pub(crate) fn permission_sync_error(&self) -> Result<Option<String>, String> {
+        self.permission_sync_error
+            .lock()
+            .map_err(|_| "权限同步状态锁已损坏".to_string())
+            .map(|error| error.clone())
+    }
+
+    pub(crate) fn set_permission_sync_error(&self, error: Option<String>) -> Result<(), String> {
+        *self
+            .permission_sync_error
+            .lock()
+            .map_err(|_| "权限同步状态锁已损坏".to_string())? = error;
+        Ok(())
+    }
+
+    pub(crate) fn update_authenticated_session_from_sync(
+        &self,
+        expected_username: &str,
+        expected_token: &str,
+        account: AgentAuthAccount,
+        account_status: AgentAuthAccountStatus,
+        agent_access_token: AgentAccessToken,
+    ) -> Result<Option<AuthenticatedAgentSession>, String> {
+        let mut authenticated = self
+            .authenticated_session
+            .lock()
+            .map_err(|_| "登录状态锁已损坏".to_string())?;
+        let Some(session) = authenticated.as_mut() else {
+            return Ok(None);
+        };
+        if session.account.username != expected_username
+            || session
+                .agent_access_token
+                .as_ref()
+                .map(|token| token.value.as_str())
+                != Some(expected_token)
+        {
+            return Ok(None);
+        }
+        session.account = account;
+        session.account_status = account_status;
+        session.agent_access_token = Some(agent_access_token);
+        session.permission_trust = AgentPermissionTrust::ServerVerified;
+        Ok(Some(session.clone()))
     }
 
     pub(crate) fn take_authenticated_session(
         &self,
     ) -> Result<Option<AuthenticatedAgentSession>, String> {
-        self.authenticated_session
+        let result = self
+            .authenticated_session
             .lock()
             .map_err(|_| "登录状态锁已损坏".to_string())
-            .map(|mut session| session.take())
+            .map(|mut session| session.take());
+        if matches!(&result, Ok(Some(_))) {
+            let _ = self.set_permission_sync_error(None);
+        }
+        result
     }
 
     pub(crate) fn set_pending_device_authorization(
@@ -238,39 +327,4 @@ impl AgentRuntime {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use zeroize::Zeroizing;
-
-    use super::AgentRuntime;
-
-    #[test]
-    fn device_authorization_cancellation_and_generation_check_are_fail_closed() {
-        let runtime = AgentRuntime::new();
-        let challenge = runtime
-            .set_pending_device_authorization(
-                Zeroizing::new("A".repeat(43)),
-                "https://proxy.example.com".to_string(),
-                PathBuf::from("agent.toml"),
-                "ABCD-EFGH-JKMN".to_string(),
-                1_800_000_000,
-                5,
-            )
-            .unwrap();
-
-        assert!(!runtime
-            .take_pending_device_authorization_if(challenge.id + 1)
-            .unwrap());
-        assert_eq!(
-            runtime.pending_device_authorization().unwrap().unwrap().id,
-            challenge.id
-        );
-
-        runtime.cancel_pending_device_authorization().unwrap();
-        assert!(runtime.pending_device_authorization().unwrap().is_none());
-        assert!(!runtime
-            .take_pending_device_authorization_if(challenge.id)
-            .unwrap());
-    }
-}
+mod tests;

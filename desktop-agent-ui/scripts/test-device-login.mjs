@@ -6,7 +6,7 @@ const loginView = await readFile(
   "utf8"
 );
 assert.match(loginView, /label="登录并配置 Agent"/);
-assert.match(loginView, /label="新用户注册"/);
+assert.match(loginView, /label="注册和账户管理"/);
 assert.doesNotMatch(
   loginView,
   /使用浏览器登录|系统浏览器|设备登录|deviceLogin|device-login/
@@ -27,6 +27,7 @@ const composable = await readFile(
   new URL("../src/composables/useAgentAuth.ts", import.meta.url),
   "utf8"
 );
+assert.match(composable, /invoke\("open_user_account_management"\)/);
 assert.doesNotMatch(
   composable,
   /start_agent_device_login|poll_agent_device_login|cancel_agent_device_login|DeviceLogin/

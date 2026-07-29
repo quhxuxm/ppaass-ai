@@ -112,6 +112,24 @@ protected void stopHttpProxyService() {
         updateHttpProxyToggle();
     }
 
+protected void stopAgentsForCredentialReplacement() {
+        if (PpaassVpnService.isRunningInProcess()
+                || prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false)) {
+            stopVpnService();
+        }
+        if (PpaassHttpProxyService.isRunningInProcess()
+                || prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false)
+                || prefs.getBoolean(PpaassHttpProxyService.PREF_ENABLED, false)) {
+            stopHttpProxyService();
+        }
+        if (PpaassVpnService.isMockGeoRunningInProcess()
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)) {
+            stopMockGeoService();
+        }
+}
+
 protected void restartRunningAgentsAfterRuleUpdate(
         boolean restartVpn,
         boolean restartHttpProxy) {

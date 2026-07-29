@@ -52,9 +52,14 @@ impl SqliteAccessLogRepository {
             // SQLite freelist pages. A zero WAL size limit truncates reset WAL files.
             .pragma("secure_delete", "ON")
             .pragma("journal_size_limit", "0");
-        let pool = SqlitePoolOptions::new()
-            .min_connections(1)
-            .max_connections(8)
+        // Proxy and Proxy Web keep this WAL database open from separate processes. SQLx's
+        // default 10-minute idle timeout and 30-minute maximum lifetime briefly close and
+        // replace pooled connections. On Unix that can let SQLite unlink/recreate `-wal` and
+        // `-shm` while the other long-lived process still has the previous files open, leaving
+        // the reader on stale sidecar inodes. Access operations are short and SQLite serializes
+        // writes anyway, so one non-recycled connection per process is sufficient and keeps
+        // the shared WAL identity stable during routine long-running service operation.
+        let pool = access_pool_options()
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(options)
             .await?;
@@ -160,4 +165,12 @@ impl SqliteAccessLogRepository {
         transaction.commit().await?;
         Ok(())
     }
+}
+
+pub(super) fn access_pool_options() -> SqlitePoolOptions {
+    SqlitePoolOptions::new()
+        .min_connections(1)
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
 }

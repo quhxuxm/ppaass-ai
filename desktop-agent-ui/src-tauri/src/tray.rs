@@ -18,7 +18,8 @@ use crate::agent::{get_agent_state_inner, start_agent_command, stop_agent_inner_
 #[cfg(any(windows, target_os = "macos"))]
 use crate::config::{
     apply_managed_credentials_to_config, load_config_from_path, locate_config_path,
-    redact_managed_identity, toggle_tun_enabled_in_config,
+    prepare_config_for_account, remember_trusted_config_baseline, toggle_tun_enabled_in_config,
+    validate_config_candidate_against_trusted_baseline,
 };
 #[cfg(any(windows, target_os = "macos"))]
 use crate::runtime::AgentRuntime;
@@ -242,6 +243,8 @@ fn toggle_tun_mode_and_restart(
     let config_path = config_path
         .or_else(locate_config_path)
         .ok_or_else(|| "找不到 Agent 配置文件".to_string())?;
+    let candidate = load_config_from_path(&config_path)?;
+    validate_config_candidate_against_trusted_baseline(&runtime, &session.account, &candidate)?;
     let managed = apply_managed_credentials_to_config(
         &config_path,
         &session.account.username,
@@ -251,12 +254,13 @@ fn toggle_tun_mode_and_restart(
     let config = toggle_tun_enabled_in_config(Some(Path::new(&managed.path)))?;
     let enabled = config.summary.tun_enabled;
     let restart_path = config.path.clone();
+    remember_trusted_config_baseline(&runtime, &config)?;
     remember_current_ui_config_path(&runtime, &restart_path);
     let _ = item.set_checked(enabled);
     emit_to_main(
         app,
         "agent-config-updated",
-        redact_managed_identity(config)?,
+        prepare_config_for_account(config, &session.account)?,
     );
 
     let state = get_agent_state_inner(&runtime)?;

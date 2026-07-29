@@ -168,7 +168,12 @@ impl SqliteUserRepository {
             .transpose()?;
 
         if let Some(account) = &linked_account {
-            guard_last_admin(&mut transaction, account, None, None).await?;
+            guard_root_admin(account, None, None)?;
+            if account.status != AccountStatus::Disabled {
+                return Err(UserRepositoryError::AccountMustBeDisabled(
+                    account.account_id.clone(),
+                ));
+            }
             sqlx::query("DELETE FROM web_accounts WHERE account_id = ?")
                 .bind(&account.account_id)
                 .execute(&mut *transaction)

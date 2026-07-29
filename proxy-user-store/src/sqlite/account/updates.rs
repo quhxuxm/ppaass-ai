@@ -49,13 +49,7 @@ impl SqliteUserRepository {
         };
         let target_role = update.role.unwrap_or(account.role);
         let target_status = update.status.unwrap_or(account.status);
-        guard_last_admin(
-            &mut transaction,
-            &account,
-            Some(target_role),
-            Some(target_status),
-        )
-        .await?;
+        guard_root_admin(&account, Some(target_role), Some(target_status))?;
 
         let mut profile = match account.linked_username.as_deref() {
             Some(username) => fetch_profile(&mut transaction, username).await?,

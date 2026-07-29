@@ -22,6 +22,7 @@ async fn existing_external_account_session_can_authorize_agent_without_a_passwor
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "keyreq_external_device".to_string(),
             account_id: account.account_id.clone(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -69,7 +70,7 @@ async fn existing_external_account_session_can_authorize_agent_without_a_passwor
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     let (device_code, user_code) = start_device_authorization(&app, "windows").await;
-    let (browser_session, browser_cookie) = sessions.issue(&account.account_id);
+    let (browser_session, browser_cookie) = sessions.issue(&account);
     let browser_cookie = browser_cookie
         .to_str()
         .unwrap()
@@ -142,7 +143,11 @@ async fn agent_device_approval_rejects_admin_missing_keys_and_cross_origin_clien
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "key_request_required"
+    );
 
     let (user_cookie, user_csrf) =
         register_user(&app, "waiting-user", "waiting-user-password").await;

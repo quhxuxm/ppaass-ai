@@ -2,12 +2,12 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use protocol::RsaKeyPair;
 use proxy_user_store::{
-    AccessLogRepository, AccountRepository, BootstrapOutcome, NewAdminAccount,
-    SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
+    AccessLogRepository, AccountRepository, AccountRole, AccountStatus, BootstrapOutcome,
+    NewAdminAccount, SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
 };
 use proxy_web::{
-    AgentDeviceAuthorizationGuard, AppState, PasswordService, PrivateKeyCipher, SessionStore,
-    build_router,
+    AgentAccessTokenService, AgentDeviceAuthorizationGuard, AppState, PasswordService,
+    PrivateKeyCipher, SessionStore, build_router,
 };
 use rsa::traits::PublicKeyParts;
 use std::{
@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 const KEY_ENCRYPTION_SECRET_ENV: &str = "PPAASS_PROXY_WEB_KEY_ENCRYPTION_SECRET";
 const BOOTSTRAP_ADMIN_USERNAME_ENV: &str = "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USERNAME";
 const BOOTSTRAP_ADMIN_PASSWORD_ENV: &str = "PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_PASSWORD";
+const ROOT_ADMIN_LOGIN_NAME: &str = "admin";
 const ALLOW_REGISTRATION_ENV: &str = "PPAASS_PROXY_WEB_ALLOW_REGISTRATION";
 const SECURE_COOKIES_ENV: &str = "PPAASS_PROXY_WEB_SECURE_COOKIES";
 const TRUST_PROXY_HEADERS_ENV: &str = "PPAASS_PROXY_WEB_TRUST_PROXY_HEADERS";
@@ -137,6 +138,7 @@ async fn main() -> Result<()> {
     let master_secret = env::var(KEY_ENCRYPTION_SECRET_ENV)
         .with_context(|| format!("必须设置环境变量 {KEY_ENCRYPTION_SECRET_ENV}"))?;
     let private_keys = PrivateKeyCipher::new(&master_secret)?;
+    let agent_tokens = AgentAccessTokenService::new(&master_secret)?;
     ensure_key_encryption_binding(store.as_ref(), &private_keys).await?;
     let passwords = PasswordService::new(4).await?;
     bootstrap_admin(store.as_ref(), &passwords).await?;
@@ -155,6 +157,7 @@ async fn main() -> Result<()> {
         device_authorizations: store,
         passwords,
         sessions: SessionStore::new(secure_cookies),
+        agent_tokens,
         private_keys,
         proxy_identity_public_key_pem,
         allow_registration,
@@ -258,23 +261,30 @@ async fn ensure_key_encryption_binding(
 }
 
 async fn bootstrap_admin(store: &SqliteUserRepository, passwords: &PasswordService) -> Result<()> {
-    if store.active_admin_count().await? > 0 {
-        info!("数据库已有启用的管理员账号，跳过 bootstrap");
+    if let Ok(configured) = env::var(BOOTSTRAP_ADMIN_USERNAME_ENV)
+        && configured.trim() != ROOT_ADMIN_LOGIN_NAME
+    {
+        bail!(
+            "根管理员登录名固定为 {ROOT_ADMIN_LOGIN_NAME}；\
+             {BOOTSTRAP_ADMIN_USERNAME_ENV} 只能设为 {ROOT_ADMIN_LOGIN_NAME}"
+        );
+    }
+    if let Some(root) = store.get_account_by_login(ROOT_ADMIN_LOGIN_NAME).await? {
+        if root.role != AccountRole::Admin || root.status != AccountStatus::Active {
+            bail!("根管理员 admin 已存在但不是启用的管理员，请先修复数据库账号状态");
+        }
+        info!("数据库已有启用的根管理员 admin，跳过 bootstrap");
         return Ok(());
     }
 
-    let username = env::var(BOOTSTRAP_ADMIN_USERNAME_ENV).unwrap_or_else(|_| "admin".to_string());
     let password = env::var(BOOTSTRAP_ADMIN_PASSWORD_ENV).with_context(|| {
-        format!(
-            "数据库还没有管理员；请设置 {BOOTSTRAP_ADMIN_PASSWORD_ENV}（用户名可通过 \
-             {BOOTSTRAP_ADMIN_USERNAME_ENV} 设置，默认 admin）"
-        )
+        format!("数据库还没有根管理员 admin；请设置 {BOOTSTRAP_ADMIN_PASSWORD_ENV}")
     })?;
     let password_hash = passwords.hash_password(password).await?;
     match store
-        .bootstrap_admin_if_none(NewAdminAccount {
+        .bootstrap_admin_if_absent(NewAdminAccount {
             account_id: format!("acc_{}", random_account_suffix()),
-            login_name: username,
+            login_name: ROOT_ADMIN_LOGIN_NAME.to_string(),
             password_hash: Some(password_hash),
             display_name: Some("系统管理员".to_string()),
             email: None,
@@ -285,18 +295,19 @@ async fn bootstrap_admin(store: &SqliteUserRepository, passwords: &PasswordServi
         BootstrapOutcome::Created(account) => {
             info!(
                 login_name = account.login_name,
-                "已创建首个管理员账号；bootstrap 密码不会再次使用"
+                "已创建根管理员账号；bootstrap 密码不会覆盖已有账号"
             );
         }
         BootstrapOutcome::AlreadyExists => {
             info!("并发启动期间另一实例已创建管理员账号");
         }
     }
-    if store.active_admin_count().await? == 0 {
-        bail!(
-            "数据库已有管理员记录但没有启用的管理员；为避免通过环境变量静默接管，\
-             请先显式恢复一个管理员账号"
-        );
+    let root = store
+        .get_account_by_login(ROOT_ADMIN_LOGIN_NAME)
+        .await?
+        .context("bootstrap 完成后根管理员 admin 仍不存在")?;
+    if root.role != AccountRole::Admin || root.status != AccountStatus::Active {
+        bail!("根管理员 admin 必须保持管理员角色和启用状态");
     }
     Ok(())
 }

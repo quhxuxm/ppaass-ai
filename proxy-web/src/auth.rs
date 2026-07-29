@@ -3,7 +3,6 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::http::{HeaderMap, HeaderValue, header};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use proxy_user_store::{AccountRepository, AccountStatus, WebAccount};
 use rand::RngExt;
@@ -20,6 +19,10 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::error::ApiError;
+
+mod tokens;
+pub use tokens::random_token;
+use tokens::{clear_session_cookie, session_cookie, session_token};
 
 pub const SESSION_COOKIE_NAME: &str = "ppaass_session";
 pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
@@ -147,15 +150,16 @@ pub struct SessionStore {
     secure_cookies: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Session {
     account_id: String,
+    auth_version: i64,
     csrf_token: String,
     expires_at: i64,
     issue_sequence: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthenticatedSession {
     pub token: String,
     pub account: WebAccount,
@@ -187,13 +191,14 @@ impl SessionStore {
         }
     }
 
-    pub fn issue(&self, account_id: &str) -> (AuthenticatedSessionToken, HeaderValue) {
-        self.issue_at(account_id, now())
+    pub fn issue(&self, account: &WebAccount) -> (AuthenticatedSessionToken, HeaderValue) {
+        self.issue_at(&account.account_id, account.auth_version, now())
     }
 
     fn issue_at(
         &self,
         account_id: &str,
+        auth_version: i64,
         issued_at: i64,
     ) -> (AuthenticatedSessionToken, HeaderValue) {
         // 只有 issue 会增加集合大小。串行化这一小段内存操作，确保并发成功登录
@@ -224,6 +229,7 @@ impl SessionStore {
             token.clone(),
             Session {
                 account_id: account_id.to_string(),
+                auth_version,
                 csrf_token: csrf_token.clone(),
                 expires_at,
                 issue_sequence,
@@ -271,6 +277,10 @@ impl SessionStore {
             self.sessions.remove(token);
             return Err(ApiError::forbidden("账号已停用"));
         }
+        if account.auth_version != session.auth_version {
+            self.sessions.remove(token);
+            return Err(ApiError::unauthorized());
+        }
         Ok(AuthenticatedSession {
             token: token.to_string(),
             account,
@@ -293,6 +303,11 @@ impl SessionStore {
             return Err(ApiError::forbidden("CSRF 校验失败"));
         }
         Ok(())
+    }
+
+    pub fn revoke_account(&self, account_id: &str) {
+        self.sessions
+            .retain(|_, session| session.account_id != account_id);
     }
 
     fn prune_expired_at(&self, current: i64) {
@@ -321,7 +336,7 @@ impl SessionStore {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthenticatedSessionToken {
     pub csrf_token: String,
     pub expires_at: i64,
@@ -330,44 +345,6 @@ pub struct AuthenticatedSessionToken {
 
 pub fn append_set_cookie(headers: &mut HeaderMap, cookie: HeaderValue) {
     headers.append(header::SET_COOKIE, cookie);
-}
-
-fn session_cookie(token: &str, max_age: Duration, secure: bool) -> HeaderValue {
-    let secure = if secure { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!(
-        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
-        max_age.as_secs(),
-        secure
-    ))
-    .expect("随机 session token 可安全用于 Cookie")
-}
-
-fn clear_session_cookie(secure: bool) -> HeaderValue {
-    let secure = if secure { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!(
-        "{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
-    ))
-    .expect("固定 Cookie header 必须有效")
-}
-
-fn session_token(headers: &HeaderMap) -> Option<&str> {
-    cookie_value(headers, SESSION_COOKIE_NAME)
-}
-
-pub fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
-        .filter_map(|part| part.trim().split_once('='))
-        .find_map(|(candidate, value)| (candidate == name).then_some(value))
-}
-
-pub fn random_token(bytes: usize) -> String {
-    let mut value = vec![0_u8; bytes];
-    rand::rng().fill(value.as_mut_slice());
-    URL_SAFE_NO_PAD.encode(value)
 }
 
 fn now() -> i64 {

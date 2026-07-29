@@ -44,14 +44,22 @@ pub(crate) struct DownloadedCredential {
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) proxy_identity_public_key_pem: String,
     pub(crate) proxy_web_url: String,
+    pub(crate) agent_access_token: Option<AgentAccessToken>,
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
+pub(crate) struct AgentAccessToken {
+    pub(crate) value: Zeroizing<String>,
+    pub(crate) expires_at: i64,
+    pub(crate) refresh_after_seconds: u64,
+}
+
 pub(crate) struct PersistedAgentLogin {
     pub(crate) account: AgentAuthAccount,
     pub(crate) account_status: AgentAuthAccountStatus,
     pub(crate) private_key_path: PathBuf,
     pub(crate) proxy_identity_public_key_path: PathBuf,
+    pub(crate) agent_access_token: Option<AgentAccessToken>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,6 +69,12 @@ struct PersistedAgentLoginRecord {
     account: AgentAuthAccount,
     #[serde(default)]
     account_status: AgentAuthAccountStatus,
+    #[serde(default)]
+    agent_access_token: Option<String>,
+    #[serde(default)]
+    agent_access_token_expires_at: Option<i64>,
+    #[serde(default)]
+    refresh_after_seconds: Option<u64>,
 }
 
 pub(crate) struct StartedDeviceAuthorization {
@@ -77,7 +91,7 @@ pub(crate) enum DeviceAuthorizationPoll {
         slow_down: bool,
         retry_after_seconds: u32,
     },
-    Authorized(DownloadedCredential),
+    Authorized(Box<DownloadedCredential>),
 }
 
 #[derive(Serialize)]
@@ -95,10 +109,22 @@ struct AuthenticationResponse {
 }
 
 #[derive(Deserialize)]
-struct AuthenticationAccount {
+pub(crate) struct AuthenticationAccount {
     role: String,
     status: String,
     linked_username: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentLoginResponse {
+    account: AuthenticationAccount,
+    profile: AgentDeviceProfile,
+    public_key_pem: String,
+    proxy_identity_public_key_pem: String,
+    private_key_pem: String,
+    agent_access_token: String,
+    agent_access_token_expires_at: i64,
+    refresh_after_seconds: u64,
 }
 
 #[derive(Deserialize)]
@@ -160,17 +186,28 @@ pub(crate) struct AgentDeviceTokenResponse {
     public_key_pem: String,
     proxy_identity_public_key_pem: String,
     private_key_pem: String,
+    #[serde(default)]
     csrf_token: String,
     #[serde(rename = "session_expires_at")]
-    _session_expires_at: i64,
+    #[serde(default)]
+    _session_expires_at: Option<i64>,
+    agent_access_token: String,
+    agent_access_token_expires_at: i64,
+    refresh_after_seconds: u64,
 }
 
 #[derive(Deserialize)]
-struct AgentDeviceProfile {
+pub(crate) struct AgentDeviceProfile {
     username: String,
     permissions: Vec<String>,
+    #[serde(default = "enabled_by_default")]
+    enabled: bool,
     key_version: i64,
     expires_at: Option<i64>,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -190,12 +227,14 @@ mod device_login;
 mod http;
 mod key_store;
 mod password_login;
+mod permission_sync;
 
 pub(crate) use credential_store::*;
 pub(crate) use device_login::*;
 pub(crate) use http::*;
 pub(crate) use key_store::*;
 pub(crate) use password_login::*;
+pub(crate) use permission_sync::*;
 
 #[cfg(test)]
 mod tests;

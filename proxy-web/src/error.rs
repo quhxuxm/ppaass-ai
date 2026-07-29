@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::rejection::JsonRejection,
+    extract::rejection::{BytesRejection, JsonRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -51,6 +51,15 @@ impl ApiError {
             status: StatusCode::UNAUTHORIZED,
             code: "invalid_credentials",
             message: "用户名或密码错误".to_string(),
+            retry_after_seconds: None,
+        }
+    }
+
+    pub fn invalid_current_password() -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "current_password_invalid",
+            message: "当前密码不正确".to_string(),
             retry_after_seconds: None,
         }
     }
@@ -120,7 +129,10 @@ impl ApiError {
 
     pub fn from_json_rejection(rejection: JsonRejection) -> Self {
         let status = rejection.status();
-        tracing::debug!(reason = %rejection.body_text(), "拒绝无效 JSON 请求");
+        tracing::debug!(
+            status = status.as_u16(),
+            "拒绝无效 JSON 请求；不记录解析错误文本以免回显请求值"
+        );
         Self {
             status,
             code: if status == StatusCode::PAYLOAD_TOO_LARGE {
@@ -132,6 +144,25 @@ impl ApiError {
                 "请求体不能超过 32 KiB".to_string()
             } else {
                 "JSON 请求格式或 Content-Type 无效".to_string()
+            },
+            retry_after_seconds: None,
+        }
+    }
+
+    pub fn from_bytes_rejection(rejection: BytesRejection) -> Self {
+        let status = rejection.status();
+        tracing::debug!(reason = %rejection.body_text(), "拒绝无法读取的请求体");
+        Self {
+            status,
+            code: if status == StatusCode::PAYLOAD_TOO_LARGE {
+                "payload_too_large"
+            } else {
+                "invalid_request"
+            },
+            message: if status == StatusCode::PAYLOAD_TOO_LARGE {
+                "请求体不能超过 32 KiB".to_string()
+            } else {
+                "无法读取请求体".to_string()
             },
             retry_after_seconds: None,
         }
@@ -154,9 +185,13 @@ impl From<UserRepositoryError> for ApiError {
                 message: format!("用户 {username} 不存在"),
                 retry_after_seconds: None,
             },
-            UserRepositoryError::LastAdmin => {
-                Self::conflict("last_admin", "不能停用、降级或删除最后一个启用的管理员")
+            UserRepositoryError::AccountMustBeDisabled(_) => {
+                Self::conflict("account_not_disabled", "只有已停用的账号才能删除")
             }
+            UserRepositoryError::RootAdminProtected => Self::conflict(
+                "root_admin_protected",
+                "根管理员 admin 不能被停用、降级或删除",
+            ),
             UserRepositoryError::VersionConflict {
                 username,
                 expected,
@@ -164,6 +199,10 @@ impl From<UserRepositoryError> for ApiError {
             } => Self::conflict(
                 "version_conflict",
                 format!("用户 {username} 的密钥版本已变化（期望 {expected}，实际 {actual}）"),
+            ),
+            UserRepositoryError::AccountVersionConflict { .. } => Self::conflict(
+                "account_version_conflict",
+                "账号认证信息已经变化，请重新登录后再试",
             ),
             UserRepositoryError::ExternalIdentityConflict { .. } => {
                 Self::conflict("external_identity_conflict", "该第三方账号已绑定其他用户")

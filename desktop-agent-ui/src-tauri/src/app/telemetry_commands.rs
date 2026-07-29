@@ -45,7 +45,7 @@ pub(crate) async fn get_packet_capture(
 ) -> Result<PacketCaptureReport, String> {
     let runtime = runtime.inner().clone();
     run_blocking("读取抓包结果", move || {
-        runtime.require_authenticated()?;
+        require_packet_capture_permission(&runtime)?;
         let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
             Some(value) => PathBuf::from(value),
             None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
@@ -68,7 +68,7 @@ pub(crate) async fn get_packet_capture_runtime_status(
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     let runtime = runtime.inner().clone();
     run_blocking("读取抓包运行状态", move || {
-        runtime.require_authenticated()?;
+        require_packet_capture_permission(&runtime)?;
         packet_capture_runtime_status(&runtime)
     })
     .await
@@ -81,7 +81,7 @@ pub(crate) async fn set_packet_capture_enabled(
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     let runtime = runtime.inner().clone();
     run_blocking("切换抓包运行状态", move || {
-        runtime.require_authenticated()?;
+        require_packet_capture_permission(&runtime)?;
         set_packet_capture_runtime_enabled(&runtime, enabled)
     })
     .await
@@ -94,8 +94,15 @@ pub(crate) async fn clear_packet_capture(
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     let runtime = runtime.inner().clone();
     run_blocking("清空抓包文件", move || {
-        runtime.require_authenticated()?;
+        require_packet_capture_permission(&runtime)?;
         clear_packet_capture_runtime(&runtime, config_path)
     })
     .await
+}
+
+fn require_packet_capture_permission(runtime: &AgentRuntime) -> Result<(), String> {
+    runtime
+        .require_authenticated_session()?
+        .account
+        .require_permission(AGENT_PACKET_CAPTURE_PERMISSION)
 }

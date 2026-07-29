@@ -53,11 +53,12 @@ impl KeyRequestStatus {
     }
 }
 
-/// 普通用户的密钥生成或轮换申请。
+/// 用户或管理员账号的密钥生成或轮换申请。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyGenerationRequest {
     pub request_id: String,
     pub account_id: String,
+    pub request_message: Option<String>,
     pub kind: KeyRequestKind,
     pub status: KeyRequestStatus,
     pub expected_key_version: Option<i64>,
@@ -72,6 +73,7 @@ pub struct KeyGenerationRequest {
 pub struct NewKeyGenerationRequest {
     pub request_id: String,
     pub account_id: String,
+    pub request_message: Option<String>,
 }
 
 /// 管理员批准申请时提交的密钥材料。

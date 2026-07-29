@@ -2,6 +2,7 @@ use super::*;
 
 mod binding_and_queries;
 mod creation;
+mod password;
 mod request_approval;
 mod request_rejection;
 mod request_submission;
@@ -17,8 +18,8 @@ impl AccountRepository for SqliteUserRepository {
         SqliteUserRepository::initialize_key_encryption_verifier(self, verifier).await
     }
 
-    async fn bootstrap_admin_if_none(&self, admin: NewAdminAccount) -> Result<BootstrapOutcome> {
-        SqliteUserRepository::bootstrap_admin_if_none(self, admin).await
+    async fn bootstrap_admin_if_absent(&self, admin: NewAdminAccount) -> Result<BootstrapOutcome> {
+        SqliteUserRepository::bootstrap_admin_if_absent(self, admin).await
     }
 
     async fn get_account_by_login(&self, login_name: &str) -> Result<Option<WebAccount>> {
@@ -39,6 +40,21 @@ impl AccountRepository for SqliteUserRepository {
 
     async fn get_login_record(&self, login_name: &str) -> Result<Option<LoginRecord>> {
         SqliteUserRepository::get_login_record(self, login_name).await
+    }
+
+    async fn update_password_hash(
+        &self,
+        account_id: &str,
+        expected_auth_version: i64,
+        password_hash: String,
+    ) -> Result<WebAccount> {
+        SqliteUserRepository::update_password_hash(
+            self,
+            account_id,
+            expected_auth_version,
+            password_hash,
+        )
+        .await
     }
 
     async fn list_managed_users(&self) -> Result<Vec<ManagedUser>> {

@@ -22,8 +22,13 @@ import java.text.*;
 import java.util.*;
 
 public class MainActivity extends MainActivityAuth {
+    private SharedPreferences agentSessionPreferences;
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
+                if (AgentSessionStore.PREF_PERMISSION_REVISION.equals(key)) {
+                    runOnUiThread(this::refreshAgentPermissionUi);
+                    return;
+                }
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
                         || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)
                         || PpaassVpnService.PREF_MOCK_GEO_REQUESTED.equals(key)
@@ -97,6 +102,11 @@ public class MainActivity extends MainActivityAuth {
         reloadUiPalette();
         configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
+        agentSessionPreferences = getSharedPreferences(
+                ManagedCredentials.PREFERENCES_NAME,
+                MODE_PRIVATE);
+        agentSessionPreferences.registerOnSharedPreferenceChangeListener(
+                preferenceChangeListener);
         showAgentEntry();
     }
 
@@ -116,6 +126,33 @@ public class MainActivity extends MainActivityAuth {
         updateHttpProxyToggle();
         syncMockGeoAfterResume();
         startStatusRefresh();
+    }
+
+    public void refreshAgentPermissionUi() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread(this::refreshAgentPermissionUi);
+            return;
+        }
+        if (isFinishing()
+                || isDestroyed()
+                || !hasAuthenticatedAgentSession()
+                || isAgentAuthenticationInProgress()) {
+            return;
+        }
+        statusHandler.removeCallbacks(statusRefresh);
+        String currentFingerprint = agentPermissionFingerprint();
+        if (currentFingerprint.equals(appliedAgentPermissionFingerprint)) {
+            if (activityResumed) {
+                startStatusRefresh();
+            } else {
+                updateStatusMetrics();
+            }
+            return;
+        }
+        buildUi();
+        if (activityResumed) {
+            startStatusRefresh();
+        }
     }
 
     @Override
@@ -141,6 +178,11 @@ public class MainActivity extends MainActivityAuth {
         dismissMockGeoDialogs();
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
+        }
+        if (agentSessionPreferences != null) {
+            agentSessionPreferences.unregisterOnSharedPreferenceChangeListener(
+                    preferenceChangeListener);
+            agentSessionPreferences = null;
         }
         super.onDestroy();
     }

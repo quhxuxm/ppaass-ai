@@ -11,12 +11,12 @@ import type { AgentLoginRequest } from "../types";
 
 const props = defineProps<{
   loading: boolean;
-  registrationLoading: boolean;
+  accountManagementLoading: boolean;
   error: string;
 }>();
 
 const emit = defineEmits<{
-  register: [];
+  manageAccount: [];
   submit: [request: AgentLoginRequest];
 }>();
 
@@ -124,12 +124,12 @@ function submit() {
         <Button
           class="auth-register"
           type="button"
-          label="新用户注册"
+          label="注册和账户管理"
           severity="secondary"
           outlined
-          :loading="registrationLoading"
+          :loading="accountManagementLoading"
           :disabled="loading"
-          @click="emit('register')"
+          @click="emit('manageAccount')"
         >
           <template #icon="slotProps">
             <AppIcon :class="slotProps.class" name="user" />

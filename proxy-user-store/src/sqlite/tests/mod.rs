@@ -54,7 +54,7 @@ pub(super) fn user_account(account_id: &str, login_name: &str) -> NewUserAccount
 
 pub(super) async fn create_admin(store: &SqliteUserRepository, account_id: &str) {
     let outcome = store
-        .bootstrap_admin_if_none(NewAdminAccount {
+        .bootstrap_admin_if_absent(NewAdminAccount {
             account_id: account_id.to_string(),
             login_name: account_id.to_string(),
             password_hash: Some("$argon2id$test".to_string()),
@@ -90,6 +90,7 @@ mod account_security;
 mod device_authorization;
 mod key_binding;
 mod key_requests;
+mod key_requests_admin;
 mod migrations;
 mod permissions;
 mod read_only;

@@ -212,6 +212,7 @@ async fn account_only_registration_and_initial_approval_are_atomic() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-initial".to_string(),
             account_id: created.account_id.clone(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -229,6 +230,7 @@ async fn account_only_registration_and_initial_approval_are_atomic() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-duplicate".to_string(),
             account_id: created.account_id.clone(),
+            request_message: None,
         })
         .await
         .unwrap_err();

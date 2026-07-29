@@ -28,6 +28,16 @@ async fn user_account_capacity_is_atomic_and_a_deleted_account_frees_a_slot() {
         .into_iter()
         .find_map(|managed| managed.account.map(|account| account.account_id))
         .unwrap();
+    store
+        .update_managed_user(
+            &created_id,
+            ManagedUserUpdate {
+                status: Some(AccountStatus::Disabled),
+                ..ManagedUserUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
     store.delete_managed_user(&created_id).await.unwrap();
     store
         .create_user_account(user_account("account-carol", "carol-login"))
@@ -47,6 +57,7 @@ async fn failed_initial_approval_rolls_back_and_request_remains_pending() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-initial".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();

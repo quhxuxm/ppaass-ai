@@ -4,6 +4,7 @@ pub(crate) fn load_agent_config_inner(
     runtime: &AgentRuntime,
     path: Option<String>,
 ) -> Result<LoadedAgentConfig, String> {
+    let session = runtime.require_authenticated_session()?;
     let config_path = match path.filter(|value| !value.trim().is_empty()) {
         Some(value) => PathBuf::from(value),
         None => current_ui_config_path(runtime)
@@ -15,9 +16,10 @@ pub(crate) fn load_agent_config_inner(
     };
 
     let loaded = load_config_from_path(&config_path)?;
+    validate_config_candidate_against_trusted_baseline(runtime, &session.account, &loaded)?;
     apply_ui_log_level(runtime, &loaded.summary.log_level);
-    remember_ui_config_path(runtime, &loaded.path)?;
-    redact_managed_identity(loaded)
+    remember_trusted_ui_config(runtime, &loaded)?;
+    prepare_config_for_account(loaded, &session.account)
 }
 
 pub(crate) fn save_agent_config_inner(
@@ -26,7 +28,33 @@ pub(crate) fn save_agent_config_inner(
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
     let session = runtime.require_authenticated_session()?;
+    session
+        .account
+        .require_permission(AGENT_CONFIG_VIEW_PERMISSION)?;
+    save_agent_config_candidate(runtime, path, raw, &session)
+}
+
+pub(crate) fn save_agent_config_summary_inner(
+    runtime: &AgentRuntime,
+    path: String,
+    summary: AgentConfigSummary,
+) -> Result<LoadedAgentConfig, String> {
+    let session = runtime.require_authenticated_session()?;
     let config_path = make_absolute_path(Path::new(&path));
+    let existing = load_config_from_path(&config_path)?;
+    let raw = merge_config_summary(&existing.raw, &summary)?;
+    save_agent_config_candidate(runtime, path, raw, &session)
+}
+
+fn save_agent_config_candidate(
+    runtime: &AgentRuntime,
+    path: String,
+    raw: String,
+    session: &crate::runtime::AuthenticatedAgentSession,
+) -> Result<LoadedAgentConfig, String> {
+    let config_path = make_absolute_path(Path::new(&path));
+    let candidate = loaded_config_from_raw(config_path.clone(), raw.clone())?;
+    validate_config_candidate_against_trusted_baseline(runtime, &session.account, &candidate)?;
     let managed_raw = enforce_managed_identity(
         &raw,
         &session.account.username,
@@ -44,28 +72,34 @@ pub(crate) fn save_agent_config_inner(
     };
 
     apply_ui_log_level(runtime, &loaded.summary.log_level);
-    remember_ui_config_path(runtime, &loaded.path)?;
+    remember_trusted_ui_config(runtime, &loaded)?;
     #[cfg(windows)]
     let _ = send_service_request(&ServiceRequest::SetLogLevel {
         log_level: loaded.summary.log_level.clone(),
     });
 
-    redact_managed_identity(loaded)
+    prepare_config_for_account(loaded, &session.account)
 }
 
-pub(crate) fn remember_ui_config_path(runtime: &AgentRuntime, path: &str) -> Result<(), String> {
+pub(crate) fn remember_trusted_ui_config(
+    runtime: &AgentRuntime,
+    loaded: &LoadedAgentConfig,
+) -> Result<(), String> {
+    remember_trusted_config_baseline(runtime, loaded)?;
     *runtime
         .ui_config_path
         .lock()
-        .map_err(|_| "UI 配置路径状态锁已损坏".to_string())? = Some(PathBuf::from(path));
+        .map_err(|_| "UI 配置路径状态锁已损坏".to_string())? = Some(PathBuf::from(&loaded.path));
     Ok(())
 }
 
 pub(crate) fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState, String> {
     let session = runtime.authenticated_session()?;
-    let config = if session.is_some() {
+    let config = if let Some(authenticated) = session.as_ref() {
         match current_ui_config_path(runtime).or_else(locate_config_path) {
-            Some(path) => match load_config_from_path(&path).and_then(redact_managed_identity) {
+            Some(path) => match load_config_from_path(&path)
+                .and_then(|loaded| prepare_config_for_account(loaded, &authenticated.account))
+            {
                 Ok(config) => Some(config),
                 Err(error) => {
                     let message =
@@ -87,10 +121,12 @@ pub(crate) fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState,
     };
     let account = session.as_ref().map(|session| session.account.clone());
     let account_status = session.map(|session| session.account_status);
+    let permission_sync_error = runtime.permission_sync_error()?;
     Ok(AgentAuthState {
         authenticated: account.is_some(),
         account,
         account_status,
+        permission_sync_error,
         config,
     })
 }
@@ -113,20 +149,22 @@ pub(crate) fn restore_agent_login_on_startup(
         &persisted.proxy_identity_public_key_path,
     )?;
     apply_ui_log_level(runtime, &loaded.summary.log_level);
-    remember_ui_config_path(runtime, &loaded.path)?;
+    remember_trusted_ui_config(runtime, &loaded)?;
     #[cfg(windows)]
     activate_windows_service_session(app)?;
-    runtime.set_authenticated_session(
+    runtime.set_authenticated_session(AuthenticatedAgentSession::new(
         persisted.account.clone(),
         persisted.account_status,
         persisted.private_key_path,
         persisted.proxy_identity_public_key_path,
         proxy_web_url,
-    )?;
+        persisted.agent_access_token,
+        AgentPermissionTrust::CachedUnverified,
+    ))?;
     info!(
         username = %persisted.account.username,
         key_version = persisted.account.key_version,
-        "已从本机受管凭据恢复 Agent 长期登录状态"
+        "已从本机受管凭据恢复 Agent 长期登录状态；可选权限等待 Proxy Web 验证"
     );
     Ok(())
 }
@@ -276,7 +314,12 @@ pub(crate) fn report_verified_proxy_auth_status(
             return;
         }
     };
-    if let Err(error) = persist_agent_login(app, &session.account, status) {
+    if let Err(error) = persist_agent_login(
+        app,
+        &session.account,
+        status,
+        session.agent_access_token.as_ref(),
+    ) {
         runtime
             .logs
             .push(format!("保存 Proxy 账号状态失败：{error}"));

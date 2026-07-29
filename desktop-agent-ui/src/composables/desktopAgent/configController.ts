@@ -17,6 +17,7 @@ import type { DesktopAgentModel } from "./model";
 import { hasTauri, invokeOrFallback } from "./platform";
 
 interface ConfigDependencies {
+  canViewRawConfig: () => boolean;
   refreshAgentState: () => Promise<void>;
   showToast: (kind: ToastKind, message: string) => void;
 }
@@ -36,11 +37,13 @@ export function createConfigController(
     if (state.config && state.dirty) {
       state.config = {
         ...state.config,
-        raw: applyFieldToToml(
-          state.config.raw,
-          "tun_enabled",
-          enabled
-        ),
+        raw: dependencies.canViewRawConfig()
+          ? applyFieldToToml(
+              state.config.raw,
+              "tun_enabled",
+              enabled
+            )
+          : "",
         summary: {
           ...state.config.summary,
           tun_enabled: enabled
@@ -121,6 +124,13 @@ export function createConfigController(
     if (!state.config || !ensureConfigEditable()) {
       return;
     }
+    if (!dependencies.canViewRawConfig()) {
+      dependencies.showToast(
+        "error",
+        "当前账户没有查看原始配置的权限，无法恢复完整默认配置"
+      );
+      return;
+    }
     if (!hasTauri()) {
       dependencies.showToast("error", "当前环境无法读取内置默认配置");
       return;
@@ -151,17 +161,23 @@ export function createConfigController(
     if (field === "runtime_threads") {
       state.config.summary.effective_runtime_threads = Number(coerced);
     }
-    state.config.raw = applyFieldToToml(
-      state.config.raw,
-      field,
-      coerced
-    );
+    if (dependencies.canViewRawConfig()) {
+      state.config.raw = applyFieldToToml(
+        state.config.raw,
+        field,
+        coerced
+      );
+    }
     state.diagnostics = null;
     state.dirty = true;
   }
 
   function setRawConfig(raw: string) {
-    if (!state.config || !ensureConfigEditable(false)) {
+    if (
+      !state.config ||
+      !dependencies.canViewRawConfig() ||
+      !ensureConfigEditable(false)
+    ) {
       return;
     }
     const editableRaw = redactManagedIdentityFromToml(raw);
@@ -178,9 +194,14 @@ export function createConfigController(
     if (!state.config) {
       return;
     }
+    const canViewRawConfig = dependencies.canViewRawConfig();
     state.config = await invokeOrFallback<LoadedAgentConfig>(
-      "save_agent_config",
-      { path: state.config.path, raw: state.config.raw },
+      canViewRawConfig
+        ? "save_agent_config"
+        : "save_agent_config_summary",
+      canViewRawConfig
+        ? { path: state.config.path, raw: state.config.raw }
+        : { path: state.config.path, summary: state.config.summary },
       () => state.config as LoadedAgentConfig
     );
     state.dirty = false;
@@ -199,11 +220,13 @@ export function createConfigController(
     const directRules = normalizeRules(rules);
     state.config = {
       ...state.config,
-      raw: applyFieldToToml(
-        state.config.raw,
-        "direct_rules",
-        directRules
-      ),
+      raw: dependencies.canViewRawConfig()
+        ? applyFieldToToml(
+            state.config.raw,
+            "direct_rules",
+            directRules
+          )
+        : "",
       summary: {
         ...state.config.summary,
         direct_rules: directRules

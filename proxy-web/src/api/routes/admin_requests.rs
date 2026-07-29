@@ -159,6 +159,7 @@ pub(crate) async fn admin_key_request_response(
     Ok(AdminKeyRequestResponse {
         request_id: request.request_id,
         account,
+        request_message: request.request_message,
         kind: request.kind,
         status: request.status,
         expected_key_version: request.expected_key_version,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::{AgentPermissionTrust, AuthenticatedAgentSession};
 
 #[test]
 fn device_authorization_rejects_malformed_codes_and_cross_origin_verification_urls() {
@@ -100,6 +101,8 @@ fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
     let credentials_dir = temp.path().join("credentials");
     let account = AgentAuthAccount {
         username: "alice".to_string(),
+        role: "admin".to_string(),
+        permissions: vec!["key.private.read".to_string(), "key.rotate".to_string()],
         key_version: 7,
         // This timestamp is deliberately in the past. It is cached display
         // metadata, not authority for a local automatic logout.
@@ -120,14 +123,25 @@ fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
     )
     .unwrap();
 
-    persist_agent_login_to_dir(&credentials_dir, &account, AgentAuthAccountStatus::Expired)
-        .unwrap();
+    let token =
+        super::super::validated_agent_access_token("A".repeat(43), 4_000_000_000, 300).unwrap();
+    persist_agent_login_to_dir(
+        &credentials_dir,
+        &account,
+        AgentAuthAccountStatus::Expired,
+        Some(&token),
+    )
+    .unwrap();
     let restored = load_persisted_agent_login_from_dir(&credentials_dir)
         .unwrap()
         .expect("persisted login");
 
     assert_eq!(restored.account, account);
     assert_eq!(restored.account_status, AgentAuthAccountStatus::Expired);
+    assert_eq!(
+        restored.agent_access_token.as_ref().unwrap().value.len(),
+        43
+    );
     assert_eq!(restored.private_key_path, private_key_path);
     assert_eq!(
         restored.proxy_identity_public_key_path,
@@ -150,11 +164,99 @@ fn persisted_login_requires_untampered_managed_credential_files() {
     let credentials_dir = temp.path().join("credentials");
     let account = AgentAuthAccount {
         username: "alice".to_string(),
+        role: "user".to_string(),
+        permissions: vec!["key.rotate".to_string()],
         key_version: 1,
         expires_at: None,
     };
-    persist_agent_login_to_dir(&credentials_dir, &account, AgentAuthAccountStatus::Active).unwrap();
+    persist_agent_login_to_dir(
+        &credentials_dir,
+        &account,
+        AgentAuthAccountStatus::Active,
+        None,
+    )
+    .unwrap();
+    let record_path = credentials_dir.join(super::super::PERSISTED_AGENT_LOGIN_FILE);
+    let mut legacy =
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&record_path).unwrap()).unwrap();
+    let object = legacy.as_object_mut().unwrap();
+    object.remove("agent_access_token");
+    object.remove("agent_access_token_expires_at");
+    object.remove("refresh_after_seconds");
+    fs::write(&record_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
-    let error = load_persisted_agent_login_from_dir(&credentials_dir).unwrap_err();
+    let error = load_persisted_agent_login_from_dir(&credentials_dir)
+        .err()
+        .expect("missing managed credentials must fail");
     assert!(error.contains("凭据缺失"));
+}
+
+#[test]
+fn tampered_persisted_role_and_permissions_restore_as_unverified() {
+    let temp = tempfile::tempdir().unwrap();
+    let credentials_dir = temp.path().join("credentials");
+    let account = AgentAuthAccount {
+        username: "alice".to_string(),
+        role: "user".to_string(),
+        permissions: vec!["key.rotate".to_string()],
+        key_version: 1,
+        expires_at: None,
+    };
+    let user_key = RsaKeyPair::generate(2048).unwrap();
+    let proxy_identity = RsaKeyPair::generate(2048).unwrap();
+    write_private_key_to_dir(
+        &credentials_dir,
+        &managed_private_key_file_name(&account.username, account.key_version),
+        &user_key.private_key_to_pem().unwrap(),
+    )
+    .unwrap();
+    write_private_key_to_dir(
+        &credentials_dir,
+        PROXY_IDENTITY_PUBLIC_KEY_FILE,
+        &proxy_identity.public_key_to_pem().unwrap(),
+    )
+    .unwrap();
+    let token =
+        super::super::validated_agent_access_token("T".repeat(43), 4_000_000_000, 300).unwrap();
+    persist_agent_login_to_dir(
+        &credentials_dir,
+        &account,
+        AgentAuthAccountStatus::Active,
+        Some(&token),
+    )
+    .unwrap();
+
+    let record_path = credentials_dir.join(super::super::PERSISTED_AGENT_LOGIN_FILE);
+    let mut record =
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&record_path).unwrap()).unwrap();
+    record["account"]["role"] = serde_json::json!("admin");
+    record["account"]["permissions"] = serde_json::json!([
+        "agent.packet_capture",
+        "agent.config.view",
+        "agent.egress.edit",
+        "agent.runtime_threads.edit"
+    ]);
+    fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let restored = load_persisted_agent_login_from_dir(&credentials_dir)
+        .unwrap()
+        .unwrap();
+    let session = AuthenticatedAgentSession::new(
+        restored.account,
+        restored.account_status,
+        restored.private_key_path,
+        restored.proxy_identity_public_key_path,
+        "https://proxy.example.com".to_string(),
+        restored.agent_access_token,
+        AgentPermissionTrust::CachedUnverified,
+    );
+
+    assert_eq!(session.account.username, "alice");
+    assert_eq!(session.account.role, "user");
+    assert!(session.account.permissions.is_empty());
+    assert_eq!(
+        session.permission_trust,
+        AgentPermissionTrust::CachedUnverified
+    );
+    assert!(session.agent_access_token.is_some());
 }

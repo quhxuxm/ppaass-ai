@@ -10,9 +10,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
 use super::{
-    build_proxy_web_client, device_verification_url, load_persisted_agent_login_from_dir,
-    managed_private_key_file_name, normalize_proxy_web_url, persist_agent_login_to_dir,
-    poll_device_authorization, registration_page_url, remove_other_managed_private_keys,
+    account_management_page_url, build_proxy_web_client, device_verification_url,
+    load_persisted_agent_login_from_dir, managed_private_key_file_name, normalize_proxy_web_url,
+    persist_agent_login_to_dir, poll_device_authorization, remove_other_managed_private_keys,
     start_device_authorization, validate_device_code, validate_key_pair,
     validate_proxy_identity_public_key, write_private_key_to_dir, DeviceAuthorizationPoll,
     PROXY_IDENTITY_PUBLIC_KEY_FILE,
@@ -144,12 +144,12 @@ fn proxy_web_url_only_allows_loopback_http() {
 }
 
 #[test]
-fn registration_page_url_uses_the_validated_proxy_web_root() {
-    let url = registration_page_url("http://127.0.0.1:8787").unwrap();
-    assert_eq!(url.as_str(), "http://127.0.0.1:8787/?mode=register");
+fn account_management_page_url_uses_the_validated_proxy_web_root() {
+    let url = account_management_page_url("http://127.0.0.1:8787").unwrap();
+    assert_eq!(url.as_str(), "http://127.0.0.1:8787/");
 
-    assert!(registration_page_url("http://proxy.example.com").is_err());
-    assert!(registration_page_url("https://proxy.example.com/path").is_err());
+    assert!(account_management_page_url("http://proxy.example.com").is_err());
+    assert!(account_management_page_url("https://proxy.example.com/path").is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -294,7 +294,10 @@ async fn device_authorization_validates_key_pair_and_logs_out_temporary_session(
             "proxy_identity_public_key_pem": public_key,
             "private_key_pem": private_key,
             "csrf_token": "csrf-device-token",
-            "session_expires_at": 4_000_000_000_i64
+            "session_expires_at": 4_000_000_000_i64,
+            "agent_access_token": "A".repeat(43),
+            "agent_access_token_expires_at": 4_000_000_000_i64,
+            "refresh_after_seconds": 300
         })
         .to_string();
         write_http_response(
@@ -337,3 +340,5 @@ async fn device_authorization_validates_key_pair_and_logs_out_temporary_session(
 }
 
 mod credential_tests;
+mod key_rotation;
+mod permission_sync;

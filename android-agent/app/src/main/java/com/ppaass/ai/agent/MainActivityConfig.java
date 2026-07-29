@@ -52,6 +52,17 @@ protected void updateConfigEditability(boolean editable) {
                 control.setEnabled(editable);
             }
         }
+        boolean egressEditable = editable
+                && hasAgentPermission(AgentPermissions.EGRESS_EDIT);
+        updateEditTextEditable(proxyAddrs, egressEditable);
+        updateEditTextEditable(connectTimeoutSecs, egressEditable);
+        updateEditTextEditable(udpSessionPoolSize, egressEditable);
+        if (compressionMode != null) {
+            compressionMode.setEnabled(egressEditable);
+        }
+        updateEditTextEditable(
+                runtimeThreads,
+                editable && hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT));
     }
 
 protected void updateEditTextEditable(EditText editText, boolean editable) {
@@ -65,23 +76,54 @@ protected void updateEditTextEditable(EditText editText, boolean editable) {
     }
 
 protected void saveConfig() {
+        boolean canEditEgress = hasAgentPermission(AgentPermissions.EGRESS_EDIT);
+        boolean canEditRuntimeThreads =
+                hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT);
+        String storedProxyAddrs = storedConfigValue("proxy_addrs", DefaultConfig.PROXY_ADDR);
+        String storedUdpSessionPoolSize = storedConfigValue(
+                "udp_session_pool_size",
+                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE));
+        String storedConnectTimeout = storedConfigValue(
+                "connect_timeout_secs",
+                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));
+        String storedCompressionMode =
+                storedConfigValue("compression_mode", DefaultConfig.COMPRESSION_MODE);
+        String storedRuntimeThreads = storedConfigValue(
+                "runtime_threads",
+                String.valueOf(DefaultConfig.RUNTIME_THREADS));
         String quicPolicyValue = selectedQuicPolicy();
-        String udpSessionPoolSizeValue = boundedIntString(
+        String requestedUdpSessionPoolSize = boundedIntString(
                 udpSessionPoolSize == null
                         ? null
                         : udpSessionPoolSize.getText().toString(),
                 DefaultConfig.UDP_SESSION_POOL_SIZE,
                 DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
                 DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
-        if (udpSessionPoolSize != null) {
-            udpSessionPoolSize.setText(udpSessionPoolSizeValue);
-            udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
-        }
+        String proxyAddrsValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                storedProxyAddrs,
+                proxyAddrs.getText().toString());
+        String udpSessionPoolSizeValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                storedUdpSessionPoolSize,
+                requestedUdpSessionPoolSize);
+        String connectTimeoutValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                storedConnectTimeout,
+                connectTimeoutSecs.getText().toString());
+        String compressionModeValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                storedCompressionMode,
+                selectedCompressionMode());
+        String runtimeThreadsValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditRuntimeThreads,
+                storedRuntimeThreads,
+                runtimeThreads.getText().toString());
         prefs.edit()
-                .putString("proxy_addrs", proxyAddrs.getText().toString())
+                .putString("proxy_addrs", proxyAddrsValue)
                 .putString("transport_mode", selectedTransportMode())
                 .putString("udp_session_pool_size", udpSessionPoolSizeValue)
-                .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
+                .putString("connect_timeout_secs", connectTimeoutValue)
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString(
@@ -91,8 +133,8 @@ protected void saveConfig() {
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
                 .putString("quic_policy", quicPolicyValue)
-                .putString("runtime_threads", runtimeThreads.getText().toString())
-                .putString("compression_mode", selectedCompressionMode())
+                .putString("runtime_threads", runtimeThreadsValue)
+                .putString("compression_mode", compressionModeValue)
                 .putString("direct_access_mode", selectedDirectAccessMode())
                 .putString("direct_access_rules", serializeDirectAccessRules())
                 .putString("yamux_udp_sessions", yamuxUdpSessions.getText().toString())
@@ -112,7 +154,32 @@ protected void saveConfig() {
                         "yamux_udp_stream_window_size_kb",
                         yamuxUdpStreamWindowSizeKb.getText().toString())
                 .apply();
+        restoreGuardedConfigControls(
+                proxyAddrsValue,
+                udpSessionPoolSizeValue,
+                connectTimeoutValue,
+                compressionModeValue,
+                runtimeThreadsValue);
     }
+
+protected void restoreGuardedConfigControls(
+        String proxyAddrsValue,
+        String udpSessionPoolSizeValue,
+        String connectTimeoutValue,
+        String compressionModeValue,
+        String runtimeThreadsValue) {
+        proxyAddrs.setText(proxyAddrsValue);
+        connectTimeoutSecs.setText(connectTimeoutValue);
+        udpSessionPoolSize.setText(udpSessionPoolSizeValue);
+        udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
+        setSpinnerValue(compressionMode, compressionModeValue);
+        runtimeThreads.setText(runtimeThreadsValue);
+}
+
+protected String storedConfigValue(String key, String fallback) {
+        String stored = prefs.getString(key, fallback);
+        return stored == null ? fallback : stored;
+}
 
 protected void restoreDefaultConfig() {
         if (isVpnRunning() || isHttpProxyRunning()) {

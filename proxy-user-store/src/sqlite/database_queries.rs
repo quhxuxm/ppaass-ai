@@ -82,33 +82,19 @@ pub(super) async fn ensure_external_identity_available(
     Ok(())
 }
 
-pub(super) async fn guard_last_admin(
-    transaction: &mut Transaction<'_, Sqlite>,
+pub(super) fn guard_root_admin(
     current: &WebAccount,
     target_role: Option<AccountRole>,
     target_status: Option<AccountStatus>,
 ) -> Result<()> {
-    let currently_active_admin =
-        current.role == AccountRole::Admin && current.status == AccountStatus::Active;
-    let remains_active_admin = target_role
-        .zip(target_status)
-        .is_some_and(|(role, status)| {
-            role == AccountRole::Admin && status == AccountStatus::Active
-        });
-    if !currently_active_admin || remains_active_admin {
+    if current.login_name != "admin" {
         return Ok(());
     }
-    let other_admin_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM web_accounts \
-         WHERE role = 'admin' AND status = 'active' AND account_id <> ?)",
-    )
-    .bind(&current.account_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !other_admin_exists {
-        return Err(UserRepositoryError::LastAdmin);
+    if target_role == Some(AccountRole::Admin) && target_status == Some(AccountStatus::Active) {
+        Ok(())
+    } else {
+        Err(UserRepositoryError::RootAdminProtected)
     }
-    Ok(())
 }
 
 pub(super) async fn fetch_account_by_id(

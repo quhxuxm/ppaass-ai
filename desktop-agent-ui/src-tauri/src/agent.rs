@@ -13,7 +13,10 @@ use common::tun_control::{TUN_HELPER_DNS_STATE_FILE_NAME, TUN_HELPER_ROUTE_STATE
 use desktop_agent_be::PacketCaptureController;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{locate_config_path, make_absolute_path, summarize_config};
+use crate::config::{
+    load_config_from_path, locate_config_path, make_absolute_path, summarize_config,
+    validate_config_candidate_against_trusted_baseline,
+};
 use crate::logging::UiLogBuffer;
 #[cfg(target_os = "macos")]
 use crate::macos_helper::ensure_macos_tun_helper_for_config;

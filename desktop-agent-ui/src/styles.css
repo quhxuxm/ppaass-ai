@@ -9134,7 +9134,8 @@ html.app-dark .dns-record-frame .dns-record-row {
   white-space: nowrap;
 }
 
-.sidebar-logout.p-button {
+.sidebar-logout.p-button,
+.sidebar-account-action.p-button {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -9147,11 +9148,14 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .sidebar-logout.p-button .p-button-label,
-.sidebar-logout.p-button .p-button-icon {
+.sidebar-logout.p-button .p-button-icon,
+.sidebar-account-action.p-button .p-button-label,
+.sidebar-account-action.p-button .p-button-icon {
   line-height: 1;
 }
 
-.sidebar-logout.p-button .app-icon {
+.sidebar-logout.p-button .app-icon,
+.sidebar-account-action.p-button .app-icon {
   width: 14px;
   height: 14px;
 }
@@ -9168,16 +9172,40 @@ html.app-dark .dns-record-frame .dns-record-row {
 }
 
 .sidebar.collapsed .sidebar-account-copy,
-.sidebar.collapsed .sidebar-logout.p-button .p-button-label {
+.sidebar.collapsed .sidebar-logout.p-button .p-button-label,
+.sidebar.collapsed .sidebar-account-action.p-button .p-button-label {
   display: none;
 }
 
-.sidebar.collapsed .sidebar-logout.p-button {
+.sidebar.collapsed .sidebar-logout.p-button,
+.sidebar.collapsed .sidebar-account-action.p-button {
   justify-content: center;
   width: 40px;
   min-width: 40px;
   height: 40px;
   padding: 0;
+}
+
+.rotate-key-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.rotate-key-form {
+  display: grid;
+  gap: 12px;
+}
+
+.rotate-key-form > p {
+  margin: 0;
+  color: var(--app-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.rotate-key-form > label {
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 /* Egress cards share two balanced rows on desktop and collapse through the

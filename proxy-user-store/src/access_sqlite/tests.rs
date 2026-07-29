@@ -20,6 +20,61 @@ fn public_key() -> String {
         .unwrap()
 }
 
+#[test]
+fn access_pool_keeps_one_connection_for_the_process_lifetime() {
+    let options = connection::access_pool_options();
+    assert_eq!(options.get_min_connections(), 1);
+    assert_eq!(options.get_max_connections(), 1);
+    assert_eq!(options.get_idle_timeout(), None);
+    assert_eq!(options.get_max_lifetime(), None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn separate_repositories_keep_sidecars_and_writes_visible_across_reopen() {
+    use std::os::unix::fs::MetadataExt;
+
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("access.sqlite3");
+    let proxy_store = SqliteAccessLogRepository::connect(&path).await.unwrap();
+    let web_store = SqliteAccessLogRepository::connect(&path).await.unwrap();
+    proxy_store
+        .record_access(record("alice", "shared.example", 100))
+        .await
+        .unwrap();
+    assert_eq!(
+        web_store.list_recent_access("alice", 0, 10).await.unwrap()[0].access_count,
+        1
+    );
+
+    let [wal_path, shm_path, _journal_path] = database_sidecar_files(&path);
+    let sidecar_identity = |sidecar: &Path| {
+        let metadata = fs::metadata(sidecar).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let initial_wal = sidecar_identity(&wal_path);
+    let initial_shm = sidecar_identity(&shm_path);
+
+    web_store.pool.close().await;
+    proxy_store
+        .record_access(record("alice", "shared.example", 101))
+        .await
+        .unwrap();
+    assert_eq!(sidecar_identity(&wal_path), initial_wal);
+    assert_eq!(sidecar_identity(&shm_path), initial_shm);
+
+    let reopened_web_store = SqliteAccessLogRepository::connect(&path).await.unwrap();
+    let records = reopened_web_store
+        .list_recent_access("alice", 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].access_count, 2);
+    assert_eq!(records[0].accessed_at, 101);
+    assert_eq!(sidecar_identity(&wal_path), initial_wal);
+    assert_eq!(sidecar_identity(&shm_path), initial_shm);
+}
+
 #[tokio::test]
 async fn access_database_does_not_require_a_user_row() {
     let directory = TempDir::new().unwrap();

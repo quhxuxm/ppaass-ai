@@ -3,6 +3,7 @@ export type AccountStatus = 'active' | 'disabled'
 export type KeyState = 'missing' | 'active' | 'expired' | 'disabled'
 export type KeyRequestStatus = 'pending' | 'approved' | 'rejected'
 export type KeyRequestKind = 'initial' | 'rotate'
+export const KEY_REQUEST_MESSAGE_MAX_LENGTH = 500
 
 export interface ProviderAvailability {
   localRegistration: boolean
@@ -57,12 +58,6 @@ export interface ManagedUser {
   keyState: KeyState
 }
 
-export interface KeyMaterial {
-  publicKeyPem: string
-  privateKeyPem: string
-  keyVersion?: number
-}
-
 export interface KeyRequest {
   id: string
   username: string
@@ -71,6 +66,7 @@ export interface KeyRequest {
   createdAt: string | null
   updatedAt: string | null
   expiresAt: string | null
+  requestMessage: string | null
   displayName?: string | null
   email?: string | null
 }
@@ -109,6 +105,11 @@ export interface AgentDeviceAuthorizationInspection {
 export interface RegisterPayload {
   username: string
   password: string
+}
+
+export interface ChangePasswordPayload {
+  current_password: string
+  new_password: string
 }
 
 export interface CreateManagedUserPayload extends RegisterPayload {

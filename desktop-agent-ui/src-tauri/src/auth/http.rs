@@ -1,9 +1,7 @@
 use super::*;
 
-pub(crate) fn registration_page_url(value: &str) -> Result<Url, String> {
-    let mut url = normalize_proxy_web_url(value)?;
-    url.query_pairs_mut().append_pair("mode", "register");
-    Ok(url)
+pub(crate) fn account_management_page_url(value: &str) -> Result<Url, String> {
+    normalize_proxy_web_url(value)
 }
 
 pub(crate) fn normalize_proxy_web_url(value: &str) -> Result<Url, String> {
@@ -45,6 +43,25 @@ pub(crate) fn endpoint(base_url: &Url, path: &str) -> Result<Url, String> {
     base_url
         .join(path)
         .map_err(|_| "构造 Proxy Web API 地址失败".to_string())
+}
+
+pub(crate) fn validated_agent_access_token(
+    value: String,
+    expires_at: i64,
+    refresh_after_seconds: u64,
+) -> Result<AgentAccessToken, String> {
+    if !(32..=4096).contains(&value.len())
+        || !value.is_ascii()
+        || value.chars().any(char::is_whitespace)
+        || expires_at <= 0
+    {
+        return Err("Proxy Web 返回的 Agent 权限同步凭据无效".to_string());
+    }
+    Ok(AgentAccessToken {
+        value: Zeroizing::new(value),
+        expires_at,
+        refresh_after_seconds: refresh_after_seconds.clamp(60, 3600),
+    })
 }
 
 pub(crate) async fn decode_json_response<T>(

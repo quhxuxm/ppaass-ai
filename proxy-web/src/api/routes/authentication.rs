@@ -64,9 +64,19 @@ pub(crate) async fn login(
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let account = authenticate_password_account(&state, &headers, peer, request).await?;
+    finish_login(&state, account).await
+}
+
+pub(crate) async fn authenticate_password_account(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    request: PasswordLoginRequest,
+) -> Result<WebAccount, ApiError> {
     let normalized_login_name = normalize_username(&request.username).ok();
     let _permit = state.device_authorization_guard.enter_login(
-        &headers,
+        headers,
         peer,
         normalized_login_name
             .as_deref()
@@ -90,7 +100,7 @@ pub(crate) async fn login(
     if record.account.status != AccountStatus::Active {
         return Err(ApiError::invalid_credentials());
     }
-    finish_login(&state, record.account).await
+    Ok(record.account)
 }
 
 pub(crate) async fn finish_login(
@@ -102,7 +112,7 @@ pub(crate) async fn finish_login(
         .accounts
         .update_last_login(&account.account_id, login_time)
         .await?;
-    let (session, cookie) = state.sessions.issue(&account.account_id);
+    let (session, cookie) = state.sessions.issue(&account);
     let mut response = Json(AuthenticationResponse {
         account,
         csrf_token: session.csrf_token,

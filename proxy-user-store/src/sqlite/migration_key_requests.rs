@@ -80,3 +80,15 @@ pub(super) async fn create_v3_tables(transaction: &mut Transaction<'_, Sqlite>) 
     .await?;
     Ok(())
 }
+
+pub(super) async fn migrate_key_requests_to_v6(
+    transaction: &mut Transaction<'_, Sqlite>,
+) -> Result<()> {
+    sqlx::query(
+        "ALTER TABLE key_generation_requests ADD COLUMN request_message TEXT \
+         CHECK(request_message IS NULL OR length(request_message) <= 500)",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}

@@ -144,7 +144,7 @@ impl SqliteUserRepository {
                      ON private_key.username = profile.username \
                    WHERE account.account_id = ? \
                      AND account.auth_version = ? \
-                     AND account.role = 'user' \
+                     AND account.role IN ('user', 'admin') \
                      AND account.status = 'active' \
                      AND profile.username = ? \
                      AND profile.permissions = ? \

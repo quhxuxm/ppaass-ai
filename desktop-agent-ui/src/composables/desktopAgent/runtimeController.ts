@@ -14,6 +14,7 @@ import { latestAgentLog } from "./model";
 import { invokeOrFallback } from "./platform";
 
 interface RuntimeDependencies {
+  canUsePacketCapture: () => boolean;
   persistConfig: () => Promise<void>;
   showToast: (kind: ToastKind, message: string) => void;
 }
@@ -94,6 +95,10 @@ export function createRuntimeController(
   }
 
   async function togglePacketCapture(enabled: boolean) {
+    if (!dependencies.canUsePacketCapture()) {
+      dependencies.showToast("error", "当前账户没有使用抓包功能的权限");
+      return;
+    }
     if (state.busy || state.packetCapture.enabled === enabled) {
       return;
     }
@@ -128,6 +133,10 @@ export function createRuntimeController(
   }
 
   async function clearPacketCapture() {
+    if (!dependencies.canUsePacketCapture()) {
+      dependencies.showToast("error", "当前账户没有使用抓包功能的权限");
+      return;
+    }
     if (!state.config || state.busy) {
       return;
     }
@@ -184,7 +193,8 @@ export function createRuntimeController(
         {},
         () => state.agent
       );
-      state.packetCapture = state.agent.running
+      state.packetCapture =
+        state.agent.running && dependencies.canUsePacketCapture()
         ? await invokeOrFallback<PacketCaptureRuntimeStatus>(
             "get_packet_capture_runtime_status",
             {},

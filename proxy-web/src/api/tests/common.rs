@@ -83,7 +83,7 @@ pub(super) async fn test_app_with_components() -> (
         .await
         .unwrap();
     store
-        .bootstrap_admin_if_none(NewAdminAccount {
+        .bootstrap_admin_if_absent(NewAdminAccount {
             account_id: "acc_admin".to_string(),
             login_name: "admin".to_string(),
             password_hash: Some(hash),
@@ -95,6 +95,7 @@ pub(super) async fn test_app_with_components() -> (
         .unwrap();
     let sessions = SessionStore::new(false);
     let private_keys = PrivateKeyCipher::new(MASTER_SECRET).unwrap();
+    let agent_tokens = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
     let state = AppState {
         users: store.clone(),
         accounts: store.clone(),
@@ -102,6 +103,7 @@ pub(super) async fn test_app_with_components() -> (
         device_authorizations: store.clone(),
         passwords,
         sessions: sessions.clone(),
+        agent_tokens,
         private_keys: private_keys.clone(),
         proxy_identity_public_key_pem: test_proxy_identity_public_key(),
         allow_registration: true,

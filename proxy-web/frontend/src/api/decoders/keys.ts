@@ -1,6 +1,5 @@
 import { ApiError } from '../types'
 import type {
-  KeyMaterial,
   KeyRequest,
   KeyRequestStatus,
   KeyState,
@@ -12,7 +11,6 @@ import {
   identifierValue,
   nullableString,
   nullableTimestamp,
-  numberValue,
   stringValue,
 } from '../values'
 
@@ -119,6 +117,10 @@ export function decodeKeyRequest(
       nullableTimestamp(root.approved_expires_at) ??
       nullableTimestamp(root.approvedExpiresAt) ??
       null,
+    requestMessage:
+      nullableString(root.request_message) ??
+      nullableString(root.requestMessage) ??
+      null,
     displayName:
       nullableString(root.display_name) ??
       nullableString(root.displayName) ??
@@ -160,37 +162,4 @@ export function decodeKeyState(
     }
   }
   return 'active'
-}
-
-export function decodeKeyMaterial(value: unknown): KeyMaterial {
-  const root = asRecord(value)
-  if (!root) {
-    throw new ApiError('服务器没有返回密钥内容', 502)
-  }
-  const nested =
-    asRecord(root.credentials) ??
-    asRecord(root.key) ??
-    asRecord(root.keys) ??
-    root
-  const profile = asRecord(root.profile) ?? asRecord(root.user)
-  const privateKeyPem =
-    stringValue(nested.private_key_pem) ??
-    stringValue(nested.privateKeyPem) ??
-    stringValue(root.private_key)
-  const publicKeyPem =
-    stringValue(nested.public_key_pem) ??
-    stringValue(nested.publicKeyPem) ??
-    stringValue(profile?.public_key_pem) ??
-    ''
-
-  if (!privateKeyPem) {
-    throw new ApiError('服务器没有返回私钥内容', 502)
-  }
-
-  return {
-    privateKeyPem,
-    publicKeyPem,
-    keyVersion:
-      numberValue(nested.key_version) ?? numberValue(nested.keyVersion),
-  }
 }

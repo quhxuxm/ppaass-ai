@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const AGENT_PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
+pub(crate) const AGENT_CONFIG_VIEW_PERMISSION: &str = "agent.config.view";
+pub(crate) const AGENT_EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
+pub(crate) const AGENT_RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentLoginRequest {
@@ -7,11 +12,53 @@ pub(crate) struct AgentLoginRequest {
     pub(crate) password: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct AgentKeyRotationRequest {
+    pub(crate) password: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AgentAuthAccount {
     pub(crate) username: String,
+    #[serde(default = "default_agent_account_role")]
+    pub(crate) role: String,
+    #[serde(default = "default_agent_account_permissions")]
+    pub(crate) permissions: Vec<String>,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,
+}
+
+fn default_agent_account_role() -> String {
+    "user".to_string()
+}
+
+fn default_agent_account_permissions() -> Vec<String> {
+    vec!["key.rotate".to_string()]
+}
+
+impl AgentAuthAccount {
+    pub(crate) fn unverified_cache_projection(self) -> Self {
+        Self {
+            role: "user".to_string(),
+            permissions: Vec::new(),
+            ..self
+        }
+    }
+
+    pub(crate) fn has_permission(&self, permission: &str) -> bool {
+        self.role == "admin"
+            || self
+                .permissions
+                .iter()
+                .any(|candidate| candidate == permission)
+    }
+
+    pub(crate) fn require_permission(&self, permission: &str) -> Result<(), String> {
+        self.has_permission(permission)
+            .then_some(())
+            .ok_or_else(|| format!("当前账号缺少权限：{permission}"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +75,7 @@ pub(crate) struct AgentAuthState {
     pub(crate) authenticated: bool,
     pub(crate) account: Option<AgentAuthAccount>,
     pub(crate) account_status: Option<AgentAuthAccountStatus>,
+    pub(crate) permission_sync_error: Option<String>,
     pub(crate) config: Option<LoadedAgentConfig>,
 }
 
@@ -68,9 +116,9 @@ pub(crate) struct PacketCaptureRuntimeStatus {
 pub(crate) struct AgentConfigSummary {
     pub(crate) listen_addr: String,
     pub(crate) proxy_addrs: Vec<String>,
-    #[serde(skip_serializing)]
+    #[serde(default, skip_serializing)]
     pub(crate) username: String,
-    #[serde(skip_serializing)]
+    #[serde(default, skip_serializing)]
     pub(crate) private_key_path: String,
     pub(crate) transport_mode: String,
     pub(crate) udp_session_pool_size: usize,
@@ -178,7 +226,7 @@ pub(crate) struct VerifiedProxyAuthStatus {
 mod tests {
     use super::{
         AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress,
-        AgentLoginRequest,
+        AgentKeyRotationRequest, AgentLoginRequest, AGENT_PACKET_CAPTURE_PERMISSION,
     };
 
     #[test]
@@ -198,15 +246,71 @@ mod tests {
     }
 
     #[test]
+    fn key_rotation_request_only_accepts_a_password() {
+        let accepted = serde_json::from_value::<AgentKeyRotationRequest>(serde_json::json!({
+            "password": "password"
+        }));
+        assert!(accepted.is_ok());
+
+        let rejected = serde_json::from_value::<AgentKeyRotationRequest>(serde_json::json!({
+            "password": "password",
+            "username": "attacker",
+            "proxyWebUrl": "https://attacker.example.com"
+        }));
+        assert!(rejected.is_err());
+    }
+
+    #[test]
+    fn legacy_persisted_account_gets_safe_role_and_permission_defaults() {
+        let account = serde_json::from_value::<AgentAuthAccount>(serde_json::json!({
+            "username": "alice",
+            "key_version": 7,
+            "expires_at": null
+        }))
+        .unwrap();
+
+        assert_eq!(account.role, "user");
+        assert_eq!(account.permissions, ["key.rotate"]);
+    }
+
+    #[test]
+    fn agent_permissions_are_fail_closed_for_users_and_implicit_for_admins() {
+        let mut user = AgentAuthAccount {
+            username: "alice".to_string(),
+            role: "user".to_string(),
+            permissions: Vec::new(),
+            key_version: 1,
+            expires_at: None,
+        };
+        assert!(user
+            .require_permission(AGENT_PACKET_CAPTURE_PERMISSION)
+            .is_err());
+        user.permissions
+            .push(AGENT_PACKET_CAPTURE_PERMISSION.to_string());
+        assert!(user
+            .require_permission(AGENT_PACKET_CAPTURE_PERMISSION)
+            .is_ok());
+
+        user.role = "admin".to_string();
+        user.permissions.clear();
+        assert!(user
+            .require_permission(AGENT_PACKET_CAPTURE_PERMISSION)
+            .is_ok());
+    }
+
+    #[test]
     fn auth_state_does_not_serialize_control_plane_endpoint() {
         let state = AgentAuthState {
             authenticated: true,
             account: Some(AgentAuthAccount {
                 username: "alice".to_string(),
+                role: "user".to_string(),
+                permissions: vec!["key.rotate".to_string()],
                 key_version: 1,
                 expires_at: Some(1_800_000_000),
             }),
             account_status: Some(AgentAuthAccountStatus::Active),
+            permission_sync_error: None,
             config: None,
         };
 

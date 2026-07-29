@@ -277,11 +277,49 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         refreshPacketCapture(true);
     }
 
+    protected void preparePacketCaptureUiForBuild() {
+        captureOperationToken++;
+        captureFilterHandler.removeCallbacks(captureFilterRender);
+        Future<?> reportFuture = captureReportFuture;
+        captureReportFuture = null;
+        if (reportFuture != null) {
+            reportFuture.cancel(true);
+        }
+        captureOperation = CaptureOperation.NONE;
+        captureClearConfirmationVisible = false;
+        capturePackets = new JSONArray();
+        captureSearchIndexes = new ArrayList<>();
+        captureStatus = null;
+        captureSummary = null;
+        captureToggle = null;
+        captureClear = null;
+        captureRefresh = null;
+        captureSearch = null;
+        captureMinimumKb = null;
+        captureDirection = null;
+        captureProtocol = null;
+        captureSort = null;
+        capturePacketList = null;
+        capturePageRoot = null;
+        capturePacketsPanel = null;
+        captureListContainer = null;
+        captureUiDestroyed = false;
+    }
+
+    protected void disablePacketCaptureForRevokedPermission() {
+        try {
+            NativeAgent.setPacketCaptureEnabled(captureFile().getAbsolutePath(), false);
+        } catch (RuntimeException ignored) {
+            // A later native start also receives no packet-capture UI entry.
+        }
+    }
+
     @Override
     protected void updateStatusMetrics() {
         super.updateStatusMetrics();
         updatePacketCaptureControls();
-        if (selectedScreenIndex == 1
+        if (captureScreenIndex >= 0
+                && selectedScreenIndex == captureScreenIndex
                 && SystemClock.elapsedRealtime() - lastCaptureRefreshMs >= CAPTURE_REFRESH_MS) {
             refreshPacketCapture(false);
         }
@@ -289,6 +327,14 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
 
     protected void updatePacketCaptureControls() {
         if (captureToggle == null) {
+            return;
+        }
+        if (!hasPacketCapturePermission()) {
+            captureToggle.setEnabled(false);
+            captureClear.setEnabled(false);
+            captureRefresh.setEnabled(false);
+            captureStatus.setText(tr("●  当前账户无抓包权限"));
+            captureStatus.setTextColor(COLOR_ACTION_STOP);
             return;
         }
         boolean busy = captureOperation != CaptureOperation.NONE;
@@ -382,6 +428,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void togglePacketCapture() {
+        if (!requirePacketCapturePermission()) {
+            return;
+        }
         if (!canStartCaptureOperation()) {
             return;
         }
@@ -409,6 +458,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void confirmClearPacketCapture() {
+        if (!requirePacketCapturePermission()) {
+            return;
+        }
         if (!canStartCaptureOperation()) {
             return;
         }
@@ -426,6 +478,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void clearPacketCapture() {
+        if (!requirePacketCapturePermission()) {
+            return;
+        }
         runCaptureBooleanOperation(
                 CaptureOperation.CLEARING,
                 "清空抓包失败：",
@@ -451,7 +506,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         new Thread(() -> {
             String failure = null;
             try {
-                if (!nativeOperation.run()) {
+                if (!hasPacketCapturePermission()) {
+                    failure = "当前账户没有使用此功能的权限";
+                } else if (!nativeOperation.run()) {
                     failure = "原生抓包服务未完成请求";
                 }
             } catch (RuntimeException error) {
@@ -470,6 +527,12 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void refreshPacketCapture(boolean showProgress) {
+        if (!hasPacketCapturePermission()) {
+            if (showProgress) {
+                showAgentPermissionDenied();
+            }
+            return;
+        }
         if (captureClearConfirmationVisible) {
             return;
         }
@@ -512,6 +575,10 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         if (Thread.currentThread().isInterrupted()) {
             return;
         }
+        MainActivityPacketCapture activity = activityRef.get();
+        if (activity == null || !activity.hasPacketCapturePermission()) {
+            return;
+        }
         CaptureReportData report = null;
         String failure = null;
         try {
@@ -531,11 +598,11 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
         }
         CaptureReportData result = report;
         String finalFailure = failure;
-        MainActivityPacketCapture activity = activityRef.get();
-        if (activity == null) {
+        MainActivityPacketCapture currentActivity = activityRef.get();
+        if (currentActivity == null || !currentActivity.hasPacketCapturePermission()) {
             return;
         }
-        activity.runOnUiThread(() -> {
+        currentActivity.runOnUiThread(() -> {
             MainActivityPacketCapture current = activityRef.get();
             if (current != null) {
                 current.finishCaptureReport(
@@ -554,6 +621,7 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
             boolean showProgress) {
         if (captureUiDestroyed
                 || isDestroyed()
+                || !hasPacketCapturePermission()
                 || token != captureOperationToken
                 || captureOperation != CaptureOperation.REFRESHING) {
             return;
@@ -569,17 +637,35 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private boolean canStartCaptureOperation() {
-        return captureOperationCanStart(
+        return AgentUiPermissionPolicy.captureOperationAllowed(
+                hasPacketCapturePermission(),
                 captureUiDestroyed || isDestroyed(),
                 captureOperation != CaptureOperation.NONE,
                 capturePacketList != null);
     }
 
     static boolean captureOperationCanStart(
+            boolean hasPermission,
             boolean destroyed,
             boolean operationInFlight,
             boolean uiReady) {
-        return !destroyed && !operationInFlight && uiReady;
+        return AgentUiPermissionPolicy.captureOperationAllowed(
+                hasPermission,
+                destroyed,
+                operationInFlight,
+                uiReady);
+    }
+
+    private boolean hasPacketCapturePermission() {
+        return hasAgentPermission(AgentPermissions.PACKET_CAPTURE);
+    }
+
+    private boolean requirePacketCapturePermission() {
+        if (hasPacketCapturePermission()) {
+            return true;
+        }
+        showAgentPermissionDenied();
+        return false;
     }
 
     private long beginCaptureOperation(CaptureOperation operation) {
@@ -639,6 +725,11 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void applyCaptureReport(CaptureReportData report) {
+        if (!hasPacketCapturePermission()) {
+            capturePackets = new JSONArray();
+            captureSearchIndexes = new ArrayList<>();
+            return;
+        }
         capturePackets = report.packets;
         captureSearchIndexes = report.searchIndexes;
         updateProtocolOptions();
@@ -850,6 +941,11 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
             return;
         }
         capturePacketList.removeAllViews();
+        if (!hasPacketCapturePermission()) {
+            capturePackets = new JSONArray();
+            captureSearchIndexes = new ArrayList<>();
+            return;
+        }
         ArrayList<JSONObject> visible = filteredPackets();
         if (visible.isEmpty()) {
             capturePacketList.setGravity(Gravity.CENTER);
@@ -1008,6 +1104,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void showPacketDetail(JSONObject packet) {
+        if (!requirePacketCapturePermission()) {
+            return;
+        }
         boolean upload = "upload".equals(packet.optString("direction"));
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -1342,6 +1441,9 @@ abstract class MainActivityPacketCapture extends MainActivityConfigScreen {
     }
 
     private void resetPacketFilters() {
+        if (!requirePacketCapturePermission()) {
+            return;
+        }
         captureSearch.setText("");
         captureMinimumKb.setText("");
         captureDirection.setSelection(0);

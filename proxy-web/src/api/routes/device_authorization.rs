@@ -76,7 +76,7 @@ pub(crate) async fn inspect_agent_device_authorization(
     validate_browser_mutation(&headers)?;
     let session = authenticate(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
-    require_agent_user_account(&session.account)?;
+    require_active_agent_account(&session.account)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let user_code_hash = agent_user_code_hash(&request.user_code)?;
     let authorization = state
@@ -102,7 +102,7 @@ pub(crate) async fn approve_agent_device_authorization(
     validate_browser_mutation(&headers)?;
     let session = authenticate(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
-    require_agent_user_account(&session.account)?;
+    require_active_agent_account(&session.account)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let user_code_hash = agent_user_code_hash(&request.user_code)?;
     let authorization = state
@@ -159,7 +159,7 @@ pub(crate) async fn deny_agent_device_authorization(
     validate_browser_mutation(&headers)?;
     let session = authenticate(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
-    require_agent_user_account(&session.account)?;
+    require_active_agent_account(&session.account)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let decision = state
         .device_authorizations
@@ -269,7 +269,7 @@ pub(crate) async fn poll_agent_device_authorization(
     if account.auth_version != expected_auth_version {
         return Err(agent_device_authorization_invalidated());
     }
-    if require_agent_user_account(&account).is_err() {
+    if require_active_agent_account(&account).is_err() {
         return Err(agent_device_authorization_invalidated());
     }
     let (profile, private_key) = load_agent_credentials_for_claim(&state, &account).await?;
@@ -288,12 +288,21 @@ pub(crate) async fn poll_agent_device_authorization(
         .accounts
         .update_last_login(&account.account_id, login_time)
         .await?;
-    let (session, cookie) = state.sessions.issue(&account.account_id);
+    let (session, cookie) = state.sessions.issue(&account);
+    let agent_token = state
+        .agent_tokens
+        .issue(&account.account_id)
+        .map_err(|error| {
+            state.sessions.revoke_issued(&session);
+            warn!(account_id = account.account_id, %error, "签发 Agent access token 失败");
+            ApiError::internal()
+        })?;
     let response_body = AgentDeviceTokenResponse {
         account,
         profile: AgentDeviceProfileResponse {
             username: profile.username,
             permissions: profile.permissions,
+            enabled: profile.enabled,
             key_version: profile.key_version,
             expires_at: profile.expires_at,
         },
@@ -302,6 +311,9 @@ pub(crate) async fn poll_agent_device_authorization(
         private_key_pem: private_key.private_key_pem,
         csrf_token: session.csrf_token.clone(),
         session_expires_at: session.expires_at,
+        agent_access_token: agent_token.token,
+        agent_access_token_expires_at: agent_token.expires_at,
+        refresh_after_seconds: crate::agent_tokens::AGENT_PROFILE_REFRESH_SECONDS,
     };
     let mut encoded = match serde_json::to_vec(&response_body) {
         Ok(encoded) => Zeroizing::new(encoded),

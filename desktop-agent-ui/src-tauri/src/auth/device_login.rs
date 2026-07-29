@@ -79,14 +79,16 @@ pub(crate) async fn poll_device_authorization(
             .await?;
     let csrf_token = Zeroizing::new(std::mem::take(&mut token.csrf_token));
     let downloaded = validate_device_token(token, normalized_url);
-    best_effort_logout(&client, &base_url, &csrf_token).await;
+    if !csrf_token.is_empty() {
+        best_effort_logout(&client, &base_url, &csrf_token).await;
+    }
     let downloaded = downloaded?;
     info!(
         username = %downloaded.account.username,
         key_version = downloaded.account.key_version,
         "Windows Agent 浏览器设备登录授权成功"
     );
-    Ok(DeviceAuthorizationPoll::Authorized(downloaded))
+    Ok(DeviceAuthorizationPoll::Authorized(Box::new(downloaded)))
 }
 
 pub(crate) fn open_system_browser(url: &Url) -> Result<(), String> {
@@ -152,13 +154,19 @@ pub(crate) fn validate_device_token(
         private_key_pem,
         csrf_token: _,
         _session_expires_at: _,
+        agent_access_token,
+        agent_access_token_expires_at,
+        refresh_after_seconds,
     } = token;
     let private_key_pem = Zeroizing::new(private_key_pem);
-    if account.role != "user" {
-        return Err("管理员账号不能用于 Agent，请使用普通用户账号登录".to_string());
+    if !matches!(account.role.as_str(), "user" | "admin") {
+        return Err("Proxy Web 返回了未知的账号角色".to_string());
     }
     if account.status != "active" {
         return Err("账号已停用".to_string());
+    }
+    if !profile.enabled {
+        return Err("Proxy 用户已停用".to_string());
     }
     if let Some(linked_username) = account.linked_username.as_deref() {
         if linked_username != profile.username {
@@ -180,15 +188,23 @@ pub(crate) fn validate_device_token(
     }
     validate_key_pair(&private_key_pem, &public_key_pem)?;
     validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
+    let agent_access_token = validated_agent_access_token(
+        agent_access_token,
+        agent_access_token_expires_at,
+        refresh_after_seconds,
+    )?;
     Ok(DownloadedCredential {
         account: AgentAuthAccount {
             username: profile.username,
+            role: account.role,
+            permissions: profile.permissions,
             key_version: profile.key_version,
             expires_at: profile.expires_at,
         },
         private_key_pem,
         proxy_identity_public_key_pem,
         proxy_web_url,
+        agent_access_token: Some(agent_access_token),
     })
 }
 

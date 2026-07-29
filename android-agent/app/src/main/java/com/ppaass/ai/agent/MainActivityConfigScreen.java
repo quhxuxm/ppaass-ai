@@ -40,6 +40,11 @@ protected void buildConfigScreen(LinearLayout root) {
                 dp(48)));
 
         LinearLayout connection = configSection(root, "连接");
+        if (!hasAgentPermission(AgentPermissions.EGRESS_EDIT)) {
+            addPermissionReadOnlyHint(
+                    connection,
+                    "出口参数为只读；管理员可分配出口修改权限。");
+        }
         proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         addFieldHelp(connection, "TCP / UDP 共用远端出口。");
@@ -100,6 +105,16 @@ protected void buildConfigScreen(LinearLayout root) {
         addFieldHelp(httpProxy, "HTTP/SOCKS5 最大并发连接数。");
 
         LinearLayout runtime = configSection(root, "运行参数");
+        if (!hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT)) {
+            addPermissionReadOnlyHint(
+                    runtime,
+                    "VPN 线程数为只读；管理员可分配线程数修改权限。");
+        }
+        if (!hasAgentPermission(AgentPermissions.EGRESS_EDIT)) {
+            addPermissionReadOnlyHint(
+                    runtime,
+                    "消息压缩格式为只读；管理员可分配出口修改权限。");
+        }
         quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
         runtimeThreads = numberControl(
                 runtime,
@@ -185,6 +200,18 @@ protected void buildConfigScreen(LinearLayout root) {
 
         buildDirectAccessSection(root);
     }
+
+protected void addPermissionReadOnlyHint(LinearLayout root, String message) {
+        TextView hint = mutedText(message, 12f);
+        hint.setTextColor(COLOR_ACTION_WARN);
+        hint.setPadding(dp(10), dp(8), dp(10), dp(8));
+        hint.setBackground(rounded(
+                COLOR_ACTION_WARN_SOFT,
+                alphaColor(COLOR_ACTION_WARN, 96)));
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, 0, 0, dp(8));
+        root.addView(hint, params);
+}
 
 protected void buildAppearanceSection(LinearLayout root) {
         LinearLayout appearance = configSection(root, "外观");

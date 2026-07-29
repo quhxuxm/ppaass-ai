@@ -46,7 +46,7 @@ impl SqliteUserRepository {
     }
 
     #[instrument(skip(self, admin), fields(login_name = %admin.login_name))]
-    pub(super) async fn bootstrap_admin_if_none(
+    pub(super) async fn bootstrap_admin_if_absent(
         &self,
         admin: NewAdminAccount,
     ) -> Result<BootstrapOutcome> {
@@ -60,11 +60,12 @@ impl SqliteUserRepository {
             normalize_optional_field("avatar_url", admin.avatar_url, MAX_AVATAR_URL_BYTES)?;
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let admin_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM web_accounts WHERE role = 'admin')")
+        let login_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM web_accounts WHERE login_name = ?)")
+                .bind(&login_name)
                 .fetch_one(&mut *transaction)
                 .await?;
-        if admin_exists {
+        if login_exists {
             transaction.rollback().await?;
             return Ok(BootstrapOutcome::AlreadyExists);
         }

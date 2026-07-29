@@ -67,6 +67,10 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("users.sqlite3");
     let store = SqliteUserRepository::connect(&path).await.unwrap();
+    sqlx::query("ALTER TABLE key_generation_requests DROP COLUMN request_message")
+        .execute(&store.pool)
+        .await
+        .unwrap();
     sqlx::query("DROP TABLE agent_device_authorizations")
         .execute(&store.pool)
         .await
@@ -93,6 +97,16 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
         columns
             .iter()
             .any(|column| column == "authorized_auth_version")
+    );
+    let mut transaction = reopened.pool.begin().await.unwrap();
+    let key_request_columns = table_columns(&mut transaction, "key_generation_requests")
+        .await
+        .unwrap();
+    transaction.rollback().await.unwrap();
+    assert!(
+        key_request_columns
+            .iter()
+            .any(|column| column == "request_message")
     );
 }
 
@@ -206,6 +220,16 @@ async fn migrates_v2_database_to_key_request_schema() {
         .iter()
         .any(|column| column == "approved_expires_at")
     );
+    assert!(
+        table_columns(
+            &mut reopened.pool.begin().await.unwrap(),
+            "key_generation_requests"
+        )
+        .await
+        .unwrap()
+        .iter()
+        .any(|column| column == "request_message")
+    );
     let mut transaction = reopened.pool.begin().await.unwrap();
     assert!(
         table_columns(&mut transaction, "user_access_records")
@@ -239,6 +263,10 @@ async fn migrates_v3_duplicate_access_rows_into_address_counts() {
         .await
         .unwrap();
     sqlx::query("DROP TABLE agent_device_authorizations")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE key_generation_requests DROP COLUMN request_message")
         .execute(&store.pool)
         .await
         .unwrap();
@@ -322,7 +350,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 6")
+    sqlx::query("PRAGMA user_version = 7")
         .execute(&pool)
         .await
         .unwrap();
@@ -341,5 +369,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
 }

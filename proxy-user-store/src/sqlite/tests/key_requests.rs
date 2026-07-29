@@ -12,6 +12,7 @@ async fn rejects_then_allows_a_new_request() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-one".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: Some("  请尽快审批，谢谢  ".to_string()),
         })
         .await
         .unwrap();
@@ -20,6 +21,10 @@ async fn rejects_then_allows_a_new_request() {
         .await
         .unwrap();
     assert_eq!(rejected.status, KeyRequestStatus::Rejected);
+    assert_eq!(
+        rejected.request_message.as_deref(),
+        Some("请尽快审批，谢谢")
+    );
     assert_eq!(rejected.reviewer_account_id.as_deref(), Some("admin-one"));
     assert!(rejected.reviewed_at.is_some());
     assert_eq!(rejected.approved_expires_at, None);
@@ -28,6 +33,7 @@ async fn rejects_then_allows_a_new_request() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-two".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -67,6 +73,7 @@ async fn expired_key_can_request_and_receive_atomic_rotation() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-rotate".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -120,6 +127,7 @@ async fn active_key_is_ineligible_but_missing_envelope_can_be_recovered() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-active".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap_err();
@@ -136,6 +144,7 @@ async fn active_key_is_ineligible_but_missing_envelope_can_be_recovered() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-recovery".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -177,6 +186,7 @@ async fn rotation_approval_rechecks_disabled_profile_inside_transaction() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-disabled".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();
@@ -241,6 +251,7 @@ async fn concurrent_approval_only_commits_one_keypair() {
         .submit_key_generation_request(NewKeyGenerationRequest {
             request_id: "request-race".to_string(),
             account_id: "account-alice".to_string(),
+            request_message: None,
         })
         .await
         .unwrap();

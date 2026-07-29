@@ -211,6 +211,12 @@ pub(crate) async fn admin_delete_user(
             .delete_managed_user(&account.account_id)
             .await?;
     } else if let Some(profile) = managed.profile {
+        if profile.enabled {
+            return Err(ApiError::conflict(
+                "account_not_disabled",
+                "只有已停用的用户才能删除",
+            ));
+        }
         state.users.delete_user(&profile.username).await?;
     } else {
         return Err(ApiError::not_found("用户不存在"));

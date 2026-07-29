@@ -41,6 +41,8 @@ export type LoadedAgentConfig = {
 
 export type AgentAuthAccount = {
   username: string;
+  role: "user" | "admin";
+  permissions: string[];
   key_version: number;
   expires_at: number | null;
 };
@@ -49,6 +51,7 @@ export type AgentAuthState = {
   authenticated: boolean;
   account: AgentAuthAccount | null;
   account_status: "active" | "expired" | "disabled" | null;
+  permission_sync_error: string | null;
   config: LoadedAgentConfig | null;
 };
 

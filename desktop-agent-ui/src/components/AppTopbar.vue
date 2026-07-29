@@ -12,6 +12,7 @@ defineProps<{
   running: boolean;
   configLocked: boolean;
   configAvailable: boolean;
+  canRestoreDefaultConfig: boolean;
   dirty: boolean;
   busy: boolean;
   colorTheme: ColorTheme;
@@ -156,7 +157,8 @@ onBeforeUnmount(() => {
                 label="恢复默认"
                 severity="secondary"
                 text
-                :disabled="!configAvailable || configLocked || busy"
+                :title="canRestoreDefaultConfig ? '恢复默认' : '当前账户没有查看原始配置的权限'"
+                :disabled="!canRestoreDefaultConfig || !configAvailable || configLocked || busy"
                 @click="emit('restore-default-config')"
               >
                 <template #icon="slotProps"><AppIcon :class="slotProps.class" name="restore" /></template>

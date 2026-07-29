@@ -6,6 +6,15 @@ pub(crate) fn provision_downloaded_credential(
     config_path: &Path,
     downloaded: DownloadedCredential,
 ) -> Result<AgentAuthState, String> {
+    let agent_access_token = downloaded.agent_access_token.clone().or_else(|| {
+        runtime
+            .authenticated_session()
+            .ok()
+            .flatten()
+            .and_then(|session| session.agent_access_token)
+    });
+    let candidate = load_config_from_path(config_path)?;
+    validate_config_candidate_against_trusted_baseline(runtime, &downloaded.account, &candidate)?;
     #[cfg(windows)]
     activate_windows_service_session(app)?;
     let agent_state = match get_agent_state_inner(runtime) {
@@ -74,7 +83,7 @@ pub(crate) fn provision_downloaded_credential(
             return Err(error);
         }
     };
-    let ui_config = match redact_managed_identity(loaded.clone()) {
+    let ui_config = match prepare_config_for_account(loaded.clone(), &downloaded.account) {
         Ok(config) => config,
         Err(error) => {
             rollback_downloaded_credential(
@@ -87,7 +96,7 @@ pub(crate) fn provision_downloaded_credential(
         }
     };
     apply_ui_log_level(runtime, &loaded.summary.log_level);
-    if let Err(error) = remember_ui_config_path(runtime, &loaded.path) {
+    if let Err(error) = remember_trusted_ui_config(runtime, &loaded) {
         rollback_downloaded_credential(
             app,
             config_path,
@@ -98,7 +107,12 @@ pub(crate) fn provision_downloaded_credential(
     }
 
     let account = downloaded.account;
-    if let Err(error) = persist_agent_login(app, &account, AgentAuthAccountStatus::Active) {
+    if let Err(error) = persist_agent_login(
+        app,
+        &account,
+        AgentAuthAccountStatus::Active,
+        agent_access_token.as_ref(),
+    ) {
         rollback_downloaded_credential(
             app,
             config_path,
@@ -107,13 +121,15 @@ pub(crate) fn provision_downloaded_credential(
         );
         return Err(error);
     }
-    if let Err(error) = runtime.set_authenticated_session(
+    if let Err(error) = runtime.set_authenticated_session(AuthenticatedAgentSession::new(
         account.clone(),
         AgentAuthAccountStatus::Active,
         private_key_path.clone(),
         proxy_identity_public_key_path.clone(),
         downloaded.proxy_web_url,
-    ) {
+        agent_access_token,
+        AgentPermissionTrust::ServerVerified,
+    )) {
         rollback_downloaded_credential(
             app,
             config_path,
@@ -136,6 +152,7 @@ pub(crate) fn provision_downloaded_credential(
         authenticated: true,
         account: Some(account),
         account_status: Some(AgentAuthAccountStatus::Active),
+        permission_sync_error: None,
         config: Some(ui_config),
     })
 }
@@ -204,6 +221,7 @@ pub(crate) async fn logout_agent(
         authenticated: false,
         account: None,
         account_status: None,
+        permission_sync_error: None,
         config: None,
     })
 }

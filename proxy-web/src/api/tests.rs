@@ -1,11 +1,15 @@
 mod access_records;
+mod admin_deletion;
+mod agent_session;
 mod auth_limits;
 mod common;
 mod device_accounts;
+mod device_admin;
 mod device_concurrency;
 mod device_denial;
 mod device_flow;
 mod key_admin;
 mod key_expiration;
 mod key_initial;
+mod password;
 mod permissions;

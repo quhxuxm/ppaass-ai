@@ -196,6 +196,9 @@ protected String authenticatedAccountSummary() {
         StringBuilder summary = new StringBuilder()
                 .append("已登录：")
                 .append(AgentAuthSession.username());
+        if (AgentPermissions.ROLE_ADMIN.equals(AgentAuthSession.role())) {
+            summary.append(" · 管理员");
+        }
         if (AgentAuthSession.isServerExpired(this)) {
             summary.append(" · 账号已过期，等待管理员续期");
         } else if (AgentAuthSession.isServerDisabled(this)) {
@@ -208,6 +211,10 @@ protected String authenticatedAccountSummary() {
             summary.append(" · 有效期至 ")
                     .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
                             .format(new Date(expiresAt * 1000L)));
+        }
+        String syncMessage = AgentAuthSession.syncMessage(this);
+        if (!syncMessage.isEmpty()) {
+            summary.append('\n').append(syncMessage);
         }
         return summary.toString();
 }

@@ -2,24 +2,52 @@
 import Card from "primevue/card";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import AppIcon from "../components/AppIcon";
+import Message from "primevue/message";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
 import Textarea from "primevue/textarea";
 import { compressionOptions, transportModeOptions } from "../constants";
 import type { AgentConfigSummary } from "../types";
 
-defineProps<{
+const props = defineProps<{
   summary: AgentConfigSummary;
   configLocked: boolean;
+  canEditEgress: boolean;
 }>();
 
 const emit = defineEmits<{
   "set-field": [field: keyof AgentConfigSummary, value: unknown];
 }>();
+
+const protectedEgressFields = new Set<keyof AgentConfigSummary>([
+  "proxy_addrs",
+  "connect_timeout_secs",
+  "compression_mode",
+  "udp_session_pool_size"
+]);
+
+function setEgressField(
+  field: keyof AgentConfigSummary,
+  value: unknown
+) {
+  if (!props.canEditEgress && protectedEgressFields.has(field)) {
+    return;
+  }
+  emit("set-field", field, value);
+}
 </script>
 
 <template>
   <div class="content-grid egress-grid">
+    <Message
+      v-if="!canEditEgress"
+      class="span-12"
+      severity="warn"
+      :closable="false"
+    >
+      当前账户没有出口配置编辑权限。远端出口地址、连接超时、消息压缩格式和 UDP 会话数仅供查看。
+    </Message>
+
     <Card class="panel span-5 egress-endpoints-panel">
       <template #title>
         <div class="panel-heading inline">
@@ -32,10 +60,10 @@ const emit = defineEmits<{
           <span><AppIcon name="server" />节点</span>
           <Textarea
             :model-value="summary.proxy_addrs.join('\n')"
-            :disabled="configLocked"
+            :disabled="configLocked || !canEditEgress"
             rows="5"
             auto-resize
-            @update:model-value="emit('set-field', 'proxy_addrs', $event)"
+            @update:model-value="setEgressField('proxy_addrs', $event)"
           />
         </label>
       </template>
@@ -69,9 +97,9 @@ const emit = defineEmits<{
               suffix=" s"
               :min="0"
               :allow-empty="false"
-              :disabled="configLocked"
+              :disabled="configLocked || !canEditEgress"
               :use-grouping="false"
-              @update:model-value="emit('set-field', 'connect_timeout_secs', $event)"
+              @update:model-value="setEgressField('connect_timeout_secs', $event)"
             />
           </label>
           <label class="field">
@@ -79,8 +107,8 @@ const emit = defineEmits<{
             <Select
               :model-value="summary.compression_mode"
               :options="compressionOptions"
-              :disabled="configLocked"
-              @update:model-value="emit('set-field', 'compression_mode', $event)"
+              :disabled="configLocked || !canEditEgress"
+              @update:model-value="setEgressField('compression_mode', $event)"
             />
           </label>
         </div>
@@ -140,9 +168,9 @@ const emit = defineEmits<{
                 :min="1"
                 :max="8"
                 :allow-empty="false"
-                :disabled="configLocked"
+                :disabled="configLocked || !canEditEgress"
                 :use-grouping="false"
-                @update:model-value="emit('set-field', 'udp_session_pool_size', $event)"
+                @update:model-value="setEgressField('udp_session_pool_size', $event)"
               />
               <small>已认证 UDP 会话数，范围 1–8，默认 4。</small>
             </label>

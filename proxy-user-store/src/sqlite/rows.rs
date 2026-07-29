@@ -113,6 +113,7 @@ pub(super) fn row_to_key_request(row: SqliteRow) -> Result<KeyGenerationRequest>
     Ok(KeyGenerationRequest {
         request_id,
         account_id: row.try_get("account_id")?,
+        request_message: row.try_get("request_message")?,
         kind,
         status,
         expected_key_version,

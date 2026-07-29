@@ -16,7 +16,6 @@
 系统不再使用“管理员 Token”。首次打开一个没有管理员的数据库时，通过环境变量创建真实管理员账号：
 
 ```bash
-export PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USERNAME="admin"
 export PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
 export PPAASS_PROXY_WEB_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes-and-keep-it-stable"
 
@@ -24,7 +23,10 @@ RUST_LOG=proxy_web=debug,proxy_user_store=debug,tower_http=info \
   cargo run -p proxy-web
 ```
 
-管理员用户名默认是 `admin`。管理员一旦存在，bootstrap 用户名和密码不会再次创建或覆盖账号。不要把密码写进仓库或命令行参数。
+根管理员用户名固定为 `admin`；如果仍设置
+`PPAASS_PROXY_WEB_BOOTSTRAP_ADMIN_USERNAME`，它也只能是 `admin`。其他管理员不能阻止
+系统补建根管理员。`admin` 一旦存在，bootstrap 密码不会覆盖账号。不要把密码写进仓库
+或命令行参数。
 
 `PPAASS_PROXY_WEB_KEY_ENCRYPTION_SECRET` 至少 32 字节，并且必须在服务重启和迁移后保持一致；丢失它将无法解密已托管的私钥。生产环境应从 Secret Manager 注入并单独备份。
 
@@ -45,7 +47,8 @@ RUST_LOG=proxy_web=debug,proxy_user_store=debug,tower_http=info \
   记录；workflow 会强制校验主机公钥，拒绝未知或发生变化的服务器。
 - Variable `PPAASS_WEB_PUBLIC_HOST`：对外服务的 DNS 名称或 IPv4 地址，不包含协议和端口。
 
-workflow 只在远端数据库没有启用管理员时使用管理员密码，不会覆盖已有管理员的密码。
+workflow 只在远端数据库没有启用的根管理员 `admin` 时使用管理员密码，不会覆盖已有
+`admin` 的密码；其他管理员账号不能替代根管理员。
 服务器合法更换 SSH 主机密钥时，应先通过独立渠道核验新指纹，再更新
 `PPAASS_DEPLOY_SSH_KNOWN_HOSTS`。
 生产环境由 Caddy 2.11.4 或更高版本监听 TCP/443，再反向代理到只监听
@@ -182,6 +185,8 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/auth/register` | 创建普通账号（不生成 Proxy 配置或密钥） |
 | `POST` | `/api/v1/auth/login` | 用户名密码登录 |
 | `POST` | `/api/v1/auth/logout` | 退出登录 |
+| `POST` | `/api/v1/agent/login` | 原生 Agent 密码认证，一次返回角色、权限、密钥和持续同步凭据 |
+| `GET` | `/api/v1/agent/me` | Agent 使用 Bearer 凭据定期刷新账号状态和权限 |
 | `POST` | `/api/v1/agent/device-authorizations` | Agent 创建浏览器设备登录 challenge |
 | `POST` | `/api/v1/agent/device-authorizations/token` | Agent 限频轮询并一次性领取账户配置和密钥 |
 | `POST` | `/api/v1/agent/device-authorizations/inspect` | 已登录用户核对设备登录请求 |
@@ -189,14 +194,15 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/agent/device-authorizations/deny` | 已登录用户拒绝设备登录 |
 | `GET` | `/api/v1/session` | 查询当前登录态并取得 CSRF Token |
 | `GET` | `/api/v1/me` | 查询账号、Proxy 配置、密钥状态和待审批申请 |
-| `GET` | `/api/v1/me/private-key` | 读取自己的有效公钥和私钥 |
+| `PUT` | `/api/v1/me/password` | 校验当前密码并修改登录密码；成功后撤销该账号全部 Web 会话 |
+| `GET` | `/api/v1/me/private-key` | 原生 Agent 登录时领取自己的有效连接凭据；Web 控制台不展示或调用 |
 | `POST` | `/api/v1/me/rotate-key` | 在现有密钥有效且有权限时直接轮换自己的密钥 |
 | `GET` | `/api/v1/me/key-request` | 查询自己的待审批密钥申请 |
-| `POST` | `/api/v1/me/key-requests` | 在缺少密钥或密钥已过期时提交密钥申请 |
+| `POST` | `/api/v1/me/key-requests` | 在缺少密钥或密钥已过期时提交申请；可带 `{"message":"..."}` 留言 |
 | `GET` | `/api/v1/me/access-records` | 查询自己的近期 Proxy 访问记录 |
 | `GET` | `/api/v1/admin/users` | 管理员列出所有账号及 legacy 用户 |
 | `POST` | `/api/v1/admin/users` | 管理员创建已批准用户并生成密钥，必须指定未来有效期 |
-| `GET/PATCH/DELETE` | `/api/v1/admin/users/{username}` | 管理员查询、修改或删除用户（密钥字段始终脱敏） |
+| `GET/PATCH/DELETE` | `/api/v1/admin/users/{username}` | 管理员查询、修改或删除用户（删除前必须先停用，密钥字段始终脱敏） |
 | `POST` | `/api/v1/admin/users/{username}/rotate-key` | 管理员轮换仍有效的密钥（不返回密钥材料） |
 | `GET` | `/api/v1/admin/key-requests` | 管理员列出待审批密钥申请 |
 | `POST` | `/api/v1/admin/key-requests/{request_id}/approve` | 批准申请并生成密钥，必须指定未来有效期 |
@@ -204,14 +210,42 @@ X-CSRF-Token: <csrf_token>
 | `GET/PATCH` | `/api/v1/admin/access-log-settings` | 查询或修改访问记录保留天数 |
 
 管理员 API 只能触发密钥生成或轮换。列表、详情、创建、更新和轮换响应都使用独立的
-脱敏 DTO，不包含 `public_key_pem`、`private_key_pem` 或 `credentials`；管理员私钥读取
-路由不存在。只有用户本人登录后，才能通过 `/api/v1/me` 查看自己的公钥信息，并通过
-`/api/v1/me/private-key` 读取自己的公私钥。私钥响应带 `Cache-Control: no-store`。
+脱敏 DTO，不包含 `public_key_pem`、`private_key_pem` 或 `credentials`。Web 控制台不再
+提供私钥显示、复制或下载面板；原生 Agent 使用已认证的本人接口领取连接凭据，并在本机
+受限目录中直接应用。密钥响应带 `Cache-Control: no-store`。
 
-## Agent 浏览器设备登录
+固定根管理员 `admin` 不能被停用、降级或删除。其他普通用户和管理员都可以被停用，
+但只有 `status=disabled` 的 Web 账号才能删除；没有 Web 账号的 legacy profile 必须先
+设置 `enabled=false`。这些约束同时由管理界面和存储事务执行，不能通过直接调用 API
+绕过。
 
-Android 和 Windows Agent 不在应用内收集网页登录凭据。原生客户端先向配置好的
-Proxy Web 地址发送：
+## Agent 原生登录与权限同步
+
+Desktop、Windows 和 Android Agent 的登录页直接向配置文件中的 Proxy Web 地址发送
+`POST /api/v1/agent/login`，地址不会展示给用户。该原生端点拒绝带浏览器 `Origin` 的
+请求，不创建 Web Cookie；认证成功后一次返回当前账号角色、Proxy profile 权限、同一
+版本的连接密钥，以及仅供 Agent 使用的 `agent_access_token`。
+
+Agent access token 使用部署主密钥派生的独立 AES-256-GCM key 加密认证，服务重启后仍可
+验证。Agent 把 token 与受管私钥一起保存到仅当前系统用户可读的本机凭据目录，绝不传给
+前端脚本或写入日志。登录后立即、随后按服务端返回的
+`refresh_after_seconds`（当前 300 秒）调用：
+
+```http
+GET /api/v1/agent/me
+Authorization: Bearer <agent_access_token>
+```
+
+响应返回最新角色、账号状态、`key_state`、权限和滚动更新的 token。权限变更会直接刷新
+Agent 界面和 Rust/原生命令层约束，不要求退出或重启。临时网络错误、5xx、401 均不会
+清除登录、私钥或停止代理；Agent 保留最后一次成功验证的权限并显示同步错误。账号被
+停用或密钥过期时，接口仍返回 200 和权威状态，Agent 保留登录但显示明确错误。连续
+30 天未成功刷新而导致 token 过期时，需要重新登录才能恢复权限同步。
+
+## 设备授权 API（可选）
+
+服务端仍提供一次性设备授权 API。需要该流程的原生客户端先向配置好的 Proxy Web 地址
+发送：
 
 ```http
 POST /api/v1/agent/device-authorizations
@@ -252,9 +286,9 @@ Agent 以 JSON `{"device_code":"..."}` 轮询
 
 成功只会发生一次，返回 `200` 和原有 `ppaass_session` HttpOnly Cookie。JSON 包含
 `account`、`profile`（用户名、权限、密钥版本、有效期）、同一密钥版本的
-`public_key_pem`/`private_key_pem`、`csrf_token` 和 `session_expires_at`。公钥专用于
-Agent 在应用私钥前校验密钥对，不会显示在普通用户确认页面。所有 API 响应统一带
-`Cache-Control: no-store`。
+`public_key_pem`/`private_key_pem`、`csrf_token`、`session_expires_at`，以及与原生
+密码登录相同的 Agent access token。公钥专用于 Agent 在应用私钥前校验密钥对，不会
+显示在普通用户确认页面。所有 API 响应统一带 `Cache-Control: no-store`。
 
 challenge 的原始设备码和用户短码不会写入数据库；存储层只接收带不同域分隔的
 SHA-256 摘要。状态更新和领取在 repository 内原子执行，并且服务端执行轮询限频、
@@ -262,21 +296,26 @@ SHA-256 摘要。状态更新和领取在 repository 内原子执行，并且服
 浏览器请求且没有 CORS 授权；浏览器 inspect/approve/deny 必须同时具有现有登录 Cookie
 和 CSRF Token。
 
-只有启用的普通用户、有效且未停用的 Proxy profile、可解密的托管私钥以及
-`key.private.read` 权限全部满足时才能批准和领取。管理员账号始终拒绝。账号尚无密钥
-或密钥已过期时，approve 返回现有的 `409 key_request_required`；challenge 保持 pending，
-用户仍需先提交密钥申请并等待管理员设置有效期。
+启用的普通用户或管理员都可以登录 Agent，但必须同时具有有效且未停用的 Proxy profile、
+可解密的托管私钥以及 `key.private.read` 权限。没有 profile 的初始管理员不能绕过密钥
+流程登录 Agent，须先在“我的账户”提交申请并由管理员批准。账号尚无密钥或密钥已过期时，
+approve 返回现有的 `409 key_request_required`；challenge 保持 pending，账号仍需先提交
+密钥申请并等待管理员设置有效期。
 
 ## 密钥申请、审批与有效期
 
-本地注册只创建账号。没有 Proxy 配置或密钥已经过期时，用户通过
+本地注册只创建普通账号；首次启动创建的管理员也可以暂时没有 Proxy profile。没有
+Proxy 配置或密钥已经过期时，普通用户和管理员都通过
 `POST /api/v1/me/key-requests` 提交申请；同一账号同时只能有一条 `pending` 申请，
 重复或并发提交会幂等返回同一条申请。管理员批准时必须给出严格晚于当前时间的
 `expires_at`，RSA 密钥只在服务端生成，私钥加密入库且不会出现在管理员响应中。
-申请被拒绝后，用户可以重新提交。
+用户可以附带一段可选的申请留言（去除首尾空白后最多 500 个字符）；留言随申请持久化，
+用户等待审批时可以回看，管理员在待审批列表和审批对话框中可以看到。留言正文不会写入
+tracing 日志。没有 JSON 请求体的旧客户端仍可提交无留言申请。申请被拒绝后，用户可以
+重新提交。
 
 `GET /api/v1/me` 的 `key_state` 为 `missing`、`active`、`expired` 或 `disabled`。
-只有 `active` 状态才返回公钥，并允许用户读取私钥。普通用户直接轮换密钥需要同时满足：
+只有 `active` 状态才可由 Agent 领取连接凭据。账号直接轮换密钥需要同时满足：
 
 - Web 账号处于启用状态；
 - Proxy 用户配置已启用；
@@ -287,6 +326,11 @@ SHA-256 摘要。状态更新和领取在 repository 内原子执行，并且服
 清空有效期或把过期时间改到未来绕过审批；必须重新提交并批准密钥申请。管理员直接
 创建用户仍属于已批准流程，`expires_at` 必填且必须严格晚于当前时间，额外权限会与
 四项基础权限合并。数据库中保留的历史 legacy 用户不参与 Web 密钥申请流程。
+
+Desktop Agent 登录后会在左侧账户区显示角色和权限。具有 `key.rotate` 权限且密钥仍有效
+时，可以点击“生成新密钥”，输入当前登录密码后由 Agent 调用轮换接口、校验新密钥对并
+直接写入本机配置；Agent 原本正在运行时会使用新凭据自动重启。缺失或过期密钥仍必须走
+管理员审批，Agent 按钮不会绕过该规则。管理员还会看到进入完整用户管理页面的入口。
 
 SQLite 模式下，已经建立的 TCP/Yamux relay 与原生 UDP 会话都会按 Proxy 的
 `udp_session_authorization_recheck_secs` 周期重新检查账号启用状态、对应 TCP/UDP
@@ -314,10 +358,26 @@ TCP 承载的共享 UDP relay 只在真正创建新 flow 前复核授权，Exist
 - `proxy.connect.udp`
 - `key.private.read`
 - `key.rotate`
+- `agent.packet_capture`
+- `agent.config.view`
+- `agent.egress.edit`
+- `agent.runtime_threads.edit`
 
-本地注册账号的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
-配置都会强制拥有以上四项基础能力。管理员创建用户时传入的其他权限会与基础能力合并；
-管理员后续通过 PATCH 更新权限时，也不能移除这四项能力。
+本地注册账号或管理员自身的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
+配置都会强制拥有前四项基础能力（TCP、UDP、领取和轮换密钥）。后四项是管理员可给
+普通用户分配的 Agent 管理权限，默认不授予；管理员创建或编辑用户时可独立勾选，并会
+保留数据库中的其他自定义权限。管理员后续通过 PATCH 更新权限时，不能移除基础能力。
+
+Agent 管理员角色天然拥有全部四项 Agent 管理权限，不要求把它们重复写入管理员 profile。
+普通用户的权限在界面和原生命令层同时执行：
+
+- `agent.packet_capture` 控制抓包入口以及读取、启停和清空命令。
+- `agent.config.view` 控制原始 TOML 配置的读取和编辑。
+- `agent.egress.edit` 控制远端出口地址、连接超时、压缩格式和 UDP 会话数。
+- `agent.runtime_threads.edit` 控制系统运行线程数。
+
+管理员角色不绕过 Proxy 数据面的权限校验，其 TCP/UDP 流量仍使用该管理员自身 profile
+中的基础连接权限。
 
 Proxy 会在认证及 CONNECT/原生 UDP 边界实际执行 TCP/UDP 权限，不只是把权限展示在页面上。
 

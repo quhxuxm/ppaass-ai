@@ -10,8 +10,8 @@ use crate::{
     MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
     NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
     NewManagedUser, NewUser, NewUserAccount, Result, UserOrigin, UserRecord, UserRepository,
-    UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_permissions,
-    normalize_public_key_pem, normalize_username, validate_user,
+    UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_key_request_message,
+    normalize_permissions, normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{
@@ -32,7 +32,7 @@ use tracing::{info, instrument, warn};
 
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 5;
+const SQLITE_SCHEMA_VERSION: i64 = 6;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -115,7 +115,7 @@ const QUALIFIED_ACCOUNT_SELECT: &str = "a.account_id, a.login_name, a.role, a.st
                                         a.auth_version, a.last_login_at, a.created_at, a.updated_at";
 const KEY_REQUEST_SELECT: &str = "request_id, account_id, kind, status, expected_key_version, \
                                   reviewer_account_id, requested_at, reviewed_at, \
-                                  approved_expires_at";
+                                  approved_expires_at, request_message";
 const ACCESS_RECORD_SELECT: &str = "record_id, username, protocol, target_host, target_port, \
                                     access_count, accessed_at";
 const DEVICE_AUTHORIZATION_SELECT: &str = "device_code_hash, user_code_hash, client_name, \

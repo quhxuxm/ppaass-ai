@@ -16,9 +16,11 @@ const DISABLED_ACCOUNT_MESSAGE =
 export function useAgentAuth() {
   const phase = ref<AgentAuthPhase>("checking");
   const error = ref("");
-  const registrationLoading = ref(false);
+  const accountManagementLoading = ref(false);
+  const keyRotationLoading = ref(false);
   const auth = reactive<AgentAuthState>(emptyAuthState());
   let unlistenAuthStatus: UnlistenFn | null = null;
+  let unlistenAuthState: UnlistenFn | null = null;
 
   const account = computed<AgentAuthAccount | null>(() => auth.account);
   const authenticated = computed(() => auth.authenticated && auth.account !== null);
@@ -27,14 +29,21 @@ export function useAgentAuth() {
   const loggingOut = computed(() => phase.value === "logging-out");
 
   onMounted(() => {
+    void listen<AgentAuthState>("agent-auth-state-updated", (event) => {
+      applyAuthState(event.payload);
+      phase.value = authenticated.value ? "authenticated" : "anonymous";
+    }).then((unlisten) => {
+      unlistenAuthState = unlisten;
+    });
     void listen<string>("agent-auth-status", (event) => {
-      applyAccountStatusMessage(
+      const status =
         event.payload === "user_disabled"
           ? "disabled"
           : event.payload === "user_expired"
             ? "expired"
-            : "active"
-      );
+            : "active";
+      auth.account_status = status;
+      applyAccountStatusMessage(status);
     })
       .then((unlisten) => {
         unlistenAuthStatus = unlisten;
@@ -47,6 +56,8 @@ export function useAgentAuth() {
   onBeforeUnmount(() => {
     unlistenAuthStatus?.();
     unlistenAuthStatus = null;
+    unlistenAuthState?.();
+    unlistenAuthState = null;
   });
 
   async function refresh() {
@@ -91,19 +102,47 @@ export function useAgentAuth() {
     }
   }
 
-  async function openRegistration() {
-    if (registrationLoading.value || loggingIn.value || loggingOut.value) {
+  async function openAccountManagement() {
+    if (accountManagementLoading.value || loggingIn.value || loggingOut.value) {
       return;
     }
 
-    registrationLoading.value = true;
+    accountManagementLoading.value = true;
     error.value = "";
     try {
-      await invoke("open_user_registration");
+      await invoke("open_user_account_management");
     } catch (reason) {
-      error.value = authErrorMessage(reason, "无法打开新用户注册页面");
+      error.value = authErrorMessage(reason, "无法打开注册和账户管理页面");
     } finally {
-      registrationLoading.value = false;
+      accountManagementLoading.value = false;
+    }
+  }
+
+  async function rotateKey(password: string) {
+    if (keyRotationLoading.value || loggingIn.value || loggingOut.value) {
+      return false;
+    }
+    keyRotationLoading.value = true;
+    error.value = "";
+    try {
+      const next = await invoke<AgentAuthState>("rotate_agent_key", {
+        request: { password }
+      });
+      applyAuthState(next);
+      phase.value = "authenticated";
+      return true;
+    } catch (reason) {
+      const message = authErrorMessage(reason, "生成和应用新密钥失败");
+      try {
+        applyAuthState(await invoke<AgentAuthState>("get_agent_auth_state"));
+      } catch {
+        // 密钥可能已经在服务端完成轮换；刷新失败时仍保留当前本机会话。
+      }
+      phase.value = authenticated.value ? "authenticated" : "anonymous";
+      error.value = message;
+      return false;
+    } finally {
+      keyRotationLoading.value = false;
     }
   }
 
@@ -128,24 +167,36 @@ export function useAgentAuth() {
   }
 
   function applyAuthState(next: AgentAuthState) {
+    const previousSyncError = auth.permission_sync_error;
     auth.authenticated = Boolean(next.authenticated);
     auth.account = next.account ?? null;
     auth.account_status = next.account_status ?? null;
+    auth.permission_sync_error = next.permission_sync_error ?? null;
     auth.config = next.config ?? null;
     applyAccountStatusMessage(auth.account_status);
+    if (
+      previousSyncError &&
+      !auth.permission_sync_error &&
+      error.value === previousSyncError
+    ) {
+      error.value = "";
+    }
   }
 
   function resetSession() {
     auth.authenticated = false;
     auth.account = null;
     auth.account_status = null;
+    auth.permission_sync_error = null;
     auth.config = null;
   }
 
   function applyAccountStatusMessage(
     status: AgentAuthState["account_status"] | "active"
   ) {
-    if (status === "expired") {
+    if (auth.permission_sync_error) {
+      error.value = auth.permission_sync_error;
+    } else if (status === "expired") {
       error.value = EXPIRED_ACCOUNT_MESSAGE;
     } else if (status === "disabled") {
       error.value = DISABLED_ACCOUNT_MESSAGE;
@@ -158,18 +209,23 @@ export function useAgentAuth() {
 
   return {
     account,
+    accountManagementLoading,
     auth,
     authenticated,
     checking,
+    clearError: () => {
+      error.value = "";
+    },
     error,
+    keyRotationLoading,
     login,
     loggingIn,
     loggingOut,
     logout,
-    openRegistration,
+    openAccountManagement,
     phase,
     refresh,
-    registrationLoading
+    rotateKey,
   };
 }
 
@@ -178,6 +234,7 @@ function emptyAuthState(): AgentAuthState {
     authenticated: false,
     account: null,
     account_status: null,
+    permission_sync_error: null,
     config: null
   };
 }

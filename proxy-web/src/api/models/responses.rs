@@ -11,7 +11,7 @@ pub(crate) struct ProvidersResponse {
     pub(crate) local_registration: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct SessionResponse {
     pub(crate) authenticated: bool,
     pub(crate) account: Option<WebAccount>,
@@ -19,7 +19,7 @@ pub(crate) struct SessionResponse {
     pub(crate) expires_at: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct AuthenticationResponse {
     pub(crate) account: WebAccount,
     pub(crate) csrf_token: String,
@@ -59,14 +59,41 @@ pub(crate) struct AgentDeviceTokenResponse {
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) csrf_token: String,
     pub(crate) session_expires_at: i64,
+    pub(crate) agent_access_token: String,
+    pub(crate) agent_access_token_expires_at: i64,
+    pub(crate) refresh_after_seconds: u32,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AgentDeviceProfileResponse {
     pub(crate) username: String,
     pub(crate) permissions: Vec<String>,
+    pub(crate) enabled: bool,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AgentCredentialResponse {
+    pub(crate) account: WebAccount,
+    pub(crate) profile: AgentDeviceProfileResponse,
+    pub(crate) public_key_pem: String,
+    pub(crate) proxy_identity_public_key_pem: Arc<str>,
+    #[serde(serialize_with = "serialize_zeroizing_string")]
+    pub(crate) private_key_pem: Zeroizing<String>,
+    pub(crate) agent_access_token: String,
+    pub(crate) agent_access_token_expires_at: i64,
+    pub(crate) refresh_after_seconds: u32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AgentProfileSyncResponse {
+    pub(crate) account: WebAccount,
+    pub(crate) profile: Option<AgentDeviceProfileResponse>,
+    pub(crate) key_state: KeyState,
+    pub(crate) agent_access_token: String,
+    pub(crate) agent_access_token_expires_at: i64,
+    pub(crate) refresh_after_seconds: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +130,7 @@ pub(crate) struct MeProfileResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct SelfKeyRequestResponse {
     pub(crate) request_id: String,
+    pub(crate) request_message: Option<String>,
     pub(crate) kind: KeyRequestKind,
     pub(crate) status: KeyRequestStatus,
     pub(crate) requested_at: i64,
@@ -119,6 +147,7 @@ pub(crate) struct MyKeyRequestResponse {
 pub(crate) struct AdminKeyRequestResponse {
     pub(crate) request_id: String,
     pub(crate) account: WebAccount,
+    pub(crate) request_message: Option<String>,
     pub(crate) kind: KeyRequestKind,
     pub(crate) status: KeyRequestStatus,
     pub(crate) expected_key_version: Option<i64>,
@@ -250,6 +279,7 @@ impl SelfKeyRequestResponse {
     pub(crate) fn from_request(request: KeyGenerationRequest) -> Self {
         Self {
             request_id: request.request_id,
+            request_message: request.request_message,
             kind: request.kind,
             status: request.status,
             requested_at: request.requested_at,

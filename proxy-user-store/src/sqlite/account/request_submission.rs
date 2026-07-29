@@ -11,11 +11,12 @@ impl SqliteUserRepository {
     ) -> Result<KeyGenerationRequest> {
         let request_id = normalize_request_id(&request.request_id)?;
         let account_id = normalize_account_id(&request.account_id)?;
+        let request_message = normalize_key_request_message(request.request_message)?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let account = fetch_account_by_id(&mut transaction, &account_id)
             .await?
             .ok_or_else(|| UserRepositoryError::NotFound(account_id.clone()))?;
-        ensure_active_normal_account(&account)?;
+        ensure_active_key_account(&account)?;
 
         if let Some(existing) =
             fetch_pending_key_request_for_account(&mut transaction, &account_id).await?
@@ -66,14 +67,16 @@ impl SqliteUserRepository {
         sqlx::query(
             "INSERT INTO key_generation_requests \
              (request_id, account_id, kind, status, expected_key_version, \
-              reviewer_account_id, requested_at, reviewed_at, approved_expires_at) \
-             VALUES (?, ?, ?, 'pending', ?, NULL, ?, NULL, NULL)",
+              reviewer_account_id, requested_at, reviewed_at, approved_expires_at, \
+              request_message) \
+             VALUES (?, ?, ?, 'pending', ?, NULL, ?, NULL, NULL, ?)",
         )
         .bind(&request_id)
         .bind(&account.account_id)
         .bind(kind.as_str())
         .bind(expected_key_version)
         .bind(timestamp)
+        .bind(request_message)
         .execute(&mut *transaction)
         .await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)

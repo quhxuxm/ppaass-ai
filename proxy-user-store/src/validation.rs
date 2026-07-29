@@ -7,6 +7,7 @@ pub const MAX_USERNAME_BYTES: usize = 128;
 pub const MAX_PUBLIC_KEY_PEM_BYTES: usize = 16 * 1024;
 pub const MAX_PERMISSIONS: usize = 32;
 pub const MAX_PERMISSION_CODE_BYTES: usize = 64;
+pub const MAX_KEY_REQUEST_MESSAGE_CHARS: usize = 500;
 const MIN_RSA_BITS: usize = 2048;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -46,6 +47,12 @@ pub enum ValidationError {
 
     #[error("权限 code 只能包含 ASCII 小写字母、数字、点、下划线或连字符：{0}")]
     InvalidPermission(String),
+
+    #[error("密钥申请留言不能超过 {MAX_KEY_REQUEST_MESSAGE_CHARS} 个字符")]
+    KeyRequestMessageTooLong,
+
+    #[error("密钥申请留言包含不允许的控制字符")]
+    InvalidKeyRequestMessage,
 
     #[error("账号字段无效：{0}")]
     InvalidAccountField(String),
@@ -155,6 +162,32 @@ pub fn normalize_permissions(
     Ok(normalized)
 }
 
+/// 规范化用户给管理员的密钥申请留言。
+///
+/// 换行和制表符属于正常的文本排版；其余控制字符会被拒绝。仅含空白的留言
+/// 归一化为 `None`，让所有 DAO 实现共享相同语义。
+pub fn normalize_key_request_message(
+    message: Option<String>,
+) -> std::result::Result<Option<String>, ValidationError> {
+    let Some(message) = message else {
+        return Ok(None);
+    };
+    let message = message.trim();
+    if message.is_empty() {
+        return Ok(None);
+    }
+    if message.chars().count() > MAX_KEY_REQUEST_MESSAGE_CHARS {
+        return Err(ValidationError::KeyRequestMessageTooLong);
+    }
+    if message
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(ValidationError::InvalidKeyRequestMessage);
+    }
+    Ok(Some(message.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +232,22 @@ mod tests {
             normalize_permissions(&["Proxy.Connect".to_string()]).unwrap_err(),
             ValidationError::InvalidPermission(_)
         ));
+    }
+
+    #[test]
+    fn key_request_message_is_trimmed_and_bounded() {
+        assert_eq!(
+            normalize_key_request_message(Some("  请尽快审批\n谢谢  ".to_string())).unwrap(),
+            Some("请尽快审批\n谢谢".to_string())
+        );
+        assert_eq!(
+            normalize_key_request_message(Some(" \n\t ".to_string())).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_key_request_message(Some("好".repeat(MAX_KEY_REQUEST_MESSAGE_CHARS + 1)))
+                .unwrap_err(),
+            ValidationError::KeyRequestMessageTooLong
+        );
     }
 }

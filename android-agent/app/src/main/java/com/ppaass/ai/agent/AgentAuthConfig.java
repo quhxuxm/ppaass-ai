@@ -30,7 +30,7 @@ final class AgentAuthConfig {
     }
 
     static String registrationUrl(Context context) throws IOException {
-        return proxyWebUrl(context) + "/?mode=register";
+        return proxyWebUrl(context) + "/";
     }
 
     static String resolveServiceRelativeUrl(String baseUrl, String relativeUrl) {

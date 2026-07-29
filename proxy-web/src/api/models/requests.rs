@@ -16,6 +16,20 @@ pub(crate) struct RegistrationRequest {
     pub(crate) display_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChangePasswordRequest {
+    pub(crate) current_password: String,
+    pub(crate) new_password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubmitKeyRequest {
+    #[serde(default)]
+    pub(crate) message: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentDeviceAuthorizationStartRequest {
@@ -24,13 +38,13 @@ pub(crate) struct AgentDeviceAuthorizationStartRequest {
     pub(crate) client_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentUserCodeRequest {
     pub(crate) user_code: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentDeviceTokenRequest {
     pub(crate) device_code: String,

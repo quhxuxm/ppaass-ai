@@ -8,16 +8,16 @@ pub(crate) async fn get_agent_auth_state(
 }
 
 #[tauri::command]
-pub(crate) async fn open_user_registration(
+pub(crate) async fn open_user_account_management(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
 ) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("user-registration") {
+    if let Some(window) = app.get_webview_window("user-account-management") {
         window
             .show()
             .and_then(|_| window.unminimize())
             .and_then(|_| window.set_focus())
-            .map_err(|_| "无法显示新用户注册窗口".to_string())?;
+            .map_err(|_| "无法显示注册和账户管理窗口".to_string())?;
         return Ok(());
     }
 
@@ -27,25 +27,26 @@ pub(crate) async fn open_user_registration(
             "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
         })?;
     let proxy_web_url = proxy_web_url_from_config(&config_path)?;
-    let registration_url = registration_page_url(&proxy_web_url)
-        .map_err(|_| "Agent 注册服务配置无效，请联系管理员".to_string())?;
+    let account_management_url = account_management_page_url(&proxy_web_url)
+        .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?;
+    let account_management_origin = account_management_url.origin();
 
     tauri::WebviewWindowBuilder::new(
         &app,
-        "user-registration",
-        tauri::WebviewUrl::External(registration_url),
+        "user-account-management",
+        tauri::WebviewUrl::External(account_management_url),
     )
-    .title("PPAASS 新用户注册")
+    .title("PPAASS 注册和账户管理")
     .inner_size(1040.0, 760.0)
     .min_inner_size(760.0, 600.0)
     .center()
     .incognito(true)
-    .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
+    .on_navigation(move |url| url.origin() == account_management_origin)
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .build()
-    .map_err(|_| "无法打开新用户注册窗口".to_string())?;
+    .map_err(|_| "无法打开注册和账户管理窗口".to_string())?;
 
-    info!("已打开新用户注册窗口");
+    info!("已打开注册和账户管理窗口");
     Ok(())
 }
 
@@ -79,6 +80,71 @@ pub(crate) async fn login_and_provision_agent(
     let downloaded =
         authenticate_and_download(&proxy_web_url, &username, password.as_str()).await?;
     provision_downloaded_credential(&app, &runtime, &config_path, downloaded)
+}
+
+#[tauri::command]
+pub(crate) async fn rotate_agent_key(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, Arc<AgentRuntime>>,
+    request: AgentKeyRotationRequest,
+) -> Result<AgentAuthState, String> {
+    let password = zeroize::Zeroizing::new(request.password);
+    if password.len() < 8 {
+        return Err("请输入当前密码".to_string());
+    }
+    let runtime = runtime.inner().clone();
+    let _operation = runtime.auth_operation.lock().await;
+    let session = runtime.require_authenticated_session()?;
+    if session.account_status != AgentAuthAccountStatus::Active {
+        return Err("当前账号不可轮换密钥，请到账户管理提交申请并等待管理员批准".to_string());
+    }
+    if !session
+        .account
+        .permissions
+        .iter()
+        .any(|permission| permission == "key.rotate")
+    {
+        return Err("当前账号没有轮换密钥的权限".to_string());
+    }
+
+    let config_path = current_ui_config_path(&runtime)
+        .or_else(locate_config_path)
+        .ok_or_else(|| {
+            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
+        })?;
+    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let was_running = get_agent_state_inner(&runtime)?.running;
+    let downloaded = authenticate_rotate_and_download(
+        &proxy_web_url,
+        &session.account.username,
+        password.as_str(),
+    )
+    .await?;
+    if downloaded.account.username != session.account.username
+        || downloaded.account.role != session.account.role
+    {
+        return Err("Proxy Web 返回的轮换账号与当前 Agent 登录账号不一致".to_string());
+    }
+
+    let state = provision_downloaded_credential(&app, &runtime, &config_path, downloaded)?;
+    if was_running {
+        let applied_config_path = state
+            .config
+            .as_ref()
+            .map(|config| config.path.clone())
+            .ok_or_else(|| "新密钥已应用，但无法确定 Agent 重启配置".to_string())?;
+        let restarted = start_agent_command(&runtime, applied_config_path)
+            .map_err(|error| format!("新密钥已应用，但 Agent 自动重启失败：{error}"))?;
+        if !restarted.running {
+            return Err("新密钥已应用，但 Agent 自动重启后未保持运行".to_string());
+        }
+    }
+    info!(
+        username = %session.account.username,
+        was_running,
+        "Agent 已应用用户轮换后的密钥"
+    );
+    Ok(state)
 }
 
 #[tauri::command]
@@ -179,7 +245,7 @@ pub(crate) async fn poll_agent_device_login(
                 &app,
                 &runtime,
                 &challenge.config_path,
-                downloaded,
+                *downloaded,
             )?;
             Ok(device_login_progress(
                 &challenge,

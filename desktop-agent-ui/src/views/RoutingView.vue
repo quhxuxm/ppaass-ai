@@ -5,6 +5,7 @@ import Card from "primevue/card";
 import AppIcon from "../components/AppIcon";
 import ConfigNumberInput from "../components/ConfigNumberInput.vue";
 import InputText from "primevue/inputtext";
+import Message from "primevue/message";
 import Select from "primevue/select";
 import SelectButton from "primevue/selectbutton";
 import Tag from "primevue/tag";
@@ -14,6 +15,7 @@ import type { AgentConfigSummary, DirectRuleGroup } from "../types";
 const props = defineProps<{
   summary: AgentConfigSummary;
   configLocked: boolean;
+  canEditRuntimeThreads: boolean;
   directModeLabel: string;
   activeForwardingLabel: string;
   tunModeLabel: string;
@@ -39,6 +41,12 @@ const emit = defineEmits<{
   "add-draft-rules": [];
   "remove-direct-rule": [index: number];
 }>();
+
+function setRuntimeThreads(value: unknown) {
+  if (props.canEditRuntimeThreads) {
+    emit("set-field", "runtime_threads", value);
+  }
+}
 </script>
 
 <template>
@@ -55,6 +63,13 @@ const emit = defineEmits<{
         <Card class="panel span-12">
           <template #title><h2>运行参数</h2></template>
           <template #content>
+            <Message
+              v-if="!canEditRuntimeThreads"
+              severity="warn"
+              :closable="false"
+            >
+              当前账户没有修改系统线程数的权限，线程配置仅供查看。
+            </Message>
             <div class="field-pair">
               <label class="field">
                 <span><AppIcon name="scroll-text" />日志</span>
@@ -62,7 +77,7 @@ const emit = defineEmits<{
               </label>
               <label class="field">
                 <span><AppIcon name="cpu" />线程</span>
-                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
+                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked || !canEditRuntimeThreads" :use-grouping="false" @update:model-value="setRuntimeThreads" />
               </label>
             </div>
           </template>

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "test": "node --experimental-strip-types scripts/test-direct-rule-domains.mjs && node scripts/test-config-toml.mjs && node scripts/test-managed-private-key.mjs && node scripts/test-device-login.mjs",
+    "test": "node --experimental-strip-types scripts/test-direct-rule-domains.mjs && node scripts/test-config-toml.mjs && node scripts/test-managed-private-key.mjs && node scripts/test-device-login.mjs && node scripts/test-agent-permissions.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri"
   },
