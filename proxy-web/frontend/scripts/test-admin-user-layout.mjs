@@ -121,7 +121,24 @@ assert.match(
 )
 assert.match(
   app,
-  /<Button\s+v-if="!isAgentHandoffSession"[\s\S]*?aria-label="退出登录"/,
+  /'topbar-logout-action',[\s\S]*?'agent-handoff-logout': isAgentHandoffSession[\s\S]*?label="退出登录"[\s\S]*?aria-label="退出登录"/,
+)
+assert.doesNotMatch(app, /class="mobile-logout-action"/)
+assert.match(
+  styles,
+  /\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*display:\s*none;/s,
+)
+assert.match(
+  styles,
+  /@media \(max-width: 820px\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*12px;[\s\S]*?\.topbar-logout-action,\s*\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*display:\s*inline-flex;[^}]*min-width:\s*104px;[^}]*min-height:\s*40px;/s,
+)
+assert.match(
+  styles,
+  /@media \(max-width: 820px\)\s*\{[\s\S]*?\.topbar-logout-action \.p-button-label\s*\{[^}]*display:\s*inline;/s,
+)
+assert.match(
+  styles,
+  /@media \(max-width: 560px\)\s*\{[\s\S]*?\.brand\.compact > span:last-child\s*\{[^}]*display:\s*none;/s,
 )
 assert.match(
   app,

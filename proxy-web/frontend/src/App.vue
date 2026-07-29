@@ -1747,9 +1747,13 @@ function clearAgentAuthorizationLocation(): void {
           <small>{{ account?.role === 'admin' ? '管理员' : '普通用户' }}</small>
         </span>
         <Button
-          v-if="!isAgentHandoffSession"
+          :class="[
+            'topbar-logout-action',
+            { 'agent-handoff-logout': isAgentHandoffSession },
+          ]"
           v-tooltip.bottom="'退出登录'"
           icon="pi pi-sign-out"
+          label="退出登录"
           severity="secondary"
           text
           rounded
