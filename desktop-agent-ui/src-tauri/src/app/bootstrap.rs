@@ -53,8 +53,7 @@ pub(crate) fn run() {
                     setup_logs.push(format!("停止旧 Agent 失败：{stop_error}"));
                 }
             }
-            start_agent_permission_sync(app.handle().clone(), setup_runtime.clone());
-            start_agent_admin_key_request_polling(app.handle().clone(), setup_runtime.clone());
+            start_agent_server_events(app.handle().clone(), setup_runtime.clone());
             start_verified_proxy_auth_status_listener(app.handle().clone(), setup_runtime.clone());
             #[cfg(windows)]
             start_windows_service_auth_failure_listener(
@@ -70,16 +69,6 @@ pub(crate) fn run() {
         .on_window_event(|window, event| {
             #[cfg(not(any(windows, target_os = "macos")))]
             let _ = (window, event);
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                window
-                    .state::<Arc<AgentRuntime>>()
-                    .permission_sync_notify
-                    .notify_one();
-                window
-                    .state::<Arc<AgentRuntime>>()
-                    .admin_key_request_poll_notify
-                    .notify_one();
-            }
             #[cfg(any(windows, target_os = "macos"))]
             if window.label() == "main"
                 && matches!(

@@ -101,10 +101,9 @@ pub(crate) struct AgentRuntime {
     authenticated_session: Mutex<Option<AuthenticatedAgentSession>>,
     permission_sync_error: Mutex<Option<String>>,
     pub(crate) permission_sync_in_progress: AtomicBool,
-    pub(crate) permission_sync_notify: tokio::sync::Notify,
+    pub(crate) server_event_notify: tokio::sync::Notify,
     admin_key_request_inbox: Mutex<AgentAdminKeyRequestInbox>,
-    pub(crate) admin_key_request_poll_in_progress: AtomicBool,
-    pub(crate) admin_key_request_poll_notify: tokio::sync::Notify,
+    pub(crate) admin_key_request_refresh_in_progress: AtomicBool,
     pub(crate) resume_after_proxy_assignment: AtomicBool,
     pending_device_authorization: Mutex<Option<PendingAgentDeviceAuthorization>>,
     next_device_authorization_id: AtomicU64,
@@ -132,10 +131,9 @@ impl AgentRuntime {
             authenticated_session: Mutex::new(None),
             permission_sync_error: Mutex::new(None),
             permission_sync_in_progress: AtomicBool::new(false),
-            permission_sync_notify: tokio::sync::Notify::new(),
+            server_event_notify: tokio::sync::Notify::new(),
             admin_key_request_inbox: Mutex::new(AgentAdminKeyRequestInbox::default()),
-            admin_key_request_poll_in_progress: AtomicBool::new(false),
-            admin_key_request_poll_notify: tokio::sync::Notify::new(),
+            admin_key_request_refresh_in_progress: AtomicBool::new(false),
             resume_after_proxy_assignment: AtomicBool::new(false),
             pending_device_authorization: Mutex::new(None),
             next_device_authorization_id: AtomicU64::new(1),
@@ -192,8 +190,7 @@ impl AgentRuntime {
             .lock()
             .map_err(|_| "权限同步状态锁已损坏".to_string())? = None;
         self.clear_admin_key_request_inbox()?;
-        self.permission_sync_notify.notify_one();
-        self.admin_key_request_poll_notify.notify_one();
+        self.server_event_notify.notify_one();
         Ok(())
     }
 
@@ -281,6 +278,7 @@ impl AgentRuntime {
         if matches!(&result, Ok(Some(_))) {
             let _ = self.set_permission_sync_error(None);
             let _ = self.clear_admin_key_request_inbox();
+            self.server_event_notify.notify_one();
         }
         result
     }

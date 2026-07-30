@@ -18,8 +18,8 @@ use crate::auth::{
     fetch_agent_permission_snapshot, load_persisted_agent_login, open_system_browser,
     persist_agent_login, persist_unassigned_agent_login, poll_device_authorization,
     reject_agent_admin_key_request, request_account_management_handoff, start_device_authorization,
-    write_managed_private_key, write_managed_proxy_identity_public_key, DeviceAuthorizationPoll,
-    DownloadedCredential,
+    write_managed_private_key, write_managed_proxy_identity_public_key, AgentServerEventKind,
+    AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,
@@ -71,6 +71,7 @@ mod config_commands;
 mod login_commands;
 mod permission_sync;
 mod provisioning;
+mod server_events;
 mod state;
 mod telemetry_commands;
 
@@ -80,6 +81,7 @@ pub(crate) use config_commands::*;
 pub(crate) use login_commands::*;
 pub(crate) use permission_sync::*;
 pub(crate) use provisioning::*;
+pub(crate) use server_events::*;
 pub(crate) use state::*;
 pub(crate) use telemetry_commands::*;
 

@@ -208,7 +208,7 @@ final class AgentAuthHttpTransport {
     }
 
     @SuppressWarnings("deprecation")
-    private HttpURLConnection openConnection(URL url) throws IOException {
+    HttpURLConnection openConnection(URL url) throws IOException {
         if (AgentAuthConfig.isLoopbackHost(url.getHost())) {
             return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
         }

@@ -1,12 +1,13 @@
 use super::common::*;
 use crate::agent_tokens::AGENT_PROFILE_REFRESH_SECONDS;
+use futures::StreamExt;
 
 const PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
 const EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
 const RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
 
 #[tokio::test]
-async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_changes() {
+async fn agent_login_returns_permissions_and_event_driven_sync_observes_admin_changes() {
     let (_directory, app) = test_app().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
     create_approved_user(
@@ -122,6 +123,95 @@ async fn agent_login_returns_permissions_and_periodic_sync_observes_admin_change
             "revoked permission still returned: {permission}: {permissions:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn authenticated_agent_event_stream_starts_with_sync_event() {
+    let (_directory, app) = test_app().await;
+    let (admin_cookie, admin_csrf) = login_admin(&app).await;
+    create_approved_user(
+        &app,
+        &admin_cookie,
+        &admin_csrf,
+        "event-user",
+        "event-user-password",
+    )
+    .await;
+    let login = json_body(agent_login(&app, "event-user", "event-user-password").await).await;
+    let token = login["agent_access_token"].as_str().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agent/events")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::ACCEPT, "text/event-stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+    let mut stream = response.into_body().into_data_stream();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first = std::str::from_utf8(&first).unwrap();
+    assert!(first.contains("event: sync"), "{first:?}");
+
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/admin/users/event-user")
+                .header(header::COOKIE, admin_cookie)
+                .header("x-csrf-token", admin_csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"permissions": [PACKET_CAPTURE_PERMISSION]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let changed = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let changed = std::str::from_utf8(&changed).unwrap();
+    assert!(changed.contains("event: profile_changed"), "{changed:?}");
+}
+
+#[tokio::test]
+async fn agent_event_stream_requires_a_valid_bearer_token() {
+    let (_directory, app) = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agent/events")
+                .header(header::AUTHORIZATION, "Bearer invalid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

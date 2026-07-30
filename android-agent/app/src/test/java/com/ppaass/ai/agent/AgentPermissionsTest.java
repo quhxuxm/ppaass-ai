@@ -46,9 +46,9 @@ public class AgentPermissionsTest {
     }
 
     @Test
-    public void profileRefreshIntervalIsAlwaysBounded() {
-        assertEquals(60, AgentProfileSyncManager.boundedInterval(1));
-        assertEquals(300, AgentProfileSyncManager.boundedInterval(300));
-        assertEquals(3600, AgentProfileSyncManager.boundedInterval(99_999));
+    public void eventReconnectBackoffIsAlwaysBounded() {
+        assertEquals(2, AgentProfileSyncManager.nextReconnectDelay(1));
+        assertEquals(60, AgentProfileSyncManager.nextReconnectDelay(30));
+        assertEquals(60, AgentProfileSyncManager.nextReconnectDelay(99_999));
     }
 }

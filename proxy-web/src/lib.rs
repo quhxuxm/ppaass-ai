@@ -1,5 +1,6 @@
 //! PPAASS Proxy 用户管理 Web 服务。
 
+mod agent_events;
 mod agent_tokens;
 mod api;
 mod auth;
@@ -8,6 +9,7 @@ mod rate_limit;
 mod secrets;
 mod web_handoffs;
 
+pub use agent_events::AgentEventHub;
 pub use agent_tokens::{AgentAccessTokenError, AgentAccessTokenService};
 pub use api::{AppState, build_router};
 pub use auth::{PasswordError, PasswordService, SessionStore};

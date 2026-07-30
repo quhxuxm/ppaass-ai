@@ -4,19 +4,21 @@ import android.content.Context;
 import android.util.Log;
 
 import java.io.IOException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
 
 final class AgentProfileSyncManager {
-    private static final String TAG = "PpaassAgentSync";
-    private static final ScheduledExecutorService EXECUTOR =
-            Executors.newSingleThreadScheduledExecutor(new SyncThreadFactory());
+    private static final String TAG = "PpaassAgentEvents";
+    private static final int MIN_RECONNECT_SECONDS = 1;
+    private static final int MAX_RECONNECT_SECONDS = 60;
+    private static final ExecutorService EXECUTOR =
+            Executors.newSingleThreadExecutor(new EventThreadFactory());
 
     private static Context applicationContext;
-    private static ScheduledFuture<?> scheduled;
+    private static Future<?> worker;
+    private static AgentServerEventClient activeClient;
     private static long generation;
 
     private AgentProfileSyncManager() {
@@ -26,14 +28,15 @@ final class AgentProfileSyncManager {
         applicationContext = context.getApplicationContext();
         AgentAdminRequestSynchronizer.prepare(applicationContext);
         generation++;
-        cancelScheduled();
-        schedule(generation, 0);
+        cancelWorker();
+        long expectedGeneration = generation;
+        worker = EXECUTOR.submit(() -> runEventLoop(expectedGeneration));
     }
 
     static synchronized void stop() {
         Context context = applicationContext;
         generation++;
-        cancelScheduled();
+        cancelWorker();
         applicationContext = null;
         if (context != null) {
             AgentAdminRequestSynchronizer.clear(context);
@@ -42,56 +45,119 @@ final class AgentProfileSyncManager {
 
     static synchronized void requestImmediateSync(Context context) {
         applicationContext = context.getApplicationContext();
-        if (!AgentAuthSession.isActive(applicationContext) || scheduled == null) {
+        if (!AgentAuthSession.isActive(applicationContext)) {
             return;
         }
-        generation++;
-        cancelScheduled();
-        schedule(generation, 0);
+        if (worker == null || worker.isDone()) {
+            start(applicationContext);
+        }
     }
 
-    static int boundedInterval(int seconds) {
-        return AgentSessionStore.clampedRefresh(seconds);
+    static int nextReconnectDelay(int currentSeconds) {
+        return Math.min(
+                Math.max(MIN_RECONNECT_SECONDS, currentSeconds) * 2,
+                MAX_RECONNECT_SECONDS);
     }
 
-    private static void runSync(long expectedGeneration) {
-        Context context;
-        synchronized (AgentProfileSyncManager.class) {
-            if (expectedGeneration != generation || applicationContext == null) {
+    private static void runEventLoop(long expectedGeneration) {
+        int reconnectSeconds = MIN_RECONNECT_SECONDS;
+        while (isCurrent(expectedGeneration)) {
+            Context context = currentContext(expectedGeneration);
+            if (context == null) {
                 return;
             }
-            context = applicationContext;
-            scheduled = null;
-        }
-        if (!AgentAuthSession.isActive(context)) {
-            return;
-        }
+            AgentSessionStore.StoredSession stored = AgentSessionStore.load(context);
+            if (stored.needsRelogin || stored.accessToken.isEmpty()) {
+                AgentSessionStore.recordLegacySession(context);
+                return;
+            }
 
+            AgentServerEventClient client;
+            try {
+                client = new AgentServerEventClient(
+                        context,
+                        AgentAuthConfig.proxyWebUrl(context));
+            } catch (IOException | RuntimeException error) {
+                recordConnectionFailure(context, error);
+                if (!waitForReconnect(expectedGeneration, reconnectSeconds)) {
+                    return;
+                }
+                reconnectSeconds = nextReconnectDelay(reconnectSeconds);
+                continue;
+            }
+            setActiveClient(expectedGeneration, client);
+            try {
+                reconnectSeconds = MIN_RECONNECT_SECONDS;
+                client.listen(
+                        stored.accessToken,
+                        event -> handleEvent(context, expectedGeneration, event));
+            } catch (AgentServerEventClient.EventException error) {
+                if (isCurrent(expectedGeneration)) {
+                    AgentSessionStore.recordSyncFailure(
+                            context,
+                            error.unauthorized
+                                    ? AgentAuthClient.SyncFailure.UNAUTHORIZED
+                                    : AgentAuthClient.SyncFailure.TRANSIENT);
+                    Log.w(TAG, "Agent SSE event stream unavailable", error);
+                }
+            } finally {
+                clearActiveClient(client);
+            }
+            if (!waitForReconnect(expectedGeneration, reconnectSeconds)) {
+                return;
+            }
+            reconnectSeconds = nextReconnectDelay(reconnectSeconds);
+        }
+    }
+
+    private static boolean handleEvent(
+            Context context,
+            long expectedGeneration,
+            String event) {
+        if (!isCurrent(expectedGeneration)) {
+            return false;
+        }
+        if (AgentServerEventClient.ADMIN_KEY_REQUESTS_CHANGED.equals(event)) {
+            synchronizeAdminRequests(context);
+            return true;
+        }
+        if (AgentServerEventClient.SYNC.equals(event)
+                || AgentServerEventClient.PROFILE_CHANGED.equals(event)
+                || AgentServerEventClient.PROFILES_CHANGED.equals(event)
+                || AgentServerEventClient.KEY_REQUEST_CHANGED.equals(event)) {
+            return synchronizeProfile(context, expectedGeneration);
+        }
+        return true;
+    }
+
+    private static boolean synchronizeProfile(
+            Context context,
+            long expectedGeneration) {
         AgentSessionStore.StoredSession stored = AgentSessionStore.load(context);
         if (stored.needsRelogin || stored.accessToken.isEmpty()) {
             AgentSessionStore.recordLegacySession(context);
-            return;
+            return false;
         }
-
-        int nextInterval = stored.refreshSeconds;
         try {
-            String baseUrl = AgentAuthConfig.proxyWebUrl(context);
             AgentAuthClient.ProfileSyncResult result =
-                    new AgentAuthClient(context, baseUrl).syncProfile(
-                            stored.accessToken,
-                            AgentAuthSession.username());
-            if (!isCurrent(expectedGeneration, context)) {
-                return;
+                    new AgentAuthClient(
+                            context,
+                            AgentAuthConfig.proxyWebUrl(context))
+                            .syncProfile(
+                                    stored.accessToken,
+                                    AgentAuthSession.username());
+            if (!isCurrent(expectedGeneration)) {
+                return false;
             }
             AgentAuthSession.applySynchronizedProfile(context, result);
             AgentAdminRequestSynchronizer.synchronize(
                     context,
                     result.accessToken);
-            nextInterval = result.refreshAfterSeconds;
-            Log.i(TAG, "Agent account permissions synchronized");
+            Log.i(TAG, "Agent state synchronized after SSE event");
+            return true;
         } catch (AgentAuthClient.SyncException error) {
-            if (!isCurrent(expectedGeneration, context)) {
-                return;
+            if (!isCurrent(expectedGeneration)) {
+                return false;
             }
             if (AgentSyncFailurePolicy.requiresManagedProxyShutdown(error.failure)) {
                 AgentSessionStore.recordManagedProxyAddressFailure(context);
@@ -99,48 +165,93 @@ final class AgentProfileSyncManager {
             } else {
                 AgentSessionStore.recordSyncFailure(context, error.failure);
             }
-            Log.w(TAG, "Agent account permission synchronization failed");
+            Log.w(TAG, "Agent state synchronization failed after SSE event");
         } catch (IOException | RuntimeException error) {
-            if (!isCurrent(expectedGeneration, context)) {
-                return;
+            if (isCurrent(expectedGeneration)) {
+                AgentSessionStore.recordSyncFailure(
+                        context,
+                        AgentAuthClient.SyncFailure.TRANSIENT);
+                Log.w(TAG, "Agent state synchronization unavailable", error);
             }
-            AgentSessionStore.recordSyncFailure(
+        }
+        return false;
+    }
+
+    private static void synchronizeAdminRequests(Context context) {
+        AgentSessionStore.StoredSession stored = AgentSessionStore.load(context);
+        if (!stored.accessToken.isEmpty()) {
+            AgentAdminRequestSynchronizer.synchronize(
                     context,
-                    AgentAuthClient.SyncFailure.TRANSIENT);
-            Log.w(TAG, "Agent account permission synchronization unavailable");
-        }
-        synchronized (AgentProfileSyncManager.class) {
-            if (expectedGeneration == generation && AgentAuthSession.isActive(context)) {
-                schedule(expectedGeneration, boundedInterval(nextInterval));
-            }
+                    stored.accessToken);
         }
     }
 
-    private static synchronized boolean isCurrent(
-            long expectedGeneration,
-            Context context) {
+    private static synchronized Context currentContext(long expectedGeneration) {
+        return expectedGeneration == generation ? applicationContext : null;
+    }
+
+    private static synchronized boolean isCurrent(long expectedGeneration) {
         return expectedGeneration == generation
-                && AgentAuthSession.isActive(context);
+                && applicationContext != null
+                && AgentAuthSession.isActive(applicationContext);
     }
 
-    private static void schedule(long expectedGeneration, int delaySeconds) {
-        scheduled = EXECUTOR.schedule(
-                () -> runSync(expectedGeneration),
-                Math.max(0, delaySeconds),
-                TimeUnit.SECONDS);
-    }
-
-    private static void cancelScheduled() {
-        if (scheduled != null) {
-            scheduled.cancel(false);
-            scheduled = null;
+    private static synchronized void setActiveClient(
+            long expectedGeneration,
+            AgentServerEventClient client) {
+        if (expectedGeneration == generation) {
+            activeClient = client;
+        } else {
+            client.cancel();
         }
     }
 
-    private static final class SyncThreadFactory implements ThreadFactory {
+    private static synchronized void clearActiveClient(
+            AgentServerEventClient client) {
+        if (activeClient == client) {
+            activeClient = null;
+        }
+    }
+
+    private static synchronized void cancelWorker() {
+        if (activeClient != null) {
+            activeClient.cancel();
+            activeClient = null;
+        }
+        if (worker != null) {
+            worker.cancel(true);
+            worker = null;
+        }
+    }
+
+    private static boolean waitForReconnect(
+            long expectedGeneration,
+            int delaySeconds) {
+        if (!isCurrent(expectedGeneration)) {
+            return false;
+        }
+        try {
+            Thread.sleep(Math.max(1, delaySeconds) * 1000L);
+            return isCurrent(expectedGeneration);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static void recordConnectionFailure(
+            Context context,
+            Throwable error) {
+        AgentSessionStore.recordSyncFailure(
+                context,
+                AgentAuthClient.SyncFailure.TRANSIENT);
+        Log.w(TAG, "Unable to create Agent SSE connection", error);
+    }
+
+    private static final class EventThreadFactory implements ThreadFactory {
         @Override
         public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "ppaass-agent-profile-sync");
+            Thread thread = new Thread(runnable, "ppaass-agent-events");
             thread.setDaemon(true);
             return thread;
         }

@@ -2637,6 +2637,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dashmap",
+ "futures",
  "http-body-util",
  "protocol",
  "proxy-user-store",

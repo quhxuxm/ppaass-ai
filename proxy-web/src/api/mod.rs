@@ -86,6 +86,7 @@ pub struct AppState {
     pub passwords: PasswordService,
     pub sessions: SessionStore,
     pub agent_tokens: AgentAccessTokenService,
+    pub agent_events: crate::AgentEventHub,
     pub web_session_handoffs: AgentWebSessionHandoffStore,
     pub private_keys: PrivateKeyCipher,
     pub proxy_identity_public_key_pem: Arc<str>,
@@ -134,6 +135,7 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         )
         .route("/agent/login", post(agent_login))
         .route("/agent/me", get(get_agent_profile))
+        .route("/agent/events", get(get_agent_events))
         .route(
             "/agent/web-session-handoffs",
             post(create_agent_web_session_handoff),

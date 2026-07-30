@@ -159,6 +159,7 @@ async fn main() -> Result<()> {
         passwords,
         sessions: SessionStore::new(secure_cookies),
         agent_tokens,
+        agent_events: proxy_web::AgentEventHub::new(),
         web_session_handoffs: AgentWebSessionHandoffStore::new(),
         private_keys,
         proxy_identity_public_key_pem,

@@ -12,7 +12,8 @@ const [
   view,
   composable,
   types,
-  rustPolling,
+  rustController,
+  rustEvents,
   rustHttp,
   bootstrap,
   styles
@@ -24,6 +25,7 @@ const [
   source("src/composables/useAdminKeyRequests.ts"),
   source("src/types.ts"),
   source("src-tauri/src/app/admin_key_requests.rs"),
+  source("src-tauri/src/app/server_events.rs"),
   source("src-tauri/src/auth/admin_key_requests.rs"),
   source("src-tauri/src/app/bootstrap.rs"),
   source("src/styles.css")
@@ -80,20 +82,21 @@ assert.doesNotMatch(types, /agent_access_token|agentAccessToken/);
 assert.doesNotMatch(composable, /bearer|authorization/i);
 assert.doesNotMatch(view, /bearer|authorization|accessToken/i);
 
-assert.match(
-  rustPolling,
-  /const ADMIN_KEY_REQUEST_POLL_SECONDS: u64 = 60/
-);
-assert.match(rustPolling, /replace_admin_key_request_inbox/);
-assert.match(rustPolling, /notify_new_admin_requests\(app, new_ids\.len\(\)\)/);
-assert.match(rustPolling, /收到 \{count\} 个新的待审批密钥申请/);
+assert.doesNotMatch(rustController, /ADMIN_KEY_REQUEST_POLL_SECONDS|interval\(/);
+assert.match(rustController, /refresh_agent_admin_key_requests_once/);
+assert.match(rustController, /replace_admin_key_request_inbox/);
+assert.match(rustController, /notify_new_admin_requests\(app, new_ids\.len\(\)\)/);
+assert.match(rustController, /收到 \{count\} 个新的待审批密钥申请/);
 assert.doesNotMatch(
-  rustPolling.match(/fn notify_new_admin_requests[\s\S]*?\\n\}/)?.[0] ?? "",
+  rustController.match(/fn notify_new_admin_requests[\s\S]*?\\n\}/)?.[0] ?? "",
   /request_message|留言/
 );
+assert.match(rustEvents, /AdminKeyRequestsChanged/);
+assert.match(rustEvents, /refresh_agent_admin_key_requests_once/);
 assert.match(rustHttp, /\.bearer_auth\(access_token\)/);
 assert.match(rustHttp, /deny_unknown_fields/g);
 assert.match(bootstrap, /tauri_plugin_notification::init\(\)/);
-assert.match(bootstrap, /start_agent_admin_key_request_polling/);
+assert.match(bootstrap, /start_agent_server_events/);
+assert.doesNotMatch(bootstrap, /start_agent_admin_key_request_polling/);
 
 console.log("desktop admin key request tests passed");

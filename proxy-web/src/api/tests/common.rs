@@ -109,6 +109,7 @@ pub(super) async fn test_app_with_components() -> (
     let web_session_handoffs = AgentWebSessionHandoffStore::new();
     let private_keys = PrivateKeyCipher::new(MASTER_SECRET).unwrap();
     let agent_tokens = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
+    let agent_events = crate::agent_events::AgentEventHub::new();
     let state = AppState {
         users: store.clone(),
         accounts: store.clone(),
@@ -118,6 +119,7 @@ pub(super) async fn test_app_with_components() -> (
         passwords,
         sessions: sessions.clone(),
         agent_tokens,
+        agent_events: agent_events.clone(),
         web_session_handoffs: web_session_handoffs.clone(),
         private_keys: private_keys.clone(),
         proxy_identity_public_key_pem: test_proxy_identity_public_key(),

@@ -160,7 +160,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
         if (adminApprovalSummary != null) {
             adminApprovalSummary.setText(adminDashboardLoading
                     ? "正在同步待审批申请…"
-                    : count + " 项待处理 · 每分钟自动同步");
+                    : count + " 项待处理 · SSE 实时同步");
         }
         if (adminRefreshButton != null) {
             adminRefreshButton.setEnabled(

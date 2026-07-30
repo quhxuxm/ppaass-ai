@@ -246,6 +246,7 @@ mod password_login;
 mod permission_sync;
 mod profile_identity;
 mod proxy_addresses;
+mod server_events;
 mod web_handoff;
 
 pub(crate) use admin_key_requests::*;
@@ -257,6 +258,7 @@ pub(crate) use password_login::*;
 pub(crate) use permission_sync::*;
 pub(crate) use profile_identity::*;
 pub(crate) use proxy_addresses::*;
+pub(crate) use server_events::*;
 pub(crate) use web_handoff::*;
 
 #[cfg(test)]

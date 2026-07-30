@@ -151,8 +151,17 @@ try {
     new URL("../src-tauri/src/app/bootstrap.rs", import.meta.url),
     "utf8"
   );
-  assert.match(bootstrap, /WindowEvent::Focused\(true\)/);
-  assert.match(bootstrap, /permission_sync_notify\s*\.notify_one\(\)/);
+  assert.match(bootstrap, /start_agent_server_events/);
+  assert.doesNotMatch(bootstrap, /WindowEvent::Focused\(true\)/);
+  assert.doesNotMatch(bootstrap, /permission_sync_notify/);
+
+  const serverEvents = await readFile(
+    new URL("../src-tauri/src/app/server_events.rs", import.meta.url),
+    "utf8"
+  );
+  assert.match(serverEvents, /AgentServerEventStream::connect/);
+  assert.match(serverEvents, /AdminKeyRequestsChanged/);
+  assert.doesNotMatch(serverEvents, /interval\(/);
 
   const egress = await readFile(
     new URL("../src/views/EgressView.vue", import.meta.url),

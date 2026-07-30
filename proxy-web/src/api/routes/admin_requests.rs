@@ -59,12 +59,16 @@ pub(crate) async fn admin_approve_key_request(
         })
         .await?;
     let request_response = admin_key_request_response(&state, result.request).await?;
+    let account_id = request_response.account.account_id.clone();
     info!(
         admin_account_id = reviewer.account_id,
         request_id = request_response.request_id,
         account_id = request_response.account.account_id,
         "管理员批准密钥申请"
     );
+    state.agent_events.publish_profile_changed(&account_id);
+    state.agent_events.publish_key_request_changed(&account_id);
+    state.agent_events.publish_admin_key_requests_changed();
     Ok(Json(AdminKeyRequestDecisionResponse {
         request: request_response,
         user: Some(result.managed_user.into()),
@@ -88,12 +92,15 @@ pub(crate) async fn admin_reject_key_request(
         })
         .await?;
     let request = admin_key_request_response(&state, request).await?;
+    let account_id = request.account.account_id.clone();
     info!(
         admin_account_id = reviewer.account_id,
         request_id = request.request_id,
         account_id = request.account.account_id,
         "管理员拒绝密钥申请"
     );
+    state.agent_events.publish_key_request_changed(&account_id);
+    state.agent_events.publish_admin_key_requests_changed();
     Ok(Json(AdminKeyRequestDecisionResponse {
         request,
         user: None,

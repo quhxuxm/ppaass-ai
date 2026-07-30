@@ -187,7 +187,8 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/auth/login` | 用户名密码登录 |
 | `POST` | `/api/v1/auth/logout` | 退出登录 |
 | `POST` | `/api/v1/agent/login` | 原生 Agent 密码认证，一次返回角色、权限、密钥和持续同步凭据 |
-| `GET` | `/api/v1/agent/me` | Agent 使用 Bearer 凭据定期刷新账号状态和权限 |
+| `GET` | `/api/v1/agent/me` | Agent 收到 SSE 事件后使用 Bearer 凭据刷新账号状态和权限 |
+| `GET` | `/api/v1/agent/events` | Agent 使用 Bearer 凭据建立 SSE 实时通知流 |
 | `POST` | `/api/v1/agent/device-authorizations` | Agent 创建浏览器设备登录 challenge |
 | `POST` | `/api/v1/agent/device-authorizations/token` | Agent 限频轮询并一次性领取账户配置和密钥 |
 | `POST` | `/api/v1/agent/device-authorizations/inspect` | 已登录用户核对设备登录请求 |
@@ -232,19 +233,31 @@ Desktop、Windows 和 Android Agent 的登录页直接向配置文件中的 Prox
 
 Agent access token 使用部署主密钥派生的独立 AES-256-GCM key 加密认证，服务重启后仍可
 验证。Agent 把 token 与受管私钥一起保存到仅当前系统用户可读的本机凭据目录，绝不传给
-前端脚本或写入日志。登录后立即、随后按服务端返回的
-`refresh_after_seconds`（当前 300 秒）调用：
+前端脚本或写入日志。登录后 Agent 建立一条长期 SSE 连接：
+
+```http
+GET /api/v1/agent/events
+Accept: text/event-stream
+Authorization: Bearer <agent_access_token>
+```
+
+SSE 只发送 `sync`、`profile_changed`、`profiles_changed`、
+`key_request_changed` 和 `admin_key_requests_changed` 等无敏感数据的事件。建立连接时
+服务端立即发送一次 `sync`；权限、账号状态、Proxy 地址目录或密钥审批发生变化时，再
+定向发送相应事件。Agent 收到事件后才调用：
 
 ```http
 GET /api/v1/agent/me
 Authorization: Bearer <agent_access_token>
 ```
 
-响应返回最新角色、账号状态、`key_state`、权限和滚动更新的 token。权限变更会直接刷新
-Agent 界面和 Rust/原生命令层约束，不要求退出或重启。临时网络错误、5xx、401 均不会
-清除登录、私钥或停止代理；Agent 保留最后一次成功验证的权限并显示同步错误。账号被
-停用或密钥过期时，接口仍返回 200 和权威状态，Agent 保留登录但显示明确错误。连续
-30 天未成功刷新而导致 token 过期时，需要重新登录才能恢复权限同步。
+响应返回最新角色、账号状态、`key_state`、权限和滚动更新的 token。Agent 不按固定
+间隔轮询业务接口；SSE 使用 15 秒注释心跳维持连接，断线后按 1–60 秒指数退避重连。
+服务端每 12 小时主动结束一次事件流，客户端重连并由新的 `sync` 事件刷新 token，避免
+长期无业务事件时凭据过期。权限变更会直接刷新 Agent 界面和 Rust/原生命令层约束，
+不要求退出或重启。临时网络错误、5xx、401 均不会清除登录、私钥或停止代理；Agent
+保留最后一次成功验证的权限并显示同步错误。账号被停用或密钥过期时，接口仍返回 200
+和权威状态，Agent 保留登录但显示明确错误。
 
 密码登录、设备 token 领取和 `GET /api/v1/agent/me` 的成功响应都会在
 `profile.proxy_addresses` 返回 1 到 32 个已启用的规范地址。该字段按地址稳定排序并

@@ -1,22 +1,7 @@
 use super::*;
 
-const DEFAULT_PERMISSION_SYNC_SECONDS: u64 = 60;
-
 mod managed_config;
 use managed_config::*;
-
-pub(crate) fn start_agent_permission_sync(app: tauri::AppHandle, runtime: Arc<AgentRuntime>) {
-    tauri::async_runtime::spawn(async move {
-        loop {
-            sync_agent_permissions_once(&app, &runtime).await;
-            let delay = permission_sync_delay(&runtime);
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = runtime.permission_sync_notify.notified() => {}
-            }
-        }
-    });
-}
 
 pub(crate) async fn sync_agent_permissions_once(
     app: &tauri::AppHandle,
@@ -125,7 +110,6 @@ pub(crate) async fn sync_agent_permissions_once(
         "Agent 用户权限同步成功"
     );
     emit_auth_state(app, runtime);
-    runtime.admin_key_request_poll_notify.notify_one();
     if updated.account_status != AgentAuthAccountStatus::Active {
         let status = match updated.account_status {
             AgentAuthAccountStatus::Active => return,
@@ -162,18 +146,6 @@ fn disable_packet_capture_if_revoked(runtime: &AgentRuntime, account: &AgentAuth
     }
 }
 
-fn permission_sync_delay(runtime: &AgentRuntime) -> std::time::Duration {
-    let seconds = runtime
-        .authenticated_session()
-        .ok()
-        .flatten()
-        .and_then(|session| session.agent_access_token)
-        .map(|token| token.refresh_after_seconds)
-        .unwrap_or(DEFAULT_PERMISSION_SYNC_SECONDS)
-        .clamp(60, 3600);
-    std::time::Duration::from_secs(seconds)
-}
-
 fn record_sync_error(app: &tauri::AppHandle, runtime: &AgentRuntime, message: String) {
     warn!("{message}");
     runtime.logs.push(message.clone());
@@ -192,19 +164,5 @@ struct PermissionSyncGuard<'a>(&'a std::sync::atomic::AtomicBool);
 impl Drop for PermissionSyncGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sync_delay_is_clamped_and_defaults_without_a_session() {
-        let runtime = AgentRuntime::new();
-        assert_eq!(
-            permission_sync_delay(&runtime),
-            std::time::Duration::from_secs(DEFAULT_PERMISSION_SYNC_SECONDS)
-        );
     }
 }

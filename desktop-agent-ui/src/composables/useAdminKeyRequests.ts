@@ -151,7 +151,7 @@ export function useAdminKeyRequests(
         false
       );
     } catch {
-      // 保留最近一次成功同步的列表；后台轮询会继续重试。
+      // 保留最近一次成功同步的列表；SSE 重连后会再次同步。
     }
   }
 

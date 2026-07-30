@@ -1,34 +1,12 @@
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri_plugin_notification::NotificationExt;
 
 use super::*;
 
-const ADMIN_KEY_REQUEST_POLL_SECONDS: u64 = 60;
 const MAX_APPROVAL_PROXY_ADDRESSES: usize = 128;
-
-pub(crate) fn start_agent_admin_key_request_polling(
-    app: tauri::AppHandle,
-    runtime: Arc<AgentRuntime>,
-) {
-    tauri::async_runtime::spawn(async move {
-        let mut interval =
-            tokio::time::interval(Duration::from_secs(ADMIN_KEY_REQUEST_POLL_SECONDS));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {}
-                _ = runtime.admin_key_request_poll_notify.notified() => {}
-            }
-            if let Err(error) = poll_agent_admin_key_requests_once(&app, &runtime).await {
-                warn!("{error}");
-                runtime.logs.push(error);
-            }
-        }
-    });
-}
 
 #[tauri::command]
 pub(crate) fn get_agent_admin_key_request_inbox(
@@ -45,7 +23,7 @@ pub(crate) async fn refresh_agent_admin_key_requests(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
 ) -> Result<AgentAdminKeyRequestInbox, String> {
-    poll_agent_admin_key_requests_once(&app, runtime.inner())
+    refresh_agent_admin_key_requests_once(&app, runtime.inner())
         .await
         .map(|update| update.inbox)
 }
@@ -110,12 +88,12 @@ pub(crate) async fn reject_agent_admin_key_request_command(
     .await
 }
 
-pub(crate) async fn poll_agent_admin_key_requests_once(
+pub(crate) async fn refresh_agent_admin_key_requests_once(
     app: &tauri::AppHandle,
     runtime: &Arc<AgentRuntime>,
 ) -> Result<AgentAdminKeyRequestUpdate, String> {
     if runtime
-        .admin_key_request_poll_in_progress
+        .admin_key_request_refresh_in_progress
         .swap(true, Ordering::AcqRel)
     {
         return Ok(AgentAdminKeyRequestUpdate {
@@ -123,7 +101,7 @@ pub(crate) async fn poll_agent_admin_key_requests_once(
             error: None,
         });
     }
-    let _guard = AdminKeyRequestPollGuard(&runtime.admin_key_request_poll_in_progress);
+    let _guard = AdminKeyRequestRefreshGuard(&runtime.admin_key_request_refresh_in_progress);
     fetch_and_apply_admin_inbox(app, runtime).await
 }
 
@@ -159,7 +137,7 @@ async fn fetch_and_apply_admin_inbox(
                 ) =>
             {
                 runtime.clear_admin_key_request_inbox()?;
-                runtime.permission_sync_notify.notify_one();
+                runtime.server_event_notify.notify_one();
                 let update = AgentAdminKeyRequestUpdate {
                     inbox: AgentAdminKeyRequestInbox::default(),
                     error: Some(error.message.clone()),
@@ -201,7 +179,6 @@ async fn finish_decision(
         Ok(()) => {
             let update = runtime.remove_admin_key_request(request_id)?;
             emit_admin_update(app, &update);
-            runtime.admin_key_request_poll_notify.notify_one();
             info!(request_id, "{log_message}");
             Ok(update.inbox)
         }
@@ -226,7 +203,7 @@ async fn finish_decision(
                         error: Some(error.message.clone()),
                     },
                 );
-                runtime.permission_sync_notify.notify_one();
+                runtime.server_event_notify.notify_one();
             }
             Err(error.message)
         }
@@ -351,9 +328,9 @@ fn notify_new_admin_requests(app: &tauri::AppHandle, count: usize) {
     }
 }
 
-struct AdminKeyRequestPollGuard<'a>(&'a std::sync::atomic::AtomicBool);
+struct AdminKeyRequestRefreshGuard<'a>(&'a std::sync::atomic::AtomicBool);
 
-impl Drop for AdminKeyRequestPollGuard<'_> {
+impl Drop for AdminKeyRequestRefreshGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }

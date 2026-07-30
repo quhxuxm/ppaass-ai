@@ -1,5 +1,6 @@
 mod admin_requests;
 mod admin_users;
+mod agent_events;
 mod agent_session;
 mod authentication;
 mod device_authorization;
@@ -9,6 +10,7 @@ mod web_session_handoff;
 
 pub(super) use admin_requests::*;
 pub(super) use admin_users::*;
+pub(super) use agent_events::*;
 pub(super) use agent_session::*;
 pub(super) use authentication::*;
 pub(super) use device_authorization::*;
