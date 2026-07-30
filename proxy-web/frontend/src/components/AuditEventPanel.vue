@@ -98,12 +98,14 @@ function changeSummary(event: AuditEvent): string {
         label="刷新"
         severity="secondary"
         outlined
+        size="small"
         :loading="loading"
         @click="emit('refresh')"
       />
     </header>
 
     <DataTable
+      class="audit-table"
       :value="events"
       :loading="loading"
       data-key="id"
@@ -111,7 +113,7 @@ function changeSummary(event: AuditEvent): string {
       :rows="10"
       :rows-per-page-options="[10, 25, 50]"
       scrollable
-      table-style="min-width: 74rem"
+      table-style="width: 100%; min-width: 76rem; table-layout: fixed"
     >
       <template #empty>
         <div class="audit-empty">
@@ -119,23 +121,28 @@ function changeSummary(event: AuditEvent): string {
           <span>还没有敏感操作审计记录</span>
         </div>
       </template>
-      <Column header="时间" style="min-width: 11rem">
-        <template #body="{ data }">{{ formatTime(data.createdAt) }}</template>
+      <Column header="时间" style="width: 13%">
+        <template #body="{ data }">
+          <span class="audit-time">{{ formatTime(data.createdAt) }}</span>
+        </template>
       </Column>
-      <Column header="操作" style="min-width: 10rem">
+      <Column header="操作" style="width: 12%">
         <template #body="{ data }">
           <Tag
+            class="audit-action"
             :value="actionLabels[data.action as AuditAction]"
             :severity="actionSeverity(data.action)"
           />
         </template>
       </Column>
-      <Column header="操作者" style="min-width: 10rem">
+      <Column header="操作者" style="width: 11%">
         <template #body="{ data }">
-          <strong :title="data.actorAccountId">{{ data.actorLoginName }}</strong>
+          <strong class="audit-actor" :title="data.actorAccountId">
+            {{ data.actorLoginName }}
+          </strong>
         </template>
       </Column>
-      <Column header="操作目标" style="min-width: 12rem">
+      <Column header="操作目标" style="width: 14%">
         <template #body="{ data }">
           <div class="audit-target">
             <strong :title="data.targetId">{{ data.targetName }}</strong>
@@ -143,14 +150,14 @@ function changeSummary(event: AuditEvent): string {
           </div>
         </template>
       </Column>
-      <Column header="操作原因" style="min-width: 15rem">
+      <Column header="操作原因" style="width: 18%">
         <template #body="{ data }">
           <span class="audit-reason" :title="data.reason || '用户本人操作'">
             {{ data.reason || '用户本人操作' }}
           </span>
         </template>
       </Column>
-      <Column header="变更详情" style="min-width: 18rem">
+      <Column header="变更详情" style="width: 32%">
         <template #body="{ data }">
           <span class="audit-change" :title="changeSummary(data)">
             {{ changeSummary(data) }}
@@ -162,21 +169,49 @@ function changeSummary(event: AuditEvent): string {
 </template>
 
 <style scoped>
-.audit-card { overflow: hidden; }
+.audit-card { margin-top: 20px; overflow: hidden; }
 .audit-header, .audit-header > div { display: flex; align-items: center; gap: 1rem; }
-.audit-header { justify-content: space-between; padding: 1.5rem; }
+.audit-header { min-height: 88px; justify-content: space-between; padding: 20px 22px; }
 .audit-header h2, .audit-header p { margin: 0; }
-.audit-header p { margin-top: .25rem; color: var(--text-muted); }
-.audit-icon { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: 1rem;
-  color: #2563eb; background: #eff6ff; font-size: 1.25rem; flex: 0 0 auto; }
+.audit-header h2 { color: #101828; font-size: 1.04rem; }
+.audit-header p { margin-top: 6px; color: #667085; font-size: .77rem; line-height: 1.5; }
+.audit-icon { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px;
+  color: #155eef; background: #eaf1ff; font-size: 1.05rem; flex: 0 0 auto; }
+.audit-table :deep(.p-datatable-table-container) { overflow-x: auto; }
+.audit-table :deep(.p-datatable-header-cell) {
+  color: #667085;
+  font-size: .72rem;
+  font-weight: 650;
+  background: #f8fafc;
+}
+.audit-table :deep(.p-datatable-thead > tr > th),
+.audit-table :deep(.p-datatable-tbody > tr > td) { min-width: 0; overflow: hidden; }
+.audit-table :deep(.p-datatable-tbody > tr > td) {
+  padding-block: 14px;
+  vertical-align: top;
+  color: #475467;
+  font-size: .8rem;
+}
+.audit-time, .audit-actor { display: block; max-width: 100%; white-space: nowrap; }
+.audit-action { max-width: 100%; font-size: .72rem; white-space: nowrap; }
+.audit-actor { overflow: hidden; text-overflow: ellipsis; }
 .audit-target { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
-.audit-target strong, .audit-reason, .audit-change { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-target strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-reason, .audit-change {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .audit-target small { color: var(--text-muted); }
 .audit-empty { display: flex; align-items: center; justify-content: center; gap: .7rem; padding: 3rem; color: var(--text-muted); }
 @media (max-width: 700px) {
   .audit-header { align-items: flex-start; }
   .audit-header > div { align-items: flex-start; }
-  .audit-header p { font-size: .9rem; }
   .audit-header :deep(.p-button-label) { display: none; }
 }
 </style>
