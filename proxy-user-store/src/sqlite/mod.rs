@@ -5,8 +5,8 @@ use crate::{
     AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
     AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll,
     AgentDeviceAuthorizationRepository, AgentDeviceAuthorizationStatus, ApprovedKeyMaterial,
-    AuditAction, AuditEvent, AuditLogRepository, AuditTargetKind, BootstrapOutcome,
-    DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
+    AuditAction, AuditEvent, AuditEventQuery, AuditLogRepository, AuditTargetKind,
+    BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
     EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest,
     KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind,
     KeyRequestRejection, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
@@ -21,7 +21,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use sqlx::{
-    Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    QueryBuilder, Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{
         SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
     },

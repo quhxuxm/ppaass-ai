@@ -24,7 +24,8 @@ import {
 } from './types'
 import type {
   AccessLogSettings,
-  AuditEvent,
+  AuditEventQuery,
+  AuditEventsPage,
   AccessRecordsResult,
   AgentDeviceAuthorizationInspection,
   ChangePasswordPayload,
@@ -373,14 +374,31 @@ export async function listProxyAddresses(): Promise<ProxyAddress[]> {
   return values.map(decodeProxyAddress)
 }
 
-export async function listAuditEvents(): Promise<AuditEvent[]> {
-  const body = await request<unknown>('/api/v1/admin/audit-events?limit=100')
+export async function listAuditEvents(
+  query: AuditEventQuery = {},
+): Promise<AuditEventsPage> {
+  const limit = Math.min(100, Math.max(1, query.limit ?? 50))
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (query.beforeId) {
+    params.set('before_audit_id', String(query.beforeId))
+  }
+  if (query.action) {
+    params.set('action', query.action)
+  }
+  const search = query.search?.trim()
+  if (search) {
+    params.set('search', search)
+  }
+  const body = await request<unknown>(
+    `/api/v1/admin/audit-events?${params.toString()}`,
+  )
   const root = asRecord(body)
   const values = Array.isArray(root?.events) ? root.events : null
   if (!values) {
     throw new ApiError('服务器返回的审计记录列表格式无效', 502)
   }
-  return values.map(decodeAuditEvent)
+  const events = values.map(decodeAuditEvent)
+  return { events, hasMore: events.length >= limit }
 }
 
 export async function createProxyAddress(

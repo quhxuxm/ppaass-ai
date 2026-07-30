@@ -1,16 +1,27 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import type { AuditAction, AuditEvent } from '../api'
 
-defineProps<{
+const props = defineProps<{
+  action: AuditAction | null
   events: AuditEvent[]
+  hasMore: boolean
   loading: boolean
+  loadingMore: boolean
+  search: string
 }>()
 
-const emit = defineEmits<{ refresh: [] }>()
+const emit = defineEmits<{
+  filter: [search: string, action: AuditAction | null]
+  loadMore: []
+  refresh: []
+}>()
 
 const actionLabels: Record<AuditAction, string> = {
   key_request_approved: '批准密钥申请',
@@ -23,6 +34,33 @@ const actionLabels: Record<AuditAction, string> = {
   proxy_server_enabled: '启用服务器',
   proxy_server_disabled: '停用服务器',
   permissions_updated: '分配用户权限',
+}
+const search = ref(props.search)
+const selectedAction = ref<AuditAction | null>(props.action)
+const actionOptions = Object.entries(actionLabels).map(([value, label]) => ({
+  label,
+  value: value as AuditAction,
+}))
+const hasFilter = computed(
+  () => Boolean(search.value.trim()) || selectedAction.value !== null,
+)
+
+watch(
+  () => [props.search, props.action] as const,
+  ([nextSearch, nextAction]) => {
+    search.value = nextSearch
+    selectedAction.value = nextAction
+  },
+)
+
+function applyFilter(): void {
+  emit('filter', search.value.trim(), selectedAction.value)
+}
+
+function resetFilter(): void {
+  search.value = ''
+  selectedAction.value = null
+  applyFilter()
 }
 
 function actionSeverity(action: AuditAction): 'success' | 'danger' | 'warn' | 'info' {
@@ -104,6 +142,37 @@ function changeSummary(event: AuditEvent): string {
       />
     </header>
 
+    <form class="audit-filter" @submit.prevent="applyFilter">
+      <span class="audit-search">
+        <i class="pi pi-search" />
+        <InputText
+          v-model="search"
+          maxlength="120"
+          placeholder="搜索操作者、目标、原因或申请编号"
+          aria-label="搜索审计记录"
+        />
+      </span>
+      <Select
+        v-model="selectedAction"
+        :options="actionOptions"
+        option-label="label"
+        option-value="value"
+        placeholder="全部操作类型"
+        show-clear
+        aria-label="按操作类型筛选"
+      />
+      <Button type="submit" label="查询" icon="pi pi-search" :loading="loading" />
+      <Button
+        v-if="hasFilter"
+        type="button"
+        label="重置"
+        severity="secondary"
+        text
+        :disabled="loading"
+        @click="resetFilter"
+      />
+    </form>
+
     <DataTable
       class="audit-table"
       :value="events"
@@ -165,6 +234,21 @@ function changeSummary(event: AuditEvent): string {
         </template>
       </Column>
     </DataTable>
+    <footer v-if="events.length" class="audit-footer">
+      <span>已加载 {{ events.length }} 条记录</span>
+      <Button
+        v-if="hasMore"
+        label="加载更早记录"
+        icon="pi pi-angle-down"
+        severity="secondary"
+        outlined
+        size="small"
+        :loading="loadingMore"
+        :disabled="loading"
+        @click="emit('loadMore')"
+      />
+      <small v-else>已显示全部匹配记录</small>
+    </footer>
   </section>
 </template>
 
@@ -177,6 +261,27 @@ function changeSummary(event: AuditEvent): string {
 .audit-header p { margin-top: 6px; color: #667085; font-size: .77rem; line-height: 1.5; }
 .audit-icon { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px;
   color: #155eef; background: #eaf1ff; font-size: 1.05rem; flex: 0 0 auto; }
+.audit-filter {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(190px, 240px) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid #eaecf0;
+  border-bottom: 1px solid #eaecf0;
+  background: #fcfcfd;
+}
+.audit-search { position: relative; min-width: 0; }
+.audit-search > i {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  z-index: 1;
+  color: #98a2b3;
+  font-size: .8rem;
+  transform: translateY(-50%);
+}
+.audit-search .p-inputtext { width: 100%; padding-left: 35px; }
 .audit-table :deep(.p-datatable-table-container) { overflow-x: auto; }
 .audit-table :deep(.p-datatable-header-cell) {
   color: #667085;
@@ -209,9 +314,25 @@ function changeSummary(event: AuditEvent): string {
 }
 .audit-target small { color: var(--text-muted); }
 .audit-empty { display: flex; align-items: center; justify-content: center; gap: .7rem; padding: 3rem; color: var(--text-muted); }
+.audit-footer {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 10px 22px;
+  color: #667085;
+  font-size: .72rem;
+  border-top: 1px solid #eaecf0;
+  background: #fcfcfd;
+}
+.audit-footer small { color: #98a2b3; }
 @media (max-width: 700px) {
   .audit-header { align-items: flex-start; }
   .audit-header > div { align-items: flex-start; }
   .audit-header :deep(.p-button-label) { display: none; }
+  .audit-filter { grid-template-columns: 1fr; }
+  .audit-filter > .p-select { width: 100%; }
+  .audit-footer { align-items: stretch; flex-direction: column; }
 }
 </style>

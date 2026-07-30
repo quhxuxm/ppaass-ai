@@ -123,6 +123,18 @@ export interface AuditEvent {
   createdAt: string
 }
 
+export interface AuditEventQuery {
+  beforeId?: number
+  limit?: number
+  action?: AuditAction | null
+  search?: string
+}
+
+export interface AuditEventsPage {
+  events: AuditEvent[]
+  hasMore: boolean
+}
+
 export interface AccessRecordsResult {
   records: AccessRecord[]
   retentionDays: number

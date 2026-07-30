@@ -1,6 +1,7 @@
 use super::*;
 
 const MAX_AUDIT_QUERY_LIMIT: u32 = 500;
+const MAX_AUDIT_SEARCH_CHARACTERS: usize = 120;
 
 pub(super) async fn insert_audit_event(
     transaction: &mut Transaction<'_, Sqlite>,
@@ -53,36 +54,58 @@ fn row_to_audit_event(row: SqliteRow) -> Result<AuditEvent> {
 
 #[async_trait]
 impl AuditLogRepository for SqliteUserRepository {
-    async fn list_audit_events(
-        &self,
-        before_audit_id: Option<i64>,
-        limit: u32,
-    ) -> Result<Vec<AuditEvent>> {
-        let limit = limit.clamp(1, MAX_AUDIT_QUERY_LIMIT);
-        let rows = match before_audit_id {
-            Some(before) if before > 0 => {
-                sqlx::query(
-                    "SELECT audit_id, action, actor_account_id, actor_login_name, target_kind, \
-                     target_id, target_name, context_id, reason, previous_value, new_value, created_at \
-                     FROM operation_audits WHERE audit_id < ? \
-                     ORDER BY audit_id DESC LIMIT ?",
-                )
-                .bind(before)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            _ => {
-                sqlx::query(
-                    "SELECT audit_id, action, actor_account_id, actor_login_name, target_kind, \
-                     target_id, target_name, context_id, reason, previous_value, new_value, created_at \
-                     FROM operation_audits ORDER BY audit_id DESC LIMIT ?",
-                )
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-            }
-        };
+    async fn list_audit_events(&self, query: AuditEventQuery) -> Result<Vec<AuditEvent>> {
+        let limit = query.limit.clamp(1, MAX_AUDIT_QUERY_LIMIT);
+        let search = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if search.is_some_and(|value| value.chars().count() > MAX_AUDIT_SEARCH_CHARACTERS) {
+            return Err(ValidationError::InvalidAccountField(format!(
+                "审计搜索关键字不能超过 {MAX_AUDIT_SEARCH_CHARACTERS} 个字符"
+            ))
+            .into());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT audit_id, action, actor_account_id, actor_login_name, target_kind, \
+             target_id, target_name, context_id, reason, previous_value, new_value, created_at \
+             FROM operation_audits WHERE 1 = 1",
+        );
+        if let Some(before) = query.before_audit_id.filter(|value| *value > 0) {
+            builder.push(" AND audit_id < ").push_bind(before);
+        }
+        if let Some(action) = query.action {
+            builder.push(" AND action = ").push_bind(action.as_str());
+        }
+        if let Some(search) = search {
+            let pattern = format!("%{}%", escape_like(search));
+            builder.push(" AND (actor_login_name LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR actor_account_id LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR target_name LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR target_id LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR COALESCE(reason, '') LIKE ");
+            builder.push_bind(pattern.clone());
+            builder.push(" ESCAPE '\\' OR COALESCE(context_id, '') LIKE ");
+            builder.push_bind(pattern);
+            builder.push(" ESCAPE '\\')");
+        }
+        builder
+            .push(" ORDER BY audit_id DESC LIMIT ")
+            .push_bind(i64::from(limit));
+        let rows = builder.build().fetch_all(&self.pool).await?;
         rows.into_iter().map(row_to_audit_event).collect()
     }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }

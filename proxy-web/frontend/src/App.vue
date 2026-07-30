@@ -55,6 +55,7 @@ import {
   updateManagedUser,
   updateMyProfile,
   type AccessRecord,
+  type AuditAction,
   type AuditEvent,
   type AgentDeviceAuthorizationInspection,
   type AccountRole,
@@ -70,6 +71,7 @@ import {
 
 type AuthMode = 'login' | 'register'
 type AppPage = 'account' | 'admin'
+type AdminSection = 'users' | 'approvals' | 'proxies' | 'audit'
 
 const PASSWORD_MIN_CHARACTERS = 8
 const AGENT_AUTHORIZATION_STORAGE_KEY = 'ppaass-agent-authorization'
@@ -198,6 +200,12 @@ const proxyAddresses = ref<ProxyAddress[]>([])
 const adminLoading = ref(false)
 const keyRequestsLoading = ref(false)
 const auditEventsLoading = ref(false)
+const auditEventsLoadingMore = ref(false)
+const auditEventsHasMore = ref(false)
+const auditEventsLoaded = ref(false)
+const auditSearch = ref('')
+const auditAction = ref<AuditAction | null>(null)
+const activeAdminSection = ref<AdminSection>('users')
 const adminSearch = ref('')
 const createVisible = ref(false)
 const createSaving = ref(false)
@@ -337,6 +345,32 @@ const adminMetrics = computed(() => {
     pending: adminKeyRequests.value.length,
   }
 })
+const adminSectionOptions = computed(() => [
+  {
+    value: 'users' as const,
+    label: '用户列表',
+    icon: 'pi pi-users',
+    count: adminMetrics.value.total,
+  },
+  {
+    value: 'approvals' as const,
+    label: '密钥审批',
+    icon: 'pi pi-key',
+    count: adminMetrics.value.pending,
+  },
+  {
+    value: 'proxies' as const,
+    label: 'Proxy 节点',
+    icon: 'pi pi-server',
+    count: proxyAddresses.value.length,
+  },
+  {
+    value: 'audit' as const,
+    label: '操作审计',
+    icon: 'pi pi-shield',
+    count: null,
+  },
+])
 const editingProfileReadOnly = computed(() => {
   const user = editingUser.value
   return (
@@ -427,6 +461,9 @@ watch(activePage, async (page) => {
   }
   if (page === 'admin' && isAdmin.value) {
     await refreshAdminUsers()
+    if (activeAdminSection.value === 'audit') {
+      await refreshAuditEvents()
+    }
   }
 })
 
@@ -826,15 +863,13 @@ async function refreshAdminUsers(): Promise<void> {
   }
   adminLoading.value = true
   keyRequestsLoading.value = true
-  auditEventsLoading.value = true
   try {
-    const [usersResult, requestsResult, settingsResult, addressesResult, auditsResult] =
+    const [usersResult, requestsResult, settingsResult, addressesResult] =
       await Promise.allSettled([
         listManagedUsers(),
         listPendingKeyRequests(),
         getAccessLogSettings(),
         listProxyAddresses(),
-        listAuditEvents(),
       ])
     if (usersResult.status === 'fulfilled') {
       adminUsers.value = usersResult.value
@@ -856,26 +891,77 @@ async function refreshAdminUsers(): Promise<void> {
     } else {
       showError('无法读取 Proxy 地址目录', addressesResult.reason)
     }
-    if (auditsResult.status === 'fulfilled') {
-      adminAuditEvents.value = auditsResult.value
-    } else {
-      showError('无法读取操作审计', auditsResult.reason)
-    }
+    auditEventsLoaded.value = false
   } finally {
     adminLoading.value = false
     keyRequestsLoading.value = false
-    auditEventsLoading.value = false
   }
 }
 
 async function refreshAuditEvents(): Promise<void> {
   auditEventsLoading.value = true
   try {
-    adminAuditEvents.value = await listAuditEvents()
+    const page = await listAuditEvents({
+      limit: 50,
+      search: auditSearch.value,
+      action: auditAction.value,
+    })
+    adminAuditEvents.value = page.events
+    auditEventsHasMore.value = page.hasMore
+    auditEventsLoaded.value = true
   } catch (error) {
     showError('无法读取操作审计', error)
   } finally {
     auditEventsLoading.value = false
+  }
+}
+
+async function selectAdminSection(section: AdminSection): Promise<void> {
+  activeAdminSection.value = section
+  if (section === 'audit' && !auditEventsLoaded.value) {
+    await refreshAuditEvents()
+  }
+}
+
+async function filterAuditEvents(
+  search: string,
+  action: AuditAction | null,
+): Promise<void> {
+  auditSearch.value = search
+  auditAction.value = action
+  await refreshAuditEvents()
+}
+
+async function loadMoreAuditEvents(): Promise<void> {
+  if (
+    auditEventsLoading.value ||
+    auditEventsLoadingMore.value ||
+    !auditEventsHasMore.value
+  ) {
+    return
+  }
+  const beforeId =
+    adminAuditEvents.value[adminAuditEvents.value.length - 1]?.id
+  if (!beforeId) {
+    return
+  }
+  auditEventsLoadingMore.value = true
+  try {
+    const page = await listAuditEvents({
+      beforeId,
+      limit: 50,
+      search: auditSearch.value,
+      action: auditAction.value,
+    })
+    const knownIds = new Set(adminAuditEvents.value.map((event) => event.id))
+    adminAuditEvents.value.push(
+      ...page.events.filter((event) => !knownIds.has(event.id)),
+    )
+    auditEventsHasMore.value = page.hasMore
+  } catch (error) {
+    showError('无法加载更早的操作审计', error)
+  } finally {
+    auditEventsLoadingMore.value = false
   }
 }
 
@@ -2469,7 +2555,26 @@ function clearAgentAuthorizationLocation(): void {
           </article>
         </div>
 
-        <section class="content-card approval-card">
+        <nav class="admin-section-tabs" aria-label="管理员工作区" role="tablist">
+          <button
+            v-for="section in adminSectionOptions"
+            :key="section.value"
+            type="button"
+            role="tab"
+            :aria-selected="activeAdminSection === section.value"
+            :class="{ active: activeAdminSection === section.value }"
+            @click="selectAdminSection(section.value)"
+          >
+            <i :class="section.icon" />
+            <span>{{ section.label }}</span>
+            <small v-if="section.count !== null">{{ section.count }}</small>
+          </button>
+        </nav>
+
+        <section
+          v-if="activeAdminSection === 'approvals'"
+          class="content-card approval-card"
+        >
           <div class="approval-card-heading">
             <div class="approval-title">
               <span class="approval-title-icon"><i class="pi pi-key" /></span>
@@ -2564,12 +2669,16 @@ function clearAgentAuthorizationLocation(): void {
         </section>
 
         <ProxyAddressCatalog
+          v-if="activeAdminSection === 'proxies'"
           :addresses="proxyAddresses"
           :loading="adminLoading"
           @changed="refreshAdminUsers"
         />
 
-        <section class="content-card retention-card">
+        <section
+          v-if="activeAdminSection === 'audit'"
+          class="content-card retention-card"
+        >
           <div class="retention-copy">
             <span class="retention-icon"><i class="pi pi-history" /></span>
             <div>
@@ -2605,12 +2714,22 @@ function clearAgentAuthorizationLocation(): void {
         </section>
 
         <AuditEventPanel
+          v-if="activeAdminSection === 'audit'"
+          :action="auditAction"
           :events="adminAuditEvents"
+          :has-more="auditEventsHasMore"
           :loading="auditEventsLoading"
+          :loading-more="auditEventsLoadingMore"
+          :search="auditSearch"
+          @filter="filterAuditEvents"
+          @load-more="loadMoreAuditEvents"
           @refresh="refreshAuditEvents"
         />
 
-        <section class="content-card users-card">
+        <section
+          v-if="activeAdminSection === 'users'"
+          class="content-card users-card"
+        >
           <div class="table-toolbar">
             <div>
               <h2>用户列表</h2>

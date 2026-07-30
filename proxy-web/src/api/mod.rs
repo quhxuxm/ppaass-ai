@@ -16,15 +16,15 @@ use proxy_user_store::{
     AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
     AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
-    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, AuditEvent, AuditLogRepository,
-    DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION, ExternalIdentity, KEY_ROTATE_PERMISSION,
-    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestKind, KeyRequestRejection,
-    KeyRequestStatus, MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate, NewAgentDeviceAuthorization,
-    NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser, NewUserAccount,
-    PRIVATE_KEY_READ_PERMISSION, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate,
-    UserOrigin, UserRecord, UserRepository, UserRepositoryError, UserUpdate, WebAccount,
-    normalize_username, parse_expires_at,
+    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, AuditAction, AuditEvent, AuditEventQuery,
+    AuditLogRepository, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION, ExternalIdentity,
+    KEY_ROTATE_PERMISSION, KeyGenerationRequest, KeyPairRotation, KeyRequestApproval,
+    KeyRequestKind, KeyRequestRejection, KeyRequestStatus, MAX_ACCESS_LOG_QUERY_LIMIT,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
+    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser,
+    NewUserAccount, PRIVATE_KEY_READ_PERMISSION, ProxyAddress, ProxyAddressRepository,
+    ProxyAddressUpdate, UserOrigin, UserRecord, UserRepository, UserRepositoryError, UserUpdate,
+    WebAccount, normalize_username, parse_expires_at,
 };
 use rand::RngExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -58,6 +58,7 @@ const REQUEST_TIMEOUT_SECONDS: u64 = 180;
 const MAX_AGENT_PRIVATE_KEY_BYTES: usize = 16 * 1024;
 const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
 const DEFAULT_ACCESS_RECORD_LIMIT: u32 = 100;
+const MAX_AUDIT_SEARCH_CHARACTERS: usize = 120;
 const SECONDS_PER_DAY: i64 = 86_400;
 const RSA_BITS: usize = 2048;
 const AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS: i64 = 10 * 60;

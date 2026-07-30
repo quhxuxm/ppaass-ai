@@ -101,6 +101,34 @@ async fn audit_events_are_admin_only_and_record_actor_reason_and_change() {
                 && event["reason"] == "复核完成，恢复登录和代理连接"
         }));
     }
+
+    let filtered = get_audits_at(
+        &app,
+        &admin_cookie,
+        "/api/v1/admin/audit-events?limit=100&action=permissions_updated&search=audit-user",
+    )
+    .await;
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let filtered = json_body(filtered).await;
+    let filtered = filtered["events"].as_array().unwrap();
+    assert!(!filtered.is_empty());
+    assert!(filtered.iter().all(|event| {
+        event["action"] == "permissions_updated" && event["target_name"] == "audit-user"
+    }));
+
+    let wildcard = get_audits_at(
+        &app,
+        &admin_cookie,
+        "/api/v1/admin/audit-events?limit=100&search=%25",
+    )
+    .await;
+    assert_eq!(wildcard.status(), StatusCode::OK);
+    assert!(
+        json_body(wildcard).await["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -298,10 +326,14 @@ async fn key_and_proxy_server_audits_require_admin_reasons() {
 }
 
 async fn get_audits(app: &Router, cookie: &str) -> Response {
+    get_audits_at(app, cookie, "/api/v1/admin/audit-events?limit=100").await
+}
+
+async fn get_audits_at(app: &Router, cookie: &str, uri: &str) -> Response {
     app.clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/admin/audit-events?limit=100")
+                .uri(uri)
                 .header(header::COOKIE, cookie)
                 .body(Body::empty())
                 .unwrap(),

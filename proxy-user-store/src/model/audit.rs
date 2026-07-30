@@ -88,6 +88,14 @@ pub struct AuditEvent {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditEventQuery {
+    pub before_audit_id: Option<i64>,
+    pub limit: u32,
+    pub action: Option<AuditAction>,
+    pub search: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewAuditEvent {
     pub action: AuditAction,

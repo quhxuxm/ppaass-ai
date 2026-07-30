@@ -164,6 +164,10 @@ pub(crate) struct AuditEventsQuery {
     pub(crate) before_audit_id: Option<i64>,
     #[serde(default = "default_audit_event_limit")]
     pub(crate) limit: u32,
+    #[serde(default)]
+    pub(crate) action: Option<AuditAction>,
+    #[serde(default)]
+    pub(crate) search: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
