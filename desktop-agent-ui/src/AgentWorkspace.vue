@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
 import ProgressSpinner from "primevue/progressspinner";
+import AdminKeyRequestsView from "./views/AdminKeyRequestsView.vue";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppIcon from "./components/AppIcon";
 import AppTopbar from "./components/AppTopbar.vue";
@@ -17,11 +18,24 @@ import TomlView from "./views/TomlView.vue";
 import { applyColorTheme, colorThemes, loadColorTheme, type ColorTheme } from "./colorThemes";
 import { languageOptions, useI18n, type AppLocale } from "./i18n";
 import { resolveAgentCapabilities } from "./agentPermissions";
-import type { AgentAuthAccount, TabKey } from "./types";
+import type {
+  AgentAdminKeyRequest,
+  AgentAdminKeyRequestApproval,
+  AgentAdminProxyAddress,
+  AgentAuthAccount,
+  AgentAuthState,
+  TabKey
+} from "./types";
 
 const props = defineProps<{
   account: AgentAuthAccount;
+  accountStatus: AgentAuthState["account_status"];
   accountManagementBusy: boolean;
+  adminKeyRequests: AgentAdminKeyRequest[];
+  adminProxyAddresses: AgentAdminProxyAddress[];
+  adminRequestsLoading: boolean;
+  adminRequestBusyId: string | null;
+  adminRequestError: string;
   canRotateKey: boolean;
   keyRotationBusy: boolean;
   logoutBusy: boolean;
@@ -29,6 +43,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   manageAccount: [];
+  refreshAdminRequests: [];
+  approveAdminRequest: [request: AgentAdminKeyRequestApproval];
+  rejectAdminRequest: [requestId: string];
   rotateKey: [];
   logout: [];
 }>();
@@ -87,6 +104,9 @@ const visibleTabs = computed(() =>
     (tab) =>
       (tab.key !== "capture" ||
         capabilities.value.canCapturePackets) &&
+      (tab.key !== "admin-requests" ||
+        (props.account.role === "admin" &&
+          props.accountStatus === "active")) &&
       (tab.key !== "egress" ||
         capabilities.value.canEditEgress) &&
       (tab.key !== "toml" ||
@@ -147,6 +167,7 @@ function setLanguage(language: AppLocale) {
         :account-username="account.username"
         :account-role="account.role"
         :account-management-busy="accountManagementBusy"
+        :admin-request-count="adminKeyRequests.length"
         :can-rotate-key="canRotateKey"
         :key-rotation-busy="keyRotationBusy"
         :logout-busy="logoutBusy"
@@ -205,6 +226,22 @@ function setLanguage(language: AppLocale) {
           :agent-running="running"
           @add-direct-rules="addDirectRulesAndRestart"
           @remove-direct-rules="removeDirectRulesAndRestart"
+        />
+
+        <AdminKeyRequestsView
+          v-else-if="
+            state.activeTab === 'admin-requests' &&
+            account.role === 'admin' &&
+            accountStatus === 'active'
+          "
+          :requests="adminKeyRequests"
+          :proxy-addresses="adminProxyAddresses"
+          :loading="adminRequestsLoading"
+          :busy-request-id="adminRequestBusyId"
+          :error="adminRequestError"
+          @refresh="emit('refreshAdminRequests')"
+          @approve="emit('approveAdminRequest', $event)"
+          @reject="emit('rejectAdminRequest', $event)"
         />
 
         <ForwardingView

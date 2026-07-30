@@ -10,7 +10,12 @@ use crate::auth::AgentAccessToken;
 use crate::logging::UiLogBuffer;
 #[cfg(windows)]
 use crate::models::VerifiedProxyAuthStatus;
-use crate::models::{AgentAuthAccount, AgentAuthAccountStatus, AgentConfigSummary};
+use crate::models::{
+    AgentAdminKeyRequestInbox, AgentAdminKeyRequestUpdate, AgentAuthAccount,
+    AgentAuthAccountStatus, AgentConfigSummary,
+};
+
+mod admin_key_requests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentPermissionTrust {
@@ -97,6 +102,9 @@ pub(crate) struct AgentRuntime {
     permission_sync_error: Mutex<Option<String>>,
     pub(crate) permission_sync_in_progress: AtomicBool,
     pub(crate) permission_sync_notify: tokio::sync::Notify,
+    admin_key_request_inbox: Mutex<AgentAdminKeyRequestInbox>,
+    pub(crate) admin_key_request_poll_in_progress: AtomicBool,
+    pub(crate) admin_key_request_poll_notify: tokio::sync::Notify,
     pub(crate) resume_after_proxy_assignment: AtomicBool,
     pending_device_authorization: Mutex<Option<PendingAgentDeviceAuthorization>>,
     next_device_authorization_id: AtomicU64,
@@ -125,6 +133,9 @@ impl AgentRuntime {
             permission_sync_error: Mutex::new(None),
             permission_sync_in_progress: AtomicBool::new(false),
             permission_sync_notify: tokio::sync::Notify::new(),
+            admin_key_request_inbox: Mutex::new(AgentAdminKeyRequestInbox::default()),
+            admin_key_request_poll_in_progress: AtomicBool::new(false),
+            admin_key_request_poll_notify: tokio::sync::Notify::new(),
             resume_after_proxy_assignment: AtomicBool::new(false),
             pending_device_authorization: Mutex::new(None),
             next_device_authorization_id: AtomicU64::new(1),
@@ -180,7 +191,9 @@ impl AgentRuntime {
             .permission_sync_error
             .lock()
             .map_err(|_| "权限同步状态锁已损坏".to_string())? = None;
+        self.clear_admin_key_request_inbox()?;
         self.permission_sync_notify.notify_one();
+        self.admin_key_request_poll_notify.notify_one();
         Ok(())
     }
 
@@ -267,6 +280,7 @@ impl AgentRuntime {
             .map(|mut session| session.take());
         if matches!(&result, Ok(Some(_))) {
             let _ = self.set_permission_sync_error(None);
+            let _ = self.clear_admin_key_request_inbox();
         }
         result
     }

@@ -36,4 +36,16 @@ public final class AgentUiPermissionPolicyTest {
                         "proxy.example:1234",
                         "attacker.example:9999"));
     }
+
+    @Test
+    public void roleParticipatesInPermissionFingerprint() {
+        assertEquals(
+                "U111",
+                AgentUiPermissionPolicy.permissionFingerprint(
+                        false, true, true, true));
+        assertEquals(
+                "A111",
+                AgentUiPermissionPolicy.permissionFingerprint(
+                        true, true, true, true));
+    }
 }

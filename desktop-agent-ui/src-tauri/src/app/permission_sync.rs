@@ -125,6 +125,7 @@ pub(crate) async fn sync_agent_permissions_once(
         "Agent 用户权限同步成功"
     );
     emit_auth_state(app, runtime);
+    runtime.admin_key_request_poll_notify.notify_one();
     if updated.account_status != AgentAuthAccountStatus::Active {
         let status = match updated.account_status {
             AgentAuthAccountStatus::Active => return,

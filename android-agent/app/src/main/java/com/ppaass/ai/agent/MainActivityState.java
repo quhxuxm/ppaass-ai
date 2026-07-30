@@ -194,9 +194,11 @@ protected final Runnable statusRefresh = new Runnable() {
     }
 
     protected String agentPermissionFingerprint() {
-        return (hasAgentPermission(AgentPermissions.PACKET_CAPTURE) ? "1" : "0")
-                + (hasAgentPermission(AgentPermissions.EGRESS_EDIT) ? "1" : "0")
-                + (hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT) ? "1" : "0");
+        return AgentUiPermissionPolicy.permissionFingerprint(
+                AgentAuthSession.isAdmin(this),
+                hasAgentPermission(AgentPermissions.PACKET_CAPTURE),
+                hasAgentPermission(AgentPermissions.EGRESS_EDIT),
+                hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT));
     }
 
     protected void reloadUiPalette() {

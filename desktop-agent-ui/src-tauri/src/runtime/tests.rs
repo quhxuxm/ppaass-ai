@@ -7,8 +7,8 @@ use super::{
 };
 use crate::auth::validated_agent_access_token;
 use crate::models::{
-    AgentAuthAccount, AgentAuthAccountStatus, AGENT_EGRESS_EDIT_PERMISSION,
-    AGENT_PACKET_CAPTURE_PERMISSION,
+    AgentAdminKeyRequest, AgentAdminKeyRequestInbox, AgentAuthAccount, AgentAuthAccountStatus,
+    AGENT_EGRESS_EDIT_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
 };
 
 #[test]
@@ -37,6 +37,46 @@ fn device_authorization_cancellation_and_generation_check_are_fail_closed() {
     assert!(!runtime
         .take_pending_device_authorization_if(challenge.id)
         .unwrap());
+}
+
+#[test]
+fn admin_inbox_compares_request_ids_and_removes_decisions() {
+    let runtime = AgentRuntime::new();
+    let first = admin_inbox(&["kreq_1"]);
+    let (_, new_ids) = runtime
+        .replace_admin_key_request_inbox(first.clone())
+        .unwrap();
+    assert_eq!(new_ids, ["kreq_1"]);
+
+    let (_, new_ids) = runtime.replace_admin_key_request_inbox(first).unwrap();
+    assert!(new_ids.is_empty());
+
+    let (_, new_ids) = runtime
+        .replace_admin_key_request_inbox(admin_inbox(&["kreq_1", "kreq_2"]))
+        .unwrap();
+    assert_eq!(new_ids, ["kreq_2"]);
+    let update = runtime.remove_admin_key_request("kreq_1").unwrap();
+    assert_eq!(update.inbox.requests[0].request_id, "kreq_2");
+
+    runtime
+        .set_authenticated_session(AuthenticatedAgentSession::new(
+            account("admin", &[]),
+            AgentAuthAccountStatus::Active,
+            managed_proxy_addresses(),
+            AgentSessionCredentials::new(
+                PathBuf::from("private.pem"),
+                PathBuf::from("proxy.pem"),
+                "https://proxy.example.com".to_string(),
+                Some(token("A")),
+            ),
+            AgentPermissionTrust::ServerVerified,
+        ))
+        .unwrap();
+    assert!(runtime
+        .admin_key_request_inbox()
+        .unwrap()
+        .requests
+        .is_empty());
 }
 
 #[test]
@@ -188,4 +228,23 @@ fn account(role: &str, permissions: &[&str]) -> AgentAuthAccount {
 
 fn token(prefix: &str) -> crate::auth::AgentAccessToken {
     validated_agent_access_token(prefix.repeat(43), 4_000_000_000, 300).unwrap()
+}
+
+fn admin_inbox(request_ids: &[&str]) -> AgentAdminKeyRequestInbox {
+    AgentAdminKeyRequestInbox {
+        requests: request_ids
+            .iter()
+            .map(|request_id| AgentAdminKeyRequest {
+                request_id: (*request_id).to_string(),
+                username: "alice".to_string(),
+                display_name: None,
+                email: None,
+                request_message: None,
+                kind: "initial".to_string(),
+                requested_at: 1_800_000_000,
+                proxy_address_ids: Vec::new(),
+            })
+            .collect(),
+        proxy_addresses: Vec::new(),
+    }
 }

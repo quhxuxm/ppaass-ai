@@ -22,7 +22,7 @@ import java.text.*;
 import java.util.*;
 
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
-abstract class MainActivityScreens extends MainActivityPacketCapture {
+abstract class MainActivityScreens extends MainActivityAdminApprovals {
 
 protected void buildUi() {
         preparePacketCaptureUiForBuild();
@@ -76,6 +76,8 @@ protected void buildUi() {
         addScreenTab(screenTabs, "状态", statusScreen);
         buildStatusScreen(statusScreen);
 
+        addAdminApprovalScreenIfNeeded(screenTabs, pages);
+
         if (hasAgentPermission(AgentPermissions.PACKET_CAPTURE)) {
             LinearLayout captureScreen = screenPage(pages);
             captureScreenIndex = screenPages.size() - 1;
@@ -99,7 +101,7 @@ protected void buildUi() {
         }
 
         appliedAgentPermissionFingerprint = agentPermissionFingerprint();
-        selectScreen(0);
+        selectScreen(initialScreenIndex());
         updateVpnToggle();
         updateHttpProxyToggle();
         updateStatusMetrics();

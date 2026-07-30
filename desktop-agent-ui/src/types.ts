@@ -1,6 +1,15 @@
 import type { AppIconName } from "./components/AppIcon";
 
-export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "capture" | "diagnostics" | "logs" | "toml";
+export type TabKey =
+  | "overview"
+  | "admin-requests"
+  | "forwarding"
+  | "egress"
+  | "routing"
+  | "capture"
+  | "diagnostics"
+  | "logs"
+  | "toml";
 export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
@@ -52,6 +61,40 @@ export type AgentAuthState = {
   account_status: "active" | "expired" | "disabled" | null;
   permission_sync_error: string | null;
   config: LoadedAgentConfig | null;
+};
+
+export type AgentAdminKeyRequest = {
+  request_id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  request_message: string | null;
+  kind: "initial" | "rotate";
+  requested_at: number;
+  proxy_address_ids: string[];
+};
+
+export type AgentAdminProxyAddress = {
+  proxy_address_id: string;
+  label: string;
+  address: string;
+  enabled: boolean;
+};
+
+export type AgentAdminKeyRequestInbox = {
+  requests: AgentAdminKeyRequest[];
+  proxy_addresses: AgentAdminProxyAddress[];
+};
+
+export type AgentAdminKeyRequestUpdate = {
+  inbox: AgentAdminKeyRequestInbox;
+  error: string | null;
+};
+
+export type AgentAdminKeyRequestApproval = {
+  requestId: string;
+  expiresAt: number;
+  proxyAddressIds: string[];
 };
 
 export type AgentLoginRequest = {

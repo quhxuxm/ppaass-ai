@@ -10,6 +10,7 @@ defineProps<{
   accountUsername: string;
   accountRole: "user" | "admin";
   accountManagementBusy: boolean;
+  adminRequestCount: number;
   canRotateKey: boolean;
   keyRotationBusy: boolean;
   logoutBusy: boolean;
@@ -53,9 +54,33 @@ const emit = defineEmits<{
       <Button
         v-for="tab in tabs"
         :key="tab.key"
-        :class="['nav-button', { active: activeTab === tab.key }]"
+        :class="[
+          'nav-button',
+          {
+            active: activeTab === tab.key,
+            'nav-button-count-badge':
+              tab.key === 'admin-requests' && adminRequestCount > 0,
+            'nav-button-count-badge-wide':
+              tab.key === 'admin-requests' && adminRequestCount > 9
+          }
+        ]"
         :label="tab.label"
         :title="tab.label"
+        :badge="
+          tab.key === 'admin-requests' && adminRequestCount
+            ? String(adminRequestCount)
+            : undefined
+        "
+        :badge-class="
+          tab.key === 'admin-requests' && adminRequestCount
+            ? {
+                'nav-request-badge': true,
+                'nav-request-badge-circle': adminRequestCount < 10,
+                'nav-request-badge-wide': adminRequestCount >= 10
+              }
+            : undefined
+        "
+        badge-severity="danger"
         text
         @click="emit('update:activeTab', tab.key)"
       >

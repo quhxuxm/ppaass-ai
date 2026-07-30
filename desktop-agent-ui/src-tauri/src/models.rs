@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+mod admin_key_requests;
+pub(crate) use admin_key_requests::*;
+
 pub(crate) const AGENT_PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
 pub(crate) const AGENT_EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
 pub(crate) const AGENT_RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
@@ -223,8 +226,9 @@ pub(crate) struct VerifiedProxyAuthStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress,
-        AgentKeyRotationRequest, AgentLoginRequest, AGENT_PACKET_CAPTURE_PERMISSION,
+        AgentAdminKeyRequestApproval, AgentAdminKeyRequestRejection, AgentAuthAccount,
+        AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress, AgentKeyRotationRequest,
+        AgentLoginRequest, AGENT_PACKET_CAPTURE_PERMISSION,
     };
 
     #[test]
@@ -256,6 +260,27 @@ mod tests {
             "proxyWebUrl": "https://attacker.example.com"
         }));
         assert!(rejected.is_err());
+    }
+
+    #[test]
+    fn admin_key_request_commands_reject_unknown_or_missing_fields() {
+        let approval = serde_json::json!({
+            "requestId": "kreq_1",
+            "expiresAt": 4_000_000_000_i64,
+            "proxyAddressIds": ["pxy_1"]
+        });
+        assert!(serde_json::from_value::<AgentAdminKeyRequestApproval>(approval.clone()).is_ok());
+        let mut unexpected = approval;
+        unexpected["agentAccessToken"] = serde_json::json!("must-stay-in-rust");
+        assert!(serde_json::from_value::<AgentAdminKeyRequestApproval>(unexpected).is_err());
+        assert!(serde_json::from_value::<AgentAdminKeyRequestRejection>(
+            serde_json::json!({"requestId": "kreq_1"})
+        )
+        .is_ok());
+        assert!(serde_json::from_value::<AgentAdminKeyRequestRejection>(
+            serde_json::json!({"requestId": "kreq_1", "username": "alice"})
+        )
+        .is_err());
     }
 
     #[test]

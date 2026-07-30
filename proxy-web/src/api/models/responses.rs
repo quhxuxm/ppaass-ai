@@ -156,6 +156,7 @@ pub(crate) struct MyKeyRequestResponse {
 pub(crate) struct AdminKeyRequestResponse {
     pub(crate) request_id: String,
     pub(crate) account: WebAccount,
+    pub(crate) proxy_address_ids: Vec<String>,
     pub(crate) request_message: Option<String>,
     pub(crate) kind: KeyRequestKind,
     pub(crate) status: KeyRequestStatus,

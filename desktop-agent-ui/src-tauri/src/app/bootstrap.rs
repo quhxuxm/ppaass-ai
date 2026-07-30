@@ -38,6 +38,7 @@ pub(crate) fn run() {
     let setup_runtime = runtime.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             restore_main_window(app);
         }))
@@ -53,6 +54,7 @@ pub(crate) fn run() {
                 }
             }
             start_agent_permission_sync(app.handle().clone(), setup_runtime.clone());
+            start_agent_admin_key_request_polling(app.handle().clone(), setup_runtime.clone());
             start_verified_proxy_auth_status_listener(app.handle().clone(), setup_runtime.clone());
             #[cfg(windows)]
             start_windows_service_auth_failure_listener(
@@ -72,6 +74,10 @@ pub(crate) fn run() {
                 window
                     .state::<Arc<AgentRuntime>>()
                     .permission_sync_notify
+                    .notify_one();
+                window
+                    .state::<Arc<AgentRuntime>>()
+                    .admin_key_request_poll_notify
                     .notify_one();
             }
             #[cfg(any(windows, target_os = "macos"))]
@@ -115,6 +121,10 @@ pub(crate) fn run() {
             get_packet_capture_runtime_status,
             set_packet_capture_enabled,
             clear_packet_capture,
+            get_agent_admin_key_request_inbox,
+            refresh_agent_admin_key_requests,
+            approve_agent_admin_key_request_command,
+            reject_agent_admin_key_request_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PPAASS Desktop Agent UI");

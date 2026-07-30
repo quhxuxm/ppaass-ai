@@ -4,7 +4,7 @@ pub(crate) async fn admin_list_proxy_addresses(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ProxyAddressesResponse>, ApiError> {
-    require_admin(&state, &headers).await?;
+    require_admin_actor(&state, &headers, false).await?;
     let proxy_addresses = state
         .proxy_addresses
         .list_proxy_addresses()

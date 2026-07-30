@@ -24,14 +24,20 @@ final class AgentProfileSyncManager {
 
     static synchronized void start(Context context) {
         applicationContext = context.getApplicationContext();
+        AgentAdminRequestSynchronizer.prepare(applicationContext);
         generation++;
         cancelScheduled();
         schedule(generation, 0);
     }
 
     static synchronized void stop() {
+        Context context = applicationContext;
         generation++;
         cancelScheduled();
+        applicationContext = null;
+        if (context != null) {
+            AgentAdminRequestSynchronizer.clear(context);
+        }
     }
 
     static synchronized void requestImmediateSync(Context context) {
@@ -78,6 +84,9 @@ final class AgentProfileSyncManager {
                 return;
             }
             AgentAuthSession.applySynchronizedProfile(context, result);
+            AgentAdminRequestSynchronizer.synchronize(
+                    context,
+                    result.accessToken);
             nextInterval = result.refreshAfterSeconds;
             Log.i(TAG, "Agent account permissions synchronized");
         } catch (AgentAuthClient.SyncException error) {

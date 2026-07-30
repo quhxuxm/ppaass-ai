@@ -30,6 +30,10 @@ public class MainActivity extends MainActivityAccountManagement {
                     runOnUiThread(this::refreshAgentPermissionUi);
                     return;
                 }
+                if (AgentAdminRequestStore.PREF_REVISION.equals(key)) {
+                    runOnUiThread(this::onAdminRequestStateChanged);
+                    return;
+                }
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
                         || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)
                         || PpaassVpnService.PREF_MOCK_GEO_REQUESTED.equals(key)
@@ -122,6 +126,7 @@ public class MainActivity extends MainActivityAccountManagement {
             return;
         }
         AgentProfileSyncManager.requestImmediateSync(this);
+        maybeRequestAdminNotificationPermission();
         cleanupStaleMockGeoState();
         restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
@@ -171,6 +176,15 @@ public class MainActivity extends MainActivityAccountManagement {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (hasAuthenticatedAgentSession()) {
+            openAdminApprovalScreenFromIntent();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         statusHandler.removeCallbacks(statusRefresh);
         if (appSelectorDialog != null) {
@@ -205,7 +219,11 @@ public class MainActivity extends MainActivityAccountManagement {
             String[] permissions,
             int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        handleMockGeoPermissionResult(requestCode, grantResults);
+        if (requestCode == ADMIN_NOTIFICATION_PERMISSION_REQUEST) {
+            onAdminNotificationPermissionResult(grantResults);
+        } else {
+            handleMockGeoPermissionResult(requestCode, grantResults);
+        }
     }
 
     @Override

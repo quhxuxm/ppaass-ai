@@ -11,12 +11,13 @@ use crate::agent::{
     start_agent_command, stop_agent_inner_command,
 };
 use crate::auth::{
-    account_management_page_url, apply_permission_snapshot, authenticate_and_download,
-    authenticate_rotate_and_download, cleanup_old_managed_private_keys,
+    account_management_page_url, apply_permission_snapshot, approve_agent_admin_key_request,
+    authenticate_and_download, authenticate_rotate_and_download, cleanup_old_managed_private_keys,
     destroy_managed_private_key, destroy_managed_proxy_identity_public_key,
-    destroy_persisted_agent_login, fetch_agent_permission_snapshot, load_persisted_agent_login,
-    open_system_browser, persist_agent_login, persist_unassigned_agent_login,
-    poll_device_authorization, request_account_management_handoff, start_device_authorization,
+    destroy_persisted_agent_login, fetch_agent_admin_key_request_inbox,
+    fetch_agent_permission_snapshot, load_persisted_agent_login, open_system_browser,
+    persist_agent_login, persist_unassigned_agent_login, poll_device_authorization,
+    reject_agent_admin_key_request, request_account_management_handoff, start_device_authorization,
     write_managed_private_key, write_managed_proxy_identity_public_key, DeviceAuthorizationPoll,
     DownloadedCredential,
 };
@@ -39,10 +40,11 @@ use crate::macos_helper::{
 #[cfg(windows)]
 use crate::models::ServiceRequest;
 use crate::models::{
-    AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState, AgentConfigSummary,
-    AgentDeviceLoginProgress, AgentKeyRotationRequest, AgentLoginRequest, AgentState,
-    ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
-    AGENT_PACKET_CAPTURE_PERMISSION,
+    AgentAdminKeyRequestApproval, AgentAdminKeyRequestInbox, AgentAdminKeyRequestRejection,
+    AgentAdminKeyRequestUpdate, AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState,
+    AgentConfigSummary, AgentDeviceLoginProgress, AgentKeyRotationRequest, AgentLoginRequest,
+    AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
+    PacketCaptureRuntimeStatus, AGENT_PACKET_CAPTURE_PERMISSION,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
@@ -63,6 +65,7 @@ use crate::windows_service::{
     service_config_root_from_args, windows_service_auth_status, INSTALL_SERVICE_ARG, SERVICE_ARG,
 };
 
+mod admin_key_requests;
 mod bootstrap;
 mod config_commands;
 mod login_commands;
@@ -71,6 +74,7 @@ mod provisioning;
 mod state;
 mod telemetry_commands;
 
+pub(crate) use admin_key_requests::*;
 pub(crate) use bootstrap::*;
 pub(crate) use config_commands::*;
 pub(crate) use login_commands::*;

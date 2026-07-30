@@ -369,6 +369,7 @@ pub(crate) fn report_verified_proxy_auth_status(
             .logs
             .push(format!("通知界面 Proxy 账号状态失败：{error}"));
     }
+    runtime.admin_key_request_poll_notify.notify_one();
 }
 
 pub(crate) fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {

@@ -5,13 +5,17 @@ import AgentWorkspace from "./AgentWorkspace.vue";
 import RotateKeyDialog from "./components/RotateKeyDialog.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useAgentAuth } from "./composables/useAgentAuth";
+import { useAdminKeyRequests } from "./composables/useAdminKeyRequests";
 import LoginView from "./views/LoginView.vue";
 import {
   clearRememberedAgentLogin,
   loadRememberedAgentLogin,
   saveRememberedAgentLogin
 } from "./rememberedLogin";
-import type { AgentLoginRequest } from "./types";
+import type {
+  AgentAdminKeyRequestApproval,
+  AgentLoginRequest
+} from "./types";
 
 const {
   account,
@@ -30,6 +34,11 @@ const {
   rotateKey
 } = useAgentAuth();
 
+const accountStatus = computed(() => auth.account_status);
+const adminRequests = useAdminKeyRequests({
+  account,
+  accountStatus
+});
 const rotateKeyDialogVisible = ref(false);
 const rotateKeyInitialPassword = ref("");
 const rotationNotice = ref("");
@@ -38,6 +47,33 @@ const canRotateKey = computed(
     auth.account_status === "active" &&
     Boolean(account.value?.permissions.includes("key.rotate"))
 );
+const visibleToast = computed(() => {
+  if (rotateKeyDialogVisible.value) {
+    return null;
+  }
+  if (error.value) {
+    return { kind: "error" as const, message: error.value };
+  }
+  if (rotationNotice.value) {
+    return {
+      kind: "success" as const,
+      message: rotationNotice.value
+    };
+  }
+  if (adminRequests.error.value) {
+    return {
+      kind: "error" as const,
+      message: adminRequests.error.value
+    };
+  }
+  if (adminRequests.notice.value) {
+    return {
+      kind: "info" as const,
+      message: adminRequests.notice.value
+    };
+  }
+  return null;
+});
 
 async function handleLogin(request: AgentLoginRequest) {
   if (!(await login(request))) {
@@ -83,6 +119,14 @@ async function confirmKeyRotation(password: string) {
     rotationNotice.value = "";
   }, 4500);
 }
+
+function approveAdminRequest(request: AgentAdminKeyRequestApproval) {
+  void adminRequests.approve(request);
+}
+
+function rejectAdminRequest(requestId: string) {
+  void adminRequests.reject(requestId);
+}
 </script>
 
 <template>
@@ -106,11 +150,20 @@ async function confirmKeyRotation(password: string) {
       ].join(':')
     "
     :account="account"
+    :account-status="auth.account_status"
     :account-management-busy="accountManagementLoading"
+    :admin-key-requests="adminRequests.inbox.value.requests"
+    :admin-proxy-addresses="adminRequests.inbox.value.proxy_addresses"
+    :admin-requests-loading="adminRequests.loading.value"
+    :admin-request-busy-id="adminRequests.busyRequestId.value"
+    :admin-request-error="adminRequests.error.value"
     :can-rotate-key="canRotateKey"
     :key-rotation-busy="keyRotationLoading"
     :logout-busy="loggingOut"
     @manage-account="openAccountManagement"
+    @refresh-admin-requests="adminRequests.refresh"
+    @approve-admin-request="approveAdminRequest"
+    @reject-admin-request="rejectAdminRequest"
     @rotate-key="openRotateKeyDialog"
     @logout="logout"
   />
@@ -126,15 +179,7 @@ async function confirmKeyRotation(password: string) {
 
   <ToastHost
     v-if="authenticated"
-    :toast="
-      rotateKeyDialogVisible
-        ? null
-        : error
-          ? { kind: 'error', message: error }
-          : rotationNotice
-            ? { kind: 'success', message: rotationNotice }
-            : null
-    "
+    :toast="visibleToast"
   />
 
   <RotateKeyDialog

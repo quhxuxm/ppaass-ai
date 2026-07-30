@@ -233,6 +233,7 @@ pub(crate) struct ErrorDetail {
     _message: String,
 }
 
+mod admin_key_requests;
 mod credential_store;
 mod device_login;
 mod http;
@@ -242,6 +243,7 @@ mod permission_sync;
 mod proxy_addresses;
 mod web_handoff;
 
+pub(crate) use admin_key_requests::*;
 pub(crate) use credential_store::*;
 pub(crate) use device_login::*;
 pub(crate) use http::*;

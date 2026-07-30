@@ -37,6 +37,7 @@ public final class PpaassApplication extends Application {
         } else {
             Log.i(TAG, "No persistent Agent login to restore");
             AgentProfileSyncManager.stop();
+            AgentAdminRequestSynchronizer.clear(this);
         }
     }
 }

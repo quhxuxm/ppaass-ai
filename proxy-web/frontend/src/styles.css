@@ -1911,10 +1911,13 @@ a:focus-visible {
   }
 
   .topbar {
-    position: static;
+    position: sticky;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 12px 18px;
+    gap: 9px 12px;
+    width: 100%;
+    min-height: 0;
+    padding: 10px 14px 12px;
+    box-sizing: border-box;
   }
 
   .brand.compact,
@@ -1924,29 +1927,36 @@ a:focus-visible {
 
   .account-menu {
     flex: 0 0 auto;
+    min-width: 0;
+    justify-self: end;
     gap: 8px;
   }
 
   .main-nav {
-    position: fixed;
-    right: 12px;
-    bottom: 12px;
-    left: 12px;
-    z-index: 25;
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
     justify-content: stretch;
+    width: 100%;
+    min-width: 0;
     overflow: hidden;
     padding: 4px;
+    box-sizing: border-box;
     border: 1px solid #e4e7ec;
-    border-radius: 15px;
+    border-radius: 12px;
     background: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 12px 35px rgba(16, 24, 40, 0.16);
+    box-shadow: none;
     backdrop-filter: blur(15px);
   }
 
   .main-nav button {
-    min-height: 46px;
+    min-width: 0;
+    min-height: 42px;
     flex: 1;
+    padding-inline: 10px;
     border-radius: 11px;
+    white-space: nowrap;
   }
 
   .topbar-logout-action,
@@ -1974,7 +1984,7 @@ a:focus-visible {
 
   .workspace {
     width: min(100% - 28px, 1320px);
-    padding: 32px 0 100px;
+    padding: 32px 0 72px;
   }
 
   .page-heading {
@@ -2058,6 +2068,24 @@ a:focus-visible {
 
   .brand.compact > span:last-child {
     display: none;
+  }
+
+  .topbar-logout-action,
+  .topbar-logout-action.agent-handoff-logout {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+  }
+
+  .topbar-logout-action .p-button-label {
+    display: none;
+  }
+
+  .main-nav button {
+    padding-inline: 8px;
+    font-size: 0.82rem;
   }
 
   .agent-authorization-actions,

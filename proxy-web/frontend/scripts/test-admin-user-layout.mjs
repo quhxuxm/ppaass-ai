@@ -130,7 +130,7 @@ assert.match(
 )
 assert.match(
   styles,
-  /@media \(max-width: 820px\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*gap:\s*12px;[\s\S]*?\.topbar-logout-action,\s*\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*display:\s*inline-flex;[^}]*min-width:\s*104px;[^}]*min-height:\s*40px;/s,
+  /@media \(max-width: 820px\)\s*\{[\s\S]*?\.topbar\s*\{[^}]*position:\s*sticky;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*width:\s*100%;[\s\S]*?\.main-nav\s*\{[^}]*position:\s*static;[^}]*grid-column:\s*1 \/ -1;[^}]*grid-row:\s*2;[^}]*width:\s*100%;[\s\S]*?\.topbar-logout-action,\s*\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*display:\s*inline-flex;[^}]*min-width:\s*104px;[^}]*min-height:\s*40px;/s,
 )
 assert.match(
   styles,
@@ -138,7 +138,7 @@ assert.match(
 )
 assert.match(
   styles,
-  /@media \(max-width: 560px\)\s*\{[\s\S]*?\.brand\.compact > span:last-child\s*\{[^}]*display:\s*none;/s,
+  /@media \(max-width: 560px\)\s*\{[\s\S]*?\.brand\.compact > span:last-child\s*\{[^}]*display:\s*none;[\s\S]*?\.topbar-logout-action,\s*\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*width:\s*40px;[^}]*min-width:\s*40px;[\s\S]*?\.topbar-logout-action \.p-button-label\s*\{[^}]*display:\s*none;/s,
 )
 assert.match(
   app,

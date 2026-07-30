@@ -33,6 +33,36 @@ pub(crate) async fn require_admin(
     Ok(session)
 }
 
+pub(crate) async fn require_admin_actor(
+    state: &AppState,
+    headers: &HeaderMap,
+    mutation: bool,
+) -> Result<WebAccount, ApiError> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        validate_native_agent_request(headers)?;
+        if headers.contains_key(header::COOKIE) {
+            return Err(ApiError::forbidden(
+                "管理员 Agent 请求不能同时携带浏览器会话",
+            ));
+        }
+        let account = authenticate_agent_token(state, headers).await?;
+        require_active_agent_account(&account)?;
+        if account.role != AccountRole::Admin {
+            return Err(ApiError::forbidden("需要管理员权限"));
+        }
+        return Ok(account);
+    }
+
+    if mutation {
+        validate_browser_mutation(headers)?;
+    }
+    let session = require_admin(state, headers).await?;
+    if mutation {
+        state.sessions.require_csrf(&session, headers)?;
+    }
+    Ok(session.account)
+}
+
 pub(crate) async fn require_active_key_profile(
     state: &AppState,
     account: &WebAccount,

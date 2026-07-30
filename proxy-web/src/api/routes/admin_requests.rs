@@ -4,7 +4,7 @@ pub(crate) async fn admin_list_key_requests(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AdminKeyRequestsResponse>, ApiError> {
-    require_admin(&state, &headers).await?;
+    require_admin_actor(&state, &headers, false).await?;
     let requests = state
         .accounts
         .list_pending_key_generation_requests()
@@ -25,9 +25,7 @@ pub(crate) async fn admin_approve_key_request(
     headers: HeaderMap,
     payload: Result<Json<ApproveKeyRequest>, JsonRejection>,
 ) -> Result<Json<AdminKeyRequestDecisionResponse>, ApiError> {
-    validate_browser_mutation(&headers)?;
-    let session = require_admin(&state, &headers).await?;
-    state.sessions.require_csrf(&session, &headers)?;
+    let reviewer = require_admin_actor(&state, &headers, true).await?;
     let Json(payload) = payload.map_err(ApiError::from_json_rejection)?;
     let expires_at = parse_future_expiration(payload.expires_at, "key-request")?;
     let request = state
@@ -54,7 +52,7 @@ pub(crate) async fn admin_approve_key_request(
         .accounts
         .approve_key_generation_request(KeyRequestApproval {
             request_id: request.request_id,
-            reviewer_account_id: session.account.account_id.clone(),
+            reviewer_account_id: reviewer.account_id.clone(),
             expires_at,
             proxy_address_ids: payload.proxy_address_ids,
             material,
@@ -62,7 +60,7 @@ pub(crate) async fn admin_approve_key_request(
         .await?;
     let request_response = admin_key_request_response(&state, result.request).await?;
     info!(
-        admin_account_id = session.account.account_id,
+        admin_account_id = reviewer.account_id,
         request_id = request_response.request_id,
         account_id = request_response.account.account_id,
         "管理员批准密钥申请"
@@ -79,16 +77,14 @@ pub(crate) async fn admin_reject_key_request(
     Path(request_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<AdminKeyRequestDecisionResponse>, ApiError> {
-    validate_browser_mutation(&headers)?;
-    let session = require_admin(&state, &headers).await?;
-    state.sessions.require_csrf(&session, &headers)?;
+    let reviewer = require_admin_actor(&state, &headers, true).await?;
     let request = state
         .accounts
-        .reject_key_generation_request(&request_id, &session.account.account_id)
+        .reject_key_generation_request(&request_id, &reviewer.account_id)
         .await?;
     let request = admin_key_request_response(&state, request).await?;
     info!(
-        admin_account_id = session.account.account_id,
+        admin_account_id = reviewer.account_id,
         request_id = request.request_id,
         account_id = request.account.account_id,
         "管理员拒绝密钥申请"
@@ -152,14 +148,22 @@ pub(crate) async fn admin_key_request_response(
     state: &AppState,
     request: KeyGenerationRequest,
 ) -> Result<AdminKeyRequestResponse, ApiError> {
-    let account = state
+    let managed = state
         .accounts
-        .get_account_by_id(&request.account_id)
+        .get_managed_user(&request.account_id)
         .await?
+        .ok_or_else(|| ApiError::not_found("密钥申请关联的账号不存在"))?;
+    let account = managed
+        .account
         .ok_or_else(|| ApiError::not_found("密钥申请关联的账号不存在"))?;
     Ok(AdminKeyRequestResponse {
         request_id: request.request_id,
         account,
+        proxy_address_ids: managed
+            .assigned_proxy_addresses
+            .into_iter()
+            .map(|address| address.proxy_address_id)
+            .collect(),
         request_message: request.request_message,
         kind: request.kind,
         status: request.status,

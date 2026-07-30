@@ -18,4 +18,15 @@ final class AgentUiPermissionPolicy {
             String requestedValue) {
         return canEdit ? requestedValue : storedValue;
     }
+
+    static String permissionFingerprint(
+            boolean administrator,
+            boolean packetCapture,
+            boolean egressEdit,
+            boolean runtimeThreadsEdit) {
+        return (administrator ? "A" : "U")
+                + (packetCapture ? "1" : "0")
+                + (egressEdit ? "1" : "0")
+                + (runtimeThreadsEdit ? "1" : "0");
+    }
 }
