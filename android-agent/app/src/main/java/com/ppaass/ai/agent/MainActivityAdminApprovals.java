@@ -1,11 +1,12 @@
 package com.ppaass.ai.agent;
 
 import android.Manifest;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -23,6 +24,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
             "admin_key_request_notification_permission_asked";
 
     private Button adminApprovalTab;
+    private TextView adminApprovalBadge;
     private Button adminRefreshButton;
     private TextView adminApprovalSummary;
     private LinearLayout adminApprovalList;
@@ -44,8 +46,9 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
         }
         LinearLayout page = screenPage(pages);
         adminApprovalScreenIndex = screenPages.size() - 1;
-        addScreenTab(tabBar, adminTabTitle(), page);
+        addScreenTab(tabBar, "审批", page);
         adminApprovalTab = screenTabButtons.get(screenTabButtons.size() - 1);
+        addAdminApprovalBadge(tabBar);
         buildAdminApprovalScreen(page);
         loadAdminDashboard(false);
     }
@@ -207,27 +210,29 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
     }
 
     private void confirmReject(AgentAdminModels.KeyRequest request) {
-        new AlertDialog.Builder(this)
-                .setTitle("拒绝密钥申请")
-                .setMessage("确定拒绝“" + request.username
-                        + "”的密钥申请吗？用户之后可以重新提交。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("拒绝申请", (dialog, which) ->
-                        performDecision(request, 0, Collections.emptyList(), false))
-                .show();
+        AgentAdminRejectionDialog.show(
+                this,
+                request,
+                (target, reason) -> performDecision(
+                        target,
+                        0,
+                        Collections.emptyList(),
+                        reason,
+                        false));
     }
 
     private void approveRequest(
             AgentAdminModels.KeyRequest request,
             long expiresAt,
             List<String> proxyAddressIds) {
-        performDecision(request, expiresAt, proxyAddressIds, true);
+        performDecision(request, expiresAt, proxyAddressIds, null, true);
     }
 
     private void performDecision(
             AgentAdminModels.KeyRequest request,
             long expiresAt,
             List<String> proxyAddressIds,
+            String rejectionReason,
             boolean approve) {
         if (!activeRequestId.isEmpty() || !AgentAuthSession.isAdmin(this)) {
             return;
@@ -253,6 +258,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
                 request,
                 expiresAt,
                 proxyAddressIds,
+                rejectionReason,
                 approve,
                 new AgentAdminOperationController.Callback() {
                     @Override
@@ -357,6 +363,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
 
     private void resetAdminApprovalViews() {
         adminApprovalTab = null;
+        adminApprovalBadge = null;
         adminRefreshButton = null;
         adminApprovalSummary = null;
         adminApprovalList = null;
@@ -364,14 +371,54 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
         adminProxyAddresses = Collections.emptyList();
     }
 
-    private String adminTabTitle() {
-        int count = AgentAdminRequestStore.pendingCount(this);
-        return count > 0 ? "审批 " + count : "审批";
+    private void addAdminApprovalBadge(LinearLayout tabBar) {
+        int tabIndex = tabBar.indexOfChild(adminApprovalTab);
+        if (tabIndex < 0) {
+            return;
+        }
+        ViewGroup.LayoutParams originalParams = adminApprovalTab.getLayoutParams();
+        tabBar.removeViewAt(tabIndex);
+
+        FrameLayout badgeHost = new FrameLayout(this);
+        badgeHost.addView(adminApprovalTab, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        adminApprovalBadge = new TextView(this);
+        adminApprovalBadge.setGravity(Gravity.CENTER);
+        adminApprovalBadge.setTextSize(9f);
+        adminApprovalBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        adminApprovalBadge.setTextColor(UiPalette.ON_BRIGHT);
+        adminApprovalBadge.setMinWidth(dp(20));
+        adminApprovalBadge.setPadding(dp(5), 0, dp(5), 0);
+        adminApprovalBadge.setBackground(rounded(
+                COLOR_ACTION_WARN,
+                alphaColor(COLOR_ACTION_WARN, 150)));
+        adminApprovalBadge.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(20),
+                Gravity.TOP | Gravity.END);
+        badgeParams.setMargins(0, dp(2), dp(4), 0);
+        badgeHost.addView(adminApprovalBadge, badgeParams);
+
+        tabBar.addView(badgeHost, tabIndex, originalParams);
+        updateAdminTabTitle();
     }
 
     private void updateAdminTabTitle() {
-        if (adminApprovalTab != null) {
-            adminApprovalTab.setText(adminTabTitle());
+        if (adminApprovalTab == null) {
+            return;
+        }
+        int count = AgentAdminRequestStore.pendingCount(this);
+        adminApprovalTab.setText("审批");
+        adminApprovalTab.setContentDescription(count > 0
+                ? "审批，" + count + " 项待处理"
+                : "审批，没有待处理申请");
+        if (adminApprovalBadge != null) {
+            adminApprovalBadge.setText(count > 99 ? "99+" : String.valueOf(count));
+            adminApprovalBadge.setVisibility(count > 0 ? View.VISIBLE : View.GONE);
         }
     }
 

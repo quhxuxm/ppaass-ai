@@ -52,6 +52,8 @@ final class AgentAuthDtos {
         public String role;
         public String status;
         public String linked_username;
+        public String display_name;
+        public String avatar_url;
 
         public Account() {
         }

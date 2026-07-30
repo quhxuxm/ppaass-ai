@@ -17,7 +17,11 @@ async fn rejects_then_allows_a_new_request() {
         .await
         .unwrap();
     let rejected = store
-        .reject_key_generation_request("request-one", "admin-one")
+        .reject_key_generation_request(KeyRequestRejection {
+            request_id: "request-one".to_string(),
+            reviewer_account_id: "admin-one".to_string(),
+            rejection_reason: Some("  当前用途说明不完整，请补充后重试。  ".to_string()),
+        })
         .await
         .unwrap();
     assert_eq!(rejected.status, KeyRequestStatus::Rejected);
@@ -26,8 +30,20 @@ async fn rejects_then_allows_a_new_request() {
         Some("请尽快审批，谢谢")
     );
     assert_eq!(rejected.reviewer_account_id.as_deref(), Some("admin-one"));
+    assert_eq!(rejected.reviewer_login_name.as_deref(), Some("admin-one"));
+    assert_eq!(
+        rejected.rejection_reason.as_deref(),
+        Some("当前用途说明不完整，请补充后重试。")
+    );
     assert!(rejected.reviewed_at.is_some());
     assert_eq!(rejected.approved_expires_at, None);
+    assert_eq!(
+        store
+            .get_latest_key_generation_request("account-alice")
+            .await
+            .unwrap(),
+        Some(rejected)
+    );
 
     let next = store
         .submit_key_generation_request(NewKeyGenerationRequest {

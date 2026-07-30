@@ -49,6 +49,8 @@ export type LoadedAgentConfig = {
 
 export type AgentAuthAccount = {
   username: string;
+  display_name: string | null;
+  avatar_url: string | null;
   role: "user" | "admin";
   permissions: string[];
   key_version: number;
@@ -67,6 +69,7 @@ export type AgentAdminKeyRequest = {
   request_id: string;
   username: string;
   display_name: string | null;
+  avatar_url: string | null;
   email: string | null;
   request_message: string | null;
   kind: "initial" | "rotate";
@@ -95,6 +98,11 @@ export type AgentAdminKeyRequestApproval = {
   requestId: string;
   expiresAt: number;
   proxyAddressIds: string[];
+};
+
+export type AgentAdminKeyRequestRejection = {
+  requestId: string;
+  reason: string | null;
 };
 
 export type AgentLoginRequest = {

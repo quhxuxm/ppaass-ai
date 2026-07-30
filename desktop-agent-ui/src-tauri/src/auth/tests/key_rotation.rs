@@ -188,6 +188,8 @@ fn device_token_accepts_an_admin_with_an_active_profile() {
                 role: "admin".to_string(),
                 status: "active".to_string(),
                 linked_username: Some("admin-proxy".to_string()),
+                display_name: None,
+                avatar_url: None,
             },
             profile: AgentDeviceProfile {
                 username: "admin-proxy".to_string(),

@@ -46,6 +46,8 @@ final class AgentAuthResponseParser {
 
         return new AgentAuthClient.LoginResult(
                 username,
+                optionalDisplayName(account.display_name),
+                optionalAvatarUrl(account.avatar_url),
                 role,
                 permissions,
                 proxyAddresses,
@@ -98,6 +100,8 @@ final class AgentAuthResponseParser {
 
         return new AgentAuthClient.ProfileSyncResult(
                 username,
+                optionalDisplayName(account.display_name),
+                optionalAvatarUrl(account.avatar_url),
                 role,
                 account.status,
                 permissions,
@@ -141,6 +145,33 @@ final class AgentAuthResponseParser {
             throw invalidResponse();
         }
         return role;
+    }
+
+    private static String optionalDisplayName(String value)
+            throws AgentAuthClient.AuthException {
+        if (value == null) {
+            return "";
+        }
+        value = value.trim();
+        if (value.codePointCount(0, value.length()) > 6
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw invalidResponse();
+        }
+        return value;
+    }
+
+    private static String optionalAvatarUrl(String value)
+            throws AgentAuthClient.AuthException {
+        if (value == null) {
+            return "";
+        }
+        if (value.length() > 1_500_000
+                || !(value.startsWith("data:image/png;base64,")
+                || value.startsWith("data:image/jpeg;base64,")
+                || value.startsWith("data:image/webp;base64,"))) {
+            throw invalidResponse();
+        }
+        return value;
     }
 
     private static void requireLinkedUsername(String linkedUsername, String username)

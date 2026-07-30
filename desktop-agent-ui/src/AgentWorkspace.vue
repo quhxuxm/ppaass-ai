@@ -21,6 +21,7 @@ import { resolveAgentCapabilities } from "./agentPermissions";
 import type {
   AgentAdminKeyRequest,
   AgentAdminKeyRequestApproval,
+  AgentAdminKeyRequestRejection,
   AgentAdminProxyAddress,
   AgentAuthAccount,
   AgentAuthState,
@@ -45,7 +46,7 @@ const emit = defineEmits<{
   manageAccount: [];
   refreshAdminRequests: [];
   approveAdminRequest: [request: AgentAdminKeyRequestApproval];
-  rejectAdminRequest: [requestId: string];
+  rejectAdminRequest: [request: AgentAdminKeyRequestRejection];
   rotateKey: [];
   logout: [];
 }>();
@@ -165,6 +166,8 @@ function setLanguage(language: AppLocale) {
         :active-tab="state.activeTab"
         :collapsed="sidebarCollapsed"
         :account-username="account.username"
+        :account-display-name="account.display_name"
+        :account-avatar-url="account.avatar_url"
         :account-role="account.role"
         :account-management-busy="accountManagementBusy"
         :admin-request-count="adminKeyRequests.length"

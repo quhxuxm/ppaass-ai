@@ -8,6 +8,8 @@ defineProps<{
   activeTab: TabKey;
   collapsed: boolean;
   accountUsername: string;
+  accountDisplayName: string | null;
+  accountAvatarUrl: string | null;
   accountRole: "user" | "admin";
   accountManagementBusy: boolean;
   adminRequestCount: number;
@@ -93,11 +95,12 @@ const emit = defineEmits<{
     <section class="sidebar-account" :title="`当前账户：${accountUsername}`">
       <div class="sidebar-account-identity">
         <span class="sidebar-account-avatar" aria-hidden="true">
-          <AppIcon name="user" />
+          <img v-if="accountAvatarUrl" :src="accountAvatarUrl" alt="" />
+          <AppIcon v-else name="user" />
         </span>
         <span class="sidebar-account-copy">
           <small>{{ accountRole === "admin" ? "管理员" : "普通用户" }}</small>
-          <strong>{{ accountUsername }}</strong>
+          <strong>{{ accountDisplayName || accountUsername }}</strong>
         </span>
       </div>
       <Button

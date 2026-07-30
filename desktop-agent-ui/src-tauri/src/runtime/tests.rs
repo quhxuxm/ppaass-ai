@@ -219,6 +219,8 @@ fn managed_proxy_addresses() -> Vec<String> {
 fn account(role: &str, permissions: &[&str]) -> AgentAuthAccount {
     AgentAuthAccount {
         username: "alice".to_string(),
+        display_name: None,
+        avatar_url: None,
         role: role.to_string(),
         permissions: permissions.iter().map(ToString::to_string).collect(),
         key_version: 3,
@@ -238,6 +240,7 @@ fn admin_inbox(request_ids: &[&str]) -> AgentAdminKeyRequestInbox {
                 request_id: (*request_id).to_string(),
                 username: "alice".to_string(),
                 display_name: None,
+                avatar_url: None,
                 email: None,
                 request_message: None,
                 kind: "initial".to_string(),

@@ -71,16 +71,21 @@ pub(crate) async fn admin_approve_key_request(
     }))
 }
 
-#[instrument(skip(state, headers), fields(request_id))]
+#[instrument(skip(state, headers, payload), fields(request_id))]
 pub(crate) async fn admin_reject_key_request(
     State(state): State<AppState>,
     Path(request_id): Path<String>,
     headers: HeaderMap,
+    payload: Option<Json<RejectKeyRequest>>,
 ) -> Result<Json<AdminKeyRequestDecisionResponse>, ApiError> {
     let reviewer = require_admin_actor(&state, &headers, true).await?;
     let request = state
         .accounts
-        .reject_key_generation_request(&request_id, &reviewer.account_id)
+        .reject_key_generation_request(KeyRequestRejection {
+            request_id,
+            reviewer_account_id: reviewer.account_id.clone(),
+            rejection_reason: payload.and_then(|Json(payload)| payload.reason),
+        })
         .await?;
     let request = admin_key_request_response(&state, request).await?;
     info!(
@@ -169,6 +174,8 @@ pub(crate) async fn admin_key_request_response(
         status: request.status,
         expected_key_version: request.expected_key_version,
         reviewer_account_id: request.reviewer_account_id,
+        reviewer_login_name: request.reviewer_login_name,
+        rejection_reason: request.rejection_reason,
         requested_at: request.requested_at,
         reviewed_at: request.reviewed_at,
         approved_expires_at: request.approved_expires_at,

@@ -197,6 +197,8 @@ pub(crate) async fn authenticate_rotate_and_download(
         proxy_addresses,
         account: AgentAuthAccount {
             username: profile.username.clone(),
+            display_name: validated_display_name(login.account.display_name)?,
+            avatar_url: validated_avatar_url(login.account.avatar_url)?,
             role: login.account.role,
             permissions: profile.permissions.clone(),
             key_version: rotated.key_version,

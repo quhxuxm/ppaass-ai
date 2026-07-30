@@ -110,6 +110,44 @@ pub(super) fn row_to_key_request(row: SqliteRow) -> Result<KeyGenerationRequest>
             "密钥申请 {request_id} 的 expected_key_version 与 kind 不一致"
         )));
     }
+    let reviewer_account_id: Option<String> = row.try_get("reviewer_account_id")?;
+    let reviewer_login_name: Option<String> = row.try_get("reviewer_login_name")?;
+    let rejection_reason: Option<String> = row.try_get("rejection_reason")?;
+    let reviewed_at: Option<i64> = row.try_get("reviewed_at")?;
+    let approved_expires_at: Option<i64> = row.try_get("approved_expires_at")?;
+    let valid_decision = match status {
+        KeyRequestStatus::Pending => {
+            reviewer_account_id.is_none()
+                && reviewer_login_name.is_none()
+                && rejection_reason.is_none()
+                && reviewed_at.is_none()
+                && approved_expires_at.is_none()
+        }
+        KeyRequestStatus::Approved => {
+            reviewer_account_id.is_some()
+                && rejection_reason.is_none()
+                && reviewed_at.is_some()
+                && approved_expires_at.is_some()
+        }
+        KeyRequestStatus::Rejected => {
+            reviewer_account_id.is_some() && reviewed_at.is_some() && approved_expires_at.is_none()
+        }
+    };
+    let valid_reviewer_name = reviewer_login_name.as_deref().is_none_or(|value| {
+        !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+    });
+    let valid_rejection_reason = rejection_reason.as_deref().is_none_or(|value| {
+        !value.is_empty()
+            && value.chars().count() <= 500
+            && !value
+                .chars()
+                .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    });
+    if !valid_decision || !valid_reviewer_name || !valid_rejection_reason {
+        return Err(UserRepositoryError::InvalidSchema(format!(
+            "密钥申请 {request_id} 的审批审计字段不一致"
+        )));
+    }
     Ok(KeyGenerationRequest {
         request_id,
         account_id: row.try_get("account_id")?,
@@ -117,10 +155,12 @@ pub(super) fn row_to_key_request(row: SqliteRow) -> Result<KeyGenerationRequest>
         kind,
         status,
         expected_key_version,
-        reviewer_account_id: row.try_get("reviewer_account_id")?,
+        reviewer_account_id,
+        reviewer_login_name,
+        rejection_reason,
         requested_at: row.try_get("requested_at")?,
-        reviewed_at: row.try_get("reviewed_at")?,
-        approved_expires_at: row.try_get("approved_expires_at")?,
+        reviewed_at,
+        approved_expires_at,
     })
 }
 

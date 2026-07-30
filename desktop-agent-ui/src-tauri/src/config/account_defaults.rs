@@ -132,6 +132,8 @@ mod tests {
     fn account(permissions: &[&str]) -> AgentAuthAccount {
         AgentAuthAccount {
             username: "alice".to_string(),
+            display_name: None,
+            avatar_url: None,
             role: "user".to_string(),
             permissions: permissions.iter().map(ToString::to_string).collect(),
             key_version: 1,

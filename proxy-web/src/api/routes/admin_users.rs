@@ -54,7 +54,7 @@ pub(crate) async fn admin_create_user(
             password_hash: Some(password_hash),
             role: AccountRole::User,
             status: AccountStatus::Active,
-            display_name: trim_optional(request.display_name),
+            display_name: normalize_nickname(request.display_name)?,
             email: None,
             avatar_url: None,
             profile: NewUser {
@@ -116,10 +116,14 @@ pub(crate) async fn admin_update_user(
             .permissions
             .map(without_deprecated_agent_permissions),
         expires_at,
-        display_name: patch_optional(request.display_name),
+        display_name: normalize_nickname_patch(request.display_name)?,
         email: patch_optional(request.email),
         avatar_url: patch_optional(request.avatar_url),
         proxy_address_ids: request.proxy_address_ids,
+        disabled_by: (request.status == Some(AccountStatus::Disabled)).then(|| AccountActor {
+            account_id: session.account.account_id.clone(),
+            login_name: session.account.login_name.clone(),
+        }),
     };
     // Web 托管账号的四项基础能力是不可撤销的；历史导入 profile 没有
     // Web 账号和可恢复私钥，必须保留其原始权限语义。

@@ -12,18 +12,19 @@ use axum::{
 };
 use protocol::RsaKeyPair;
 use proxy_user_store::{
-    AccessLogRepository, AccessProtocol, AccessRecord, AccountRepository, AccountRole,
-    AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
+    AccessLogRepository, AccessProtocol, AccessRecord, AccountActor, AccountRepository,
+    AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
     AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
     AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
     ExternalIdentity, KEY_ROTATE_PERMISSION, KeyGenerationRequest, KeyPairRotation,
-    KeyRequestApproval, KeyRequestKind, KeyRequestStatus, MAX_ACCESS_LOG_QUERY_LIMIT,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser,
-    NewUserAccount, PRIVATE_KEY_READ_PERMISSION, ProxyAddress, ProxyAddressRepository,
-    ProxyAddressUpdate, UserOrigin, UserRecord, UserRepository, UserRepositoryError, UserUpdate,
-    WebAccount, normalize_username, parse_expires_at,
+    KeyRequestApproval, KeyRequestKind, KeyRequestRejection, KeyRequestStatus,
+    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
+    ManagedUser, ManagedUserUpdate, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
+    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
+    ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate, UserOrigin, UserRecord,
+    UserRepository, UserRepositoryError, UserUpdate, WebAccount, normalize_username,
+    parse_expires_at,
 };
 use rand::RngExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -159,6 +160,10 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         )
         .route("/session", get(get_session))
         .route("/me", get(get_me))
+        .route(
+            "/me/profile",
+            put(update_my_profile).layer(DefaultBodyLimit::max(MAX_PROFILE_REQUEST_BODY_BYTES)),
+        )
         .route("/me/password", put(change_my_password))
         .route("/me/private-key", get(get_my_private_key))
         .route("/me/rotate-key", post(rotate_my_key))

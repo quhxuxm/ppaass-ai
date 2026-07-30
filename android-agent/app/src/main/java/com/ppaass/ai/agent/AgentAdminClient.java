@@ -11,12 +11,13 @@ import java.util.Set;
 final class AgentAdminClient {
     static final String KEY_REQUESTS_PATH = "/api/v1/admin/key-requests";
     static final String PROXY_ADDRESSES_PATH = "/api/v1/admin/proxy-addresses";
-    static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+    static final int MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
     private static final int MAX_REQUESTS = 4096;
     private static final int MAX_PROXY_ADDRESSES = 4096;
     private static final int MAX_TOKEN_BYTES = 4 * 1024;
     private static final int MAX_ID_BYTES = 128;
     private static final int MAX_USERNAME_BYTES = 128;
+    private static final int MAX_AVATAR_URL_BYTES = 1_500_000;
     private static final int MAX_MESSAGE_CHARACTERS = 500;
     private static final int MAX_PROXY_IDS_PER_REQUEST = 32;
 
@@ -106,11 +107,13 @@ final class AgentAdminClient {
         parseRequest(response.request, "approved");
     }
 
-    void reject(String accessToken, String requestId) throws AdminException {
+    void reject(String accessToken, String requestId, String reason) throws AdminException {
+        reason = optionalMessage(reason);
         AgentAdminDtos.DecisionResponse response = request(
                 "POST",
                 decisionPath(requestId, "reject"),
-                null,
+                new AgentAdminDtos.RejectKeyRequest(
+                        reason.isEmpty() ? null : reason),
                 accessToken,
                 AgentAdminDtos.DecisionResponse.class);
         parseRequest(response.request, "rejected");
@@ -162,6 +165,9 @@ final class AgentAdminClient {
         String id = requireIdentifier(value.request_id);
         String username = requireText(value.account.login_name, MAX_USERNAME_BYTES);
         String displayName = optionalText(value.account.display_name, 256);
+        String avatarUrl = optionalText(
+                value.account.avatar_url,
+                MAX_AVATAR_URL_BYTES);
         String email = optionalText(value.account.email, 320);
         String message = optionalMessage(value.request_message);
         List<String> proxyIds = requireProxyIds(value.proxy_address_ids, false);
@@ -169,6 +175,7 @@ final class AgentAdminClient {
                 id,
                 username,
                 displayName,
+                avatarUrl,
                 email,
                 proxyIds,
                 message,

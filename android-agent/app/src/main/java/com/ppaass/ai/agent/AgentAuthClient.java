@@ -8,8 +8,8 @@ import java.util.Set;
 
 final class AgentAuthClient {
     private static final String TAG = "PpaassAgentAuth";
-    private static final int MAX_NORMAL_RESPONSE_BYTES = 64 * 1024;
-    private static final int MAX_CREDENTIAL_RESPONSE_BYTES = 256 * 1024;
+    private static final int MAX_NORMAL_RESPONSE_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_CREDENTIAL_RESPONSE_BYTES = 2 * 1024 * 1024;
     private static final int MAX_DEVICE_AUTHORIZATION_SECONDS = 60 * 60;
     private static final int MAX_DEVICE_POLL_DELAY_SECONDS = 5 * 60;
 
@@ -279,6 +279,8 @@ final class AgentAuthClient {
 
     static final class LoginResult {
         final String username;
+        final String displayName;
+        final String avatarUrl;
         final String role;
         final Set<String> permissions;
         final List<String> proxyAddresses;
@@ -292,6 +294,8 @@ final class AgentAuthClient {
 
         LoginResult(
                 String username,
+                String displayName,
+                String avatarUrl,
                 String role,
                 Set<String> permissions,
                 List<String> proxyAddresses,
@@ -303,6 +307,8 @@ final class AgentAuthClient {
                 long accessTokenExpiresAt,
                 int refreshAfterSeconds) {
             this.username = username;
+            this.displayName = displayName;
+            this.avatarUrl = avatarUrl;
             this.role = role;
             this.permissions = permissions;
             this.proxyAddresses = proxyAddresses;
@@ -318,6 +324,8 @@ final class AgentAuthClient {
 
     static final class ProfileSyncResult {
         final String username;
+        final String displayName;
+        final String avatarUrl;
         final String role;
         final String accountStatus;
         final Set<String> permissions;
@@ -332,6 +340,8 @@ final class AgentAuthClient {
 
         ProfileSyncResult(
                 String username,
+                String displayName,
+                String avatarUrl,
                 String role,
                 String accountStatus,
                 Set<String> permissions,
@@ -344,6 +354,8 @@ final class AgentAuthClient {
                 long accessTokenExpiresAt,
                 int refreshAfterSeconds) {
             this.username = username;
+            this.displayName = displayName;
+            this.avatarUrl = avatarUrl;
             this.role = role;
             this.accountStatus = accountStatus;
             this.permissions = permissions;

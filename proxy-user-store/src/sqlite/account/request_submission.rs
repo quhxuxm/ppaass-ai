@@ -67,9 +67,9 @@ impl SqliteUserRepository {
         sqlx::query(
             "INSERT INTO key_generation_requests \
              (request_id, account_id, kind, status, expected_key_version, \
-              reviewer_account_id, requested_at, reviewed_at, approved_expires_at, \
-              request_message) \
-             VALUES (?, ?, ?, 'pending', ?, NULL, ?, NULL, NULL, ?)",
+              reviewer_account_id, reviewer_login_name, rejection_reason, requested_at, \
+              reviewed_at, approved_expires_at, request_message) \
+             VALUES (?, ?, ?, 'pending', ?, NULL, NULL, NULL, ?, NULL, NULL, ?)",
         )
         .bind(&request_id)
         .bind(&account.account_id)
@@ -112,6 +112,24 @@ impl SqliteUserRepository {
         let request_id = normalize_request_id(request_id)?;
         let mut connection = self.pool.acquire().await?;
         fetch_key_request_by_id(&mut connection, &request_id).await
+    }
+
+    pub(super) async fn get_latest_key_generation_request(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<KeyGenerationRequest>> {
+        let account_id = normalize_account_id(account_id)?;
+        let query = format!(
+            "SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests \
+             WHERE account_id = ? ORDER BY requested_at DESC, request_id COLLATE BINARY DESC \
+             LIMIT 1"
+        );
+        sqlx::query(&query)
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(row_to_key_request)
+            .transpose()
     }
 
     pub(super) async fn list_pending_key_generation_requests(

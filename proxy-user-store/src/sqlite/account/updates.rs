@@ -45,6 +45,21 @@ impl SqliteUserRepository {
                     .transpose()
             })
             .transpose()?;
+        let disabled_by = update
+            .disabled_by
+            .map(|actor| {
+                Ok::<_, UserRepositoryError>(AccountActor {
+                    account_id: normalize_account_id(&actor.account_id)?,
+                    login_name: normalize_username(&actor.login_name)?,
+                })
+            })
+            .transpose()?;
+        if disabled_by.is_some() && update.status != Some(AccountStatus::Disabled) {
+            return Err(ValidationError::InvalidAccountField(
+                "disabled_by 只能用于停用账号".to_string(),
+            )
+            .into());
+        }
 
         let profile_update_requested =
             update.enabled.is_some() || permissions.is_some() || update.expires_at.is_some();
@@ -55,6 +70,23 @@ impl SqliteUserRepository {
         let target_role = update.role.unwrap_or(account.role);
         let target_status = update.status.unwrap_or(account.status);
         guard_root_admin(&account, Some(target_role), Some(target_status))?;
+        let newly_disabled =
+            account.status != AccountStatus::Disabled && target_status == AccountStatus::Disabled;
+        if newly_disabled {
+            if let Some(actor) = disabled_by.as_ref() {
+                let reviewer = fetch_account_by_id(&mut transaction, &actor.account_id)
+                    .await?
+                    .filter(|candidate| {
+                        candidate.login_name == actor.login_name
+                            && candidate.role == AccountRole::Admin
+                            && candidate.status == AccountStatus::Active
+                    })
+                    .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                        account_id: actor.account_id.clone(),
+                    })?;
+                debug_assert_eq!(reviewer.login_name, actor.login_name);
+            }
+        }
 
         let mut profile = match account.linked_username.as_deref() {
             Some(username) => fetch_profile(&mut transaction, username).await?,
@@ -102,6 +134,20 @@ impl SqliteUserRepository {
         .bind(&account.account_id)
         .execute(&mut *transaction)
         .await?;
+        if newly_disabled && let Some(actor) = disabled_by {
+            sqlx::query(
+                "INSERT INTO account_disable_audits \
+                 (target_account_id, target_login_name, admin_account_id, \
+                  admin_login_name, disabled_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&account.account_id)
+            .bind(&account.login_name)
+            .bind(actor.account_id)
+            .bind(actor.login_name)
+            .bind(account.updated_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
 
         if let Some(profile) = profile.as_mut() {
             if let Some(enabled) = update.enabled {

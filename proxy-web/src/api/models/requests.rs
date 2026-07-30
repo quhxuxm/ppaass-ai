@@ -25,6 +25,15 @@ pub(crate) struct ChangePasswordRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct UpdateMyProfileRequest {
+    #[serde(default)]
+    pub(crate) display_name: PatchField<String>,
+    #[serde(default)]
+    pub(crate) avatar_data_url: PatchField<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SubmitKeyRequest {
     #[serde(default)]
     pub(crate) message: Option<String>,
@@ -99,6 +108,13 @@ pub(crate) struct AdminUpdateUserRequest {
 pub(crate) struct ApproveKeyRequest {
     pub(crate) expires_at: ExpiresAtValue,
     pub(crate) proxy_address_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RejectKeyRequest {
+    #[serde(default)]
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -11,6 +11,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentAdminKeyRequestApproval,
   AgentAdminKeyRequestInbox,
+  AgentAdminKeyRequestRejection,
   AgentAdminKeyRequestUpdate,
   AgentAuthAccount,
   AgentAuthState
@@ -102,11 +103,11 @@ export function useAdminKeyRequests(
     );
   }
 
-  async function reject(requestId: string) {
+  async function reject(request: AgentAdminKeyRequestRejection) {
     return decide(
-      requestId,
+      request.requestId,
       "reject_agent_admin_key_request_command",
-      { request: { requestId } },
+      { request },
       "密钥申请已拒绝"
     );
   }

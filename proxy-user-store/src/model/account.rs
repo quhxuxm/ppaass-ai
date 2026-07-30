@@ -92,6 +92,8 @@ pub struct ManagedUserUpdate {
     pub email: Option<Option<String>>,
     pub avatar_url: Option<Option<String>>,
     pub proxy_address_ids: Option<Vec<String>>,
+    /// 执行账号停用的管理员快照。存储实现应在 active -> disabled 时写入审计记录。
+    pub disabled_by: Option<AccountActor>,
 }
 
 impl ManagedUserUpdate {
@@ -106,6 +108,12 @@ impl ManagedUserUpdate {
             && self.avatar_url.is_none()
             && self.proxy_address_ids.is_none()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountActor {
+    pub account_id: String,
+    pub login_name: String,
 }
 
 /// 登录校验专用记录。包含密码哈希，因此故意不实现 `Debug` 或序列化。

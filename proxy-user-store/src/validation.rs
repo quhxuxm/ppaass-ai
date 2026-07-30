@@ -8,6 +8,7 @@ pub const MAX_PUBLIC_KEY_PEM_BYTES: usize = 16 * 1024;
 pub const MAX_PERMISSIONS: usize = 32;
 pub const MAX_PERMISSION_CODE_BYTES: usize = 64;
 pub const MAX_KEY_REQUEST_MESSAGE_CHARS: usize = 500;
+pub const MAX_KEY_REQUEST_REJECTION_REASON_CHARS: usize = 500;
 pub const MAX_PROXY_ADDRESS_BYTES: usize = 512;
 pub const MAX_PROXY_ADDRESS_LABEL_BYTES: usize = 128;
 pub const MAX_PROXY_ADDRESSES_PER_ACCOUNT: usize = 32;
@@ -56,6 +57,12 @@ pub enum ValidationError {
 
     #[error("密钥申请留言包含不允许的控制字符")]
     InvalidKeyRequestMessage,
+
+    #[error("密钥申请拒绝理由不能超过 {MAX_KEY_REQUEST_REJECTION_REASON_CHARS} 个字符")]
+    KeyRequestRejectionReasonTooLong,
+
+    #[error("密钥申请拒绝理由包含不允许的控制字符")]
+    InvalidKeyRequestRejectionReason,
 
     #[error("Proxy 地址 ID 无效")]
     InvalidProxyAddressId,
@@ -300,6 +307,29 @@ pub fn normalize_key_request_message(
     Ok(Some(message.to_string()))
 }
 
+/// 规范化管理员提供给申请人的拒绝理由。
+pub fn normalize_key_request_rejection_reason(
+    reason: Option<String>,
+) -> std::result::Result<Option<String>, ValidationError> {
+    let Some(reason) = reason else {
+        return Ok(None);
+    };
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Ok(None);
+    }
+    if reason.chars().count() > MAX_KEY_REQUEST_REJECTION_REASON_CHARS {
+        return Err(ValidationError::KeyRequestRejectionReasonTooLong);
+    }
+    if reason
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(ValidationError::InvalidKeyRequestRejectionReason);
+    }
+    Ok(Some(reason.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +390,28 @@ mod tests {
             normalize_key_request_message(Some("好".repeat(MAX_KEY_REQUEST_MESSAGE_CHARS + 1)))
                 .unwrap_err(),
             ValidationError::KeyRequestMessageTooLong
+        );
+    }
+
+    #[test]
+    fn key_request_rejection_reason_is_trimmed_and_bounded() {
+        assert_eq!(
+            normalize_key_request_rejection_reason(Some(
+                "  请补充用途说明后重新申请。  ".to_string()
+            ))
+            .unwrap(),
+            Some("请补充用途说明后重新申请。".to_string())
+        );
+        assert_eq!(
+            normalize_key_request_rejection_reason(Some(" \n ".to_string())).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_key_request_rejection_reason(Some(
+                "拒".repeat(MAX_KEY_REQUEST_REJECTION_REASON_CHARS + 1)
+            ))
+            .unwrap_err(),
+            ValidationError::KeyRequestRejectionReasonTooLong
         );
     }
 }

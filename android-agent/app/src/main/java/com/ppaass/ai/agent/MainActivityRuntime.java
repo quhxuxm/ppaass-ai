@@ -77,6 +77,7 @@ protected void updateStatusMetrics() {
         if (accountSummary != null) {
             accountSummary.setText(tr(authenticatedAccountSummary()));
         }
+        updateAccountAvatar();
         long rxBytes = currentVpnDownloadBytes();
         long txBytes = currentVpnUploadBytes();
         long nowMs = SystemClock.elapsedRealtime();
@@ -193,9 +194,12 @@ protected void loadHourlyTraffic(String key, long[] target) {
     }
 
 protected String authenticatedAccountSummary() {
+        String displayName = AgentAuthSession.displayName();
         StringBuilder summary = new StringBuilder()
                 .append("已登录：")
-                .append(AgentAuthSession.username());
+                .append(displayName.isEmpty()
+                        ? AgentAuthSession.username()
+                        : displayName);
         if (AgentPermissions.ROLE_ADMIN.equals(AgentAuthSession.role())) {
             summary.append(" · 管理员");
         }
@@ -217,6 +221,22 @@ protected String authenticatedAccountSummary() {
             summary.append('\n').append(syncMessage);
         }
         return summary.toString();
+}
+
+protected void updateAccountAvatar() {
+        if (accountAvatar == null) {
+            return;
+        }
+        Bitmap avatar = AgentProfileAvatar.decode(AgentAuthSession.avatarUrl());
+        if (avatar != null) {
+            accountAvatar.setPadding(0, 0, 0, 0);
+            accountAvatar.clearColorFilter();
+            accountAvatar.setImageBitmap(avatar);
+            return;
+        }
+        accountAvatar.setPadding(dp(9), dp(9), dp(9), dp(9));
+        accountAvatar.setImageResource(R.drawable.ic_vpn);
+        accountAvatar.setColorFilter(COLOR_ACCENT);
 }
 
 protected String serializeHourlyTraffic(long[] values) {

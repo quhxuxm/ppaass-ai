@@ -101,6 +101,8 @@ fn persisted_login_survives_local_expiry_metadata_and_keeps_status() {
     let credentials_dir = temp.path().join("credentials");
     let account = AgentAuthAccount {
         username: "alice".to_string(),
+        display_name: None,
+        avatar_url: None,
         role: "admin".to_string(),
         permissions: vec!["key.private.read".to_string(), "key.rotate".to_string()],
         key_version: 7,
@@ -182,6 +184,8 @@ fn persisted_login_requires_untampered_managed_credential_files() {
     let credentials_dir = temp.path().join("credentials");
     let account = AgentAuthAccount {
         username: "alice".to_string(),
+        display_name: None,
+        avatar_url: None,
         role: "user".to_string(),
         permissions: vec!["key.rotate".to_string()],
         key_version: 1,
@@ -216,6 +220,8 @@ fn tampered_persisted_role_and_permissions_restore_as_unverified() {
     let credentials_dir = temp.path().join("credentials");
     let account = AgentAuthAccount {
         username: "alice".to_string(),
+        display_name: None,
+        avatar_url: None,
         role: "user".to_string(),
         permissions: vec!["key.rotate".to_string()],
         key_version: 1,

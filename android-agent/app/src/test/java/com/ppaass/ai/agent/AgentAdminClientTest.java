@@ -35,6 +35,9 @@ public final class AgentAdminClientTest {
         AgentAdminModels.KeyRequest request = dashboard.requests.get(0);
         assertEquals("req_one", request.id);
         assertEquals("alice@example.com", request.username);
+        assertEquals(
+                "data:image/png;base64,iVBORw0KGgo=",
+                request.avatarUrl);
         assertEquals("需要续期", request.message);
         assertEquals(List.of("proxy_main"), request.proxyAddressIds);
         assertEquals(1, dashboard.proxyAddresses.size());
@@ -60,16 +63,18 @@ public final class AgentAdminClientTest {
     }
 
     @Test
-    public void rejectionPostsWithoutBody() throws Exception {
+    public void rejectionPostsUserVisibleReason() throws Exception {
         FakeTransport transport = new FakeTransport(ok(keyRequestsJson("rejected")));
 
-        new AgentAdminClient(transport).reject(TOKEN, "req_one");
+        new AgentAdminClient(transport).reject(TOKEN, "req_one", " 请补充用途 ");
 
         Call call = transport.calls.get(0);
         assertEquals(
                 AgentAdminClient.KEY_REQUESTS_PATH + "/req_one/reject",
                 call.path);
-        assertEquals(null, call.body);
+        AgentAdminDtos.RejectKeyRequest body =
+                (AgentAdminDtos.RejectKeyRequest) call.body;
+        assertEquals("请补充用途", body.reason);
     }
 
     @Test
@@ -81,7 +86,7 @@ public final class AgentAdminClientTest {
 
         AgentAdminClient.AdminException error = assertThrows(
                 AgentAdminClient.AdminException.class,
-                () -> new AgentAdminClient(transport).reject(TOKEN, "req_one"));
+                () -> new AgentAdminClient(transport).reject(TOKEN, "req_one", ""));
 
         assertTrue(error.isConflict());
         assertEquals("key_request_already_reviewed", error.code);
@@ -127,7 +132,9 @@ public final class AgentAdminClientTest {
                 + "\"request_id\":\"req_one\","
                 + "\"account\":{\"account_id\":\"acc_alice\","
                 + "\"login_name\":\"alice@example.com\","
-                + "\"display_name\":\"Alice\",\"email\":\"alice@example.com\"},"
+                + "\"display_name\":\"Alice\","
+                + "\"avatar_url\":\"data:image/png;base64,iVBORw0KGgo=\","
+                + "\"email\":\"alice@example.com\"},"
                 + "\"proxy_address_ids\":[\"proxy_main\"],"
                 + "\"request_message\":\"需要续期\","
                 + "\"kind\":\"rotate\",\"status\":\"" + status + "\","

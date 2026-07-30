@@ -142,6 +142,8 @@ pub(crate) struct SelfKeyRequestResponse {
     pub(crate) request_message: Option<String>,
     pub(crate) kind: KeyRequestKind,
     pub(crate) status: KeyRequestStatus,
+    pub(crate) reviewer_login_name: Option<String>,
+    pub(crate) rejection_reason: Option<String>,
     pub(crate) requested_at: i64,
     pub(crate) reviewed_at: Option<i64>,
     pub(crate) approved_expires_at: Option<i64>,
@@ -162,6 +164,8 @@ pub(crate) struct AdminKeyRequestResponse {
     pub(crate) status: KeyRequestStatus,
     pub(crate) expected_key_version: Option<i64>,
     pub(crate) reviewer_account_id: Option<String>,
+    pub(crate) reviewer_login_name: Option<String>,
+    pub(crate) rejection_reason: Option<String>,
     pub(crate) requested_at: i64,
     pub(crate) reviewed_at: Option<i64>,
     pub(crate) approved_expires_at: Option<i64>,
@@ -266,13 +270,17 @@ pub(crate) struct AdminKeyRotationResponse {
 
 impl From<ManagedUser> for AdminManagedUserResponse {
     fn from(user: ManagedUser) -> Self {
+        let mut account = user.account;
+        if let Some(account) = account.as_mut() {
+            account.avatar_url = None;
+        }
         let proxy_addresses = user
             .assigned_proxy_addresses
             .into_iter()
             .map(ProxyAddressResponse::from)
             .collect();
         Self {
-            account: user.account,
+            account,
             profile: user.profile.map(AdminUserProfileResponse::from),
             has_private_key: user.has_private_key,
             providers: user.providers,
@@ -327,6 +335,8 @@ impl SelfKeyRequestResponse {
             request_message: request.request_message,
             kind: request.kind,
             status: request.status,
+            reviewer_login_name: request.reviewer_login_name,
+            rejection_reason: request.rejection_reason,
             requested_at: request.requested_at,
             reviewed_at: request.reviewed_at,
             approved_expires_at: request.approved_expires_at,

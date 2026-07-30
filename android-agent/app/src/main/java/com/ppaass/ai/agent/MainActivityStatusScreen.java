@@ -69,16 +69,29 @@ protected void buildStatusScreen(LinearLayout root) {
         LinearLayout accountBlock = new LinearLayout(this);
         accountBlock.setOrientation(LinearLayout.VERTICAL);
         accountBlock.setPadding(0, dp(14), 0, 0);
+        LinearLayout accountIdentity = horizontalRow();
+        accountAvatar = new ImageView(this);
+        accountAvatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        accountAvatar.setBackground(iconPlateBackground(COLOR_ACCENT));
+        accountAvatar.setClipToOutline(true);
+        accountAvatar.setPadding(dp(6), dp(6), dp(6), dp(6));
+        updateAccountAvatar();
+        LinearLayout.LayoutParams accountAvatarParams =
+                new LinearLayout.LayoutParams(dp(42), dp(42));
+        accountAvatarParams.setMargins(0, 0, dp(12), 0);
+        accountIdentity.addView(accountAvatar, accountAvatarParams);
+
         accountSummary = mutedText(authenticatedAccountSummary(), 12.5f);
         accountSummary.setSingleLine(false);
         accountSummary.setMaxLines(4);
         accountSummary.setLineSpacing(dp(2), 1f);
         accountSummary.setEllipsize(TextUtils.TruncateAt.END);
         accountSummary.setContentDescription(tr("当前登录用户"));
-        accountBlock.addView(accountSummary, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+        accountIdentity.addView(accountSummary, new LinearLayout.LayoutParams(
+                0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                0f));
+                1f));
+        accountBlock.addView(accountIdentity, matchWrap());
 
         LinearLayout accountActions = horizontalRow();
         accountManagementButton = secondaryButton(

@@ -103,6 +103,7 @@ protected AlertDialog appSelectorDialog;
 protected Button vpnToggle;
 protected TextView vpnStatus;
 protected TextView accountSummary;
+protected ImageView accountAvatar;
 protected Button accountManagementButton;
 protected boolean accountManagementInProgress;
 protected Button httpProxyToggle;

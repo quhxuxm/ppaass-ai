@@ -38,6 +38,10 @@ async fn admin_agent_lists_approves_and_rejects_key_requests() {
     let body = json_body(list).await;
     assert_eq!(body["requests"][0]["request_id"], first_request);
     assert_eq!(body["requests"][0]["request_message"], "请批准第一份密钥");
+    assert_eq!(
+        body["requests"][0]["account"]["avatar_url"],
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+    );
     assert_admin_response_is_redacted(&body);
 
     let addresses = native_get(&app, "/api/v1/admin/proxy-addresses", &admin_token).await;
@@ -60,6 +64,7 @@ async fn admin_agent_lists_approves_and_rejects_key_requests() {
     assert_eq!(approved.status(), StatusCode::OK);
     let body = json_body(approved).await;
     assert_eq!(body["request"]["status"], "approved");
+    assert_eq!(body["request"]["reviewer_login_name"], "agent-admin");
     assert_admin_response_is_redacted(&body);
 
     let second_request = register_and_request_key(
@@ -73,11 +78,17 @@ async fn admin_agent_lists_approves_and_rejects_key_requests() {
         &app,
         &format!("/api/v1/admin/key-requests/{second_request}/reject"),
         &admin_token,
-        None,
+        Some(json!({"reason": "用途说明不足，请补充后重新申请。"})),
     )
     .await;
     assert_eq!(rejected.status(), StatusCode::OK);
-    assert_eq!(json_body(rejected).await["request"]["status"], "rejected");
+    let body = json_body(rejected).await;
+    assert_eq!(body["request"]["status"], "rejected");
+    assert_eq!(body["request"]["reviewer_login_name"], "agent-admin");
+    assert_eq!(
+        body["request"]["rejection_reason"],
+        "用途说明不足，请补充后重新申请。"
+    );
 
     set_user_status(&app, &root_cookie, &root_csrf, "agent-admin", "disabled").await;
     let disabled = native_get(&app, "/api/v1/admin/key-requests", &admin_token).await;
@@ -206,6 +217,27 @@ async fn register_and_request_key(
     message: &str,
 ) -> String {
     let (cookie, csrf) = register_user(app, username, password).await;
+    let profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/me/profile")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "avatar_data_url":
+                            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(profile.status(), StatusCode::OK);
     let response = app
         .clone()
         .oneshot(

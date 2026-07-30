@@ -87,6 +87,7 @@ pub(crate) async fn reject_agent_admin_key_request_command(
     request: AgentAdminKeyRequestRejection,
 ) -> Result<AgentAdminKeyRequestInbox, String> {
     validate_request_id(&request.request_id)?;
+    let reason = normalize_rejection_reason(request.reason)?;
     let session = require_active_admin_session(runtime.inner())?;
     let token = session
         .agent_access_token
@@ -96,6 +97,7 @@ pub(crate) async fn reject_agent_admin_key_request_command(
         &session.proxy_web_url,
         token.value.as_str(),
         &request.request_id,
+        reason.as_deref(),
     )
     .await;
     finish_decision(
@@ -289,6 +291,26 @@ fn validate_request_id(request_id: &str) -> Result<(), String> {
         return Err("密钥申请编号无效".to_string());
     }
     Ok(())
+}
+
+fn normalize_rejection_reason(reason: Option<String>) -> Result<Option<String>, String> {
+    let Some(reason) = reason else {
+        return Ok(None);
+    };
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Ok(None);
+    }
+    if reason.chars().count() > 500 {
+        return Err("拒绝理由不能超过 500 个字符".to_string());
+    }
+    if reason
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err("拒绝理由包含不允许的控制字符".to_string());
+    }
+    Ok(Some(reason.to_string()))
 }
 
 fn current_timestamp() -> i64 {

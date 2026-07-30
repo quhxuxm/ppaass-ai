@@ -19,6 +19,7 @@ import Toast from 'primevue/toast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import KeyRequestDialog from './components/KeyRequestDialog.vue'
+import ProfileEditor from './components/ProfileEditor.vue'
 import ProxyAddressCatalog from './components/ProxyAddressCatalog.vue'
 import ProxyAddressChecklist from './components/ProxyAddressChecklist.vue'
 import RequestMessage from './components/RequestMessage.vue'
@@ -50,6 +51,7 @@ import {
   submitMyKeyRequest,
   updateAccessLogSettings,
   updateManagedUser,
+  updateMyProfile,
   type AccessRecord,
   type AgentDeviceAuthorizationInspection,
   type AccountRole,
@@ -60,6 +62,7 @@ import {
   type ProxyAddress,
   type SelfView,
   type SessionState,
+  type UpdateMyProfilePayload,
 } from './api'
 
 type AuthMode = 'login' | 'register'
@@ -171,6 +174,7 @@ const keyRequestLoading = ref(false)
 const keyRequestDialogVisible = ref(false)
 const keyRotationLoading = ref(false)
 const passwordSaving = ref(false)
+const profileSaving = ref(false)
 const passwordForm = reactive({
   currentPassword: '',
   newPassword: '',
@@ -231,6 +235,9 @@ const approvalMinimumExpiry = ref(minimumFutureExpiry())
 const approvalExpiresAt = ref<Date | null>(defaultExpiry())
 const approvalProxyAddressIds = ref<string[]>([])
 const rejectingRequestId = ref('')
+const rejectionVisible = ref(false)
+const rejectionRequest = ref<KeyRequest | null>(null)
+const rejectionReason = ref('')
 const retentionDays = ref<number | null>(7)
 const retentionSaving = ref(false)
 const enabledProxyAddresses = computed(() =>
@@ -471,6 +478,23 @@ async function submitPasswordChange(): Promise<void> {
     showError('修改密码失败', error)
   } finally {
     passwordSaving.value = false
+  }
+}
+
+async function saveMyProfile(payload: UpdateMyProfilePayload): Promise<void> {
+  profileSaving.value = true
+  try {
+    await updateMyProfile(payload)
+    await refreshSelf()
+    toast.add({
+      severity: 'success',
+      summary: '个人资料已更新',
+      life: 3000,
+    })
+  } catch (error) {
+    showError('保存个人资料失败', error)
+  } finally {
+    profileSaving.value = false
   }
 }
 
@@ -1077,23 +1101,22 @@ async function submitApproval(): Promise<void> {
 }
 
 function confirmRejectKeyRequest(request: KeyRequest): void {
-  confirm.require({
-    header: '拒绝密钥申请',
-    message: `确定拒绝“${request.username}”的密钥申请吗？用户可以稍后重新提交。`,
-    icon: 'pi pi-times-circle',
-    acceptLabel: '拒绝申请',
-    rejectLabel: '取消',
-    acceptClass: 'p-button-danger',
-    accept: () => {
-      void performRejectKeyRequest(request)
-    },
-  })
+  rejectionRequest.value = request
+  rejectionReason.value = ''
+  rejectionVisible.value = true
 }
 
-async function performRejectKeyRequest(request: KeyRequest): Promise<void> {
+async function performRejectKeyRequest(): Promise<void> {
+  const request = rejectionRequest.value
+  if (!request) {
+    return
+  }
   rejectingRequestId.value = request.id
   try {
-    await rejectKeyRequest(request.id)
+    await rejectKeyRequest(request.id, rejectionReason.value)
+    rejectionVisible.value = false
+    rejectionRequest.value = null
+    rejectionReason.value = ''
     await refreshAdminUsers()
     toast.add({
       severity: 'success',
@@ -1595,8 +1618,15 @@ function clearAgentAuthorizationLocation(): void {
         </div>
 
         <div class="agent-authorization-account">
-          <Avatar
-            :label="(account?.displayName || account?.username || 'U').slice(0, 1).toUpperCase()"
+        <Avatar
+            :image="account?.avatarUrl || undefined"
+            :label="
+              account?.avatarUrl
+                ? undefined
+                : (account?.displayName || account?.username || 'U')
+                    .slice(0, 1)
+                    .toUpperCase()
+            "
             shape="circle"
           />
           <span>
@@ -1739,7 +1769,14 @@ function clearAgentAuthorizationLocation(): void {
 
       <div class="account-menu">
         <Avatar
-          :label="(account?.displayName || account?.username || 'U').slice(0, 1).toUpperCase()"
+          :image="account?.avatarUrl || undefined"
+          :label="
+            account?.avatarUrl
+              ? undefined
+              : (account?.displayName || account?.username || 'U')
+                  .slice(0, 1)
+                  .toUpperCase()
+          "
           shape="circle"
         />
         <span class="account-menu-copy">
@@ -1940,6 +1977,13 @@ function clearAgentAuthorizationLocation(): void {
             </div>
           </section>
 
+          <ProfileEditor
+            v-if="account"
+            :account="account"
+            :saving="profileSaving"
+            @save="saveMyProfile"
+          />
+
           <section class="content-card account-security-card">
             <div class="card-heading">
               <div>
@@ -2043,6 +2087,8 @@ function clearAgentAuthorizationLocation(): void {
                 :class="
                   keyState !== 'disabled' && pendingKeyRequest?.status === 'pending'
                     ? 'pi pi-clock'
+                    : pendingKeyRequest?.status === 'rejected'
+                      ? 'pi pi-times-circle'
                     : keyState === 'expired'
                       ? 'pi pi-calendar-times'
                       : keyState === 'disabled'
@@ -2067,6 +2113,9 @@ function clearAgentAuthorizationLocation(): void {
                     : '首次密钥申请正在等待审批'
                 }}
               </h2>
+              <h2 v-else-if="pendingKeyRequest?.status === 'rejected'">
+                密钥申请已被拒绝
+              </h2>
               <h2 v-else-if="keyState === 'expired'">密钥已过期，请申请续期</h2>
               <h2 v-else-if="keyState === 'missing'">申请你的第一组代理密钥</h2>
               <h2 v-else-if="keyState === 'disabled'">代理连接已被暂停</h2>
@@ -2080,6 +2129,14 @@ function clearAgentAuthorizationLocation(): void {
                 申请于
                 {{ pendingKeyRequest.createdAt ? formatExpiry(pendingKeyRequest.createdAt) : '刚刚' }}
                 提交。管理员批准并设置新的有效期后，已授权 Agent 会领取新的连接凭据。
+              </p>
+              <p v-else-if="pendingKeyRequest?.status === 'rejected'">
+                {{
+                  pendingKeyRequest.reviewerLoginName
+                    ? `管理员 ${pendingKeyRequest.reviewerLoginName} 已处理这项申请。`
+                    : '管理员已处理这项申请。'
+                }}
+                你可以根据拒绝理由修改说明后重新提交。
               </p>
               <p v-else-if="keyState === 'expired'">
                 旧密钥已失效，不能继续用于新连接。提交申请后，管理员将审核并设置新的有效期。
@@ -2100,6 +2157,12 @@ function clearAgentAuthorizationLocation(): void {
                 "
                 :message="pendingKeyRequest.requestMessage"
                 label="我的留言"
+              />
+              <RequestMessage
+                v-if="pendingKeyRequest?.status === 'rejected'"
+                :message="pendingKeyRequest.rejectionReason"
+                label="拒绝理由"
+                empty-text="管理员未填写拒绝理由。"
               />
               <div class="key-request-actions">
                 <Button
@@ -2127,6 +2190,8 @@ function clearAgentAuthorizationLocation(): void {
               :value="
                 keyState !== 'disabled' && pendingKeyRequest?.status === 'pending'
                   ? '待管理员审批'
+                  : pendingKeyRequest?.status === 'rejected'
+                    ? '申请被拒绝'
                   : keyState === 'expired'
                     ? '已过期'
                     : keyState === 'disabled'
@@ -2138,6 +2203,8 @@ function clearAgentAuthorizationLocation(): void {
               :severity="
                 keyState !== 'disabled' && pendingKeyRequest?.status === 'pending'
                   ? 'info'
+                  : pendingKeyRequest?.status === 'rejected'
+                    ? 'danger'
                   : keyState === 'expired'
                     ? 'danger'
                     : keyState === 'disabled'
@@ -2327,6 +2394,7 @@ function clearAgentAuthorizationLocation(): void {
               class="approval-item"
             >
               <Avatar
+                :image="request.avatarUrl || undefined"
                 :label="request.username.slice(0, 1).toUpperCase()"
                 shape="circle"
               />
@@ -3063,6 +3131,7 @@ function clearAgentAuthorizationLocation(): void {
   >
     <div v-if="approvalRequest" class="approval-dialog-user">
       <Avatar
+        :image="approvalRequest.avatarUrl || undefined"
         :label="approvalRequest.username.slice(0, 1).toUpperCase()"
         shape="circle"
       />
@@ -3123,6 +3192,50 @@ function clearAgentAuthorizationLocation(): void {
         :loading="approvalSaving"
         :disabled="!approvalProxyAddressIds.length"
         @click="submitApproval"
+      />
+    </template>
+  </Dialog>
+
+  <Dialog
+    v-model:visible="rejectionVisible"
+    modal
+    header="拒绝密钥申请"
+    class="form-dialog rejection-dialog"
+    :style="{ width: 'min(92vw, 520px)' }"
+    :closable="!rejectingRequestId"
+  >
+    <div v-if="rejectionRequest" class="dialog-form">
+      <p class="dialog-lead">
+        拒绝“{{ rejectionRequest.username }}”的申请后，用户可以看到下面的理由并重新提交。
+      </p>
+      <div class="form-field">
+        <label for="key-request-rejection-reason">拒绝理由（用户可见）</label>
+        <Textarea
+          id="key-request-rejection-reason"
+          v-model="rejectionReason"
+          rows="5"
+          maxlength="500"
+          placeholder="例如：请补充业务用途和需要的有效期后重新申请。"
+          :disabled="Boolean(rejectingRequestId)"
+          fluid
+        />
+        <small>{{ Array.from(rejectionReason).length }} / 500，可选。</small>
+      </div>
+    </div>
+    <template #footer>
+      <Button
+        label="取消"
+        severity="secondary"
+        text
+        :disabled="Boolean(rejectingRequestId)"
+        @click="rejectionVisible = false"
+      />
+      <Button
+        label="确认拒绝"
+        icon="pi pi-times"
+        severity="danger"
+        :loading="Boolean(rejectingRequestId)"
+        @click="performRejectKeyRequest"
       />
     </template>
   </Dialog>

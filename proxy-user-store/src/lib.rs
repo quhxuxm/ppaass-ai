@@ -10,16 +10,17 @@ pub use access_sqlite::SqliteAccessLogRepository;
 pub use model::{
     AGENT_EGRESS_EDIT_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
     AGENT_RUNTIME_THREADS_EDIT_PERMISSION, AccessLogSettings, AccessProtocol, AccessRecord,
-    AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
-    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
-    AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus, ApprovedKeyMaterial,
-    BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
-    EncryptedPrivateKey, ExternalIdentity, KEY_ROTATE_PERMISSION, KeyEncryptionBinding,
-    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
-    KeyRequestKind, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
-    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
+    AccountActor, AccountRole, AccountStatus, AgentDeviceAuthorization,
+    AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
+    AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus,
+    ApprovedKeyMaterial, BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS,
+    DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION, EncryptedPrivateKey, ExternalIdentity,
+    KEY_ROTATE_PERMISSION, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
+    KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind, KeyRequestRejection,
+    KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate, NewAccessRecord,
+    NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser,
+    NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
     PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION, ProxyAddress, ProxyAddressUpdate,
     UserOrigin, UserRecord, UserUpdate, WebAccount, default_proxy_permissions,
 };
@@ -29,12 +30,13 @@ pub use repository::{
 };
 pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};
 pub use validation::{
-    MAX_KEY_REQUEST_MESSAGE_CHARS, MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS,
-    MAX_PROXY_ADDRESS_BYTES, MAX_PROXY_ADDRESS_LABEL_BYTES, MAX_PROXY_ADDRESSES_PER_ACCOUNT,
-    MAX_PUBLIC_KEY_PEM_BYTES, MAX_USERNAME_BYTES, ValidationError, normalize_key_request_message,
-    normalize_permissions, normalize_proxy_address, normalize_proxy_address_id,
-    normalize_proxy_address_ids, normalize_proxy_address_label, normalize_public_key_pem,
-    normalize_username, parse_expires_at, validate_user,
+    MAX_KEY_REQUEST_MESSAGE_CHARS, MAX_KEY_REQUEST_REJECTION_REASON_CHARS,
+    MAX_PERMISSION_CODE_BYTES, MAX_PERMISSIONS, MAX_PROXY_ADDRESS_BYTES,
+    MAX_PROXY_ADDRESS_LABEL_BYTES, MAX_PROXY_ADDRESSES_PER_ACCOUNT, MAX_PUBLIC_KEY_PEM_BYTES,
+    MAX_USERNAME_BYTES, ValidationError, normalize_key_request_message,
+    normalize_key_request_rejection_reason, normalize_permissions, normalize_proxy_address,
+    normalize_proxy_address_id, normalize_proxy_address_ids, normalize_proxy_address_label,
+    normalize_public_key_pem, normalize_username, parse_expires_at, validate_user,
 };
 
 use thiserror::Error;

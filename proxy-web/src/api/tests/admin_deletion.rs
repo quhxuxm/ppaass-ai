@@ -1,8 +1,9 @@
 use super::common::*;
+use sqlx::{Connection, SqliteConnection};
 
 #[tokio::test]
 async fn active_user_must_be_disabled_before_admin_can_delete_it() {
-    let (_directory, app) = test_app().await;
+    let (directory, app) = test_app().await;
     let (cookie, csrf) = login_admin(&app).await;
     create_approved_user(&app, &cookie, &csrf, "delete-user", "delete-user-password").await;
 
@@ -24,6 +25,19 @@ async fn active_user_must_be_disabled_before_admin_can_delete_it() {
     assert_eq!(response.status(), StatusCode::OK);
     let response = delete_user(&app, &cookie, &csrf, "delete-user").await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let mut database =
+        SqliteConnection::connect(directory.path().join("users.sqlite3").to_str().unwrap())
+            .await
+            .unwrap();
+    let audit: (String, String) = sqlx::query_as(
+        "SELECT target_login_name, admin_login_name \
+         FROM account_disable_audits ORDER BY audit_id DESC LIMIT 1",
+    )
+    .fetch_one(&mut database)
+    .await
+    .unwrap();
+    assert_eq!(audit, ("delete-user".to_string(), "admin".to_string()));
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ final class AgentAdminModels {
         final String id;
         final String username;
         final String displayName;
+        final String avatarUrl;
         final String email;
         final List<String> proxyAddressIds;
         final String message;
@@ -22,6 +23,7 @@ final class AgentAdminModels {
                 String id,
                 String username,
                 String displayName,
+                String avatarUrl,
                 String email,
                 List<String> proxyAddressIds,
                 String message,
@@ -30,6 +32,7 @@ final class AgentAdminModels {
             this.id = id;
             this.username = username;
             this.displayName = displayName;
+            this.avatarUrl = avatarUrl;
             this.email = email;
             this.proxyAddressIds = immutableCopy(proxyAddressIds);
             this.message = message;

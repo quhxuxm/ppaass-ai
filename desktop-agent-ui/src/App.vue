@@ -14,6 +14,7 @@ import {
 } from "./rememberedLogin";
 import type {
   AgentAdminKeyRequestApproval,
+  AgentAdminKeyRequestRejection,
   AgentLoginRequest
 } from "./types";
 
@@ -124,8 +125,8 @@ function approveAdminRequest(request: AgentAdminKeyRequestApproval) {
   void adminRequests.approve(request);
 }
 
-function rejectAdminRequest(requestId: string) {
-  void adminRequests.reject(requestId);
+function rejectAdminRequest(request: AgentAdminKeyRequestRejection) {
+  void adminRequests.reject(request);
 }
 </script>
 

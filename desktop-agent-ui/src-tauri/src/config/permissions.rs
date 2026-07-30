@@ -184,6 +184,8 @@ mod tests {
     fn account(role: &str, permissions: &[&str]) -> AgentAuthAccount {
         AgentAuthAccount {
             username: "alice".to_string(),
+            display_name: None,
+            avatar_url: None,
             role: role.to_string(),
             permissions: permissions
                 .iter()

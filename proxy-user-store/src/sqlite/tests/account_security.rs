@@ -208,6 +208,49 @@ async fn managed_account_must_be_disabled_before_deletion() {
 }
 
 #[tokio::test]
+async fn disabling_an_account_records_the_admin_snapshot_and_survives_deletion() {
+    let (_directory, store) = test_store().await;
+    create_admin(&store, "audit-admin").await;
+    store
+        .create_user_account(user_account("audit-target", "target-user"))
+        .await
+        .unwrap();
+
+    store
+        .update_managed_user(
+            "audit-target",
+            ManagedUserUpdate {
+                status: Some(AccountStatus::Disabled),
+                disabled_by: Some(AccountActor {
+                    account_id: "audit-admin".to_string(),
+                    login_name: "audit-admin".to_string(),
+                }),
+                ..ManagedUserUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    store.delete_managed_user("audit-target").await.unwrap();
+
+    let audit: (String, String, String, String) = sqlx::query_as(
+        "SELECT target_account_id, target_login_name, admin_account_id, admin_login_name \
+         FROM account_disable_audits",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        audit,
+        (
+            "audit-target".to_string(),
+            "target-user".to_string(),
+            "audit-admin".to_string(),
+            "audit-admin".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
 async fn password_hash_update_is_atomic_and_increments_auth_version() {
     let (_directory, store) = test_store().await;
     let account = store

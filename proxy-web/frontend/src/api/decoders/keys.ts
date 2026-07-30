@@ -121,10 +121,22 @@ export function decodeKeyRequest(
       nullableString(root.request_message) ??
       nullableString(root.requestMessage) ??
       null,
+    rejectionReason:
+      nullableString(root.rejection_reason) ??
+      nullableString(root.rejectionReason) ??
+      null,
+    reviewerLoginName:
+      nullableString(root.reviewer_login_name) ??
+      nullableString(root.reviewerLoginName) ??
+      null,
     displayName:
       nullableString(root.display_name) ??
       nullableString(root.displayName) ??
       nullableString(account?.display_name),
+    avatarUrl:
+      nullableString(root.avatar_url) ??
+      nullableString(root.avatarUrl) ??
+      nullableString(account?.avatar_url),
     email: nullableString(root.email) ?? nullableString(account?.email),
   }
 }

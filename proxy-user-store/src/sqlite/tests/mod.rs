@@ -40,6 +40,24 @@ pub(super) async fn drop_v8_proxy_address_tables(store: &SqliteUserRepository) {
         .unwrap();
 }
 
+pub(super) async fn drop_v9_key_request_columns(store: &SqliteUserRepository) {
+    sqlx::query("ALTER TABLE key_generation_requests DROP COLUMN reviewer_login_name")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE key_generation_requests DROP COLUMN rejection_reason")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+}
+
+pub(super) async fn drop_v10_account_disable_audits(store: &SqliteUserRepository) {
+    sqlx::query("DROP TABLE account_disable_audits")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+}
+
 pub(super) fn managed_user(
     account_id: &str,
     login_name: &str,

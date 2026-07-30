@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use reqwest::StatusCode;
 use serde::de::IgnoredAny;
 
+use super::profile_identity::validated_avatar_url;
 use super::*;
 use crate::models::{AgentAdminKeyRequest, AgentAdminKeyRequestInbox, AgentAdminProxyAddress};
 
-const MAX_ADMIN_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_ADMIN_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ADMIN_KEY_REQUESTS: usize = 2_000;
 const MAX_ADMIN_PROXY_ADDRESSES: usize = 512;
 
@@ -39,6 +40,8 @@ struct AdminKeyRequestResponse {
     status: String,
     expected_key_version: Option<i64>,
     reviewer_account_id: Option<String>,
+    reviewer_login_name: Option<String>,
+    rejection_reason: Option<String>,
     requested_at: i64,
     reviewed_at: Option<i64>,
     approved_expires_at: Option<i64>,
@@ -105,6 +108,11 @@ struct ApproveKeyRequestPayload<'a> {
     proxy_address_ids: &'a [String],
 }
 
+#[derive(Serialize)]
+struct RejectKeyRequestPayload<'a> {
+    reason: Option<&'a str>,
+}
+
 pub(crate) async fn fetch_agent_admin_key_request_inbox(
     proxy_web_url: &str,
     access_token: &str,
@@ -157,6 +165,7 @@ pub(crate) async fn reject_agent_admin_key_request(
     proxy_web_url: &str,
     access_token: &str,
     request_id: &str,
+    reason: Option<&str>,
 ) -> Result<(), AgentAdminHttpError> {
     let base_url = admin_base_url(proxy_web_url)?;
     let client = build_proxy_web_client().map_err(request_setup_error)?;
@@ -167,6 +176,7 @@ pub(crate) async fn reject_agent_admin_key_request(
     let response = client
         .post(endpoint(&base_url, &path).map_err(request_setup_error)?)
         .bearer_auth(access_token)
+        .json(&RejectKeyRequestPayload { reason })
         .send()
         .await
         .map_err(|error| request_error(map_request_error(error)))?;
@@ -215,6 +225,8 @@ fn validate_admin_inbox(
             request_id: request.request_id,
             username: request.account.login_name,
             display_name: request.account.display_name,
+            avatar_url: validated_avatar_url(request.account.avatar_url)
+                .map_err(|_| invalid_response("密钥申请包含无效头像"))?,
             email: request.account.email,
             request_message: request.request_message,
             kind: request.kind,
@@ -264,14 +276,11 @@ fn validate_request(
             .linked_username
             .as_deref()
             .is_none_or(|value| value.len() <= 256)
-        && request
-            .account
-            .avatar_url
-            .as_deref()
-            .is_none_or(|value| value.len() <= 4096)
         && request.account.last_login_at.is_none_or(|value| value > 0)
         && request.expected_key_version.is_none_or(|value| value >= 0)
         && request.reviewer_account_id.is_none()
+        && request.reviewer_login_name.is_none()
+        && request.rejection_reason.is_none()
         && request.reviewed_at.is_none()
         && request.approved_expires_at.is_none();
     if !valid_identifier(&request.request_id)

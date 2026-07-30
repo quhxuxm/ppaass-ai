@@ -1,14 +1,20 @@
 use super::super::*;
 
 impl SqliteUserRepository {
-    #[instrument(skip(self), fields(request_id, reviewer_account_id))]
+    #[instrument(
+        skip(self, rejection),
+        fields(
+            request_id = %rejection.request_id,
+            reviewer_account_id = %rejection.reviewer_account_id
+        )
+    )]
     pub(super) async fn reject_key_generation_request(
         &self,
-        request_id: &str,
-        reviewer_account_id: &str,
+        rejection: KeyRequestRejection,
     ) -> Result<KeyGenerationRequest> {
-        let request_id = normalize_request_id(request_id)?;
-        let reviewer_account_id = normalize_account_id(reviewer_account_id)?;
+        let request_id = normalize_request_id(&rejection.request_id)?;
+        let reviewer_account_id = normalize_account_id(&rejection.reviewer_account_id)?;
+        let rejection_reason = normalize_key_request_rejection_reason(rejection.rejection_reason)?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)
             .await?
@@ -26,10 +32,13 @@ impl SqliteUserRepository {
         let timestamp = now();
         let result = sqlx::query(
             "UPDATE key_generation_requests SET status = 'rejected', \
-             reviewer_account_id = ?, reviewed_at = ? \
+             reviewer_account_id = ?, reviewer_login_name = ?, rejection_reason = ?, \
+             reviewed_at = ? \
              WHERE request_id = ? AND status = 'pending'",
         )
         .bind(&reviewer.account_id)
+        .bind(&reviewer.login_name)
+        .bind(rejection_reason)
         .bind(timestamp)
         .bind(&request.request_id)
         .execute(&mut *transaction)

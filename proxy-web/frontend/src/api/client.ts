@@ -19,6 +19,7 @@ import { clearClientSession, request } from './transport'
 import {
   ApiError,
   KEY_REQUEST_MESSAGE_MAX_LENGTH,
+  KEY_REQUEST_REJECTION_REASON_MAX_LENGTH,
 } from './types'
 import type {
   AccessLogSettings,
@@ -35,6 +36,7 @@ import type {
   SelfView,
   SessionState,
   UpdateManagedUserPayload,
+  UpdateMyProfilePayload,
   UpdateProxyAddressPayload,
 } from './types'
 import { asRecord, boolValue, numberValue } from './values'
@@ -123,6 +125,15 @@ export async function changeMyPassword(
   payload: ChangePasswordPayload,
 ): Promise<void> {
   await request<unknown>('/api/v1/me/password', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateMyProfile(
+  payload: UpdateMyProfilePayload,
+): Promise<void> {
+  await request<unknown>('/api/v1/me/profile', {
     method: 'PUT',
     body: JSON.stringify(payload),
   })
@@ -298,10 +309,25 @@ export async function approveKeyRequest(
 
 export async function rejectKeyRequest(
   requestId: string,
+  reason: string | null = null,
 ): Promise<void> {
+  const normalizedReason = reason?.trim() || null
+  if (
+    normalizedReason &&
+    Array.from(normalizedReason).length >
+      KEY_REQUEST_REJECTION_REASON_MAX_LENGTH
+  ) {
+    throw new ApiError(
+      `拒绝理由不能超过 ${KEY_REQUEST_REJECTION_REASON_MAX_LENGTH} 字`,
+      400,
+    )
+  }
   await request<unknown>(
     `/api/v1/admin/key-requests/${encodeURIComponent(requestId)}/reject`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      body: JSON.stringify({ reason: normalizedReason }),
+    },
   )
 }
 

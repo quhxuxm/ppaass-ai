@@ -5,9 +5,10 @@ use crate::{
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
     AgentDeviceAuthorizationPoll, BootstrapOutcome, EncryptedPrivateKey, KeyEncryptionBinding,
     KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
-    LoginRecord, ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount,
-    NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress,
-    NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord, UserUpdate, WebAccount,
+    KeyRequestRejection, LoginRecord, ManagedUser, ManagedUserUpdate, NewAccessRecord,
+    NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser,
+    NewProxyAddress, NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord,
+    UserUpdate, WebAccount,
 };
 
 /// 数据库无关的用户 CRUD 接口。
@@ -111,6 +112,12 @@ pub trait AccountRepository: Send + Sync {
         account_id: &str,
     ) -> Result<Option<KeyGenerationRequest>>;
 
+    /// 查询账号最近提交的一项申请，包含已批准和已拒绝结果。
+    async fn get_latest_key_generation_request(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<KeyGenerationRequest>>;
+
     /// 按稳定申请 ID 查询任意状态的申请。
     async fn get_key_generation_request(
         &self,
@@ -129,8 +136,7 @@ pub trait AccountRepository: Send + Sync {
     /// 管理员拒绝一项仍处于 pending 的申请。
     async fn reject_key_generation_request(
         &self,
-        request_id: &str,
-        reviewer_account_id: &str,
+        rejection: KeyRequestRejection,
     ) -> Result<KeyGenerationRequest>;
 
     /// 仅当账号已经停用时，原子删除 Web 账号及其关联的 Proxy profile。

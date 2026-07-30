@@ -121,6 +121,13 @@ impl AccountRepository for SqliteUserRepository {
         SqliteUserRepository::get_key_generation_request(self, request_id).await
     }
 
+    async fn get_latest_key_generation_request(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<KeyGenerationRequest>> {
+        SqliteUserRepository::get_latest_key_generation_request(self, account_id).await
+    }
+
     async fn list_pending_key_generation_requests(&self) -> Result<Vec<KeyGenerationRequest>> {
         SqliteUserRepository::list_pending_key_generation_requests(self).await
     }
@@ -134,11 +141,9 @@ impl AccountRepository for SqliteUserRepository {
 
     async fn reject_key_generation_request(
         &self,
-        request_id: &str,
-        reviewer_account_id: &str,
+        rejection: KeyRequestRejection,
     ) -> Result<KeyGenerationRequest> {
-        SqliteUserRepository::reject_key_generation_request(self, request_id, reviewer_account_id)
-            .await
+        SqliteUserRepository::reject_key_generation_request(self, rejection).await
     }
 
     async fn delete_managed_user(&self, account_id: &str) -> Result<()> {

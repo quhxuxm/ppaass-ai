@@ -9,6 +9,8 @@ import java.util.Set;
 
 final class AgentSessionStore {
     static final String PREF_ROLE = "managed_account_role";
+    static final String PREF_DISPLAY_NAME = "managed_account_display_name";
+    static final String PREF_AVATAR_URL = "managed_account_avatar_url";
     static final String PREF_PERMISSIONS = "managed_agent_permissions";
     static final String PREF_ACCESS_TOKEN = "managed_agent_access_token";
     static final String PREF_ACCESS_TOKEN_EXPIRES_AT =
@@ -37,6 +39,8 @@ final class AgentSessionStore {
             SharedPreferences.Editor editor,
             AgentAuthClient.LoginResult result) {
         editor.putString(PREF_ROLE, result.role)
+                .putString(PREF_DISPLAY_NAME, result.displayName)
+                .putString(PREF_AVATAR_URL, result.avatarUrl)
                 .putStringSet(PREF_PERMISSIONS, new HashSet<>(result.permissions))
                 .putString(
                         ManagedProxyAddresses.PREF_PROXY_ADDRESSES,
@@ -74,6 +78,8 @@ final class AgentSessionStore {
         }
         return new StoredSession(
                 role,
+                preferences.getString(PREF_DISPLAY_NAME, ""),
+                preferences.getString(PREF_AVATAR_URL, ""),
                 permissions,
                 token,
                 preferences.getLong(PREF_ACCESS_TOKEN_EXPIRES_AT, -1),
@@ -90,6 +96,8 @@ final class AgentSessionStore {
         SharedPreferences preferences = preferences(context);
         SharedPreferences.Editor editor = preferences.edit()
                 .putString(PREF_ROLE, result.role)
+                .putString(PREF_DISPLAY_NAME, result.displayName)
+                .putString(PREF_AVATAR_URL, result.avatarUrl)
                 .putStringSet(PREF_PERMISSIONS, new HashSet<>(result.permissions))
                 .putString(
                         ManagedProxyAddresses.PREF_PROXY_ADDRESSES,
@@ -199,6 +207,8 @@ final class AgentSessionStore {
 
     static void clearFrom(SharedPreferences.Editor editor) {
         editor.remove(PREF_ROLE)
+                .remove(PREF_DISPLAY_NAME)
+                .remove(PREF_AVATAR_URL)
                 .remove(PREF_PERMISSIONS)
                 .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
                 .remove(PREF_PROXY_ASSIGNMENT_STATE)
@@ -248,6 +258,8 @@ final class AgentSessionStore {
 
     static final class StoredSession {
         final String role;
+        final String displayName;
+        final String avatarUrl;
         final Set<String> permissions;
         final String accessToken;
         final long accessTokenExpiresAt;
@@ -256,12 +268,16 @@ final class AgentSessionStore {
 
         StoredSession(
                 String role,
+                String displayName,
+                String avatarUrl,
                 Set<String> permissions,
                 String accessToken,
                 long accessTokenExpiresAt,
                 int refreshSeconds,
                 boolean needsRelogin) {
             this.role = role;
+            this.displayName = displayName == null ? "" : displayName;
+            this.avatarUrl = avatarUrl == null ? "" : avatarUrl;
             this.permissions = permissions;
             this.accessToken = accessToken;
             this.accessTokenExpiresAt = accessTokenExpiresAt;

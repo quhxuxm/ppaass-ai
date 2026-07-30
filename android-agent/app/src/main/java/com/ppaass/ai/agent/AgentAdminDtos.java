@@ -10,6 +10,7 @@ final class AgentAdminDtos {
         public String account_id;
         public String login_name;
         public String display_name;
+        public String avatar_url;
         public String email;
 
         public Account() {
@@ -60,6 +61,14 @@ final class AgentAdminDtos {
         ApproveKeyRequest(long expiresAt, List<String> proxyAddressIds) {
             this.expires_at = expiresAt;
             this.proxy_address_ids = proxyAddressIds;
+        }
+    }
+
+    static final class RejectKeyRequest {
+        public final String reason;
+
+        RejectKeyRequest(String reason) {
+            this.reason = reason;
         }
     }
 

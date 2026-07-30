@@ -17,7 +17,7 @@ fn account() -> serde_json::Value {
         "linked_username": null,
         "display_name": "Alice",
         "email": "alice@example.com",
-        "avatar_url": null,
+        "avatar_url": "data:image/png;base64,iVBORw0KGgo=",
         "auth_version": 1,
         "last_login_at": null,
         "created_at": 1_800_000_000_i64,
@@ -39,6 +39,16 @@ fn key_request(status: &str) -> serde_json::Value {
             serde_json::Value::Null
         } else {
             serde_json::json!("acct_admin")
+        },
+        "reviewer_login_name": if pending {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!("admin")
+        },
+        "rejection_reason": if status == "rejected" {
+            serde_json::json!("请补充用途说明")
+        } else {
+            serde_json::Value::Null
         },
         "requested_at": 1_800_000_002_i64,
         "reviewed_at": if pending {
@@ -101,6 +111,10 @@ async fn admin_inbox_uses_bearer_and_maps_requests_without_exposing_token() {
 
     assert_eq!(inbox.requests.len(), 1);
     assert_eq!(inbox.requests[0].username, "alice@example.com");
+    assert_eq!(
+        inbox.requests[0].avatar_url.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgo=")
+    );
     assert_eq!(inbox.requests[0].proxy_address_ids, ["pxy_current"]);
     assert_eq!(inbox.proxy_addresses.len(), 1);
     for request in captured {
@@ -185,10 +199,16 @@ async fn concurrent_rejection_is_returned_as_a_typed_conflict() {
         request
     });
 
-    let error = reject_agent_admin_key_request(&format!("http://{address}"), TOKEN, "kreq_1")
-        .await
-        .unwrap_err();
+    let error = reject_agent_admin_key_request(
+        &format!("http://{address}"),
+        TOKEN,
+        "kreq_1",
+        Some("请补充用途说明"),
+    )
+    .await
+    .unwrap_err();
     let request = server.await.unwrap();
     assert!(request.starts_with("POST /api/v1/admin/key-requests/kreq_1/reject HTTP/1.1"));
+    assert!(request.contains("\"reason\":\"请补充用途说明\""));
     assert!(error.is_conflict());
 }

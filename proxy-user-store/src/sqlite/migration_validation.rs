@@ -101,6 +101,8 @@ pub(super) async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -
             "status",
             "expected_key_version",
             "reviewer_account_id",
+            "reviewer_login_name",
+            "rejection_reason",
             "requested_at",
             "reviewed_at",
             "approved_expires_at",
@@ -138,6 +140,19 @@ pub(super) async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -
             "authorized_at",
             "consumed_at",
             "last_polled_at",
+        ],
+    )
+    .await?;
+    require_columns(
+        transaction,
+        "account_disable_audits",
+        &[
+            "audit_id",
+            "target_account_id",
+            "target_login_name",
+            "admin_account_id",
+            "admin_login_name",
+            "disabled_at",
         ],
     )
     .await?;

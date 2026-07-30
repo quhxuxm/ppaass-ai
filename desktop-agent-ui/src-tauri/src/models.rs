@@ -23,6 +23,10 @@ pub(crate) struct AgentKeyRotationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AgentAuthAccount {
     pub(crate) username: String,
+    #[serde(default)]
+    pub(crate) display_name: Option<String>,
+    #[serde(default)]
+    pub(crate) avatar_url: Option<String>,
     #[serde(default = "default_agent_account_role")]
     pub(crate) role: String,
     #[serde(default = "default_agent_account_permissions")]
@@ -274,7 +278,7 @@ mod tests {
         unexpected["agentAccessToken"] = serde_json::json!("must-stay-in-rust");
         assert!(serde_json::from_value::<AgentAdminKeyRequestApproval>(unexpected).is_err());
         assert!(serde_json::from_value::<AgentAdminKeyRequestRejection>(
-            serde_json::json!({"requestId": "kreq_1"})
+            serde_json::json!({"requestId": "kreq_1", "reason": "请补充说明"})
         )
         .is_ok());
         assert!(serde_json::from_value::<AgentAdminKeyRequestRejection>(
@@ -300,6 +304,8 @@ mod tests {
     fn agent_permissions_are_fail_closed_for_users_and_implicit_for_admins() {
         let mut user = AgentAuthAccount {
             username: "alice".to_string(),
+            display_name: None,
+            avatar_url: None,
             role: "user".to_string(),
             permissions: Vec::new(),
             key_version: 1,
@@ -327,6 +333,8 @@ mod tests {
             authenticated: true,
             account: Some(AgentAuthAccount {
                 username: "alice".to_string(),
+                display_name: None,
+                avatar_url: None,
                 role: "user".to_string(),
                 permissions: vec!["key.rotate".to_string()],
                 key_version: 1,

@@ -5,10 +5,12 @@ import Checkbox from "primevue/checkbox";
 import DatePicker from "primevue/datepicker";
 import Dialog from "primevue/dialog";
 import ProgressSpinner from "primevue/progressspinner";
+import Textarea from "primevue/textarea";
 import AppIcon from "../components/AppIcon";
 import type {
   AgentAdminKeyRequest,
   AgentAdminKeyRequestApproval,
+  AgentAdminKeyRequestRejection,
   AgentAdminProxyAddress
 } from "../types";
 
@@ -23,13 +25,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   refresh: [];
   approve: [request: AgentAdminKeyRequestApproval];
-  reject: [requestId: string];
+  reject: [request: AgentAdminKeyRequestRejection];
 }>();
 
 const approvalRequest = ref<AgentAdminKeyRequest | null>(null);
 const approvalExpiresAt = ref<Date | null>(null);
 const approvalProxyAddressIds = ref<string[]>([]);
 const rejectionRequest = ref<AgentAdminKeyRequest | null>(null);
+const rejectionReason = ref("");
 const enabledProxyAddresses = computed(() =>
   props.proxyAddresses.filter((address) => address.enabled)
 );
@@ -64,6 +67,7 @@ watch(
       !requestIds.includes(rejectionRequest.value.request_id)
     ) {
       rejectionRequest.value = null;
+      rejectionReason.value = "";
     }
   }
 );
@@ -77,6 +81,21 @@ function openApproval(request: AgentAdminKeyRequest) {
     enabledIds.has(id)
   );
   approvalExpiresAt.value = defaultExpiry();
+}
+
+function openRejection(request: AgentAdminKeyRequest) {
+  rejectionRequest.value = request;
+  rejectionReason.value = "";
+}
+
+function submitRejection() {
+  if (!rejectionRequest.value || rejectionBusy.value) {
+    return;
+  }
+  emit("reject", {
+    requestId: rejectionRequest.value.request_id,
+    reason: rejectionReason.value.trim() || null
+  });
 }
 
 function submitApproval() {
@@ -151,7 +170,8 @@ function defaultExpiry() {
         class="admin-request-card"
       >
         <div class="admin-request-identity">
-          <span class="admin-request-avatar" aria-hidden="true">
+          <img v-if="request.avatar_url" class="admin-request-avatar" :src="request.avatar_url" alt="" />
+          <span v-else class="admin-request-avatar" aria-hidden="true">
             {{ request.username.slice(0, 1).toUpperCase() }}
           </span>
           <div>
@@ -190,7 +210,7 @@ function defaultExpiry() {
             severity="danger"
             text
             :disabled="Boolean(busyRequestId)"
-            @click="rejectionRequest = request"
+            @click="openRejection(request)"
           />
           <Button
             label="批准"
@@ -220,7 +240,8 @@ function defaultExpiry() {
   >
     <div v-if="approvalRequest" class="approval-dialog-content">
       <div class="approval-user-summary">
-        <strong>{{ approvalRequest.username }}</strong>
+        <img v-if="approvalRequest.avatar_url" class="admin-request-avatar" :src="approvalRequest.avatar_url" alt="" />
+        <strong>{{ approvalRequest.display_name || approvalRequest.username }}</strong>
         <span>{{ requestKindLabel(approvalRequest) }}</span>
       </div>
 
@@ -289,11 +310,25 @@ function defaultExpiry() {
     :closable="!rejectionBusy"
     @update:visible="$event || (rejectionRequest = null)"
   >
-    <p v-if="rejectionRequest" class="rejection-copy">
-      确定拒绝 <strong>{{ rejectionRequest.username }}</strong> 的{{
-        requestKindLabel(rejectionRequest)
-      }}申请吗？
-    </p>
+    <div v-if="rejectionRequest" class="rejection-dialog-content">
+      <p class="rejection-copy">
+        拒绝 <strong>{{ rejectionRequest.username }}</strong> 的{{
+          requestKindLabel(rejectionRequest)
+        }}申请后，用户可以查看理由并重新提交。
+      </p>
+      <label class="rejection-reason">
+        <span>拒绝理由（用户可见）</span>
+        <Textarea
+          v-model="rejectionReason"
+          rows="5"
+          maxlength="500"
+          placeholder="例如：请补充业务用途和需要的有效期后重新申请。"
+          :disabled="rejectionBusy"
+          fluid
+        />
+        <small>{{ Array.from(rejectionReason).length }} / 500，可选</small>
+      </label>
+    </div>
     <template #footer>
       <Button
         label="取消"
@@ -307,10 +342,7 @@ function defaultExpiry() {
         severity="danger"
         :loading="rejectionBusy"
         :disabled="rejectionBusy"
-        @click="
-          rejectionRequest &&
-          emit('reject', rejectionRequest.request_id)
-        "
+        @click="submitRejection"
       />
     </template>
   </Dialog>
@@ -327,7 +359,7 @@ function defaultExpiry() {
 .admin-request-identity { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .admin-request-identity > div { min-width: 0; display: grid; }
 .admin-request-identity strong, .admin-request-identity span, .admin-request-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.admin-request-avatar { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; background: var(--app-muted-surface); color: var(--app-primary-strong); font-weight: 800; }
+.admin-request-avatar { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; object-fit: cover; background: var(--app-muted-surface); color: var(--app-primary-strong); font-weight: 800; }
 .admin-request-kind { padding: 6px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
 .admin-request-kind.initial { color: #0f8f67; background: rgba(16,185,129,.14); }
 .admin-request-kind.rotate { color: #d97706; background: rgba(245,158,11,.14); }
@@ -342,7 +374,7 @@ function defaultExpiry() {
 .admin-request-empty :deep(.app-icon) { width: 50px; height: 50px; }
 .admin-request-error { display: flex; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 12px; color: #ef6c91; background: rgba(239,108,145,.1); }
 .approval-dialog-content { display: grid; gap: 18px; }
-.approval-user-summary { display: flex; justify-content: space-between; padding: 13px 15px; border-radius: 13px; background: var(--app-muted-surface); }
+.approval-user-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 15px; border-radius: 13px; background: var(--app-muted-surface); }
 .approval-user-summary span { color: var(--app-text-muted); }
 .approval-proxy-list { display: grid; gap: 8px; margin: 0; padding: 14px; border: 1px solid var(--app-border); border-radius: 14px; }
 .approval-proxy-list legend, .approval-expiry > span { font-weight: 800; }
@@ -353,6 +385,9 @@ function defaultExpiry() {
 .approval-proxy-empty { padding: 15px; color: var(--app-text-muted); text-align: center; }
 .approval-expiry { display: grid; gap: 8px; }
 .rejection-copy { line-height: 1.7; }
+.rejection-dialog-content, .rejection-reason { display: grid; gap: 10px; }
+.rejection-reason > span { font-weight: 800; }
+.rejection-reason > small { color: var(--app-text-muted); text-align: right; }
 @media (max-width: 720px) {
   .admin-request-heading { align-items: stretch; flex-direction: column; }
   .admin-request-list { grid-template-columns: 1fr; }

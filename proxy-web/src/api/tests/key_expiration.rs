@@ -229,7 +229,10 @@ async fn concurrent_key_requests_are_idempotent_and_rejection_allows_retry() {
                 .uri(&reject_uri)
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reason": "请补充业务用途和所需有效期。"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -237,6 +240,10 @@ async fn concurrent_key_requests_are_idempotent_and_rejection_allows_retry() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body["request"]["status"], "rejected");
+    assert_eq!(
+        body["request"]["rejection_reason"],
+        "请补充业务用途和所需有效期。"
+    );
     assert!(body["user"].is_null());
     assert_admin_response_is_redacted(&body);
 
@@ -267,7 +274,13 @@ async fn concurrent_key_requests_are_idempotent_and_rejection_allows_retry() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(json_body(response).await["request"].is_null());
+    let body = json_body(response).await;
+    assert_eq!(body["request"]["status"], "rejected");
+    assert_eq!(
+        body["request"]["rejection_reason"],
+        "请补充业务用途和所需有效期。"
+    );
+    assert_eq!(body["request"]["reviewer_login_name"], "admin");
 
     let response = app
         .oneshot(

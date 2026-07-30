@@ -36,6 +36,37 @@ pub(crate) async fn get_me(
 }
 
 #[instrument(skip(state, headers, payload))]
+pub(crate) async fn update_my_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<UpdateMyProfileRequest>, JsonRejection>,
+) -> Result<Json<WebAccount>, ApiError> {
+    validate_browser_mutation(&headers)?;
+    let session = authenticate(&state, &headers).await?;
+    state.sessions.require_csrf(&session, &headers)?;
+    let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
+    let display_name = normalize_nickname_patch(request.display_name)?;
+    let avatar_url = normalize_avatar_patch(request.avatar_data_url)?;
+    if display_name.is_none() && avatar_url.is_none() {
+        return Err(ApiError::bad_request("至少修改昵称或头像中的一项"));
+    }
+    let managed = state
+        .accounts
+        .update_managed_user(
+            &session.account.account_id,
+            ManagedUserUpdate {
+                display_name,
+                avatar_url,
+                ..ManagedUserUpdate::default()
+            },
+        )
+        .await?;
+    let account = managed.account.ok_or_else(ApiError::internal)?;
+    info!(account_id = account.account_id, "用户更新个人资料");
+    Ok(Json(account))
+}
+
+#[instrument(skip(state, headers, payload))]
 pub(crate) async fn change_my_password(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -117,7 +148,7 @@ pub(crate) async fn get_my_key_request(
     let session = authenticate(&state, &headers).await?;
     let request = state
         .accounts
-        .get_pending_key_generation_request(&session.account.account_id)
+        .get_latest_key_generation_request(&session.account.account_id)
         .await?
         .map(SelfKeyRequestResponse::from_request);
     Ok(Json(MyKeyRequestResponse { request }))

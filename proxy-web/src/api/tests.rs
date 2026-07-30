@@ -14,6 +14,7 @@ mod key_expiration;
 mod key_initial;
 mod password;
 mod permissions;
+mod profile;
 mod proxy_address_assignment_errors;
 mod proxy_addresses;
 mod web_session_handoff;

@@ -23,6 +23,8 @@ async fn v7_migration_removes_deprecated_agent_config_view_permission() {
         .await
         .unwrap();
     drop_v8_proxy_address_tables(&store).await;
+    drop_v10_account_disable_audits(&store).await;
+    drop_v9_key_request_columns(&store).await;
     sqlx::query("PRAGMA user_version = 6")
         .execute(&store.pool)
         .await

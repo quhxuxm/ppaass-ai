@@ -40,6 +40,8 @@ fn auth_state_keeps_session_when_config_cannot_be_loaded() {
         .set_authenticated_session(AuthenticatedAgentSession::new(
             AgentAuthAccount {
                 username: "alice".to_string(),
+                display_name: None,
+                avatar_url: None,
                 role: "user".to_string(),
                 permissions: vec!["key.rotate".to_string()],
                 key_version: 7,
@@ -82,6 +84,8 @@ fn auth_state_keeps_session_when_config_cannot_be_parsed() {
         .set_authenticated_session(AuthenticatedAgentSession::new(
             AgentAuthAccount {
                 username: "bob".to_string(),
+                display_name: None,
+                avatar_url: None,
                 role: "admin".to_string(),
                 permissions: vec!["key.rotate".to_string()],
                 key_version: 2,
@@ -229,6 +233,8 @@ fn authenticated_runtime_with_baseline(
         .set_authenticated_session(AuthenticatedAgentSession::new(
             AgentAuthAccount {
                 username: "viewer".to_string(),
+                display_name: None,
+                avatar_url: None,
                 role: role.to_string(),
                 permissions: permissions.iter().map(ToString::to_string).collect(),
                 key_version: 1,

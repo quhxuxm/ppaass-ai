@@ -92,3 +92,30 @@ pub(super) async fn migrate_key_requests_to_v6(
     .await?;
     Ok(())
 }
+
+pub(super) async fn migrate_key_requests_to_v9(
+    transaction: &mut Transaction<'_, Sqlite>,
+) -> Result<()> {
+    sqlx::query(
+        "ALTER TABLE key_generation_requests ADD COLUMN reviewer_login_name TEXT \
+         CHECK(reviewer_login_name IS NULL OR \
+               (length(reviewer_login_name) BETWEEN 1 AND 256))",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "ALTER TABLE key_generation_requests ADD COLUMN rejection_reason TEXT \
+         CHECK(rejection_reason IS NULL OR length(rejection_reason) <= 500)",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE key_generation_requests SET reviewer_login_name = (\
+             SELECT login_name FROM web_accounts \
+             WHERE web_accounts.account_id = key_generation_requests.reviewer_account_id\
+         ) WHERE reviewer_account_id IS NOT NULL",
+    )
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}

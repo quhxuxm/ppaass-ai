@@ -1,8 +1,12 @@
 package com.ppaass.ai.agent;
 
+import android.graphics.Bitmap;
 import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -24,6 +28,11 @@ final class AgentAdminRequestViews {
             Callbacks callbacks) {
         LinearLayout card = host.panel(root);
         LinearLayout titleRow = host.horizontalRow();
+        View avatar = avatarView(host, request, 42);
+        LinearLayout.LayoutParams avatarParams =
+                new LinearLayout.LayoutParams(host.dp(42), host.dp(42));
+        avatarParams.setMargins(0, 0, host.dp(10), 0);
+        titleRow.addView(avatar, avatarParams);
         LinearLayout identity = new LinearLayout(host);
         identity.setOrientation(LinearLayout.VERTICAL);
         TextView name = host.titleText(request.title(), 17f);
@@ -96,6 +105,32 @@ final class AgentAdminRequestViews {
         LinearLayout.LayoutParams actionParams = host.matchWrap();
         actionParams.setMargins(0, host.dp(12), 0, 0);
         card.addView(actions, actionParams);
+    }
+
+    static View avatarView(
+            MainActivityAdminApprovals host,
+            AgentAdminModels.KeyRequest request,
+            int sizeDp) {
+        Bitmap bitmap = AgentProfileAvatar.decode(request.avatarUrl);
+        if (bitmap != null) {
+            ImageView avatar = new ImageView(host);
+            avatar.setImageBitmap(bitmap);
+            avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            avatar.setBackground(host.rounded(
+                    host.COLOR_CONTROL,
+                    host.COLOR_BORDER));
+            avatar.setClipToOutline(true);
+            avatar.setContentDescription(request.title() + "的头像");
+            return avatar;
+        }
+        TextView fallback = host.titleText(
+                request.title().substring(0, 1).toUpperCase(Locale.getDefault()),
+                sizeDp > 42 ? 18f : 16f);
+        fallback.setGravity(Gravity.CENTER);
+        fallback.setBackground(host.rounded(
+                host.COLOR_CONTROL,
+                host.COLOR_BORDER));
+        return fallback;
     }
 
     private static boolean hasEnabledAddress(

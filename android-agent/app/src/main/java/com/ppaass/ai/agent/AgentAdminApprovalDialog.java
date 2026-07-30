@@ -4,6 +4,7 @@ import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.app.TimePickerDialog;
 import android.graphics.Typeface;
+import android.view.Window;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -35,17 +36,47 @@ final class AgentAdminApprovalDialog {
 
         ScrollView scroll = new ScrollView(host);
         scroll.setFillViewport(true);
+        scroll.setBackgroundColor(host.COLOR_SURFACE);
         LinearLayout root = new LinearLayout(host);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(host.dp(20), host.dp(4), host.dp(20), host.dp(12));
+        root.setPadding(host.dp(20), host.dp(20), host.dp(20), host.dp(14));
+        root.setBackgroundColor(host.COLOR_SURFACE);
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        TextView dialogTitle = host.titleText("批准密钥申请", 22f);
+        root.addView(dialogTitle, host.matchWrap());
+
+        LinearLayout identity = new LinearLayout(host);
+        identity.setOrientation(LinearLayout.HORIZONTAL);
+        identity.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        identity.setPadding(
+                host.dp(14), host.dp(12), host.dp(14), host.dp(12));
+        identity.setBackground(host.rounded(
+                host.COLOR_CONTROL,
+                host.COLOR_BORDER));
+        LinearLayout.LayoutParams avatarParams =
+                new LinearLayout.LayoutParams(host.dp(48), host.dp(48));
+        avatarParams.setMargins(0, 0, host.dp(12), 0);
+        identity.addView(
+                AgentAdminRequestViews.avatarView(host, request, 48),
+                avatarParams);
+        LinearLayout identityText = new LinearLayout(host);
+        identityText.setOrientation(LinearLayout.VERTICAL);
         TextView user = host.titleText(request.title(), 18f);
-        root.addView(user, host.matchWrap());
+        identityText.addView(user, host.matchWrap());
         TextView username = host.mutedText(request.username, 13f);
-        root.addView(username, host.matchWrap());
+        LinearLayout.LayoutParams usernameParams = host.matchWrap();
+        usernameParams.setMargins(0, host.dp(3), 0, 0);
+        identityText.addView(username, usernameParams);
+        identity.addView(identityText, new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f));
+        LinearLayout.LayoutParams identityParams = host.matchWrap();
+        identityParams.setMargins(0, host.dp(14), 0, 0);
+        root.addView(identity, identityParams);
 
         if (!request.message.isEmpty()) {
             TextView messageLabel = host.controlLabel("用户留言");
@@ -116,13 +147,14 @@ final class AgentAdminApprovalDialog {
         root.addView(error, errorParams);
 
         AlertDialog dialog = new AlertDialog.Builder(host)
-                .setTitle("批准密钥申请")
                 .setView(scroll)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("批准并生成密钥", null)
                 .create();
         dialog.setOnShowListener(ignored -> {
+            styleDialogSurface(host, dialog);
             Button approve = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            approve.setTextColor(host.COLOR_ACCENT_DARK);
             approve.setEnabled(!choices.isEmpty());
             approve.setOnClickListener(view -> {
                 List<String> selected = selectedIds(choices);
@@ -139,8 +171,21 @@ final class AgentAdminApprovalDialog {
                 dialog.dismiss();
                 listener.onApprove(request, expiresAt, selected);
             });
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+                    .setTextColor(host.COLOR_MUTED);
         });
         dialog.show();
+    }
+
+    private static void styleDialogSurface(
+            MainActivityAdminApprovals host,
+            AlertDialog dialog) {
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(host.rounded(
+                    host.COLOR_SURFACE,
+                    host.COLOR_BORDER));
+        }
     }
 
     static String validationMessage(

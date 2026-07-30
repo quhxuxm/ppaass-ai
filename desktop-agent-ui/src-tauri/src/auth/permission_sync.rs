@@ -12,6 +12,8 @@ struct AgentPermissionSyncResponse {
 
 pub(crate) struct AgentPermissionSnapshot {
     pub(crate) role: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) avatar_url: Option<String>,
     pub(crate) permissions: Option<Vec<String>>,
     pub(crate) proxy_addresses: Vec<String>,
     pub(crate) profile_enabled: Option<bool>,
@@ -133,6 +135,8 @@ fn validate_permission_sync_response(
     )?;
     Ok(AgentPermissionSnapshot {
         role: response.account.role,
+        display_name: validated_display_name(response.account.display_name)?,
+        avatar_url: validated_avatar_url(response.account.avatar_url)?,
         permissions: profile.as_ref().map(|profile| profile.permissions.clone()),
         proxy_addresses: profile
             .as_ref()
@@ -152,6 +156,8 @@ pub(crate) fn apply_permission_snapshot(
 ) -> (AgentAuthAccount, AgentAuthAccountStatus, Option<String>) {
     let mut account = current.clone();
     account.role.clone_from(&snapshot.role);
+    account.display_name.clone_from(&snapshot.display_name);
+    account.avatar_url.clone_from(&snapshot.avatar_url);
     account.permissions = snapshot.permissions.clone().unwrap_or_default();
     if snapshot.profile_enabled == Some(false) {
         return (account, AgentAuthAccountStatus::Disabled, None);
@@ -206,6 +212,8 @@ mod tests {
     fn account(role: &str) -> AgentAuthAccount {
         AgentAuthAccount {
             username: "alice".to_string(),
+            display_name: None,
+            avatar_url: None,
             role: role.to_string(),
             permissions: vec!["old.permission".to_string()],
             key_version: 7,
@@ -217,6 +225,8 @@ mod tests {
     fn snapshot_updates_permissions_without_changing_current_key_material_version() {
         let snapshot = AgentPermissionSnapshot {
             role: "user".to_string(),
+            display_name: Some("小爱".to_string()),
+            avatar_url: None,
             permissions: Some(vec!["agent.packet_capture".to_string()]),
             proxy_addresses: vec!["proxy.example.com:443".to_string()],
             profile_enabled: Some(true),
@@ -227,6 +237,7 @@ mod tests {
         };
         let (updated, status, warning) = apply_permission_snapshot(&account("user"), &snapshot);
         assert_eq!(updated.permissions, ["agent.packet_capture"]);
+        assert_eq!(updated.display_name.as_deref(), Some("小爱"));
         assert_eq!(updated.expires_at, Some(4_100_000_000));
         assert_eq!(status, AgentAuthAccountStatus::Active);
         assert!(warning.is_none());
@@ -237,6 +248,8 @@ mod tests {
     fn changed_key_version_preserves_local_version_and_marks_account_expired() {
         let snapshot = AgentPermissionSnapshot {
             role: "admin".to_string(),
+            display_name: None,
+            avatar_url: None,
             permissions: Some(Vec::new()),
             proxy_addresses: vec!["proxy.example.com:443".to_string()],
             profile_enabled: Some(true),
@@ -256,6 +269,8 @@ mod tests {
     fn missing_profile_clears_stale_user_permissions() {
         let snapshot = AgentPermissionSnapshot {
             role: "user".to_string(),
+            display_name: None,
+            avatar_url: None,
             permissions: None,
             proxy_addresses: Vec::new(),
             profile_enabled: None,

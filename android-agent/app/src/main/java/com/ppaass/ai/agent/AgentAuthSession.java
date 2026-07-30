@@ -16,6 +16,8 @@ final class AgentAuthSession {
     private static final int SERVER_STATUS_USER_DISABLED = 2;
 
     private static String username;
+    private static String displayName = "";
+    private static String avatarUrl = "";
     private static String role = AgentPermissions.ROLE_USER;
     private static Set<String> permissions = Collections.emptySet();
     private static long keyVersion = -1;
@@ -28,6 +30,8 @@ final class AgentAuthSession {
     static synchronized void authenticate(AgentAuthClient.LoginResult result) {
         authenticate(
                 result.username,
+                result.displayName,
+                result.avatarUrl,
                 result.role,
                 result.permissions,
                 result.keyVersion,
@@ -40,6 +44,8 @@ final class AgentAuthSession {
             long authenticatedExpiresAt) {
         authenticate(
                 authenticatedUsername,
+                "",
+                "",
                 AgentPermissions.ROLE_USER,
                 Collections.emptySet(),
                 authenticatedKeyVersion,
@@ -48,11 +54,15 @@ final class AgentAuthSession {
 
     private static void authenticate(
             String authenticatedUsername,
+            String authenticatedDisplayName,
+            String authenticatedAvatarUrl,
             String authenticatedRole,
             Set<String> authenticatedPermissions,
             long authenticatedKeyVersion,
             long authenticatedExpiresAt) {
         username = authenticatedUsername;
+        displayName = authenticatedDisplayName == null ? "" : authenticatedDisplayName;
+        avatarUrl = authenticatedAvatarUrl == null ? "" : authenticatedAvatarUrl;
         role = authenticatedRole;
         permissions = AgentPermissions.immutableCopy(authenticatedPermissions);
         keyVersion = authenticatedKeyVersion;
@@ -62,6 +72,8 @@ final class AgentAuthSession {
 
     static synchronized void clear() {
         username = null;
+        displayName = "";
+        avatarUrl = "";
         role = AgentPermissions.ROLE_USER;
         permissions = Collections.emptySet();
         keyVersion = -1;
@@ -85,6 +97,8 @@ final class AgentAuthSession {
         AgentSessionStore.StoredSession stored = AgentSessionStore.load(context);
         authenticate(
                 metadata.username,
+                stored.displayName,
+                stored.avatarUrl,
                 stored.role,
                 stored.permissions,
                 metadata.keyVersion,
@@ -126,6 +140,8 @@ final class AgentAuthSession {
             throw new IOException("无法安全保存同步后的 Agent 权限");
         }
         role = result.role;
+        displayName = result.displayName;
+        avatarUrl = result.avatarUrl;
         permissions = AgentPermissions.immutableCopy(result.permissions);
         if (result.keyVersion == localKeyVersion) {
             expiresAt = result.expiresAt;
@@ -177,6 +193,14 @@ final class AgentAuthSession {
 
     static synchronized String username() {
         return username == null ? "" : username;
+    }
+
+    static synchronized String displayName() {
+        return displayName;
+    }
+
+    static synchronized String avatarUrl() {
+        return avatarUrl;
     }
 
     static synchronized String role() {

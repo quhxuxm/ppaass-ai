@@ -43,7 +43,7 @@ pub(crate) async fn register(
             account_id: new_account_id(),
             login_name: username.clone(),
             password_hash: Some(password_hash),
-            display_name: trim_optional(request.display_name),
+            display_name: normalize_nickname(request.display_name)?,
             email: None,
             avatar_url: None,
             external_identity: None,

@@ -30,10 +30,10 @@ use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
 const CREDENTIALS_DIR: &str = "credentials";
 const PERSISTED_AGENT_LOGIN_FILE: &str = "agent-login.json";
 const PERSISTED_AGENT_LOGIN_VERSION: u8 = 2;
-const MAX_PERSISTED_AGENT_LOGIN_BYTES: u64 = 16 * 1024;
+const MAX_PERSISTED_AGENT_LOGIN_BYTES: u64 = 2 * 1024 * 1024;
 const PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
-const MAX_NORMAL_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_PRIVATE_KEY_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_NORMAL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PRIVATE_KEY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DEVICE_AUTHORIZATION_SECONDS: i64 = 60 * 60;
 const MAX_DEVICE_POLL_SECONDS: u32 = 120;
 #[cfg(windows)]
@@ -122,6 +122,10 @@ pub(crate) struct AuthenticationAccount {
     role: String,
     status: String,
     linked_username: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    avatar_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +244,7 @@ mod http;
 mod key_store;
 mod password_login;
 mod permission_sync;
+mod profile_identity;
 mod proxy_addresses;
 mod web_handoff;
 
@@ -250,6 +255,7 @@ pub(crate) use http::*;
 pub(crate) use key_store::*;
 pub(crate) use password_login::*;
 pub(crate) use permission_sync::*;
+pub(crate) use profile_identity::*;
 pub(crate) use proxy_addresses::*;
 pub(crate) use web_handoff::*;
 

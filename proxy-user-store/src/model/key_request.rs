@@ -63,6 +63,8 @@ pub struct KeyGenerationRequest {
     pub status: KeyRequestStatus,
     pub expected_key_version: Option<i64>,
     pub reviewer_account_id: Option<String>,
+    pub reviewer_login_name: Option<String>,
+    pub rejection_reason: Option<String>,
     pub requested_at: i64,
     pub reviewed_at: Option<i64>,
     pub approved_expires_at: Option<i64>,
@@ -99,6 +101,13 @@ pub struct KeyRequestApproval {
     pub expires_at: i64,
     pub proxy_address_ids: Vec<String>,
     pub material: ApprovedKeyMaterial,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequestRejection {
+    pub request_id: String,
+    pub reviewer_account_id: String,
+    pub rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

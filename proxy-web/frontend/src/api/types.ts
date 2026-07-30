@@ -4,6 +4,7 @@ export type KeyState = 'missing' | 'active' | 'expired' | 'disabled'
 export type KeyRequestStatus = 'pending' | 'approved' | 'rejected'
 export type KeyRequestKind = 'initial' | 'rotate'
 export const KEY_REQUEST_MESSAGE_MAX_LENGTH = 500
+export const KEY_REQUEST_REJECTION_REASON_MAX_LENGTH = 500
 
 export interface ProviderAvailability {
   localRegistration: boolean
@@ -76,7 +77,10 @@ export interface KeyRequest {
   updatedAt: string | null
   expiresAt: string | null
   requestMessage: string | null
+  rejectionReason: string | null
+  reviewerLoginName: string | null
   displayName?: string | null
+  avatarUrl?: string | null
   email?: string | null
 }
 
@@ -119,6 +123,11 @@ export interface RegisterPayload {
 export interface ChangePasswordPayload {
   current_password: string
   new_password: string
+}
+
+export interface UpdateMyProfilePayload {
+  display_name: string | null
+  avatar_data_url?: string | null
 }
 
 export interface CreateManagedUserPayload extends RegisterPayload {

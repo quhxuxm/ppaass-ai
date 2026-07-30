@@ -199,6 +199,8 @@ pub(crate) fn validate_device_token(
         proxy_addresses,
         account: AgentAuthAccount {
             username: profile.username,
+            display_name: validated_display_name(account.display_name)?,
+            avatar_url: validated_avatar_url(account.avatar_url)?,
             role: account.role,
             permissions: profile.permissions,
             key_version: profile.key_version,

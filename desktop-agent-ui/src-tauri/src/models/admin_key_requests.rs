@@ -5,6 +5,7 @@ pub(crate) struct AgentAdminKeyRequest {
     pub(crate) request_id: String,
     pub(crate) username: String,
     pub(crate) display_name: Option<String>,
+    pub(crate) avatar_url: Option<String>,
     pub(crate) email: Option<String>,
     pub(crate) request_message: Option<String>,
     pub(crate) kind: String,
@@ -44,4 +45,5 @@ pub(crate) struct AgentAdminKeyRequestApproval {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentAdminKeyRequestRejection {
     pub(crate) request_id: String,
+    pub(crate) reason: Option<String>,
 }

@@ -217,10 +217,12 @@ impl SqliteUserRepository {
 
         let result = sqlx::query(
             "UPDATE key_generation_requests SET status = 'approved', \
-             reviewer_account_id = ?, reviewed_at = ?, approved_expires_at = ? \
+             reviewer_account_id = ?, reviewer_login_name = ?, rejection_reason = NULL, \
+             reviewed_at = ?, approved_expires_at = ? \
              WHERE request_id = ? AND status = 'pending'",
         )
         .bind(&reviewer.account_id)
+        .bind(&reviewer.login_name)
         .bind(timestamp)
         .bind(expires_at)
         .bind(&request.request_id)

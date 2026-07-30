@@ -1,6 +1,53 @@
 use super::*;
 
 #[tokio::test]
+async fn migrates_v8_key_request_reviewer_names() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("users.sqlite3");
+    let store = SqliteUserRepository::connect(&path).await.unwrap();
+    create_admin(&store, "admin-reviewer").await;
+    store
+        .create_user_account(user_account("account-reviewee", "reviewee"))
+        .await
+        .unwrap();
+    store
+        .submit_key_generation_request(NewKeyGenerationRequest {
+            request_id: "request-v8-review".to_string(),
+            account_id: "account-reviewee".to_string(),
+            request_message: None,
+        })
+        .await
+        .unwrap();
+    store
+        .reject_key_generation_request(KeyRequestRejection {
+            request_id: "request-v8-review".to_string(),
+            reviewer_account_id: "admin-reviewer".to_string(),
+            rejection_reason: None,
+        })
+        .await
+        .unwrap();
+    drop_v10_account_disable_audits(&store).await;
+    drop_v9_key_request_columns(&store).await;
+    sqlx::query("PRAGMA user_version = 8")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    store.pool.close().await;
+
+    let reopened = SqliteUserRepository::connect(&path).await.unwrap();
+    let request = reopened
+        .get_key_generation_request("request-v8-review")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request.reviewer_login_name.as_deref(),
+        Some("admin-reviewer")
+    );
+    assert_eq!(request.rejection_reason, None);
+}
+
+#[tokio::test]
 async fn disables_publicly_compromised_legacy_demo_keys_until_rotated() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("users.sqlite3");
@@ -76,6 +123,8 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
         .await
         .unwrap();
     drop_v8_proxy_address_tables(&store).await;
+    drop_v10_account_disable_audits(&store).await;
+    drop_v9_key_request_columns(&store).await;
     sqlx::query("PRAGMA user_version = 4")
         .execute(&store.pool)
         .await
@@ -199,6 +248,7 @@ async fn migrates_v2_database_to_key_request_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v10_account_disable_audits(&store).await;
     drop_v8_proxy_address_tables(&store).await;
     sqlx::query("PRAGMA user_version = 2")
         .execute(&store.pool)
@@ -272,6 +322,8 @@ async fn migrates_v3_duplicate_access_rows_into_address_counts() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v10_account_disable_audits(&store).await;
+    drop_v9_key_request_columns(&store).await;
     sqlx::query(
         r#"
         CREATE TABLE user_access_records (
@@ -353,7 +405,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 9")
+    sqlx::query("PRAGMA user_version = 11")
         .execute(&pool)
         .await
         .unwrap();
@@ -372,5 +424,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 11);
 }

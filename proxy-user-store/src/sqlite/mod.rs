@@ -1,20 +1,21 @@
 use crate::{
-    AccessLogRepository, AccessLogSettings, AccessProtocol, AccessRecord, AccountRepository,
-    AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
-    AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
-    AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
-    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, BootstrapOutcome,
-    DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
+    AccessLogRepository, AccessLogSettings, AccessProtocol, AccessRecord, AccountActor,
+    AccountRepository, AccountRole, AccountStatus, AgentDeviceAuthorization,
+    AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
+    AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll,
+    AgentDeviceAuthorizationRepository, AgentDeviceAuthorizationStatus, ApprovedKeyMaterial,
+    BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
     EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest,
     KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind,
-    KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate, NewAccessRecord,
-    NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser,
-    NewProxyAddress, NewUser, NewUserAccount, ProxyAddress, ProxyAddressRepository,
+    KeyRequestRejection, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
+    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
+    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, ProxyAddress, ProxyAddressRepository,
     ProxyAddressUpdate, Result, UserOrigin, UserRecord, UserRepository, UserRepositoryError,
-    UserUpdate, ValidationError, WebAccount, normalize_key_request_message, normalize_permissions,
-    normalize_proxy_address, normalize_proxy_address_id, normalize_proxy_address_ids,
-    normalize_proxy_address_label, normalize_public_key_pem, normalize_username, validate_user,
+    UserUpdate, ValidationError, WebAccount, normalize_key_request_message,
+    normalize_key_request_rejection_reason, normalize_permissions, normalize_proxy_address,
+    normalize_proxy_address_id, normalize_proxy_address_ids, normalize_proxy_address_label,
+    normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{
@@ -35,14 +36,14 @@ use tracing::{info, instrument, warn};
 
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 8;
+const SQLITE_SCHEMA_VERSION: i64 = 10;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
 const MAX_PASSWORD_HASH_BYTES: usize = 4096;
 const MAX_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_EMAIL_BYTES: usize = 320;
-const MAX_AVATAR_URL_BYTES: usize = 2048;
+const MAX_AVATAR_URL_BYTES: usize = 1_500_000;
 const MAX_PRIVATE_KEY_ENVELOPE_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_ACCESS_TARGET_HOST_BYTES: usize = 1_024;
@@ -118,8 +119,8 @@ const QUALIFIED_ACCOUNT_SELECT: &str = "a.account_id, a.login_name, a.role, a.st
                                         a.linked_username, a.display_name, a.email, a.avatar_url, \
                                         a.auth_version, a.last_login_at, a.created_at, a.updated_at";
 const KEY_REQUEST_SELECT: &str = "request_id, account_id, kind, status, expected_key_version, \
-                                  reviewer_account_id, requested_at, reviewed_at, \
-                                  approved_expires_at, request_message";
+                                  reviewer_account_id, reviewer_login_name, rejection_reason, \
+                                  requested_at, reviewed_at, approved_expires_at, request_message";
 const ACCESS_RECORD_SELECT: &str = "record_id, username, protocol, target_host, target_port, \
                                     access_count, accessed_at";
 const DEVICE_AUTHORIZATION_SELECT: &str = "device_code_hash, user_code_hash, client_name, \
@@ -149,6 +150,7 @@ mod database_queries;
 mod device;
 mod file_permissions;
 mod migration_access;
+mod migration_account_audits;
 mod migration_device;
 mod migration_key_requests;
 mod migration_permissions;
@@ -164,6 +166,7 @@ use database_queries::*;
 #[cfg(unix)]
 use file_permissions::*;
 use migration_access::*;
+use migration_account_audits::*;
 use migration_device::*;
 use migration_key_requests::*;
 use migration_permissions::*;

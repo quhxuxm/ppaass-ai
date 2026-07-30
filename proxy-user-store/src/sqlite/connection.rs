@@ -201,6 +201,12 @@ impl SqliteUserRepository {
         if schema_version < 8 {
             create_v8_proxy_address_tables(&mut transaction).await?;
         }
+        if schema_version < 9 {
+            migrate_key_requests_to_v9(&mut transaction).await?;
+        }
+        if schema_version < 10 {
+            create_v10_account_disable_audits(&mut transaction).await?;
+        }
         ensure_v5_indexes(&mut transaction).await?;
         let revoked_compromised_profiles =
             revoke_compromised_bundled_demo_profiles(&mut transaction).await?;
@@ -218,7 +224,7 @@ impl SqliteUserRepository {
 
         if schema_version < SQLITE_SCHEMA_VERSION {
             // 版本号是迁移的提交标记，必须最后写入。
-            sqlx::query("PRAGMA user_version = 8")
+            sqlx::query("PRAGMA user_version = 10")
                 .execute(&mut *transaction)
                 .await?;
         }

@@ -4,24 +4,26 @@ withDefaults(
     message: string | null
     label?: string
     compact?: boolean
+    emptyText?: string
   }>(),
   {
     label: '申请留言',
     compact: false,
+    emptyText: '',
   },
 )
 </script>
 
 <template>
   <section
-    v-if="message"
+    v-if="message || emptyText"
     :class="['request-message', { compact }]"
   >
     <span class="request-message-label">
       <i class="pi pi-comment" aria-hidden="true" />
       {{ label }}
     </span>
-    <p>{{ message }}</p>
+    <p :class="{ empty: !message }">{{ message || emptyText }}</p>
   </section>
 </template>
 
@@ -58,6 +60,11 @@ withDefaults(
   overflow-wrap: anywhere;
   scrollbar-gutter: stable;
   white-space: pre-wrap;
+}
+
+.request-message p.empty {
+  color: #667085;
+  font-style: italic;
 }
 
 .request-message.compact {
