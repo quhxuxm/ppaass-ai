@@ -115,11 +115,11 @@ struct RejectKeyRequestPayload<'a> {
 }
 
 pub(crate) async fn fetch_agent_admin_key_request_inbox(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     access_token: &str,
 ) -> Result<AgentAdminKeyRequestInbox, AgentAdminHttpError> {
-    let base_url = admin_base_url(proxy_web_url)?;
-    let client = build_proxy_web_client().map_err(request_setup_error)?;
+    let base_url = admin_base_url(proxy_registry_url)?;
+    let client = build_proxy_registry_client().map_err(request_setup_error)?;
     let requests_url =
         endpoint(&base_url, "api/v1/admin/key-requests").map_err(request_setup_error)?;
     let addresses_url =
@@ -136,15 +136,15 @@ pub(crate) async fn fetch_agent_admin_key_request_inbox(
 }
 
 pub(crate) async fn approve_agent_admin_key_request(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     access_token: &str,
     request_id: &str,
     expires_at: i64,
     proxy_address_ids: &[String],
     reason: &str,
 ) -> Result<(), AgentAdminHttpError> {
-    let base_url = admin_base_url(proxy_web_url)?;
-    let client = build_proxy_web_client().map_err(request_setup_error)?;
+    let base_url = admin_base_url(proxy_registry_url)?;
+    let client = build_proxy_registry_client().map_err(request_setup_error)?;
     let path = format!(
         "api/v1/admin/key-requests/{}/approve",
         encode_path_component(request_id)
@@ -165,13 +165,13 @@ pub(crate) async fn approve_agent_admin_key_request(
 }
 
 pub(crate) async fn reject_agent_admin_key_request(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     access_token: &str,
     request_id: &str,
     reason: &str,
 ) -> Result<(), AgentAdminHttpError> {
-    let base_url = admin_base_url(proxy_web_url)?;
-    let client = build_proxy_web_client().map_err(request_setup_error)?;
+    let base_url = admin_base_url(proxy_registry_url)?;
+    let client = build_proxy_registry_client().map_err(request_setup_error)?;
     let path = format!(
         "api/v1/admin/key-requests/{}/reject",
         encode_path_component(request_id)
@@ -187,8 +187,8 @@ pub(crate) async fn reject_agent_admin_key_request(
     validate_decision(&decision, request_id, "rejected")
 }
 
-fn admin_base_url(proxy_web_url: &str) -> Result<Url, AgentAdminHttpError> {
-    normalize_proxy_web_url(proxy_web_url)
+fn admin_base_url(proxy_registry_url: &str) -> Result<Url, AgentAdminHttpError> {
+    normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| request_setup_error("Agent 管理服务配置无效".to_string()))
 }
 
@@ -206,7 +206,7 @@ where
         return Err(api_error(status, detail));
     }
     serde_json::from_slice(&bytes).map_err(|_| AgentAdminHttpError {
-        message: "Proxy Web 返回的管理员数据格式无效".to_string(),
+        message: "Proxy Registry 返回的管理员数据格式无效".to_string(),
         status: Some(status),
     })
 }
@@ -353,7 +353,7 @@ fn api_error(status: StatusCode, detail: Option<AdminErrorDetail>) -> AgentAdmin
         _ => detail
             .filter(|detail| !detail.message.trim().is_empty() && detail.message.len() <= 1_000)
             .map(|detail| detail.message)
-            .unwrap_or_else(|| format!("Proxy Web 返回 HTTP {}", status.as_u16())),
+            .unwrap_or_else(|| format!("Proxy Registry 返回 HTTP {}", status.as_u16())),
     };
     AgentAdminHttpError {
         message,

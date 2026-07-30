@@ -10,7 +10,7 @@ impl SqliteUserRepository {
     ///
     /// This is the only constructor the Proxy process should use. It neither creates
     /// directories/files nor runs migrations/imports, and every SQLite connection has both
-    /// `SQLITE_OPEN_READONLY` and `PRAGMA query_only=ON`. Proxy Web must initialize and migrate
+    /// `SQLITE_OPEN_READONLY` and `PRAGMA query_only=ON`. Proxy Registry must initialize and migrate
     /// the database before Proxy starts.
     #[instrument(skip(path), fields(database = %path.as_ref().display(), read_only = true))]
     pub async fn connect_read_only(path: impl AsRef<Path>) -> Result<Self> {
@@ -55,7 +55,7 @@ impl SqliteUserRepository {
         if schema_version != SQLITE_SCHEMA_VERSION {
             return Err(UserRepositoryError::InvalidSchema(format!(
                 "Proxy 只读用户数据库版本必须为 {SQLITE_SCHEMA_VERSION}，实际为 \
-                 {schema_version}；请先启动 Proxy Web 完成迁移"
+                 {schema_version}；请先启动 Proxy Registry 完成迁移"
             )));
         }
         // Proxy authentication only needs this table. A zero-row query validates its complete

@@ -2,7 +2,7 @@
 # UI 登录成功后会写入托管用户名和应用私有目录中的密钥路径。
 
 listen_addr = "0.0.0.0:10080"
-proxy_web_url = "http://127.0.0.1:8787"
+proxy_registry_url = "http://127.0.0.1:8787"
 # 远程部署地址应只放在 config/remote/agent.toml。
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
 transport_mode = "udp"

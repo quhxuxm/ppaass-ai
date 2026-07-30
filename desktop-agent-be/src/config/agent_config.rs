@@ -15,10 +15,10 @@ use std::path::Path;
 pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
-    /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Web 地址。
+    /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Registry 地址。
     /// 后端库和 CI 集成测试工具不消费该 UI 控制面配置，因此它仍是可选项。
     #[serde(default)]
-    pub proxy_web_url: Option<String>,
+    pub proxy_registry_url: Option<String>,
     pub username: String,
     pub private_key_path: String,
     /// Pinned Proxy TCP/Yamux transport identity public key PEM file.

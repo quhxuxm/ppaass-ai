@@ -10,35 +10,35 @@ public class AgentAuthConfigTest {
     public void remoteAuthenticationRequiresHttpsAndRootUrl() {
         assertEquals(
                 "https://140.82.30.214",
-                AgentAuthConfig.normalizeProxyWebUrl("https://140.82.30.214/"));
+                AgentAuthConfig.normalizeProxyRegistryUrl("https://140.82.30.214/"));
         assertEquals(
                 "http://127.0.0.1:8787",
-                AgentAuthConfig.normalizeProxyWebUrl("http://127.0.0.1:8787"));
+                AgentAuthConfig.normalizeProxyRegistryUrl("http://127.0.0.1:8787"));
         assertEquals(
                 "http://127.0.0.2:8787",
-                AgentAuthConfig.normalizeProxyWebUrl("http://127.0.0.2:8787"));
+                AgentAuthConfig.normalizeProxyRegistryUrl("http://127.0.0.2:8787"));
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl("http://proxy.example.com"));
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl("http://proxy.example.com"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl(
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl(
                         "http://127.attacker.example"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl(
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl(
                         "http://127.0.0.1.example"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl("https://proxy.example.com/login"));
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl("https://proxy.example.com/login"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl(
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl(
                         "https://user:password@proxy.example.com"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> AgentAuthConfig.normalizeProxyWebUrl(
+                () -> AgentAuthConfig.normalizeProxyRegistryUrl(
                         "https://proxy.example.com/?mode=register"));
     }
 

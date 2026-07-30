@@ -14,15 +14,15 @@
     },
     {
         "adapter": "CodeLLDB",
-        "label": "Debug Proxy",
+        "label": "Debug Proxy Entry",
         "request": "launch",
         "build": {
             "command": "cargo",
-            "args": ["build", "--package", "proxy"],
+            "args": ["build", "--package", "proxy-entry"],
         },
-        "program": "$ZED_WORKTREE_ROOT/target/debug/proxy",
+        "program": "$ZED_WORKTREE_ROOT/target/debug/proxy-entry",
         "cwd": "$ZED_WORKTREE_ROOT",
-        "args": ["--config", "config/local/proxy.toml"],
+        "args": ["--config", "config/local/proxy-entry.toml"],
         "stopOnEntry": false,
     },
     {
@@ -66,14 +66,14 @@
     },
     {
         "adapter": "CodeLLDB",
-        "label": "Debug Proxy (Forward)",
+        "label": "Debug Proxy Entry (Forward)",
         "request": "launch",
         "build": {
             "command": "cargo",
-            "args": ["build", "--package", "proxy"],
+            "args": ["build", "--package", "proxy-entry"],
         },
-        "program": "$ZED_WORKTREE_ROOT/target/debug/proxy",
-        "args": ["--config", "config/local/proxy-forward.toml"],
+        "program": "$ZED_WORKTREE_ROOT/target/debug/proxy-entry",
+        "args": ["--config", "config/local/proxy-entry-forward.toml"],
         "cwd": "$ZED_WORKTREE_ROOT",
         "stopOnEntry": false,
     },

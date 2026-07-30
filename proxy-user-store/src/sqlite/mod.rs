@@ -37,6 +37,7 @@ use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
 
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
+// Persisted metadata key retained across the Proxy Registry rename.
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
 const SQLITE_SCHEMA_VERSION: i64 = 11;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;

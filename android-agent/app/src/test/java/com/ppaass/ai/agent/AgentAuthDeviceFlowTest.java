@@ -29,7 +29,7 @@ public class AgentAuthDeviceFlowTest {
     }
 
     @Test
-    public void proxyWebRateLimitRetriesUsingRetryAfterOrCurrentInterval() {
+    public void proxyRegistryRateLimitRetriesUsingRetryAfterOrCurrentInterval() {
         assertEquals(
                 5,
                 AgentAuthClient.devicePollRateLimitDelaySeconds(

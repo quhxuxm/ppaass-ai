@@ -48,11 +48,11 @@ fn enforce_managed_identity_overrides_quoted_keys_and_escapes_paths() {
 #[test]
 fn redact_managed_identity_removes_credentials_from_ui_config() {
     let raw = concat!(
-        "# identity is managed by Proxy Web\n",
+        "# identity is managed by Proxy Registry\n",
         "\"username\" = \"alice\"\n",
         "\"private_key_path\" = \"/secret/managed.pem\"\n",
         "\"proxy_identity_public_key_path\" = \"/secret/proxy-identity.pem\"\n",
-        "\"proxy_web_url\" = \"https://hidden.example.com\"\n",
+        "\"proxy_registry_url\" = \"https://hidden.example.com\"\n",
         "listen_addr = \"127.0.0.1:10080\"\n\n",
         "[tun]\n",
         "enabled = false\n",
@@ -67,7 +67,7 @@ fn redact_managed_identity_removes_credentials_from_ui_config() {
     assert!(!redacted.raw.contains("username"));
     assert!(!redacted.raw.contains("private_key_path"));
     assert!(!redacted.raw.contains("proxy_identity_public_key_path"));
-    assert!(!redacted.raw.contains("proxy_web_url"));
+    assert!(!redacted.raw.contains("proxy_registry_url"));
     assert!(!redacted.raw.contains("hidden.example.com"));
     assert!(!redacted.raw.contains("/secret/managed.pem"));
     assert!(redacted.raw.contains("listen_addr = \"127.0.0.1:10080\""));
@@ -79,7 +79,7 @@ fn redact_managed_identity_removes_credentials_from_ui_config() {
     assert!(!serialized.contains("username"));
     assert!(!serialized.contains("private_key_path"));
     assert!(!serialized.contains("proxy_identity_public_key_path"));
-    assert!(!serialized.contains("proxy_web_url"));
+    assert!(!serialized.contains("proxy_registry_url"));
     assert!(!serialized.contains("hidden.example.com"));
     assert!(!serialized.contains("/secret/managed.pem"));
 }
@@ -90,7 +90,7 @@ fn applies_managed_credentials_without_changing_other_config() {
     let path = directory.path().join("agent.toml");
     fs::write(
             &path,
-            "listen_addr = \"127.0.0.1:10080\"\nproxy_web_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n\n[tun]\nenabled = false\n",
+            "listen_addr = \"127.0.0.1:10080\"\nproxy_registry_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n\n[tun]\nenabled = false\n",
         )
         .unwrap();
     let key_path = directory.path().join("credentials/new.pem");
@@ -104,7 +104,7 @@ fn applies_managed_credentials_without_changing_other_config() {
     assert_eq!(loaded.summary.listen_addr, "127.0.0.1:10080");
     assert!(!loaded.summary.tun_enabled);
     assert_eq!(
-        proxy_web_url_from_config(&path).unwrap(),
+        proxy_registry_url_from_config(&path).unwrap(),
         "https://hidden.example.com"
     );
 }
@@ -119,7 +119,7 @@ fn managed_identity_round_trip_keeps_secret_on_disk_but_not_in_ui() {
         .join("credentials/proxy-identity-public.pem");
     fs::write(
             &path,
-            "listen_addr = \"127.0.0.1:10080\"\nproxy_web_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n",
+            "listen_addr = \"127.0.0.1:10080\"\nproxy_registry_url = \"https://hidden.example.com\"\nusername = \"old\"\nprivate_key_path = \"old.pem\"\n",
         )
         .unwrap();
 
@@ -127,10 +127,10 @@ fn managed_identity_round_trip_keeps_secret_on_disk_but_not_in_ui() {
         apply_managed_credentials_to_config(&path, "alice", &key_path, &identity_path).unwrap();
     let redacted = redact_managed_identity(loaded).unwrap();
     assert!(!redacted.raw.contains("private_key_path"));
-    assert!(!redacted.raw.contains("proxy_web_url"));
+    assert!(!redacted.raw.contains("proxy_registry_url"));
 
     let edited = format!(
-        "{}proxy_web_url = \"https://attacker.example.com\"\ntransport_mode = \"tcp\"\n",
+        "{}proxy_registry_url = \"https://attacker.example.com\"\ntransport_mode = \"tcp\"\n",
         redacted.raw
     );
     let enforced = enforce_managed_identity(
@@ -150,19 +150,19 @@ fn managed_identity_round_trip_keeps_secret_on_disk_but_not_in_ui() {
     );
     assert_eq!(persisted.summary.transport_mode, "tcp");
     assert_eq!(
-        proxy_web_url_from_config(&path).unwrap(),
+        proxy_registry_url_from_config(&path).unwrap(),
         "https://hidden.example.com"
     );
     assert!(!persisted.raw.contains("attacker.example.com"));
 }
 
 #[test]
-fn clearing_managed_credentials_preserves_hidden_proxy_web_endpoint() {
+fn clearing_managed_credentials_preserves_hidden_proxy_registry_endpoint() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent.toml");
     fs::write(
             &path,
-            "proxy_web_url = \"https://hidden.example.com\"\nusername = \"alice\"\nprivate_key_path = \"credentials/managed.pem\"\nproxy_identity_public_key_path = \"credentials/proxy-identity-public.pem\"\ntransport_mode = \"tcp\"\n",
+            "proxy_registry_url = \"https://hidden.example.com\"\nusername = \"alice\"\nprivate_key_path = \"credentials/managed.pem\"\nproxy_identity_public_key_path = \"credentials/proxy-identity-public.pem\"\ntransport_mode = \"tcp\"\n",
         )
         .unwrap();
 
@@ -172,23 +172,23 @@ fn clearing_managed_credentials_preserves_hidden_proxy_web_endpoint() {
     assert!(!raw.contains("username"));
     assert!(!raw.contains("private_key_path"));
     assert!(!raw.contains("proxy_identity_public_key_path"));
-    assert!(raw.contains("proxy_web_url = \"https://hidden.example.com\""));
+    assert!(raw.contains("proxy_registry_url = \"https://hidden.example.com\""));
     assert!(raw.contains("transport_mode = \"tcp\""));
 }
 
 #[test]
-fn proxy_web_url_must_exist_in_desktop_agent_config() {
+fn proxy_registry_url_must_exist_in_desktop_agent_config() {
     let directory = tempfile::tempdir().unwrap();
     let configured = directory.path().join("configured.toml");
     let missing = directory.path().join("missing.toml");
-    fs::write(&configured, "proxy_web_url = \"http://127.0.0.1:8787\"\n").unwrap();
+    fs::write(&configured, "proxy_registry_url = \"http://127.0.0.1:8787\"\n").unwrap();
     fs::write(&missing, "listen_addr = \"127.0.0.1:10080\"\n").unwrap();
 
     assert_eq!(
-        proxy_web_url_from_config(&configured).unwrap(),
+        proxy_registry_url_from_config(&configured).unwrap(),
         "http://127.0.0.1:8787"
     );
-    assert!(proxy_web_url_from_config(&missing).is_err());
+    assert!(proxy_registry_url_from_config(&missing).is_err());
 }
 
 #[test]

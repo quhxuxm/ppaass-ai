@@ -15,21 +15,21 @@ fn compression_mode_defaults_to_none() {
 }
 
 #[test]
-fn proxy_web_url_is_optional_for_backend_library_and_test_harness() {
+fn proxy_registry_url_is_optional_for_backend_library_and_test_harness() {
     let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
-    assert_eq!(config.proxy_web_url, None);
+    assert_eq!(config.proxy_registry_url, None);
 }
 
 #[test]
-fn proxy_web_url_is_parsed_when_configured() {
+fn proxy_registry_url_is_parsed_when_configured() {
     let config: AgentConfig = toml::from_str(
-        &(MINIMAL_AGENT_CONFIG.to_owned() + "proxy_web_url = \"https://proxy.example.com\"\n"),
+        &(MINIMAL_AGENT_CONFIG.to_owned() + "proxy_registry_url = \"https://proxy.example.com\"\n"),
     )
     .unwrap();
 
     assert_eq!(
-        config.proxy_web_url.as_deref(),
+        config.proxy_registry_url.as_deref(),
         Some("https://proxy.example.com")
     );
 }

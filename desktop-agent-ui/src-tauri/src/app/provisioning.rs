@@ -129,7 +129,7 @@ pub(crate) fn provision_downloaded_credential(
         AgentSessionCredentials::new(
             private_key_path.clone(),
             proxy_identity_public_key_path.clone(),
-            downloaded.proxy_web_url,
+            downloaded.proxy_registry_url,
             agent_access_token,
         ),
         AgentPermissionTrust::ServerVerified,

@@ -26,7 +26,7 @@ final class AgentConfigJson {
         List<String> proxyAddresses = ManagedProxyAddresses.load(context);
         if (proxyAddresses.isEmpty()) {
             throw new JSONException(
-                    "Proxy Web 未为当前账户分配可用的 Proxy 地址，请重新登录或联系管理员");
+                    "Proxy Registry 未为当前账户分配可用的 Proxy 地址，请重新登录或联系管理员");
         }
         String quicPolicy = selectedQuicPolicy(prefs, canEditEgress);
         String transportMode = normalizeTransportMode(

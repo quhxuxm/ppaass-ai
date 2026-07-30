@@ -39,7 +39,7 @@ abstract class MainActivityAccountManagement extends MainActivityAuth {
             long requestGeneration,
             String accessToken) {
         try {
-            String baseUrl = AgentAuthConfig.proxyWebUrl(this);
+            String baseUrl = AgentAuthConfig.proxyRegistryUrl(this);
             AgentWebSessionHandoffClient client =
                     new AgentWebSessionHandoffClient(this, baseUrl);
             synchronized (this) {

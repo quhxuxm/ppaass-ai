@@ -84,7 +84,7 @@ final class AgentAuthResponseParser {
             username = requireText(profile.username);
             if (!username.equals(expectedUsername)) {
                 throw new AgentAuthClient.AuthException(
-                        "Proxy Web 返回了其他用户的权限配置");
+                        "Proxy Registry 返回了其他用户的权限配置");
             }
             requireLinkedUsername(account.linked_username, username);
             permissions = permissions(profile.permissions);
@@ -271,6 +271,6 @@ final class AgentAuthResponseParser {
     }
 
     private static AgentAuthClient.AuthException invalidResponse() {
-        return new AgentAuthClient.AuthException("Proxy Web 响应格式无效");
+        return new AgentAuthClient.AuthException("Proxy Registry 响应格式无效");
     }
 }

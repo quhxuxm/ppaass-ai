@@ -22,7 +22,7 @@ try {
   assert.doesNotMatch(egressView, /select-private-key|选择私钥文件/);
   assert.doesNotMatch(egressView, /@update:model-value=.*username/);
   assert.doesNotMatch(egressView, /身份凭据|managed-credential-status/);
-  assert.doesNotMatch(egressView, /凭据已由 Proxy Web 托管|Agent 不展示或接受手工更改/);
+  assert.doesNotMatch(egressView, /凭据已由 Proxy Registry 托管|Agent 不展示或接受手工更改/);
   assert.match(egressView, /class="content-grid egress-grid"/);
   assert.doesNotMatch(egressView, /egress-endpoints-panel|proxy_addrs|远端出口地址/);
   assert.match(egressView, /class="panel span-12 egress-transport-panel"/);
@@ -64,12 +64,12 @@ try {
 
   const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
   assert.doesNotMatch(typesSource, /\bprivate_key_path\s*:/);
-  assert.doesNotMatch(typesSource, /proxy_web_url|default_proxy_web_url|proxyWebUrl/);
+  assert.doesNotMatch(typesSource, /proxy_registry_url|default_proxy_registry_url|proxyRegistryUrl/);
 
   const loginView = await readFile(new URL("../src/views/LoginView.vue", import.meta.url), "utf8");
   assert.doesNotMatch(
     loginView,
-    /defaultProxyWebUrl|proxyWebUrl|agent-login-proxy-web-url|Proxy Web 地址|连接设置|auth-server-settings/
+    /defaultProxyRegistryUrl|proxyRegistryUrl|agent-login-proxy-registry-url|Proxy Registry 地址|连接设置|auth-server-settings/
   );
   assert.match(loginView, /import Checkbox from "primevue\/checkbox"/);
   assert.match(loginView, /记住用户名和密码/);
@@ -78,7 +78,7 @@ try {
   assert.match(loginView, /loadRememberedAgentLogin/);
 
   const appSource = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
-  assert.doesNotMatch(appSource, /default-proxy-web-url|default_proxy_web_url/);
+  assert.doesNotMatch(appSource, /default-proxy-registry-url|default_proxy_registry_url/);
   const tauriAppStateSource = await readFile(
     new URL("../src-tauri/src/app/state.rs", import.meta.url),
     "utf8"
@@ -99,7 +99,7 @@ try {
   );
   assert.doesNotMatch(
     authComposable,
-    /LOCAL_PROXY_WEB_URL|proxyWebUrl|proxy_web_url|default_proxy_web_url|127\.0\.0\.1:8787/
+    /LOCAL_PROXY_REGISTRY_URL|proxyRegistryUrl|proxy_registry_url|default_proxy_registry_url|127\.0\.0\.1:8787/
   );
   assert.match(authComposable, /invoke\("open_user_account_management"\)/);
   assert.match(authComposable, /invoke<AgentAuthState>\("rotate_agent_key"/);
@@ -119,7 +119,7 @@ try {
   assert.match(rotateDialog, /label="确认生成并应用"/);
   assert.match(rotateDialog, /input-id="rotate-key-password"/);
   assert.match(rotateDialog, /私钥不会显示/);
-  assert.doesNotMatch(rotateDialog, /private_key_pem|proxyWebUrl|proxy_web_url/);
+  assert.doesNotMatch(rotateDialog, /private_key_pem|proxyRegistryUrl|proxy_registry_url/);
 
   assert.match(appSource, /loadRememberedAgentLogin/);
   assert.match(appSource, /remembered\?\.username\.trim\(\) === account\.value\?\.username/);
@@ -184,8 +184,8 @@ try {
     new URL("../../config/remote/agent.toml", import.meta.url),
     "utf8"
   );
-  assert.match(packagedAgentConfig, /^proxy_web_url = "https:\/\/140\.82\.30\.214"$/m);
-  assert.doesNotMatch(packagedAgentConfig, /proxy_web_url = "http:\/\/127\.0\.0\.1:8787"/);
+  assert.match(packagedAgentConfig, /^proxy_registry_url = "https:\/\/140\.82\.30\.214"$/m);
+  assert.doesNotMatch(packagedAgentConfig, /proxy_registry_url = "http:\/\/127\.0\.0\.1:8787"/);
   assert.doesNotMatch(packagedAgentConfig, /^\s*username\s*=/m);
   assert.doesNotMatch(packagedAgentConfig, /^\s*private_key_path\s*=/m);
   assert.doesNotMatch(packagedAgentConfig, /^\s*proxy_addrs\s*=/m);
@@ -199,16 +199,16 @@ try {
 
   assert.doesNotMatch(fallbackRawConfig, /\busername\s*=/);
   assert.doesNotMatch(fallbackRawConfig, /\bprivate_key_path\s*=/);
-  assert.doesNotMatch(fallbackRawConfig, /\bproxy_web_url\s*=/);
+  assert.doesNotMatch(fallbackRawConfig, /\bproxy_registry_url\s*=/);
 
   const redacted = redactManagedIdentityFromToml([
     'username = "attacker"',
     '"private_key_path" = "/tmp/attacker.pem"',
-    "'proxy_web_url' = \"https://hidden.example.com\"",
+    "'proxy_registry_url' = \"https://hidden.example.com\"",
     "transport_mode = \"tcp\"",
     ""
   ].join("\n"));
-  assert.doesNotMatch(redacted, /attacker|private_key_path|username|proxy_web_url|hidden\.example\.com/);
+  assert.doesNotMatch(redacted, /attacker|private_key_path|username|proxy_registry_url|hidden\.example\.com/);
   assert.match(redacted, /^transport_mode = "tcp"$/m);
 
   const desktopAgent = useDesktopAgent();
@@ -220,13 +220,13 @@ try {
   desktopAgent.setRawConfig([
     'username = "attacker"',
     'private_key_path = "/tmp/attacker.pem"',
-    'proxy_web_url = "https://hidden.example.com"',
+    'proxy_registry_url = "https://hidden.example.com"',
     'transport_mode = "tcp"',
     ""
   ].join("\n"));
   assert.doesNotMatch(
     desktopAgent.state.config.raw,
-    /attacker|private_key_path|username|proxy_web_url|hidden\.example\.com/
+    /attacker|private_key_path|username|proxy_registry_url|hidden\.example\.com/
   );
   assert.equal(desktopAgent.state.config.summary.transport_mode, "tcp");
   assert.equal(desktopAgent.state.dirty, true);

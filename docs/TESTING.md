@@ -18,7 +18,7 @@ We recommend using 4 terminals:
 
 ```
 Terminal 1: Mock Target Servers
-Terminal 2: Proxy Server
+Terminal 2: Proxy Entry
 Terminal 3: Agent Server
 Terminal 4: Test Runner
 ```
@@ -46,11 +46,11 @@ The mock servers provide:
   - `GET /json` - Returns JSON response
 - **TCP Echo Server (port 9091)** - Echoes all received data
 
-### Terminal 2: Start Proxy Server
+### Terminal 2: Start Proxy Entry
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p proxy -- --config config/proxy.toml
+cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
 ```
 
 **Expected Output:**
@@ -303,7 +303,7 @@ jobs:
         run: ./run-tests.sh mock-target &
         
       - name: Start proxy
-        run: cargo run --release -p proxy -- --config config/proxy.toml &
+        run: cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml &
         
       - name: Start test-only agent harness
         run: cargo run --release -p desktop-agent-be --features integration-test-harness --bin desktop-agent-integration-harness -- --config config/local/agent-forward.toml --managed-proxy-address 127.0.0.1:8080 &

@@ -41,7 +41,7 @@ pub(crate) async fn approve_agent_admin_key_request_command(
         .as_ref()
         .ok_or_else(|| "管理员 Agent 审批凭据缺失，请重新登录".to_string())?;
     let result = approve_agent_admin_key_request(
-        &session.proxy_web_url,
+        &session.proxy_registry_url,
         token.value.as_str(),
         &request.request_id,
         request.expires_at,
@@ -74,7 +74,7 @@ pub(crate) async fn reject_agent_admin_key_request_command(
         .as_ref()
         .ok_or_else(|| "管理员 Agent 审批凭据缺失，请重新登录".to_string())?;
     let result = reject_agent_admin_key_request(
-        &session.proxy_web_url,
+        &session.proxy_registry_url,
         token.value.as_str(),
         &request.request_id,
         &reason,
@@ -128,7 +128,7 @@ async fn fetch_and_apply_admin_inbox(
         );
     };
     let inbox =
-        match fetch_agent_admin_key_request_inbox(&session.proxy_web_url, token.value.as_str())
+        match fetch_agent_admin_key_request_inbox(&session.proxy_registry_url, token.value.as_str())
             .await
         {
             Ok(inbox) => inbox,
@@ -154,7 +154,7 @@ async fn fetch_and_apply_admin_inbox(
     let current = active_admin_session(runtime)?;
     if !current.is_some_and(|current| {
         current.account.username == session.account.username
-            && current.proxy_web_url == session.proxy_web_url
+            && current.proxy_registry_url == session.proxy_registry_url
     }) {
         runtime.clear_admin_key_request_inbox()?;
         let update = AgentAdminKeyRequestUpdate {

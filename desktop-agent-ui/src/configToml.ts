@@ -189,7 +189,7 @@ export function summarizeRaw(raw: string): AgentConfigSummary {
 
 export function redactManagedIdentityFromToml(raw: string) {
   return raw.replace(
-    /^[ \t]*(?:(?:"(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url)")|(?:'(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url)')|(?:username|private_key_path|proxy_identity_public_key_path|proxy_web_url))[ \t]*=.*(?:\r?\n|$)/gm,
+    /^[ \t]*(?:(?:"(?:username|private_key_path|proxy_identity_public_key_path|proxy_registry_url)")|(?:'(?:username|private_key_path|proxy_identity_public_key_path|proxy_registry_url)')|(?:username|private_key_path|proxy_identity_public_key_path|proxy_registry_url))[ \t]*=.*(?:\r?\n|$)/gm,
     ""
   );
 }

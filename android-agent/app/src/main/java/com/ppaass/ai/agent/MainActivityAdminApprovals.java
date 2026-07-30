@@ -247,7 +247,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
         }
         final String baseUrl;
         try {
-            baseUrl = AgentAuthConfig.proxyWebUrl(this);
+            baseUrl = AgentAuthConfig.proxyRegistryUrl(this);
         } catch (IOException error) {
             showAdminMessage("无法连接管理员服务");
             return;
@@ -302,7 +302,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
         }
         final String baseUrl;
         try {
-            baseUrl = AgentAuthConfig.proxyWebUrl(this);
+            baseUrl = AgentAuthConfig.proxyRegistryUrl(this);
         } catch (IOException error) {
             if (showErrors) {
                 showAdminMessage("无法连接管理员服务");

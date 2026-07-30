@@ -27,7 +27,7 @@ use crate::config::{
     enforce_managed_config_path_for_account, enforce_managed_identity,
     install_bundled_agent_assets, load_config_from_path, load_default_config,
     loaded_config_from_raw, locate_config_path, make_absolute_path, merge_config_summary,
-    prepare_config_for_account, primary_agent_config_path, proxy_web_url_from_config,
+    prepare_config_for_account, primary_agent_config_path, proxy_registry_url_from_config,
     remember_trusted_config_baseline, validate_config_candidate_against_trusted_baseline,
     write_config_file,
 };

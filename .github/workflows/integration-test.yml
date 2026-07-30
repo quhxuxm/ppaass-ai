@@ -37,9 +37,9 @@ jobs:
           cargo run -p integration-tests -- mock-target &
           npx wait-on http://localhost:9090/health --timeout 60000
 
-      - name: Start proxy
+      - name: Start Proxy Entry
         run: |
-          cargo run --package proxy --bin proxy -- --config config/local/proxy.toml &
+          cargo run --package proxy-entry --bin proxy-entry -- --config config/local/proxy-entry.toml &
           npx wait-on tcp:8080 -t 60000
 
       - name: Start test-only Agent harness

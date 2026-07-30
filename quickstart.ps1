@@ -9,7 +9,7 @@ Write-Host @"
 "@ -ForegroundColor Cyan
 
 # Check if built
-if (-not (Test-Path "target\release\proxy.exe")) {
+if (-not (Test-Path "target\release\proxy-entry.exe")) {
     Write-Host "`n⚠️  Binaries not found. Building project..." -ForegroundColor Yellow
     .\build.ps1
     if ($LASTEXITCODE -ne 0) {
@@ -26,8 +26,8 @@ New-Item -ItemType Directory -Force -Path "config", "keys" | Out-Null
 Write-Host "   Created: config/, keys/" -ForegroundColor Gray
 
 # Check configuration
-if (-not (Test-Path "config\proxy.toml")) {
-    Write-Host "`n⚠️  Proxy configuration not found. Please ensure config\proxy.toml exists." -ForegroundColor Yellow
+if (-not (Test-Path "config\local\proxy-entry.toml")) {
+    Write-Host "`n⚠️  Proxy Entry configuration not found. Please ensure config\local\proxy-entry.toml exists." -ForegroundColor Yellow
 } else {
     Write-Host "`n✅ Configuration files found!" -ForegroundColor Green
 }
@@ -38,10 +38,10 @@ Write-Host @"
 ║                     Next Steps                               ║
 ╚══════════════════════════════════════════════════════════════╝
 
-1️⃣  Start the Proxy Server:
-   .\target\release\proxy.exe --config config\proxy.toml
+1️⃣  Start Proxy Entry:
+   .\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
 
-2️⃣  Start Proxy Web and register the user
+2️⃣  Start Proxy Registry and register the user
 
 3️⃣  Approve the user's key request and expiration in the admin console
 
@@ -65,7 +65,7 @@ Write-Host @"
 ║                    Quick Commands                            ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Start Proxy:  .\target\release\proxy.exe --config config\proxy.toml
+Start Proxy Entry:  .\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
 Start Agent:  .\target\release\desktop-agent.exe --config config\agent.toml
 
 "@ -ForegroundColor White

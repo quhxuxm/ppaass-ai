@@ -14,16 +14,16 @@ struct AgentWebSessionHandoffResponse {
 
 #[instrument(skip_all)]
 pub(crate) async fn request_account_management_handoff(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     agent_access_token: &str,
 ) -> Result<Url, String> {
-    let base_url = normalize_proxy_web_url(proxy_web_url)
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?;
     if agent_access_token.is_empty() {
         return Err("当前 Agent 登录缺少账户交接凭据，请重新登录".to_string());
     }
 
-    let client = build_proxy_web_client()?;
+    let client = build_proxy_registry_client()?;
     let response = client
         .post(endpoint(&base_url, "api/v1/agent/web-session-handoffs")?)
         .bearer_auth(agent_access_token)
@@ -52,11 +52,11 @@ pub(crate) fn account_management_handoff_url(
         || handoff_path.starts_with("//")
         || handoff_path.contains('\\')
     {
-        return Err("Proxy Web 返回的账户交接地址无效".to_string());
+        return Err("Proxy Registry 返回的账户交接地址无效".to_string());
     }
     let url = base_url
         .join(handoff_path)
-        .map_err(|_| "Proxy Web 返回的账户交接地址无效".to_string())?;
+        .map_err(|_| "Proxy Registry 返回的账户交接地址无效".to_string())?;
     if url.origin() != base_url.origin()
         || !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -65,14 +65,14 @@ pub(crate) fn account_management_handoff_url(
         || url.query().is_none()
         || url.fragment().is_some()
     {
-        return Err("Proxy Web 返回的账户交接地址不可信".to_string());
+        return Err("Proxy Registry 返回的账户交接地址不可信".to_string());
     }
     Ok(url)
 }
 
 fn validate_handoff_lifetime(expires_in: u64) -> Result<(), String> {
     if !(1..=MAX_HANDOFF_LIFETIME_SECONDS).contains(&expires_in) {
-        return Err("Proxy Web 返回的账户交接有效期无效".to_string());
+        return Err("Proxy Registry 返回的账户交接有效期无效".to_string());
     }
     Ok(())
 }

@@ -5,7 +5,7 @@ use crate::runtime::{AgentPermissionTrust, AgentSessionCredentials, Authenticate
 fn device_authorization_rejects_malformed_codes_and_cross_origin_verification_urls() {
     assert!(validate_device_code(&"A".repeat(43)).is_ok());
     assert!(validate_device_code("../not-a-device-code").is_err());
-    let base = normalize_proxy_web_url("https://proxy.example.com").unwrap();
+    let base = normalize_proxy_registry_url("https://proxy.example.com").unwrap();
     assert!(device_verification_url(&base, "/#agent-authorize=ABCD").is_ok());
     assert!(
         device_verification_url(&base, "https://attacker.example.com/#agent-authorize=ABCD")

@@ -1,0 +1,1606 @@
+name: Build and Deploy Proxy Entry and Proxy Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select environment"
+        required: true
+        type: choice
+        options:
+          - production
+          - dev
+          - qa
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-proxy-services-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-proxy-services:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential gcc pkg-config libssl-dev openssh-client sshpass
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test and build Proxy Registry frontend
+        run: |
+          npm ci --prefix proxy-registry/frontend --no-audit --no-fund
+          npm test --prefix proxy-registry/frontend
+          npm run build --prefix proxy-registry/frontend
+
+      - name: Build Proxy Entry and Proxy Registry (Linux)
+        run: cargo build -p proxy-entry -p proxy-registry --release
+
+      - name: Package Proxy Entry and Proxy Registry
+        shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+        run: |
+          set -euo pipefail
+          rm -rf .deploy-proxy-services
+          mkdir -p .deploy-proxy-services
+          cp target/release/proxy-entry .deploy-proxy-services/proxy-entry
+          cp target/release/proxy-registry .deploy-proxy-services/proxy-registry
+          cp config/remote/proxy-entry.toml .deploy-proxy-services/proxy-entry.toml
+          cp start-proxy-entry.sh .deploy-proxy-services/start-proxy-entry.sh
+          cp start-proxy-registry.sh .deploy-proxy-services/start-proxy-registry.sh
+          mkdir -p .deploy-proxy-services/proxy-registry-frontend
+          cp -R proxy-registry/frontend/dist/. .deploy-proxy-services/proxy-registry-frontend/
+          printf '%s\n' "$GITHUB_SHA" \
+            > .deploy-proxy-services/proxy-registry-frontend/deploy-version.txt
+
+          {
+            echo "PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_USERNAME=admin"
+            echo "PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION=true"
+            echo "PPAASS_PROXY_REGISTRY_LISTEN_ADDR=127.0.0.1:8787"
+            printf 'PPAASS_PROXY_REGISTRY_PUBLIC_HOST=%q\n' "$WEB_PUBLIC_HOST"
+            echo "PPAASS_PROXY_REGISTRY_SECURE_COOKIES=true"
+            echo "PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS=true"
+            echo "RUST_LOG=proxy_registry=info,proxy_user_store=info,tower_http=info"
+          } > .deploy-proxy-services/proxy-registry.env
+
+          chmod +x \
+            .deploy-proxy-services/proxy-entry \
+            .deploy-proxy-services/proxy-registry \
+            .deploy-proxy-services/start-proxy-entry.sh \
+            .deploy-proxy-services/start-proxy-registry.sh
+
+      - name: Validate Proxy Registry admin password
+        shell: bash
+        env:
+          WEB_ADMIN_PASSWORD: ${{ secrets.PPAASS_WEB_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${WEB_ADMIN_PASSWORD:?PPAASS_WEB_ADMIN_PASSWORD secret is required}"
+          case "$WEB_ADMIN_PASSWORD" in
+            *$'\n'*|*$'\r'*)
+              echo "PPAASS_WEB_ADMIN_PASSWORD must not contain a newline" >&2
+              exit 1
+              ;;
+          esac
+          password_bytes="$(printf '%s' "$WEB_ADMIN_PASSWORD" | wc -c | tr -d '[:space:]')"
+          password_characters="$(
+            printf '%s' "$WEB_ADMIN_PASSWORD" \
+              | node -e 'const fs = require("fs"); process.stdout.write(String(Array.from(fs.readFileSync(0, "utf8")).length));'
+          )"
+          if [ "$password_characters" -lt 8 ] || [ "$password_bytes" -gt 256 ]; then
+            echo "PPAASS_WEB_ADMIN_PASSWORD must contain at least 8 characters and at most 256 UTF-8 bytes" >&2
+            exit 1
+          fi
+
+      - name: Validate Proxy Registry public host
+        shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+        run: |
+          set -euo pipefail
+          : "${WEB_PUBLIC_HOST:?PPAASS_WEB_PUBLIC_HOST repository variable is required}"
+          case "$WEB_PUBLIC_HOST" in
+            *[!0-9A-Za-z._-]*|'')
+              echo "PPAASS_WEB_PUBLIC_HOST must be an IPv4 address or DNS name without a URL scheme, port, or path" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve deployment connection
+        shell: bash
+        env:
+          PRODUCTION_REMOTE_HOST: ${{ secrets.PRODUCTION_REMOTE_HOST }}
+          PRODUCTION_REMOTE_USER: ${{ secrets.PRODUCTION_REMOTE_USER }}
+          PRODUCTION_REMOTE_PASSWORD: ${{ secrets.PRODUCTION_REMOTE_PASSWORD }}
+          DEV_REMOTE_HOST: ${{ secrets.DEV_REMOTE_HOST }}
+          DEV_REMOTE_USER: ${{ secrets.DEV_REMOTE_USER }}
+          DEV_REMOTE_PASSWORD: ${{ secrets.DEV_REMOTE_PASSWORD }}
+          QA_REMOTE_HOST: ${{ secrets.QA_REMOTE_HOST }}
+          QA_REMOTE_USER: ${{ secrets.QA_REMOTE_USER }}
+          QA_REMOTE_PASSWORD: ${{ secrets.QA_REMOTE_PASSWORD }}
+          DEPLOY_FOLDER_SECRET: ${{ secrets.DEPLOY_FOLDER }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.PPAASS_DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.environment }}" in
+            production)
+              remote_host_value="$PRODUCTION_REMOTE_HOST"
+              remote_user_value="$PRODUCTION_REMOTE_USER"
+              remote_password_value="$PRODUCTION_REMOTE_PASSWORD"
+              ;;
+            dev)
+              remote_host_value="$DEV_REMOTE_HOST"
+              remote_user_value="$DEV_REMOTE_USER"
+              remote_password_value="$DEV_REMOTE_PASSWORD"
+              ;;
+            qa)
+              remote_host_value="$QA_REMOTE_HOST"
+              remote_user_value="$QA_REMOTE_USER"
+              remote_password_value="$QA_REMOTE_PASSWORD"
+              ;;
+            *)
+              echo "Unknown environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
+          : "${remote_host_value:?Remote host secret is required}"
+          : "${remote_user_value:?Remote user secret is required}"
+          : "${remote_password_value:?Remote password secret is required}"
+          : "${DEPLOY_FOLDER_SECRET:?DEPLOY_FOLDER secret is required}"
+          : "${DEPLOY_SSH_KNOWN_HOSTS:?PPAASS_DEPLOY_SSH_KNOWN_HOSTS secret is required}"
+          for connection_value in \
+            "$remote_host_value" \
+            "$remote_user_value" \
+            "$remote_password_value" \
+            "$DEPLOY_FOLDER_SECRET"; do
+            case "$connection_value" in
+              *$'\n'*|*$'\r'*)
+                echo "Deployment connection secrets must not contain newlines" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          connection_file="$RUNNER_TEMP/ppaass-deploy-connection.env"
+          password_file="$RUNNER_TEMP/ppaass-deploy-password"
+          known_hosts_file="$RUNNER_TEMP/ppaass-deploy-known-hosts"
+          umask 077
+          printf '%s' "$remote_password_value" > "$password_file"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          if ! ssh-keygen -F "$remote_host_value" -f "$known_hosts_file" >/dev/null; then
+            echo "PPAASS_DEPLOY_SSH_KNOWN_HOSTS does not contain a key for $remote_host_value" >&2
+            exit 1
+          fi
+          {
+            printf 'REMOTE_HOST=%q\n' "$remote_host_value"
+            printf 'REMOTE_USER=%q\n' "$remote_user_value"
+            printf 'DEPLOY_FOLDER=%q\n' "$DEPLOY_FOLDER_SECRET"
+            printf 'REMOTE_PASSWORD_FILE=%q\n' "$password_file"
+            printf 'REMOTE_KNOWN_HOSTS_FILE=%q\n' "$known_hosts_file"
+          } > "$connection_file"
+          chmod 600 "$connection_file" "$password_file" "$known_hosts_file"
+
+      - name: Prepare remote deploy folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "bash -seuo pipefail -- '$deploy_folder_base64'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$(printf '%s' "$1" | base64 -d)"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+
+          mkdir -p "$DEPLOY_DIR"
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          RUNTIME_DIR="/opt/ppaass"
+          STATE_DIR="/var/lib/ppaass"
+          case "$DEPLOY_DIR" in
+            /|/root|/home|/opt|/var|/usr|/etc)
+              echo "DEPLOY_FOLDER must be a dedicated staging subdirectory, got $DEPLOY_DIR" >&2
+              exit 1
+              ;;
+            "$RUNTIME_DIR"|"$RUNTIME_DIR"/*|"$STATE_DIR"|"$STATE_DIR"/*)
+              echo "DEPLOY_FOLDER is an upload staging directory and must not overlap $RUNTIME_DIR or $STATE_DIR" >&2
+              exit 1
+              ;;
+          esac
+          case "$DEPLOY_DIR" in
+            /root/*)
+              echo "DEPLOY_FOLDER is under /root; it will be used only for root-owned upload staging"
+              echo "Services will run from $RUNTIME_DIR with persistent state in $STATE_DIR"
+              ;;
+          esac
+          if [ "$(id -u)" -ne 0 ]; then
+            echo "Proxy Registry HTTPS on TCP/443 requires a root deployment user" >&2
+            exit 1
+          fi
+          if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+            echo "Caddy deployment requires a systemd-based Linux server" >&2
+            exit 1
+          fi
+          if systemctl is-active --quiet caddy.service 2>/dev/null \
+            || systemctl is-enabled --quiet caddy.service 2>/dev/null; then
+            echo "caddy.service is active or enabled; migrate and disable it before PPAASS manages TCP/443" >&2
+            exit 1
+          fi
+          REMOTE_SCRIPT
+
+      - name: Ensure Caddy is installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "bash -seuo pipefail" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          CADDY_MINIMUM_VERSION="2.11.4"
+          CADDY_INSTALL_VERSION="2.11.4"
+          CADDY_INSTALL_PATH="/usr/local/bin/caddy"
+          temporary_directory=""
+
+          cleanup_caddy_installer() {
+            if [ -n "$temporary_directory" ]; then
+              rm -rf -- "$temporary_directory"
+            fi
+          }
+          trap cleanup_caddy_installer EXIT
+
+          version_is_supported() {
+            candidate_version="${1#v}"
+            candidate_version="${candidate_version%% *}"
+            case "$candidate_version" in
+              ''|*[!0-9.]*)
+                return 1
+                ;;
+            esac
+            first_version="$(
+              printf '%s\n%s\n' "$CADDY_MINIMUM_VERSION" "$candidate_version" \
+                | sort -V \
+                | head -n 1
+            )"
+            [ "$first_version" = "$CADDY_MINIMUM_VERSION" ]
+          }
+
+          if ! command -v curl >/dev/null 2>&1; then
+            echo "curl is required to install and health-check Caddy" >&2
+            exit 1
+          fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y openssl
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y openssl
+            else
+              echo "OpenSSL is missing and no supported package manager is available" >&2
+              exit 1
+            fi
+          fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "OpenSSL installation did not provide the openssl command" >&2
+            exit 1
+          fi
+
+          caddy_binary="$(command -v caddy || true)"
+          installed_version=""
+          if [ -n "$caddy_binary" ]; then
+            installed_version="$(
+              "$caddy_binary" version 2>/dev/null \
+                | awk '{ print $1 }' \
+                || true
+            )"
+          fi
+
+          if [ -n "$caddy_binary" ] && version_is_supported "$installed_version"; then
+            if [ "$caddy_binary" != "$CADDY_INSTALL_PATH" ]; then
+              install -o root -g root -m 0755 \
+                "$caddy_binary" \
+                "$CADDY_INSTALL_PATH"
+            fi
+            installed_version="$("$CADDY_INSTALL_PATH" version | awk '{ print $1 }')"
+            echo "Using Caddy $installed_version from $CADDY_INSTALL_PATH"
+            exit 0
+          fi
+
+          case "$(uname -m)" in
+            x86_64|amd64)
+              caddy_architecture="amd64"
+              ;;
+            aarch64|arm64)
+              caddy_architecture="arm64"
+              ;;
+            armv7l|armv7)
+              caddy_architecture="armv7"
+              ;;
+            *)
+              echo "Unsupported Caddy architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          if ! command -v sha512sum >/dev/null 2>&1; then
+            echo "sha512sum is required to verify Caddy" >&2
+            exit 1
+          fi
+
+          temporary_directory="$(mktemp -d)"
+          archive_name="caddy_${CADDY_INSTALL_VERSION}_linux_${caddy_architecture}.tar.gz"
+          release_base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_INSTALL_VERSION}"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --output "$temporary_directory/$archive_name" \
+            "$release_base/$archive_name"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --output "$temporary_directory/checksums.txt" \
+            "$release_base/caddy_${CADDY_INSTALL_VERSION}_checksums.txt"
+
+          expected_checksum="$(
+            awk -v archive="$archive_name" '$2 == archive { print $1; exit }' \
+              "$temporary_directory/checksums.txt"
+          )"
+          case "$expected_checksum" in
+            ''|*[!0-9a-fA-F]*)
+              echo "Caddy release checksum is missing or invalid" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#expected_checksum}" -ne 128 ]; then
+            echo "Caddy release checksum has an invalid length" >&2
+            exit 1
+          fi
+          printf '%s  %s\n' \
+            "$expected_checksum" \
+            "$temporary_directory/$archive_name" \
+            | sha512sum --check --status
+
+          tar -xzf "$temporary_directory/$archive_name" -C "$temporary_directory" caddy
+          test -f "$temporary_directory/caddy"
+          install -o root -g root -m 0755 \
+            "$temporary_directory/caddy" \
+            "$CADDY_INSTALL_PATH"
+          installed_version="$("$CADDY_INSTALL_PATH" version | awk '{ print $1 }')"
+          if ! version_is_supported "$installed_version"; then
+            echo "Installed unsupported Caddy version: $installed_version" >&2
+            exit 1
+          fi
+          echo "Installed Caddy $installed_version at $CADDY_INSTALL_PATH"
+          REMOTE_SCRIPT
+
+      - name: Upload Proxy Entry and Proxy Registry files
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          : "${REMOTE_KNOWN_HOSTS_FILE:?REMOTE_KNOWN_HOSTS_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+          test -r "$REMOTE_KNOWN_HOSTS_FILE"
+
+          REMOTE_UPLOAD_SCRIPT="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_FOLDER"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+
+          mkdir -p "$DEPLOY_DIR"
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          # Upload before stopping the old processes. GNU tar unlinks each
+          # replaced executable first, so a running process keeps its old inode
+          # until the later controlled service restart. Recursively unlink old
+          # directory trees as well, because --unlink-first alone cannot replace
+          # a non-empty frontend directory.
+          tar --unlink-first --recursive-unlink -xf - -C "$DEPLOY_DIR"
+          chmod +x \
+            "$DEPLOY_DIR/proxy-entry" \
+            "$DEPLOY_DIR/proxy-registry" \
+            "$DEPLOY_DIR/start-proxy-entry.sh" \
+            "$DEPLOY_DIR/start-proxy-registry.sh"
+          REMOTE_SCRIPT
+          )"
+
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          remote_upload_script_base64="$(printf '%s' "$REMOTE_UPLOAD_SCRIPT" | base64 -w 0)"
+          tar -C .deploy-proxy-services -cf - . | sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "bash -c 'deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; remote_script=\"\$(printf \"%s\" \"\$2\" | base64 -d)\"; DEPLOY_FOLDER=\"\$deploy_folder\" bash -eo pipefail -c \"\$remote_script\"' -- '$deploy_folder_base64' '$remote_upload_script_base64'"
+
+      - name: Stop running Proxy Entry and Proxy Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$REMOTE_USER@$REMOTE_HOST" \
+            "bash -seuo pipefail -- '$deploy_folder_base64'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DEPLOY_DIR="$(printf '%s' "$1" | base64 -d)"
+          case "$DEPLOY_DIR" in
+            "~")
+              DEPLOY_DIR="$HOME"
+              ;;
+            "~/"*)
+              DEPLOY_DIR="$HOME/${DEPLOY_DIR#~/}"
+              ;;
+          esac
+          DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd -P)"
+          RUNTIME_DIR="/opt/ppaass"
+
+          find_deploy_processes() {
+            target_executable="$1"
+            for executable_link in /proc/[0-9]*/exe; do
+              executable="$(readlink "$executable_link" 2>/dev/null || true)"
+              executable="${executable% (deleted)}"
+              if [ "$executable" = "$target_executable" ]; then
+                process_id="${executable_link#/proc/}"
+                printf '%s\n' "${process_id%/exe}"
+              fi
+            done
+          }
+
+          stop_deploy_processes() {
+            service_name="$1"
+            target_executable="$2"
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -z "$process_ids" ]; then
+              echo "No running $service_name process found"
+              return
+            fi
+
+            echo "Stopping existing $service_name process(es): $process_ids"
+            kill $process_ids 2>/dev/null || true
+            for wait_index in $(seq 1 20); do
+              process_ids="$(find_deploy_processes "$target_executable")"
+              [ -z "$process_ids" ] && break
+              sleep 0.5
+            done
+
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -n "$process_ids" ]; then
+              echo "Force stopping $service_name process(es): $process_ids"
+              kill -9 $process_ids 2>/dev/null || true
+              sleep 1
+            fi
+
+            process_ids="$(find_deploy_processes "$target_executable")"
+            if [ -n "$process_ids" ]; then
+              echo "Failed to stop $service_name process(es): $process_ids" >&2
+              exit 1
+            fi
+          }
+
+          if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            systemctl stop ppaass-caddy.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-entry.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-registry.service 2>/dev/null || true
+            # Stop units from deployments made before the component rename.
+            systemctl stop ppaass-proxy.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-web.service 2>/dev/null || true
+          fi
+
+          if [ -f "$DEPLOY_DIR/start-proxy-entry.sh" ]; then
+            chmod +x "$DEPLOY_DIR/start-proxy-entry.sh"
+            "$DEPLOY_DIR/start-proxy-entry.sh" stop || true
+          fi
+          if [ -f "$DEPLOY_DIR/start-proxy-registry.sh" ]; then
+            chmod +x "$DEPLOY_DIR/start-proxy-registry.sh"
+            "$DEPLOY_DIR/start-proxy-registry.sh" stop || true
+          fi
+
+          stop_deploy_processes "Proxy Entry" "$DEPLOY_DIR/proxy-entry"
+          stop_deploy_processes "Proxy Registry" "$DEPLOY_DIR/proxy-registry"
+          stop_deploy_processes "Proxy Entry runtime" "$RUNTIME_DIR/proxy-entry"
+          stop_deploy_processes "Proxy Registry runtime" "$RUNTIME_DIR/proxy-registry"
+          stop_deploy_processes "legacy Proxy" "$DEPLOY_DIR/proxy"
+          stop_deploy_processes "legacy Proxy Web" "$DEPLOY_DIR/proxy-web"
+          stop_deploy_processes "legacy Proxy runtime" "$RUNTIME_DIR/proxy"
+          stop_deploy_processes "legacy Proxy Web runtime" "$RUNTIME_DIR/proxy-web"
+          REMOTE_SCRIPT
+
+      - name: Deploy and restart Proxy Entry and Proxy Registry
+        shell: bash
+        env:
+          WEB_ADMIN_PASSWORD: ${{ secrets.PPAASS_WEB_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/ppaass-deploy-connection.env"
+          : "${REMOTE_HOST:?REMOTE_HOST is required}"
+          : "${REMOTE_USER:?REMOTE_USER is required}"
+          : "${DEPLOY_FOLDER:?DEPLOY_FOLDER is required}"
+          : "${REMOTE_PASSWORD_FILE:?REMOTE_PASSWORD_FILE is required}"
+          : "${WEB_ADMIN_PASSWORD:?PPAASS_WEB_ADMIN_PASSWORD secret is required}"
+          test -r "$REMOTE_PASSWORD_FILE"
+
+          REMOTE_DEPLOY_SCRIPT="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          ADMIN_PASSWORD_INPUT_FILE="${PPAASS_PROXY_REGISTRY_ADMIN_PASSWORD_INPUT_FILE:?}"
+          STAGING_DIR="$DEPLOY_FOLDER"
+          case "$STAGING_DIR" in
+            "~")
+              STAGING_DIR="$HOME"
+              ;;
+            "~/"*)
+              STAGING_DIR="$HOME/${STAGING_DIR#~/}"
+              ;;
+          esac
+
+          cd "$STAGING_DIR"
+          STAGING_DIR="$(pwd -P)"
+          umask 077
+          RUNTIME_DIR="/opt/ppaass"
+          STATE_DIR="/var/lib/ppaass"
+          USER_DATA_DIR="$STATE_DIR/users"
+          ACCESS_DATA_DIR="$STATE_DIR/access"
+          SECRET_DIR="$STATE_DIR/secrets"
+          IDENTITY_DIR="$STATE_DIR/identity"
+          PROXY_LOG_DIR="/var/log/ppaass/proxy-entry"
+          WEB_LOG_DIR="/var/log/ppaass/proxy-registry"
+          PROXY_USER="ppaass-proxy-entry"
+          PROXY_GROUP="ppaass-proxy-entry"
+          WEB_USER="ppaass-proxy-registry"
+          WEB_GROUP="ppaass-proxy-registry"
+          USER_READ_GROUP="ppaass-user-readers"
+          ACCESS_GROUP="ppaass-access"
+          KEY_SECRET_FILE="$SECRET_DIR/proxy-registry-key-encryption-secret"
+          LEGACY_CANONICAL_KEY_SECRET_FILE="$SECRET_DIR/proxy-web-key-encryption-secret"
+          ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-registry-admin-password"
+          DATABASE_FILE="$USER_DATA_DIR/proxy-users.sqlite3"
+          ACCESS_LOG_DATABASE_FILE="$ACCESS_DATA_DIR/proxy-access.sqlite3"
+          PROXY_IDENTITY_PRIVATE_KEY="$IDENTITY_DIR/proxy-identity-private.pem"
+          PROXY_IDENTITY_PUBLIC_KEY="$IDENTITY_DIR/proxy-identity-public.pem"
+          LEGACY_STAGING_DATA_DIR="$STAGING_DIR/data"
+          LEGACY_STAGING_DATABASE_FILE="$LEGACY_STAGING_DATA_DIR/proxy-users.sqlite3"
+          LEGACY_STATE_DATA_DIR="$STATE_DIR/data"
+          LEGACY_STATE_DATABASE_FILE="$LEGACY_STATE_DATA_DIR/proxy-users.sqlite3"
+          LEGACY_SECRET_DIR="$STAGING_DIR/.secrets"
+          CADDY_MINIMUM_VERSION="2.11.4"
+          CADDY_CONFIG_DIR="/etc/ppaass"
+          CADDY_CONFIG_FILE="$CADDY_CONFIG_DIR/Caddyfile"
+          CADDY_STATE_DIR="/var/lib/ppaass-caddy"
+          DEPLOY_SUCCEEDED=false
+          PROXY_START_ATTEMPTED=false
+          WEB_START_ATTEMPTED=false
+          CADDY_START_ATTEMPTED=false
+          temporary_admin_file=""
+          temporary_key_file=""
+          temporary_identity_private_key=""
+          temporary_identity_public_key=""
+          temporary_proxy_config=""
+          temporary_caddy_config=""
+
+          cleanup_deployment_secrets() {
+            if [ -n "$temporary_admin_file" ]; then
+              rm -f "$temporary_admin_file"
+            fi
+            if [ -n "$temporary_key_file" ]; then
+              rm -f "$temporary_key_file"
+            fi
+            if [ -n "$temporary_identity_private_key" ]; then
+              rm -f "$temporary_identity_private_key"
+            fi
+            if [ -n "$temporary_identity_public_key" ]; then
+              rm -f "$temporary_identity_public_key"
+            fi
+            if [ -n "$temporary_proxy_config" ]; then
+              rm -f "$temporary_proxy_config"
+            fi
+            if [ -n "$temporary_caddy_config" ]; then
+              rm -f "$temporary_caddy_config"
+            fi
+            rm -f "$ADMIN_PASSWORD_FILE"
+            if [ "$DEPLOY_SUCCEEDED" != true ]; then
+              if [ "$CADDY_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-caddy.service 2>/dev/null || true
+              fi
+              if [ "$WEB_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-proxy-registry.service 2>/dev/null || true
+              fi
+              if [ "$PROXY_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-proxy-entry.service 2>/dev/null || true
+              fi
+            fi
+          }
+          trap cleanup_deployment_secrets EXIT
+
+          case "$STAGING_DIR" in
+            /|/root|/home|/opt|/var|/usr|/etc)
+              echo "DEPLOY_FOLDER must be a dedicated staging subdirectory, got $STAGING_DIR" >&2
+              exit 1
+              ;;
+            "$RUNTIME_DIR"|"$RUNTIME_DIR"/*|"$STATE_DIR"|"$STATE_DIR"/*)
+              echo "DEPLOY_FOLDER must be a staging directory outside $RUNTIME_DIR and $STATE_DIR" >&2
+              exit 1
+              ;;
+          esac
+
+          test -x "$STAGING_DIR/proxy-entry"
+          test -x "$STAGING_DIR/proxy-registry"
+          test -x "$STAGING_DIR/start-proxy-entry.sh"
+          test -x "$STAGING_DIR/start-proxy-registry.sh"
+          test -f "$STAGING_DIR/proxy-entry.toml"
+          test -f "$STAGING_DIR/proxy-registry.env"
+          test -f "$STAGING_DIR/proxy-registry-frontend/index.html"
+
+          if [ "$(id -u)" -ne 0 ] \
+            || ! command -v systemctl >/dev/null 2>&1 \
+            || [ ! -d /run/systemd/system ]; then
+            echo "Caddy deployment requires a root user on a systemd-based Linux server" >&2
+            exit 1
+          fi
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "OpenSSL is required to provision the persistent Proxy transport identity" >&2
+            exit 1
+          fi
+
+          set -a
+          # shellcheck disable=SC1091
+          . "$STAGING_DIR/proxy-registry.env"
+          set +a
+          WEB_PUBLIC_HOST="${PPAASS_PROXY_REGISTRY_PUBLIC_HOST:?}"
+          WEB_LISTEN_ADDR="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:?}"
+          if [ "$WEB_LISTEN_ADDR" != "127.0.0.1:8787" ]; then
+            echo "Proxy Registry must listen only on 127.0.0.1:8787 behind Caddy, got $WEB_LISTEN_ADDR" >&2
+            exit 1
+          fi
+          case "$WEB_PUBLIC_HOST" in
+            *[!0-9A-Za-z._-]*|'')
+              echo "Invalid Proxy Registry public host: $WEB_PUBLIC_HOST" >&2
+              exit 1
+              ;;
+          esac
+
+          nologin_shell="$(command -v nologin || printf '/usr/sbin/nologin')"
+
+          ensure_system_group() {
+            group_name="$1"
+            if ! getent group "$group_name" >/dev/null 2>&1; then
+              groupadd --system "$group_name"
+            fi
+          }
+
+          ensure_system_user() {
+            local service_user="$1"
+            local service_group="$2"
+            local service_passwd_entry service_home service_shell
+            if id -u "$service_user" >/dev/null 2>&1; then
+              service_passwd_entry="$(getent passwd "$service_user")"
+              service_home="$(printf '%s\n' "$service_passwd_entry" | cut -d: -f6)"
+              service_shell="$(printf '%s\n' "$service_passwd_entry" | cut -d: -f7)"
+              if [ "$(id -u "$service_user")" -eq 0 ]; then
+                echo "$service_user must not resolve to UID 0" >&2
+                exit 1
+              fi
+              if [ "$(id -gn "$service_user")" != "$service_group" ]; then
+                echo "$service_user exists with unexpected primary group $(id -gn "$service_user")" >&2
+                exit 1
+              fi
+              case "$service_home" in
+                /nonexistent|/var/empty|/var/lib/ppaass)
+                  ;;
+                *)
+                  echo "$service_user exists with non-service home $service_home" >&2
+                  exit 1
+                  ;;
+              esac
+              case "$service_shell" in
+                */nologin|/bin/false)
+                  ;;
+                *)
+                  echo "$service_user exists with an interactive shell: $service_shell" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              useradd \
+                --system \
+                --gid "$service_group" \
+                --home-dir /nonexistent \
+                --no-create-home \
+                --shell "$nologin_shell" \
+                "$service_user"
+            fi
+          }
+
+          ensure_system_group "$PROXY_GROUP"
+          ensure_system_group "$WEB_GROUP"
+          ensure_system_group "$USER_READ_GROUP"
+          ensure_system_group "$ACCESS_GROUP"
+          ensure_system_user "$PROXY_USER" "$PROXY_GROUP"
+          ensure_system_user "$WEB_USER" "$WEB_GROUP"
+          if [ "$(id -u "$PROXY_USER")" -eq "$(id -u "$WEB_USER")" ]; then
+            echo "Proxy and Proxy Registry must use distinct Unix UIDs" >&2
+            exit 1
+          fi
+
+          for managed_directory in \
+            "$RUNTIME_DIR" \
+            "$STATE_DIR" \
+            "$USER_DATA_DIR" \
+            "$ACCESS_DATA_DIR" \
+            "$SECRET_DIR" \
+            "$IDENTITY_DIR" \
+            /var/log/ppaass \
+            "$PROXY_LOG_DIR" \
+            "$WEB_LOG_DIR"; do
+            if [ -L "$managed_directory" ]; then
+              echo "Refusing symlinked managed directory: $managed_directory" >&2
+              exit 1
+            fi
+          done
+
+          install -d -o root -g root -m 0755 "$STATE_DIR"
+          install -d -o "$WEB_USER" -g "$USER_READ_GROUP" -m 2750 "$USER_DATA_DIR"
+          install -d -o root -g "$ACCESS_GROUP" -m 2770 "$ACCESS_DATA_DIR"
+          install -d -o root -g "$WEB_GROUP" -m 0750 "$SECRET_DIR"
+          install -d -o root -g root -m 0755 "$IDENTITY_DIR"
+          install -d -o root -g root -m 0755 /var/log/ppaass
+          install -d -o root -g "$PROXY_GROUP" -m 0770 "$PROXY_LOG_DIR"
+          install -d -o root -g "$WEB_GROUP" -m 0770 "$WEB_LOG_DIR"
+
+          require_regular_file_or_absent() {
+            checked_file="$1"
+            if [ ! -e "$checked_file" ] && [ ! -L "$checked_file" ]; then
+              return
+            fi
+            if [ ! -f "$checked_file" ] || [ -L "$checked_file" ]; then
+              echo "Refusing non-regular deployment state file: $checked_file" >&2
+              exit 1
+            fi
+            if [ "$(stat -c '%h' -- "$checked_file")" -ne 1 ]; then
+              echo "Refusing hard-linked deployment state file: $checked_file" >&2
+              exit 1
+            fi
+          }
+
+          for legacy_data_directory in \
+            "$LEGACY_STAGING_DATA_DIR" \
+            "$LEGACY_STATE_DATA_DIR"; do
+            if [ -L "$legacy_data_directory" ]; then
+              echo "Refusing symlinked legacy data directory: $legacy_data_directory" >&2
+              exit 1
+            fi
+          done
+
+          require_sqlite_family() {
+            sqlite_database="$1"
+            for sqlite_suffix in "" "-wal" "-shm" "-journal"; do
+              require_regular_file_or_absent "${sqlite_database}${sqlite_suffix}"
+            done
+            if [ ! -e "$sqlite_database" ]; then
+              for sqlite_suffix in "-wal" "-shm" "-journal"; do
+                if [ -e "${sqlite_database}${sqlite_suffix}" ]; then
+                  echo "SQLite sidecar exists without its database: ${sqlite_database}${sqlite_suffix}" >&2
+                  exit 1
+                fi
+              done
+            fi
+          }
+
+          require_sqlite_family "$LEGACY_STAGING_DATABASE_FILE"
+          require_sqlite_family "$LEGACY_STATE_DATABASE_FILE"
+          require_sqlite_family "$DATABASE_FILE"
+          require_sqlite_family "$ACCESS_LOG_DATABASE_FILE"
+          require_regular_file_or_absent "$PROXY_IDENTITY_PRIVATE_KEY"
+          require_regular_file_or_absent "$PROXY_IDENTITY_PUBLIC_KEY"
+
+          if [ ! -e "$PROXY_IDENTITY_PRIVATE_KEY" ]; then
+            temporary_identity_private_key="$(
+              mktemp "$IDENTITY_DIR/.proxy-identity-private.XXXXXX"
+            )"
+            if ! openssl genpkey \
+              -algorithm RSA \
+              -pkeyopt rsa_keygen_bits:3072 \
+              -out "$temporary_identity_private_key" >/dev/null 2>&1; then
+              echo "Failed to generate the persistent Proxy transport identity" >&2
+              exit 1
+            fi
+            chown "$PROXY_USER":"$PROXY_GROUP" "$temporary_identity_private_key"
+            chmod 0600 "$temporary_identity_private_key"
+            mv -f "$temporary_identity_private_key" "$PROXY_IDENTITY_PRIVATE_KEY"
+            temporary_identity_private_key=""
+            echo "Generated persistent 3072-bit Proxy transport identity; include $IDENTITY_DIR in server backups"
+          fi
+          if ! openssl rsa \
+            -in "$PROXY_IDENTITY_PRIVATE_KEY" \
+            -check \
+            -noout >/dev/null 2>&1; then
+            echo "Stored Proxy transport identity is not a valid RSA private key" >&2
+            exit 1
+          fi
+          chown "$PROXY_USER":"$PROXY_GROUP" "$PROXY_IDENTITY_PRIVATE_KEY"
+          chmod 0600 "$PROXY_IDENTITY_PRIVATE_KEY"
+
+          temporary_identity_public_key="$(
+            mktemp "$IDENTITY_DIR/.proxy-identity-public.XXXXXX"
+          )"
+          if ! openssl pkey \
+            -in "$PROXY_IDENTITY_PRIVATE_KEY" \
+            -pubout \
+            -out "$temporary_identity_public_key" 2>/dev/null; then
+            echo "Failed to derive the Proxy transport identity public key" >&2
+            exit 1
+          fi
+          chown root:"$WEB_GROUP" "$temporary_identity_public_key"
+          chmod 0640 "$temporary_identity_public_key"
+          mv -f "$temporary_identity_public_key" "$PROXY_IDENTITY_PUBLIC_KEY"
+          temporary_identity_public_key=""
+
+          legacy_database_source=""
+          for candidate_database in \
+            "$LEGACY_STAGING_DATABASE_FILE" \
+            "$LEGACY_STATE_DATABASE_FILE"; do
+            if [ -e "$candidate_database" ]; then
+              if [ -n "$legacy_database_source" ]; then
+                echo "Multiple legacy Proxy databases exist; refusing to choose silently" >&2
+                echo "First: $legacy_database_source" >&2
+                echo "Second: $candidate_database" >&2
+                exit 1
+              fi
+              legacy_database_source="$candidate_database"
+            fi
+          done
+          if [ -n "$legacy_database_source" ]; then
+            if [ -e "$DATABASE_FILE" ]; then
+              echo "Both a legacy and canonical user database exist; refusing to choose silently" >&2
+              echo "Legacy: $legacy_database_source" >&2
+              echo "Canonical: $DATABASE_FILE" >&2
+              exit 1
+            fi
+            for database_suffix in "" "-wal" "-shm" "-journal"; do
+              legacy_database_part="${legacy_database_source}${database_suffix}"
+              if [ -e "$legacy_database_part" ]; then
+                mv "$legacy_database_part" "${DATABASE_FILE}${database_suffix}"
+              fi
+            done
+            echo "Migrated the stopped user SQLite database and sidecars from $(dirname "$legacy_database_source") to $USER_DATA_DIR"
+          fi
+
+          for database_suffix in "" "-wal" "-shm" "-journal"; do
+            database_part="${DATABASE_FILE}${database_suffix}"
+            if [ -e "$database_part" ]; then
+              chown "$WEB_USER":"$USER_READ_GROUP" "$database_part"
+              chmod 0640 "$database_part"
+            fi
+            access_database_part="${ACCESS_LOG_DATABASE_FILE}${database_suffix}"
+            if [ -e "$access_database_part" ]; then
+              chown root:"$ACCESS_GROUP" "$access_database_part"
+              chmod 0660 "$access_database_part"
+            fi
+          done
+
+          if [ -L "$LEGACY_SECRET_DIR" ]; then
+            echo "Refusing symlinked legacy secret directory: $LEGACY_SECRET_DIR" >&2
+            exit 1
+          fi
+          require_regular_file_or_absent "$KEY_SECRET_FILE"
+          for legacy_key_secret_file in \
+            "$LEGACY_CANONICAL_KEY_SECRET_FILE" \
+            "$LEGACY_SECRET_DIR/proxy-web-key-encryption-secret" \
+            "$LEGACY_SECRET_DIR/proxy-registry-key-encryption-secret"; do
+            require_regular_file_or_absent "$legacy_key_secret_file"
+            if [ -e "$legacy_key_secret_file" ]; then
+              if [ -e "$KEY_SECRET_FILE" ]; then
+                if ! cmp -s "$legacy_key_secret_file" "$KEY_SECRET_FILE"; then
+                  echo "Legacy and canonical Proxy Registry encryption secrets differ; refusing migration" >&2
+                  exit 1
+                fi
+                rm -f "$legacy_key_secret_file"
+              else
+                mv "$legacy_key_secret_file" "$KEY_SECRET_FILE"
+                echo "Migrated the persistent Proxy Registry encryption secret to $SECRET_DIR"
+              fi
+            fi
+          done
+
+          install -d -o root -g root -m 0755 "$RUNTIME_DIR"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/proxy-entry" \
+            "$RUNTIME_DIR/proxy-entry"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/proxy-registry" \
+            "$RUNTIME_DIR/proxy-registry"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/start-proxy-entry.sh" \
+            "$RUNTIME_DIR/start-proxy-entry.sh"
+          install -o root -g root -m 0755 \
+            "$STAGING_DIR/start-proxy-registry.sh" \
+            "$RUNTIME_DIR/start-proxy-registry.sh"
+          install -o root -g "$WEB_GROUP" -m 0640 \
+            "$STAGING_DIR/proxy-registry.env" \
+            "$RUNTIME_DIR/proxy-registry.env"
+          rm -rf -- \
+            "$RUNTIME_DIR/proxy" \
+            "$RUNTIME_DIR/proxy-web" \
+            "$RUNTIME_DIR/start-proxy.sh" \
+            "$RUNTIME_DIR/start-proxy-web.sh" \
+            "$RUNTIME_DIR/proxy-web.env" \
+            "$RUNTIME_DIR/proxy-web-frontend"
+
+          temporary_proxy_config="$(mktemp "$RUNTIME_DIR/.proxy-entry.toml.XXXXXX")"
+          if ! awk \
+            -v database_file="$DATABASE_FILE" \
+            -v access_log_database_file="$ACCESS_LOG_DATABASE_FILE" \
+            -v proxy_identity_private_key="$PROXY_IDENTITY_PRIVATE_KEY" '
+            /^[[:space:]]*access_log_database_path[[:space:]]*=/ {
+              access_log_database_path_count++
+              next
+            }
+            /^[[:space:]]*access_log_database_group_writable[[:space:]]*=/ {
+              access_log_database_group_writable_count++
+              next
+            }
+            /^[[:space:]]*transport_identity_private_key_path[[:space:]]*=/ {
+              print "transport_identity_private_key_path = \"" proxy_identity_private_key "\""
+              transport_identity_private_key_path_count++
+              next
+            }
+            /^[[:space:]]*users_database_path[[:space:]]*=/ {
+              print "users_database_path = \"" database_file "\""
+              print "access_log_database_path = \"" access_log_database_file "\""
+              print "access_log_database_group_writable = true"
+              users_database_path_count++
+              next
+            }
+            { print }
+            END {
+              if (users_database_path_count != 1 \
+                  || access_log_database_path_count > 1 \
+                  || access_log_database_group_writable_count > 1 \
+                  || transport_identity_private_key_path_count != 1) {
+                exit 2
+              }
+            }
+          ' "$STAGING_DIR/proxy-entry.toml" > "$temporary_proxy_config"; then
+            echo "proxy-entry.toml has invalid database path or permission settings" >&2
+            exit 1
+          fi
+          chown root:"$PROXY_GROUP" "$temporary_proxy_config"
+          chmod 0640 "$temporary_proxy_config"
+          mv -f "$temporary_proxy_config" "$RUNTIME_DIR/proxy-entry.toml"
+          temporary_proxy_config=""
+
+          rm -rf -- "$RUNTIME_DIR/proxy-registry-frontend"
+          cp -a -- "$STAGING_DIR/proxy-registry-frontend" "$RUNTIME_DIR/proxy-registry-frontend"
+          chown -R root:root "$RUNTIME_DIR/proxy-registry-frontend"
+          find "$RUNTIME_DIR/proxy-registry-frontend" -type d -exec chmod 0755 {} +
+          find "$RUNTIME_DIR/proxy-registry-frontend" -type f -exec chmod 0644 {} +
+
+          test -r "$ADMIN_PASSWORD_INPUT_FILE"
+          temporary_admin_file="$(mktemp "$SECRET_DIR/.proxy-registry-admin-password.XXXXXX")"
+          cp "$ADMIN_PASSWORD_INPUT_FILE" "$temporary_admin_file"
+          password_bytes="$(wc -c < "$temporary_admin_file" | tr -d '[:space:]')"
+          if [ "$password_bytes" -eq 0 ] || [ "$password_bytes" -gt 256 ]; then
+            echo "Received Proxy Registry admin password has an invalid length" >&2
+            exit 1
+          fi
+          chown root:"$WEB_GROUP" "$temporary_admin_file"
+          chmod 0640 "$temporary_admin_file"
+          mv -f "$temporary_admin_file" "$ADMIN_PASSWORD_FILE"
+          temporary_admin_file=""
+          chown root:"$WEB_GROUP" "$ADMIN_PASSWORD_FILE"
+          chmod 0640 "$ADMIN_PASSWORD_FILE"
+
+          if [ ! -s "$KEY_SECRET_FILE" ]; then
+            temporary_key_file="$(mktemp "$SECRET_DIR/.proxy-registry-key-encryption-secret.XXXXXX")"
+            od -An -N48 -tx1 /dev/urandom | tr -d '[:space:]' > "$temporary_key_file"
+            chown root:"$WEB_GROUP" "$temporary_key_file"
+            chmod 0640 "$temporary_key_file"
+            mv -f "$temporary_key_file" "$KEY_SECRET_FILE"
+            temporary_key_file=""
+            echo "Generated the persistent Proxy Registry key-encryption secret; include $SECRET_DIR in server backups"
+          fi
+          key_secret_bytes="$(wc -c < "$KEY_SECRET_FILE" | tr -d '[:space:]')"
+          if [ "$key_secret_bytes" -lt 32 ]; then
+            echo "Proxy Registry key-encryption secret must contain at least 32 bytes" >&2
+            exit 1
+          fi
+          chown root:"$WEB_GROUP" "$KEY_SECRET_FILE"
+          chmod 0640 "$KEY_SECRET_FILE"
+
+          rm -f \
+            "$LEGACY_SECRET_DIR/proxy-web-admin-password" \
+            "$LEGACY_SECRET_DIR/proxy-web-oauth.env" \
+            "$LEGACY_SECRET_DIR/proxy-registry-admin-password" \
+            "$LEGACY_SECRET_DIR/proxy-registry-oauth.env"
+          rm -f \
+            "$RUNTIME_DIR/users.toml" \
+            "$SECRET_DIR/proxy-registry-oauth.env"
+          rmdir "$LEGACY_SECRET_DIR" 2>/dev/null || true
+
+          version_is_supported() {
+            candidate_version="${1#v}"
+            candidate_version="${candidate_version%% *}"
+            case "$candidate_version" in
+              ''|*[!0-9.]*)
+                return 1
+                ;;
+            esac
+            first_version="$(
+              printf '%s\n%s\n' "$CADDY_MINIMUM_VERSION" "$candidate_version" \
+                | sort -V \
+                | head -n 1
+            )"
+            [ "$first_version" = "$CADDY_MINIMUM_VERSION" ]
+          }
+
+          CADDY_BINARY="/usr/local/bin/caddy"
+          if [ ! -x "$CADDY_BINARY" ]; then
+            echo "Caddy is missing after the installation step" >&2
+            exit 1
+          fi
+          CADDY_VERSION="$("$CADDY_BINARY" version 2>/dev/null | awk '{ print $1 }')"
+          if ! version_is_supported "$CADDY_VERSION"; then
+            echo "Caddy $CADDY_MINIMUM_VERSION or newer is required; found $CADDY_VERSION" >&2
+            exit 1
+          fi
+
+          PROXY_LISTEN_ADDR="$(
+            awk -F '"' '
+              /^[[:space:]]*listen_addr[[:space:]]*=/ { print $2; exit }
+            ' "$RUNTIME_DIR/proxy-entry.toml"
+          )"
+          PROXY_LISTEN_PORT="${PROXY_LISTEN_ADDR##*:}"
+          case "$PROXY_LISTEN_PORT" in
+            ''|*[!0-9]*)
+              echo "Invalid listen_addr in proxy-entry.toml: $PROXY_LISTEN_ADDR" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$PROXY_LISTEN_PORT" -eq 443 ]; then
+            echo "Proxy TCP port 443 conflicts with Proxy Registry HTTPS" >&2
+            exit 1
+          fi
+
+          # QUIC 与兼容 TCP 传输共用端口号，但分别使用 UDP 和 TCP。
+          # 部署时同步维护主机防火墙，避免服务已监听 UDP、入站规则却只开放 TCP。
+          if [ "$(id -u)" -eq 0 ]; then
+            if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+              ufw allow "$PROXY_LISTEN_PORT/tcp"
+              ufw allow "$PROXY_LISTEN_PORT/udp"
+              ufw allow 443/tcp
+            fi
+
+            if command -v firewall-cmd >/dev/null 2>&1 \
+              && firewall-cmd --state >/dev/null 2>&1; then
+              firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/tcp"
+              firewall-cmd --permanent --add-port="$PROXY_LISTEN_PORT/udp"
+              firewall-cmd --permanent --add-port=443/tcp
+              firewall-cmd --reload
+            fi
+          fi
+
+          if ! getent group caddy >/dev/null 2>&1; then
+            groupadd --system caddy
+          fi
+          if ! id -u caddy >/dev/null 2>&1; then
+            nologin_shell="$(command -v nologin || printf '/usr/sbin/nologin')"
+            useradd \
+              --system \
+              --gid caddy \
+              --home-dir "$CADDY_STATE_DIR" \
+              --shell "$nologin_shell" \
+              caddy
+          fi
+          install -d -o caddy -g caddy -m 0700 \
+            "$CADDY_STATE_DIR" \
+            "$CADDY_STATE_DIR/config" \
+            "$CADDY_STATE_DIR/storage"
+          chown -R caddy:caddy "$CADDY_STATE_DIR"
+          install -d -o root -g caddy -m 0750 "$CADDY_CONFIG_DIR"
+
+          temporary_caddy_config="$(mktemp "$CADDY_CONFIG_DIR/.Caddyfile.XXXXXX")"
+          cat > "$temporary_caddy_config" <<EOF
+          {
+            admin off
+            auto_https disable_redirects
+            default_sni $WEB_PUBLIC_HOST
+            storage file_system $CADDY_STATE_DIR/storage
+            servers {
+              protocols h1 h2
+            }
+          }
+
+          https://$WEB_PUBLIC_HOST {
+            tls {
+              issuer acme https://acme-v02.api.letsencrypt.org/directory {
+                profile shortlived
+                disable_http_challenge
+              }
+            }
+
+            encode zstd gzip
+            reverse_proxy 127.0.0.1:8787
+
+            header {
+              Strict-Transport-Security "max-age=31536000"
+              X-Content-Type-Options "nosniff"
+              Referrer-Policy "no-referrer"
+            }
+          }
+          EOF
+          chmod 0640 "$temporary_caddy_config"
+          chown root:caddy "$temporary_caddy_config"
+          HOME="$CADDY_STATE_DIR" \
+            XDG_CONFIG_HOME="$CADDY_STATE_DIR/config" \
+            XDG_DATA_HOME="$CADDY_STATE_DIR" \
+            "$CADDY_BINARY" validate \
+              --config "$temporary_caddy_config" \
+              --adapter caddyfile
+          mv -f "$temporary_caddy_config" "$CADDY_CONFIG_FILE"
+          temporary_caddy_config=""
+          chmod 0640 "$CADDY_CONFIG_FILE"
+          chown root:caddy "$CADDY_CONFIG_FILE"
+          chown -R caddy:caddy "$CADDY_STATE_DIR"
+
+          cat > /etc/systemd/system/ppaass-proxy-entry.service <<EOF
+          [Unit]
+          Description=PPAASS Proxy Entry
+          Wants=network-online.target ppaass-proxy-registry.service
+          After=network-online.target ppaass-proxy-registry.service
+
+          [Service]
+          Type=simple
+          User=$PROXY_USER
+          Group=$PROXY_GROUP
+          SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
+          WorkingDirectory=$RUNTIME_DIR
+          Environment=PPAASS_PROXY_REGISTRY_LISTEN_ADDR=$WEB_LISTEN_ADDR
+          Environment=PPAASS_PROXY_ENTRY_IDENTITY_PRIVATE_KEY=$PROXY_IDENTITY_PRIVATE_KEY
+          Environment=PPAASS_PROXY_ENTRY_IDENTITY_PUBLIC_KEY=$PROXY_IDENTITY_PUBLIC_KEY
+          ExecStartPre=$RUNTIME_DIR/start-proxy-registry.sh wait-health
+          ExecStart=$RUNTIME_DIR/proxy-entry --config $RUNTIME_DIR/proxy-entry.toml --log-dir $PROXY_LOG_DIR
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0007
+          NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadOnlyPaths=$USER_DATA_DIR $PROXY_IDENTITY_PRIVATE_KEY
+          ReadWritePaths=$ACCESS_DATA_DIR $PROXY_LOG_DIR
+          InaccessiblePaths=$SECRET_DIR
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          cat > /etc/systemd/system/ppaass-proxy-registry.service <<EOF
+          [Unit]
+          Description=PPAASS Proxy Registry
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=simple
+          User=$WEB_USER
+          Group=$WEB_GROUP
+          SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
+          WorkingDirectory=$RUNTIME_DIR
+          Environment=PPAASS_PROXY_REGISTRY_RUNTIME_ENV_FILE=$RUNTIME_DIR/proxy-registry.env
+          Environment=PPAASS_PROXY_REGISTRY_SECRET_DIR=$SECRET_DIR
+          Environment=PPAASS_PROXY_REGISTRY_DATABASE=$DATABASE_FILE
+          Environment=PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE=true
+          Environment=PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE=$ACCESS_LOG_DATABASE_FILE
+          Environment=PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE=true
+          Environment=PPAASS_PROXY_ENTRY_IDENTITY_PRIVATE_KEY=$PROXY_IDENTITY_PRIVATE_KEY
+          Environment=PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY=$PROXY_IDENTITY_PUBLIC_KEY
+          Environment=PPAASS_PROXY_REGISTRY_FRONTEND_DIST=$RUNTIME_DIR/proxy-registry-frontend
+          Environment=PPAASS_PROXY_REGISTRY_LOG_DIR=$WEB_LOG_DIR
+          ExecStart=$RUNTIME_DIR/start-proxy-registry.sh run
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0027
+          NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadWritePaths=$USER_DATA_DIR $ACCESS_DATA_DIR $WEB_LOG_DIR
+          ReadOnlyPaths=$SECRET_DIR $PROXY_IDENTITY_PUBLIC_KEY
+          AmbientCapabilities=
+          CapabilityBoundingSet=
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          cat > /etc/systemd/system/ppaass-caddy.service <<EOF
+          [Unit]
+          Description=PPAASS Caddy HTTPS reverse proxy
+          Wants=network-online.target
+          Wants=ppaass-proxy-registry.service
+          After=network-online.target ppaass-proxy-registry.service
+
+          [Service]
+          Type=simple
+          User=caddy
+          Group=caddy
+          Environment=HOME=$CADDY_STATE_DIR
+          Environment=XDG_CONFIG_HOME=$CADDY_STATE_DIR/config
+          Environment=XDG_DATA_HOME=$CADDY_STATE_DIR
+          ExecStart=$CADDY_BINARY run --environ --config $CADDY_CONFIG_FILE --adapter caddyfile
+          Restart=always
+          RestartSec=3
+          TimeoutStopSec=20
+          LimitNOFILE=1048576
+          LimitCORE=0
+          UMask=0077
+          NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectControlGroups=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          LockPersonality=true
+          RestrictSUIDSGID=true
+          ReadWritePaths=$CADDY_STATE_DIR
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl disable ppaass-proxy.service ppaass-proxy-web.service 2>/dev/null || true
+          rm -f \
+            /etc/systemd/system/ppaass-proxy.service \
+            /etc/systemd/system/ppaass-proxy-web.service
+          systemctl daemon-reload
+          systemctl enable \
+            ppaass-proxy-entry.service \
+            ppaass-proxy-registry.service \
+            ppaass-caddy.service
+
+          require_active_service() {
+            service_name="$1"
+            if systemctl is-active --quiet "$service_name"; then
+              return 0
+            fi
+            systemctl --no-pager --full status "$service_name" || true
+            journalctl -u "$service_name" -n 100 --no-pager || true
+            return 1
+          }
+
+          wait_for_proxy_registry_internal() {
+            proxy_registry_healthy=false
+            for health_attempt in $(seq 1 30); do
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                --noproxy '*' \
+                --connect-timeout 3 \
+                --max-time 5 \
+                "http://127.0.0.1:8787/healthz" >/dev/null 2>&1; then
+                proxy_registry_healthy=true
+                break
+              fi
+              sleep 1
+            done
+            if [ "$proxy_registry_healthy" != true ]; then
+              echo "Proxy Registry internal health check failed on 127.0.0.1:8787" >&2
+              journalctl -u ppaass-proxy-registry.service -n 100 --no-pager || true
+              return 1
+            fi
+            echo "Verified Proxy Registry internal health on http://127.0.0.1:8787/healthz"
+          }
+
+          wait_for_proxy_registry_public() {
+            proxy_registry_healthy=false
+            for health_attempt in $(seq 1 90); do
+              if curl \
+                --fail \
+                --silent \
+                --show-error \
+                --noproxy '*' \
+                --connect-timeout 5 \
+                --max-time 10 \
+                --connect-to "$WEB_PUBLIC_HOST:443:127.0.0.1:443" \
+                "https://$WEB_PUBLIC_HOST/healthz" >/dev/null 2>&1; then
+                proxy_registry_healthy=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "$proxy_registry_healthy" != true ]; then
+              echo "Caddy HTTPS health check failed for $WEB_PUBLIC_HOST:443" >&2
+              journalctl -u ppaass-caddy.service -n 150 --no-pager || true
+              return 1
+            fi
+            echo "Verified Caddy certificate and reverse proxy on https://$WEB_PUBLIC_HOST/healthz"
+          }
+
+          # Proxy Registry exclusively migrates the user database and creates/imports
+          # the access-log database. Keep Proxy Entry stopped until that work is healthy
+          # so its read-only user-database open always sees the current schema.
+          WEB_START_ATTEMPTED=true
+          systemctl restart ppaass-proxy-registry.service
+          require_active_service ppaass-proxy-registry.service
+          wait_for_proxy_registry_internal
+
+          # The password only bootstraps the fixed root admin account. Once the
+          # Web process is healthy, remove it and restart so it is absent from
+          # both the filesystem and the long-running process environment.
+          rm -f "$ADMIN_PASSWORD_FILE"
+          systemctl restart ppaass-proxy-registry.service
+          require_active_service ppaass-proxy-registry.service
+          wait_for_proxy_registry_internal
+
+          PROXY_START_ATTEMPTED=true
+          systemctl restart ppaass-proxy-entry.service
+          require_active_service ppaass-proxy-entry.service
+
+          if systemctl is-active --quiet caddy.service 2>/dev/null \
+            || systemctl is-enabled --quiet caddy.service 2>/dev/null; then
+            echo "caddy.service is active or enabled and may own TCP/443; migrate and disable it before deploying PPAASS" >&2
+            exit 1
+          fi
+          if command -v ss >/dev/null 2>&1 \
+            && ss -H -lnt "sport = :443" | grep -q .; then
+            echo "TCP/443 is already occupied after stopping ppaass-caddy.service" >&2
+            ss -H -lntp "sport = :443" >&2 || true
+            exit 1
+          fi
+
+          CADDY_START_ATTEMPTED=true
+          systemctl restart ppaass-caddy.service
+          require_active_service ppaass-caddy.service
+          wait_for_proxy_registry_public
+
+          if command -v ss >/dev/null 2>&1; then
+            if ! ss -H -lnt "sport = :$PROXY_LISTEN_PORT" | grep -q .; then
+              echo "Proxy is not listening on TCP/$PROXY_LISTEN_PORT" >&2
+              exit 1
+            fi
+            if ! ss -H -lnu "sport = :$PROXY_LISTEN_PORT" | grep -q .; then
+              echo "Proxy is not listening on UDP/$PROXY_LISTEN_PORT for QUIC" >&2
+              exit 1
+            fi
+            echo "Verified proxy listeners on TCP/$PROXY_LISTEN_PORT and UDP/$PROXY_LISTEN_PORT"
+            if ! ss -H -lnt "sport = :443" | grep -q .; then
+              echo "Caddy is not listening on TCP/443" >&2
+              exit 1
+            fi
+            echo "Verified Caddy listener on TCP/443"
+          fi
+
+          systemctl --no-pager --full status ppaass-proxy-entry.service
+          systemctl --no-pager --full status ppaass-proxy-registry.service
+          systemctl --no-pager --full status ppaass-caddy.service
+
+          DEPLOY_SUCCEEDED=true
+          trap - EXIT
+          REMOTE_SCRIPT
+          )"
+
+          deploy_input_dir="$(mktemp -d "$RUNNER_TEMP/ppaass-web-deploy-inputs.XXXXXX")"
+          cleanup_deploy_inputs() {
+            for input_file in \
+              "$deploy_input_dir/admin-password" \
+              "$deploy_input_dir/deploy.sh"; do
+              if [ ! -e "$input_file" ]; then
+                continue
+              fi
+              if command -v shred >/dev/null 2>&1; then
+                shred --remove --zero "$input_file" || rm -f "$input_file"
+              else
+                rm -f "$input_file"
+              fi
+            done
+            rmdir "$deploy_input_dir" 2>/dev/null || true
+          }
+          trap cleanup_deploy_inputs EXIT
+          umask 077
+          printf '%s' "$WEB_ADMIN_PASSWORD" > "$deploy_input_dir/admin-password"
+          printf '%s' "$REMOTE_DEPLOY_SCRIPT" > "$deploy_input_dir/deploy.sh"
+          chmod 600 "$deploy_input_dir"/*
+
+          deploy_folder_base64="$(printf '%s' "$DEPLOY_FOLDER" | base64 -w 0)"
+          tar \
+            -C "$deploy_input_dir" \
+            -cf - \
+            admin-password \
+            deploy.sh \
+            | sshpass -f "$REMOTE_PASSWORD_FILE" ssh \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$REMOTE_KNOWN_HOSTS_FILE" \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=4 \
+              "$REMOTE_USER@$REMOTE_HOST" \
+              "bash -c 'set -euo pipefail; deploy_folder=\"\$(printf \"%s\" \"\$1\" | base64 -d)\"; input_dir=\"\$(mktemp -d)\"; trap \"rm -rf -- \\\"\$input_dir\\\"\" EXIT; tar -xf - -C \"\$input_dir\"; chmod 600 \"\$input_dir\"/*; PPAASS_PROXY_REGISTRY_ADMIN_PASSWORD_INPUT_FILE=\"\$input_dir/admin-password\" DEPLOY_FOLDER=\"\$deploy_folder\" bash \"\$input_dir/deploy.sh\"' -- '$deploy_folder_base64'"
+          cleanup_deploy_inputs
+          trap - EXIT
+
+      - name: Verify public Proxy Registry HTTPS
+        shell: bash
+        env:
+          WEB_PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+        run: |
+          set -euo pipefail
+          : "${WEB_PUBLIC_HOST:?PPAASS_WEB_PUBLIC_HOST repository variable is required}"
+          public_web_healthy=false
+          for health_attempt in $(seq 1 60); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 10 \
+              "https://$WEB_PUBLIC_HOST/healthz" >/dev/null; then
+              public_web_healthy=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$public_web_healthy" != true ]; then
+            echo "Public Proxy Registry HTTPS health check failed for $WEB_PUBLIC_HOST:443" >&2
+            exit 1
+          fi
+
+          public_web_html="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "https://$WEB_PUBLIC_HOST/"
+          )"
+          if ! printf '%s' "$public_web_html" | grep -q '<div id="app"></div>'; then
+            echo "Public Proxy Registry frontend entry page is invalid" >&2
+            exit 1
+          fi
+
+          deployed_version="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --noproxy '*' \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "https://$WEB_PUBLIC_HOST/deploy-version.txt"
+          )"
+          if [ "$deployed_version" != "$GITHUB_SHA" ]; then
+            echo "Public Proxy Registry frontend version does not match this deployment" >&2
+            exit 1
+          fi
+
+      - name: Clean up deployment credentials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for credential_file in \
+            "$RUNNER_TEMP/ppaass-deploy-password" \
+            "$RUNNER_TEMP/ppaass-deploy-connection.env" \
+            "$RUNNER_TEMP/ppaass-deploy-known-hosts"; do
+            if [ ! -e "$credential_file" ]; then
+              continue
+            fi
+            if command -v shred >/dev/null 2>&1; then
+              shred --remove --zero "$credential_file" || rm -f "$credential_file"
+            else
+              rm -f "$credential_file"
+            fi
+          done

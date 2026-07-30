@@ -93,7 +93,7 @@ final class AgentAuthHttpTransport {
                 throw AgentAuthErrors.apiError(response.status, response.body);
             }
         } catch (AgentAuthClient.AuthException error) {
-            Log.w(TAG, "Failed to clear temporary Proxy Web session");
+            Log.w(TAG, "Failed to clear temporary Proxy Registry session");
         }
     }
 
@@ -285,7 +285,7 @@ final class AgentAuthHttpTransport {
                 } else if (token.length() > MAX_SESSION_COOKIE_BYTES
                         || !isUrlSafeToken(token)) {
                     throw new AgentAuthClient.AuthException(
-                            "Proxy Web 会话响应无效");
+                            "Proxy Registry 会话响应无效");
                 } else {
                     sessionCookie = pair;
                 }
@@ -307,7 +307,7 @@ final class AgentAuthHttpTransport {
                 total += read;
                 if (total > maximumBytes) {
                     throw new AgentAuthClient.AuthException(
-                            "Proxy Web 响应过大，已拒绝处理");
+                            "Proxy Registry 响应过大，已拒绝处理");
                 }
                 output.write(buffer, 0, read);
             }

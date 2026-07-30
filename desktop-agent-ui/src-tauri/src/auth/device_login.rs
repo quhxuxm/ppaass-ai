@@ -2,12 +2,12 @@ use super::*;
 
 #[instrument(skip_all)]
 pub(crate) async fn start_device_authorization(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
 ) -> Result<StartedDeviceAuthorization, String> {
-    let base_url = normalize_proxy_web_url(proxy_web_url)
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
     let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
-    let client = build_proxy_web_client()?;
+    let client = build_proxy_registry_client()?;
     let response = client
         .post(endpoint(&base_url, "api/v1/agent/device-authorizations")?)
         .json(&AgentDeviceAuthorizationStartPayload {
@@ -27,10 +27,10 @@ pub(crate) async fn start_device_authorization(
     validate_device_code(&device_code)?;
     validate_user_code(&response.user_code)?;
     if !(1..=MAX_DEVICE_AUTHORIZATION_SECONDS).contains(&response.expires_in) {
-        return Err("Proxy Web 返回的设备登录有效期无效".to_string());
+        return Err("Proxy Registry 返回的设备登录有效期无效".to_string());
     }
     if !(1..=MAX_DEVICE_POLL_SECONDS).contains(&response.interval) {
-        return Err("Proxy Web 返回的设备登录轮询间隔无效".to_string());
+        return Err("Proxy Registry 返回的设备登录轮询间隔无效".to_string());
     }
     let verification_url = device_verification_url(&base_url, &response.verification_uri_complete)?;
     let expires_at = current_timestamp().saturating_add(response.expires_in);
@@ -45,21 +45,21 @@ pub(crate) async fn start_device_authorization(
         verification_url,
         expires_at,
         interval_seconds: response.interval,
-        proxy_web_url: normalized_url,
+        proxy_registry_url: normalized_url,
     })
 }
 
 #[instrument(skip_all)]
 pub(crate) async fn poll_device_authorization(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     device_code: &str,
     default_interval_seconds: u32,
 ) -> Result<DeviceAuthorizationPoll, String> {
     validate_device_code(device_code)?;
-    let base_url = normalize_proxy_web_url(proxy_web_url)
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
     let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
-    let client = build_proxy_web_client()?;
+    let client = build_proxy_registry_client()?;
     let response = client
         .post(endpoint(
             &base_url,
@@ -144,7 +144,7 @@ pub(crate) fn open_system_browser(url: &Url) -> Result<(), String> {
 
 pub(crate) fn validate_device_token(
     token: AgentDeviceTokenResponse,
-    proxy_web_url: String,
+    proxy_registry_url: String,
 ) -> Result<DownloadedCredential, String> {
     let AgentDeviceTokenResponse {
         account,
@@ -160,7 +160,7 @@ pub(crate) fn validate_device_token(
     } = token;
     let private_key_pem = Zeroizing::new(private_key_pem);
     if !matches!(account.role.as_str(), "user" | "admin") {
-        return Err("Proxy Web 返回了未知的账号角色".to_string());
+        return Err("Proxy Registry 返回了未知的账号角色".to_string());
     }
     if account.status != "active" {
         return Err("账号已停用".to_string());
@@ -208,7 +208,7 @@ pub(crate) fn validate_device_token(
         },
         private_key_pem,
         proxy_identity_public_key_pem,
-        proxy_web_url,
+        proxy_registry_url,
         agent_access_token: Some(agent_access_token),
     })
 }
@@ -227,7 +227,7 @@ pub(crate) async fn decode_device_authorization_error(
         .unwrap_or_else(|| default_interval_seconds.clamp(1, MAX_DEVICE_POLL_SECONDS));
     let (_, bytes) = read_bounded_response(response, MAX_NORMAL_RESPONSE_BYTES).await?;
     let envelope = serde_json::from_slice::<ErrorEnvelope>(&bytes)
-        .map_err(|_| format!("Proxy Web 返回 HTTP {}", status.as_u16()))?;
+        .map_err(|_| format!("Proxy Registry 返回 HTTP {}", status.as_u16()))?;
     match envelope.error.code.as_str() {
         "authorization_pending" => Ok(DeviceAuthorizationPoll::Pending {
             slow_down: false,
@@ -251,7 +251,7 @@ pub(crate) fn validate_device_code(value: &str) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err("Proxy Web 返回的设备登录码格式无效".to_string());
+        return Err("Proxy Registry 返回的设备登录码格式无效".to_string());
     }
     Ok(())
 }
@@ -263,31 +263,31 @@ pub(crate) fn validate_user_code(value: &str) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
-        return Err("Proxy Web 返回的设备授权短码格式无效".to_string());
+        return Err("Proxy Registry 返回的设备授权短码格式无效".to_string());
     }
     Ok(())
 }
 
 pub(crate) fn device_verification_url(base_url: &Url, value: &str) -> Result<Url, String> {
     if value.is_empty() || value.len() > 2048 {
-        return Err("Proxy Web 返回的设备登录地址无效".to_string());
+        return Err("Proxy Registry 返回的设备登录地址无效".to_string());
     }
     let url = base_url
         .join(value)
-        .map_err(|_| "Proxy Web 返回的设备登录地址无效".to_string())?;
+        .map_err(|_| "Proxy Registry 返回的设备登录地址无效".to_string())?;
     if url.origin() != base_url.origin()
         || !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return Err("Proxy Web 返回的设备登录地址不可信".to_string());
+        return Err("Proxy Registry 返回的设备登录地址不可信".to_string());
     }
     Ok(url)
 }
 
-pub(crate) fn build_proxy_web_client() -> Result<Client, String> {
+pub(crate) fn build_proxy_registry_client() -> Result<Client, String> {
     Client::builder()
-        // Proxy Web is the control plane that provisions this Agent. Routing its
+        // Proxy Registry is the control plane that provisions this Agent. Routing its
         // login or private-key requests through the Agent's own data-plane proxy
         // would create a dependency loop when HTTP_PROXY points at this Agent.
         .no_proxy()
@@ -297,5 +297,5 @@ pub(crate) fn build_proxy_web_client() -> Result<Client, String> {
         .timeout(Duration::from_secs(20))
         .user_agent(concat!("ppaass-desktop-agent/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|error| format!("初始化 Proxy Web 客户端失败：{error}"))
+        .map_err(|error| format!("初始化 Proxy Registry 客户端失败：{error}"))
 }

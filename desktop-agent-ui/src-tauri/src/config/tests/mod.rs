@@ -1,7 +1,7 @@
 use super::{
     apply_managed_credentials_to_config, bundled_agent_config_resource,
     clear_managed_credentials_from_config, enforce_managed_identity, load_config_from_path,
-    proxy_web_url_from_config, redact_managed_identity, summarize_config,
+    proxy_registry_url_from_config, redact_managed_identity, summarize_config,
     toggle_tun_enabled_in_config, upsert_toml_bool, write_config_file,
 };
 use crate::models::LoadedAgentConfig;

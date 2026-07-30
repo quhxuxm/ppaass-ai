@@ -20,12 +20,12 @@ final class AgentKeyValidator {
             matches = NativeAgent.validateKeyPair(privateKeyPem, publicKeyPem);
         } catch (RuntimeException | UnsatisfiedLinkError error) {
             throw new AgentAuthClient.AuthException(
-                    "无法校验 Proxy Web 返回的私钥",
+                    "无法校验 Proxy Registry 返回的私钥",
                     error);
         }
         if (!matches) {
             throw new AgentAuthClient.AuthException(
-                    "Proxy Web 返回的公钥和私钥不匹配");
+                    "Proxy Registry 返回的公钥和私钥不匹配");
         }
     }
 
@@ -36,14 +36,14 @@ final class AgentKeyValidator {
                 || publicKeyPem.getBytes(StandardCharsets.UTF_8).length
                 > MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES) {
             throw new AgentAuthClient.AuthException(
-                    "Proxy Web 返回的 Proxy 身份公钥大小无效");
+                    "Proxy Registry 返回的 Proxy 身份公钥大小无效");
         }
         String begin = "-----BEGIN PUBLIC KEY-----";
         String end = "-----END PUBLIC KEY-----";
         String normalized = publicKeyPem.trim();
         if (!normalized.startsWith(begin) || !normalized.endsWith(end)) {
             throw new AgentAuthClient.AuthException(
-                    "Proxy Web 返回的 Proxy 身份公钥格式无效");
+                    "Proxy Registry 返回的 Proxy 身份公钥格式无效");
         }
         String encoded = normalized.substring(
                 begin.length(),
@@ -55,13 +55,13 @@ final class AgentKeyValidator {
             int bits = key.getModulus().bitLength();
             if (bits < 2048 || bits > 8192) {
                 throw new AgentAuthClient.AuthException(
-                        "Proxy Web 返回的 Proxy 身份公钥强度无效");
+                        "Proxy Registry 返回的 Proxy 身份公钥强度无效");
             }
         } catch (IllegalArgumentException
                  | GeneralSecurityException
                  | ClassCastException error) {
             throw new AgentAuthClient.AuthException(
-                    "Proxy Web 返回的 Proxy 身份公钥格式无效",
+                    "Proxy Registry 返回的 Proxy 身份公钥格式无效",
                     error);
         }
     }

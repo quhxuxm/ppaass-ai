@@ -26,7 +26,7 @@ final class AgentAdminClient {
     AgentAdminClient(Context context, String baseUrl) {
         this(new HttpTransport(new AgentAuthHttpTransport(
                 context,
-                AgentAuthConfig.normalizeProxyWebUrl(baseUrl))));
+                AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl))));
     }
 
     AgentAdminClient(Transport transport) {
@@ -308,7 +308,7 @@ final class AgentAdminClient {
         return new AdminException(
                 502,
                 "invalid_response",
-                "Proxy Web 返回的管理员数据无效",
+                "Proxy Registry 返回的管理员数据无效",
                 cause);
     }
 

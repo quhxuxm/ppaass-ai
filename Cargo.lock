@@ -2572,7 +2572,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy"
+name = "proxy-entry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2610,25 +2610,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy-user-store"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "libc",
- "protocol",
- "rsa",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "proxy-web"
+name = "proxy-registry"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
@@ -2657,6 +2639,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "proxy-user-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "protocol",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

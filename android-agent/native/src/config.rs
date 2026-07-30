@@ -18,7 +18,7 @@ pub struct AndroidAgentConfig {
     pub username: String,
     pub private_key_pem: String,
     /// Pinned Proxy TCP/Yamux transport identity public key provisioned by
-    /// Proxy Web. TCP connections fail closed when it is missing.
+    /// Proxy Registry. TCP connections fail closed when it is missing.
     #[serde(default)]
     pub proxy_identity_public_key_pem: Option<String>,
 

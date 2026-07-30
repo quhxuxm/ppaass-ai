@@ -17,7 +17,7 @@ final class AgentAuthClient {
     private final AgentAuthHttpTransport transport;
 
     AgentAuthClient(Context context, String baseUrl) {
-        this.baseUrl = AgentAuthConfig.normalizeProxyWebUrl(baseUrl);
+        this.baseUrl = AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl);
         this.transport = new AgentAuthHttpTransport(
                 context,
                 this.baseUrl);
@@ -111,7 +111,7 @@ final class AgentAuthClient {
                 || expiresIn > MAX_DEVICE_AUTHORIZATION_SECONDS
                 || interval < 1
                 || interval > MAX_DEVICE_POLL_DELAY_SECONDS) {
-            throw new AuthException("Proxy Web 返回的设备登录参数无效");
+            throw new AuthException("Proxy Registry 返回的设备登录参数无效");
         }
         try {
             AgentAuthConfig.resolveServiceRelativeUrl(baseUrl, verificationUri);
@@ -124,7 +124,7 @@ final class AgentAuthClient {
                     (int) expiresIn,
                     (int) interval);
         } catch (IllegalArgumentException error) {
-            throw new AuthException("Proxy Web 返回的设备登录地址无效", error);
+            throw new AuthException("Proxy Registry 返回的设备登录地址无效", error);
         }
     }
 
@@ -253,14 +253,14 @@ final class AgentAuthClient {
 
     private static String requireText(String value) throws AuthException {
         if (value == null || value.isEmpty()) {
-            throw new AuthException("Proxy Web 响应格式无效");
+            throw new AuthException("Proxy Registry 响应格式无效");
         }
         return value;
     }
 
     private static long requireLong(Long value) throws AuthException {
         if (value == null) {
-            throw new AuthException("Proxy Web 响应格式无效");
+            throw new AuthException("Proxy Registry 响应格式无效");
         }
         return value;
     }

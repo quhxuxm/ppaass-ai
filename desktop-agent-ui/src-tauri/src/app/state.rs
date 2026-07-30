@@ -61,7 +61,7 @@ fn save_agent_config_candidate(
         &session.account.username,
         &session.private_key_path,
         &session.proxy_identity_public_key_path,
-        &session.proxy_web_url,
+        &session.proxy_registry_url,
     )?;
     write_config_file(&config_path, &managed_raw)?;
 
@@ -142,7 +142,7 @@ pub(crate) fn restore_agent_login_on_startup(
     let config_path = locate_config_path().ok_or_else(|| {
         "持久登录凭据存在，但找不到 Agent 配置文件；将保留凭据并等待下次启动恢复".to_string()
     })?;
-    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let loaded = if persisted.proxy_assignment_missing {
         let (loaded, _) = enforce_config_path_for_account(&config_path, &persisted.account)?;
         let stop_error = stop_agent_inner_command(runtime).err();
@@ -180,7 +180,7 @@ pub(crate) fn restore_agent_login_on_startup(
         AgentSessionCredentials::new(
             persisted.private_key_path,
             persisted.proxy_identity_public_key_path,
-            proxy_web_url,
+            proxy_registry_url,
             persisted.agent_access_token,
         ),
         AgentPermissionTrust::CachedUnverified,
@@ -189,7 +189,7 @@ pub(crate) fn restore_agent_login_on_startup(
         username = %persisted.account.username,
         key_version = persisted.account.key_version,
         proxy_assignment_missing = persisted.proxy_assignment_missing,
-        "已从本机受管凭据恢复 Agent 长期登录状态；权限与地址等待 Proxy Web 验证"
+        "已从本机受管凭据恢复 Agent 长期登录状态；权限与地址等待 Proxy Registry 验证"
     );
     Ok(())
 }

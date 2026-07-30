@@ -17,13 +17,13 @@ final class AgentWebSessionHandoffClient {
     private final Transport transport;
 
     AgentWebSessionHandoffClient(Context context, String baseUrl) {
-        this.baseUrl = AgentAuthConfig.normalizeProxyWebUrl(baseUrl);
+        this.baseUrl = AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl);
         this.transport = new HttpTransport(
                 new AgentAuthHttpTransport(context, this.baseUrl));
     }
 
     AgentWebSessionHandoffClient(String baseUrl, Transport transport) {
-        this.baseUrl = AgentAuthConfig.normalizeProxyWebUrl(baseUrl);
+        this.baseUrl = AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl);
         this.transport = transport;
     }
 
@@ -65,7 +65,7 @@ final class AgentWebSessionHandoffClient {
             String resolved = AgentAuthConfig.resolveServiceRelativeUrl(
                     baseUrl,
                     response.handoff_path);
-            URI configured = new URI(AgentAuthConfig.normalizeProxyWebUrl(baseUrl));
+            URI configured = new URI(AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl));
             URI handoff = new URI(resolved);
             if (!sameOrigin(configured, handoff)
                     || !CONSUME_PATH.equals(handoff.getRawPath())
@@ -106,9 +106,9 @@ final class AgentWebSessionHandoffClient {
     private static AgentAuthClient.AuthException invalidResponse(Throwable cause) {
         return cause == null
                 ? new AgentAuthClient.AuthException(
-                "Proxy Web 返回的账户管理登录地址无效")
+                "Proxy Registry 返回的账户管理登录地址无效")
                 : new AgentAuthClient.AuthException(
-                "Proxy Web 返回的账户管理登录地址无效",
+                "Proxy Registry 返回的账户管理登录地址无效",
                 cause);
     }
 

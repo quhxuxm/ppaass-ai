@@ -1,9 +1,9 @@
 [workspace]
 members = [
     "desktop-agent-be",
-    "proxy",
+    "proxy-entry",
     "proxy-user-store",
-    "proxy-web",
+    "proxy-registry",
     "common",
     "protocol",
     "tests",

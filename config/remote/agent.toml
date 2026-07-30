@@ -2,7 +2,7 @@
 # 正式客户端登录后才会写入托管用户名和私钥路径
 
 listen_addr = "0.0.0.0:10080"
-proxy_web_url = "https://140.82.30.214"
+proxy_registry_url = "https://140.82.30.214"
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
 transport_mode = "udp"
 # 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。

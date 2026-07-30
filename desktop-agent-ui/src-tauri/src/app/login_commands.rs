@@ -20,7 +20,7 @@ pub(crate) async fn open_user_account_management(
                 .agent_access_token
                 .as_ref()
                 .ok_or_else(|| "当前 Agent 登录缺少账户交接凭据，请重新登录".to_string())?;
-            request_account_management_handoff(&session.proxy_web_url, access_token.value.as_str())
+            request_account_management_handoff(&session.proxy_registry_url, access_token.value.as_str())
                 .await?
         }
         None => {
@@ -30,8 +30,8 @@ pub(crate) async fn open_user_account_management(
                     "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。"
                         .to_string()
                 })?;
-            let proxy_web_url = proxy_web_url_from_config(&config_path)?;
-            account_management_page_url(&proxy_web_url)
+            let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
+            account_management_page_url(&proxy_registry_url)
                 .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?
         }
     };
@@ -94,9 +94,9 @@ pub(crate) async fn login_and_provision_agent(
         .ok_or_else(|| {
             "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
         })?;
-    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let downloaded =
-        authenticate_and_download(&proxy_web_url, &username, password.as_str()).await?;
+        authenticate_and_download(&proxy_registry_url, &username, password.as_str()).await?;
     provision_downloaded_credential(&app, &runtime, &config_path, downloaded)
 }
 
@@ -141,10 +141,10 @@ pub(crate) async fn rotate_agent_key(
         .ok_or_else(|| {
             "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
         })?;
-    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
+    let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let was_running = get_agent_state_inner(&runtime)?.running;
     let downloaded = authenticate_rotate_and_download(
-        &proxy_web_url,
+        &proxy_registry_url,
         &session.account.username,
         password.as_str(),
         audit_reason,
@@ -153,7 +153,7 @@ pub(crate) async fn rotate_agent_key(
     if downloaded.account.username != session.account.username
         || downloaded.account.role != session.account.role
     {
-        return Err("Proxy Web 返回的轮换账号与当前 Agent 登录账号不一致".to_string());
+        return Err("Proxy Registry 返回的轮换账号与当前 Agent 登录账号不一致".to_string());
     }
 
     let state = provision_downloaded_credential(&app, &runtime, &config_path, downloaded)?;
@@ -192,12 +192,12 @@ pub(crate) async fn start_agent_device_login(
         .ok_or_else(|| {
             "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
         })?;
-    let proxy_web_url = proxy_web_url_from_config(&config_path)?;
-    let started = start_device_authorization(&proxy_web_url).await?;
+    let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
+    let started = start_device_authorization(&proxy_registry_url).await?;
     let verification_url = started.verification_url.clone();
     let challenge = runtime.set_pending_device_authorization(
         started.device_code,
-        started.proxy_web_url,
+        started.proxy_registry_url,
         config_path,
         started.user_code,
         started.expires_at,
@@ -233,7 +233,7 @@ pub(crate) async fn poll_agent_device_login(
         .pending_device_authorization()?
         .ok_or_else(|| "设备登录已取消或失效".to_string())?;
     let poll = match poll_device_authorization(
-        &challenge.proxy_web_url,
+        &challenge.proxy_registry_url,
         &challenge.device_code,
         challenge.interval_seconds,
     )

@@ -198,7 +198,7 @@ fn handle_tun_menu_event(
     if !runtime.is_authenticated() {
         let config_path = current_ui_config_path(&runtime);
         let _ = item.set_checked(tun_enabled_for_path(config_path.as_deref()));
-        emit_to_main(app, "agent-tray-error", "请先登录 Proxy Web 账号");
+        emit_to_main(app, "agent-tray-error", "请先登录 Proxy Registry 账号");
         restore_main_window(app);
         return;
     }

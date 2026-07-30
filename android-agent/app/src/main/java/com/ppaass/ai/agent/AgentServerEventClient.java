@@ -44,7 +44,7 @@ final class AgentServerEventClient {
     private volatile HttpURLConnection activeConnection;
 
     AgentServerEventClient(android.content.Context context, String baseUrl) {
-        this.baseUrl = AgentAuthConfig.normalizeProxyWebUrl(baseUrl);
+        this.baseUrl = AgentAuthConfig.normalizeProxyRegistryUrl(baseUrl);
         this.connectionFactory =
                 new AgentAuthHttpTransport(context, this.baseUrl);
     }
@@ -72,7 +72,7 @@ final class AgentServerEventClient {
             if (contentType == null
                     || !"text/event-stream".equalsIgnoreCase(
                     contentType.split(";", 2)[0].trim())) {
-                throw new EventException("Proxy Web SSE 响应类型无效", false);
+                throw new EventException("Proxy Registry SSE 响应类型无效", false);
             }
             readEvents(connection.getInputStream(), listener);
         } catch (EventException error) {

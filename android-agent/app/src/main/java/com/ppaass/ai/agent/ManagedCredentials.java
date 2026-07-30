@@ -37,14 +37,14 @@ final class ManagedCredentials {
         String proxyIdentityPublicKeyPem = result.proxyIdentityPublicKeyPem;
         String normalizedUsername = username == null ? "" : username.trim();
         if (normalizedUsername.isEmpty() || keyVersion < 0) {
-            throw new IOException("Proxy Web 返回的用户凭据无效");
+            throw new IOException("Proxy Registry 返回的用户凭据无效");
         }
         byte[] privateKeyBytes = privateKeyPem == null
                 ? new byte[0]
                 : privateKeyPem.getBytes(StandardCharsets.UTF_8);
         if (privateKeyBytes.length == 0
                 || privateKeyBytes.length > ManagedCredentialFiles.MAX_PRIVATE_KEY_BYTES) {
-            throw new IOException("Proxy Web 返回的私钥大小无效");
+            throw new IOException("Proxy Registry 返回的私钥大小无效");
         }
         try {
             AgentAuthClient.validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);

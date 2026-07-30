@@ -2,11 +2,11 @@ use super::*;
 
 #[instrument(skip_all, fields(username = %username))]
 pub(crate) async fn authenticate_and_download(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     username: &str,
     password: &str,
 ) -> Result<DownloadedCredential, String> {
-    let base_url = normalize_proxy_web_url(proxy_web_url)
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
     let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
     let username = username.trim().to_string();
@@ -16,7 +16,7 @@ pub(crate) async fn authenticate_and_download(
     if password.len() < 8 {
         return Err("请输入密码".to_string());
     }
-    let client = build_proxy_web_client()?;
+    let client = build_proxy_registry_client()?;
 
     info!("开始通过配置的认证服务验证 Agent 用户");
     let response = client
@@ -56,12 +56,12 @@ pub(crate) async fn authenticate_and_download(
 
 #[instrument(skip_all, fields(username = %username))]
 pub(crate) async fn authenticate_rotate_and_download(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     username: &str,
     password: &str,
     audit_reason: Option<&str>,
 ) -> Result<DownloadedCredential, String> {
-    let base_url = normalize_proxy_web_url(proxy_web_url)
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)
         .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
     let normalized_url = base_url.as_str().trim_end_matches('/').to_string();
     let username = username.trim().to_string();
@@ -71,7 +71,7 @@ pub(crate) async fn authenticate_rotate_and_download(
     if password.len() < 8 {
         return Err("请输入当前密码".to_string());
     }
-    let client = build_proxy_web_client()?;
+    let client = build_proxy_registry_client()?;
 
     info!("开始验证 Agent 用户并轮换密钥");
     let login_response = client
@@ -90,7 +90,7 @@ pub(crate) async fn authenticate_rotate_and_download(
 
     if !matches!(login.account.role.as_str(), "user" | "admin") {
         best_effort_logout(&client, &base_url, &csrf_token).await;
-        return Err("Proxy Web 返回了未知的账号角色".to_string());
+        return Err("Proxy Registry 返回了未知的账号角色".to_string());
     }
     if login.account.status != "active" {
         best_effort_logout(&client, &base_url, &csrf_token).await;
@@ -185,7 +185,7 @@ pub(crate) async fn authenticate_rotate_and_download(
         .checked_add(1)
         .ok_or_else(|| "当前密钥版本无效".to_string())?;
     if rotated.username != profile.username || rotated.key_version != expected_version {
-        return Err("Proxy Web 返回的轮换密钥与当前账号版本不一致".to_string());
+        return Err("Proxy Registry 返回的轮换密钥与当前账号版本不一致".to_string());
     }
     let private_key_pem = Zeroizing::new(rotated.private_key_pem);
     validate_key_pair(&private_key_pem, &rotated.public_key_pem)?;
@@ -209,7 +209,7 @@ pub(crate) async fn authenticate_rotate_and_download(
         },
         private_key_pem,
         proxy_identity_public_key_pem: rotated.proxy_identity_public_key_pem,
-        proxy_web_url: normalized_url,
+        proxy_registry_url: normalized_url,
         agent_access_token: None,
     })
 }

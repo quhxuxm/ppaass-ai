@@ -24,7 +24,7 @@ observability.
 
 ### Changes Made
 
-#### Proxy Side (`proxy/src/connection/mod.rs`)
+#### Proxy Side (`proxy-entry/src/connection/mod.rs`)
 
 **Removed instrumentation from hot-path functions:**
 

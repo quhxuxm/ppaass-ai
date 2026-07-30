@@ -18,7 +18,7 @@ final class AgentAdminRequestSynchronizer {
             return;
         }
         try {
-            String baseUrl = AgentAuthConfig.proxyWebUrl(context);
+            String baseUrl = AgentAuthConfig.proxyRegistryUrl(context);
             List<AgentAdminModels.KeyRequest> requests =
                     new AgentAdminClient(context, baseUrl)
                             .listKeyRequests(accessToken);

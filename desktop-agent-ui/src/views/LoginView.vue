@@ -79,7 +79,7 @@ function submit() {
             v-model="form.username"
             autocomplete="username"
             autofocus
-            placeholder="输入 Proxy Web 用户名"
+            placeholder="输入 Proxy Registry 用户名"
             :disabled="loading"
           />
         </label>
@@ -141,7 +141,7 @@ function submit() {
         <AppIcon name="shield-check" />
         <p>
           <strong>凭据由本机安全处理</strong>
-          <span>私钥会从 Proxy Web 自动下载并应用到 Agent，不会显示在界面中。</span>
+          <span>私钥会从 Proxy Registry 自动下载并应用到 Agent，不会显示在界面中。</span>
         </p>
       </aside>
     </section>

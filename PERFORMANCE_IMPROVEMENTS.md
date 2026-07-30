@@ -62,7 +62,7 @@ This document outlines the performance optimizations applied to fix critical per
 - [tests/src/mock_client.rs](tests/src/mock_client.rs)
 - [desktop-agent-be/src/http_handler.rs](desktop-agent-be/src/http_handler.rs)
 - [desktop-agent-be/src/connection_pool.rs](desktop-agent-be/src/connection_pool.rs)
-- [proxy/src/connection.rs](proxy/src/connection.rs)
+- [proxy-entry/src/connection.rs](proxy-entry/src/connection.rs)
 
 ### 4. **Added Request Rate Limiting** ✅
 **Problem**: Too many concurrent requests causing resource exhaustion.

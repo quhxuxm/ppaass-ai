@@ -137,7 +137,7 @@ final class AgentAdminApprovalDialog {
         }
         if (choices.isEmpty()) {
             TextView empty = host.mutedText(
-                    "没有启用的 Proxy 地址，请先在 Proxy Web 中配置。",
+                    "没有启用的 Proxy 地址，请先在 Proxy Registry 中配置。",
                     13f);
             empty.setPadding(host.dp(6), host.dp(10), host.dp(6), host.dp(10));
             proxyList.addView(empty, host.matchWrap());

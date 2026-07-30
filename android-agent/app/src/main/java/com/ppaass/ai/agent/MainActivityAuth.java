@@ -108,7 +108,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
                 "用户名",
                 remembered == null ? "" : remembered.username,
                 false);
-        loginUsername.setHint(tr("输入 Proxy Web 用户名"));
+        loginUsername.setHint(tr("输入 Proxy Registry 用户名"));
         loginUsername.setImeOptions(EditorInfo.IME_ACTION_NEXT);
 
         loginPassword = loginField(
@@ -163,7 +163,7 @@ abstract class MainActivityAuth extends MainActivityScreens {
         card.addView(registrationButton, registrationParams);
 
         TextView securityNote = mutedText(
-                "私钥会从 Proxy Web 自动下载到应用私有目录，不会显示在界面中。",
+                "私钥会从 Proxy Registry 自动下载到应用私有目录，不会显示在界面中。",
                 12.5f);
         securityNote.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams noteParams = matchWrap();
@@ -225,9 +225,9 @@ abstract class MainActivityAuth extends MainActivityScreens {
         setAuthenticationBusy(true);
         new Thread(() -> {
             try {
-                String proxyWebUrl = AgentAuthConfig.proxyWebUrl(this);
+                String proxyRegistryUrl = AgentAuthConfig.proxyRegistryUrl(this);
                 AgentAuthClient.LoginResult result =
-                        new AgentAuthClient(this, proxyWebUrl).authenticate(username, password);
+                        new AgentAuthClient(this, proxyRegistryUrl).authenticate(username, password);
                 boolean committed = AgentAuthenticationCoordinator.commitIfCurrent(
                         attempt,
                         () -> commitAuthenticatedResult(

@@ -31,7 +31,7 @@ pub(crate) struct AuthenticatedAgentSession {
     pub(crate) permission_trust: AgentPermissionTrust,
     pub(crate) private_key_path: PathBuf,
     pub(crate) proxy_identity_public_key_path: PathBuf,
-    pub(crate) proxy_web_url: String,
+    pub(crate) proxy_registry_url: String,
     pub(crate) agent_access_token: Option<AgentAccessToken>,
 }
 
@@ -39,7 +39,7 @@ pub(crate) struct AuthenticatedAgentSession {
 pub(crate) struct AgentSessionCredentials {
     private_key_path: PathBuf,
     proxy_identity_public_key_path: PathBuf,
-    proxy_web_url: String,
+    proxy_registry_url: String,
     agent_access_token: Option<AgentAccessToken>,
 }
 
@@ -47,13 +47,13 @@ impl AgentSessionCredentials {
     pub(crate) fn new(
         private_key_path: PathBuf,
         proxy_identity_public_key_path: PathBuf,
-        proxy_web_url: String,
+        proxy_registry_url: String,
         agent_access_token: Option<AgentAccessToken>,
     ) -> Self {
         Self {
             private_key_path,
             proxy_identity_public_key_path,
-            proxy_web_url,
+            proxy_registry_url,
             agent_access_token,
         }
     }
@@ -78,7 +78,7 @@ impl AuthenticatedAgentSession {
             permission_trust,
             private_key_path: credentials.private_key_path,
             proxy_identity_public_key_path: credentials.proxy_identity_public_key_path,
-            proxy_web_url: credentials.proxy_web_url,
+            proxy_registry_url: credentials.proxy_registry_url,
             agent_access_token: credentials.agent_access_token,
         }
     }
@@ -88,7 +88,7 @@ impl AuthenticatedAgentSession {
 pub(crate) struct PendingAgentDeviceAuthorization {
     pub(crate) id: u64,
     pub(crate) device_code: Zeroizing<String>,
-    pub(crate) proxy_web_url: String,
+    pub(crate) proxy_registry_url: String,
     pub(crate) config_path: PathBuf,
     pub(crate) user_code: String,
     pub(crate) expires_at: i64,
@@ -158,7 +158,7 @@ impl AgentRuntime {
     pub(crate) fn require_authenticated(&self) -> Result<(), String> {
         self.is_authenticated()
             .then_some(())
-            .ok_or_else(|| "请先登录 Proxy Web 账号".to_string())
+            .ok_or_else(|| "请先登录 Proxy Registry 账号".to_string())
     }
 
     pub(crate) fn authenticated_session(
@@ -174,7 +174,7 @@ impl AgentRuntime {
         &self,
     ) -> Result<AuthenticatedAgentSession, String> {
         self.authenticated_session()?
-            .ok_or_else(|| "请先登录 Proxy Web 账号".to_string())
+            .ok_or_else(|| "请先登录 Proxy Registry 账号".to_string())
     }
 
     pub(crate) fn set_authenticated_session(
@@ -286,7 +286,7 @@ impl AgentRuntime {
     pub(crate) fn set_pending_device_authorization(
         &self,
         device_code: Zeroizing<String>,
-        proxy_web_url: String,
+        proxy_registry_url: String,
         config_path: PathBuf,
         user_code: String,
         expires_at: i64,
@@ -298,7 +298,7 @@ impl AgentRuntime {
         let challenge = PendingAgentDeviceAuthorization {
             id,
             device_code,
-            proxy_web_url,
+            proxy_registry_url,
             config_path,
             user_code,
             expires_at,

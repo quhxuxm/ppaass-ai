@@ -44,9 +44,9 @@ mkdir -p config keys
 
 ## Configuration
 
-### Step 1: Start the Proxy Server
+### Step 1: Start Proxy Entry
 
-1. Edit `config/proxy.toml` if needed:
+1. Edit `config/local/proxy-entry.toml` if needed:
 
 ```toml
 listen_addr = "0.0.0.0:8080"
@@ -55,14 +55,14 @@ access_log_database_path = "data/proxy-access.sqlite3"
 transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
-2. Start the proxy server:
+2. Start Proxy Entry:
 
 ```bash
 # On Windows
-.\target\release\proxy.exe --config config\proxy.toml
+.\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
 
 # On Linux/macOS
-./target/release/proxy --config config/proxy.toml
+./target/release/proxy-entry --config config/local/proxy-entry.toml
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
@@ -70,24 +70,24 @@ transport_identity_private_key_path = "data/proxy-identity-private.pem"
 If you deploy the binaries and configs alongside the scripts, use:
 
 ```bash
-# Proxy on Linux
-./start-proxy.sh
+# Proxy Entry on Linux
+./start-proxy-entry.sh
 ```
 
 ```powershell
-# Proxy on Windows (dev helper)
-.\start-proxy.bat
+# Proxy Entry on Windows (dev helper)
+.\start-proxy-entry.bat
 ```
 
 ### Step 2: Register and Approve a User
 
-Start Proxy Web against the same `users_database_path`, register a normal account, submit a key
-request, and approve it from the administrator console with an expiration time. Proxy Web creates
+Start Proxy Registry against the same `users_database_path`, register a normal account, submit a key
+request, and approve it from the administrator console with an expiration time. Proxy Registry creates
 the managed key pair and writes the user profile to SQLite; Proxy opens that database read-only.
 
 ### Step 3: Configure the Agent
 
-Edit `config/agent.toml` with the Proxy Web endpoint, then sign in from the Agent UI. Proxy Web
+Edit `config/agent.toml` with the Proxy Registry endpoint, then sign in from the Agent UI. Proxy Registry
 assigns the runtime Proxy addresses; they are not stored in `agent.toml`. The Agent downloads and
 applies the approved managed credential automatically.
 
@@ -177,7 +177,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 2. **Check user configuration:**
     - Verify the username in agent config matches the proxy
-    - Check that the account has an active approved profile in the Proxy Web SQLite database
+    - Check that the account has an active approved profile in the Proxy Registry SQLite database
 
 ### Performance Issues
 
@@ -194,7 +194,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 ### Multiple Users
 
-Create and approve additional accounts from the Proxy Web administrator console.
+Create and approve additional accounts from the Proxy Registry administrator console.
 
 ## Support
 
@@ -207,10 +207,10 @@ For issues and questions:
 
 ## Quick Reference
 
-**Start Proxy:**
+**Start Proxy Entry:**
 
 ```bash
-./target/release/proxy --config config/proxy.toml
+./target/release/proxy-entry --config config/local/proxy-entry.toml
 ```
 
 **Start Agent:**

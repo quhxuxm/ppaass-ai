@@ -20,7 +20,7 @@ The application consists of six main components:
 
 1. **Agent**: Runs on client machine, forwards traffic to proxy
 2. **Proxy**: Server-side component that connects to target servers
-3. **Proxy Web**: Axum API and Vue/PrimeVue user management console
+3. **Proxy Registry**: Axum API and Vue/PrimeVue user management console
 4. **Proxy User Store**: Database-independent user CRUD contract with a SQLite adapter
 5. **Protocol**: Shared protocol definition and crypto implementation
 6. **Common**: Shared utilities and error types
@@ -40,35 +40,34 @@ cargo build --release
 
 # Build specific component
 cargo build --release -p desktop-agent-be
-cargo build --release -p proxy
-cargo build --release -p proxy-web
+cargo build --release -p proxy-entry
+cargo build --release -p proxy-registry
 
 # Build the Vue + PrimeVue console
-cd proxy-web/frontend
+cd proxy-registry/frontend
 npm install
 npm run build
 ```
 
 ### Configuration
 
-1. Copy example configurations:
+1. Review the checked-in local configurations:
 
 ```bash
-mkdir -p config keys
-cp config/agent.toml.example config/agent.toml
-cp config/proxy.toml.example config/proxy.toml
+${EDITOR:-vi} config/local/agent.toml
+${EDITOR:-vi} config/local/proxy-entry.toml
 ```
 
-2. Start the proxy server:
+2. Start Proxy Entry:
 
 ```bash
-cargo run --release -p proxy -- --config config/proxy.toml
+cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
 ```
 
-3. Start Proxy Web, register a user, and approve the user's key request. Proxy Web is the only
+3. Start Proxy Registry, register a user, and approve the user's key request. Proxy Registry is the only
    writer for the shared SQLite user database.
 
-4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Web.
+4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Registry.
 
 5. Start the Agent from the authenticated Desktop Agent UI. The standalone
    `desktop-agent` product binary intentionally refuses normal proxy traffic because it has no
@@ -78,9 +77,9 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 ### Desktop Agent Login
 
-The Tauri desktop app requires a Proxy Web login once per application process before it
+The Tauri desktop app requires a Proxy Registry login once per application process before it
 loads the Agent workspace. Its authentication endpoint is read only by the Rust backend
-from the top-level `proxy_web_url` field in the active `agent.toml`; it is not returned
+from the top-level `proxy_registry_url` field in the active `agent.toml`; it is not returned
 to or editable by the Vue webview. Loopback endpoints may use HTTP, while remote
 endpoints must use HTTPS.
 
@@ -128,7 +127,7 @@ quic_policy = "allow"               # application UDP/443 policy: allow direct/p
 file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
 ```
 
-When using the Desktop Agent UI, Proxy addresses are assigned by Proxy Web after login and are
+When using the Desktop Agent UI, Proxy addresses are assigned by Proxy Registry after login and are
 kept out of `agent.toml`, the UI, and logs. Product traffic requires an authenticated runtime
 session; the removed `proxy_addrs` TOML field and the old public `--proxy` CLI argument are
 intentionally rejected. The separate headless harness is built only behind the
@@ -142,7 +141,7 @@ Android also provides runtime packet capture for VPN/TUN and explicit HTTP/SOCKS
 
 The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 
-### Proxy Configuration (`config/proxy.toml`)
+### Proxy Configuration (`config/local/proxy-entry.toml`)
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
@@ -156,12 +155,12 @@ udp_session_channel_size = 256             # Datagrams queued per native UDP ses
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
 
-Proxy requires the SQLite user database and has no file-based user fallback. Proxy Web owns schema
+Proxy requires the SQLite user database and has no file-based user fallback. Proxy Registry owns schema
 migrations and user writes; Proxy opens the same user database read-only and writes visit history
 only to the physically separate access database. New user changes are visible to subsequent TCP
 and UDP authentications without restarting Proxy.
 
-See [`proxy-web/README.md`](proxy-web/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
+See [`proxy-registry/README.md`](proxy-registry/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 
 The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
 Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
@@ -209,9 +208,9 @@ See `tests/README.md` for detailed testing documentation.
 Set log level via environment variable:
 
 ```bash
-RUST_LOG=info cargo run -p proxy
+RUST_LOG=info cargo run -p proxy-entry
 cd desktop-agent-ui && RUST_LOG=debug npm run tauri dev
-RUST_LOG=proxy_web=debug,proxy_user_store=debug cargo run -p proxy-web
+RUST_LOG=proxy_registry=debug,proxy_user_store=debug cargo run -p proxy-registry
 ```
 
 ## Development
@@ -222,9 +221,9 @@ RUST_LOG=proxy_web=debug,proxy_user_store=debug cargo run -p proxy-web
 ppaass-ai/
 ├── desktop-agent-be/  # Client-side desktop agent backend
 ├── desktop-agent-ui/       # Desktop agent UI
-├── proxy/          # Server-side proxy
+├── proxy-entry/          # Proxy Entry
 ├── proxy-user-store/ # Database-independent user repository + SQLite adapter
-├── proxy-web/      # Axum API and Vue/PrimeVue user management console
+├── proxy-registry/      # Axum API and Vue/PrimeVue user management console
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities
 ├── tests/          # Integration and performance tests

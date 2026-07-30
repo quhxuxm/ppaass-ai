@@ -31,12 +31,12 @@ pub(crate) struct AgentPermissionSyncFailure {
 }
 
 pub(crate) async fn fetch_agent_permission_snapshot(
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
     access_token: &str,
     expected_username: &str,
 ) -> Result<AgentPermissionSnapshot, AgentPermissionSyncFailure> {
-    let base_url = normalize_proxy_web_url(proxy_web_url).map_err(|_| transient_config_error())?;
-    let client = build_proxy_web_client().map_err(transient_error)?;
+    let base_url = normalize_proxy_registry_url(proxy_registry_url).map_err(|_| transient_config_error())?;
+    let client = build_proxy_registry_client().map_err(transient_error)?;
     let response = client
         .get(endpoint(&base_url, "api/v1/agent/me").map_err(transient_error)?)
         .bearer_auth(access_token)
@@ -166,7 +166,7 @@ pub(crate) fn apply_permission_snapshot(
     let warning = match snapshot.key_version {
         Some(version) if version != current.key_version => {
             status = AgentAuthAccountStatus::Expired;
-            Some("Proxy Web 密钥版本已变化，请重新登录以应用最新密钥".to_string())
+            Some("Proxy Registry 密钥版本已变化，请重新登录以应用最新密钥".to_string())
         }
         Some(_) => {
             account.expires_at = snapshot.expires_at;

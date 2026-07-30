@@ -79,7 +79,7 @@ final class UiLanguage {
         put("连接你的代理账户", "Connect your proxy account");
         put("登录后自动下载并应用当前账户获批的代理凭据。",
                 "Sign in to download and apply the approved proxy credential for this account.");
-        put("输入 Proxy Web 用户名", "Enter your Proxy Web username");
+        put("输入 Proxy Registry 用户名", "Enter your Proxy Registry username");
         put("至少 8 位", "At least 8 characters");
         put("记住用户名和密码", "Remember username and password");
         put("登录并配置 Agent", "Sign in and configure Agent");
@@ -88,18 +88,18 @@ final class UiLanguage {
         put("正在打开", "Opening");
         put("账户管理登录凭据已失效，请重新登录 Agent",
                 "Account management sign-in expired; sign in to Agent again");
-        put("Proxy Web 返回的账户管理登录地址无效",
-                "Proxy Web returned an invalid account management sign-in URL");
+        put("Proxy Registry 返回的账户管理登录地址无效",
+                "Proxy Registry returned an invalid account management sign-in URL");
         put("无法打开账户管理页面", "Could not open account management");
         put("设备登录已取消", "Device sign-in cancelled");
         put("无法创建设备登录请求", "Could not create the device sign-in request");
         put("无法创建设备登录轮询请求", "Could not create the device sign-in poll request");
-        put("Proxy Web 返回的设备登录参数无效",
-                "Proxy Web returned invalid device sign-in parameters");
-        put("Proxy Web 返回的设备登录地址无效",
-                "Proxy Web returned an invalid device sign-in URL");
-        put("Proxy Web 返回的设备登录结果无效",
-                "Proxy Web returned an invalid device sign-in result");
+        put("Proxy Registry 返回的设备登录参数无效",
+                "Proxy Registry returned invalid device sign-in parameters");
+        put("Proxy Registry 返回的设备登录地址无效",
+                "Proxy Registry returned an invalid device sign-in URL");
+        put("Proxy Registry 返回的设备登录结果无效",
+                "Proxy Registry returned an invalid device sign-in result");
         put("无法打开第三方登录页面", "Could not open the third-party sign-in page");
         put("浏览器登录或应用 Agent 凭据失败",
                 "Browser sign-in or Agent credential setup failed");
@@ -111,12 +111,12 @@ final class UiLanguage {
                 "The browser sign-in request expired; start again");
         put("浏览器登录请求无效或已被使用，请重新开始",
                 "The browser sign-in request is invalid or already used; start again");
-        put("Proxy Web 返回的密钥版本无效",
-                "Proxy Web returned an invalid key version");
-        put("Proxy Web 返回的登录会话已经过期",
-                "Proxy Web returned an expired sign-in session");
+        put("Proxy Registry 返回的密钥版本无效",
+                "Proxy Registry returned an invalid key version");
+        put("Proxy Registry 返回的登录会话已经过期",
+                "Proxy Registry returned an expired sign-in session");
         put("新用户注册", "Create account");
-        put("私钥会从 Proxy Web 自动下载到应用私有目录，不会显示在界面中。",
+        put("私钥会从 Proxy Registry 自动下载到应用私有目录，不会显示在界面中。",
                 "The private key is downloaded into app-private storage and is never shown in the UI.");
         put("请输入用户名", "Enter your username");
         put("密码至少需要 8 位", "Password must be at least 8 characters");

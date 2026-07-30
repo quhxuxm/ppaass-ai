@@ -7,7 +7,7 @@ pub(crate) fn validated_display_name(value: Option<String>) -> Result<Option<Str
         return Ok(None);
     }
     if value.chars().count() > 6 || value.chars().any(char::is_control) {
-        return Err("Proxy Web 返回了无效昵称".to_string());
+        return Err("Proxy Registry 返回了无效昵称".to_string());
     }
     Ok(Some(value))
 }
@@ -24,7 +24,7 @@ pub(crate) fn validated_avatar_url(value: Option<String>) -> Result<Option<Strin
                 | Some("data:image/webp;base64")
         )
     {
-        return Err("Proxy Web 返回了无效头像".to_string());
+        return Err("Proxy Registry 返回了无效头像".to_string());
     }
     Ok(Some(value))
 }

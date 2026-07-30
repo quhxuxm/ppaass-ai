@@ -18,7 +18,7 @@ pub(crate) struct AgentServerEventStream {
 
 impl AgentServerEventStream {
     pub(crate) async fn connect(base_url: &str, access_token: &str) -> Result<Self, String> {
-        let base_url = normalize_proxy_web_url(base_url)?;
+        let base_url = normalize_proxy_registry_url(base_url)?;
         let url = endpoint(&base_url, "api/v1/agent/events")?;
         let client = Client::builder()
             .redirect(Policy::none())
@@ -47,7 +47,7 @@ impl AgentServerEventStream {
                     .is_some_and(|mime| mime.trim() == "text/event-stream")
             });
         if !is_event_stream {
-            return Err("Proxy Web SSE 响应类型无效".to_string());
+            return Err("Proxy Registry SSE 响应类型无效".to_string());
         }
         Ok(Self {
             response,

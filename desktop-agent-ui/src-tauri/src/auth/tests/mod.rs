@@ -11,9 +11,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
 use super::{
-    account_management_page_url, build_proxy_web_client, device_verification_url,
+    account_management_page_url, build_proxy_registry_client, device_verification_url,
     load_persisted_agent_login_from_dir, managed_private_key_file_name, map_api_error,
-    normalize_proxy_web_url, persist_agent_login_to_dir, poll_device_authorization,
+    normalize_proxy_registry_url, persist_agent_login_to_dir, poll_device_authorization,
     remove_other_managed_private_keys, start_device_authorization, validate_device_code,
     validate_key_pair, validate_proxy_identity_public_key, write_private_key_to_dir,
     DeviceAuthorizationPoll, ErrorDetail, PROXY_IDENTITY_PUBLIC_KEY_FILE,
@@ -118,16 +118,16 @@ async fn write_http_response(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proxy_web_client_ignores_http_proxy_environment() {
+async fn proxy_registry_client_ignores_http_proxy_environment() {
     let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target_address = target_listener.local_addr().unwrap();
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_address = proxy_listener.local_addr().unwrap();
-    let target_task = tokio::spawn(respond_once(target_listener, "proxy-web"));
+    let target_task = tokio::spawn(respond_once(target_listener, "proxy-registry"));
     let proxy_task = tokio::spawn(respond_once(proxy_listener, "environment-proxy"));
 
     let environment = ProxyEnvironmentGuard::install(&format!("http://{proxy_address}"));
-    let client = build_proxy_web_client().unwrap();
+    let client = build_proxy_registry_client().unwrap();
     drop(environment);
 
     let response = timeout(
@@ -137,27 +137,27 @@ async fn proxy_web_client_ignores_http_proxy_environment() {
             .send(),
     )
     .await
-    .expect("Proxy Web request timed out")
+    .expect("Proxy Registry request timed out")
     .unwrap();
-    assert_eq!(response.text().await.unwrap(), "proxy-web");
+    assert_eq!(response.text().await.unwrap(), "proxy-registry");
     target_task.await.unwrap();
     proxy_task.abort();
     let _ = proxy_task.await;
 }
 
 #[test]
-fn proxy_web_url_only_allows_loopback_http() {
-    assert!(normalize_proxy_web_url("http://127.0.0.1:8787").is_ok());
-    assert!(normalize_proxy_web_url("http://localhost:8787/").is_ok());
-    assert!(normalize_proxy_web_url("http://[::1]:8787").is_ok());
-    assert!(normalize_proxy_web_url("https://proxy.example.com").is_ok());
-    assert!(normalize_proxy_web_url("http://proxy.example.com").is_err());
-    assert!(normalize_proxy_web_url("https://proxy.example.com/path").is_err());
-    assert!(normalize_proxy_web_url("file:///tmp/proxy").is_err());
+fn proxy_registry_url_only_allows_loopback_http() {
+    assert!(normalize_proxy_registry_url("http://127.0.0.1:8787").is_ok());
+    assert!(normalize_proxy_registry_url("http://localhost:8787/").is_ok());
+    assert!(normalize_proxy_registry_url("http://[::1]:8787").is_ok());
+    assert!(normalize_proxy_registry_url("https://proxy.example.com").is_ok());
+    assert!(normalize_proxy_registry_url("http://proxy.example.com").is_err());
+    assert!(normalize_proxy_registry_url("https://proxy.example.com/path").is_err());
+    assert!(normalize_proxy_registry_url("file:///tmp/proxy").is_err());
 }
 
 #[test]
-fn account_management_page_url_uses_the_validated_proxy_web_root() {
+fn account_management_page_url_uses_the_validated_proxy_registry_root() {
     let url = account_management_page_url("http://127.0.0.1:8787").unwrap();
     assert_eq!(url.as_str(), "http://127.0.0.1:8787/");
 

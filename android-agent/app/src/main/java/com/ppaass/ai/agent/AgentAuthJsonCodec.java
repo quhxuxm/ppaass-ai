@@ -67,7 +67,7 @@ final class AgentAuthJsonCodec {
 
     private static AgentAuthClient.AuthException invalidResponse(Throwable cause) {
         return cause == null
-                ? new AgentAuthClient.AuthException("Proxy Web 响应格式无效")
-                : new AgentAuthClient.AuthException("Proxy Web 响应格式无效", cause);
+                ? new AgentAuthClient.AuthException("Proxy Registry 响应格式无效")
+                : new AgentAuthClient.AuthException("Proxy Registry 响应格式无效", cause);
     }
 }

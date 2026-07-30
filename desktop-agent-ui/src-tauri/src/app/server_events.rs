@@ -20,7 +20,7 @@ pub(crate) fn start_agent_server_events(app: tauri::AppHandle, runtime: Arc<Agen
                 continue;
             };
             let mut stream =
-                match AgentServerEventStream::connect(&session.proxy_web_url, token.value.as_str())
+                match AgentServerEventStream::connect(&session.proxy_registry_url, token.value.as_str())
                     .await
                 {
                     Ok(stream) => {

@@ -31,7 +31,7 @@ In separate terminals:
 ```bash
 # Start proxy
 cd /path/to/ppaass-ai
-cargo run --release -p proxy -- --config config/proxy.toml
+cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
 
 # Start agent
 cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml

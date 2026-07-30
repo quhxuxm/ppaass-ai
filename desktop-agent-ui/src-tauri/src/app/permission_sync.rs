@@ -32,7 +32,7 @@ pub(crate) async fn sync_agent_permissions_once(
     };
     let expected_token = access_token.value.clone();
     let snapshot = match fetch_agent_permission_snapshot(
-        &session.proxy_web_url,
+        &session.proxy_registry_url,
         expected_token.as_str(),
         &session.account.username,
     )

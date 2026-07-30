@@ -324,6 +324,6 @@ pub(crate) fn require_active_profile(me: &MeResponse) -> Result<&MeProfile, Stri
             }
         }
         "disabled" => Err("Proxy 用户已停用".to_string()),
-        _ => Err("Proxy Web 返回了未知的密钥状态".to_string()),
+        _ => Err("Proxy Registry 返回了未知的密钥状态".to_string()),
     }
 }

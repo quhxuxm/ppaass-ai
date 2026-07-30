@@ -76,7 +76,7 @@ final class AgentProfileSyncManager {
             try {
                 client = new AgentServerEventClient(
                         context,
-                        AgentAuthConfig.proxyWebUrl(context));
+                        AgentAuthConfig.proxyRegistryUrl(context));
             } catch (IOException | RuntimeException error) {
                 recordConnectionFailure(context, error);
                 if (!waitForReconnect(expectedGeneration, reconnectSeconds)) {
@@ -142,7 +142,7 @@ final class AgentProfileSyncManager {
             AgentAuthClient.ProfileSyncResult result =
                     new AgentAuthClient(
                             context,
-                            AgentAuthConfig.proxyWebUrl(context))
+                            AgentAuthConfig.proxyRegistryUrl(context))
                             .syncProfile(
                                     stored.accessToken,
                                     AgentAuthSession.username());

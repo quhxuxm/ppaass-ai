@@ -24,7 +24,7 @@ final class ManagedProxyAddresses {
         List<String> normalized = normalize(values);
         if (normalized.isEmpty()) {
             throw new AgentAuthClient.AuthException(
-                    "Proxy Web 未为当前账户分配 Proxy 地址");
+                    "Proxy Registry 未为当前账户分配 Proxy 地址");
         }
         return normalized;
     }
@@ -154,6 +154,6 @@ final class ManagedProxyAddresses {
     }
 
     private static AgentAuthClient.AuthException invalidResponse() {
-        return new AgentAuthClient.AuthException("Proxy Web 返回的 Proxy 地址无效");
+        return new AgentAuthClient.AuthException("Proxy Registry 返回的 Proxy 地址无效");
     }
 }

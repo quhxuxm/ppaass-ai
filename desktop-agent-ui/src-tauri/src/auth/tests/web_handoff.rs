@@ -1,7 +1,7 @@
 use tokio::net::TcpListener;
 
 use super::super::{
-    account_management_handoff_url, normalize_proxy_web_url, request_account_management_handoff,
+    account_management_handoff_url, normalize_proxy_registry_url, request_account_management_handoff,
 };
 use super::{read_http_request, write_http_response};
 
@@ -42,7 +42,7 @@ async fn web_session_handoff_posts_agent_bearer_and_accepts_same_origin_path() {
 
 #[test]
 fn web_session_handoff_rejects_non_relative_or_cross_origin_values() {
-    let base = normalize_proxy_web_url("https://proxy.example.com").unwrap();
+    let base = normalize_proxy_registry_url("https://proxy.example.com").unwrap();
     for value in [
         "",
         "api/v1/auth/handoff",

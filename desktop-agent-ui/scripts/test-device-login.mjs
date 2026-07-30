@@ -12,7 +12,7 @@ assert.doesNotMatch(
   /使用浏览器登录|系统浏览器|设备登录|deviceLogin|device-login/
 );
 assert.doesNotMatch(loginView, /微信|WeChat|Google|oauth/i);
-assert.doesNotMatch(loginView, /proxyWebUrl|proxy_web_url|private_key_pem/);
+assert.doesNotMatch(loginView, /proxyRegistryUrl|proxy_registry_url|private_key_pem/);
 
 const appView = await readFile(
   new URL("../src/App.vue", import.meta.url),
@@ -34,7 +34,7 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   composable,
-  /verification_uri|device_code|proxy_web_url|private_key_pem/
+  /verification_uri|device_code|proxy_registry_url|private_key_pem/
 );
 
 const loginCommands = await readFile(
@@ -42,7 +42,7 @@ const loginCommands = await readFile(
   "utf8"
 );
 assert.match(loginCommands, /request_account_management_handoff/);
-assert.match(loginCommands, /session\.proxy_web_url/);
+assert.match(loginCommands, /session\.proxy_registry_url/);
 assert.match(loginCommands, /session\s*\.\s*agent_access_token/);
 assert.match(loginCommands, /\.destroy\(\)/);
 assert.doesNotMatch(

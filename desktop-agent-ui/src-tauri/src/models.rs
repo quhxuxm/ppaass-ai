@@ -248,7 +248,7 @@ mod tests {
         let rejected = serde_json::from_value::<AgentLoginRequest>(serde_json::json!({
             "username": "alice",
             "password": "password",
-            "proxyWebUrl": "https://attacker.example.com"
+            "proxyRegistryUrl": "https://attacker.example.com"
         }));
         assert!(rejected.is_err());
     }
@@ -264,7 +264,7 @@ mod tests {
         let rejected = serde_json::from_value::<AgentKeyRotationRequest>(serde_json::json!({
             "password": "password",
             "username": "attacker",
-            "proxyWebUrl": "https://attacker.example.com"
+            "proxyRegistryUrl": "https://attacker.example.com"
         }));
         assert!(rejected.is_err());
     }
@@ -350,7 +350,7 @@ mod tests {
         };
 
         let serialized = serde_json::to_string(&state).unwrap();
-        assert!(!serialized.contains("proxy_web"));
+        assert!(!serialized.contains("proxy_registry"));
         assert!(!serialized.contains("attacker.example.com"));
     }
 
@@ -369,7 +369,7 @@ mod tests {
         for secret_field in [
             "device_code",
             "private_key",
-            "proxy_web",
+            "proxy_registry",
             "verification_uri",
         ] {
             assert!(!serialized.contains(secret_field));

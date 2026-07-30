@@ -37,12 +37,12 @@ jobs:
       - name: Unit Tests
         run: cargo test --workspace --lib --bins --locked
 
-  proxy-web-frontend:
-    name: Proxy Web frontend
+  proxy-registry-frontend:
+    name: Proxy Registry frontend
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: proxy-web/frontend
+        working-directory: proxy-registry/frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: proxy-web/frontend/package-lock.json
+          cache-dependency-path: proxy-registry/frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund

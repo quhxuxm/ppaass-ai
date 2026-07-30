@@ -274,7 +274,7 @@ function defaultExpiry() {
           </span>
         </label>
         <div v-if="!enabledProxyAddresses.length" class="approval-proxy-empty">
-          当前没有启用的 Proxy 地址，请先在 Proxy Web 中配置。
+          当前没有启用的 Proxy 地址，请先在 Proxy Registry 中配置。
         </div>
       </fieldset>
 

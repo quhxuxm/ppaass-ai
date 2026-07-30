@@ -11,30 +11,30 @@ import java.util.Properties;
 
 final class AgentAuthConfig {
     private static final String ASSET_NAME = "agent.properties";
-    private static final String PROXY_WEB_URL_KEY = "proxy_web_url";
+    private static final String PROXY_REGISTRY_URL_KEY = "proxy_registry_url";
 
     private AgentAuthConfig() {
     }
 
-    static String proxyWebUrl(Context context) throws IOException {
+    static String proxyRegistryUrl(Context context) throws IOException {
         Properties properties = new Properties();
         try (InputStream input = context.getAssets().open(ASSET_NAME)) {
             properties.load(input);
         }
-        String value = properties.getProperty(PROXY_WEB_URL_KEY);
+        String value = properties.getProperty(PROXY_REGISTRY_URL_KEY);
         try {
-            return normalizeProxyWebUrl(value);
+            return normalizeProxyRegistryUrl(value);
         } catch (IllegalArgumentException error) {
             throw new IOException("Agent 认证服务配置无效，请联系管理员", error);
         }
     }
 
     static String registrationUrl(Context context) throws IOException {
-        return proxyWebUrl(context) + "/";
+        return proxyRegistryUrl(context) + "/";
     }
 
     static String resolveServiceRelativeUrl(String baseUrl, String relativeUrl) {
-        String normalizedBase = normalizeProxyWebUrl(baseUrl);
+        String normalizedBase = normalizeProxyRegistryUrl(baseUrl);
         if (relativeUrl == null || relativeUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("missing service-relative URL");
         }
@@ -57,26 +57,26 @@ final class AgentAuthConfig {
         return normalizedBase + relative;
     }
 
-    static String normalizeProxyWebUrl(String value) {
+    static String normalizeProxyRegistryUrl(String value) {
         if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException("missing proxy_web_url");
+            throw new IllegalArgumentException("missing proxy_registry_url");
         }
 
         final URI parsed;
         try {
             parsed = new URI(value.trim());
         } catch (URISyntaxException error) {
-            throw new IllegalArgumentException("invalid proxy_web_url", error);
+            throw new IllegalArgumentException("invalid proxy_registry_url", error);
         }
 
         String scheme = parsed.getScheme();
         String host = parsed.getHost();
         if (scheme == null || host == null) {
-            throw new IllegalArgumentException("proxy_web_url must include scheme and host");
+            throw new IllegalArgumentException("proxy_registry_url must include scheme and host");
         }
         scheme = scheme.toLowerCase(Locale.ROOT);
         if (!"http".equals(scheme) && !"https".equals(scheme)) {
-            throw new IllegalArgumentException("unsupported proxy_web_url scheme");
+            throw new IllegalArgumentException("unsupported proxy_registry_url scheme");
         }
         if (parsed.getRawUserInfo() != null
                 || parsed.getRawQuery() != null
@@ -84,10 +84,10 @@ final class AgentAuthConfig {
                 || !(parsed.getRawPath() == null
                 || parsed.getRawPath().isEmpty()
                 || "/".equals(parsed.getRawPath()))) {
-            throw new IllegalArgumentException("proxy_web_url must be a service root");
+            throw new IllegalArgumentException("proxy_registry_url must be a service root");
         }
         if ("http".equals(scheme) && !isLoopbackHost(host)) {
-            throw new IllegalArgumentException("remote proxy_web_url must use HTTPS");
+            throw new IllegalArgumentException("remote proxy_registry_url must use HTTPS");
         }
 
         try {
@@ -100,7 +100,7 @@ final class AgentAuthConfig {
                     null,
                     null).toString();
         } catch (URISyntaxException error) {
-            throw new IllegalArgumentException("invalid proxy_web_url", error);
+            throw new IllegalArgumentException("invalid proxy_registry_url", error);
         }
     }
 

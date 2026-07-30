@@ -77,9 +77,9 @@ Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径
 
 ## 运行配置
 
-打开 App 后必须先使用 Proxy Web 的普通用户账号登录。Proxy Web 地址由
+打开 App 后必须先使用 Proxy Registry 的普通用户账号登录。Proxy Registry 地址由
 `app/src/main/assets/agent.properties` 随安装包配置，不在登录界面显示。登录成功后，
-App 会校验账号状态、密钥版本和有效期，从 Proxy Web 下载当前用户已获管理员批准的
+App 会校验账号状态、密钥版本和有效期，从 Proxy Registry 下载当前用户已获管理员批准的
 私钥，并保存到 Android 应用私有的 no-backup 目录；私钥不会在界面中显示，也不能由
 用户手工更改。私钥文件固定为仅应用 UID 可读写，并记录长度与 SHA-256 摘要供每次服务
 启动和进程恢复时校验。认证响应中的 `profile.proxy_addresses` 同样由服务端托管并按
@@ -90,8 +90,8 @@ App 会校验账号状态、密钥版本和有效期，从 Proxy Web 下载当�
 会在升级启动时清除。
 
 Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
-`http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Web 端口>`
-连接开发机。Proxy 地址不再由 Debug 或 Release 包内置，而由管理员在 Proxy Web 分配；
+`http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Registry 端口>`
+连接开发机。Proxy 地址不再由 Debug 或 Release 包内置，而由管理员在 Proxy Registry 分配；
 本地调试若分配了回环地址，应为相应端口配置第二条 `adb reverse`。Release 构建继续使用
 main 目录中的 HTTPS 正式认证地址和原生 UDP 默认模式。认证地址不会展示在登录页。
 
@@ -115,7 +115,7 @@ main 目录中的 HTTPS 正式认证地址和原生 UDP 默认模式。认证地
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
 - 模拟 GEO。可以选择内置城市或自定义经纬度；VPN 运行期间会同时更新 Android GPS、网络定位和 Google 融合定位，VPN 停止后恢复真实定位。首次使用需要开启系统定位、在 Android 开发者选项中把 PPAASS VPN 选为“模拟位置信息应用”，并授予定位权限。
 
-Agent 权限每隔一段时间从 Proxy Web 同步。没有抓包权限时不显示抓包页并强制关闭抓包；
+Agent 权限每隔一段时间从 Proxy Registry 同步。没有抓包权限时不显示抓包页并强制关闭抓包；
 没有出口修改权限时不显示出口配置区，传输模式、UDP 会话池、连接超时、QUIC、压缩和
 TCP/Yamux 通道参数会在持久化与原生启动层同时回落内置默认值；没有系统运行参数权限时
 不显示对应面板，VPN runtime 线程数回落默认值。其余基础状态、显式代理和直连规则入口

@@ -23,7 +23,7 @@ ppaass-ai/
 │   │   └── socks5_handler.rs # SOCKS5 protocol handler
 │   └── Cargo.toml
 │
-├── proxy/              # Server-side proxy
+├── proxy-entry/              # Proxy Entry
 │   ├── src/
 │   │   ├── main.rs           # Entry point
 │   │   ├── config.rs         # Configuration management
@@ -50,8 +50,9 @@ ppaass-ai/
 │   └── Cargo.toml
 │
 ├── config/             # Configuration files
-│   ├── agent.toml            # Agent configuration
-│   └── proxy.toml            # Proxy configuration
+│   ├── local/
+│   │   ├── agent.toml        # Agent configuration
+│   │   └── proxy-entry.toml  # Proxy Entry configuration
 │
 ├── doc/                # Documentation
 │   └── requirements.md       # Original requirements
@@ -127,20 +128,20 @@ chmod +x build.sh
 cargo build --release --workspace
 ```
 
-### 2. Start the Proxy Server
+### 2. Start Proxy Entry
 
 ```bash
 # Windows
-.\target\release\proxy.exe --config config\proxy.toml
+.\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
 
 # Linux/macOS
-./target/release/proxy --config config/proxy.toml
+./target/release/proxy-entry --config config/local/proxy-entry.toml
 ```
 
 ### 3. Add a User
 
-Register the user in Proxy Web, submit a key request, and let an administrator approve it with an
-expiration time. Proxy and Proxy Web then use the same SQLite user database.
+Register the user in Proxy Registry, submit a key request, and let an administrator approve it with an
+expiration time. Proxy Entry and Proxy Registry then use the same SQLite user database.
 
 ### 4. Configure and Start the Agent
 

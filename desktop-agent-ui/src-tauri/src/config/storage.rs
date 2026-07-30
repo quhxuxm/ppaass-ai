@@ -6,17 +6,17 @@ pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, St
     loaded_config_from_raw(config_path, raw)
 }
 
-pub(crate) fn proxy_web_url_from_config(path: &Path) -> Result<String, String> {
+pub(crate) fn proxy_registry_url_from_config(path: &Path) -> Result<String, String> {
     let config_path = make_absolute_path(path);
     let raw = fs::read_to_string(&config_path)
         .map_err(|_| "无法读取 Agent 认证服务配置，请联系管理员".to_string())?;
-    proxy_web_url_from_raw(&raw)
+    proxy_registry_url_from_raw(&raw)
 }
 
-pub(crate) fn proxy_web_url_from_raw(raw: &str) -> Result<String, String> {
+pub(crate) fn proxy_registry_url_from_raw(raw: &str) -> Result<String, String> {
     let config =
         toml::from_str::<Value>(raw).map_err(|_| "Agent 配置格式无效，请联系管理员".to_string())?;
-    str_at(&config, &["proxy_web_url"])
+    str_at(&config, &["proxy_registry_url"])
         .map(ToOwned::to_owned)
         .ok_or_else(|| "Agent 缺少认证服务配置，请联系管理员".to_string())
 }
@@ -97,13 +97,13 @@ pub(crate) fn apply_managed_credentials_to_config(
 ) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(path);
     let loaded = load_config_from_path(&config_path)?;
-    let proxy_web_url = proxy_web_url_from_raw(&loaded.raw)?;
+    let proxy_registry_url = proxy_registry_url_from_raw(&loaded.raw)?;
     let raw = enforce_managed_identity(
         &loaded.raw,
         username,
         private_key_path,
         proxy_identity_public_key_path,
-        &proxy_web_url,
+        &proxy_registry_url,
     )?;
     write_config_file(&config_path, &raw)?;
 
@@ -139,7 +139,7 @@ pub(crate) fn enforce_managed_identity(
     username: &str,
     private_key_path: &Path,
     proxy_identity_public_key_path: &Path,
-    proxy_web_url: &str,
+    proxy_registry_url: &str,
 ) -> Result<String, String> {
     let mut document = raw
         .parse::<DocumentMut>()
@@ -148,7 +148,7 @@ pub(crate) fn enforce_managed_identity(
     document["private_key_path"] = value(private_key_path.to_string_lossy().as_ref());
     document["proxy_identity_public_key_path"] =
         value(proxy_identity_public_key_path.to_string_lossy().as_ref());
-    document["proxy_web_url"] = value(proxy_web_url);
+    document["proxy_registry_url"] = value(proxy_registry_url);
     let managed_raw = document.to_string();
     summarize_config(&managed_raw)?;
     Ok(managed_raw)
@@ -164,7 +164,7 @@ pub(crate) fn redact_managed_identity(
     document.remove("username");
     document.remove("private_key_path");
     document.remove("proxy_identity_public_key_path");
-    document.remove("proxy_web_url");
+    document.remove("proxy_registry_url");
     loaded.raw = document.to_string();
     loaded.summary.username.clear();
     loaded.summary.private_key_path.clear();

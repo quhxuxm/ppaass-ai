@@ -90,7 +90,7 @@ export function useAgentAuth() {
       });
       applyAuthState(next);
       if (!authenticated.value) {
-        throw new Error("Proxy Web 未建立有效的 Agent 登录会话");
+        throw new Error("Proxy Registry 未建立有效的 Agent 登录会话");
       }
       phase.value = "authenticated";
       return true;

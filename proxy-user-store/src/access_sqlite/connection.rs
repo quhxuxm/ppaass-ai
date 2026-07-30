@@ -52,7 +52,7 @@ impl SqliteAccessLogRepository {
             // SQLite freelist pages. A zero WAL size limit truncates reset WAL files.
             .pragma("secure_delete", "ON")
             .pragma("journal_size_limit", "0");
-        // Proxy and Proxy Web keep this WAL database open from separate processes. SQLx's
+        // Proxy Entry and Proxy Registry keep this WAL database open from separate processes. SQLx's
         // default 10-minute idle timeout and 30-minute maximum lifetime briefly close and
         // replace pooled connections. On Unix that can let SQLite unlink/recreate `-wal` and
         // `-shm` while the other long-lived process still has the previous files open, leaving

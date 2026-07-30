@@ -44,7 +44,7 @@ pub(crate) struct DownloadedCredential {
     pub(crate) proxy_addresses: Vec<String>,
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) proxy_identity_public_key_pem: String,
-    pub(crate) proxy_web_url: String,
+    pub(crate) proxy_registry_url: String,
     pub(crate) agent_access_token: Option<AgentAccessToken>,
 }
 
@@ -92,7 +92,7 @@ pub(crate) struct StartedDeviceAuthorization {
     pub(crate) verification_url: Url,
     pub(crate) expires_at: i64,
     pub(crate) interval_seconds: u32,
-    pub(crate) proxy_web_url: String,
+    pub(crate) proxy_registry_url: String,
 }
 
 pub(crate) enum DeviceAuthorizationPoll {
