@@ -16,6 +16,7 @@ const emit = defineEmits<{
 
 const MAX_NICKNAME_CHARACTERS = 6
 const MAX_AVATAR_BYTES = 1024 * 1024
+const AVATAR_SIZE = 64
 const nickname = ref('')
 const avatarPreview = ref<string | null>(null)
 const avatarChanged = ref(false)
@@ -58,16 +59,11 @@ async function onAvatarSelected(event: Event): Promise<void> {
     return
   }
   try {
-    const dimensions = await readImageDimensions(file)
-    if (dimensions.width > 64 || dimensions.height > 64) {
-      error.value = '头像尺寸不能超过 64 × 64 像素'
-      return
-    }
-    avatarPreview.value = await readAsDataUrl(file)
+    avatarPreview.value = await resizeAvatar(file)
     avatarChanged.value = true
     error.value = ''
   } catch {
-    error.value = '无法读取头像图片'
+    error.value = '无法处理头像图片'
   }
 }
 
@@ -89,7 +85,7 @@ function submit(): void {
   })
 }
 
-function readAsDataUrl(file: File): Promise<string> {
+function readAsDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () =>
@@ -99,19 +95,45 @@ function readAsDataUrl(file: File): Promise<string> {
   })
 }
 
-function readImageDimensions(file: File): Promise<{ width: number; height: number }> {
+async function resizeAvatar(file: File): Promise<string> {
+  const url = URL.createObjectURL(file)
+  try {
+    const image = await loadImage(url)
+    const canvas = document.createElement('canvas')
+    canvas.width = AVATAR_SIZE
+    canvas.height = AVATAR_SIZE
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Canvas is unavailable')
+    context.drawImage(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE)
+    const avatar = await canvasToPng(canvas)
+    if (avatar.size > MAX_AVATAR_BYTES) {
+      throw new Error('Resized avatar is too large')
+    }
+    return readAsDataUrl(avatar)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
     const image = new Image()
     image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve({ width: image.naturalWidth, height: image.naturalHeight })
+      image.naturalWidth > 0 && image.naturalHeight > 0
+        ? resolve(image)
+        : reject(new Error('Image dimensions are invalid'))
     }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject()
-    }
+    image.onerror = () => reject(new Error('Image decoding failed'))
     image.src = url
+  })
+}
+
+function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('PNG encoding failed'))),
+      'image/png',
+    )
   })
 }
 </script>
@@ -158,7 +180,7 @@ function readImageDimensions(file: File): Promise<{ width: number; height: numbe
             text
             @click="removeAvatar"
           />
-          <small>PNG、JPEG 或 WebP；不超过 1 MiB、64 × 64 像素。</small>
+          <small>PNG、JPEG 或 WebP；原文件不超过 1 MiB，上传时统一缩放为 64 × 64 像素。</small>
         </div>
       </div>
 

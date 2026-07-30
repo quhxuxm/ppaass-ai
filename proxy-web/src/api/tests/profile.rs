@@ -73,7 +73,7 @@ async fn user_updates_nickname_and_bounded_avatar() {
 }
 
 #[tokio::test]
-async fn profile_rejects_long_nickname_and_large_dimensions() {
+async fn profile_rejects_long_nickname_and_non_normalized_avatar() {
     let (_directory, app) = test_app().await;
     let (cookie, csrf) = register_user(&app, "invalid-profile", "profile-password").await;
 
@@ -94,6 +94,15 @@ async fn profile_rejects_long_nickname_and_large_dimensions() {
     )
     .await;
     assert_eq!(avatar.status(), StatusCode::BAD_REQUEST);
+
+    let wrong_aspect_ratio = update_profile(
+        &app,
+        &cookie,
+        &csrf,
+        json!({"avatar_data_url":png_data_url(64, 32)}),
+    )
+    .await;
+    assert_eq!(wrong_aspect_ratio.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

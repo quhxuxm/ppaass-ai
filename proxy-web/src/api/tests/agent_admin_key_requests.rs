@@ -1,4 +1,5 @@
 use super::common::*;
+use base64::Engine;
 
 #[tokio::test]
 async fn admin_agent_lists_approves_and_rejects_key_requests() {
@@ -40,7 +41,7 @@ async fn admin_agent_lists_approves_and_rejects_key_requests() {
     assert_eq!(body["requests"][0]["request_message"], "请批准第一份密钥");
     assert_eq!(
         body["requests"][0]["account"]["avatar_url"],
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+        test_avatar_data_url()
     );
     assert_admin_response_is_redacted(&body);
 
@@ -217,6 +218,7 @@ async fn register_and_request_key(
     message: &str,
 ) -> String {
     let (cookie, csrf) = register_user(app, username, password).await;
+    let avatar = test_avatar_data_url();
     let profile = app
         .clone()
         .oneshot(
@@ -226,13 +228,7 @@ async fn register_and_request_key(
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "avatar_data_url":
-                            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(json!({"avatar_data_url": avatar}).to_string()))
                 .unwrap(),
         )
         .await
@@ -257,6 +253,16 @@ async fn register_and_request_key(
         .as_str()
         .unwrap()
         .to_string()
+}
+
+fn test_avatar_data_url() -> String {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&64_u32.to_be_bytes());
+    png.extend_from_slice(&64_u32.to_be_bytes());
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    )
 }
 
 async fn set_user_role(app: &Router, cookie: &str, csrf: &str, username: &str, role: &str) {

@@ -122,7 +122,7 @@ pub(crate) async fn admin_update_user(
         expires_at,
         display_name: normalize_nickname_patch(request.display_name)?,
         email: patch_optional(request.email),
-        avatar_url: patch_optional(request.avatar_url),
+        avatar_url: normalize_avatar_patch(request.avatar_url)?,
         proxy_address_ids: request.proxy_address_ids,
         disabled_by: (request.status == Some(AccountStatus::Disabled)).then(|| AccountActor {
             account_id: session.account.account_id.clone(),

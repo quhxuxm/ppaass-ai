@@ -64,8 +64,8 @@ fn normalize_avatar_data_url(value: &str) -> Result<String, ApiError> {
     }
     let (width, height) =
         image_dimensions(mime, &bytes).ok_or_else(|| ApiError::bad_request("头像图片数据无效"))?;
-    if width == 0 || height == 0 || width > MAX_AVATAR_DIMENSION || height > MAX_AVATAR_DIMENSION {
-        return Err(ApiError::bad_request("头像尺寸不能超过 64 × 64 像素"));
+    if width != MAX_AVATAR_DIMENSION || height != MAX_AVATAR_DIMENSION {
+        return Err(ApiError::bad_request("头像必须处理为 64 × 64 像素"));
     }
     Ok(format!(
         "data:{mime};base64,{}",
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn png_dimensions_are_bounded() {
+    fn avatar_dimensions_must_be_exactly_64_by_64() {
         let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         png.extend_from_slice(&64_u32.to_be_bytes());
         png.extend_from_slice(&64_u32.to_be_bytes());
@@ -183,11 +183,11 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(&png)
         );
         assert!(normalize_avatar_data_url(&value).is_ok());
-        png[19] = 65;
-        let oversized = format!(
+        png[23] = 63;
+        let wrong_height = format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(&png)
         );
-        assert!(normalize_avatar_data_url(&oversized).is_err());
+        assert!(normalize_avatar_data_url(&wrong_height).is_err());
     }
 }
