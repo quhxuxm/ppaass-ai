@@ -170,6 +170,7 @@ async fn approval_posts_bearer_expiry_and_proxy_selection() {
         "kreq_1",
         4_000_000_000,
         &["pxy_current".to_string()],
+        "审批测试",
     )
     .await
     .unwrap();
@@ -203,7 +204,7 @@ async fn concurrent_rejection_is_returned_as_a_typed_conflict() {
         &format!("http://{address}"),
         TOKEN,
         "kreq_1",
-        Some("请补充用途说明"),
+        "请补充用途说明",
     )
     .await
     .unwrap_err();

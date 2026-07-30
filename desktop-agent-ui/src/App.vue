@@ -109,8 +109,8 @@ function closeRotateKeyDialog() {
   }
 }
 
-async function confirmKeyRotation(password: string) {
-  if (!(await rotateKey(password))) {
+async function confirmKeyRotation(password: string, reason: string | null) {
+  if (!(await rotateKey(password, reason))) {
     return;
   }
   rotateKeyDialogVisible.value = false;
@@ -188,6 +188,7 @@ function rejectAdminRequest(request: AgentAdminKeyRequestRejection) {
     :busy="keyRotationLoading"
     :error="error"
     :initial-password="rotateKeyInitialPassword"
+    :is-admin="account?.role === 'admin'"
     @close="closeRotateKeyDialog"
     @confirm="confirmKeyRotation"
   />

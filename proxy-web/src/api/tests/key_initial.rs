@@ -211,7 +211,8 @@ async fn initial_key_request_requires_approval_before_owner_can_read_keys() {
                 .body(Body::from(
                     json!({
                         "expires_at": 1,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "测试过期审批"
                     })
                     .to_string(),
                 ))
@@ -233,7 +234,8 @@ async fn initial_key_request_requires_approval_before_owner_can_read_keys() {
                 .body(Body::from(
                     json!({
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "批准初始密钥申请"
                     })
                     .to_string(),
                 ))

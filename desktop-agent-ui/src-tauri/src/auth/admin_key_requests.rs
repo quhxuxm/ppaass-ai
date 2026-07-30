@@ -106,11 +106,12 @@ struct AdminErrorDetail {
 struct ApproveKeyRequestPayload<'a> {
     expires_at: i64,
     proxy_address_ids: &'a [String],
+    reason: &'a str,
 }
 
 #[derive(Serialize)]
 struct RejectKeyRequestPayload<'a> {
-    reason: Option<&'a str>,
+    reason: &'a str,
 }
 
 pub(crate) async fn fetch_agent_admin_key_request_inbox(
@@ -140,6 +141,7 @@ pub(crate) async fn approve_agent_admin_key_request(
     request_id: &str,
     expires_at: i64,
     proxy_address_ids: &[String],
+    reason: &str,
 ) -> Result<(), AgentAdminHttpError> {
     let base_url = admin_base_url(proxy_web_url)?;
     let client = build_proxy_web_client().map_err(request_setup_error)?;
@@ -153,6 +155,7 @@ pub(crate) async fn approve_agent_admin_key_request(
         .json(&ApproveKeyRequestPayload {
             expires_at,
             proxy_address_ids,
+            reason,
         })
         .send()
         .await
@@ -165,7 +168,7 @@ pub(crate) async fn reject_agent_admin_key_request(
     proxy_web_url: &str,
     access_token: &str,
     request_id: &str,
-    reason: Option<&str>,
+    reason: &str,
 ) -> Result<(), AgentAdminHttpError> {
     let base_url = admin_base_url(proxy_web_url)?;
     let client = build_proxy_web_client().map_err(request_setup_error)?;

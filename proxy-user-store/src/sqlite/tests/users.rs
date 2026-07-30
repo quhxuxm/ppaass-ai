@@ -3,6 +3,7 @@ use super::*;
 #[tokio::test]
 async fn creates_updates_and_persists_user() {
     let (directory, store) = test_store().await;
+    create_admin(&store, "user-admin").await;
     let created = store
         .create_user("alice", &public_key(), None)
         .await
@@ -21,6 +22,8 @@ async fn creates_updates_and_persists_user() {
                     "proxy.connect.udp".to_string(),
                 ]),
                 expires_at: Some(Some(1_893_456_000)),
+                changed_by: Some(account_actor("user-admin", "user-admin")),
+                audit_reason: Some("更新用户权限".to_string()),
                 ..UserUpdate::default()
             },
         )

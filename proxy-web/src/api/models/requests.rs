@@ -39,6 +39,13 @@ pub(crate) struct SubmitKeyRequest {
     pub(crate) message: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RotateMyKeyRequest {
+    #[serde(default)]
+    pub(crate) reason: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentDeviceAuthorizationStartRequest {
@@ -78,6 +85,7 @@ pub(crate) struct AdminCreateUserRequest {
     pub(crate) proxy_address_ids: Vec<String>,
     #[serde(default = "enabled_by_default")]
     pub(crate) enabled: bool,
+    pub(crate) audit_reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +109,8 @@ pub(crate) struct AdminUpdateUserRequest {
     pub(crate) email: PatchField<String>,
     #[serde(default)]
     pub(crate) avatar_url: PatchField<String>,
+    #[serde(default)]
+    pub(crate) audit_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +118,7 @@ pub(crate) struct AdminUpdateUserRequest {
 pub(crate) struct ApproveKeyRequest {
     pub(crate) expires_at: ExpiresAtValue,
     pub(crate) proxy_address_ids: Vec<String>,
+    pub(crate) reason: String,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +147,23 @@ pub(crate) struct UpdateProxyAddressRequest {
     pub(crate) address: Option<String>,
     #[serde(default)]
     pub(crate) enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) audit_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AdminRotateKeyRequest {
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AuditEventsQuery {
+    #[serde(default)]
+    pub(crate) before_audit_id: Option<i64>,
+    #[serde(default = "default_audit_event_limit")]
+    pub(crate) limit: u32,
 }
 
 #[derive(Debug, Deserialize)]

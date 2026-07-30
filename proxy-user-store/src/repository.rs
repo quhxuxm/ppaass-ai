@@ -3,13 +3,24 @@ use async_trait::async_trait;
 use crate::{
     AccessLogSettings, AccessRecord, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
-    AgentDeviceAuthorizationPoll, BootstrapOutcome, EncryptedPrivateKey, KeyEncryptionBinding,
-    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
-    KeyRequestRejection, LoginRecord, ManagedUser, ManagedUserUpdate, NewAccessRecord,
-    NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest, NewManagedUser,
-    NewProxyAddress, NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord,
-    UserUpdate, WebAccount,
+    AgentDeviceAuthorizationPoll, AuditEvent, BootstrapOutcome, EncryptedPrivateKey,
+    KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation, KeyRequestApproval,
+    KeyRequestApprovalResult, KeyRequestRejection, LoginRecord, ManagedUser, ManagedUserUpdate,
+    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
+    NewManagedUser, NewProxyAddress, NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result,
+    UserRecord, UserUpdate, WebAccount,
 };
+
+/// 管理员可见的操作审计查询接口。
+#[async_trait]
+pub trait AuditLogRepository: Send + Sync {
+    /// 按时间倒序读取审计事件。`before_audit_id` 用于稳定翻页。
+    async fn list_audit_events(
+        &self,
+        before_audit_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<AuditEvent>>;
+}
 
 /// 数据库无关的用户 CRUD 接口。
 ///

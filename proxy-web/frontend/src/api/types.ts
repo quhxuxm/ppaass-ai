@@ -3,6 +3,17 @@ export type AccountStatus = 'active' | 'disabled'
 export type KeyState = 'missing' | 'active' | 'expired' | 'disabled'
 export type KeyRequestStatus = 'pending' | 'approved' | 'rejected'
 export type KeyRequestKind = 'initial' | 'rotate'
+export type AuditAction =
+  | 'key_request_approved'
+  | 'key_request_rejected'
+  | 'key_regenerated'
+  | 'proxy_access_enabled'
+  | 'proxy_access_disabled'
+  | 'web_login_enabled'
+  | 'web_login_disabled'
+  | 'proxy_server_enabled'
+  | 'proxy_server_disabled'
+  | 'permissions_updated'
 export const KEY_REQUEST_MESSAGE_MAX_LENGTH = 500
 export const KEY_REQUEST_REJECTION_REASON_MAX_LENGTH = 500
 
@@ -97,6 +108,21 @@ export interface AccessLogSettings {
   retentionDays: number
 }
 
+export interface AuditEvent {
+  id: number
+  action: AuditAction
+  actorAccountId: string
+  actorLoginName: string
+  targetKind: 'user' | 'proxy_server'
+  targetId: string
+  targetName: string
+  contextId: string | null
+  reason: string | null
+  previousValue: string | null
+  newValue: string | null
+  createdAt: string
+}
+
 export interface AccessRecordsResult {
   records: AccessRecord[]
   retentionDays: number
@@ -134,6 +160,7 @@ export interface CreateManagedUserPayload extends RegisterPayload {
   expires_at: string
   permissions?: string[]
   proxy_address_ids: string[]
+  audit_reason: string
 }
 
 export interface UpdateManagedUserPayload {
@@ -143,6 +170,7 @@ export interface UpdateManagedUserPayload {
   expires_at?: string | null
   permissions?: string[]
   proxy_address_ids?: string[]
+  audit_reason?: string
 }
 
 export interface CreateProxyAddressPayload {
@@ -155,6 +183,7 @@ export interface UpdateProxyAddressPayload {
   label?: string
   address?: string
   enabled?: boolean
+  audit_reason?: string
 }
 
 export class ApiError extends Error {

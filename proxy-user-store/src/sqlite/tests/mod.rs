@@ -58,6 +58,20 @@ pub(super) async fn drop_v10_account_disable_audits(store: &SqliteUserRepository
         .unwrap();
 }
 
+pub(super) async fn drop_v11_operation_audits(store: &SqliteUserRepository) {
+    sqlx::query("DROP TABLE operation_audits")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+}
+
+pub(super) fn account_actor(account_id: &str, login_name: &str) -> AccountActor {
+    AccountActor {
+        account_id: account_id.to_string(),
+        login_name: login_name.to_string(),
+    }
+}
+
 pub(super) fn managed_user(
     account_id: &str,
     login_name: &str,
@@ -78,6 +92,8 @@ pub(super) fn managed_user(
         encrypted_private_key: b"encrypted-private-key".to_vec(),
         external_identity,
         proxy_address_ids: vec![TEST_PROXY_ADDRESS_ID.to_string()],
+        created_by: None,
+        audit_reason: None,
     }
 }
 
@@ -123,6 +139,7 @@ pub(super) fn initial_approval(
             profile: NewUser::new(username, public_key(), UserOrigin::Local),
             encrypted_private_key: b"encrypted-private-key".to_vec(),
         },
+        audit_reason: "测试审批".to_string(),
     }
 }
 

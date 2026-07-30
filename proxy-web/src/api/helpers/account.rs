@@ -208,6 +208,8 @@ pub(crate) async fn load_private_key(
 pub(crate) async fn rotate_profile_key(
     state: &AppState,
     profile: UserRecord,
+    actor: AccountActor,
+    audit_reason: Option<String>,
 ) -> Result<PrivateKeyResponse, ApiError> {
     let next_version = profile
         .key_version
@@ -225,6 +227,8 @@ pub(crate) async fn rotate_profile_key(
             expected_key_version: profile.key_version,
             public_key_pem,
             encrypted_private_key,
+            actor,
+            audit_reason,
         })
         .await?;
     Ok(PrivateKeyResponse {

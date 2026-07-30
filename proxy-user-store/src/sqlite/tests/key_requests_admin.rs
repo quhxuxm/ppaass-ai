@@ -25,6 +25,7 @@ async fn active_admin_can_receive_initial_key_and_rotate_it_after_expiration() {
                 profile: NewUser::new("admin-proxy-profile", public_key(), UserOrigin::Local),
                 encrypted_private_key: b"admin-initial-envelope".to_vec(),
             },
+            audit_reason: "批准管理员初始密钥".to_string(),
         })
         .await
         .unwrap();
@@ -69,6 +70,7 @@ async fn active_admin_can_receive_initial_key_and_rotate_it_after_expiration() {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"admin-rotated-envelope".to_vec(),
             },
+            audit_reason: "批准管理员密钥轮换".to_string(),
         })
         .await
         .unwrap();

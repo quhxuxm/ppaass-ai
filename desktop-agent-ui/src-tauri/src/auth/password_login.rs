@@ -59,6 +59,7 @@ pub(crate) async fn authenticate_rotate_and_download(
     proxy_web_url: &str,
     username: &str,
     password: &str,
+    audit_reason: Option<&str>,
 ) -> Result<DownloadedCredential, String> {
     let base_url = normalize_proxy_web_url(proxy_web_url)
         .map_err(|_| "Agent 认证服务配置无效，请联系管理员".to_string())?;
@@ -151,12 +152,14 @@ pub(crate) async fn authenticate_rotate_and_download(
         return Err(error);
     }
 
-    let rotate_response = match client
+    let rotate_request = client
         .post(endpoint(&base_url, "api/v1/me/rotate-key")?)
-        .header("x-csrf-token", csrf_token.as_str())
-        .send()
-        .await
-    {
+        .header("x-csrf-token", csrf_token.as_str());
+    let rotate_result = match audit_reason {
+        Some(reason) => rotate_request.json(&RotateKeyPayload { reason }).send().await,
+        None => rotate_request.send().await,
+    };
+    let rotate_response = match rotate_result {
         Ok(response) => response,
         Err(error) => {
             best_effort_logout(&client, &base_url, &csrf_token).await;

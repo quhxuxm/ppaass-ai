@@ -19,6 +19,7 @@ import Toast from 'primevue/toast'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import KeyRequestDialog from './components/KeyRequestDialog.vue'
+import AuditEventPanel from './components/AuditEventPanel.vue'
 import ProfileEditor from './components/ProfileEditor.vue'
 import ProxyAddressCatalog from './components/ProxyAddressCatalog.vue'
 import ProxyAddressChecklist from './components/ProxyAddressChecklist.vue'
@@ -39,6 +40,7 @@ import {
   getSession,
   inspectAgentDeviceAuthorization,
   listPendingKeyRequests,
+  listAuditEvents,
   listProxyAddresses,
   listMyAccessRecords,
   listManagedUsers,
@@ -53,6 +55,7 @@ import {
   updateManagedUser,
   updateMyProfile,
   type AccessRecord,
+  type AuditEvent,
   type AgentDeviceAuthorizationInspection,
   type AccountRole,
   type AccountStatus,
@@ -173,6 +176,8 @@ const agentAuthorizationError = ref('')
 const keyRequestLoading = ref(false)
 const keyRequestDialogVisible = ref(false)
 const keyRotationLoading = ref(false)
+const ownRotationVisible = ref(false)
+const ownRotationReason = ref('')
 const passwordSaving = ref(false)
 const profileSaving = ref(false)
 const passwordForm = reactive({
@@ -188,9 +193,11 @@ const accessRecordsFirst = ref(0)
 
 const adminUsers = ref<ManagedUser[]>([])
 const adminKeyRequests = ref<KeyRequest[]>([])
+const adminAuditEvents = ref<AuditEvent[]>([])
 const proxyAddresses = ref<ProxyAddress[]>([])
 const adminLoading = ref(false)
 const keyRequestsLoading = ref(false)
+const auditEventsLoading = ref(false)
 const adminSearch = ref('')
 const createVisible = ref(false)
 const createSaving = ref(false)
@@ -202,6 +209,7 @@ const createForm = reactive({
   agentPermissions: [] as string[],
   additionalPermissions: '',
   proxyAddressIds: [] as string[],
+  auditReason: '',
 })
 const editVisible = ref(false)
 const editSaving = ref(false)
@@ -213,6 +221,7 @@ const editForm = reactive({
   expiresAt: null as Date | null,
   agentPermissions: [] as string[],
   proxyAddressIds: [] as string[],
+  auditReason: '',
 })
 const displayedEditAgentPermissions = computed({
   get: () =>
@@ -234,10 +243,14 @@ const approvalRequest = ref<KeyRequest | null>(null)
 const approvalMinimumExpiry = ref(minimumFutureExpiry())
 const approvalExpiresAt = ref<Date | null>(defaultExpiry())
 const approvalProxyAddressIds = ref<string[]>([])
+const approvalReason = ref('')
 const rejectingRequestId = ref('')
 const rejectionVisible = ref(false)
 const rejectionRequest = ref<KeyRequest | null>(null)
 const rejectionReason = ref('')
+const rotationVisible = ref(false)
+const rotationUser = ref<ManagedUser | null>(null)
+const rotationReason = ref('')
 const retentionDays = ref<number | null>(7)
 const retentionSaving = ref(false)
 const enabledProxyAddresses = computed(() =>
@@ -339,6 +352,39 @@ const editingHasEditableFields = computed(
     (Boolean(editingUser.value?.account) && !editingRootAdmin.value) ||
     Boolean(editingUser.value?.profile),
 )
+const editingPermissionsChanged = computed(() => {
+  const user = editingUser.value
+  if (!user) return false
+  if (
+    !user.profile ||
+    user.profile.origin === 'legacy' ||
+    !user.account ||
+    editForm.role !== 'user'
+  ) {
+    return false
+  }
+  const desired = new Set([
+    ...basePermissionCodes,
+    ...editForm.agentPermissions,
+    ...editingCustomPermissions.value,
+  ])
+  const current = new Set(user.profile.permissions)
+  return (
+    desired.size !== current.size ||
+    [...desired].some((permission) => !current.has(permission))
+  )
+})
+const editingRequiresAuditReason = computed(() => {
+  const user = editingUser.value
+  if (!user) return false
+  return (
+    (Boolean(user.account) &&
+      !isRootAdmin(user) &&
+      editForm.status !== user.account?.status) ||
+    (Boolean(user.profile) && editForm.enabled !== user.profile?.enabled) ||
+    editingPermissionsChanged.value
+  )
+})
 onMounted(async () => {
   clockTimer = setInterval(() => {
     currentTime.value = Date.now()
@@ -730,6 +776,11 @@ async function refreshKeyRequest(): Promise<void> {
 }
 
 function confirmRotateOwnKey(): void {
+  if (isAdmin.value) {
+    ownRotationReason.value = ''
+    ownRotationVisible.value = true
+    return
+  }
   confirm.require({
     header: '重新生成密钥对',
     message:
@@ -744,10 +795,17 @@ function confirmRotateOwnKey(): void {
   })
 }
 
-async function rotateOwnKey(): Promise<void> {
+async function rotateOwnKey(reason?: string): Promise<void> {
+  const normalizedReason = reason?.trim()
+  if (isAdmin.value && !normalizedReason) {
+    toast.add({ severity: 'warn', summary: '请输入重生成密钥的原因', life: 2800 })
+    return
+  }
   keyRotationLoading.value = true
   try {
-    await rotateMyKey()
+    await rotateMyKey(normalizedReason)
+    ownRotationVisible.value = false
+    ownRotationReason.value = ''
     await refreshSelf()
     toast.add({
       severity: 'success',
@@ -768,13 +826,15 @@ async function refreshAdminUsers(): Promise<void> {
   }
   adminLoading.value = true
   keyRequestsLoading.value = true
+  auditEventsLoading.value = true
   try {
-    const [usersResult, requestsResult, settingsResult, addressesResult] =
+    const [usersResult, requestsResult, settingsResult, addressesResult, auditsResult] =
       await Promise.allSettled([
         listManagedUsers(),
         listPendingKeyRequests(),
         getAccessLogSettings(),
         listProxyAddresses(),
+        listAuditEvents(),
       ])
     if (usersResult.status === 'fulfilled') {
       adminUsers.value = usersResult.value
@@ -796,9 +856,26 @@ async function refreshAdminUsers(): Promise<void> {
     } else {
       showError('无法读取 Proxy 地址目录', addressesResult.reason)
     }
+    if (auditsResult.status === 'fulfilled') {
+      adminAuditEvents.value = auditsResult.value
+    } else {
+      showError('无法读取操作审计', auditsResult.reason)
+    }
   } finally {
     adminLoading.value = false
     keyRequestsLoading.value = false
+    auditEventsLoading.value = false
+  }
+}
+
+async function refreshAuditEvents(): Promise<void> {
+  auditEventsLoading.value = true
+  try {
+    adminAuditEvents.value = await listAuditEvents()
+  } catch (error) {
+    showError('无法读取操作审计', error)
+  } finally {
+    auditEventsLoading.value = false
   }
 }
 
@@ -837,6 +914,7 @@ function openCreate(): void {
   createForm.agentPermissions = []
   createForm.additionalPermissions = ''
   createForm.proxyAddressIds = []
+  createForm.auditReason = ''
   createMinimumExpiry.value = minimumFutureExpiry()
   createVisible.value = true
 }
@@ -893,6 +971,14 @@ async function submitCreate(): Promise<void> {
     })
     return
   }
+  if (!createForm.auditReason.trim()) {
+    toast.add({
+      severity: 'warn',
+      summary: '请输入创建和权限分配原因',
+      life: 3000,
+    })
+    return
+  }
   createSaving.value = true
   try {
     await createManagedUser({
@@ -904,6 +990,7 @@ async function submitCreate(): Promise<void> {
         ...additionalPermissions,
       ],
       proxy_address_ids: createForm.proxyAddressIds,
+      audit_reason: createForm.auditReason.trim(),
     })
     createVisible.value = false
     createForm.password = ''
@@ -935,6 +1022,7 @@ function openEdit(user: ManagedUser): void {
           .filter((permission) => permissions.includes(permission.code))
           .map((permission) => permission.code)
   editForm.proxyAddressIds = user.proxyAddresses.map((address) => address.id)
+  editForm.auditReason = ''
   editingCustomPermissions.value = permissions.filter(
     (permission) =>
       !basePermissionCodes.has(permission) &&
@@ -968,21 +1056,37 @@ async function submitEdit(): Promise<void> {
     })
     return
   }
+  if (editingRequiresAuditReason.value && !editForm.auditReason.trim()) {
+    toast.add({
+      severity: 'warn',
+      summary: '请输入本次修改原因',
+      detail: '管理员敏感操作必须写入审计原因',
+      life: 3200,
+    })
+    return
+  }
+  const statusChanged =
+    Boolean(user.account) &&
+    !isRootAdmin(user) &&
+    editForm.status !== user.account?.status
+  const proxyAccessChanged =
+    Boolean(user.profile) && editForm.enabled !== user.profile?.enabled
+  const permissionsChanged = editingPermissionsChanged.value
   editSaving.value = true
   try {
     await updateManagedUser(managedUsername(user), {
       role: user.account && !isRootAdmin(user) ? editForm.role : undefined,
-      status: user.account && !isRootAdmin(user) ? editForm.status : undefined,
-      enabled: user.profile ? editForm.enabled : undefined,
+      status: statusChanged ? editForm.status : undefined,
+      enabled: proxyAccessChanged ? editForm.enabled : undefined,
       expires_at:
         user.profile && !editingProfileReadOnly.value
         ? editForm.expiresAt?.toISOString() ?? null
         : undefined,
       permissions:
+        permissionsChanged &&
         user.profile &&
         user.profile.origin !== 'legacy' &&
-        user.account &&
-        editForm.role === 'user'
+        user.account
           ? [
               ...editForm.agentPermissions,
               ...editingCustomPermissions.value,
@@ -995,6 +1099,9 @@ async function submitEdit(): Promise<void> {
         editForm.proxyAddressIds.length
           ? editForm.proxyAddressIds
           : undefined,
+      audit_reason: editingRequiresAuditReason.value
+        ? editForm.auditReason.trim()
+        : undefined,
     })
     editVisible.value = false
     editingUser.value = null
@@ -1008,27 +1115,24 @@ async function submitEdit(): Promise<void> {
 }
 
 function confirmRotateAdminKey(user: ManagedUser): void {
-  const username = managedUsername(user)
-  confirm.require({
-    header: user.hasPrivateKey ? '重新生成用户密钥' : '生成用户密钥',
-    message: user.hasPrivateKey
-      ? `确定为“${username}”生成新密钥吗？旧私钥会立即失效。`
-      : `确定为“${username}”生成密钥吗？生成后只有该用户本人登录才能查看。`,
-    icon: 'pi pi-refresh',
-    acceptLabel: '生成新密钥',
-    rejectLabel: '取消',
-    acceptClass: 'p-button-danger',
-    accept: () => {
-      void rotateAdminKey(user)
-    },
-  })
+  rotationUser.value = user
+  rotationReason.value = ''
+  rotationVisible.value = true
 }
 
 async function rotateAdminKey(user: ManagedUser): Promise<void> {
   const username = managedUsername(user)
+  const reason = rotationReason.value.trim()
+  if (!reason) {
+    toast.add({ severity: 'warn', summary: '请输入重生成密钥的原因', life: 2800 })
+    return
+  }
   rotatingUsername.value = username
   try {
-    await rotateManagedUserKey(username)
+    await rotateManagedUserKey(username, reason)
+    rotationVisible.value = false
+    rotationUser.value = null
+    rotationReason.value = ''
     await refreshAdminUsers()
     toast.add({
       severity: 'success',
@@ -1053,6 +1157,7 @@ function openApproval(request: KeyRequest): void {
   approvalProxyAddressIds.value =
     managed?.proxyAddresses.map((address) => address.id) ?? []
   approvalVisible.value = true
+  approvalReason.value = ''
 }
 
 async function submitApproval(): Promise<void> {
@@ -1076,6 +1181,10 @@ async function submitApproval(): Promise<void> {
     })
     return
   }
+  if (!approvalReason.value.trim()) {
+    toast.add({ severity: 'warn', summary: '请输入批准原因', life: 2800 })
+    return
+  }
 
   approvalSaving.value = true
   try {
@@ -1083,6 +1192,7 @@ async function submitApproval(): Promise<void> {
       request.id,
       expiresAt.toISOString(),
       approvalProxyAddressIds.value,
+      approvalReason.value.trim(),
     )
     approvalVisible.value = false
     approvalRequest.value = null
@@ -1109,6 +1219,10 @@ function confirmRejectKeyRequest(request: KeyRequest): void {
 async function performRejectKeyRequest(): Promise<void> {
   const request = rejectionRequest.value
   if (!request) {
+    return
+  }
+  if (!rejectionReason.value.trim()) {
+    toast.add({ severity: 'warn', summary: '请输入拒绝原因', life: 2800 })
     return
   }
   rejectingRequestId.value = request.id
@@ -2490,6 +2604,12 @@ function clearAgentAuthorizationLocation(): void {
           </div>
         </section>
 
+        <AuditEventPanel
+          :events="adminAuditEvents"
+          :loading="auditEventsLoading"
+          @refresh="refreshAuditEvents"
+        />
+
         <section class="content-card users-card">
           <div class="table-toolbar">
             <div>
@@ -2840,6 +2960,18 @@ function clearAgentAuthorizationLocation(): void {
           可选。使用逗号、空格或换行分隔 permission code；基础能力和上方三项 Agent 权限会自动排除。
         </small>
       </div>
+      <div class="form-field">
+        <label for="create-audit-reason">创建和权限分配原因</label>
+        <Textarea
+          id="create-audit-reason"
+          v-model="createForm.auditReason"
+          rows="3"
+          maxlength="500"
+          placeholder="说明为什么创建该用户并分配这些权限"
+          fluid
+        />
+        <small>{{ Array.from(createForm.auditReason).length }} / 500，必填。</small>
+      </div>
     </form>
     <template #footer>
       <Button label="取消" severity="secondary" text @click="createVisible = false" />
@@ -3096,6 +3228,27 @@ function clearAgentAuthorizationLocation(): void {
             </div>
           </div>
       </section>
+      <section v-if="editingRequiresAuditReason" class="user-editor-section audit-reason-section">
+        <div class="user-editor-section-heading">
+          <span><i class="pi pi-file-edit" /></span>
+          <div>
+            <strong>本次修改原因</strong>
+            <small>管理员敏感操作会写入仅管理员可见的审计记录。</small>
+          </div>
+        </div>
+        <div class="form-field">
+          <label for="edit-audit-reason">操作原因</label>
+          <Textarea
+            id="edit-audit-reason"
+            v-model="editForm.auditReason"
+            rows="3"
+            maxlength="500"
+            placeholder="说明为什么需要修改该用户配置"
+            fluid
+          />
+          <small>{{ Array.from(editForm.auditReason).length }} / 500，敏感变更必填。</small>
+        </div>
+      </section>
     </form>
     <template #footer>
       <Button
@@ -3178,6 +3331,18 @@ function clearAgentAuthorizationLocation(): void {
       />
       <small>必填，且必须晚于当前时间。批准后用户才能查看和使用新密钥。</small>
     </div>
+    <div class="form-field">
+      <label for="approval-reason">批准原因</label>
+      <Textarea
+        id="approval-reason"
+        v-model="approvalReason"
+        rows="3"
+        maxlength="500"
+        placeholder="说明批准本次密钥申请的原因"
+        fluid
+      />
+      <small>{{ Array.from(approvalReason).length }} / 500，必填，仅管理员可见。</small>
+    </div>
     <template #footer>
       <Button
         label="取消"
@@ -3219,7 +3384,7 @@ function clearAgentAuthorizationLocation(): void {
           :disabled="Boolean(rejectingRequestId)"
           fluid
         />
-        <small>{{ Array.from(rejectionReason).length }} / 500，可选。</small>
+        <small>{{ Array.from(rejectionReason).length }} / 500，必填。</small>
       </div>
     </div>
     <template #footer>
@@ -3236,6 +3401,95 @@ function clearAgentAuthorizationLocation(): void {
         severity="danger"
         :loading="Boolean(rejectingRequestId)"
         @click="performRejectKeyRequest"
+      />
+    </template>
+  </Dialog>
+
+  <Dialog
+    v-model:visible="ownRotationVisible"
+    modal
+    header="重新生成自己的密钥"
+    class="form-dialog"
+    :style="{ width: 'min(92vw, 520px)' }"
+    :closable="!keyRotationLoading"
+  >
+    <div class="dialog-form">
+      <p class="dialog-lead">
+        旧连接凭据会立即失效。管理员操作将写入审计记录，请填写原因。
+      </p>
+      <div class="form-field">
+        <label for="own-rotation-reason">重生成原因</label>
+        <Textarea
+          id="own-rotation-reason"
+          v-model="ownRotationReason"
+          rows="4"
+          maxlength="500"
+          placeholder="说明为什么需要重新生成自己的密钥"
+          :disabled="keyRotationLoading"
+          fluid
+        />
+        <small>{{ Array.from(ownRotationReason).length }} / 500，必填。</small>
+      </div>
+    </div>
+    <template #footer>
+      <Button
+        label="取消"
+        severity="secondary"
+        text
+        :disabled="keyRotationLoading"
+        @click="ownRotationVisible = false"
+      />
+      <Button
+        label="生成新密钥"
+        icon="pi pi-refresh"
+        severity="danger"
+        :loading="keyRotationLoading"
+        :disabled="!ownRotationReason.trim()"
+        @click="rotateOwnKey(ownRotationReason)"
+      />
+    </template>
+  </Dialog>
+
+  <Dialog
+    v-model:visible="rotationVisible"
+    modal
+    header="重新生成用户密钥"
+    class="form-dialog"
+    :style="{ width: 'min(92vw, 520px)' }"
+    :closable="!rotatingUsername"
+  >
+    <div v-if="rotationUser" class="dialog-form">
+      <p class="dialog-lead">
+        将为“{{ managedUsername(rotationUser) }}”生成新密钥，旧私钥会立即失效。
+      </p>
+      <div class="form-field">
+        <label for="rotation-reason">重生成原因</label>
+        <Textarea
+          id="rotation-reason"
+          v-model="rotationReason"
+          rows="4"
+          maxlength="500"
+          placeholder="说明为什么需要重新生成该用户的密钥"
+          :disabled="Boolean(rotatingUsername)"
+          fluid
+        />
+        <small>{{ Array.from(rotationReason).length }} / 500，必填。</small>
+      </div>
+    </div>
+    <template #footer>
+      <Button
+        label="取消"
+        severity="secondary"
+        text
+        :disabled="Boolean(rotatingUsername)"
+        @click="rotationVisible = false"
+      />
+      <Button
+        label="生成新密钥"
+        icon="pi pi-refresh"
+        severity="danger"
+        :loading="Boolean(rotatingUsername)"
+        @click="rotationUser && rotateAdminKey(rotationUser)"
       />
     </template>
   </Dialog>

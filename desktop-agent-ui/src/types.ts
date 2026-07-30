@@ -98,11 +98,12 @@ export type AgentAdminKeyRequestApproval = {
   requestId: string;
   expiresAt: number;
   proxyAddressIds: string[];
+  reason: string;
 };
 
 export type AgentAdminKeyRequestRejection = {
   requestId: string;
-  reason: string | null;
+  reason: string;
 };
 
 export type AgentLoginRequest = {

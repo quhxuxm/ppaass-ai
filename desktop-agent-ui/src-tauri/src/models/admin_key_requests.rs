@@ -39,11 +39,12 @@ pub(crate) struct AgentAdminKeyRequestApproval {
     pub(crate) request_id: String,
     pub(crate) expires_at: i64,
     pub(crate) proxy_address_ids: Vec<String>,
+    pub(crate) reason: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentAdminKeyRequestRejection {
     pub(crate) request_id: String,
-    pub(crate) reason: Option<String>,
+    pub(crate) reason: String,
 }

@@ -9,6 +9,7 @@ pub const MAX_PERMISSIONS: usize = 32;
 pub const MAX_PERMISSION_CODE_BYTES: usize = 64;
 pub const MAX_KEY_REQUEST_MESSAGE_CHARS: usize = 500;
 pub const MAX_KEY_REQUEST_REJECTION_REASON_CHARS: usize = 500;
+pub const MAX_AUDIT_REASON_CHARS: usize = 500;
 pub const MAX_PROXY_ADDRESS_BYTES: usize = 512;
 pub const MAX_PROXY_ADDRESS_LABEL_BYTES: usize = 128;
 pub const MAX_PROXY_ADDRESSES_PER_ACCOUNT: usize = 32;
@@ -64,6 +65,15 @@ pub enum ValidationError {
     #[error("密钥申请拒绝理由包含不允许的控制字符")]
     InvalidKeyRequestRejectionReason,
 
+    #[error("操作原因不能为空")]
+    EmptyAuditReason,
+
+    #[error("操作原因不能超过 {MAX_AUDIT_REASON_CHARS} 个字符")]
+    AuditReasonTooLong,
+
+    #[error("操作原因包含不允许的控制字符")]
+    InvalidAuditReason,
+
     #[error("Proxy 地址 ID 无效")]
     InvalidProxyAddressId,
 
@@ -104,6 +114,23 @@ pub fn normalize_username(username: &str) -> std::result::Result<String, Validat
         return Err(ValidationError::InvalidUsername);
     }
     Ok(username.to_string())
+}
+
+pub fn normalize_audit_reason(reason: &str) -> std::result::Result<String, ValidationError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(ValidationError::EmptyAuditReason);
+    }
+    if reason.chars().count() > MAX_AUDIT_REASON_CHARS {
+        return Err(ValidationError::AuditReasonTooLong);
+    }
+    if reason
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(ValidationError::InvalidAuditReason);
+    }
+    Ok(reason.to_string())
 }
 
 pub fn normalize_public_key_pem(
@@ -412,6 +439,22 @@ mod tests {
             ))
             .unwrap_err(),
             ValidationError::KeyRequestRejectionReasonTooLong
+        );
+    }
+
+    #[test]
+    fn audit_reason_is_required_trimmed_and_bounded() {
+        assert_eq!(
+            normalize_audit_reason("  已核实本次操作  ").unwrap(),
+            "已核实本次操作"
+        );
+        assert_eq!(
+            normalize_audit_reason(" \n ").unwrap_err(),
+            ValidationError::EmptyAuditReason
+        );
+        assert_eq!(
+            normalize_audit_reason(&"因".repeat(MAX_AUDIT_REASON_CHARS + 1)).unwrap_err(),
+            ValidationError::AuditReasonTooLong
         );
     }
 }

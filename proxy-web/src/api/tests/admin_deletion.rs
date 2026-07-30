@@ -127,8 +127,11 @@ async fn patch_user(
     cookie: &str,
     csrf: &str,
     username: &str,
-    body: Value,
+    mut body: Value,
 ) -> Response {
+    body.as_object_mut()
+        .unwrap()
+        .insert("audit_reason".to_string(), json!("管理员测试操作"));
     app.clone()
         .oneshot(
             Request::builder()

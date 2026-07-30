@@ -89,7 +89,10 @@ async fn expired_key_is_hidden_and_can_only_be_restored_by_approval() {
                 .uri("/api/v1/admin/users/expired-user/rotate-key")
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reason": "测试过期密钥不能直接轮换"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -149,7 +152,8 @@ async fn expired_key_is_hidden_and_can_only_be_restored_by_approval() {
                 .body(Body::from(
                     json!({
                         "expires_at": LATER_FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "批准过期密钥重新生成"
                     })
                     .to_string(),
                 ))
@@ -255,7 +259,10 @@ async fn concurrent_key_requests_are_idempotent_and_rejection_allows_retry() {
                 .uri(reject_uri)
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reason": "重复拒绝冲突测试"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

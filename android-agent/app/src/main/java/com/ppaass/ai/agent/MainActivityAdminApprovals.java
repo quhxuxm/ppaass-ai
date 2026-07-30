@@ -199,11 +199,13 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
                         public void onApprove(
                                 AgentAdminModels.KeyRequest selected,
                                 long expiresAt,
-                                List<String> proxyAddressIds) {
+                                List<String> proxyAddressIds,
+                                String reason) {
                             approveRequest(
                                     selected,
                                     expiresAt,
-                                    proxyAddressIds);
+                                    proxyAddressIds,
+                                    reason);
                         }
                     });
         }
@@ -224,15 +226,16 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
     private void approveRequest(
             AgentAdminModels.KeyRequest request,
             long expiresAt,
-            List<String> proxyAddressIds) {
-        performDecision(request, expiresAt, proxyAddressIds, null, true);
+            List<String> proxyAddressIds,
+            String reason) {
+        performDecision(request, expiresAt, proxyAddressIds, reason, true);
     }
 
     private void performDecision(
             AgentAdminModels.KeyRequest request,
             long expiresAt,
             List<String> proxyAddressIds,
-            String rejectionReason,
+            String reason,
             boolean approve) {
         if (!activeRequestId.isEmpty() || !AgentAuthSession.isAdmin(this)) {
             return;
@@ -258,7 +261,7 @@ abstract class MainActivityAdminApprovals extends MainActivityPacketCapture {
                 request,
                 expiresAt,
                 proxyAddressIds,
-                rejectionReason,
+                reason,
                 approve,
                 new AgentAdminOperationController.Callback() {
                     @Override

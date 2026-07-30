@@ -123,6 +123,19 @@ pub(super) async fn fetch_account_by_login(
         .transpose()
 }
 
+pub(super) async fn fetch_account_by_linked_username(
+    connection: &mut SqliteConnection,
+    username: &str,
+) -> Result<Option<WebAccount>> {
+    let query = format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?");
+    sqlx::query(&query)
+        .bind(username)
+        .fetch_optional(&mut *connection)
+        .await?
+        .map(row_to_account)
+        .transpose()
+}
+
 pub(super) async fn fetch_key_request_by_id(
     connection: &mut SqliteConnection,
     request_id: &str,

@@ -40,6 +40,7 @@ fn proxy_addresses_are_canonical_and_strictly_validated() {
 #[tokio::test]
 async fn assigned_addresses_are_atomic_unique_and_cannot_be_disabled() {
     let (_directory, store) = test_store().await;
+    create_admin(&store, "address-admin").await;
     store
         .create_proxy_address(NewProxyAddress {
             proxy_address_id: "pxy_backup".to_string(),
@@ -82,6 +83,8 @@ async fn assigned_addresses_are_atomic_unique_and_cannot_be_disabled() {
                 TEST_PROXY_ADDRESS_ID,
                 ProxyAddressUpdate {
                     enabled: Some(false),
+                    changed_by: Some(account_actor("address-admin", "address-admin")),
+                    audit_reason: Some("测试已分配节点不能停用".to_string()),
                     ..ProxyAddressUpdate::default()
                 },
             )
@@ -109,6 +112,8 @@ async fn assigned_addresses_are_atomic_unique_and_cannot_be_disabled() {
             TEST_PROXY_ADDRESS_ID,
             ProxyAddressUpdate {
                 enabled: Some(false),
+                changed_by: Some(account_actor("address-admin", "address-admin")),
+                audit_reason: Some("停用未分配节点".to_string()),
                 ..ProxyAddressUpdate::default()
             },
         )

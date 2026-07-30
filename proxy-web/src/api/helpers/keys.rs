@@ -3,6 +3,8 @@ use super::super::*;
 pub(crate) async fn rotate_profile_key_for_admin(
     state: &AppState,
     profile: UserRecord,
+    actor: AccountActor,
+    audit_reason: String,
 ) -> Result<UserRecord, ApiError> {
     let next_version = profile
         .key_version
@@ -17,6 +19,8 @@ pub(crate) async fn rotate_profile_key_for_admin(
             expected_key_version: profile.key_version,
             public_key_pem: generated.public_key_pem,
             encrypted_private_key: generated.encrypted_private_key,
+            actor,
+            audit_reason: Some(audit_reason),
         })
         .await
         .map_err(Into::into)

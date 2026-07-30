@@ -118,7 +118,7 @@ export function useAgentAuth() {
     }
   }
 
-  async function rotateKey(password: string) {
+  async function rotateKey(password: string, reason: string | null) {
     if (keyRotationLoading.value || loggingIn.value || loggingOut.value) {
       return false;
     }
@@ -126,7 +126,7 @@ export function useAgentAuth() {
     error.value = "";
     try {
       const next = await invoke<AgentAuthState>("rotate_agent_key", {
-        request: { password }
+        request: { password, reason }
       });
       applyAuthState(next);
       phase.value = "authenticated";

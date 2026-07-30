@@ -36,7 +36,8 @@ async fn admin_with_an_active_profile_can_manage_keys_records_and_authorize_agen
                 .body(Body::from(
                     json!({
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "批准管理员密钥申请"
                     })
                     .to_string(),
                 ))
@@ -77,7 +78,7 @@ async fn admin_with_an_active_profile_can_manage_keys_records_and_authorize_agen
         "admin-traffic.example"
     );
 
-    let response = app
+    let missing_reason = app
         .clone()
         .oneshot(
             Request::builder()
@@ -86,6 +87,24 @@ async fn admin_with_an_active_profile_can_manage_keys_records_and_authorize_agen
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
                 .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_reason.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/me/rotate-key")
+                .header(header::COOKIE, &admin_cookie)
+                .header("x-csrf-token", &admin_csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"reason": "管理员更新自己的 Agent 连接密钥"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

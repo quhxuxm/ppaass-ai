@@ -101,6 +101,7 @@ pub struct KeyRequestApproval {
     pub expires_at: i64,
     pub proxy_address_ids: Vec<String>,
     pub material: ApprovedKeyMaterial,
+    pub audit_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

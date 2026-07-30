@@ -94,6 +94,10 @@ pub struct ManagedUserUpdate {
     pub proxy_address_ids: Option<Vec<String>>,
     /// 执行账号停用的管理员快照。存储实现应在 active -> disabled 时写入审计记录。
     pub disabled_by: Option<AccountActor>,
+    /// 修改登录状态、Proxy 连接状态或权限的管理员快照。
+    pub changed_by: Option<AccountActor>,
+    /// 管理员执行受审计变更时填写的原因。
+    pub audit_reason: Option<String>,
 }
 
 impl ManagedUserUpdate {
@@ -154,6 +158,9 @@ pub struct NewManagedUser {
     pub encrypted_private_key: Vec<u8>,
     pub external_identity: Option<ExternalIdentity>,
     pub proxy_address_ids: Vec<String>,
+    /// 管理端创建用户时的操作者；内部迁移和测试可不提供。
+    pub created_by: Option<AccountActor>,
+    pub audit_reason: Option<String>,
 }
 
 /// 首次启动创建管理员账号所需的数据。管理员可以不绑定 Proxy profile。
@@ -190,4 +197,8 @@ pub struct KeyPairRotation {
     pub expected_key_version: i64,
     pub public_key_pem: String,
     pub encrypted_private_key: Vec<u8>,
+    /// 发起本次密钥重生成的用户本人或管理员。
+    pub actor: AccountActor,
+    /// 管理员重生成密钥时填写的原因；用户本人自助操作可为空。
+    pub audit_reason: Option<String>,
 }

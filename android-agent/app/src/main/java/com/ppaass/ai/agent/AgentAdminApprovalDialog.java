@@ -4,10 +4,12 @@ import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.app.TimePickerDialog;
 import android.graphics.Typeface;
+import android.text.InputFilter;
 import android.view.Window;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -21,6 +23,8 @@ import java.util.Locale;
 import java.util.Set;
 
 final class AgentAdminApprovalDialog {
+    private static final int MAX_REASON_CHARACTERS = 500;
+
     private AgentAdminApprovalDialog() {
     }
 
@@ -139,6 +143,32 @@ final class AgentAdminApprovalDialog {
             proxyList.addView(empty, host.matchWrap());
         }
 
+        TextView reasonLabel = host.controlLabel("操作原因");
+        root.addView(reasonLabel, host.labelParams());
+        EditText reason = new EditText(host);
+        reason.setTextColor(host.COLOR_TEXT);
+        reason.setHintTextColor(host.COLOR_MUTED);
+        reason.setTextSize(14f);
+        reason.setTypeface(Typeface.DEFAULT);
+        reason.setHint("例如：已核实用户用途和密钥有效期");
+        reason.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
+        reason.setMinLines(3);
+        reason.setMaxLines(5);
+        reason.setPadding(host.dp(12), host.dp(10), host.dp(12), host.dp(10));
+        reason.setBackground(host.rounded(host.COLOR_CONTROL, host.COLOR_BORDER));
+        reason.setFilters(new InputFilter[]{
+                new InputFilter.LengthFilter(MAX_REASON_CHARACTERS)
+        });
+        LinearLayout.LayoutParams reasonParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                host.dp(112));
+        root.addView(reason, reasonParams);
+
+        TextView reasonLimit = host.mutedText("必填，最多 500 个字符", 12f);
+        LinearLayout.LayoutParams reasonLimitParams = host.matchWrap();
+        reasonLimitParams.setMargins(0, host.dp(6), 0, 0);
+        root.addView(reasonLimit, reasonLimitParams);
+
         TextView error = host.mutedText("", 13f);
         error.setTextColor(host.COLOR_ACTION_STOP);
         error.setVisibility(TextView.GONE);
@@ -162,14 +192,19 @@ final class AgentAdminApprovalDialog {
                 String validation = validationMessage(
                         System.currentTimeMillis() / 1000L,
                         expiresAt,
-                        selected.size());
+                        selected.size(),
+                        reason.getText().toString());
                 if (validation != null) {
                     error.setText(validation);
                     error.setVisibility(TextView.VISIBLE);
                     return;
                 }
                 dialog.dismiss();
-                listener.onApprove(request, expiresAt, selected);
+                listener.onApprove(
+                        request,
+                        expiresAt,
+                        selected,
+                        reason.getText().toString().trim());
             });
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
                     .setTextColor(host.COLOR_MUTED);
@@ -191,12 +226,16 @@ final class AgentAdminApprovalDialog {
     static String validationMessage(
             long nowEpochSeconds,
             long expiresAt,
-            int selectedProxyCount) {
+            int selectedProxyCount,
+            String reason) {
         if (expiresAt <= nowEpochSeconds) {
             return "密钥过期时间必须晚于当前时间";
         }
         if (selectedProxyCount < 1) {
             return "请至少选择一个启用的 Proxy 地址";
+        }
+        if (reason == null || reason.trim().isEmpty()) {
+            return "请填写本次审批的操作原因";
         }
         return null;
     }
@@ -258,7 +297,8 @@ final class AgentAdminApprovalDialog {
         void onApprove(
                 AgentAdminModels.KeyRequest request,
                 long expiresAt,
-                List<String> proxyAddressIds);
+                List<String> proxyAddressIds,
+                String reason);
     }
 
     private static final class ProxyChoice {

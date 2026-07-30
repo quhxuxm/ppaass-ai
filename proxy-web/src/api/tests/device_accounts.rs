@@ -47,6 +47,7 @@ async fn existing_external_account_session_can_authorize_agent_without_a_passwor
                 profile,
                 encrypted_private_key: stored_keys.encrypted_private_key,
             },
+            audit_reason: "测试设备账号审批".to_string(),
         })
         .await
         .unwrap();
@@ -196,6 +197,11 @@ async fn agent_device_approval_rejects_admin_missing_keys_and_cross_origin_clien
                     PROXY_CONNECT_TCP_PERMISSION.to_string(),
                     PROXY_CONNECT_UDP_PERMISSION.to_string(),
                 ]),
+                changed_by: Some(AccountActor {
+                    account_id: "acc_admin".to_string(),
+                    login_name: "admin".to_string(),
+                }),
+                audit_reason: Some("移除私钥读取权限".to_string()),
                 ..UserUpdate::default()
             },
         )
@@ -229,6 +235,11 @@ async fn agent_device_approval_rejects_admin_missing_keys_and_cross_origin_clien
             "disabled-device",
             UserUpdate {
                 enabled: Some(false),
+                changed_by: Some(AccountActor {
+                    account_id: "acc_admin".to_string(),
+                    login_name: "admin".to_string(),
+                }),
+                audit_reason: Some("停用设备授权测试用户".to_string()),
                 ..UserUpdate::default()
             },
             StatusCode::FORBIDDEN,

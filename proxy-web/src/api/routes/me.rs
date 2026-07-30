@@ -132,17 +132,27 @@ pub(crate) async fn get_my_private_key(
     Ok(Json(load_private_key(&state, profile).await?))
 }
 
-#[instrument(skip(state, headers))]
+#[instrument(skip(state, headers, payload))]
 pub(crate) async fn rotate_my_key(
     State(state): State<AppState>,
     headers: HeaderMap,
+    payload: Option<Json<RotateMyKeyRequest>>,
 ) -> Result<Json<PrivateKeyResponse>, ApiError> {
     validate_browser_mutation(&headers)?;
     let session = authenticate(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
     let profile = require_active_key_profile(&state, &session.account).await?;
     require_profile_permission(&profile, KEY_ROTATE_PERMISSION)?;
-    let response = rotate_profile_key(&state, profile).await?;
+    let response = rotate_profile_key(
+        &state,
+        profile,
+        AccountActor {
+            account_id: session.account.account_id.clone(),
+            login_name: session.account.login_name.clone(),
+        },
+        payload.and_then(|Json(request)| request.reason),
+    )
+    .await?;
     state
         .agent_events
         .publish_profile_changed(&session.account.account_id);

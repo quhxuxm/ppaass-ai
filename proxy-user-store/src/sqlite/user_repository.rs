@@ -89,8 +89,39 @@ impl SqliteUserRepository {
             .as_deref()
             .map(normalize_permissions)
             .transpose()?;
+        let changed_by = update
+            .changed_by
+            .map(|actor| {
+                Ok::<_, UserRepositoryError>(AccountActor {
+                    account_id: normalize_account_id(&actor.account_id)?,
+                    login_name: normalize_username(&actor.login_name)?,
+                })
+            })
+            .transpose()?;
+        if (update.enabled.is_some() || permissions.is_some()) && changed_by.is_none() {
+            return Err(ValidationError::InvalidAccountField(
+                "修改代理连接状态或权限时必须提供操作管理员".to_string(),
+            )
+            .into());
+        }
+        let audit_reason = if update.enabled.is_some() || permissions.is_some() {
+            Some(normalize_audit_reason(
+                update.audit_reason.as_deref().unwrap_or_default(),
+            )?)
+        } else {
+            None
+        };
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(actor) = changed_by.as_ref() {
+            let administrator = fetch_account_by_id(&mut transaction, &actor.account_id)
+                .await?
+                .filter(|candidate| candidate.login_name == actor.login_name)
+                .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                    account_id: actor.account_id.clone(),
+                })?;
+            ensure_active_admin(&administrator)?;
+        }
         let query = format!("SELECT {USER_SELECT} FROM users WHERE username = ?");
         let mut user = sqlx::query(&query)
             .bind(&username)
@@ -99,6 +130,8 @@ impl SqliteUserRepository {
             .map(row_to_user)
             .transpose()?
             .ok_or_else(|| UserRepositoryError::NotFound(username.clone()))?;
+        let previous_enabled = user.enabled;
+        let previous_permissions = user.permissions.clone();
 
         let key_changed = public_key_pem
             .as_ref()
@@ -145,6 +178,56 @@ impl SqliteUserRepository {
                 .bind(&user.username)
                 .execute(&mut *transaction)
                 .await?;
+        }
+        if let Some(actor) = changed_by {
+            if previous_enabled != user.enabled {
+                insert_audit_event(
+                    &mut transaction,
+                    NewAuditEvent {
+                        action: if user.enabled {
+                            AuditAction::ProxyAccessEnabled
+                        } else {
+                            AuditAction::ProxyAccessDisabled
+                        },
+                        actor_account_id: actor.account_id.clone(),
+                        actor_login_name: actor.login_name.clone(),
+                        target_kind: AuditTargetKind::User,
+                        target_id: user.username.clone(),
+                        target_name: user.username.clone(),
+                        context_id: None,
+                        reason: audit_reason.clone(),
+                        previous_value: Some(previous_enabled.to_string()),
+                        new_value: Some(user.enabled.to_string()),
+                        created_at: user.updated_at,
+                    },
+                )
+                .await?;
+            }
+            if previous_permissions != user.permissions {
+                insert_audit_event(
+                    &mut transaction,
+                    NewAuditEvent {
+                        action: AuditAction::PermissionsUpdated,
+                        actor_account_id: actor.account_id,
+                        actor_login_name: actor.login_name,
+                        target_kind: AuditTargetKind::User,
+                        target_id: user.username.clone(),
+                        target_name: user.username.clone(),
+                        context_id: None,
+                        reason: audit_reason,
+                        previous_value: Some(
+                            serde_json::to_string(&previous_permissions).map_err(|error| {
+                                UserRepositoryError::InvalidSchema(error.to_string())
+                            })?,
+                        ),
+                        new_value: Some(serde_json::to_string(&user.permissions).map_err(
+                            |error| UserRepositoryError::InvalidSchema(error.to_string()),
+                        )?),
+                        created_at: user.updated_at,
+                    },
+                )
+                .await?;
+            }
         }
         transaction.commit().await?;
         info!(

@@ -117,6 +117,8 @@ async fn key_binding_migrates_existing_envelopes_and_rejects_the_wrong_secret() 
             encrypted_private_key: correct.encrypt("alice", 1, "private-pem").unwrap(),
             external_identity: None,
             proxy_address_ids: vec!["pxy_main_test".to_string()],
+            created_by: None,
+            audit_reason: None,
         })
         .await
         .unwrap();

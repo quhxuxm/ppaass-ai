@@ -8,7 +8,8 @@ async fn admin_key_management_is_redacted_but_owner_can_read_keys() {
         "username":"bob",
         "password":"bob-secure-password",
         "expires_at": FUTURE_EXPIRATION,
-        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+        "audit_reason": "创建密钥管理测试用户"
     })
     .to_string();
     let missing_csrf = app
@@ -62,7 +63,8 @@ async fn admin_key_management_is_redacted_but_owner_can_read_keys() {
                         "username":"past-expiry",
                         "password":"safe-user-password",
                         "expires_at":1,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "audit_reason": "测试过期有效期"
                     })
                     .to_string(),
                 ))
@@ -145,7 +147,10 @@ async fn admin_key_management_is_redacted_but_owner_can_read_keys() {
                 .uri("/api/v1/admin/users/bob/rotate-key")
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reason": "管理员主动轮换密钥"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

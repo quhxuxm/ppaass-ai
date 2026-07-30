@@ -174,6 +174,7 @@ async fn failed_credential_construction_does_not_burn_device_code() {
             access_logs: store.clone(),
             device_authorizations: store.clone(),
             proxy_addresses: store.clone(),
+            audit_logs: store.clone(),
             passwords: PasswordService::new(1).await.unwrap(),
             sessions: SessionStore::new(false),
             agent_tokens: AgentAccessTokenService::new(MASTER_SECRET).unwrap(),

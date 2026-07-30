@@ -113,7 +113,13 @@ async fn handoff_rechecks_disabled_account_before_issuing_cookie() {
                 .header(header::COOKIE, admin_cookie)
                 .header("x-csrf-token", admin_csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"status": "disabled"}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "status": "disabled",
+                        "audit_reason": "测试停用后交接失效"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await

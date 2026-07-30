@@ -65,7 +65,8 @@ async fn registration_and_admin_creation_share_the_eight_character_password_mini
                         "username": "short-admin-password",
                         "password": "1234567",
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "audit_reason": "测试短密码"
                     })
                     .to_string(),
                 ))
@@ -164,6 +165,11 @@ async fn password_login_limits_ip_and_account_without_account_enumeration() {
             &disabled.account_id,
             ManagedUserUpdate {
                 status: Some(AccountStatus::Disabled),
+                changed_by: Some(AccountActor {
+                    account_id: "acc_admin".to_string(),
+                    login_name: "admin".to_string(),
+                }),
+                audit_reason: Some("测试登录限流停用账号".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )

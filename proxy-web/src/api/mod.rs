@@ -16,15 +16,15 @@ use proxy_user_store::{
     AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
     AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationRepository,
-    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
-    ExternalIdentity, KEY_ROTATE_PERMISSION, KeyGenerationRequest, KeyPairRotation,
-    KeyRequestApproval, KeyRequestKind, KeyRequestRejection, KeyRequestStatus,
-    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
-    ManagedUser, ManagedUserUpdate, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
-    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
-    ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate, UserOrigin, UserRecord,
-    UserRepository, UserRepositoryError, UserUpdate, WebAccount, normalize_username,
-    parse_expires_at,
+    AgentDeviceAuthorizationStatus, ApprovedKeyMaterial, AuditEvent, AuditLogRepository,
+    DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION, ExternalIdentity, KEY_ROTATE_PERMISSION,
+    KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestKind, KeyRequestRejection,
+    KeyRequestStatus, MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate, NewAgentDeviceAuthorization,
+    NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser, NewUserAccount,
+    PRIVATE_KEY_READ_PERMISSION, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate,
+    UserOrigin, UserRecord, UserRepository, UserRepositoryError, UserUpdate, WebAccount,
+    normalize_username, parse_expires_at,
 };
 use rand::RngExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -83,6 +83,7 @@ pub struct AppState {
     pub access_logs: Arc<dyn AccessLogRepository>,
     pub device_authorizations: Arc<dyn AgentDeviceAuthorizationRepository>,
     pub proxy_addresses: Arc<dyn ProxyAddressRepository>,
+    pub audit_logs: Arc<dyn AuditLogRepository>,
     pub passwords: PasswordService,
     pub sessions: SessionStore,
     pub agent_tokens: AgentAccessTokenService,
@@ -207,6 +208,7 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
             "/admin/proxy-addresses/{proxy_address_id}",
             axum::routing::patch(admin_update_proxy_address).delete(admin_delete_proxy_address),
         )
+        .route("/admin/audit-events", get(admin_list_audit_events))
         .fallback(api_not_found)
         .method_not_allowed_fallback(api_method_not_allowed);
 

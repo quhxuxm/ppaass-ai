@@ -22,10 +22,11 @@ async fn migrates_v8_key_request_reviewer_names() {
         .reject_key_generation_request(KeyRequestRejection {
             request_id: "request-v8-review".to_string(),
             reviewer_account_id: "admin-reviewer".to_string(),
-            rejection_reason: None,
+            rejection_reason: Some("迁移测试拒绝原因".to_string()),
         })
         .await
         .unwrap();
+    drop_v11_operation_audits(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
     sqlx::query("PRAGMA user_version = 8")
@@ -52,6 +53,7 @@ async fn disables_publicly_compromised_legacy_demo_keys_until_rotated() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("users.sqlite3");
     let store = SqliteUserRepository::connect(&path).await.unwrap();
+    create_admin(&store, "migration-admin").await;
     let created = store
         .create_user_record(NewUser::new(
             "compromised-demo",
@@ -89,6 +91,8 @@ async fn disables_publicly_compromised_legacy_demo_keys_until_rotated() {
             UserUpdate {
                 public_key_pem: Some(public_key()),
                 enabled: Some(true),
+                changed_by: Some(account_actor("migration-admin", "migration-admin")),
+                audit_reason: Some("迁移后恢复代理连接".to_string()),
                 ..UserUpdate::default()
             },
         )
@@ -122,6 +126,7 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v11_operation_audits(&store).await;
     drop_v8_proxy_address_tables(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
@@ -249,6 +254,7 @@ async fn migrates_v2_database_to_key_request_schema() {
         .await
         .unwrap();
     drop_v10_account_disable_audits(&store).await;
+    drop_v11_operation_audits(&store).await;
     drop_v8_proxy_address_tables(&store).await;
     sqlx::query("PRAGMA user_version = 2")
         .execute(&store.pool)
@@ -323,6 +329,7 @@ async fn migrates_v3_duplicate_access_rows_into_address_counts() {
         .await
         .unwrap();
     drop_v10_account_disable_audits(&store).await;
+    drop_v11_operation_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
     sqlx::query(
         r#"
@@ -405,7 +412,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 11")
+    sqlx::query("PRAGMA user_version = 12")
         .execute(&pool)
         .await
         .unwrap();
@@ -424,5 +431,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
 }

@@ -49,7 +49,12 @@ public final class AgentAdminClientTest {
         FakeTransport transport = new FakeTransport(ok(keyRequestsJson("approved")));
         AgentAdminClient client = new AgentAdminClient(transport);
 
-        client.approve(TOKEN, "req_one", 4_102_444_800L, List.of("proxy_main"));
+        client.approve(
+                TOKEN,
+                "req_one",
+                4_102_444_800L,
+                List.of("proxy_main"),
+                " 已核实用途 ");
 
         Call call = transport.calls.get(0);
         assertEquals("POST", call.method);
@@ -60,6 +65,7 @@ public final class AgentAdminClientTest {
                 (AgentAdminDtos.ApproveKeyRequest) call.body;
         assertEquals(4_102_444_800L, body.expires_at);
         assertEquals(List.of("proxy_main"), body.proxy_address_ids);
+        assertEquals("已核实用途", body.reason);
     }
 
     @Test
@@ -86,7 +92,10 @@ public final class AgentAdminClientTest {
 
         AgentAdminClient.AdminException error = assertThrows(
                 AgentAdminClient.AdminException.class,
-                () -> new AgentAdminClient(transport).reject(TOKEN, "req_one", ""));
+                () -> new AgentAdminClient(transport).reject(
+                        TOKEN,
+                        "req_one",
+                        "申请材料不足"));
 
         assertTrue(error.isConflict());
         assertEquals("key_request_already_reviewed", error.code);

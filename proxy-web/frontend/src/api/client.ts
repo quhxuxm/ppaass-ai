@@ -15,6 +15,7 @@ import {
   decodeSelf,
 } from './decoders/users'
 import { decodeProxyAddress } from './decoders/proxyAddresses'
+import { decodeAuditEvent } from './decoders/audits'
 import { clearClientSession, request } from './transport'
 import {
   ApiError,
@@ -23,6 +24,7 @@ import {
 } from './types'
 import type {
   AccessLogSettings,
+  AuditEvent,
   AccessRecordsResult,
   AgentDeviceAuthorizationInspection,
   ChangePasswordPayload,
@@ -178,9 +180,12 @@ export async function submitMyKeyRequest(
   return keyRequest
 }
 
-export async function rotateMyKey(): Promise<void> {
+export async function rotateMyKey(reason?: string): Promise<void> {
   await request<unknown>('/api/v1/me/rotate-key', {
     method: 'POST',
+    ...(reason
+      ? { body: JSON.stringify({ reason: reason.trim() }) }
+      : {}),
   })
 }
 
@@ -261,10 +266,11 @@ export function deleteManagedUser(username: string): Promise<void> {
 
 export async function rotateManagedUserKey(
   username: string,
+  reason: string,
 ): Promise<ManagedUser> {
   const body = await request<unknown>(
     `/api/v1/admin/users/${encodeURIComponent(username)}/rotate-key`,
-    { method: 'POST' },
+    { method: 'POST', body: JSON.stringify({ reason }) },
   )
   const root = asRecord(body) ?? {}
   return decodeManagedUser(root.user ?? root.managed_user ?? body)
@@ -294,6 +300,7 @@ export async function approveKeyRequest(
   requestId: string,
   expiresAt: string,
   proxyAddressIds: string[],
+  reason: string,
 ): Promise<void> {
   await request<unknown>(
     `/api/v1/admin/key-requests/${encodeURIComponent(requestId)}/approve`,
@@ -302,6 +309,7 @@ export async function approveKeyRequest(
       body: JSON.stringify({
         expires_at: expiresAt,
         proxy_address_ids: proxyAddressIds,
+        reason,
       }),
     },
   )
@@ -363,6 +371,16 @@ export async function listProxyAddresses(): Promise<ProxyAddress[]> {
     throw new ApiError('服务器返回的 Proxy 地址目录格式无效', 502)
   }
   return values.map(decodeProxyAddress)
+}
+
+export async function listAuditEvents(): Promise<AuditEvent[]> {
+  const body = await request<unknown>('/api/v1/admin/audit-events?limit=100')
+  const root = asRecord(body)
+  const values = Array.isArray(root?.events) ? root.events : null
+  if (!values) {
+    throw new ApiError('服务器返回的审计记录列表格式无效', 502)
+  }
+  return values.map(decodeAuditEvent)
 }
 
 export async function createProxyAddress(

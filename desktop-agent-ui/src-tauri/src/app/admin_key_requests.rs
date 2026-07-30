@@ -46,6 +46,7 @@ pub(crate) async fn approve_agent_admin_key_request_command(
         &request.request_id,
         request.expires_at,
         &request.proxy_address_ids,
+        &request.reason,
     )
     .await;
     finish_decision(
@@ -65,7 +66,8 @@ pub(crate) async fn reject_agent_admin_key_request_command(
     request: AgentAdminKeyRequestRejection,
 ) -> Result<AgentAdminKeyRequestInbox, String> {
     validate_request_id(&request.request_id)?;
-    let reason = normalize_rejection_reason(request.reason)?;
+    let reason = normalize_rejection_reason(Some(request.reason))?
+        .ok_or_else(|| "请输入拒绝理由".to_string())?;
     let session = require_active_admin_session(runtime.inner())?;
     let token = session
         .agent_access_token
@@ -75,7 +77,7 @@ pub(crate) async fn reject_agent_admin_key_request_command(
         &session.proxy_web_url,
         token.value.as_str(),
         &request.request_id,
-        reason.as_deref(),
+        &reason,
     )
     .await;
     finish_decision(
@@ -215,6 +217,7 @@ fn validate_approval(
     runtime: &AgentRuntime,
 ) -> Result<(), String> {
     validate_request_id(&request.request_id)?;
+    normalize_audit_reason(&request.reason, "批准原因")?;
     if request.expires_at <= current_timestamp() {
         return Err("密钥有效期必须晚于当前时间".to_string());
     }
@@ -242,6 +245,23 @@ fn validate_approval(
         return Err("选择中包含已停用或不存在的 Proxy 地址，请刷新后重试".to_string());
     }
     Ok(())
+}
+
+fn normalize_audit_reason(reason: &str, label: &str) -> Result<String, String> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(format!("请输入{label}"));
+    }
+    if reason.chars().count() > 500 {
+        return Err(format!("{label}不能超过 500 个字符"));
+    }
+    if reason
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(format!("{label}包含不允许的控制字符"));
+    }
+    Ok(reason.to_string())
 }
 
 fn active_admin_session(

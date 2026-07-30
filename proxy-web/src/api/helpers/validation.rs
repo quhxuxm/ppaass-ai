@@ -8,6 +8,10 @@ pub(crate) fn default_access_record_limit() -> u32 {
     DEFAULT_ACCESS_RECORD_LIMIT
 }
 
+pub(crate) fn default_audit_event_limit() -> u32 {
+    100
+}
+
 pub(crate) fn access_log_cutoff(retention_days: u16) -> i64 {
     current_timestamp().saturating_sub(i64::from(retention_days) * SECONDS_PER_DAY)
 }

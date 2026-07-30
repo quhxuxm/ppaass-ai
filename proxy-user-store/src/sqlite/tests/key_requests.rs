@@ -108,6 +108,7 @@ async fn expired_key_can_request_and_receive_atomic_rotation() {
                 public_key_pem: new_public_key.clone(),
                 encrypted_private_key: b"rotated-envelope".to_vec(),
             },
+            audit_reason: "批准密钥轮换".to_string(),
         })
         .await
         .unwrap();
@@ -212,6 +213,8 @@ async fn rotation_approval_rechecks_disabled_profile_inside_transaction() {
             "account-alice",
             ManagedUserUpdate {
                 enabled: Some(false),
+                changed_by: Some(account_actor("admin-one", "admin-one")),
+                audit_reason: Some("验证停用用户不能审批".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )
@@ -228,6 +231,7 @@ async fn rotation_approval_rechecks_disabled_profile_inside_transaction() {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"must-not-commit".to_vec(),
             },
+            audit_reason: "测试停用用户审批".to_string(),
         })
         .await
         .unwrap_err();
@@ -289,6 +293,7 @@ async fn concurrent_approval_only_commits_one_keypair() {
                     profile: NewUser::new("alice", first_public, UserOrigin::Local),
                     encrypted_private_key: b"first-envelope".to_vec(),
                 },
+                audit_reason: "并发审批一".to_string(),
             })
             .await
     });
@@ -303,6 +308,7 @@ async fn concurrent_approval_only_commits_one_keypair() {
                     profile: NewUser::new("alice", second_public, UserOrigin::Local),
                     encrypted_private_key: b"second-envelope".to_vec(),
                 },
+                audit_reason: "并发审批二".to_string(),
             })
             .await
     });

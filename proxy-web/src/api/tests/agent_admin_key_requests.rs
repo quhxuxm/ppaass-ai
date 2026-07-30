@@ -58,7 +58,8 @@ async fn admin_agent_lists_approves_and_rejects_key_requests() {
         &admin_token,
         Some(json!({
             "expires_at": FUTURE_EXPIRATION,
-            "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+            "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+            "reason": "已核实申请用途"
         })),
     )
     .await;
@@ -148,7 +149,8 @@ async fn admin_agent_requests_reject_browser_and_mixed_credentials() {
                 .body(Body::from(
                     json!({
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "跨站请求测试"
                     })
                     .to_string(),
                 ))
@@ -273,7 +275,10 @@ async fn set_user_status(app: &Router, cookie: &str, csrf: &str, username: &str,
     patch_user(app, cookie, csrf, username, json!({"status": status})).await;
 }
 
-async fn patch_user(app: &Router, cookie: &str, csrf: &str, username: &str, body: Value) {
+async fn patch_user(app: &Router, cookie: &str, csrf: &str, username: &str, mut body: Value) {
+    body.as_object_mut()
+        .unwrap()
+        .insert("audit_reason".to_string(), json!("管理员测试操作"));
     let response = app
         .clone()
         .oneshot(

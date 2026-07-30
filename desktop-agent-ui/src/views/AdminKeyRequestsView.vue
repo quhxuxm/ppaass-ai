@@ -31,6 +31,7 @@ const emit = defineEmits<{
 const approvalRequest = ref<AgentAdminKeyRequest | null>(null);
 const approvalExpiresAt = ref<Date | null>(null);
 const approvalProxyAddressIds = ref<string[]>([]);
+const approvalReason = ref("");
 const rejectionRequest = ref<AgentAdminKeyRequest | null>(null);
 const rejectionReason = ref("");
 const enabledProxyAddresses = computed(() =>
@@ -50,7 +51,8 @@ const approvalValid = computed(
   () =>
     approvalExpiresAt.value !== null &&
     approvalExpiresAt.value.getTime() > Date.now() &&
-    approvalProxyAddressIds.value.length > 0
+    approvalProxyAddressIds.value.length > 0 &&
+    approvalReason.value.trim().length > 0
 );
 
 watch(
@@ -81,6 +83,7 @@ function openApproval(request: AgentAdminKeyRequest) {
     enabledIds.has(id)
   );
   approvalExpiresAt.value = defaultExpiry();
+  approvalReason.value = "";
 }
 
 function openRejection(request: AgentAdminKeyRequest) {
@@ -89,12 +92,16 @@ function openRejection(request: AgentAdminKeyRequest) {
 }
 
 function submitRejection() {
-  if (!rejectionRequest.value || rejectionBusy.value) {
+  if (
+    !rejectionRequest.value ||
+    rejectionBusy.value ||
+    !rejectionReason.value.trim()
+  ) {
     return;
   }
   emit("reject", {
     requestId: rejectionRequest.value.request_id,
-    reason: rejectionReason.value.trim() || null
+    reason: rejectionReason.value.trim()
   });
 }
 
@@ -109,7 +116,8 @@ function submitApproval() {
   emit("approve", {
     requestId: approvalRequest.value.request_id,
     expiresAt: Math.floor(approvalExpiresAt.value.getTime() / 1000),
-    proxyAddressIds: [...approvalProxyAddressIds.value]
+    proxyAddressIds: [...approvalProxyAddressIds.value],
+    reason: approvalReason.value.trim()
   });
 }
 
@@ -283,6 +291,18 @@ function defaultExpiry() {
           :disabled="approvalBusy"
         />
       </label>
+      <label class="approval-expiry">
+        <span>批准原因</span>
+        <Textarea
+          v-model="approvalReason"
+          rows="4"
+          maxlength="500"
+          placeholder="说明批准本次密钥申请的原因"
+          :disabled="approvalBusy"
+          fluid
+        />
+        <small>{{ Array.from(approvalReason).length }} / 500，必填，仅管理员可见</small>
+      </label>
     </div>
     <template #footer>
       <Button
@@ -326,7 +346,7 @@ function defaultExpiry() {
           :disabled="rejectionBusy"
           fluid
         />
-        <small>{{ Array.from(rejectionReason).length }} / 500，可选</small>
+        <small>{{ Array.from(rejectionReason).length }} / 500，必填</small>
       </label>
     </div>
     <template #footer>
@@ -334,7 +354,7 @@ function defaultExpiry() {
         label="取消"
         severity="secondary"
         text
-        :disabled="rejectionBusy"
+        :disabled="rejectionBusy || !rejectionReason.trim()"
         @click="rejectionRequest = null"
       />
       <Button

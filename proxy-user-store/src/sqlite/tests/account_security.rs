@@ -3,6 +3,7 @@ use super::*;
 #[tokio::test]
 async fn rotates_legacy_keypair_with_cas_and_upserts_private_key() {
     let (_directory, store) = test_store().await;
+    create_admin(&store, "admin-one").await;
     store
         .create_user("legacy-user", &public_key(), None)
         .await
@@ -13,6 +14,11 @@ async fn rotates_legacy_keypair_with_cas_and_upserts_private_key() {
             expected_key_version: 1,
             public_key_pem: public_key(),
             encrypted_private_key: b"first-envelope".to_vec(),
+            actor: AccountActor {
+                account_id: "admin-one".to_string(),
+                login_name: "admin-one".to_string(),
+            },
+            audit_reason: Some("轮换 legacy 密钥".to_string()),
         })
         .await
         .unwrap();
@@ -31,6 +37,11 @@ async fn rotates_legacy_keypair_with_cas_and_upserts_private_key() {
             expected_key_version: 1,
             public_key_pem: public_key(),
             encrypted_private_key: b"stale-envelope".to_vec(),
+            actor: AccountActor {
+                account_id: "admin-one".to_string(),
+                login_name: "admin-one".to_string(),
+            },
+            audit_reason: Some("测试过期版本".to_string()),
         })
         .await
         .unwrap_err();
@@ -74,6 +85,8 @@ async fn protects_root_admin_but_allows_other_admins_to_be_deleted() {
                 "admin-one",
                 ManagedUserUpdate {
                     status: Some(AccountStatus::Disabled),
+                    changed_by: Some(account_actor("admin-one", "admin")),
+                    audit_reason: Some("验证根管理员保护".to_string()),
                     ..ManagedUserUpdate::default()
                 }
             )
@@ -114,6 +127,8 @@ async fn protects_root_admin_but_allows_other_admins_to_be_deleted() {
             "admin-two",
             ManagedUserUpdate {
                 status: Some(AccountStatus::Disabled),
+                changed_by: Some(account_actor("admin-one", "admin")),
+                audit_reason: Some("停用非根管理员".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )
@@ -173,6 +188,7 @@ async fn bootstrap_root_admin_is_not_suppressed_by_an_existing_admin() {
 #[tokio::test]
 async fn managed_account_must_be_disabled_before_deletion() {
     let (_directory, store) = test_store().await;
+    create_admin(&store, "delete-admin").await;
     store
         .create_managed_user(managed_user(
             "delete-user",
@@ -192,6 +208,8 @@ async fn managed_account_must_be_disabled_before_deletion() {
             "delete-user",
             ManagedUserUpdate {
                 status: Some(AccountStatus::Disabled),
+                changed_by: Some(account_actor("delete-admin", "delete-admin")),
+                audit_reason: Some("删除前停用账号".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )
@@ -225,6 +243,7 @@ async fn disabling_an_account_records_the_admin_snapshot_and_survives_deletion()
                     account_id: "audit-admin".to_string(),
                     login_name: "audit-admin".to_string(),
                 }),
+                audit_reason: Some("违规账号停用".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )

@@ -158,6 +158,25 @@ pub(super) async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -
     .await?;
     require_columns(
         transaction,
+        "operation_audits",
+        &[
+            "audit_id",
+            "action",
+            "actor_account_id",
+            "actor_login_name",
+            "target_kind",
+            "target_id",
+            "target_name",
+            "context_id",
+            "reason",
+            "previous_value",
+            "new_value",
+            "created_at",
+        ],
+    )
+    .await?;
+    require_columns(
+        transaction,
         "proxy_addresses",
         &[
             "proxy_address_id",

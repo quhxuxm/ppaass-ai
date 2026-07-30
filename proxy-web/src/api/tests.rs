@@ -2,6 +2,7 @@ mod access_records;
 mod admin_deletion;
 mod agent_admin_key_requests;
 mod agent_session;
+mod audit_events;
 mod auth_limits;
 mod common;
 mod device_accounts;

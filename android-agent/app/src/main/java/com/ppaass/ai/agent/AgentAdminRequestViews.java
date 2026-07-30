@@ -149,6 +149,7 @@ final class AgentAdminRequestViews {
         void onApprove(
                 AgentAdminModels.KeyRequest request,
                 long expiresAt,
-                List<String> proxyAddressIds);
+                List<String> proxyAddressIds,
+                String reason);
     }
 }

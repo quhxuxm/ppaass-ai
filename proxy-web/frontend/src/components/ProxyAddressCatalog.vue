@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import Textarea from 'primevue/textarea'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
@@ -27,6 +28,10 @@ const visible = ref(false)
 const saving = ref(false)
 const editingId = ref<string | null>(null)
 const form = reactive({ label: '', address: '' })
+const statusAddress = ref<ProxyAddress | null>(null)
+const statusEnabled = ref(false)
+const statusReason = ref('')
+const statusSaving = ref(false)
 const enabledCount = computed(
   () => props.addresses.filter((address) => address.enabled).length,
 )
@@ -88,13 +93,30 @@ async function submit(): Promise<void> {
   }
 }
 
-async function setEnabled(address: ProxyAddress, enabled: boolean): Promise<void> {
+function openStatusChange(address: ProxyAddress, enabled: boolean): void {
+  statusAddress.value = address
+  statusEnabled.value = enabled
+  statusReason.value = ''
+}
+
+async function setEnabled(): Promise<void> {
+  const address = statusAddress.value
+  const reason = statusReason.value.trim()
+  if (!address || !reason) {
+    toast.add({ severity: 'warn', summary: '请输入状态变更原因', life: 2600 })
+    return
+  }
+  statusSaving.value = true
   try {
-    await updateProxyAddress(address.id, { enabled })
+    await updateProxyAddress(address.id, {
+      enabled: statusEnabled.value,
+      audit_reason: reason,
+    })
+    statusAddress.value = null
     emit('changed')
     toast.add({
       severity: 'success',
-      summary: enabled ? 'Proxy 地址已启用' : 'Proxy 地址已停用',
+      summary: statusEnabled.value ? 'Proxy 地址已启用' : 'Proxy 地址已停用',
       life: 2400,
     })
   } catch (error) {
@@ -104,6 +126,8 @@ async function setEnabled(address: ProxyAddress, enabled: boolean): Promise<void
         : '更新 Proxy 地址状态失败',
       error,
     )
+  } finally {
+    statusSaving.value = false
   }
 }
 
@@ -204,7 +228,7 @@ function confirmDelete(address: ProxyAddress): void {
               severity="secondary"
               outlined
               size="small"
-              @click="setEnabled(item, false)"
+              @click="openStatusChange(item, false)"
             />
             <Button
               v-else
@@ -213,7 +237,7 @@ function confirmDelete(address: ProxyAddress): void {
               severity="success"
               outlined
               size="small"
-              @click="setEnabled(item, true)"
+              @click="openStatusChange(item, true)"
             />
             <Button
               label="编辑"
@@ -311,6 +335,51 @@ function confirmDelete(address: ProxyAddress): void {
         label="保存"
         icon="pi pi-check"
         :loading="saving"
+      />
+    </template>
+  </Dialog>
+
+  <Dialog
+    :visible="Boolean(statusAddress)"
+    modal
+    :header="statusEnabled ? '启用 Proxy 服务器' : '停用 Proxy 服务器'"
+    :style="{ width: 'min(92vw, 500px)' }"
+    class="proxy-address-dialog"
+    :closable="!statusSaving"
+    @update:visible="!$event && (statusAddress = null)"
+  >
+    <div v-if="statusAddress" class="catalog-status-dialog">
+      <p>
+        {{ statusEnabled ? '启用' : '停用' }}
+        <strong>{{ statusAddress.label }}</strong>
+        （{{ statusAddress.address }}）
+      </p>
+      <label for="proxy-status-reason">操作原因</label>
+      <Textarea
+        id="proxy-status-reason"
+        v-model="statusReason"
+        rows="4"
+        maxlength="500"
+        placeholder="说明为什么需要变更该服务器状态"
+        :disabled="statusSaving"
+        fluid
+      />
+      <small>{{ Array.from(statusReason).length }} / 500，必填。</small>
+    </div>
+    <template #footer>
+      <Button
+        label="取消"
+        severity="secondary"
+        text
+        :disabled="statusSaving"
+        @click="statusAddress = null"
+      />
+      <Button
+        :label="statusEnabled ? '确认启用' : '确认停用'"
+        :icon="statusEnabled ? 'pi pi-play' : 'pi pi-pause'"
+        :severity="statusEnabled ? 'success' : 'danger'"
+        :loading="statusSaving"
+        @click="setEnabled"
       />
     </template>
   </Dialog>

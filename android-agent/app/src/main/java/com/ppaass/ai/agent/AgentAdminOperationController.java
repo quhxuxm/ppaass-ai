@@ -41,7 +41,7 @@ final class AgentAdminOperationController {
             AgentAdminModels.KeyRequest request,
             long expiresAt,
             List<String> proxyAddressIds,
-            String rejectionReason,
+            String reason,
             boolean approve,
             Callback callback) {
         cancelLocked();
@@ -55,9 +55,10 @@ final class AgentAdminOperationController {
                             accessToken,
                             request.id,
                             expiresAt,
-                            proxyAddressIds);
+                            proxyAddressIds,
+                            reason);
                 } else {
-                    client.reject(accessToken, request.id, rejectionReason);
+                    client.reject(accessToken, request.id, reason);
                 }
                 AgentAdminModels.Dashboard dashboard =
                         client.loadDashboard(accessToken);

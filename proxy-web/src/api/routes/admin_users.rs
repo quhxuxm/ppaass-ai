@@ -68,6 +68,11 @@ pub(crate) async fn admin_create_user(
             encrypted_private_key: generated.encrypted_private_key,
             external_identity: None,
             proxy_address_ids: request.proxy_address_ids,
+            created_by: Some(AccountActor {
+                account_id: session.account.account_id.clone(),
+                login_name: session.account.login_name.clone(),
+            }),
+            audit_reason: Some(request.audit_reason),
         })
         .await?;
     info!(
@@ -128,6 +133,11 @@ pub(crate) async fn admin_update_user(
             account_id: session.account.account_id.clone(),
             login_name: session.account.login_name.clone(),
         }),
+        changed_by: Some(AccountActor {
+            account_id: session.account.account_id.clone(),
+            login_name: session.account.login_name.clone(),
+        }),
+        audit_reason: request.audit_reason,
     };
     // Web 托管账号的四项基础能力是不可撤销的；历史导入 profile 没有
     // Web 账号和可恢复私钥，必须保留其原始权限语义。
@@ -191,6 +201,8 @@ pub(crate) async fn admin_update_user(
                     permissions: update.permissions,
                     enabled: update.enabled,
                     expires_at: update.expires_at,
+                    changed_by: update.changed_by,
+                    audit_reason: update.audit_reason,
                 },
             )
             .await?;
@@ -254,15 +266,17 @@ pub(crate) async fn admin_delete_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[instrument(skip(state, headers), fields(identifier))]
+#[instrument(skip(state, headers, payload), fields(identifier))]
 pub(crate) async fn admin_rotate_key(
     State(state): State<AppState>,
     Path(identifier): Path<String>,
     headers: HeaderMap,
+    payload: Result<Json<AdminRotateKeyRequest>, JsonRejection>,
 ) -> Result<Json<AdminKeyRotationResponse>, ApiError> {
     validate_browser_mutation(&headers)?;
     let session = require_admin(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
+    let Json(payload) = payload.map_err(ApiError::from_json_rejection)?;
     let mut managed = resolve_managed_user(&state, &identifier).await?;
     let target_account_id = managed
         .account
@@ -289,7 +303,16 @@ pub(crate) async fn admin_rotate_key(
         .profile
         .take()
         .ok_or_else(|| ApiError::not_found("该账号没有 Proxy 用户配置"))?;
-    let updated_profile = rotate_profile_key_for_admin(&state, profile).await?;
+    let updated_profile = rotate_profile_key_for_admin(
+        &state,
+        profile,
+        AccountActor {
+            account_id: session.account.account_id.clone(),
+            login_name: session.account.login_name.clone(),
+        },
+        payload.reason,
+    )
+    .await?;
     let key_version = updated_profile.key_version;
     info!(
         admin_account_id = session.account.account_id,

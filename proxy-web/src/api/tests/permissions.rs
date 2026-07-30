@@ -19,7 +19,8 @@ async fn admin_permission_updates_cannot_remove_required_web_capabilities() {
                         "password": "permission-user-password",
                         "expires_at": FUTURE_EXPIRATION,
                         "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
-                        "permissions": ["audit.read"]
+                        "permissions": ["audit.read"],
+                        "audit_reason": "创建权限测试用户"
                     })
                     .to_string(),
                 ))
@@ -47,7 +48,13 @@ async fn admin_permission_updates_cannot_remove_required_web_capabilities() {
                 .header(header::COOKIE, cookie)
                 .header("x-csrf-token", csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"permissions": []}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "permissions": [],
+                        "audit_reason": "重置用户权限"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -88,7 +95,8 @@ async fn deprecated_config_view_permission_is_not_assignable() {
                             "agent.egress.edit",
                             "agent.packet_capture",
                             "agent.runtime_threads.edit"
-                        ]
+                        ],
+                        "audit_reason": "创建兼容权限测试用户"
                     })
                     .to_string(),
                 ))
@@ -142,7 +150,8 @@ async fn legacy_database_permission_update_does_not_gain_private_key_capabilitie
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "permissions": ["agent.config.view", "legacy.audit"]
+                        "permissions": ["agent.config.view", "legacy.audit"],
+                        "audit_reason": "更新历史用户权限"
                     })
                     .to_string(),
                 ))
@@ -181,7 +190,10 @@ async fn legacy_database_permission_update_does_not_gain_private_key_capabilitie
                 .uri("/api/v1/admin/users/legacy-user/rotate-key")
                 .header(header::COOKIE, cookie)
                 .header("x-csrf-token", csrf)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reason": "历史用户轮换测试"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

@@ -116,6 +116,7 @@ pub(super) async fn test_app_with_components() -> (
         access_logs: store.clone(),
         device_authorizations: store.clone(),
         proxy_addresses: store.clone(),
+        audit_logs: store.clone(),
         passwords,
         sessions: sessions.clone(),
         agent_tokens,
@@ -294,7 +295,8 @@ pub(super) async fn create_approved_user(
                         "username": username,
                         "password": password,
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "audit_reason": "测试创建用户"
                     })
                     .to_string(),
                 ))

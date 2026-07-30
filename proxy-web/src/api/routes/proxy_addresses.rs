@@ -65,6 +65,11 @@ pub(crate) async fn admin_update_proxy_address(
                 label: payload.label,
                 address: payload.address,
                 enabled: payload.enabled,
+                changed_by: Some(AccountActor {
+                    account_id: session.account.account_id.clone(),
+                    login_name: session.account.login_name.clone(),
+                }),
+                audit_reason: payload.audit_reason,
             },
         )
         .await?;

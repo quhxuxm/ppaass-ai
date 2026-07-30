@@ -101,6 +101,9 @@ pub struct UserUpdate {
     pub enabled: Option<bool>,
     /// `None` 表示不修改，`Some(None)` 表示清除过期时间。
     pub expires_at: Option<Option<i64>>,
+    /// 修改 legacy 用户代理连接状态或权限的管理员。
+    pub changed_by: Option<super::AccountActor>,
+    pub audit_reason: Option<String>,
 }
 
 impl UserUpdate {

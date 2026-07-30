@@ -165,10 +165,41 @@ impl SqliteUserRepository {
             .as_deref()
             .map(normalize_proxy_address)
             .transpose()?;
+        let changed_by = update
+            .changed_by
+            .map(|actor| {
+                Ok::<_, UserRepositoryError>(AccountActor {
+                    account_id: normalize_account_id(&actor.account_id)?,
+                    login_name: normalize_username(&actor.login_name)?,
+                })
+            })
+            .transpose()?;
+        let audit_reason = if update.enabled.is_some() {
+            let actor = changed_by.as_ref().ok_or_else(|| {
+                ValidationError::InvalidAccountField(
+                    "修改服务器状态时必须提供操作管理员".to_string(),
+                )
+            })?;
+            let reason =
+                normalize_audit_reason(update.audit_reason.as_deref().unwrap_or_default())?;
+            Some((actor.clone(), reason))
+        } else {
+            None
+        };
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some((actor, _)) = audit_reason.as_ref() {
+            let administrator = fetch_account_by_id(&mut transaction, &actor.account_id)
+                .await?
+                .filter(|candidate| candidate.login_name == actor.login_name)
+                .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                    account_id: actor.account_id.clone(),
+                })?;
+            ensure_active_admin(&administrator)?;
+        }
         let mut current = fetch_proxy_address(&mut transaction, &proxy_address_id)
             .await?
             .ok_or_else(|| UserRepositoryError::ProxyAddressNotFound(proxy_address_id.clone()))?;
+        let previous_enabled = current.enabled;
         let label = update
             .label
             .as_deref()
@@ -218,6 +249,31 @@ impl SqliteUserRepository {
         .bind(&proxy_address_id)
         .execute(&mut *transaction)
         .await?;
+        if previous_enabled != current.enabled
+            && let Some((actor, reason)) = audit_reason
+        {
+            insert_audit_event(
+                &mut transaction,
+                NewAuditEvent {
+                    action: if current.enabled {
+                        AuditAction::ProxyServerEnabled
+                    } else {
+                        AuditAction::ProxyServerDisabled
+                    },
+                    actor_account_id: actor.account_id,
+                    actor_login_name: actor.login_name,
+                    target_kind: AuditTargetKind::ProxyServer,
+                    target_id: current.proxy_address_id.clone(),
+                    target_name: current.label.clone(),
+                    context_id: None,
+                    reason: Some(reason),
+                    previous_value: Some(previous_enabled.to_string()),
+                    new_value: Some(current.enabled.to_string()),
+                    created_at: current.updated_at,
+                },
+            )
+            .await?;
+        }
         transaction.commit().await?;
         info!(proxy_address_id, "Proxy 地址目录项已更新");
         Ok(current)

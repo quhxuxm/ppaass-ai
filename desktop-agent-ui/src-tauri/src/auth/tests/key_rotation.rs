@@ -151,6 +151,7 @@ async fn rotation_uses_csrf_and_returns_only_validated_next_version() {
         let rotate_request = read_request(&mut rotate_stream).await;
         assert_authenticated_request(&rotate_request, "POST /api/v1/me/rotate-key HTTP/1.1");
         assert!(rotate_request.contains("x-csrf-token: csrf-rotate"));
+        assert!(rotate_request.contains(r#""reason":"管理员定期更新连接密钥""#));
         let rotate_body = serde_json::json!({
             "username": "alice",
             "public_key_pem": public_key.clone(),
@@ -168,7 +169,12 @@ async fn rotation_uses_csrf_and_returns_only_validated_next_version() {
     });
 
     let downloaded =
-        authenticate_rotate_and_download(&format!("http://{address}"), "alice", "password")
+        authenticate_rotate_and_download(
+            &format!("http://{address}"),
+            "alice",
+            "password",
+            Some("管理员定期更新连接密钥"),
+        )
             .await
             .unwrap();
     assert_eq!(downloaded.account.role, "admin");
@@ -259,10 +265,11 @@ async fn expired_key_rotation_directs_the_user_to_admin_approval() {
         respond(&mut logout_stream, "204 No Content", "", false).await;
     });
 
-    let error = authenticate_rotate_and_download(&format!("http://{address}"), "alice", "password")
-        .await
-        .err()
-        .expect("expired key rotation must fail");
+    let error =
+        authenticate_rotate_and_download(&format!("http://{address}"), "alice", "password", None)
+            .await
+            .err()
+            .expect("expired key rotation must fail");
     assert!(error.contains("管理员批准"), "{error}");
     server.await.unwrap();
 }

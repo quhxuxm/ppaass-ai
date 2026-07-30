@@ -15,6 +15,7 @@ impl SqliteUserRepository {
         let request_id = normalize_request_id(&rejection.request_id)?;
         let reviewer_account_id = normalize_account_id(&rejection.reviewer_account_id)?;
         let rejection_reason = normalize_key_request_rejection_reason(rejection.rejection_reason)?;
+        let audit_reason = normalize_audit_reason(rejection_reason.as_deref().unwrap_or_default())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)
             .await?
@@ -49,6 +50,26 @@ impl SqliteUserRepository {
                 status: KeyRequestStatus::Pending,
             });
         }
+        let target = fetch_account_by_id(&mut transaction, &request.account_id)
+            .await?
+            .ok_or_else(|| UserRepositoryError::NotFound(request.account_id.clone()))?;
+        insert_audit_event(
+            &mut transaction,
+            NewAuditEvent {
+                action: AuditAction::KeyRequestRejected,
+                actor_account_id: reviewer.account_id.clone(),
+                actor_login_name: reviewer.login_name.clone(),
+                target_kind: AuditTargetKind::User,
+                target_id: target.account_id,
+                target_name: target.login_name,
+                context_id: Some(request.request_id.clone()),
+                reason: Some(audit_reason),
+                previous_value: Some("pending".to_string()),
+                new_value: Some("rejected".to_string()),
+                created_at: timestamp,
+            },
+        )
+        .await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)
             .await?
             .ok_or_else(|| {

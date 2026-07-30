@@ -56,6 +56,7 @@ pub(crate) async fn admin_approve_key_request(
             expires_at,
             proxy_address_ids: payload.proxy_address_ids,
             material,
+            audit_reason: payload.reason,
         })
         .await?;
     let request_response = admin_key_request_response(&state, result.request).await?;

@@ -14,6 +14,7 @@ async fn v8_migration_keeps_existing_profiles_but_does_not_guess_addresses() {
         .await
         .unwrap();
     drop_v8_proxy_address_tables(&store).await;
+    drop_v11_operation_audits(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
     sqlx::query("PRAGMA user_version = 7")

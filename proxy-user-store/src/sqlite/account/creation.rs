@@ -19,6 +19,8 @@ impl SqliteUserRepository {
             encrypted_private_key,
             external_identity,
             proxy_address_ids,
+            created_by,
+            audit_reason,
         } = user;
         let account_id = normalize_account_id(&account_id)?;
         let login_name = normalize_username(&login_name)?;
@@ -32,8 +34,29 @@ impl SqliteUserRepository {
         let external_identity = external_identity
             .map(normalize_external_identity)
             .transpose()?;
+        let created_by = created_by
+            .map(|actor| {
+                Ok::<_, UserRepositoryError>(AccountActor {
+                    account_id: normalize_account_id(&actor.account_id)?,
+                    login_name: normalize_username(&actor.login_name)?,
+                })
+            })
+            .transpose()?;
+        let audit_reason = created_by
+            .as_ref()
+            .map(|_| normalize_audit_reason(audit_reason.as_deref().unwrap_or_default()))
+            .transpose()?;
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(actor) = created_by.as_ref() {
+            let administrator = fetch_account_by_id(&mut transaction, &actor.account_id)
+                .await?
+                .filter(|candidate| candidate.login_name == actor.login_name)
+                .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                    account_id: actor.account_id.clone(),
+                })?;
+            ensure_active_admin(&administrator)?;
+        }
         if role == AccountRole::User {
             ensure_user_account_capacity(&mut transaction, self.max_user_accounts).await?;
         }
@@ -96,6 +119,50 @@ impl SqliteUserRepository {
             timestamp,
         )
         .await?;
+        if let (Some(actor), Some(reason)) = (created_by, audit_reason) {
+            insert_audit_event(
+                &mut transaction,
+                NewAuditEvent {
+                    action: if profile.enabled {
+                        AuditAction::ProxyAccessEnabled
+                    } else {
+                        AuditAction::ProxyAccessDisabled
+                    },
+                    actor_account_id: actor.account_id.clone(),
+                    actor_login_name: actor.login_name.clone(),
+                    target_kind: AuditTargetKind::User,
+                    target_id: account_id.clone(),
+                    target_name: login_name.clone(),
+                    context_id: None,
+                    reason: Some(reason.clone()),
+                    previous_value: None,
+                    new_value: Some(profile.enabled.to_string()),
+                    created_at: timestamp,
+                },
+            )
+            .await?;
+            insert_audit_event(
+                &mut transaction,
+                NewAuditEvent {
+                    action: AuditAction::PermissionsUpdated,
+                    actor_account_id: actor.account_id,
+                    actor_login_name: actor.login_name,
+                    target_kind: AuditTargetKind::User,
+                    target_id: account_id.clone(),
+                    target_name: login_name.clone(),
+                    context_id: None,
+                    reason: Some(reason),
+                    previous_value: Some("[]".to_string()),
+                    new_value: Some(
+                        serde_json::to_string(&profile.permissions).map_err(|error| {
+                            UserRepositoryError::InvalidSchema(error.to_string())
+                        })?,
+                    ),
+                    created_at: timestamp,
+                },
+            )
+            .await?;
+        }
 
         let account = fetch_account_by_id(&mut transaction, &account_id)
             .await?

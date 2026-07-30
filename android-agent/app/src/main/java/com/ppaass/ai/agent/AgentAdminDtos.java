@@ -57,10 +57,15 @@ final class AgentAdminDtos {
     static final class ApproveKeyRequest {
         public final long expires_at;
         public final List<String> proxy_address_ids;
+        public final String reason;
 
-        ApproveKeyRequest(long expiresAt, List<String> proxyAddressIds) {
+        ApproveKeyRequest(
+                long expiresAt,
+                List<String> proxyAddressIds,
+                String reason) {
             this.expires_at = expiresAt;
             this.proxy_address_ids = proxyAddressIds;
+            this.reason = reason;
         }
     }
 

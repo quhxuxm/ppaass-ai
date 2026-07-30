@@ -18,6 +18,8 @@ pub(crate) struct AgentLoginRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AgentKeyRotationRequest {
     pub(crate) password: String,
+    #[serde(default)]
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -252,9 +254,10 @@ mod tests {
     }
 
     #[test]
-    fn key_rotation_request_only_accepts_a_password() {
+    fn key_rotation_request_accepts_an_optional_reason_only() {
         let accepted = serde_json::from_value::<AgentKeyRotationRequest>(serde_json::json!({
-            "password": "password"
+            "password": "password",
+            "reason": "管理员更新自己的连接密钥"
         }));
         assert!(accepted.is_ok());
 
@@ -271,7 +274,8 @@ mod tests {
         let approval = serde_json::json!({
             "requestId": "kreq_1",
             "expiresAt": 4_000_000_000_i64,
-            "proxyAddressIds": ["pxy_1"]
+            "proxyAddressIds": ["pxy_1"],
+            "reason": "已核实申请用途"
         });
         assert!(serde_json::from_value::<AgentAdminKeyRequestApproval>(approval.clone()).is_ok());
         let mut unexpected = approval;

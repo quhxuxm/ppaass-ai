@@ -60,13 +60,13 @@ final class AgentAdminRejectionDialog {
         root.addView(identity, identityParams);
 
         TextView description = host.mutedText(
-                "可填写拒绝原因，用户会在账户页面看到。",
+                "请填写拒绝原因；用户会在账户页面看到，该原因也会写入审计记录。",
                 14f);
         LinearLayout.LayoutParams descriptionParams = host.matchWrap();
         descriptionParams.setMargins(0, host.dp(10), 0, 0);
         root.addView(description, descriptionParams);
 
-        TextView label = host.controlLabel("拒绝理由（可选）");
+        TextView label = host.controlLabel("拒绝理由");
         root.addView(label, host.labelParams());
         EditText reason = new EditText(host);
         reason.setTextColor(host.COLOR_TEXT);
@@ -110,6 +110,11 @@ final class AgentAdminRejectionDialog {
             reject.setTextColor(host.COLOR_ACTION_STOP);
             reject.setOnClickListener(view -> {
                 String value = reason.getText().toString().trim();
+                if (value.isEmpty()) {
+                    reason.setError("请填写拒绝理由");
+                    reason.requestFocus();
+                    return;
+                }
                 dialog.dismiss();
                 listener.onReject(request, value);
             });

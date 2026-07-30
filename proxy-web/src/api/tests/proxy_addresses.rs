@@ -73,7 +73,8 @@ async fn admin_catalog_and_user_assignments_enforce_safe_reassignment() {
                         "username": "assigned-user",
                         "password": "assigned-user-password",
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [proxy_address_id]
+                        "proxy_address_ids": [proxy_address_id],
+                        "audit_reason": "创建节点分配测试用户"
                     })
                     .to_string(),
                 ))
@@ -96,7 +97,13 @@ async fn admin_catalog_and_user_assignments_enforce_safe_reassignment() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"enabled": false}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "enabled": false,
+                        "audit_reason": "测试已分配服务器不能停用"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -140,7 +147,13 @@ async fn admin_catalog_and_user_assignments_enforce_safe_reassignment() {
             .header("x-csrf-token", &csrf);
         let body = if method == "PATCH" {
             request = request.header("content-type", "application/json");
-            Body::from(json!({"enabled": false}).to_string())
+            Body::from(
+                json!({
+                    "enabled": false,
+                    "audit_reason": "停用未分配服务器"
+                })
+                .to_string(),
+            )
         } else {
             Body::empty()
         };
@@ -188,7 +201,8 @@ async fn approval_requires_addresses_and_all_credential_profiles_return_them() {
                 .body(Body::from(
                     json!({
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": []
+                        "proxy_address_ids": [],
+                        "reason": "测试空 Proxy 地址审批"
                     })
                     .to_string(),
                 ))
@@ -210,7 +224,8 @@ async fn approval_requires_addresses_and_all_credential_profiles_return_them() {
                 .body(Body::from(
                     json!({
                         "expires_at": FUTURE_EXPIRATION,
-                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID]
+                        "proxy_address_ids": [TEST_PROXY_ADDRESS_ID],
+                        "reason": "批准并分配默认 Proxy"
                     })
                     .to_string(),
                 ))

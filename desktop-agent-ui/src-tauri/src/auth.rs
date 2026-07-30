@@ -109,6 +109,11 @@ struct LoginPayload<'a> {
     password: &'a str,
 }
 
+#[derive(Serialize)]
+struct RotateKeyPayload<'a> {
+    reason: &'a str,
+}
+
 #[derive(Deserialize)]
 struct AuthenticationResponse {
     account: AuthenticationAccount,

@@ -3,6 +3,7 @@ use super::*;
 #[tokio::test]
 async fn user_account_capacity_is_atomic_and_a_deleted_account_frees_a_slot() {
     let (_directory, mut store) = test_store().await;
+    create_admin(&store, "admin-capacity").await;
     store.max_user_accounts = 1;
     let first_store = store.clone();
     let second_store = store.clone();
@@ -26,13 +27,20 @@ async fn user_account_capacity_is_atomic_and_a_deleted_account_frees_a_slot() {
         .await
         .unwrap()
         .into_iter()
-        .find_map(|managed| managed.account.map(|account| account.account_id))
+        .find_map(|managed| {
+            managed
+                .account
+                .filter(|account| account.role == AccountRole::User)
+                .map(|account| account.account_id)
+        })
         .unwrap();
     store
         .update_managed_user(
             &created_id,
             ManagedUserUpdate {
                 status: Some(AccountStatus::Disabled),
+                changed_by: Some(account_actor("admin-capacity", "admin-capacity")),
+                audit_reason: Some("清理容量测试账号".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )
@@ -72,6 +80,7 @@ async fn failed_initial_approval_rolls_back_and_request_remains_pending() {
                 public_key_pem: public_key(),
                 encrypted_private_key: b"wrong-kind-envelope".to_vec(),
             },
+            audit_reason: "测试错误审批".to_string(),
         })
         .await
         .unwrap_err();

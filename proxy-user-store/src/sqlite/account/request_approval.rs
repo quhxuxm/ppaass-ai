@@ -18,10 +18,12 @@ impl SqliteUserRepository {
             expires_at,
             proxy_address_ids,
             material,
+            audit_reason,
         } = approval;
         let request_id = normalize_request_id(&request_id)?;
         let reviewer_account_id = normalize_account_id(&reviewer_account_id)?;
         let proxy_address_ids = normalize_proxy_address_ids(&proxy_address_ids)?;
+        let audit_reason = normalize_audit_reason(&audit_reason)?;
 
         let material = match material {
             ApprovedKeyMaterial::Initial {
@@ -233,6 +235,75 @@ impl SqliteUserRepository {
                 request_id: request.request_id,
                 status: KeyRequestStatus::Pending,
             });
+        }
+        insert_audit_event(
+            &mut transaction,
+            NewAuditEvent {
+                action: AuditAction::KeyRequestApproved,
+                actor_account_id: reviewer.account_id.clone(),
+                actor_login_name: reviewer.login_name.clone(),
+                target_kind: AuditTargetKind::User,
+                target_id: account.account_id.clone(),
+                target_name: account.login_name.clone(),
+                context_id: Some(request.request_id.clone()),
+                reason: Some(audit_reason.clone()),
+                previous_value: Some("pending".to_string()),
+                new_value: Some("approved".to_string()),
+                created_at: timestamp,
+            },
+        )
+        .await?;
+        if request.kind == KeyRequestKind::Initial {
+            let created_profile = fetch_profile(
+                &mut transaction,
+                account.linked_username.as_deref().ok_or_else(|| {
+                    UserRepositoryError::InvalidSchema(
+                        "初始密钥审批后账号未关联 Proxy 用户".to_string(),
+                    )
+                })?,
+            )
+            .await?
+            .ok_or_else(|| {
+                UserRepositoryError::InvalidSchema("初始密钥审批后 Proxy 用户不存在".to_string())
+            })?;
+            insert_audit_event(
+                &mut transaction,
+                NewAuditEvent {
+                    action: AuditAction::ProxyAccessEnabled,
+                    actor_account_id: reviewer.account_id.clone(),
+                    actor_login_name: reviewer.login_name.clone(),
+                    target_kind: AuditTargetKind::User,
+                    target_id: account.account_id.clone(),
+                    target_name: account.login_name.clone(),
+                    context_id: Some(request.request_id.clone()),
+                    reason: Some(audit_reason.clone()),
+                    previous_value: None,
+                    new_value: Some(created_profile.enabled.to_string()),
+                    created_at: timestamp,
+                },
+            )
+            .await?;
+            insert_audit_event(
+                &mut transaction,
+                NewAuditEvent {
+                    action: AuditAction::PermissionsUpdated,
+                    actor_account_id: reviewer.account_id.clone(),
+                    actor_login_name: reviewer.login_name.clone(),
+                    target_kind: AuditTargetKind::User,
+                    target_id: account.account_id.clone(),
+                    target_name: account.login_name.clone(),
+                    context_id: Some(request.request_id.clone()),
+                    reason: Some(audit_reason),
+                    previous_value: Some("[]".to_string()),
+                    new_value: Some(
+                        serde_json::to_string(&created_profile.permissions).map_err(|error| {
+                            UserRepositoryError::InvalidSchema(error.to_string())
+                        })?,
+                    ),
+                    created_at: timestamp,
+                },
+            )
+            .await?;
         }
         replace_account_proxy_addresses(
             &mut transaction,

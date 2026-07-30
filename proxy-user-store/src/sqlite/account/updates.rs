@@ -54,6 +54,15 @@ impl SqliteUserRepository {
                 })
             })
             .transpose()?;
+        let changed_by = update
+            .changed_by
+            .map(|actor| {
+                Ok::<_, UserRepositoryError>(AccountActor {
+                    account_id: normalize_account_id(&actor.account_id)?,
+                    login_name: normalize_username(&actor.login_name)?,
+                })
+            })
+            .transpose()?;
         if disabled_by.is_some() && update.status != Some(AccountStatus::Disabled) {
             return Err(ValidationError::InvalidAccountField(
                 "disabled_by 只能用于停用账号".to_string(),
@@ -63,6 +72,22 @@ impl SqliteUserRepository {
 
         let profile_update_requested =
             update.enabled.is_some() || permissions.is_some() || update.expires_at.is_some();
+        let audit_requested =
+            update.status.is_some() || update.enabled.is_some() || permissions.is_some();
+        let audit_actor = changed_by.or_else(|| disabled_by.clone());
+        if audit_requested && audit_actor.is_none() {
+            return Err(ValidationError::InvalidAccountField(
+                "修改登录状态、代理连接状态或权限时必须提供操作管理员".to_string(),
+            )
+            .into());
+        }
+        let audit_reason = if audit_requested {
+            Some(normalize_audit_reason(
+                update.audit_reason.as_deref().unwrap_or_default(),
+            )?)
+        } else {
+            None
+        };
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let Some(mut account) = fetch_account_by_id(&mut transaction, &account_id).await? else {
             return Err(UserRepositoryError::NotFound(account_id));
@@ -72,6 +97,15 @@ impl SqliteUserRepository {
         guard_root_admin(&account, Some(target_role), Some(target_status))?;
         let newly_disabled =
             account.status != AccountStatus::Disabled && target_status == AccountStatus::Disabled;
+        if let Some(actor) = audit_actor.as_ref() {
+            let administrator = fetch_account_by_id(&mut transaction, &actor.account_id)
+                .await?
+                .filter(|candidate| candidate.login_name == actor.login_name)
+                .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                    account_id: actor.account_id.clone(),
+                })?;
+            ensure_active_admin(&administrator)?;
+        }
         if newly_disabled {
             if let Some(actor) = disabled_by.as_ref() {
                 let reviewer = fetch_account_by_id(&mut transaction, &actor.account_id)
@@ -92,6 +126,9 @@ impl SqliteUserRepository {
             Some(username) => fetch_profile(&mut transaction, username).await?,
             None => None,
         };
+        let previous_status = account.status;
+        let previous_enabled = profile.as_ref().map(|profile| profile.enabled);
+        let previous_permissions = profile.as_ref().map(|profile| profile.permissions.clone());
         if profile_update_requested && profile.is_none() {
             return Err(UserRepositoryError::NotFound(format!(
                 "账号 {} 未关联 Proxy 用户",
@@ -183,6 +220,83 @@ impl SqliteUserRepository {
             )
             .await?;
         }
+        if let Some(actor) = audit_actor {
+            let target_id = account.account_id.clone();
+            let target_name = account.login_name.clone();
+            if previous_status != account.status {
+                insert_audit_event(
+                    &mut transaction,
+                    NewAuditEvent {
+                        action: if account.status == AccountStatus::Active {
+                            AuditAction::WebLoginEnabled
+                        } else {
+                            AuditAction::WebLoginDisabled
+                        },
+                        actor_account_id: actor.account_id.clone(),
+                        actor_login_name: actor.login_name.clone(),
+                        target_kind: AuditTargetKind::User,
+                        target_id: target_id.clone(),
+                        target_name: target_name.clone(),
+                        context_id: None,
+                        reason: audit_reason.clone(),
+                        previous_value: Some(previous_status.as_str().to_string()),
+                        new_value: Some(account.status.as_str().to_string()),
+                        created_at: account.updated_at,
+                    },
+                )
+                .await?;
+            }
+            if let (Some(previous), Some(profile)) = (previous_enabled, profile.as_ref())
+                && previous != profile.enabled
+            {
+                insert_audit_event(
+                    &mut transaction,
+                    NewAuditEvent {
+                        action: if profile.enabled {
+                            AuditAction::ProxyAccessEnabled
+                        } else {
+                            AuditAction::ProxyAccessDisabled
+                        },
+                        actor_account_id: actor.account_id.clone(),
+                        actor_login_name: actor.login_name.clone(),
+                        target_kind: AuditTargetKind::User,
+                        target_id: target_id.clone(),
+                        target_name: target_name.clone(),
+                        context_id: None,
+                        reason: audit_reason.clone(),
+                        previous_value: Some(previous.to_string()),
+                        new_value: Some(profile.enabled.to_string()),
+                        created_at: profile.updated_at,
+                    },
+                )
+                .await?;
+            }
+            if let (Some(previous), Some(profile)) = (previous_permissions, profile.as_ref())
+                && previous != profile.permissions
+            {
+                insert_audit_event(
+                    &mut transaction,
+                    NewAuditEvent {
+                        action: AuditAction::PermissionsUpdated,
+                        actor_account_id: actor.account_id,
+                        actor_login_name: actor.login_name,
+                        target_kind: AuditTargetKind::User,
+                        target_id,
+                        target_name,
+                        context_id: None,
+                        reason: audit_reason,
+                        previous_value: Some(serde_json::to_string(&previous).map_err(
+                            |error| UserRepositoryError::InvalidSchema(error.to_string()),
+                        )?),
+                        new_value: Some(serde_json::to_string(&profile.permissions).map_err(
+                            |error| UserRepositoryError::InvalidSchema(error.to_string()),
+                        )?),
+                        created_at: profile.updated_at,
+                    },
+                )
+                .await?;
+            }
+        }
 
         let managed = fetch_managed_for_account(&mut transaction, account).await?;
         transaction.commit().await?;
@@ -229,6 +343,15 @@ impl SqliteUserRepository {
     #[instrument(skip(self, rotation), fields(username = %rotation.username))]
     pub(super) async fn rotate_keypair(&self, rotation: KeyPairRotation) -> Result<UserRecord> {
         let username = normalize_username(&rotation.username)?;
+        let actor = AccountActor {
+            account_id: normalize_account_id(&rotation.actor.account_id)?,
+            login_name: normalize_username(&rotation.actor.login_name)?,
+        };
+        let supplied_audit_reason = rotation
+            .audit_reason
+            .as_deref()
+            .map(normalize_audit_reason)
+            .transpose()?;
         let public_key_pem = normalize_public_key_pem(&rotation.public_key_pem)?;
         validate_private_key_envelope(&rotation.encrypted_private_key)?;
         if rotation.expected_key_version < 1 {
@@ -239,6 +362,25 @@ impl SqliteUserRepository {
         }
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let actor_account = fetch_account_by_id(&mut transaction, &actor.account_id)
+            .await?
+            .filter(|candidate| {
+                candidate.login_name == actor.login_name
+                    && candidate.status == AccountStatus::Active
+            })
+            .ok_or_else(|| UserRepositoryError::NotFound(actor.account_id.clone()))?;
+        let actor_is_owner = actor_account.linked_username.as_deref() == Some(username.as_str());
+        if actor_account.role != AccountRole::Admin && !actor_is_owner {
+            return Err(ValidationError::InvalidAccountField(
+                "普通用户只能重生成自己的密钥".to_string(),
+            )
+            .into());
+        }
+        let audit_reason = if actor_account.role == AccountRole::Admin {
+            Some(supplied_audit_reason.ok_or(ValidationError::EmptyAuditReason)?)
+        } else {
+            supplied_audit_reason
+        };
         let actual: Option<i64> =
             sqlx::query_scalar("SELECT key_version FROM users WHERE username = ?")
                 .bind(&username)
@@ -292,6 +434,30 @@ impl SqliteUserRepository {
         .bind(new_version)
         .bind(timestamp)
         .execute(&mut *transaction)
+        .await?;
+        let target_account = fetch_account_by_linked_username(&mut transaction, &username).await?;
+        insert_audit_event(
+            &mut transaction,
+            NewAuditEvent {
+                action: AuditAction::KeyRegenerated,
+                actor_account_id: actor.account_id,
+                actor_login_name: actor.login_name,
+                target_kind: AuditTargetKind::User,
+                target_id: target_account
+                    .as_ref()
+                    .map(|account| account.account_id.clone())
+                    .unwrap_or_else(|| username.clone()),
+                target_name: target_account
+                    .as_ref()
+                    .map(|account| account.login_name.clone())
+                    .unwrap_or_else(|| username.clone()),
+                context_id: None,
+                reason: audit_reason,
+                previous_value: Some(actual.to_string()),
+                new_value: Some(new_version.to_string()),
+                created_at: timestamp,
+            },
+        )
         .await?;
         transaction.commit().await?;
         info!(username, key_version = new_version, "用户密钥对已轮换");

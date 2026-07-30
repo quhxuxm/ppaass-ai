@@ -61,7 +61,8 @@ async fn agent_login_returns_permissions_and_event_driven_sync_observes_admin_ch
                             EGRESS_EDIT_PERMISSION,
                             RUNTIME_THREADS_EDIT_PERMISSION,
                             "custom.keep"
-                        ]
+                        ],
+                        "audit_reason": "更新 Agent 权限"
                     })
                     .to_string(),
                 ))
@@ -101,7 +102,13 @@ async fn agent_login_returns_permissions_and_event_driven_sync_observes_admin_ch
                 .header(header::COOKIE, &admin_cookie)
                 .header("x-csrf-token", &admin_csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"permissions": []}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "permissions": [],
+                        "audit_reason": "撤销 Agent 权限"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -181,7 +188,11 @@ async fn authenticated_agent_event_stream_starts_with_sync_event() {
                 .header("x-csrf-token", admin_csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"permissions": [PACKET_CAPTURE_PERMISSION]}).to_string(),
+                    json!({
+                        "permissions": [PACKET_CAPTURE_PERMISSION],
+                        "audit_reason": "启用抓包权限"
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -238,7 +249,13 @@ async fn agent_sync_reports_disabled_account_without_logging_it_out() {
                 .header(header::COOKIE, admin_cookie)
                 .header("x-csrf-token", admin_csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"status": "disabled"}).to_string()))
+                .body(Body::from(
+                    json!({
+                        "status": "disabled",
+                        "audit_reason": "停用同步测试账号"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await

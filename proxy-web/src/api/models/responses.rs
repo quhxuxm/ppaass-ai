@@ -247,6 +247,11 @@ pub(crate) struct ProxyAddressesResponse {
     pub(crate) proxy_addresses: Vec<ProxyAddressResponse>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct AuditEventsResponse {
+    pub(crate) events: Vec<AuditEvent>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct PrivateKeyResponse {
     pub(crate) username: String,

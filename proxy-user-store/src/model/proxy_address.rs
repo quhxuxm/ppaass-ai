@@ -23,6 +23,9 @@ pub struct ProxyAddressUpdate {
     pub label: Option<String>,
     pub address: Option<String>,
     pub enabled: Option<bool>,
+    /// 修改服务器启用状态的管理员。
+    pub changed_by: Option<super::AccountActor>,
+    pub audit_reason: Option<String>,
 }
 
 impl ProxyAddressUpdate {

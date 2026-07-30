@@ -155,6 +155,7 @@ async fn main() -> Result<()> {
         accounts: store.clone(),
         access_logs,
         device_authorizations: store.clone(),
+        audit_logs: store.clone(),
         proxy_addresses: store,
         passwords,
         sessions: SessionStore::new(secure_cookies),

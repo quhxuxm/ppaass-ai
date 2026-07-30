@@ -93,27 +93,28 @@ final class AgentAdminClient {
             String accessToken,
             String requestId,
             long expiresAt,
-            List<String> proxyAddressIds) throws AdminException {
+            List<String> proxyAddressIds,
+            String reason) throws AdminException {
         if (expiresAt <= 0) {
             throw new AdminException(0, "invalid_request", "密钥有效期无效");
         }
         List<String> ids = requireProxyIds(proxyAddressIds, true);
+        reason = requiredReason(reason);
         AgentAdminDtos.DecisionResponse response = request(
                 "POST",
                 decisionPath(requestId, "approve"),
-                new AgentAdminDtos.ApproveKeyRequest(expiresAt, ids),
+                new AgentAdminDtos.ApproveKeyRequest(expiresAt, ids, reason),
                 accessToken,
                 AgentAdminDtos.DecisionResponse.class);
         parseRequest(response.request, "approved");
     }
 
     void reject(String accessToken, String requestId, String reason) throws AdminException {
-        reason = optionalMessage(reason);
+        reason = requiredReason(reason);
         AgentAdminDtos.DecisionResponse response = request(
                 "POST",
                 decisionPath(requestId, "reject"),
-                new AgentAdminDtos.RejectKeyRequest(
-                        reason.isEmpty() ? null : reason),
+                new AgentAdminDtos.RejectKeyRequest(reason),
                 accessToken,
                 AgentAdminDtos.DecisionResponse.class);
         parseRequest(response.request, "rejected");
@@ -265,6 +266,14 @@ final class AgentAdminClient {
             throw invalidResponse();
         }
         return message;
+    }
+
+    private static String requiredReason(String value) throws AdminException {
+        String reason = optionalMessage(value);
+        if (reason.isEmpty()) {
+            throw new AdminException(0, "invalid_request", "请填写操作原因");
+        }
+        return reason;
     }
 
     private static void requireAccessToken(String value) throws AdminException {

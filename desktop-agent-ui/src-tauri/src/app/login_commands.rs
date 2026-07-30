@@ -106,7 +106,8 @@ pub(crate) async fn rotate_agent_key(
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
     request: AgentKeyRotationRequest,
 ) -> Result<AgentAuthState, String> {
-    let password = zeroize::Zeroizing::new(request.password);
+    let AgentKeyRotationRequest { password, reason } = request;
+    let password = zeroize::Zeroizing::new(password);
     if password.len() < 8 {
         return Err("请输入当前密码".to_string());
     }
@@ -124,6 +125,16 @@ pub(crate) async fn rotate_agent_key(
     {
         return Err("当前账号没有轮换密钥的权限".to_string());
     }
+    let audit_reason = reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty());
+    if session.account.role == "admin" && audit_reason.is_none() {
+        return Err("管理员重新生成密钥必须填写操作原因".to_string());
+    }
+    if audit_reason.is_some_and(|candidate| candidate.chars().count() > 500) {
+        return Err("操作原因不能超过 500 个字符".to_string());
+    }
 
     let config_path = current_ui_config_path(&runtime)
         .or_else(locate_config_path)
@@ -136,6 +147,7 @@ pub(crate) async fn rotate_agent_key(
         &proxy_web_url,
         &session.account.username,
         password.as_str(),
+        audit_reason,
     )
     .await?;
     if downloaded.account.username != session.account.username
