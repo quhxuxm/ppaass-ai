@@ -75,6 +75,11 @@ require_text deploy/proxy-registry/install.sh 'Environment=HOME=/var/lib/caddy'
 require_text deploy/proxy-registry/install.sh 'ExecStart=$caddy_binary run --environ --config /etc/caddy/Caddyfile'
 require_text deploy/proxy-registry/install.sh '"$caddy_binary" fmt --overwrite /etc/caddy/Caddyfile'
 require_text deploy/proxy-registry/install.sh 'runuser -u caddy -- env HOME=/var/lib/caddy'
+require_text deploy/proxy-registry/install.sh 'show_registry_service_diagnostics'
+require_text deploy/proxy-registry/install.sh 'journalctl -u "$service" -n 100 --no-pager'
+require_text deploy/proxy-registry/install.sh 'Registry instance $instance public API'
+require_text deploy/proxy-registry/install.sh 'Registry instance $instance control API'
+reject_text deploy/proxy-registry/install.sh 'curl --fail --silent --show-error --retry 20'
 require_text deploy/proxy-registry/install.sh '@registry_control path /control /control/*'
 require_text deploy/proxy-registry/install.sh 'handle @registry_control'
 reject_text deploy/proxy-registry/install.sh 'handle_path /control'
@@ -85,6 +90,21 @@ require_text deploy/proxy-registry/install.sh '"https://$REGISTRY_HOST/control/v
 require_text deploy/proxy-registry/install.sh 'REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET in the registry_production GitHub Environment'
 require_text deploy/proxy-entry/install.sh 'Waiting for the Registry control plane before starting Entry.'
 require_text deploy/proxy-entry/install.sh 'journalctl -u "$entry_service"'
+
+awk '
+    index($0, "Registry instance $instance public API") { public_wait = NR }
+    index($0, "Registry instance $instance control API") { control_wait = NR }
+    index($0, "systemctl reload-or-restart caddy.service") { caddy_reload = NR }
+    END {
+        if (!public_wait || !control_wait || !caddy_reload ||
+            public_wait >= caddy_reload || control_wait >= caddy_reload) {
+            exit 1
+        }
+    }
+' deploy/proxy-registry/install.sh || {
+    echo "Registry instances must become healthy before Caddy reloads" >&2
+    exit 1
+}
 
 secret_path_assignments="$(
     grep -Fc 'SECRET_DIR="${PPAASS_PROXY_REGISTRY_SECRET_DIR:-.secrets}"' \

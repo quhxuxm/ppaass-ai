@@ -16,7 +16,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Registry installation must run as root." >&2
     exit 1
 fi
-for command in systemctl caddy curl readlink runuser; do
+for command in systemctl journalctl caddy curl readlink runuser; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Registry host." >&2
         exit 1
@@ -145,6 +145,18 @@ wait_for_http_health() {
     fi
     rm -f "$response_file" "$error_file"
     return 1
+}
+
+show_registry_service_diagnostics() {
+    local instance
+    local service
+
+    for instance in 1 2; do
+        service="ppaass-proxy-registry-$instance.service"
+        echo "Diagnostics for $service:" >&2
+        systemctl status "$service" --no-pager --full >&2 || true
+        journalctl -u "$service" -n 100 --no-pager >&2 || true
+    done
 }
 
 service_user="ppaass-proxy-registry"
@@ -285,18 +297,31 @@ systemctl daemon-reload
 systemctl cat caddy.service >/dev/null
 systemctl enable ppaass-proxy-registry-1.service \
     ppaass-proxy-registry-2.service caddy.service
-systemctl restart ppaass-proxy-registry-1.service
-systemctl restart ppaass-proxy-registry-2.service
+for instance in 1 2; do
+    if ! systemctl restart "ppaass-proxy-registry-$instance.service"; then
+        show_registry_service_diagnostics
+        exit 1
+    fi
+done
+for instance in 1 2; do
+    public_port=$((8786 + instance))
+    control_port=$((8796 + instance))
+    if ! wait_for_http_health \
+        "Registry instance $instance public API" \
+        "http://127.0.0.1:$public_port/healthz" \
+        120; then
+        show_registry_service_diagnostics
+        exit 1
+    fi
+    if ! wait_for_http_health \
+        "Registry instance $instance control API" \
+        "http://127.0.0.1:$control_port/control/v1/health" \
+        120; then
+        show_registry_service_diagnostics
+        exit 1
+    fi
+done
 systemctl reload-or-restart caddy.service
-
-for port in 8787 8788; do
-    curl --fail --silent --show-error --retry 20 --retry-delay 1 \
-        "http://127.0.0.1:$port/healthz" >/dev/null
-done
-for port in 8797 8798; do
-    curl --fail --silent --show-error --retry 20 --retry-delay 1 \
-        "http://127.0.0.1:$port/control/v1/health" >/dev/null
-done
 wait_for_http_health \
     "Registry public API" \
     "https://$REGISTRY_HOST/healthz" \
