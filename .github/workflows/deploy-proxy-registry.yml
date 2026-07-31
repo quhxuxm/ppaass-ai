@@ -41,19 +41,16 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Check source file sizes
+      - name: Validate source and deployment scripts
         run: |
           bash scripts/check-source-line-limits.sh
-          bash scripts/test-proxy-deployment-layout.sh
           bash -n start-proxy-registry.sh deploy/proxy-registry/install.sh
 
-      - name: Test and build Registry
+      - name: Build Registry
         run: |
           set -euo pipefail
           npm ci --prefix proxy-registry/frontend --no-audit --no-fund
-          npm test --prefix proxy-registry/frontend
           npm run build --prefix proxy-registry/frontend
-          cargo test -p proxy-control-protocol -p proxy-registry
           cargo build -p proxy-registry --release
 
       - name: Package Registry release

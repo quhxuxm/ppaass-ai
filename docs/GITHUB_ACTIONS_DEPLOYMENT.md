@@ -5,6 +5,10 @@
 - `.github/workflows/deploy-proxy-registry.yml`
 - `.github/workflows/deploy-proxy-entry.yml`
 
+UT 由独立的 `.github/workflows/unit-test.yml` 执行，支持 push、pull request 和手动
+触发。两个部署工作流只执行源码静态约束、发布构建和安装脚本语法检查，不再重复运行
+Rust、前端 UT 或部署契约测试。
+
 当前工作流使用两个独立的 GitHub Environment，因此 Registry 和 Entry 可以部署到
 不同服务器：
 
