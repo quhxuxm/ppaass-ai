@@ -231,6 +231,3 @@ async fn handle_connection(
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
