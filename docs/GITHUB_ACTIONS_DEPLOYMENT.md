@@ -110,6 +110,9 @@ Registry 部署脚本通过外部 Caddy 地址确认公开 API 和 Control API �
 考虑到部署目标可能使用自签名证书，这两个外部 HTTPS 自检不校验证书链或主机名；
 本地两个 Registry 实例的 HTTP 健康检查不受影响。
 
+Caddy 只对外提供 HTTPS，不创建 TCP/80 的 HTTP→HTTPS 重定向监听。这样 Registry 与
+Entry 部署在同一台服务器时，Entry 可以继续使用自己的 TCP/UDP 80 监听端口。
+
 从旧配置升级时，应新增 `ENTRY_PRODUCTION_REGISTRY_URL` 并填写上述完整 URL，然后
 删除旧的 `ENTRY_PRODUCTION_REGISTRY_HOST` 和 `ENTRY_PRODUCTION_REGISTRY_SCHEME`；
 新工作流不再读取旧变量或自动补全协议。

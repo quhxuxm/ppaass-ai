@@ -94,6 +94,7 @@ require_text deploy/proxy-registry/install.sh 'Registry instance $instance publi
 require_text deploy/proxy-registry/install.sh 'Registry instance $instance control API'
 reject_text deploy/proxy-registry/install.sh 'curl --fail --silent --show-error --retry 20'
 require_text deploy/proxy-registry/install.sh '@registry_control path /control /control/*'
+require_text deploy/proxy-registry/install.sh 'auto_https disable_redirects'
 require_text deploy/proxy-registry/install.sh 'handle @registry_control'
 reject_text deploy/proxy-registry/install.sh 'handle_path /control'
 reject_text deploy/proxy-registry/install.sh 'uri strip_prefix /control'

@@ -277,6 +277,10 @@ ensure_caddy_service
 
 install -d -m 0755 /etc/caddy
 cat >/etc/caddy/Caddyfile <<EOF
+{
+    auto_https disable_redirects
+}
+
 $REGISTRY_HOST {
     @registry_control path /control /control/*
 
