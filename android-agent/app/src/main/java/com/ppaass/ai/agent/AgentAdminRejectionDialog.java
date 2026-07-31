@@ -23,7 +23,8 @@ final class AgentAdminRejectionDialog {
         LinearLayout root = new LinearLayout(host);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(host.dp(20), host.dp(20), host.dp(20), host.dp(14));
-        root.setBackgroundColor(host.COLOR_SURFACE);
+        // The window drawable provides the surface and border. Painting an
+        // opaque child here hides that border along the custom-content area.
 
         root.addView(host.titleText("拒绝密钥申请", 22f), host.matchWrap());
 

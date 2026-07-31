@@ -40,11 +40,11 @@ final class AgentAdminApprovalDialog {
 
         ScrollView scroll = new ScrollView(host);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(host.COLOR_SURFACE);
         LinearLayout root = new LinearLayout(host);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(host.dp(20), host.dp(20), host.dp(20), host.dp(14));
-        root.setBackgroundColor(host.COLOR_SURFACE);
+        // Keep the custom content transparent. The rounded window drawable owns
+        // the dialog surface; an opaque child would paint over its side stroke.
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
