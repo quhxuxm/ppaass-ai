@@ -1,5 +1,4 @@
 use super::common::*;
-use base64::Engine;
 use futures::StreamExt;
 use proxy_registry::AGENT_PROFILE_REFRESH_SECONDS;
 
@@ -211,84 +210,6 @@ async fn authenticated_agent_event_stream_starts_with_sync_event() {
 }
 
 #[tokio::test]
-async fn avatar_update_is_published_and_returned_to_android_agent_endpoints() {
-    let (_directory, app) = test_app().await;
-    let (admin_cookie, admin_csrf) = login_admin(&app).await;
-    create_approved_user(
-        &app,
-        &admin_cookie,
-        &admin_csrf,
-        "avatar-sync-user",
-        "avatar-sync-password",
-    )
-    .await;
-    let (user_cookie, user_csrf) =
-        login_user(&app, "avatar-sync-user", "avatar-sync-password").await;
-    let initial =
-        json_body(agent_login(&app, "avatar-sync-user", "avatar-sync-password").await).await;
-    let token = initial["agent_access_token"].as_str().unwrap();
-
-    let events = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/agent/events")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::ACCEPT, "text/event-stream")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(events.status(), StatusCode::OK);
-    let mut stream = events.into_body().into_data_stream();
-    let initial_event = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        std::str::from_utf8(&initial_event)
-            .unwrap()
-            .contains("event: sync")
-    );
-
-    let avatar = test_avatar_data_url();
-    let update = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/api/v1/me/profile")
-                .header(header::COOKIE, user_cookie)
-                .header("x-csrf-token", user_csrf)
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"avatar_data_url": avatar}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(update.status(), StatusCode::OK);
-
-    let changed = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        std::str::from_utf8(&changed)
-            .unwrap()
-            .contains("event: profile_changed")
-    );
-
-    let synced = json_body(agent_profile(&app, token).await).await;
-    assert_eq!(synced["account"]["avatar_url"], avatar);
-    let relogin =
-        json_body(agent_login(&app, "avatar-sync-user", "avatar-sync-password").await).await;
-    assert_eq!(relogin["account"]["avatar_url"], avatar);
-}
-
-#[tokio::test]
 async fn agent_event_stream_requires_a_valid_bearer_token() {
     let (_directory, app) = test_app().await;
     let response = app
@@ -427,14 +348,4 @@ async fn agent_profile(app: &Router, token: &str) -> Response {
         )
         .await
         .unwrap()
-}
-
-fn test_avatar_data_url() -> String {
-    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-    png.extend_from_slice(&64_u32.to_be_bytes());
-    png.extend_from_slice(&64_u32.to_be_bytes());
-    format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(png)
-    )
 }

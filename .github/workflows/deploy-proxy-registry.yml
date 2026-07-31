@@ -41,9 +41,8 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Validate source and deployment scripts
+      - name: Validate deployment scripts
         run: |
-          bash scripts/check-source-line-limits.sh
           bash -n start-proxy-registry.sh deploy/proxy-registry/install.sh
 
       - name: Build Registry

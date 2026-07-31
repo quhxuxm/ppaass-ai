@@ -5,8 +5,12 @@ repository_files() {
     git ls-files --cached --others --exclude-standard
 }
 
-source_violations="$(
-    repository_files |
+layout_check_dir="$(mktemp -d)"
+trap 'rm -rf -- "$layout_check_dir"' EXIT HUP INT TERM
+source_violations_file="$layout_check_dir/source-violations"
+bypass_violations_file="$layout_check_dir/bypass-violations"
+
+repository_files |
     while IFS= read -r source_file; do
         case "$source_file" in
             src/*.rs | */src/*.rs) ;;
@@ -64,11 +68,9 @@ source_violations="$(
             }
         ' "$source_file" |
             sed "s#^#$source_file:#"
-    done
-)"
+    done >"$source_violations_file"
 
-bypass_violations="$(
-    repository_files |
+repository_files |
     while IFS= read -r test_file; do
         case "$test_file" in
             tests/*.rs | */tests/*.rs) ;;
@@ -79,18 +81,17 @@ bypass_violations="$(
             'include[[:space:]]*!|#[[:space:]]*\[[[:space:]]*path[[:space:]]*=|\.\.[/\\]+src' \
             "$test_file" |
             sed "s#^#$test_file:#" || true
-    done
-)"
+    done >"$bypass_violations_file"
 
-if [ -n "$source_violations" ]; then
+if [ -s "$source_violations_file" ]; then
     echo "Rust test code must live in each crate's top-level tests/ directory:" >&2
-    printf '%s\n' "$source_violations" >&2
+    cat "$source_violations_file" >&2
     exit 1
 fi
 
-if [ -n "$bypass_violations" ]; then
+if [ -s "$bypass_violations_file" ]; then
     echo "Cargo integration tests must not include or path-import production src files:" >&2
-    printf '%s\n' "$bypass_violations" >&2
+    cat "$bypass_violations_file" >&2
     exit 1
 fi
 

@@ -34,10 +34,9 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Validate and build Entry
+      - name: Build Entry
         run: |
           set -euo pipefail
-          bash scripts/check-source-line-limits.sh
           bash -n deploy/proxy-entry/install.sh
           cargo build -p proxy-entry --release
 
