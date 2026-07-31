@@ -51,7 +51,7 @@ pub struct RemoteControlPlane {
 impl RemoteControlPlane {
     pub(crate) async fn connect(config: &ProxyConfig) -> Result<Arc<Self>> {
         validate_entry_id(&config.entry_id)?;
-        let base_url = validate_control_url(&config.registry_control_url)?;
+        let base_url = validate_registry_url(&config.registry_url)?;
         let token = load_control_token(Path::new(&config.registry_control_token_path))?;
         let timeout = Duration::from_secs(config.control_request_timeout_secs.clamp(1, 60));
         let client = Client::builder()
@@ -217,13 +217,12 @@ pub fn validate_entry_id(entry_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_control_url(value: &str) -> Result<Url> {
-    let mut url = Url::parse(value).map_err(|error| {
-        ProxyError::Configuration(format!("registry_control_url 无效：{error}"))
-    })?;
+pub fn validate_registry_url(value: &str) -> Result<Url> {
+    let mut url = Url::parse(value)
+        .map_err(|error| ProxyError::Configuration(format!("registry_url 无效：{error}")))?;
     if url.query().is_some() || url.fragment().is_some() {
         return Err(ProxyError::Configuration(
-            "registry_control_url 不能包含 query 或 fragment".to_string(),
+            "registry_url 不能包含 query 或 fragment".to_string(),
         ));
     }
     let secure = url.scheme() == "https";
@@ -236,7 +235,7 @@ pub fn validate_control_url(value: &str) -> Result<Url> {
         });
     if !secure && !loopback_http {
         return Err(ProxyError::Configuration(
-            "registry_control_url 必须使用 HTTPS；仅回环地址允许 HTTP".to_string(),
+            "registry_url 必须使用 HTTPS；仅回环地址允许 HTTP".to_string(),
         ));
     }
     url.set_path("/");

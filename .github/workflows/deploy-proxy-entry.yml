@@ -44,16 +44,16 @@ jobs:
       - name: Package Entry release
         env:
           ENTRY_ID: ${{ vars[format('{0}_ID', inputs.environment)] }}
-          CONTROL_HOST: ${{ vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)] }}
+          REGISTRY_HOST: ${{ vars[format('{0}_REGISTRY_HOST', inputs.environment)] }}
           RUNTIME_ROOT: ${{ vars[format('{0}_RUNTIME_ROOT', inputs.environment)] }}
           CONTROL_TOKEN: ${{ secrets[format('{0}_CONTROL_TOKEN', inputs.environment)] }}
         run: |
           set -euo pipefail
           : "${ENTRY_ID:?${{ inputs.environment }}_ID is required}"
-          : "${CONTROL_HOST:?${{ inputs.environment }}_CONTROL_PUBLIC_HOST is required}"
+          : "${REGISTRY_HOST:?${{ inputs.environment }}_REGISTRY_HOST is required}"
           : "${CONTROL_TOKEN:?${{ inputs.environment }}_CONTROL_TOKEN is required}"
           case "$ENTRY_ID" in *[!0-9A-Za-z._:-]*|'') exit 1 ;; esac
-          case "$CONTROL_HOST" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
+          case "$REGISTRY_HOST" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
           [ "${#CONTROL_TOKEN}" -ge 32 ]
           case "$CONTROL_TOKEN" in *[[:space:]]*) exit 1 ;; esac
 
@@ -66,7 +66,7 @@ jobs:
           {
             printf 'RELEASE_SHA=%q\n' "$GITHUB_SHA"
             printf 'ENTRY_ID=%q\n' "$ENTRY_ID"
-            printf 'CONTROL_URL=%q\n' "https://$CONTROL_HOST"
+            printf 'REGISTRY_URL=%q\n' "https://$REGISTRY_HOST"
             printf 'RUNTIME_ROOT=%q\n' "${RUNTIME_ROOT:-/opt/ppaass-entry}"
           } >"$bundle/deploy.env"
           tar -C .deploy -czf .deploy/proxy-entry.tgz proxy-entry

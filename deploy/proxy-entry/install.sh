@@ -7,12 +7,12 @@ bundle="${1:?bundle directory is required}"
 
 : "${RELEASE_SHA:?}"
 : "${ENTRY_ID:?}"
-: "${CONTROL_URL:?}"
+: "${REGISTRY_URL:?}"
 : "${RUNTIME_ROOT:=/opt/ppaass-entry}"
 
 case "$RELEASE_SHA" in *[!0-9a-f]*|'') exit 2 ;; esac
 case "$ENTRY_ID" in *[!0-9A-Za-z._:-]*|'') exit 2 ;; esac
-case "$CONTROL_URL" in https://*) ;; *) echo "CONTROL_URL must use HTTPS" >&2; exit 2 ;; esac
+case "$REGISTRY_URL" in https://*) ;; *) echo "REGISTRY_URL must use HTTPS" >&2; exit 2 ;; esac
 case "$RUNTIME_ROOT" in /opt/*|/srv/*) ;; *) echo "Unsafe RUNTIME_ROOT" >&2; exit 2 ;; esac
 if [ "$(id -u)" -ne 0 ]; then
     echo "Entry installation must run as root." >&2
@@ -104,7 +104,7 @@ install -o "$service_user" -g "$service_user" -m 0600 \
 
 sed \
     -e "s|^entry_id = .*|entry_id = \"$ENTRY_ID\"|" \
-    -e "s|^registry_control_url = .*|registry_control_url = \"$CONTROL_URL\"|" \
+    -e "s|^registry_url = .*|registry_url = \"$REGISTRY_URL\"|" \
     -e "s|^registry_control_token_path = .*|registry_control_token_path = \"$secret_root/registry-control-token\"|" \
     "$bundle/proxy-entry.toml" >"$release_root/proxy-entry.toml"
 chmod 0644 "$release_root/proxy-entry.toml"
@@ -141,7 +141,7 @@ systemctl enable "$entry_service"
 echo "Waiting for the Registry control plane before starting Entry."
 wait_for_http_health \
     "Registry control plane" \
-    "$CONTROL_URL/control/v1/health" \
+    "$REGISTRY_URL/control/v1/health" \
     600
 if ! systemctl restart "$entry_service"; then
     systemctl status "$entry_service" --no-pager --full >&2 || true

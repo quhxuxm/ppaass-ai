@@ -57,8 +57,7 @@ GitHub Environment：`registry_production`
 
 | Variable | 示例 | 约束与用途 |
 | --- | --- | --- |
-| `REGISTRY_PRODUCTION_WEB_PUBLIC_HOST` | `registry.example.com` | Registry 管理页面和公开 API 地址，不带 `https://`、端口或路径 |
-| `REGISTRY_PRODUCTION_CONTROL_PUBLIC_HOST` | `registry-control.example.com` | Entry 访问 Registry 控制 API 的地址，不带协议、端口或路径；内容必须与 Entry 对应 Variable 相同 |
+| `REGISTRY_PRODUCTION_REGISTRY_HOST` | `registry.example.com` | Registry 管理页面、公开 API 和 `/control/*` 控制 API 共用的地址，不带 `https://`、端口或路径 |
 
 ### 可选的 Variable
 
@@ -84,7 +83,7 @@ GitHub Environment：`entry_production`
 | Variable | 示例 | 约束与用途 |
 | --- | --- | --- |
 | `ENTRY_PRODUCTION_ID` | `entry-production-01` | Entry 的稳定唯一标识；不同 Entry 不能重复 |
-| `ENTRY_PRODUCTION_CONTROL_PUBLIC_HOST` | `registry-control.example.com` | 内容必须与 `REGISTRY_PRODUCTION_CONTROL_PUBLIC_HOST` 相同 |
+| `ENTRY_PRODUCTION_REGISTRY_HOST` | `registry.example.com` | Registry 公共地址；内容必须与 `REGISTRY_PRODUCTION_REGISTRY_HOST` 相同 |
 
 ### 可选的 Variable
 
@@ -98,6 +97,10 @@ Entry 和 Registry 可以配置相同的远程服务器地址，同时启动两�
 安装脚本会等待 Registry 的外部控制健康接口就绪后再启动服务；Registry 安装脚本也会
 验证公开 API 和控制 API 的外部 HTTPS 地址。这样可以处理 Registry 构建时间比 Entry
 更长的情况，但 Registry 自身的配置错误仍会阻止整个部署完成。
+
+Registry 只使用 `REGISTRY_PRODUCTION_REGISTRY_HOST`。Caddy 在同一个站点中将
+`/control` 和 `/control/*` 请求转发到 Control 监听端口，其余请求转发到 Registry
+Web/API 监听端口。`ENTRY_PRODUCTION_REGISTRY_HOST` 必须填写同一个 Host。
 
 `REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET` 与服务器已有
 `/var/lib/ppaass/secrets/proxy-registry-key-encryption-secret` 不一致时，Registry 会
@@ -127,6 +130,9 @@ ssh root@registry-host "cat /var/lib/ppaass/secrets/proxy-registry-key-encryptio
 - `PPAASS_PROXY_CONTROL_TOKEN`
 - `PPAASS_WEB_PUBLIC_HOST`
 - `PPAASS_REGISTRY_CONTROL_PUBLIC_HOST`
+- `REGISTRY_PRODUCTION_WEB_PUBLIC_HOST`
+- `REGISTRY_PRODUCTION_CONTROL_PUBLIC_HOST`
+- `ENTRY_PRODUCTION_CONTROL_PUBLIC_HOST`
 - `PPAASS_PROXY_ENTRY_ID`
 - `PPAASS_REGISTRY_RUNTIME_ROOT`
 - `PPAASS_ENTRY_RUNTIME_ROOT`

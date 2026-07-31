@@ -6,12 +6,11 @@ bundle="${1:?bundle directory is required}"
 . "$bundle/deploy.env"
 
 : "${RELEASE_SHA:?}"
-: "${PUBLIC_HOST:?}"
-: "${CONTROL_HOST:?}"
+: "${REGISTRY_HOST:?}"
 : "${RUNTIME_ROOT:=/opt/ppaass-registry}"
 
 case "$RELEASE_SHA" in *[!0-9a-f]*|'') exit 2 ;; esac
-case "$PUBLIC_HOST$CONTROL_HOST" in *[!0-9A-Za-z._-]*) exit 2 ;; esac
+case "$REGISTRY_HOST" in *[!0-9A-Za-z._-]*) exit 2 ;; esac
 case "$RUNTIME_ROOT" in /opt/*|/srv/*) ;; *) echo "Unsafe RUNTIME_ROOT" >&2; exit 2 ;; esac
 if [ "$(id -u)" -ne 0 ]; then
     echo "Registry installation must run as root." >&2
@@ -134,7 +133,7 @@ install -o "$service_user" -g "$service_user" -m 0600 \
 cat >"$release_root/proxy-registry.env" <<EOF
 PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_USERNAME=admin
 PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION=true
-PPAASS_PROXY_REGISTRY_PUBLIC_HOST=$PUBLIC_HOST
+PPAASS_PROXY_REGISTRY_PUBLIC_HOST=$REGISTRY_HOST
 PPAASS_PROXY_REGISTRY_SECURE_COOKIES=true
 PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS=true
 PPAASS_PROXY_REGISTRY_DATABASE=$user_data_root/proxy-users.sqlite3
@@ -185,20 +184,24 @@ write_registry_unit 2 8788 8798
 
 install -d -m 0755 /etc/caddy
 cat >/etc/caddy/Caddyfile <<EOF
-$PUBLIC_HOST {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:8787 127.0.0.1:8788 {
-        lb_policy cookie ppaass_registry
-        health_uri /healthz
-        lb_try_duration 5s
-    }
-}
+$REGISTRY_HOST {
+    @registry_control path /control /control/*
 
-$CONTROL_HOST {
-    reverse_proxy 127.0.0.1:8797 127.0.0.1:8798 {
-        lb_policy random
-        health_uri /control/v1/health
-        lb_try_duration 5s
+    handle @registry_control {
+        reverse_proxy 127.0.0.1:8797 127.0.0.1:8798 {
+            lb_policy random
+            health_uri /control/v1/health
+            lb_try_duration 5s
+        }
+    }
+
+    handle {
+        encode zstd gzip
+        reverse_proxy 127.0.0.1:8787 127.0.0.1:8788 {
+            lb_policy cookie ppaass_registry
+            health_uri /healthz
+            lb_try_duration 5s
+        }
     }
 }
 EOF
@@ -221,10 +224,10 @@ for port in 8797 8798; do
 done
 wait_for_http_health \
     "Registry public API" \
-    "https://$PUBLIC_HOST/healthz" \
+    "https://$REGISTRY_HOST/healthz" \
     300
 wait_for_http_health \
     "Registry control API" \
-    "https://$CONTROL_HOST/control/v1/health" \
+    "https://$REGISTRY_HOST/control/v1/health" \
     300
 echo "Registry $RELEASE_SHA deployed with two instances."

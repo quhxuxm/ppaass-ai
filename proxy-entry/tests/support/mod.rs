@@ -44,7 +44,7 @@ pub fn proxy_config(extra: &str) -> ProxyConfig {
         r#"
 listen_addr = "127.0.0.1:0"
 entry_id = "entry-test"
-registry_control_url = "http://127.0.0.1:8797"
+registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "control-token"
 {extra}
 "#

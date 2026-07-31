@@ -88,7 +88,7 @@ fn log_startup_configuration(config: &ProxyConfig) {
             .unwrap_or("默认路由")
     );
     info!("Proxy Entry 实例：{}", config.entry_id);
-    info!("Registry 控制面：{}", config.registry_control_url);
+    info!("Registry 地址：{}", config.registry_url);
 }
 
 fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {

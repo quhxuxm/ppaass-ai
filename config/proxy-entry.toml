@@ -6,7 +6,7 @@ listen_addr = "0.0.0.0:80"
 
 # 部署流程会替换为当前环境的稳定 Entry ID、Registry 控制面地址和 Token 文件。
 entry_id = "entry-production"
-registry_control_url = "https://registry-control.example.com"
+registry_url = "https://registry.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
 
 # 日志级别：trace、debug、info、warn、error

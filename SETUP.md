@@ -67,7 +67,7 @@ cargo run --release -p proxy-registry -- \
 ```toml
 listen_addr = "0.0.0.0:8080"
 entry_id = "entry-local"
-registry_control_url = "http://127.0.0.1:8797"
+registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 ```
 

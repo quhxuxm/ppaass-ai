@@ -46,10 +46,17 @@ require_text proxy-entry/Cargo.toml 'proxy-control-protocol = { path = "../proxy
 reject_text proxy-entry/Cargo.toml 'proxy-registry'
 reject_text proxy-entry/Cargo.toml 'sqlx'
 
-require_text config/proxy-entry.toml 'registry_control_url = "https://'
+require_text config/proxy-entry.toml 'registry_url = "https://'
+reject_text config/proxy-entry.toml 'registry_control_url'
 require_text config/proxy-entry.toml 'registry_control_token_path = '
-require_text tests/fixtures/config/proxy-entry-integration.toml 'registry_control_url = "http://127.0.0.1:8797"'
+require_text tests/fixtures/config/proxy-entry-integration.toml 'registry_url = "http://127.0.0.1:8797"'
 require_text .github/workflows/deploy-proxy-entry.yml 'cp config/proxy-entry.toml "$bundle/proxy-entry.toml"'
+require_text .github/workflows/deploy-proxy-entry.yml "printf 'REGISTRY_URL=%q"
+reject_text .github/workflows/deploy-proxy-entry.yml "printf 'CONTROL_URL=%q"
+require_text deploy/proxy-entry/install.sh ': "${REGISTRY_URL:?}"'
+require_text deploy/proxy-entry/install.sh 'registry_url = \"$REGISTRY_URL\"'
+reject_text deploy/proxy-entry/install.sh '$CONTROL_URL'
+reject_text deploy/proxy-entry/install.sh 'registry_control_url'
 reject_text deploy/proxy-entry/install.sh 'sqlite'
 reject_text deploy/proxy-entry/install.sh 'caddy'
 
@@ -59,7 +66,13 @@ require_text deploy/proxy-registry/install.sh 'lb_policy cookie ppaass_registry'
 require_text deploy/proxy-registry/install.sh 'lb_policy random'
 require_text deploy/proxy-registry/install.sh 'health_uri /healthz'
 require_text deploy/proxy-registry/install.sh 'health_uri /control/v1/health'
-require_text deploy/proxy-registry/install.sh '"https://$CONTROL_HOST/control/v1/health"'
+require_text deploy/proxy-registry/install.sh '@registry_control path /control /control/*'
+require_text deploy/proxy-registry/install.sh 'handle @registry_control'
+reject_text deploy/proxy-registry/install.sh 'handle_path /control'
+reject_text deploy/proxy-registry/install.sh 'uri strip_prefix /control'
+reject_text deploy/proxy-registry/install.sh 'CONTROL_HOST'
+reject_text deploy/proxy-registry/install.sh '$PUBLIC_HOST'
+require_text deploy/proxy-registry/install.sh '"https://$REGISTRY_HOST/control/v1/health"'
 require_text deploy/proxy-registry/install.sh 'REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET in the registry_production GitHub Environment'
 require_text deploy/proxy-entry/install.sh 'Waiting for the Registry control plane before starting Entry.'
 require_text deploy/proxy-entry/install.sh 'journalctl -u "$entry_service"'
@@ -98,16 +111,20 @@ do
 done
 
 require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_ID', inputs.environment)]"
-require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)]"
+require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_REGISTRY_HOST', inputs.environment)]"
+reject_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)]"
 require_text .github/workflows/deploy-proxy-entry.yml "secrets[format('{0}_CONTROL_TOKEN', inputs.environment)]"
-require_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_WEB_PUBLIC_HOST', inputs.environment)]"
-require_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)]"
+require_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_REGISTRY_HOST', inputs.environment)]"
+reject_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_WEB_PUBLIC_HOST', inputs.environment)]"
+reject_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)]"
 require_text .github/workflows/deploy-proxy-registry.yml "secrets[format('{0}_KEY_ENCRYPTION_SECRET', inputs.environment)]"
 require_text .github/workflows/deploy-proxy-registry.yml "secrets[format('{0}_CONTROL_TOKEN', inputs.environment)]"
 reject_text .github/workflows/deploy-proxy-entry.yml 'vars.PPAASS_'
 reject_text .github/workflows/deploy-proxy-entry.yml 'secrets.PPAASS_'
 reject_text .github/workflows/deploy-proxy-registry.yml 'vars.PPAASS_'
 reject_text .github/workflows/deploy-proxy-registry.yml 'secrets.PPAASS_'
+reject_text config/proxy-entry.toml 'registry-control.example.com'
+reject_text proxy-registry/README.md 'registry-control.example.com'
 
 require_text .github/workflows/deploy-proxy-entry.yml 'options: [entry_production]'
 require_text .github/workflows/deploy-proxy-registry.yml 'options: [registry_production]'

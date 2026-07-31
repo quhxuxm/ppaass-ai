@@ -2,7 +2,7 @@
 
 listen_addr = "0.0.0.0:18080"
 entry_id = "entry-yamux-test"
-registry_control_url = "http://127.0.0.1:8797"
+registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 log_level = "info"
 log_dir = "logs"

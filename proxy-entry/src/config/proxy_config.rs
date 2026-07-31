@@ -12,7 +12,7 @@ pub struct ProxyConfig {
     pub entry_id: String,
 
     /// Proxy Registry 内部控制面的 HTTPS 基础地址。
-    pub registry_control_url: String,
+    pub registry_url: String,
 
     /// 仅当前服务账号可读的控制面 Bearer Token 文件。
     pub registry_control_token_path: String,

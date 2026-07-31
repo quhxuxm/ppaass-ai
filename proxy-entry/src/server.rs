@@ -59,7 +59,7 @@ impl ProxyServer {
         let control_plane = RemoteControlPlane::connect(&config).await?;
         info!(
             entry_id = config.entry_id,
-            registry_control_url = config.registry_control_url,
+            registry_url = config.registry_url,
             "已启用远程 Registry 授权与访问记录控制面"
         );
         let access_recorder =

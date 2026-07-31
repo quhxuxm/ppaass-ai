@@ -2,7 +2,7 @@ use protocol::{Address, TransportProtocol};
 use proxy_control_protocol::AccessEvent;
 use proxy_entry::access_log::{AccessRecorder, access_target};
 use proxy_entry::control_plane::{
-    AccessEventSink, load_control_token, validate_control_url, validate_entry_id,
+    AccessEventSink, load_control_token, validate_entry_id, validate_registry_url,
 };
 use proxy_entry::error::{ProxyError, Result};
 use std::sync::Arc;
@@ -69,12 +69,12 @@ async fn retries_a_batch_with_the_same_id() {
 }
 
 #[test]
-fn control_url_requires_https_except_for_loopback_development() {
-    assert!(validate_control_url("https://registry.example.com").is_ok());
-    assert!(validate_control_url("http://127.0.0.1:8797").is_ok());
-    assert!(validate_control_url("http://localhost:8797").is_ok());
-    assert!(validate_control_url("http://registry.example.com").is_err());
-    assert!(validate_control_url("https://registry.example.com?token=bad").is_err());
+fn registry_url_requires_https_except_for_loopback_development() {
+    assert!(validate_registry_url("https://registry.example.com").is_ok());
+    assert!(validate_registry_url("http://127.0.0.1:8797").is_ok());
+    assert!(validate_registry_url("http://localhost:8797").is_ok());
+    assert!(validate_registry_url("http://registry.example.com").is_err());
+    assert!(validate_registry_url("https://registry.example.com?token=bad").is_err());
 }
 
 #[test]

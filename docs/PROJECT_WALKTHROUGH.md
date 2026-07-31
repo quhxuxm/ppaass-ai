@@ -313,7 +313,7 @@ Proxy Entry 收到通过认证的 Connect 请求后，直接按目标地址建�
 
 - `listen_addr`: Proxy 监听地址。
 - Proxy 在 `listen_addr` 的同一数值端口绑定 TCP 与 raw UDP；启用原生 UDP 模式时防火墙必须同时放行 UDP。
-- `registry_control_url`: 必填的 Registry 控制面 HTTPS 地址（仅回环开发允许 HTTP）。
+- `registry_url`: 必填的 Registry HTTPS 地址（仅回环开发允许 HTTP）。
 - `registry_control_token_path`: 必填的控制面 Token 文件。
 - `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。

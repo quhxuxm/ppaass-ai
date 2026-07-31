@@ -90,8 +90,9 @@ cargo run -p proxy-registry -- \
   --control-listen 127.0.0.1:8797
 ```
 
-生产环境保持 Axum 只监听回环地址，由 Caddy 提供 HTTPS。控制域名也必须使用 TLS，
-并应通过防火墙或私网 DNS 只允许 Entry 主机访问；应用层仍会强制校验 Bearer Token。
+生产环境保持 Axum 只监听回环地址，由 Caddy 提供 HTTPS。同一 Registry 公共 Host 上的
+`/control/*` 控制接口也必须使用 TLS；如需进一步限制来源，可在 Caddy 中只允许 Entry
+主机访问该路径。应用层仍会强制校验 Bearer Token。
 
 ## Vue 本地开发
 
@@ -379,7 +380,7 @@ Entry 只配置控制面，不配置数据库：
 
 ```toml
 entry_id = "entry-production"
-registry_control_url = "https://registry-control.example.com"
+registry_url = "https://registry.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
 ```
 

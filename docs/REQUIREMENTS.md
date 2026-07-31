@@ -256,7 +256,7 @@ GitHub Actions workflows should build, test and deploy the platform.
   - Deploy two Registry processes behind Caddy; deploy Entry without SQLite or Caddy.
   - Resolve the selected deployment server from `<ENV>_REMOTE_HOST/USER/PASSWORD`.
   - Use separate `entry_production` and `registry_production` environments so Entry and Registry may target different servers.
-  - Prefix every GitHub Actions Secret and Variable with the selected role-specific environment; shared runtime values such as the control token and control host use separate names whose contents must match.
+  - Prefix every GitHub Actions Secret and Variable with the selected role-specific environment; shared runtime values such as the control token and Registry public host use role-scoped names whose contents must match.
   - Authenticate SSH/SCP deployments with the configured password, disable client public-key authentication and accept the server host key on first connection without requiring a known_hosts secret.
   - Read the root administrator password from `REGISTRY_PRODUCTION_WEB_ADMIN_PASSWORD`; never commit the password or generated runtime secrets.
   - Validate/install or upgrade Caddy when needed, proxy HTTPS/443 to the Registry loopback listener and preserve automatic renewal. For the current public-IP deployment, use an ACME short-lived IP certificate with TLS-ALPN-01 on 443 so renewal does not require port 80.

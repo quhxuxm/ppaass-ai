@@ -162,7 +162,7 @@ The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are i
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 entry_id = "entry-local"                   # Stable identity for idempotent batches
-registry_control_url = "http://127.0.0.1:8797"
+registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions

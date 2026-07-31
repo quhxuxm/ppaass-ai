@@ -55,20 +55,18 @@ jobs:
 
       - name: Package Registry release
         env:
-          PUBLIC_HOST: ${{ vars[format('{0}_WEB_PUBLIC_HOST', inputs.environment)] }}
-          CONTROL_HOST: ${{ vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)] }}
+          REGISTRY_HOST: ${{ vars[format('{0}_REGISTRY_HOST', inputs.environment)] }}
           RUNTIME_ROOT: ${{ vars[format('{0}_RUNTIME_ROOT', inputs.environment)] }}
           ADMIN_PASSWORD: ${{ secrets[format('{0}_WEB_ADMIN_PASSWORD', inputs.environment)] }}
           REGISTRY_KEY_SECRET: ${{ secrets[format('{0}_KEY_ENCRYPTION_SECRET', inputs.environment)] }}
           CONTROL_TOKEN: ${{ secrets[format('{0}_CONTROL_TOKEN', inputs.environment)] }}
         run: |
           set -euo pipefail
-          : "${PUBLIC_HOST:?${{ inputs.environment }}_WEB_PUBLIC_HOST is required}"
-          : "${CONTROL_HOST:?${{ inputs.environment }}_CONTROL_PUBLIC_HOST is required}"
+          : "${REGISTRY_HOST:?${{ inputs.environment }}_REGISTRY_HOST is required}"
           : "${ADMIN_PASSWORD:?${{ inputs.environment }}_WEB_ADMIN_PASSWORD is required}"
           : "${REGISTRY_KEY_SECRET:?${{ inputs.environment }}_KEY_ENCRYPTION_SECRET is required}"
           : "${CONTROL_TOKEN:?${{ inputs.environment }}_CONTROL_TOKEN is required}"
-          case "$PUBLIC_HOST$CONTROL_HOST" in
+          case "$REGISTRY_HOST" in
             *[!0-9A-Za-z._-]*) echo "Invalid Registry host name" >&2; exit 1 ;;
           esac
           [ "${#ADMIN_PASSWORD}" -ge 8 ]
@@ -87,8 +85,7 @@ jobs:
           printf '%s' "$CONTROL_TOKEN" >"$bundle/control-token"
           {
             printf 'RELEASE_SHA=%q\n' "$GITHUB_SHA"
-            printf 'PUBLIC_HOST=%q\n' "$PUBLIC_HOST"
-            printf 'CONTROL_HOST=%q\n' "$CONTROL_HOST"
+            printf 'REGISTRY_HOST=%q\n' "$REGISTRY_HOST"
             printf 'RUNTIME_ROOT=%q\n' "${RUNTIME_ROOT:-/opt/ppaass-registry}"
           } >"$bundle/deploy.env"
           tar -C .deploy -czf .deploy/proxy-registry.tgz proxy-registry
