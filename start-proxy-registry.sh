@@ -1,20 +1,6 @@
 #!/bin/bash
-# Start Proxy Registry (Linux)
-# Assumes proxy-registry, proxy-registry.env, and proxy-registry-frontend are in
-# the same deployment directory as this script.
-#
-# Usage:
-#   ./start-proxy-registry.sh          Start/restart Proxy Registry in background
-#   ./start-proxy-registry.sh run      Run Proxy Registry in the foreground (systemd)
-#   ./start-proxy-registry.sh wait-health
-#                                 Wait for the local health endpoint (systemd)
-#   ./start-proxy-registry.sh stop     Stop the background process
-#   ./start-proxy-registry.sh status   Show process status
-#   ./start-proxy-registry.sh restart  Restart the background process
-#
-# PPAASS_PROXY_REGISTRY_LOG_DIR can override the background log/PID directory.
-# Production keeps the user database group-readable and uses a separate,
-# group-writable access-log database shared by Proxy Entry and Proxy Registry.
+# Start one Proxy Registry instance. Multiple systemd units use distinct
+# LISTEN_ADDR, CONTROL_LISTEN_ADDR and LOG_DIR values while sharing SQLite.
 
 set -u
 
@@ -24,12 +10,12 @@ cd "$SCRIPT_DIR" || exit 1
 
 LOG_DIR="${PPAASS_PROXY_REGISTRY_LOG_DIR:-logs}"
 PID_FILE="$LOG_DIR/proxy-registry.pid"
-START_TIMEOUT="${PROXY_REGISTRY_START_TIMEOUT:-20}"
 RUNTIME_ENV_FILE="${PPAASS_PROXY_REGISTRY_RUNTIME_ENV_FILE:-proxy-registry.env}"
 SECRET_DIR="${PPAASS_PROXY_REGISTRY_SECRET_DIR:-.secrets}"
 KEY_SECRET_FILE="$SECRET_DIR/proxy-registry-key-encryption-secret"
 ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-registry-admin-password"
-IDENTITY_PRIVATE_KEY="${PPAASS_PROXY_ENTRY_IDENTITY_PRIVATE_KEY:-data/proxy-identity-private.pem}"
+CONTROL_TOKEN_FILE="$SECRET_DIR/proxy-registry-control-token"
+START_TIMEOUT="${PROXY_REGISTRY_START_TIMEOUT:-20}"
 
 read_pid() {
     if [ -f "$PID_FILE" ]; then
@@ -42,59 +28,6 @@ is_running() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
-wait_for_exit() {
-    local pid="$1"
-    local timeout_secs="${2:-10}"
-    local elapsed=0
-
-    while is_running "$pid" && [ "$elapsed" -lt "$timeout_secs" ]; do
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-
-    ! is_running "$pid"
-}
-
-find_deploy_processes() {
-    local executable_link executable pid
-
-    for executable_link in /proc/[0-9]*/exe; do
-        executable="$(readlink "$executable_link" 2>/dev/null || true)"
-        executable="${executable% (deleted)}"
-        if [ "$executable" = "$SCRIPT_DIR/proxy-registry" ]; then
-            pid="${executable_link#/proc/}"
-            printf '%s\n' "${pid%/exe}"
-        fi
-    done
-}
-
-stop_proxy_registry() {
-    local pid existing_pids
-    pid="$(read_pid)"
-
-    if is_running "$pid"; then
-        echo "Stopping Proxy Registry process: $pid"
-        kill "$pid" 2>/dev/null || true
-        if ! wait_for_exit "$pid" 10; then
-            echo "Force killing Proxy Registry process: $pid"
-            kill -9 "$pid" 2>/dev/null || true
-        fi
-    fi
-    rm -f "$PID_FILE"
-
-    existing_pids="$(find_deploy_processes)"
-    if [ -n "$existing_pids" ]; then
-        echo "Stopping remaining Proxy Registry process(es): $existing_pids"
-        kill $existing_pids 2>/dev/null || true
-        sleep 2
-        existing_pids="$(find_deploy_processes)"
-        if [ -n "$existing_pids" ]; then
-            echo "Force killing remaining Proxy Registry process(es): $existing_pids"
-            kill -9 $existing_pids 2>/dev/null || true
-        fi
-    fi
-}
-
 load_runtime_environment() {
     if [ -f "$RUNTIME_ENV_FILE" ]; then
         set -a
@@ -102,274 +35,193 @@ load_runtime_environment() {
         . "$RUNTIME_ENV_FILE"
         set +a
     fi
+    SECRET_DIR="${PPAASS_PROXY_REGISTRY_SECRET_DIR:-.secrets}"
+    KEY_SECRET_FILE="$SECRET_DIR/proxy-registry-key-encryption-secret"
+    ADMIN_PASSWORD_FILE="$SECRET_DIR/proxy-registry-admin-password"
+    CONTROL_TOKEN_FILE="$SECRET_DIR/proxy-registry-control-token"
+}
+
+read_required_secret() {
+    local path="$1"
+    local label="$2"
+    local value
+
+    if [ ! -r "$path" ] || [ -L "$path" ] || [ ! -f "$path" ]; then
+        echo "Error: $label file is missing, unreadable, or unsafe: $path" >&2
+        return 1
+    fi
+    value="$(cat "$path")"
+    if [ "${#value}" -lt 32 ] || [ "${#value}" -gt 512 ]; then
+        echo "Error: $label must contain 32..=512 bytes." >&2
+        return 1
+    fi
+    case "$value" in
+        *[[:space:]]*)
+            echo "Error: $label must not contain whitespace." >&2
+            return 1
+            ;;
+    esac
+    printf '%s' "$value"
 }
 
 load_secret_environment() {
-    local encryption_secret encryption_secret_bytes
-    local admin_password admin_password_bytes
+    local encryption_secret control_token admin_password
 
-    if [ ! -r "$KEY_SECRET_FILE" ]; then
-        echo "Error: $KEY_SECRET_FILE is missing or unreadable." >&2
-        return 1
-    fi
-    encryption_secret="$(cat "$KEY_SECRET_FILE")"
-    encryption_secret_bytes="$(printf '%s' "$encryption_secret" | wc -c | tr -d '[:space:]')"
-    if [ "$encryption_secret_bytes" -lt 32 ]; then
-        echo "Error: Proxy Registry key encryption secret must contain at least 32 bytes." >&2
-        return 1
-    fi
+    encryption_secret="$(
+        read_required_secret "$KEY_SECRET_FILE" "Registry key encryption secret"
+    )" || return 1
+    control_token="$(
+        read_required_secret "$CONTROL_TOKEN_FILE" "Registry control token"
+    )" || return 1
     export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="$encryption_secret"
+    export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="$control_token"
 
     if [ -r "$ADMIN_PASSWORD_FILE" ]; then
         admin_password="$(cat "$ADMIN_PASSWORD_FILE")"
-        admin_password_bytes="$(printf '%s' "$admin_password" | wc -c | tr -d '[:space:]')"
-        if [ "$admin_password_bytes" -eq 0 ] || [ "$admin_password_bytes" -gt 256 ]; then
-            echo "Error: Proxy Registry admin password must contain at most 256 UTF-8 bytes." >&2
+        if [ "${#admin_password}" -lt 8 ] || [ "${#admin_password}" -gt 256 ]; then
+            echo "Error: Registry admin password must contain 8..=256 bytes." >&2
             return 1
         fi
         export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="$admin_password"
     else
         unset PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD 2>/dev/null || true
     fi
-
 }
 
-ensure_runtime_files() {
-    if [ ! -x "./proxy-registry" ]; then
+validate_runtime_files() {
+    local public_key frontend
+    public_key="${PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
+    frontend="${PPAASS_PROXY_REGISTRY_FRONTEND_DIST:-proxy-registry-frontend}"
+    if [ ! -x ./proxy-registry ]; then
         echo "Error: ./proxy-registry is missing or not executable." >&2
         return 1
     fi
-    if [ ! -f "./proxy-registry-frontend/index.html" ]; then
-        echo "Error: ./proxy-registry-frontend/index.html is missing." >&2
+    if [ ! -f "$frontend/index.html" ]; then
+        echo "Error: Registry frontend index is missing: $frontend/index.html" >&2
+        return 1
+    fi
+    if [ -L "$public_key" ] || [ ! -r "$public_key" ] || [ ! -f "$public_key" ]; then
+        echo "Error: Registry requires a provisioned Proxy identity public key: $public_key" >&2
+        return 1
+    fi
+    if ! command -v openssl >/dev/null 2>&1 \
+        || ! openssl pkey -pubin -in "$public_key" -noout >/dev/null 2>&1; then
+        echo "Error: Proxy identity public key is invalid: $public_key" >&2
         return 1
     fi
 }
 
-ensure_proxy_identity_public_key() {
-    local public_key="$1"
-    local identity_file private_key_dir public_key_dir
-    local temporary_private_key temporary_public_key
-
-    if ! command -v openssl >/dev/null 2>&1; then
-        echo "Error: openssl is required for the Proxy transport identity." >&2
-        return 1
-    fi
-    for identity_file in "$IDENTITY_PRIVATE_KEY" "$public_key"; do
-        if [ -L "$identity_file" ]; then
-            echo "Error: refusing symlinked Proxy identity file: $identity_file" >&2
+permission_args() {
+    local name="$1"
+    local enabled="$2"
+    local argument="$3"
+    case "$enabled" in
+        true) printf '%s\n' "$argument" ;;
+        false) ;;
+        *)
+            echo "Error: $name must be true or false." >&2
             return 1
-        fi
-        if [ -e "$identity_file" ] && [ ! -f "$identity_file" ]; then
-            echo "Error: Proxy identity path is not a regular file: $identity_file" >&2
-            return 1
-        fi
-    done
-
-    # The production Web UID cannot read the private identity and only needs
-    # the public file provisioned by the deployment workflow.
-    if [ -r "$public_key" ] && [ ! -r "$IDENTITY_PRIVATE_KEY" ]; then
-        if openssl pkey -pubin -in "$public_key" -noout >/dev/null 2>&1; then
-            return 0
-        fi
-        echo "Error: Proxy transport identity public key is invalid." >&2
-        return 1
-    fi
-
-    private_key_dir="$(dirname "$IDENTITY_PRIVATE_KEY")"
-    public_key_dir="$(dirname "$public_key")"
-    mkdir -p "$private_key_dir" "$public_key_dir"
-    if [ ! -e "$IDENTITY_PRIVATE_KEY" ]; then
-        temporary_private_key="$(mktemp "$private_key_dir/.proxy-identity-private.XXXXXX")" \
-            || return 1
-        if ! (
-            umask 077
-            openssl genpkey \
-                -algorithm RSA \
-                -pkeyopt rsa_keygen_bits:3072 \
-                -out "$temporary_private_key" >/dev/null 2>&1
-        ); then
-            rm -f "$temporary_private_key"
-            echo "Error: failed to generate the Proxy transport identity." >&2
-            return 1
-        fi
-        chmod 0600 "$temporary_private_key"
-        if ln "$temporary_private_key" "$IDENTITY_PRIVATE_KEY" 2>/dev/null; then
-            echo "Generated persistent local Proxy transport identity: $IDENTITY_PRIVATE_KEY"
-        fi
-        rm -f "$temporary_private_key"
-    fi
-    if [ ! -r "$IDENTITY_PRIVATE_KEY" ] \
-        || ! openssl rsa -in "$IDENTITY_PRIVATE_KEY" -check -noout >/dev/null 2>&1; then
-        echo "Error: Proxy transport identity private key is unreadable or invalid." >&2
-        return 1
-    fi
-    chmod 0600 "$IDENTITY_PRIVATE_KEY" 2>/dev/null || true
-
-    temporary_public_key="$(mktemp "$public_key_dir/.proxy-identity-public.XXXXXX")" \
-        || return 1
-    if ! openssl pkey \
-        -in "$IDENTITY_PRIVATE_KEY" \
-        -pubout \
-        -out "$temporary_public_key" 2>/dev/null; then
-        rm -f "$temporary_public_key"
-        echo "Error: failed to derive the Proxy transport identity public key." >&2
-        return 1
-    fi
-    chmod 0644 "$temporary_public_key"
-    mv -f "$temporary_public_key" "$public_key"
+            ;;
+    esac
 }
 
 run_proxy_registry() {
-    local listen_addr database_path access_log_database_path proxy_identity_public_key frontend_dist
-    local database_group_readable access_log_database_group_writable
-    local -a database_permission_args=()
-    local -a access_log_database_permission_args=()
+    local listen control_listen database access_database public_key frontend
+    local database_permission access_permission
 
     load_runtime_environment
-    proxy_identity_public_key="${PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
     load_secret_environment || exit 1
-    ensure_runtime_files || exit 1
-    ensure_proxy_identity_public_key "$proxy_identity_public_key" || exit 1
+    validate_runtime_files || exit 1
+    listen="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:-127.0.0.1:8787}"
+    control_listen="${PPAASS_PROXY_REGISTRY_CONTROL_LISTEN_ADDR:-127.0.0.1:8797}"
+    database="${PPAASS_PROXY_REGISTRY_DATABASE:-data/proxy-users.sqlite3}"
+    access_database="${PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE:-data/proxy-access.sqlite3}"
+    public_key="${PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
+    frontend="${PPAASS_PROXY_REGISTRY_FRONTEND_DIST:-proxy-registry-frontend}"
+    database_permission="$(
+        permission_args PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE \
+            "${PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE:-false}" \
+            --database-group-readable
+    )" || exit 1
+    access_permission="$(
+        permission_args PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE \
+            "${PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE:-false}" \
+            --access-log-database-group-writable
+    )" || exit 1
+    mkdir -p "$LOG_DIR" "$(dirname "$database")" "$(dirname "$access_database")"
 
-    listen_addr="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:-127.0.0.1:8787}"
-    database_path="${PPAASS_PROXY_REGISTRY_DATABASE:-data/proxy-users.sqlite3}"
-    access_log_database_path="${PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE:-data/proxy-access.sqlite3}"
-    frontend_dist="${PPAASS_PROXY_REGISTRY_FRONTEND_DIST:-proxy-registry-frontend}"
-    database_group_readable="${PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE:-false}"
-    case "$database_group_readable" in
-        true)
-            database_permission_args+=(--database-group-readable)
-            ;;
-        false)
-            ;;
-        *)
-            echo "Error: PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE must be true or false." >&2
-            exit 1
-            ;;
-    esac
-    access_log_database_group_writable="${PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE:-false}"
-    case "$access_log_database_group_writable" in
-        true)
-            access_log_database_permission_args+=(--access-log-database-group-writable)
-            ;;
-        false)
-            ;;
-        *)
-            echo "Error: PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE must be true or false." >&2
-            exit 1
-            ;;
-    esac
-    case "${PPAASS_PROXY_REGISTRY_DATABASE_GROUP_WRITABLE:-false}" in
-        false)
-            ;;
-        *)
-            echo "Error: PPAASS_PROXY_REGISTRY_DATABASE_GROUP_WRITABLE is obsolete; use the split database permission settings." >&2
-            exit 1
-            ;;
-    esac
-    mkdir -p \
-        "$LOG_DIR" \
-        "$(dirname "$database_path")" \
-        "$(dirname "$access_log_database_path")"
-    exec ./proxy-registry \
-        --listen "$listen_addr" \
-        --database "$database_path" \
-        "${database_permission_args[@]}" \
-        --access-log-database "$access_log_database_path" \
-        "${access_log_database_permission_args[@]}" \
-        --proxy-identity-public-key "$proxy_identity_public_key" \
-        --frontend-dist "$frontend_dist"
+    local -a args=(
+        --listen "$listen"
+        --control-listen "$control_listen"
+        --database "$database"
+        --access-log-database "$access_database"
+        --proxy-identity-public-key "$public_key"
+        --frontend-dist "$frontend"
+    )
+    [ -n "$database_permission" ] && args+=("$database_permission")
+    [ -n "$access_permission" ] && args+=("$access_permission")
+    exec ./proxy-registry "${args[@]}"
 }
 
-wait_for_proxy_registry_health() {
-    local timeout_seconds="${PPAASS_PROXY_REGISTRY_HEALTH_TIMEOUT:-60}"
-    local listen_addr="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:-127.0.0.1:8787}"
-    local deadline
+wait_for_health() {
+    local timeout="${PPAASS_PROXY_REGISTRY_HEALTH_TIMEOUT:-60}"
+    local listen control_listen deadline
 
-    case "$timeout_seconds" in
+    load_runtime_environment
+    listen="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:-127.0.0.1:8787}"
+    control_listen="${PPAASS_PROXY_REGISTRY_CONTROL_LISTEN_ADDR:-127.0.0.1:8797}"
+    case "$timeout" in
         ''|*[!0-9]*|0)
-            echo "Error: PPAASS_PROXY_REGISTRY_HEALTH_TIMEOUT must be a positive integer." >&2
+            echo "Error: health timeout must be a positive integer." >&2
             return 1
             ;;
     esac
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "Error: curl is required for the Proxy Registry health check." >&2
-        return 1
-    fi
-
-    deadline=$((SECONDS + timeout_seconds))
+    deadline=$((SECONDS + timeout))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        if curl \
-            --fail \
-            --silent \
-            --show-error \
-            --noproxy '*' \
-            --connect-timeout 1 \
-            --max-time 2 \
-            "http://$listen_addr/healthz" >/dev/null 2>&1; then
+        if curl --fail --silent --noproxy '*' --max-time 2 \
+            "http://$listen/healthz" >/dev/null 2>&1 \
+            && curl --fail --silent --noproxy '*' --max-time 2 \
+                "http://$control_listen/control/v1/health" >/dev/null 2>&1; then
             return 0
         fi
         sleep 1
     done
-
-    echo "Error: Proxy Registry did not become healthy within ${timeout_seconds}s." >&2
+    echo "Error: Registry did not become healthy within ${timeout}s." >&2
     return 1
 }
 
-wait_for_start() {
-    local pid="$1"
-    local elapsed=0
-    local listen_addr listen_port
-
-    load_runtime_environment
-    listen_addr="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:-127.0.0.1:8787}"
-    listen_port="${listen_addr##*:}"
-
-    while [ "$elapsed" -lt "$START_TIMEOUT" ]; do
-        if ! is_running "$pid"; then
-            break
-        fi
-        if command -v curl >/dev/null 2>&1; then
-            if curl --fail --silent --show-error \
-                "http://127.0.0.1:$listen_port/healthz" >/dev/null 2>&1; then
-                return 0
-            fi
-        else
-            return 0
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-
-    echo "Error: Proxy Registry did not become healthy within ${START_TIMEOUT}s." >&2
-    if [ -f "$LOG_DIR/proxy-registry.out" ]; then
-        tail -n 80 "$LOG_DIR/proxy-registry.out" >&2
+stop_proxy_registry() {
+    local pid
+    pid="$(read_pid)"
+    if ! is_running "$pid"; then
+        rm -f "$PID_FILE"
+        echo "Proxy Registry is not running."
+        return 0
     fi
-    return 1
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+        is_running "$pid" || break
+        sleep 1
+    done
+    if is_running "$pid"; then
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
 }
 
 start_proxy_registry() {
     local pid
-
-    ensure_runtime_files || exit 1
     mkdir -p "$LOG_DIR"
-    stop_proxy_registry
-
-    echo "Starting Proxy Registry..."
-    if command -v setsid >/dev/null 2>&1; then
-        nohup setsid bash "$SCRIPT_PATH" run > "$LOG_DIR/proxy-registry.out" 2>&1 &
-    else
-        nohup bash "$SCRIPT_PATH" run > "$LOG_DIR/proxy-registry.out" 2>&1 &
-    fi
+    stop_proxy_registry >/dev/null
+    nohup bash "$SCRIPT_PATH" run >"$LOG_DIR/proxy-registry.out" 2>&1 &
     pid=$!
-    echo "$pid" > "$PID_FILE"
-
-    if ! wait_for_start "$pid"; then
+    printf '%s\n' "$pid" >"$PID_FILE"
+    if ! wait_for_health; then
+        echo "Registry failed to start; see $LOG_DIR/proxy-registry.out" >&2
         stop_proxy_registry
         return 1
     fi
-    echo "Proxy Registry is running with PID $pid"
-    echo "Logs: $SCRIPT_DIR/$LOG_DIR/proxy-registry.out"
+    echo "Proxy Registry started with PID $pid"
 }
 
 status_proxy_registry() {
@@ -384,27 +236,17 @@ status_proxy_registry() {
 }
 
 case "${1:-start}" in
-    run)
-        run_proxy_registry
-        ;;
-    start)
-        start_proxy_registry
-        ;;
+    run) run_proxy_registry ;;
+    wait-health) wait_for_health ;;
+    start) start_proxy_registry ;;
     restart)
         stop_proxy_registry
         start_proxy_registry
         ;;
-    stop)
-        stop_proxy_registry
-        ;;
-    status)
-        status_proxy_registry
-        ;;
-    wait-health)
-        wait_for_proxy_registry_health
-        ;;
+    stop) stop_proxy_registry ;;
+    status) status_proxy_registry ;;
     *)
-        echo "Usage: $0 [start|run|stop|status|restart|wait-health]"
+        echo "Usage: $0 [run|wait-health|start|restart|stop|status]"
         exit 1
         ;;
 esac

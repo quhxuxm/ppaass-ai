@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readStyles } from "./read-styles.mjs";
 import { createServer } from "vite";
 
 const server = await createServer({
@@ -46,7 +47,7 @@ try {
   const topbar = await readFile(new URL("../src/components/AppTopbar.vue", import.meta.url), "utf8");
   assert.doesNotMatch(topbar, /topbar-account|accountUsername|logoutBusy|emit\('logout'\)/);
 
-  const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  const styles = await readStyles();
   assert.match(
     styles,
     /\.sidebar-account\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/

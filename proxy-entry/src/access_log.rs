@@ -1,13 +1,12 @@
-//! Proxy 访问记录的异步写入层。
+//! Proxy 访问记录的异步批量上报层。
 //!
-//! 代理连接的热路径只向有界队列执行一次 `try_send`，SQLite 等持久化工作由
-//! 后台任务串行完成。默认 no-op recorder 仅供不需要持久化的内部测试使用。
+//! 代理连接的热路径只向有界队列执行一次 `try_send`，Registry HTTP 上报由
+//! 后台任务串行完成。批次失败时使用同一 ID 有界重试，由 Registry 保证幂等。
 
+use crate::control_plane::AccessEventSink;
 use protocol::{Address, TransportProtocol};
-use proxy_user_store::{
-    AccessLogRepository, AccessProtocol, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MIN_ACCESS_LOG_RETENTION_DAYS, NewAccessRecord,
-};
+use proxy_control_protocol::{AccessEvent, AccessProtocol, MAX_ACCESS_EVENTS_PER_BATCH};
+use rand::RngExt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -15,28 +14,20 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
 const ACCESS_LOG_CHANNEL_SIZE: usize = 4096;
-const ACCESS_LOG_PURGE_INTERVAL_SECS: u64 = 60 * 60;
-const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
-
-#[derive(Debug)]
-struct PendingAccessRecord {
-    username: String,
-    protocol: AccessProtocol,
-    target_host: String,
-    target_port: u16,
-    accessed_at: i64,
-}
+const ACCESS_LOG_BATCH_FLUSH_MILLIS: u64 = 1_000;
+const ACCESS_LOG_BATCH_MAX_ATTEMPTS: u32 = 5;
+const ACCESS_LOG_RETRY_MAX_SECONDS: u64 = 5;
 
 /// 可廉价 clone 并注入每条连接/UDP flow 的非阻塞访问记录器。
 #[derive(Clone, Default)]
 pub(crate) struct AccessRecorder {
-    sender: Option<mpsc::Sender<PendingAccessRecord>>,
+    sender: Option<mpsc::Sender<AccessEvent>>,
 }
 
 impl AccessRecorder {
-    pub(crate) fn start(repository: Arc<dyn AccessLogRepository>) -> Self {
+    pub(crate) fn start(sink: Arc<dyn AccessEventSink>) -> Self {
         let (sender, receiver) = mpsc::channel(ACCESS_LOG_CHANNEL_SIZE);
-        tokio::spawn(run_writer(repository, receiver));
+        tokio::spawn(run_writer(sink, receiver));
         Self {
             sender: Some(sender),
         }
@@ -51,7 +42,7 @@ impl AccessRecorder {
         let Some((target_host, target_port)) = access_target(address) else {
             return;
         };
-        let pending = PendingAccessRecord {
+        let pending = AccessEvent {
             username: username.to_owned(),
             protocol: match transport {
                 TransportProtocol::Tcp => AccessProtocol::Tcp,
@@ -87,77 +78,105 @@ fn access_target(address: &Address) -> Option<(String, u16)> {
     }
 }
 
-async fn run_writer(
-    repository: Arc<dyn AccessLogRepository>,
-    mut receiver: mpsc::Receiver<PendingAccessRecord>,
-) {
-    purge_expired_records(repository.as_ref()).await;
-    let mut purge_interval = tokio::time::interval(std::time::Duration::from_secs(
-        ACCESS_LOG_PURGE_INTERVAL_SECS,
-    ));
-    // 第一次 tick 会立即完成；启动时已经主动清理过，消费掉它即可。
-    purge_interval.tick().await;
-
-    loop {
-        tokio::select! {
-            maybe_record = receiver.recv() => {
-                let Some(record) = maybe_record else {
+async fn run_writer(sink: Arc<dyn AccessEventSink>, mut receiver: mpsc::Receiver<AccessEvent>) {
+    while let Some(first) = receiver.recv().await {
+        let mut records = Vec::with_capacity(MAX_ACCESS_EVENTS_PER_BATCH);
+        records.push(first);
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(ACCESS_LOG_BATCH_FLUSH_MILLIS);
+        let mut receiver_closed = false;
+        while records.len() < MAX_ACCESS_EVENTS_PER_BATCH {
+            match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                Ok(Some(record)) => records.push(record),
+                Ok(None) => {
+                    receiver_closed = true;
                     break;
-                };
-                let result = repository
-                    .record_access(NewAccessRecord {
-                        username: record.username,
-                        protocol: record.protocol,
-                        target_host: record.target_host,
-                        target_port: record.target_port,
-                        accessed_at: record.accessed_at,
-                    })
-                    .await;
-                if let Err(error) = result {
-                    warn!("写入用户访问记录失败：{error}");
+                }
+                Err(_) => break,
+            }
+        }
+
+        let batch_id = new_batch_id();
+        let mut retry_delay = std::time::Duration::from_secs(1);
+        let mut delivered = false;
+        for attempt in 1..=ACCESS_LOG_BATCH_MAX_ATTEMPTS {
+            match sink.submit_access_batch(&batch_id, &records).await {
+                Ok(()) => {
+                    delivered = true;
+                    debug!(batch_id, record_count = records.len(), "访问记录批次已上报");
+                    break;
+                }
+                Err(error) if attempt < ACCESS_LOG_BATCH_MAX_ATTEMPTS => {
+                    warn!(
+                        %error,
+                        batch_id,
+                        record_count = records.len(),
+                        attempt,
+                        "访问记录批次上报失败，将使用同一批次 ID 重试"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay = (retry_delay * 2)
+                        .min(std::time::Duration::from_secs(ACCESS_LOG_RETRY_MAX_SECONDS));
+                }
+                Err(error) => {
+                    warn!(
+                        %error,
+                        batch_id,
+                        record_count = records.len(),
+                        "访问记录批次达到重试上限，按尽力记录语义丢弃"
+                    );
                 }
             }
-            _ = purge_interval.tick() => {
-                purge_expired_records(repository.as_ref()).await;
-            }
+        }
+        if !delivered {
+            error!(
+                batch_id,
+                record_count = records.len(),
+                "访问记录批次未能持久化"
+            );
+        }
+        if receiver_closed {
+            break;
         }
     }
 }
 
-async fn purge_expired_records(repository: &dyn AccessLogRepository) {
-    let settings = match repository.get_access_log_settings().await {
-        Ok(settings) => settings,
-        Err(error) => {
-            warn!("读取访问记录保留策略失败，跳过本轮清理：{error}");
-            return;
-        }
-    };
-    if !(MIN_ACCESS_LOG_RETENTION_DAYS..=MAX_ACCESS_LOG_RETENTION_DAYS)
-        .contains(&settings.retention_days)
-    {
-        warn!(
-            retention_days = settings.retention_days,
-            "访问记录保留天数超出支持范围，跳过本轮清理"
-        );
-        return;
-    }
-    let before = OffsetDateTime::now_utc().unix_timestamp()
-        - i64::from(settings.retention_days) * SECONDS_PER_DAY;
-    match repository.purge_access_records_before(before).await {
-        Ok(0) => {}
-        Ok(deleted) => debug!(
-            deleted,
-            retention_days = settings.retention_days,
-            "已清理过期访问记录"
-        ),
-        Err(error) => warn!("清理过期访问记录失败：{error}"),
-    }
+fn new_batch_id() -> String {
+    let mut random = [0_u8; 16];
+    rand::rng().fill(&mut random);
+    hex::encode(random)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::access_target;
+    use super::{access_target, run_writer};
+    use crate::{
+        control_plane::AccessEventSink,
+        error::{ProxyError, Result},
+    };
     use protocol::Address;
+    use proxy_control_protocol::{AccessEvent, AccessProtocol};
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, Notify, mpsc};
+
+    #[derive(Default)]
+    struct RetrySink {
+        batch_ids: Mutex<Vec<String>>,
+        delivered: Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl AccessEventSink for RetrySink {
+        async fn submit_access_batch(&self, batch_id: &str, _events: &[AccessEvent]) -> Result<()> {
+            let mut ids = self.batch_ids.lock().await;
+            ids.push(batch_id.to_string());
+            if ids.len() == 1 {
+                return Err(ProxyError::ControlPlane("模拟响应丢失".to_string()));
+            }
+            self.delivered.notify_one();
+            Ok(())
+        }
+    }
 
     #[test]
     fn maps_real_targets_without_virtual_addresses() {
@@ -177,5 +196,30 @@ mod tests {
         );
         assert_eq!(access_target(&Address::ProxyDns { port: 53 }), None);
         assert_eq!(access_target(&Address::UdpRelay), None);
+    }
+
+    #[tokio::test]
+    async fn retries_a_batch_with_the_same_id() {
+        let sink = Arc::new(RetrySink::default());
+        let (sender, receiver) = mpsc::channel(2);
+        tokio::spawn(run_writer(sink.clone(), receiver));
+        sender
+            .send(AccessEvent {
+                username: "alice".to_string(),
+                protocol: AccessProtocol::Tcp,
+                target_host: "example.com".to_string(),
+                target_port: 443,
+                accessed_at: 1,
+            })
+            .await
+            .unwrap();
+        drop(sender);
+        tokio::time::timeout(std::time::Duration::from_secs(3), sink.delivered.notified())
+            .await
+            .unwrap();
+
+        let batch_ids = sink.batch_ids.lock().await;
+        assert_eq!(batch_ids.len(), 2);
+        assert_eq!(batch_ids[0], batch_ids[1]);
     }
 }

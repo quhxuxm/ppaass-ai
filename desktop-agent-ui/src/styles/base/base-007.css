@@ -1,0 +1,335 @@
+.diagnostic-row strong,
+.diagnostic-row span,
+.diagnostic-row p {
+  min-width: 0;
+}
+
+.diagnostic-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-row span,
+.diagnostic-row p {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.diagnostic-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-result {
+  display: grid;
+  justify-items: end;
+}
+
+.diagnostic-result strong {
+  color: #b76f00;
+}
+
+.diagnostic-row.fail .diagnostic-result strong {
+  color: #be123c;
+}
+
+.log-view,
+.toml-editor-shell {
+  height: calc(100vh - 210px);
+  min-height: 420px;
+}
+
+.log-view {
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #111827;
+  color: #f1e7cf;
+  font-family: var(--app-mono-font);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.log-line {
+  min-height: 22px;
+  padding: 1px 8px 1px 10px;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-line:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.log-line-trace {
+  border-left-color: #94a3b8;
+}
+
+.log-line-debug {
+  border-left-color: #00b8d9;
+}
+
+.log-line-info {
+  border-left-color: #7c3aed;
+}
+
+.log-line-warn {
+  border-left-color: #f59e0b;
+}
+
+.log-line-error {
+  border-left-color: #f43f5e;
+}
+
+.log-timestamp {
+  color: #ffdd58;
+}
+
+.log-level-trace,
+.log-level-debug,
+.log-level-info,
+.log-level-warn,
+.log-level-error {
+  font-weight: 800;
+}
+
+.log-level-trace {
+  color: #cbd5e1;
+}
+
+.log-level-debug {
+  color: #00d4ff;
+}
+
+.log-level-info {
+  color: #d7c2ff;
+}
+
+.log-level-warn {
+  color: #fbbf24;
+}
+
+.log-level-error {
+  color: #fb7185;
+}
+
+.log-thread {
+  color: #c4b5fd;
+}
+
+.log-target {
+  color: #00d4ff;
+}
+
+.log-field {
+  color: #f0abfc;
+}
+
+.log-string {
+  color: #ffe58a;
+}
+
+.log-number,
+.log-address {
+  color: #fdba74;
+}
+
+.log-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #94a3b8;
+}
+
+.toml-editor-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: #0f172a;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.toml-highlight,
+.toml-editor {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 14px;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--app-mono-font);
+  font-size: 14px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.toml-highlight {
+  z-index: 1;
+  overflow: hidden;
+  background: #0f172a;
+  color: #f1e7cf;
+  pointer-events: none;
+}
+
+.toml-highlight code {
+  display: inline-block;
+  min-width: 100%;
+  white-space: inherit;
+}
+
+.toml-editor {
+  z-index: 2;
+  resize: none;
+  overflow: auto;
+  background: transparent !important;
+  caret-color: #ffd21f;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  outline: none;
+}
+
+.toml-editor[readonly] {
+  cursor: default;
+}
+
+.toml-editor-shell textarea.toml-editor.p-textarea {
+  background: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+.toml-editor::selection {
+  background: rgba(255, 210, 31, 0.24);
+}
+
+.toml-line {
+  display: block;
+  min-height: 22px;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.toml-section {
+  color: #ffdd58;
+  font-weight: 800;
+}
+
+.toml-key {
+  color: #00d4ff;
+}
+
+.toml-equals,
+.toml-punctuation {
+  color: #94a3b8;
+}
+
+.toml-string {
+  color: #ffe58a;
+}
+
+.toml-number {
+  color: #fdba74;
+}
+
+.toml-boolean {
+  color: #f0abfc;
+  font-weight: 800;
+}
+
+.toml-date {
+  color: #c4b5fd;
+}
+
+.toml-comment {
+  color: #64748b;
+  font-style: italic;
+}
+
+.loading,
+.empty-state {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  min-height: 380px;
+  color: #64748b;
+}
+
+.empty-state svg {
+  width: 32px;
+  height: 32px;
+  color: #dc2626;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #dbe3ed;
+  border-top-color: #ffd21f;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  max-width: 380px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  color: #ffffff;
+  font-weight: 800;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.24);
+}
+
+.toast.success {
+  background: #ffd21f;
+  color: #151820;
+}
+
+.toast.info {
+  background: #7c3aed;
+}
+
+.toast.error {
+  background: #be123c;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Fresh multicolor glass theme. Kept as a final layer so existing PrimeVue
+   components inherit the richer palette without changing their behavior. */
+.sidebar,
+.topbar,
+.panel,
+.sidebar-status,
+.overview-drag-ghost,
+.field input,
+.field select,
+.field textarea,
+.field .p-inputtext,
+.field .p-select,
+.field .p-inputnumber,
+.field .p-textarea,
+.toml-editor-shell {
+  backdrop-filter: blur(22px) saturate(1.28);
+}

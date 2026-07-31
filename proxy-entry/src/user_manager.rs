@@ -1,17 +1,20 @@
-use crate::config::UserConfig;
-use crate::error::{ProxyError, Result};
+use crate::{config::UserConfig, error::Result};
+use async_trait::async_trait;
 use parking_lot::Mutex;
 use protocol::tcp_transport::{tcp_auth_replay_key, tcp_auth_replay_user_key};
-use proxy_user_store::UserRepository;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tracing::instrument;
 
+#[async_trait]
+pub(crate) trait AuthorizationProvider: Send + Sync {
+    async fn get_user(&self, username: &str) -> Result<Option<UserConfig>>;
+}
+
 pub struct UserManager {
-    repository: Arc<dyn UserRepository>,
-    /// Only successfully verified TCP authentication proofs enter this bounded
-    /// cache. It makes a signed client nonce a one-shot value inside the
-    /// configured timestamp window.
+    provider: Arc<dyn AuthorizationProvider>,
     tcp_auth_replays: Mutex<TcpAuthReplayCache>,
 }
 
@@ -50,39 +53,19 @@ impl TcpAuthReplayCache {
 }
 
 impl UserManager {
-    #[instrument(skip(repository))]
-    pub fn new(repository: Arc<dyn UserRepository>) -> Self {
+    #[instrument(skip(provider))]
+    pub(crate) fn new(provider: impl IntoAuthorizationProvider) -> Self {
         Self {
-            repository,
+            provider: provider.into_authorization_provider(),
             tcp_auth_replays: Mutex::new(TcpAuthReplayCache::default()),
         }
     }
 
     #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
-        self.repository
-            .get_user(username)
-            .await
-            .map(|user| {
-                user.map(|user| UserConfig {
-                    username: user.username,
-                    public_key_pem: user.public_key_pem,
-                    expires_at: user.expires_at.map(|timestamp| timestamp.to_string()),
-                    permissions: user.permissions,
-                    enabled: user.enabled,
-                    key_version: Some(user.key_version),
-                })
-            })
-            .map_err(|error| {
-                ProxyError::Configuration(format!("查询用户 Repository 失败：{error}"))
-            })
+        self.provider.get_user(username).await
     }
 
-    /// Atomically consume one verified TCP authentication nonce.
-    ///
-    /// The caller must invoke this only after RSA-PSS verification, otherwise
-    /// unauthenticated packets could fill the cache. Capacity exhaustion fails
-    /// closed after expired entries have been pruned.
     pub(crate) fn claim_tcp_auth_nonce(
         &self,
         username: &str,
@@ -113,66 +96,108 @@ impl UserManager {
     }
 }
 
+pub(crate) trait IntoAuthorizationProvider {
+    fn into_authorization_provider(self) -> Arc<dyn AuthorizationProvider>;
+}
+
+impl<T> IntoAuthorizationProvider for Arc<T>
+where
+    T: AuthorizationProvider + 'static,
+{
+    fn into_authorization_provider(self) -> Arc<dyn AuthorizationProvider> {
+        self
+    }
+}
+
 #[cfg(test)]
-mod tests {
-    use super::{MAX_TCP_AUTH_REPLAY_ENTRIES_PER_USER, UserManager};
-    use protocol::RsaKeyPair;
-    use proxy_user_store::{SqliteUserRepository, UserRepository};
-    use std::sync::Arc;
-    use tempfile::TempDir;
+#[derive(Default)]
+pub(crate) struct TestAuthorizationProvider {
+    users: tokio::sync::RwLock<HashMap<String, UserConfig>>,
+}
 
-    #[tokio::test]
-    async fn observes_web_changes_from_the_same_sqlite_file() {
-        let directory = TempDir::new().unwrap();
-        let database_path = directory.path().join("users.sqlite3");
-        let web_store = SqliteUserRepository::connect(&database_path).await.unwrap();
-        let proxy_store = SqliteUserRepository::connect_read_only(&database_path)
-            .await
-            .unwrap();
-        let repository: Arc<dyn UserRepository> = Arc::new(proxy_store);
-        let manager = UserManager::new(repository);
-        assert!(manager.get_user("alice").await.unwrap().is_none());
-
-        let public_key = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap();
-        web_store
-            .create_user("alice", &public_key, Some(1_893_456_000))
-            .await
-            .unwrap();
-
-        let user = manager.get_user("alice").await.unwrap().unwrap();
-        assert_eq!(user.username, "alice");
-        assert_eq!(user.expires_at.as_deref(), Some("1893456000"));
+#[cfg(test)]
+impl TestAuthorizationProvider {
+    pub(crate) fn new(users: impl IntoIterator<Item = UserConfig>) -> Self {
+        Self {
+            users: tokio::sync::RwLock::new(
+                users
+                    .into_iter()
+                    .map(|user| (user.username.clone(), user))
+                    .collect(),
+            ),
+        }
     }
 
-    #[tokio::test]
-    async fn verified_tcp_auth_nonce_is_one_shot_and_expires() {
-        let directory = TempDir::new().unwrap();
-        let repository: Arc<dyn UserRepository> = Arc::new(
-            SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
-                .await
-                .unwrap(),
-        );
-        let manager = UserManager::new(repository);
-        let nonce = [9_u8; 32];
+    pub(crate) async fn set_user(&self, user: UserConfig) {
+        self.users.write().await.insert(user.username.clone(), user);
+    }
 
+    pub(crate) async fn remove_user(&self, username: &str) {
+        self.users.write().await.remove(username);
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl AuthorizationProvider for TestAuthorizationProvider {
+    async fn get_user(&self, username: &str) -> Result<Option<UserConfig>> {
+        Ok(self.users.read().await.get(username).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_TCP_AUTH_REPLAY_ENTRIES_PER_USER, TestAuthorizationProvider, UserManager};
+    use crate::config::UserConfig;
+    use protocol::RsaKeyPair;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn observes_authorization_provider_changes() {
+        let provider = Arc::new(TestAuthorizationProvider::default());
+        let manager = UserManager::new(provider.clone());
+        assert!(manager.get_user("alice").await.unwrap().is_none());
+
+        provider
+            .set_user(UserConfig {
+                username: "alice".to_string(),
+                public_key_pem: RsaKeyPair::generate(2048)
+                    .unwrap()
+                    .public_key_to_pem()
+                    .unwrap(),
+                expires_at: Some("1893456000".to_string()),
+                permissions: Vec::new(),
+                enabled: true,
+                key_version: Some(1),
+            })
+            .await;
+        assert_eq!(
+            manager
+                .get_user("alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .expires_at
+                .as_deref(),
+            Some("1893456000")
+        );
+        provider.remove_user("alice").await;
+        assert!(manager.get_user("alice").await.unwrap().is_none());
+    }
+
+    #[test]
+    fn verified_tcp_auth_nonce_is_one_shot_and_expires() {
+        let manager = UserManager::new(Arc::new(TestAuthorizationProvider::default()));
+        let nonce = [9_u8; 32];
         assert!(manager.claim_tcp_auth_nonce("alice", nonce, 100, 200));
         assert!(!manager.claim_tcp_auth_nonce("alice", nonce, 100, 200));
         assert!(manager.claim_tcp_auth_nonce("bob", nonce, 100, 200));
         assert!(manager.claim_tcp_auth_nonce("alice", nonce, 201, 300));
     }
 
-    #[tokio::test]
-    async fn one_user_cannot_exhaust_the_global_tcp_replay_cache() {
-        let directory = TempDir::new().unwrap();
-        let repository: Arc<dyn UserRepository> = Arc::new(
-            SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
-                .await
-                .unwrap(),
-        );
-        let manager = UserManager::new(repository);
+    #[test]
+    fn one_user_cannot_exhaust_the_global_tcp_replay_cache() {
+        let manager = UserManager::new(Arc::new(TestAuthorizationProvider::default()));
         for index in 0..MAX_TCP_AUTH_REPLAY_ENTRIES_PER_USER {
             let mut nonce = [0_u8; 32];
             nonce[..8].copy_from_slice(&(index as u64).to_be_bytes());

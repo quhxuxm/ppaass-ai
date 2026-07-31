@@ -1,7 +1,6 @@
 use super::*;
+use crate::user_manager::TestAuthorizationProvider;
 use protocol::{AgentCodec, crypto::verify_pss_sha256, tcp_transport::TCP_AUTH_NONCE_LEN};
-use proxy_user_store::{SqliteUserRepository, UserRepository};
-use tempfile::TempDir;
 use tokio::io::DuplexStream;
 use tokio_util::codec::Framed;
 
@@ -58,8 +57,9 @@ fn test_proxy_config() -> Arc<ProxyConfig> {
         toml::from_str(
             r#"
 listen_addr = "127.0.0.1:0"
-users_database_path = "users.sqlite3"
-access_log_database_path = "access.sqlite3"
+entry_id = "entry-test"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "control-token"
 replay_attack_tolerance = 300
 "#,
         )
@@ -97,13 +97,10 @@ fn user_config(public_key_pem: &str, enabled: bool, expires_at: Option<i64>) -> 
     }
 }
 
-async fn test_user_manager() -> (TempDir, Arc<UserManager>) {
-    let directory = TempDir::new().unwrap();
-    let repository = SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
-        .await
-        .unwrap();
-    let repository: Arc<dyn UserRepository> = Arc::new(repository);
-    (directory, Arc::new(UserManager::new(repository)))
+async fn test_user_manager() -> (Arc<TestAuthorizationProvider>, Arc<UserManager>) {
+    let provider = Arc::new(TestAuthorizationProvider::default());
+    let manager = Arc::new(UserManager::new(provider.clone()));
+    (provider, manager)
 }
 
 async fn authenticate_request(

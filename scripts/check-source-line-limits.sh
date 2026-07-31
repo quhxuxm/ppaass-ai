@@ -5,7 +5,7 @@ limit="${SOURCE_LINE_LIMIT:-400}"
 
 violations="$(
     git ls-files --cached --others --exclude-standard |
-    grep -E '\.(rs|ts|js|html)$' |
+    grep -E '\.(rs|ts|vue|js|mjs|html|css|sh|yml|yaml|ps1|bat)$' |
     while IFS= read -r source_file; do
         [ -f "$source_file" ] || continue
         line_count="$(awk 'END { print NR }' "$source_file")"

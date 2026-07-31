@@ -11,7 +11,7 @@ mimalloc-allocator = ["dep:mimalloc"]
 [dependencies]
 protocol = { path = "../protocol" }
 common = { path = "../common" }
-proxy-user-store = { path = "../proxy-user-store" }
+proxy-control-protocol = { path = "../proxy-control-protocol" }
 
 tokio.workspace = true
 tokio-yamux.workspace = true
@@ -34,6 +34,9 @@ parking_lot.workspace = true
 dashmap.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde_json.workspace = true
+sha2.workspace = true
 libc.workspace = true
 pretty-hex.workspace = true
 socket2.workspace = true

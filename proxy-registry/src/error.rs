@@ -1,10 +1,10 @@
+use crate::store::UserRepositoryError;
 use axum::{
     Json,
     extract::rejection::{BytesRejection, JsonRejection, QueryRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use proxy_user_store::UserRepositoryError;
 use serde::Serialize;
 use tracing::error;
 

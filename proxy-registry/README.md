@@ -6,11 +6,13 @@
 - Vue 3 + PrimeVue 4 提供普通用户中心与管理员控制台。
 - 本地密码使用 Argon2id 哈希；登录态使用服务端不透明会话、HttpOnly Cookie 和 CSRF Token。
 - RSA 私钥使用部署主密钥 AES-256-GCM 加密后写入数据库，公钥与私钥按版本原子更新。
-- `proxy-user-store::UserRepository`、`AccountRepository`、`ProxyAddressRepository`、
-  `AccessLogRepository` 和 `AgentDeviceAuthorizationRepository` 是数据库无关接口；
+- `proxy-registry::store` 中的 `UserRepository`、`AccountRepository`、
+  `ProxyAddressRepository`、`AccessLogRepository` 和
+  `AgentDeviceAuthorizationRepository` 是数据库无关接口；
   当前适配器使用 SQLite。
-- Web 读写用户 SQLite，Proxy 仅只读该库；访问记录使用单独的共享 SQLite。全部服务
-  日志使用 `tracing`，不会记录密码、Cookie 或私钥。
+- Registry 独占用户和访问记录 SQLite；Entry 通过受 Token 保护的 HTTP/SSE 控制面读取
+  授权并批量上报访问记录，不再打开数据库。全部服务日志使用 `tracing`，不会记录密码、
+  Cookie、控制 Token 或私钥。
 - 多个 Proxy Registry 通过共享数据库中的事件日志同步 Agent SSE 通知。事件由业务事务
   使用普通 SQL 显式写入，不依赖数据库触发器；每个 Registry 实例独立轮询并只向连接
   在本实例上的 Agent 广播。
@@ -22,8 +24,9 @@
 ```bash
 export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
 export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes-and-keep-it-stable"
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
 
-RUST_LOG=proxy_registry=debug,proxy_user_store=debug,tower_http=info \
+RUST_LOG=proxy_registry=debug,tower_http=info \
   cargo run -p proxy-registry
 ```
 
@@ -34,134 +37,76 @@ RUST_LOG=proxy_registry=debug,proxy_user_store=debug,tower_http=info \
 
 `PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET` 至少 32 字节，并且必须在服务重启和迁移后保持一致；丢失它将无法解密已托管的私钥。生产环境应从 Secret Manager 注入并单独备份。
 
-## GitHub Actions 部署
+## GitHub Actions 分离部署
 
-手动运行 `.github/workflows/deploy-proxy-entry-and-registry.yml` 会同时构建并部署 Proxy Entry、Proxy Registry 和 Vue
-静态资源。必须为 workflow 配置以下 GitHub Actions 配置：
+Entry 和 Registry 使用两个独立的手动工作流，可以部署到不同服务器：
 
-部署 job 会绑定 workflow 输入所选的同名 GitHub Environment：`production`、`dev` 或
-`qa`。下面的 Secrets 和 Variables 必须分别配置在对应 Environment 中，不应使用一套
-仓库级凭据跨环境复用；Environment protection rules 也会在读取该环境凭据前生效。
+- `.github/workflows/deploy-proxy-registry.yml`：构建 Registry 和 Vue，部署两个 Registry
+  进程，并让 Caddy 同时负载均衡公开 Web API 与内部控制 API。
+- `.github/workflows/deploy-proxy-entry.yml`：只构建和部署 Entry，不安装 Caddy，也不
+  接触 SQLite。
 
-- 对应环境的 SSH Secrets：`PRODUCTION_REMOTE_HOST/USER/PASSWORD`、
-  `DEV_REMOTE_HOST/USER/PASSWORD` 或 `QA_REMOTE_HOST/USER/PASSWORD`。
-- Secret `DEPLOY_FOLDER`：该环境服务器上的专用上传暂存子目录。
-- Secret `PPAASS_WEB_ADMIN_PASSWORD`：首次创建 `admin` 使用的密码。
-- Secret `PPAASS_DEPLOY_SSH_KNOWN_HOSTS`：部署服务器经过核验的 SSH `known_hosts`
-  记录；workflow 会强制校验主机公钥，拒绝未知或发生变化的服务器。
-- Variable `PPAASS_WEB_PUBLIC_HOST`：对外服务的 DNS 名称或 IPv4 地址，不包含协议和端口。
-
-workflow 只在远端数据库没有启用的根管理员 `admin` 时使用管理员密码，不会覆盖已有
-`admin` 的密码；其他管理员账号不能替代根管理员。
-服务器合法更换 SSH 主机密钥时，应先通过独立渠道核验新指纹，再更新
+两个工作流都绑定所选的 GitHub Environment（`production`、`dev` 或 `qa`）。
+Registry 主机使用 `<ENV>_REGISTRY_REMOTE_HOST/USER/PASSWORD`，Entry 主机使用
+`<ENV>_ENTRY_REMOTE_HOST/USER/PASSWORD`。远端用户当前必须是能够管理 systemd、
+系统用户和 Caddy 的 root 用户。两边共同需要经过核验的
 `PPAASS_DEPLOY_SSH_KNOWN_HOSTS`。
-生产环境由 Caddy 2.11.4 或更高版本监听 TCP/443，再负载均衡到只监听
-`127.0.0.1:8787` 和 `127.0.0.1:8788` 的两个 Axum 进程。Caddy 对两个上游执行
-`/healthz` 主动健康检查，并使用粘性 Cookie 保持进程内 Web 会话；Agent 一次性网页登录
-交接码存放在共享 SQLite，因此可以跨进程签发和领取。workflow 会检查服务器上的 Caddy
-版本；未安装或版本过低时，会校验官方发布包的 SHA-512 后自动安装。Proxy Registry 始终
-使用 Secure Cookie，不会把回环 HTTP 端口暴露到公网。
+Registry 主机需预先安装 systemd、Caddy、OpenSSL 和 curl；Entry 主机需预先安装
+systemd、OpenSSL 和 curl。
 
-当 `PPAASS_WEB_PUBLIC_HOST` 是公网 IPv4 地址时，Caddy 会向 Let's Encrypt 申请
-`shortlived` IP 证书，并通过 TLS-ALPN-01 在 TCP/443 上完成验证。Caddy 会在证书到期
-前自动续期并加载新证书，无需人工更新或重新部署。IP 证书的 160 小时有效期是
-Let's Encrypt 的设计；正常运行的 Caddy 会持续自动管理它。HTTP-01 已禁用，因此申请
-和续期不会占用或中断 TCP/80，Proxy 原有的 TCP/UDP 监听可继续使用 80 端口。Caddy
-的账号、证书和续期状态持久化在 `/var/lib/ppaass-caddy`，部署时不会清空该目录。
+必须配置以下共享 Secrets：
 
-不需要在 GitHub 中保存 TLS 证书或私钥，也不再使用
-`PPAASS_WEB_TLS_CERTIFICATE`、`PPAASS_WEB_TLS_PRIVATE_KEY` 这类 Secret。服务器和云
-安全组需要允许公网访问 TCP/443，并允许 Caddy 访问 Let's Encrypt 的 ACME 服务；
-workflow 会通过系统信任链访问公开的 `/healthz`，以验证证书和反向代理均可用。
+- `PPAASS_PROXY_CONTROL_TOKEN`：至少 32 字节、无空白；Registry 校验，Entry 以
+  `0600` 文件读取。
+- `PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM` 与
+  `PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM`：同一传输身份密钥对。私钥只部署到 Entry，
+  公钥只部署到 Registry；Entry 工作流会在部署前验证二者匹配。
+- `PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET`：Registry 托管用户私钥的稳定主密钥。
+  迁移已有数据库时必须填写原主密钥；部署脚本发现不匹配会停止。
+- `PPAASS_WEB_ADMIN_PASSWORD`：仅在数据库还没有根管理员时用于 bootstrap。
 
-私钥加密主密钥首次部署时生成在
-`/var/lib/ppaass/secrets/proxy-registry-key-encryption-secret`，不会打入构建包。Proxy Registry 会把认证校验信封
-存入 SQLite 元数据，并在每次启动时校验当前主密钥；已有 legacy 数据库可以首次接入，
-错误主密钥则无法通过启动检查。必须将数据库和主密钥成对备份与迁移，避免已有托管
-私钥无法解密。
+必须配置以下 Variables：
 
-Proxy TCP/Yamux 传输身份同样不进入仓库或 GitHub Secrets。服务器首次部署时由 OpenSSL
-原子生成一把持久的 3072 位 PKCS#8 RSA 私钥，保存为
-`/var/lib/ppaass/identity/proxy-identity-private.pem`（仅 Proxy UID、`0600`）；每次部署
-都从它重新派生 SPKI 公钥给 Proxy Registry 只读。后续部署复用同一私钥，不会静默轮换 Agent
-已经固定校验的服务端身份。
+- `PPAASS_WEB_PUBLIC_HOST`：管理员 Web/API 的公开 DNS 名称。
+- `PPAASS_REGISTRY_CONTROL_PUBLIC_HOST`：Entry 访问的控制面 DNS 名称。
+- `PPAASS_PROXY_ENTRY_ID`：当前 Entry 的稳定唯一标识。
+- 可选 `PPAASS_REGISTRY_RUNTIME_ROOT`、`PPAASS_ENTRY_RUNTIME_ROOT`，只允许
+  `/opt` 或 `/srv` 下的目录。
 
-`DEPLOY_FOLDER` 只作为 root 使用的上传暂存目录；它必须是专用子目录（例如
-`/root/ppaass-upload`），即使位于 `/root` 下也不会成为 systemd 服务的工作目录。
-workflow 将 root 拥有的二进制、脚本和配置安装到
-`/opt/ppaass`，并使用两个 UID 不同的无登录系统用户运行服务：
+Registry 的两个进程共享
+`/var/lib/ppaass/users/proxy-users.sqlite3` 和
+`/var/lib/ppaass/access/proxy-access.sqlite3`。公开端口为
+`127.0.0.1:8787/8788`，控制端口为 `127.0.0.1:8797/8798`。Caddy 对公开 Web/API
+使用 Cookie 粘性负载均衡，避免进程内 Web 会话跨实例丢失；无状态控制 API 使用随机
+负载均衡。管理员界面的会话响应包含实际提供请求的
+`registry_instance_id`，因此每次刷新都能看到当前连接到的实例。
 
-- Proxy 使用 `ppaass-proxy` 用户，只保留绑定低端口所需的
-  `CAP_NET_BIND_SERVICE`，并通过 systemd `InaccessiblePaths` 阻止读取 Web Secret。
-- Proxy Registry 使用 `ppaass-proxy-registry` 用户且不持有 capability。Web Secret 由 root
-  拥有且只给 `ppaass-proxy-registry` 组读权限，因此 Proxy UID 无法通过文件权限或
-  `/proc/<pid>`/ptrace 读取 Web 主密钥或管理员密码。
-- 用户/账号/密钥数据库位于 `/var/lib/ppaass/users`。目录由 Web UID 拥有并使用
-  `ppaass-user-readers` 组和 `2750`；数据库、WAL、SHM 与 rollback journal 使用
-  `ppaass-proxy-registry:ppaass-user-readers` 和 `0640`。Proxy 只拥有该组的读/执行权限，
-  并同时通过 SQLite read-only/query-only 模式及 systemd `ReadOnlyPaths` 禁止写入。
-- 访问记录单独存放在 `/var/lib/ppaass/access`。该目录使用受限
-  `ppaass-access` 共享组和 `2770`，数据库及 sidecar 使用 `0660`。Proxy 需要写入
-  访问次数，Web 需要查询和执行保留期清理，因此只有这个不含账号、密钥或认证资料的
-  数据库允许两个 UID 读写。
+控制面没有依赖 Redis、数据库触发器或进程内唯一消费者。授权变更由业务事务使用普通
+SQL 写入事件表；每个 Registry 进程轮询同一中央存储并向本进程上的 SSE 连接广播。
+Entry 的授权缓存最多保留五秒，收到事件即失效；访问记录使用
+`entry_id + batch_id` 做普通 SQL 幂等写入。将来把 SQLite 替换为中央数据库时，Entry
+和 Agent 的协议不需要变化。
 
-首次采用新目录布局时，workflow 会在两个服务停止后，把旧
-`DEPLOY_FOLDER/data/proxy-users.sqlite3`，或上一版固定目录中的
-`/var/lib/ppaass/data/proxy-users.sqlite3`，连同 WAL/SHM/journal 一起迁移到
-`/var/lib/ppaass/users`，并迁移旧 `.secrets` 中的加密主密钥。若多个旧位置同时存在，
-或旧位置和新位置同时存在用户数据库，workflow 会明确失败，不会静默选择一份数据。
-用户数据库会原地调整为 Web 拥有的 `0640`，不会复制或重建。
+首次从旧的同机部署拆分时：
 
-部署会先启动 `registry-1`。它完成用户 schema 迁移，并把旧用户数据库里的历史访问
-记录与保留期设置幂等迁移到新的访问记录数据库；核对导入结果后会清空主库旧记录并
-截断对应 WAL，避免访问历史继续残留在用户库。随后启动 `registry-2` 并分别校验两个
-实例的 `/healthz` 和 `instance_id`，最后才启动只读用户库的 Proxy。systemd 冷启动也会
-让 Proxy 等待 Web 健康，避免 Proxy 在 schema 迁移前打开数据库。
+1. 保留 Registry 主机上的 `/var/lib/ppaass/users`、`access`、`secrets` 和公钥。
+2. 将原传输私钥安全录入 `PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM`，再部署 Entry 主机。
+3. 将对应公钥和原 Registry 加密主密钥录入 Secrets；部署 Registry。
+4. 确认两个 Registry 本地健康端点、Caddy HTTPS 端点和 Entry systemd 服务均正常后，
+   再下线旧的同机 Entry。
 
-默认配置：
-
-- 对外地址：`https://<PPAASS_WEB_PUBLIC_HOST>`（Caddy TCP/443）
-- Axum 回环地址：`http://127.0.0.1:8787`（`registry-1`）和
-  `http://127.0.0.1:8788`（`registry-2`）
-- 服务运行目录：`/opt/ppaass`
-- Caddy 持久化目录：`/var/lib/ppaass-caddy`
-- 用户 SQLite：`/var/lib/ppaass/users/proxy-users.sqlite3`
-- 访问记录 SQLite：`/var/lib/ppaass/access/proxy-access.sqlite3`
-- Proxy 传输身份私钥：`/var/lib/ppaass/identity/proxy-identity-private.pem`
-- Proxy Registry 可读的传输身份公钥：`/var/lib/ppaass/identity/proxy-identity-public.pem`
-- Proxy Registry Secret：`/var/lib/ppaass/secrets`
-- 服务日志：`/var/log/ppaass/proxy`、`/var/log/ppaass/proxy-registry`
-- Vue 构建目录：`proxy-registry/frontend/dist`
-- GitHub 部署显式开放普通用户注册，并强制使用 Secure Cookie
-
-可通过以下环境变量显式覆盖注册与 Cookie 行为：
+本地手动启动时，Registry 的公开监听与控制监听必须分开：
 
 ```bash
-export PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION="true"
-export PPAASS_PROXY_REGISTRY_SECURE_COOKIES="true"
-# 仅当 Axum 回环监听且前方是受信反向代理时启用，用于按真实客户端 IP 限频。
-export PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS="true"
-# 多实例部署时设置唯一名称；未设置时默认使用 registry-<监听端口>。
-export PPAASS_PROXY_REGISTRY_INSTANCE_ID="registry-1"
-```
-
-Axum 本身只提供 HTTP，默认只允许监听回环地址。本地开发或手动启动时继续使用：
-
-```bash
-mkdir -p data
-umask 077
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
-  -out data/proxy-identity-private.pem
-openssl pkey -in data/proxy-identity-private.pem -pubout \
-  -out data/proxy-identity-public.pem
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
 cargo run -p proxy-registry -- \
   --listen 127.0.0.1:8787 \
+  --control-listen 127.0.0.1:8797 \
   --proxy-identity-public-key data/proxy-identity-public.pem
 ```
 
-生产部署不要让 Axum 直接持有证书或监听 443，应保持回环监听并由 Caddy 提供公网
-HTTPS。`--allow-insecure-remote` 只供自定义拓扑中受信 TLS 反向代理后的明文内网链路
-使用，不能用于公网。
+生产环境保持 Axum 只监听回环地址，由 Caddy 提供 HTTPS。控制域名也必须使用 TLS，
+并应通过防火墙或私网 DNS 只允许 Entry 主机访问；应用层仍会强制校验 Bearer Token。
 
 ## Vue 本地开发
 
@@ -443,26 +388,25 @@ schema v8 新增 `proxy_addresses` 地址目录和 `account_proxy_addresses` 账
 依赖 `ProxyAddressRepository` 和账号 repository；SQLite 表和 SQL 不进入 Axum handler，
 后续增加其他数据库时可以用新适配器保持同一事务语义和 API 契约。
 
-## Proxy 与数据库边界
+## Entry 与 Registry 数据边界
 
-Proxy 只支持 SQLite 用户库：
+Entry 只配置控制面，不配置数据库：
 
 ```toml
-users_database_path = "data/proxy-users.sqlite3"
-access_log_database_path = "data/proxy-access.sqlite3"
-access_log_database_group_writable = false
+entry_id = "entry-production"
+registry_control_url = "https://registry-control.example.com"
+registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
 transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
-Proxy Registry 是用户 schema 和账号写入的唯一所有者；Proxy 以 read-only/query-only
-方式打开用户库。旧数据库里已有的 `origin=legacy` 记录继续保留，但服务不再提供
-文件导入入口。legacy public-only 记录没有可登录领取的私钥，因此仍不能参与普通用户
-密钥申请流程。
+Proxy Registry 是用户、账号和访问记录 schema 的唯一所有者；Entry 不链接存储 crate，
+也不打开 SQLite。旧数据库里已有的 `origin=legacy` 记录继续保留，但服务不再提供文件
+导入入口。legacy public-only 记录没有可登录领取的私钥，因此仍不能参与普通用户密钥
+申请流程。
 
-在 Unix 上，本地默认将两个 SQLite 的主文件及 sidecar 设为 `0600`。生产部署中，
-Proxy Registry 使用 `--database-group-readable` 将用户库设为 `0640`；Proxy 对它只读。
-访问记录库通过 Proxy 的 `access_log_database_group_writable = true` 与 Proxy Registry 的
-`--access-log-database-group-writable` 显式设为 `0660`，并放在独立的 setgid 共享
-目录。
+在 Unix 上，本地默认将两个 SQLite 的主文件及 sidecar 设为 `0600`。生产部署中两个
+Registry 进程使用同一无登录 UID，因此不再需要把数据库授权给 Entry。控制 Token 和
+Entry 传输私钥都使用 `0600` 文件，分别只部署到所需的服务主机。
 
-两个业务层只依赖数据库无关 Repository。将来增加 PostgreSQL 等数据库时，应新增适配器并在启动阶段选择实现，无需修改 Proxy 认证或 Axum handler。
+Registry handler 只依赖数据库无关 Repository。将来增加 PostgreSQL 等中央数据库时，
+应新增适配器并在启动阶段选择实现，无需修改 Entry 认证、控制协议或 Axum handler。

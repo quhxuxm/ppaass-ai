@@ -1,0 +1,153 @@
+name: Build and Deploy Proxy Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Select environment
+        required: true
+        type: choice
+        options: [production, dev, qa]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-proxy-registry-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: proxy-registry/frontend/package-lock.json
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check source file sizes
+        run: |
+          bash scripts/check-source-line-limits.sh
+          bash scripts/test-proxy-deployment-layout.sh
+          bash -n start-proxy-registry.sh deploy/proxy-registry/install.sh
+
+      - name: Test and build Registry
+        run: |
+          set -euo pipefail
+          npm ci --prefix proxy-registry/frontend --no-audit --no-fund
+          npm test --prefix proxy-registry/frontend
+          npm run build --prefix proxy-registry/frontend
+          cargo test -p proxy-control-protocol -p proxy-registry
+          cargo build -p proxy-registry --release
+
+      - name: Package Registry release
+        env:
+          PUBLIC_HOST: ${{ vars.PPAASS_WEB_PUBLIC_HOST }}
+          CONTROL_HOST: ${{ vars.PPAASS_REGISTRY_CONTROL_PUBLIC_HOST }}
+          RUNTIME_ROOT: ${{ vars.PPAASS_REGISTRY_RUNTIME_ROOT }}
+          ADMIN_PASSWORD: ${{ secrets.PPAASS_WEB_ADMIN_PASSWORD }}
+          REGISTRY_KEY_SECRET: ${{ secrets.PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET }}
+          CONTROL_TOKEN: ${{ secrets.PPAASS_PROXY_CONTROL_TOKEN }}
+          IDENTITY_PUBLIC_KEY: ${{ secrets.PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          : "${PUBLIC_HOST:?PPAASS_WEB_PUBLIC_HOST is required}"
+          : "${CONTROL_HOST:?PPAASS_REGISTRY_CONTROL_PUBLIC_HOST is required}"
+          : "${ADMIN_PASSWORD:?PPAASS_WEB_ADMIN_PASSWORD is required}"
+          : "${REGISTRY_KEY_SECRET:?PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET is required}"
+          : "${CONTROL_TOKEN:?PPAASS_PROXY_CONTROL_TOKEN is required}"
+          : "${IDENTITY_PUBLIC_KEY:?PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM is required}"
+          case "$PUBLIC_HOST$CONTROL_HOST" in
+            *[!0-9A-Za-z._-]*) echo "Invalid Registry host name" >&2; exit 1 ;;
+          esac
+          [ "${#ADMIN_PASSWORD}" -ge 8 ]
+          [ "${#REGISTRY_KEY_SECRET}" -ge 32 ]
+          [ "${#CONTROL_TOKEN}" -ge 32 ]
+          case "$CONTROL_TOKEN" in *[[:space:]]*) exit 1 ;; esac
+
+          bundle=".deploy/proxy-registry"
+          mkdir -p "$bundle/frontend"
+          install -m 0755 target/release/proxy-registry "$bundle/proxy-registry"
+          install -m 0755 start-proxy-registry.sh "$bundle/start-proxy-registry.sh"
+          install -m 0755 deploy/proxy-registry/install.sh "$bundle/install.sh"
+          cp -a proxy-registry/frontend/dist/. "$bundle/frontend/"
+          printf '%s' "$ADMIN_PASSWORD" >"$bundle/admin-password"
+          printf '%s' "$REGISTRY_KEY_SECRET" >"$bundle/registry-key-secret"
+          printf '%s' "$CONTROL_TOKEN" >"$bundle/control-token"
+          printf '%s\n' "$IDENTITY_PUBLIC_KEY" >"$bundle/proxy-identity-public.pem"
+          openssl pkey -pubin -in "$bundle/proxy-identity-public.pem" -noout
+          {
+            printf 'RELEASE_SHA=%q\n' "$GITHUB_SHA"
+            printf 'PUBLIC_HOST=%q\n' "$PUBLIC_HOST"
+            printf 'CONTROL_HOST=%q\n' "$CONTROL_HOST"
+            printf 'RUNTIME_ROOT=%q\n' "${RUNTIME_ROOT:-/opt/ppaass-registry}"
+          } >"$bundle/deploy.env"
+          tar -C .deploy -czf .deploy/proxy-registry.tgz proxy-registry
+
+      - name: Resolve Registry host
+        env:
+          PROD_HOST: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_HOST }}
+          PROD_USER: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_USER }}
+          PROD_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_PASSWORD }}
+          DEV_HOST: ${{ secrets.DEV_REGISTRY_REMOTE_HOST }}
+          DEV_USER: ${{ secrets.DEV_REGISTRY_REMOTE_USER }}
+          DEV_PASSWORD: ${{ secrets.DEV_REGISTRY_REMOTE_PASSWORD }}
+          QA_HOST: ${{ secrets.QA_REGISTRY_REMOTE_HOST }}
+          QA_USER: ${{ secrets.QA_REGISTRY_REMOTE_USER }}
+          QA_PASSWORD: ${{ secrets.QA_REGISTRY_REMOTE_PASSWORD }}
+          KNOWN_HOSTS: ${{ secrets.PPAASS_DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.environment }}" in
+            production) host="$PROD_HOST"; user="$PROD_USER"; password="$PROD_PASSWORD" ;;
+            dev) host="$DEV_HOST"; user="$DEV_USER"; password="$DEV_PASSWORD" ;;
+            qa) host="$QA_HOST"; user="$QA_USER"; password="$QA_PASSWORD" ;;
+          esac
+          : "${host:?Registry remote host is required}"
+          : "${user:?Registry remote user is required}"
+          : "${password:?Registry remote password is required}"
+          : "${KNOWN_HOSTS:?PPAASS_DEPLOY_SSH_KNOWN_HOSTS is required}"
+          case "$host" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
+          case "$user" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
+          case "$password" in *$'\n'*|*$'\r'*) exit 1 ;; esac
+          {
+            printf 'REMOTE_HOST=%s\n' "$host"
+            printf 'REMOTE_USER=%s\n' "$user"
+            printf 'REMOTE_PASSWORD<<PPAASS_EOF\n%s\nPPAASS_EOF\n' "$password"
+          } >>"$GITHUB_ENV"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" >~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/known_hosts
+
+      - name: Deploy two Registry instances and Caddy
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+          export SSHPASS="$REMOTE_PASSWORD"
+          remote_root="/tmp/ppaass-registry-$GITHUB_SHA"
+          ssh_options=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+          sshpass -e ssh "${ssh_options[@]}" "$REMOTE_USER@$REMOTE_HOST" \
+            "install -d -m 0700 '$remote_root'"
+          sshpass -e scp "${ssh_options[@]}" .deploy/proxy-registry.tgz \
+            "$REMOTE_USER@$REMOTE_HOST:$remote_root/release.tgz"
+          sshpass -e ssh "${ssh_options[@]}" "$REMOTE_USER@$REMOTE_HOST" \
+            "tar -xzf '$remote_root/release.tgz' -C '$remote_root' && \
+             bash '$remote_root/proxy-registry/install.sh' '$remote_root/proxy-registry'; \
+             status=\$?; rm -rf -- '$remote_root'; exit \$status"

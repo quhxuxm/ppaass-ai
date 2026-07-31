@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readStyles } from "./read-styles.mjs";
 
 async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -28,7 +29,7 @@ const [
   source("src-tauri/src/app/server_events.rs"),
   source("src-tauri/src/auth/admin_key_requests.rs"),
   source("src-tauri/src/app/bootstrap.rs"),
-  source("src/styles.css")
+  readStyles()
 ]);
 
 assert.match(workspace, /tab\.key !== "admin-requests"/);

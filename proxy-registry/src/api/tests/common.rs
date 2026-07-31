@@ -2,12 +2,12 @@ pub(super) use super::super::*;
 pub(super) use crate::rate_limit::{
     LOGIN_ACCOUNT_CAPACITY, LOGIN_CLIENT_CAPACITY, REGISTRATION_CLIENT_CAPACITY,
 };
+pub(super) use crate::store::{
+    AccessLogRepository, NewAccessRecord, NewAdminAccount, SqliteUserRepository,
+};
 pub(super) use axum::{
     body::{Body, to_bytes},
     http::Request,
-};
-pub(super) use proxy_user_store::{
-    AccessLogRepository, NewAccessRecord, NewAdminAccount, SqliteUserRepository,
 };
 pub(super) use serde_json::{Value, json};
 pub(super) use tempfile::TempDir;

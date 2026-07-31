@@ -4,12 +4,10 @@
 # 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 PPAASS 原生加密 UDP。
 listen_addr = "0.0.0.0:8080"
 
-# SQLite 用户数据库路径。proxy-registry 负责初始化和管理，Proxy 始终只读；
-# Web 变更对新的认证立即生效。
-users_database_path = "data/proxy-users.sqlite3"
-
-# 独立访问记录数据库；Proxy 只写该文件，不具备修改用户数据库的能力。
-access_log_database_path = "data/proxy-access.sqlite3"
+# Registry 控制面；授权读取和访问记录上报均通过这个接口完成。
+entry_id = "entry-local"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 
 # TCP/Yamux 传输身份私钥（PKCS#8 PEM）；公钥由 Proxy Registry 提供给 Agent 固定校验。
 transport_identity_private_key_path = "data/proxy-identity-private.pem"

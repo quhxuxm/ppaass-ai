@@ -168,111 +168,77 @@ fn validate_active_udp_user(user: &UserConfig, now: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::validate_session_authorization;
-    use crate::user_manager::UserManager;
-    use protocol::RsaKeyPair;
-    use proxy_user_store::{
-        AccountActor, AccountRepository, NewAdminAccount, SqliteUserRepository, UserRepository,
-        UserUpdate,
+    use crate::{
+        config::UserConfig,
+        user_manager::{TestAuthorizationProvider, UserManager},
     };
+    use protocol::RsaKeyPair;
     use std::sync::Arc;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn live_session_revalidation_detects_disable_permission_revocation_and_key_rotation() {
-        let directory = TempDir::new().unwrap();
-        let database_path = directory.path().join("users.sqlite3");
-        let store = Arc::new(SqliteUserRepository::connect(&database_path).await.unwrap());
-        create_test_admin(&store).await;
-        let manager = UserManager::new(store.clone() as Arc<dyn UserRepository>);
         let first_public_key = RsaKeyPair::generate(2048)
             .unwrap()
             .public_key_to_pem()
             .unwrap()
             .trim()
             .to_string();
-        let created = store
-            .create_user("alice", &first_public_key, Some(i64::MAX))
-            .await
-            .unwrap();
-
-        validate_session_authorization(
-            &manager,
-            "alice",
+        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
             &first_public_key,
-            Some(created.key_version),
-        )
-        .await
-        .unwrap();
+            true,
+            vec!["proxy.connect.udp"],
+            Some(i64::MAX),
+            1,
+        )]));
+        let manager = UserManager::new(provider.clone());
 
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    enabled: Some(false),
-                    changed_by: Some(test_actor()),
-                    audit_reason: Some("测试停用 UDP 用户".to_string()),
-                    ..UserUpdate::default()
-                },
-            )
+        validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
             .await
             .unwrap();
-        assert!(
-            validate_session_authorization(
-                &manager,
-                "alice",
+
+        provider
+            .set_user(test_user(
                 &first_public_key,
-                Some(created.key_version),
-            )
-            .await
-            .is_err()
+                false,
+                vec!["proxy.connect.udp"],
+                Some(i64::MAX),
+                1,
+            ))
+            .await;
+        assert!(
+            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
+                .await
+                .is_err()
         );
 
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    enabled: Some(true),
-                    permissions: Some(vec!["proxy.connect.tcp".to_string()]),
-                    changed_by: Some(test_actor()),
-                    audit_reason: Some("测试撤销 UDP 权限".to_string()),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(
-            validate_session_authorization(
-                &manager,
-                "alice",
+        provider
+            .set_user(test_user(
                 &first_public_key,
-                Some(created.key_version),
-            )
-            .await
-            .is_err()
+                true,
+                vec!["proxy.connect.tcp"],
+                Some(i64::MAX),
+                1,
+            ))
+            .await;
+        assert!(
+            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
+                .await
+                .is_err()
         );
 
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    permissions: Some(vec!["proxy.connect.udp".to_string()]),
-                    expires_at: Some(Some(common::current_timestamp())),
-                    changed_by: Some(test_actor()),
-                    audit_reason: Some("测试恢复 UDP 权限并设置过期时间".to_string()),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(
-            validate_session_authorization(
-                &manager,
-                "alice",
+        provider
+            .set_user(test_user(
                 &first_public_key,
-                Some(created.key_version),
-            )
-            .await
-            .is_err()
+                true,
+                vec!["proxy.connect.udp"],
+                Some(common::current_timestamp()),
+                1,
+            ))
+            .await;
+        assert!(
+            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
+                .await
+                .is_err()
         );
 
         let second_public_key = RsaKeyPair::generate(2048)
@@ -281,73 +247,53 @@ mod tests {
             .unwrap()
             .trim()
             .to_string();
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    public_key_pem: Some(second_public_key),
-                    permissions: Some(vec!["proxy.connect.udp".to_string()]),
-                    expires_at: Some(Some(i64::MAX)),
-                    changed_by: Some(test_actor()),
-                    audit_reason: Some("测试轮换 UDP 用户密钥".to_string()),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
+        provider
+            .set_user(test_user(
+                &second_public_key,
+                true,
+                vec!["proxy.connect.udp"],
+                Some(i64::MAX),
+                2,
+            ))
+            .await;
         assert!(
-            validate_session_authorization(
-                &manager,
-                "alice",
-                &first_public_key,
-                Some(created.key_version),
-            )
-            .await
-            .is_err()
+            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
+                .await
+                .is_err()
         );
 
         // 即使管理员把公钥内容恢复为握手时的 PEM，单调递增的 key_version
         // 也必须永久淘汰旧会话，避免公钥内容比较的 ABA。
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    public_key_pem: Some(first_public_key.clone()),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(
-            validate_session_authorization(
-                &manager,
-                "alice",
+        provider
+            .set_user(test_user(
                 &first_public_key,
-                Some(created.key_version),
-            )
-            .await
-            .is_err()
+                true,
+                vec!["proxy.connect.udp"],
+                Some(i64::MAX),
+                3,
+            ))
+            .await;
+        assert!(
+            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
+                .await
+                .is_err()
         );
     }
 
-    fn test_actor() -> AccountActor {
-        AccountActor {
-            account_id: "test-admin".to_string(),
-            login_name: "test-admin".to_string(),
+    fn test_user(
+        public_key_pem: &str,
+        enabled: bool,
+        permissions: Vec<&str>,
+        expires_at: Option<i64>,
+        key_version: i64,
+    ) -> UserConfig {
+        UserConfig {
+            username: "alice".to_string(),
+            public_key_pem: public_key_pem.to_string(),
+            expires_at: expires_at.map(|value| value.to_string()),
+            permissions: permissions.into_iter().map(str::to_string).collect(),
+            enabled,
+            key_version: Some(key_version),
         }
-    }
-
-    async fn create_test_admin(store: &SqliteUserRepository) {
-        store
-            .bootstrap_admin_if_absent(NewAdminAccount {
-                account_id: "test-admin".to_string(),
-                login_name: "test-admin".to_string(),
-                password_hash: None,
-                display_name: None,
-                email: None,
-                avatar_url: None,
-            })
-            .await
-            .unwrap();
     }
 }

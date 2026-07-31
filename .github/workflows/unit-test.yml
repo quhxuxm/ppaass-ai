@@ -15,7 +15,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Enforce source line limit
-        run: ./scripts/check-source-line-limits.sh
+        run: |
+          ./scripts/check-source-line-limits.sh
+          bash scripts/test-proxy-deployment-layout.sh
 
       - name: Install system dependencies
         run: |

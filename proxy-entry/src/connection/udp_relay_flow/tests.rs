@@ -1,44 +1,18 @@
 use super::*;
 use crate::config::{PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP, UserConfig};
-use crate::user_manager::UserManager;
-use proxy_user_store::{UserOrigin, UserRecord, UserRepository, UserUpdate};
+use crate::user_manager::{AuthorizationProvider, UserManager};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct CountingUserRepository {
-    user: UserRecord,
+    user: UserConfig,
     get_count: AtomicUsize,
 }
 
 #[async_trait::async_trait]
-impl UserRepository for CountingUserRepository {
-    async fn get_user(&self, username: &str) -> proxy_user_store::Result<Option<UserRecord>> {
+impl AuthorizationProvider for CountingUserRepository {
+    async fn get_user(&self, username: &str) -> crate::error::Result<Option<UserConfig>> {
         self.get_count.fetch_add(1, Ordering::AcqRel);
         Ok((username == self.user.username).then(|| self.user.clone()))
-    }
-
-    async fn list_users(&self) -> proxy_user_store::Result<Vec<UserRecord>> {
-        unreachable!("flow authorization tests only query one user")
-    }
-
-    async fn create_user(
-        &self,
-        _username: &str,
-        _public_key_pem: &str,
-        _expires_at: Option<i64>,
-    ) -> proxy_user_store::Result<UserRecord> {
-        unreachable!("flow authorization tests never create users")
-    }
-
-    async fn update_user(
-        &self,
-        _username: &str,
-        _update: UserUpdate,
-    ) -> proxy_user_store::Result<UserRecord> {
-        unreachable!("flow authorization tests never update users")
-    }
-
-    async fn delete_user(&self, _username: &str) -> proxy_user_store::Result<()> {
-        unreachable!("flow authorization tests never delete users")
     }
 }
 
@@ -46,8 +20,9 @@ fn test_config(max_flows: usize) -> ProxyConfig {
     toml::from_str(&format!(
         r#"
 listen_addr = "127.0.0.1:0"
-users_database_path = "users.sqlite3"
-access_log_database_path = "access.sqlite3"
+entry_id = "entry-test"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "control-token"
 udp_relay_max_flows = {max_flows}
 "#
     ))
@@ -56,19 +31,16 @@ udp_relay_max_flows = {max_flows}
 
 fn counting_repository() -> Arc<CountingUserRepository> {
     Arc::new(CountingUserRepository {
-        user: UserRecord {
+        user: UserConfig {
             username: "alice".to_string(),
             public_key_pem: "handshake-key".to_string(),
+            expires_at: Some(i64::MAX.to_string()),
             permissions: vec![
                 PERMISSION_PROXY_CONNECT_TCP.to_string(),
                 PERMISSION_PROXY_CONNECT_UDP.to_string(),
             ],
             enabled: true,
-            origin: UserOrigin::Local,
-            key_version: 7,
-            expires_at: Some(i64::MAX),
-            created_at: 1,
-            updated_at: 1,
+            key_version: Some(7),
         },
         get_count: AtomicUsize::new(0),
     })
@@ -82,7 +54,7 @@ fn authorized_flow_set(
     tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
     tokio::sync::mpsc::Receiver<u64>,
 ) {
-    let manager = Arc::new(UserManager::new(repository as Arc<dyn UserRepository>));
+    let manager = Arc::new(UserManager::new(repository));
     let user = UserConfig {
         username: "alice".to_string(),
         public_key_pem: "handshake-key".to_string(),

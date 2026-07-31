@@ -8,18 +8,25 @@ use std::path::Path;
 pub struct ProxyConfig {
     pub listen_addr: String,
 
-    /// SQLite 用户数据库路径。Proxy 始终以 read-only/query-only 模式打开，
-    /// 写入和 schema 迁移只由 Proxy Registry 完成。
-    pub users_database_path: String,
+    /// 当前数据面实例的稳定标识，用于访问记录幂等键和运行日志。
+    pub entry_id: String,
 
-    /// 独立的访问记录 SQLite 路径。Proxy 只对这个数据库写入访问历史，绝不向
-    /// 用户数据库写入。
-    pub access_log_database_path: String,
+    /// Proxy Registry 内部控制面的 HTTPS 基础地址。
+    pub registry_control_url: String,
 
-    /// Unix 下允许访问记录数据库及 sidecar 由文件属组读写（`0660`），以便
-    /// Proxy Registry 查询记录和管理保留期。
-    #[serde(default)]
-    pub access_log_database_group_writable: bool,
+    /// 仅当前服务账号可读的控制面 Bearer Token 文件。
+    pub registry_control_token_path: String,
+
+    /// 单个控制面 HTTP 请求的超时时间。
+    #[serde(default = "default_control_request_timeout_secs")]
+    pub control_request_timeout_secs: u64,
+
+    /// 授权快照本地缓存的最长有效时间。安全边界固定为 1..=5 秒。
+    #[serde(
+        default = "default_authorization_cache_max_age_secs",
+        deserialize_with = "deserialize_authorization_cache_max_age_secs"
+    )]
+    pub authorization_cache_max_age_secs: u64,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -175,6 +182,30 @@ fn default_replay_attack_tolerance() -> i64 {
 
 fn default_connect_timeout_secs() -> u64 {
     30
+}
+
+fn default_control_request_timeout_secs() -> u64 {
+    10
+}
+
+fn default_authorization_cache_max_age_secs() -> u64 {
+    5
+}
+
+fn deserialize_authorization_cache_max_age_secs<'de, D>(
+    deserializer: D,
+) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if (1..=5).contains(&value) {
+        Ok(value)
+    } else {
+        Err(de::Error::custom(
+            "authorization_cache_max_age_secs must be between 1 and 5",
+        ))
+    }
 }
 
 fn default_tcp_relay_idle_timeout_secs() -> u64 {

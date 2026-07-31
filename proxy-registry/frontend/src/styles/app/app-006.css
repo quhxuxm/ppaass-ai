@@ -1,0 +1,357 @@
+.retention-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 28px;
+  margin-top: 20px;
+  padding: 20px 22px;
+}
+
+.retention-copy {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.retention-icon {
+  color: #6941c6;
+  background: #f4f3ff;
+}
+
+.retention-control {
+  display: grid;
+  gap: 6px;
+}
+
+.retention-control > label {
+  color: #344054;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.retention-control > div {
+  display: flex;
+  gap: 8px;
+}
+
+.retention-control .p-inputnumber {
+  width: 150px;
+}
+
+.retention-control small {
+  color: #98a2b3;
+  font-size: 0.66rem;
+}
+
+.approval-required-notice,
+.privacy-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  color: #475467;
+  border: 1px solid #fedf89;
+  border-radius: 10px;
+  background: #fffaeb;
+}
+
+.approval-required-notice > i,
+.privacy-notice > i {
+  margin-top: 2px;
+  color: #b54708;
+}
+
+.approval-required-notice > span {
+  display: grid;
+  gap: 3px;
+}
+
+.approval-required-notice strong {
+  font-size: 0.8rem;
+}
+
+.approval-required-notice small,
+.privacy-notice span {
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.approval-dialog-user {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.approval-dialog-user > div {
+  display: grid;
+  gap: 2px;
+}
+
+.approval-dialog-user strong {
+  color: #344054;
+  font-size: 0.85rem;
+}
+
+.approval-dialog-user span {
+  color: #98a2b3;
+  font-size: 0.72rem;
+}
+
+.approval-dialog-message {
+  margin-bottom: 16px;
+}
+
+.approval-expiry-field {
+  margin-top: 18px;
+}
+
+@media (max-width: 1360px) {
+  .users-card .p-datatable-thead > tr > th.p-datatable-frozen-column:last-child,
+  .users-card .p-datatable-tbody > tr > td.p-datatable-frozen-column:last-child {
+    position: static !important;
+    right: auto !important;
+  }
+}
+
+@media (max-width: 1100px) {
+  .auth-page {
+    grid-template-columns: minmax(360px, 0.8fr) minmax(450px, 1.2fr);
+  }
+
+  .auth-intro {
+    padding: 42px;
+  }
+
+  .intro-security {
+    display: grid;
+    gap: 10px;
+  }
+
+  .summary-grid,
+  .permission-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .main-nav {
+    justify-self: start;
+  }
+
+  .account-menu-copy {
+    display: none;
+  }
+
+  .approval-item {
+    grid-template-columns: auto minmax(140px, 1fr) auto;
+  }
+
+  .approval-time {
+    grid-column: 2;
+  }
+
+  .approval-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .retention-card {
+    grid-template-columns: 1fr;
+  }
+
+}
+
+@media (max-width: 820px) {
+  .admin-section-tabs {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .admin-section-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-section-tabs button {
+    flex: 0 0 150px;
+  }
+
+  .auth-page {
+    display: block;
+    padding: 20px;
+    background:
+      radial-gradient(circle at 10% 0, rgba(21, 94, 239, 0.12), transparent 20rem),
+      #f7f9fd;
+  }
+
+  .auth-intro {
+    min-height: auto;
+    margin: 0;
+    padding: 25px;
+    border-radius: 20px;
+  }
+
+  .intro-copy {
+    padding: 48px 0 28px;
+  }
+
+  .intro-copy h1 {
+    font-size: clamp(2.2rem, 10vw, 3.6rem);
+  }
+
+  .intro-security {
+    display: none;
+  }
+
+  .auth-panel {
+    padding: 38px 12px 44px;
+  }
+
+  .topbar {
+    position: sticky;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 9px 12px;
+    width: 100%;
+    min-height: 0;
+    padding: 10px 14px 12px;
+    box-sizing: border-box;
+  }
+
+  .brand.compact,
+  .brand.compact > span:last-child {
+    min-width: 0;
+  }
+
+  .account-menu {
+    flex: 0 0 auto;
+    min-width: 0;
+    justify-self: end;
+    gap: 8px;
+  }
+
+  .main-nav {
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    justify-content: stretch;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    padding: 4px;
+    box-sizing: border-box;
+    border: 1px solid #e4e7ec;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: none;
+    backdrop-filter: blur(15px);
+  }
+
+  .main-nav button {
+    min-width: 0;
+    min-height: 42px;
+    flex: 1;
+    padding-inline: 10px;
+    border-radius: 11px;
+    white-space: nowrap;
+  }
+
+  .topbar-logout-action,
+  .topbar-logout-action.agent-handoff-logout {
+    display: inline-flex;
+    min-width: 104px;
+    min-height: 40px;
+    flex: 0 0 auto;
+    color: #475467;
+    border: 1px solid #d0d5dd;
+    background: #fff;
+  }
+
+  .topbar-logout-action .p-button-label {
+    display: inline;
+  }
+
+  .main-nav button::after {
+    display: none;
+  }
+
+  .main-nav button.active {
+    background: #eef4ff;
+  }
+
+  .workspace {
+    width: min(100% - 28px, 1320px);
+    padding: 32px 0 72px;
+  }
+
+  .page-heading {
+    align-items: flex-start;
+  }
+
+  .admin-heading {
+    display: grid;
+  }
+
+  .key-request-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .key-request-card > .p-tag {
+    grid-column: 2;
+    width: fit-content;
+  }
+
+  .rotate-banner {
+    grid-template-columns: auto 1fr;
+  }
+
+  .rotate-banner .p-button {
+    grid-column: 1 / -1;
+  }
+
+  .table-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .table-actions,
+  .search-box {
+    flex: 1;
+  }
+
+  .search-box .p-inputtext {
+    width: 100%;
+  }
+
+  .approval-card-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .approval-heading-actions {
+    align-self: stretch;
+    justify-content: space-between;
+  }
+
+  .approval-item {
+    grid-template-columns: auto 1fr;
+  }
+
+  .approval-item > .p-tag,
+  .approval-time,
+  .approval-actions {
+    grid-column: 2;
+    grid-row: auto;
+  }
+
+  .approval-actions {
+    align-items: center;
+    flex-direction: row;
+  }
+}

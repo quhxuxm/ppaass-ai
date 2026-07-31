@@ -44,10 +44,10 @@ The requirements in this section are normative and supersede any older conflicti
 - The current data-plane service, Cargo package, binary, configuration and service name are `proxy-entry`. The old `proxy` service name may appear only in explicitly marked migration/cleanup logic.
 - The current account/configuration service, Cargo package, binary and service name are `proxy-registry`. The old `proxy-web` service name may appear only in explicitly marked migration/cleanup logic.
 - Proxy Registry uses Axum and a Vue 3 + PrimeVue frontend.
-- User CRUD must use the database-independent repository traits in `proxy-user-store`. SQLite is the current adapter, but handlers and domain APIs must not expose SQLite types so another database can be added later.
-- `users.toml` is no longer a supported user source or compatibility path. Proxy Registry is the only writer of account, profile, encrypted-key, Proxy-address, approval and audit data. Proxy Entry opens the current user SQLite in forced read-only mode.
-- Proxy access records use a separate SQLite database. Repeated visits by the same user to the same host/address must update the last-access time and increment a counter instead of inserting an unbounded number of duplicate rows.
-- The current production topology has one Proxy Registry process and a local SQLite user database shared read-only with Proxy Entry. Registry Web sessions, SSE fan-out, handoff codes and rate limits are process-local; active-active Registry nodes, a distributed event/session store and independent Entry/Registry user databases are future work, not completed capabilities.
+- User CRUD must use the database-independent repository traits inside `proxy-registry::store`. SQLite is the current adapter, but handlers and domain APIs must not expose SQLite types so another database can be added later.
+- `users.toml` is no longer a supported user source or compatibility path. Proxy Registry exclusively owns account, profile, encrypted-key, Proxy-address, approval, audit and access data. Proxy Entry requests public authorization snapshots through the authenticated control API and never opens SQLite.
+- Proxy access records use a separate Registry-owned SQLite database. Repeated visits by the same user to the same host/address must update the last-access time and increment a counter instead of inserting an unbounded number of duplicate rows. Entry reports bounded batches identified by `(entry_id, batch_id)` so an HTTP retry cannot double count a batch.
+- The current production topology runs two Proxy Registry processes on one Registry host against the same SQLite files. Caddy uses a sticky cookie for the public Web/API listener because Web sessions remain process-local, while the stateless Entry control listener is randomly balanced. Durable Agent events and one-time handoff codes use ordinary SQL so both Registry processes observe consistent state. Proxy Entry may run on a separate server; moving Registry processes to separate hosts requires replacing SQLite with a central database.
 
 ### Registration, login and account lifecycle
 
@@ -160,7 +160,7 @@ The requirements in this section are normative and supersede any older conflicti
 - Frontend tests run before deployment, and the deployed Registry frontend exposes a version marker matching the deployed commit.
 - Linux start scripts provide start/stop/status supervision, PID handling, log setup, configuration validation and health checks for `proxy-entry` and `proxy-registry`. Windows also has a `start-proxy-entry.bat` helper.
 - Production deployment builds and deploys both renamed services. Proxy Registry listens on `127.0.0.1:8787` and is exposed through Caddy on HTTPS/443 with automatic certificate renewal, while Proxy Entry retains its configured TCP/raw-UDP data-plane port.
-- CI must reject any tracked or unignored Rust, TypeScript, JavaScript or HTML source file longer than 400 lines. Large features must be split into focused modules/components.
+- CI must reject any tracked or unignored Rust, TypeScript, Vue, JavaScript, HTML, CSS, shell, YAML, PowerShell or batch source/configuration file longer than 400 lines. Large features must be split into focused modules/components.
 
 ## Architecture requirements
 
@@ -184,7 +184,7 @@ Network package encoding and decoding should use the `Encoder` and `Decoder` tra
 
 The Desktop Agent UI should use Tauri 2, TypeScript, Vue 3 and PrimeVue.
 
-Proxy Registry owns user CRUD through database-independent `proxy-user-store` repository traits. SQLite is the current persistence adapter; `users.toml` is not supported.
+Proxy Registry owns user CRUD through its database-independent repository traits. SQLite is the current persistence adapter; `users.toml` is not supported.
 
 ## Implementation details
 
@@ -206,7 +206,7 @@ Proxy Registry owns user CRUD through database-independent `proxy-user-store` re
 - Important logic:
   - The configuration file format should be `TOML`.
   - Yamux sessions from Agent to Proxy Entry should be created lazily on demand; Agent startup should not proactively open idle TCP/Yamux sessions. This rule does not redefine the configured native UDP session pool.
-  - The project should keep the desktop Agent backend in `desktop-agent-be`, the data-plane server in `proxy-entry`, the control plane in `proxy-registry` and shared account persistence contracts in `proxy-user-store`.
+  - The project should keep the desktop Agent backend in `desktop-agent-be`, the data-plane server in `proxy-entry`, the control plane and persistence contracts in `proxy-registry`, and the versioned Entry control contract in `proxy-control-protocol`.
   - Common logic should be organized as a separate workspace crate named `common`.
   - The efficient and secure Agent-to-Proxy Entry protocol should be organized as a separate workspace crate named `protocol`.
   - The codec should use `LengthDelimitedCodec` from `tokio-util` as the base codec.
@@ -215,11 +215,11 @@ Proxy Registry owns user CRUD through database-independent `proxy-user-store` re
   - Log level should be configurable through configuration and command-line arguments.
   - File logging should be non-blocking.
   - The Tokio runtime thread count should be configurable through configuration and command-line arguments where the signed-in user has permission to change runtime parameters.
-  - Agents, Proxy Entry and Proxy Registry are independently built processes with separate startup scripts and configurations. The current production topology is single-node and co-locates Entry and Registry around the local read-only/shared SQLite boundary; this does not imply multi-node Registry support.
+  - Agents, Proxy Entry and Proxy Registry are independently built processes with separate startup scripts and configurations. The current production topology runs Entry independently and places two Registry processes behind Caddy on the Registry host. Both Registry processes share the local SQLite files; cross-host Registry deployment requires a central database.
   - A restart action in a startup script should stop the currently running process before starting the replacement.
   - The Agent runs on Windows and macOS, so platform helpers should be provided where packaging does not already own process startup.
   - Proxy Entry and Proxy Registry run on Linux, so each service should have its own `sh` startup script.
-  - User CRUD must go through `proxy-user-store` repository traits. Proxy Registry has write ownership of the user database, and Proxy Entry opens the shared user SQLite database as read-only/query-only.
+  - User CRUD must go through `proxy-registry::store` repository traits. Proxy Registry has exclusive ownership of user and access databases; Proxy Entry must use the authenticated control API and must not open either database.
   - The TCP data-forwarding path should use `tokio::io::copy_bidirectional` to relay data between client, Agent, Proxy Entry and target.
 - Flow:
   - The direct framed TCP path and TCP-mode Yamux business substreams should include 3 processes:
@@ -251,26 +251,23 @@ GitHub Actions workflows should build, test and deploy the platform.
 - The container to run the workflow should use the latest stable Debian release.
 - The build workflow builds the project and runs unit tests.
 - The integration workflow runs end-to-end integration tests.
-- Deploy workflow:
-  - Deploy the Proxy Entry and Proxy Registry build results, Registry frontend and related configuration files to the target Linux server with SCP.
-  - Start the two services with `start-proxy-entry.sh` and `start-proxy-registry.sh`.
-  - Copy deployment artifacts to the folder defined by the repository secret `DEPLOY_FOLDER`, keeping service configuration files alongside their respective binaries.
+- Deploy workflows:
+  - Deploy Proxy Entry and Proxy Registry independently so they may run on different Linux servers.
+  - Deploy two Registry processes behind Caddy; deploy Entry without SQLite or Caddy.
+  - Use separate `<ENV>_ENTRY_REMOTE_*` and `<ENV>_REGISTRY_REMOTE_*` SSH credentials.
   - Read the root administrator password from the repository secret `PPAASS_WEB_ADMIN_PASSWORD`; never commit the password or generated runtime secrets.
   - Validate/install or upgrade Caddy when needed, proxy HTTPS/443 to the Registry loopback listener and preserve automatic renewal. For the current public-IP deployment, use an ACME short-lived IP certificate with TLS-ALPN-01 on 443 so renewal does not require port 80.
   - The deployment workflow should be triggered manually with an environment selector:
     - `production`
     - `dev`
     - `qa`
-  - Target Linux server hostname, username and password are read from repository secrets:
+  - Target Linux server hostname, username and password are read from role-specific repository secrets:
     - For `production` env:
-      - The linux server ip address is defined with: `PRODUCTION_REMOTE_HOST`
-      - The linux server username is defined with: `PRODUCTION_REMOTE_USER`
-      - The linux server password is defined with: `PRODUCTION_REMOTE_PASSWORD`
+      - `PRODUCTION_ENTRY_REMOTE_HOST/USER/PASSWORD`
+      - `PRODUCTION_REGISTRY_REMOTE_HOST/USER/PASSWORD`
     - For `dev` env:
-      - The linux server ip address is defined with: `DEV_REMOTE_HOST`
-      - The linux server username is defined with: `DEV_REMOTE_USER`
-      - The linux server password is defined with: `DEV_REMOTE_PASSWORD`
+      - `DEV_ENTRY_REMOTE_HOST/USER/PASSWORD`
+      - `DEV_REGISTRY_REMOTE_HOST/USER/PASSWORD`
     - For `qa` env:
-      - The linux server ip address is defined with: `QA_REMOTE_HOST`
-      - The linux server username is defined with: `QA_REMOTE_USER`
-      - The linux server password is defined with: `QA_REMOTE_PASSWORD`
+      - `QA_ENTRY_REMOTE_HOST/USER/PASSWORD`
+      - `QA_REGISTRY_REMOTE_HOST/USER/PASSWORD`

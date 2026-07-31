@@ -8,7 +8,7 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
-- **User Management Console**: Axum API and Vue/PrimeVue UI backed by the same user repository as Proxy authentication
+- **User Management Console**: Axum API and Vue/PrimeVue UI backed by Registry-owned persistence; Proxy Entry reads public authorization snapshots through the authenticated control API
 - **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
 - **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
@@ -58,14 +58,25 @@ ${EDITOR:-vi} config/local/agent.toml
 ${EDITOR:-vi} config/local/proxy-entry.toml
 ```
 
-2. Start Proxy Entry:
+2. Start Proxy Registry with a control token, then start Proxy Entry with the
+   same token stored in the configured token file:
 
 ```bash
+export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
+export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes"
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
+umask 077
+mkdir -p data
+printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
+cargo run --release -p proxy-registry -- \
+  --proxy-identity-public-key data/proxy-identity-public.pem
+
 cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
 ```
 
-3. Start Proxy Registry, register a user, and approve the user's key request. Proxy Registry is the only
-   writer for the shared SQLite user database.
+3. Register a user and approve the user's key request. Proxy Registry is the
+   only owner of the SQLite databases; Proxy Entry uses its authenticated
+   control API and never opens SQLite.
 
 4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Registry.
 
@@ -145,8 +156,9 @@ The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are i
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
-users_database_path = "data/proxy-users.sqlite3" # Required user database; Proxy opens it read-only
-access_log_database_path = "data/proxy-access.sqlite3" # Required, separate writable access database
+entry_id = "entry-local"                   # Stable identity for idempotent batches
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 transport_identity_private_key_path = "data/proxy-identity-private.pem" # Required PKCS#8 identity
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
@@ -155,10 +167,10 @@ udp_session_channel_size = 256             # Datagrams queued per native UDP ses
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
 
-Proxy requires the SQLite user database and has no file-based user fallback. Proxy Registry owns schema
-migrations and user writes; Proxy opens the same user database read-only and writes visit history
-only to the physically separate access database. New user changes are visible to subsequent TCP
-and UDP authentications without restarting Proxy.
+Proxy Registry exclusively owns schema migrations, user data and access history. Proxy Entry resolves
+authorization over the versioned control API, keeps a cache for at most five seconds, invalidates it
+from Registry SSE events, and sends access history in idempotent batches. A control outage therefore
+fails closed after the bounded cache expires.
 
 See [`proxy-registry/README.md`](proxy-registry/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 
@@ -210,7 +222,7 @@ Set log level via environment variable:
 ```bash
 RUST_LOG=info cargo run -p proxy-entry
 cd desktop-agent-ui && RUST_LOG=debug npm run tauri dev
-RUST_LOG=proxy_registry=debug,proxy_user_store=debug cargo run -p proxy-registry
+RUST_LOG=proxy_registry=debug,tower_http=info cargo run -p proxy-registry
 ```
 
 ## Development
@@ -222,8 +234,8 @@ ppaass-ai/
 ├── desktop-agent-be/  # Client-side desktop agent backend
 ├── desktop-agent-ui/       # Desktop agent UI
 ├── proxy-entry/          # Proxy Entry
-├── proxy-user-store/ # Database-independent user repository + SQLite adapter
-├── proxy-registry/      # Axum API and Vue/PrimeVue user management console
+├── proxy-registry/      # Control plane, persistence, API and Vue console
+├── proxy-control-protocol/ # Versioned Registry-to-Entry HTTP/SSE contract
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities
 ├── tests/          # Integration and performance tests

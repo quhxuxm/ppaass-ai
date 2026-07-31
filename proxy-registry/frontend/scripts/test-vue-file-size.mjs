@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const sourceRoot = fileURLToPath(new URL('../src', import.meta.url))
 const oversizedFiles = readdirSync(sourceRoot, { recursive: true })
-  .filter((path) => path.endsWith('.vue'))
+  .filter((path) => /\.(?:ts|vue)$/.test(path))
   .map((path) => {
     const absolutePath = join(sourceRoot, path)
     const lines = readFileSync(absolutePath, 'utf8').split(/\r?\n/).length
@@ -19,9 +19,9 @@ const oversizedFiles = readdirSync(sourceRoot, { recursive: true })
 assert.deepEqual(
   oversizedFiles,
   [],
-  `以下 Vue 文件超过 400 行：\n${oversizedFiles
+  `以下前端源码文件超过 400 行：\n${oversizedFiles
     .map(({ lines, path }) => `- ${path}: ${lines} 行`)
     .join('\n')}`,
 )
 
-console.log('Proxy Registry Vue 文件行数检查通过（每个文件不超过 400 行）')
+console.log('Proxy Registry 前端源码行数检查通过（每个文件不超过 400 行）')

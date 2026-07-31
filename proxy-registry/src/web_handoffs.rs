@@ -1,8 +1,8 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use proxy_user_store::{
+use crate::store::{
     AgentWebSessionHandoffConsume, AgentWebSessionHandoffCreate, AgentWebSessionHandoffRepository,
     NewAgentWebSessionHandoff, WebAccount,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use std::{
     sync::Arc,
@@ -185,7 +185,7 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proxy_user_store::{
+    use crate::store::{
         AccountRepository, AgentWebSessionHandoffRepository, NewAdminAccount, SqliteUserRepository,
     };
     use tempfile::TempDir;

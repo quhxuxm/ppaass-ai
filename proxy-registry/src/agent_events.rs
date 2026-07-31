@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use proxy_user_store::{AgentEventRecord, AgentEventRepository, UserRepositoryError};
+use crate::store::{AgentEventRecord, AgentEventRepository, UserRepositoryError};
 use tokio::sync::broadcast;
 use tracing::{debug, error, warn};
 
@@ -29,6 +29,13 @@ impl AgentServerEvent {
         self.account_id
             .as_deref()
             .is_none_or(|target| target == account_id)
+    }
+
+    pub(crate) fn affects_proxy_authorization(&self) -> bool {
+        matches!(
+            self.kind.as_ref(),
+            "profile_changed" | "profiles_changed" | "sync"
+        )
     }
 }
 
@@ -179,7 +186,7 @@ async fn purge_expired_events(repository: &dyn AgentEventRepository) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proxy_user_store::{NewProxyAddress, ProxyAddressRepository, SqliteUserRepository};
+    use crate::store::{NewProxyAddress, ProxyAddressRepository, SqliteUserRepository};
     use tempfile::TempDir;
 
     #[tokio::test]

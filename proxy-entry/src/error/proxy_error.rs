@@ -19,4 +19,7 @@ pub enum ProxyError {
 
     #[error("Configuration error: {0}")]
     Configuration(String),
+
+    #[error("Control plane error: {0}")]
+    ControlPlane(String),
 }

@@ -7,6 +7,7 @@
 mod access_log;
 mod config;
 mod connection;
+mod control_plane;
 mod error;
 mod native_udp;
 mod server;
@@ -136,8 +137,8 @@ fn main() -> Result<()> {
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or("默认路由")
         );
-        info!("只读用户数据库：{}", config.users_database_path);
-        info!("访问记录数据库：{}", config.access_log_database_path);
+        info!("Proxy Entry 实例：{}", config.entry_id);
+        info!("Registry 控制面：{}", config.registry_control_url);
 
         // 主监听循环外面包一层 panic 恢复：单次服务 run panic 后重新建 listener。
         // 普通错误仍返回给进程，避免配置/绑定等硬错误被无限重启掩盖。

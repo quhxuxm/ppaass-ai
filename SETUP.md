@@ -44,14 +44,32 @@ mkdir -p config keys
 
 ## Configuration
 
-### Step 1: Start Proxy Entry
+### Step 1: Start Proxy Registry
+
+Proxy Registry owns SQLite and exposes a separate loopback control listener:
+
+```bash
+export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
+export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes"
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
+umask 077
+mkdir -p data
+printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
+cargo run --release -p proxy-registry -- \
+  --listen 127.0.0.1:8787 \
+  --control-listen 127.0.0.1:8797 \
+  --proxy-identity-public-key data/proxy-identity-public.pem
+```
+
+### Step 2: Start Proxy Entry
 
 1. Edit `config/local/proxy-entry.toml` if needed:
 
 ```toml
 listen_addr = "0.0.0.0:8080"
-users_database_path = "data/proxy-users.sqlite3"
-access_log_database_path = "data/proxy-access.sqlite3"
+entry_id = "entry-local"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
@@ -79,13 +97,13 @@ If you deploy the binaries and configs alongside the scripts, use:
 .\start-proxy-entry.bat
 ```
 
-### Step 2: Register and Approve a User
+### Step 3: Register and Approve a User
 
-Start Proxy Registry against the same `users_database_path`, register a normal account, submit a key
-request, and approve it from the administrator console with an expiration time. Proxy Registry creates
-the managed key pair and writes the user profile to SQLite; Proxy opens that database read-only.
+Register a normal account, submit a key request, and approve it from the administrator console with
+an expiration time. Proxy Registry creates the managed key pair and persists it. Proxy Entry receives
+only public authorization snapshots over the authenticated control API.
 
-### Step 3: Configure the Agent
+### Step 4: Configure the Agent
 
 Edit `config/agent.toml` with the Proxy Registry endpoint, then sign in from the Agent UI. Proxy Registry
 assigns the runtime Proxy addresses; they are not stored in `agent.toml`. The Agent downloads and

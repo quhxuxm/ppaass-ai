@@ -1,10 +1,10 @@
+use crate::store::{AccountRepository, AccountStatus, WebAccount};
 use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::http::{HeaderMap, HeaderValue, header};
 use dashmap::DashMap;
-use proxy_user_store::{AccountRepository, AccountStatus, WebAccount};
 use rand::RngExt;
 use std::{
     sync::{

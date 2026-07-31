@@ -164,30 +164,23 @@ fn duration_until_expiry(expires_at: i64, now: SystemTime) -> Duration {
 mod tests {
     use super::*;
     use crate::config::PERMISSION_PROXY_CONNECT_TCP;
+    use crate::user_manager::TestAuthorizationProvider;
     use protocol::RsaKeyPair;
-    use proxy_user_store::{
-        AccountRepository, NewAdminAccount, SqliteUserRepository, UserRepository, UserUpdate,
-    };
-    use tempfile::TempDir;
 
     #[tokio::test]
-    async fn absolute_expiry_closes_idle_sqlite_connection() {
-        let directory = TempDir::new().unwrap();
-        let store = Arc::new(
-            SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
-                .await
-                .unwrap(),
-        );
+    async fn absolute_expiry_closes_idle_connection() {
         let expires_at = common::current_timestamp() + 30;
         let public_key = RsaKeyPair::generate(2048)
             .unwrap()
             .public_key_to_pem()
             .unwrap();
-        store
-            .create_user("alice", &public_key, Some(expires_at))
-            .await
-            .unwrap();
-        let manager = Arc::new(UserManager::new(store as Arc<dyn UserRepository>));
+        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
+            &public_key,
+            true,
+            1,
+            Some(expires_at),
+        )]));
+        let manager = Arc::new(UserManager::new(provider));
         let user = manager.get_user("alice").await.unwrap().unwrap();
         let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
 
@@ -205,12 +198,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_key_version_rejects_public_key_aba() {
-        let directory = TempDir::new().unwrap();
-        let database_path = directory.path().join("users.sqlite3");
-        let store = Arc::new(SqliteUserRepository::connect(&database_path).await.unwrap());
-        create_test_admin(&store).await;
-        let manager = Arc::new(UserManager::new(store.clone() as Arc<dyn UserRepository>));
+    async fn key_version_rejects_public_key_aba() {
         let public_key_a = RsaKeyPair::generate(2048)
             .unwrap()
             .public_key_to_pem()
@@ -219,33 +207,22 @@ mod tests {
             .unwrap()
             .public_key_to_pem()
             .unwrap();
-        let created = store
-            .create_user("alice", &public_key_a, Some(i64::MAX))
-            .await
-            .unwrap();
+        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
+            &public_key_a,
+            true,
+            1,
+            Some(i64::MAX),
+        )]));
+        let manager = Arc::new(UserManager::new(provider.clone()));
         let user = manager.get_user("alice").await.unwrap().unwrap();
         let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
 
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    public_key_pem: Some(public_key_b),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    public_key_pem: Some(created.public_key_pem),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
+        provider
+            .set_user(test_user(&public_key_b, true, 2, Some(i64::MAX)))
+            .await;
+        provider
+            .set_user(test_user(&public_key_a, true, 3, Some(i64::MAX)))
+            .await;
 
         assert!(
             authorization
@@ -257,39 +234,25 @@ mod tests {
 
     #[tokio::test]
     async fn periodic_recheck_closes_disabled_connection_within_five_seconds() {
-        let directory = TempDir::new().unwrap();
-        let database_path = directory.path().join("users.sqlite3");
-        let store = Arc::new(SqliteUserRepository::connect(&database_path).await.unwrap());
-        create_test_admin(&store).await;
-        let manager = Arc::new(UserManager::new(store.clone() as Arc<dyn UserRepository>));
         let public_key = RsaKeyPair::generate(2048)
             .unwrap()
             .public_key_to_pem()
             .unwrap();
-        store
-            .create_user("alice", &public_key, Some(i64::MAX))
-            .await
-            .unwrap();
+        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
+            &public_key,
+            true,
+            1,
+            Some(i64::MAX),
+        )]));
+        let manager = Arc::new(UserManager::new(provider.clone()));
         let user = manager.get_user("alice").await.unwrap().unwrap();
         let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
 
         // 模拟 ConnectSuccess 刚发送后管理员停用账号。guard 的周期不受 relay
         // activity/idle timer 影响，最迟第五秒独立唤醒并关闭。
-        store
-            .update_user(
-                "alice",
-                UserUpdate {
-                    enabled: Some(false),
-                    changed_by: Some(proxy_user_store::AccountActor {
-                        account_id: "test-admin".to_string(),
-                        login_name: "test-admin".to_string(),
-                    }),
-                    audit_reason: Some("测试周期授权复查".to_string()),
-                    ..UserUpdate::default()
-                },
-            )
-            .await
-            .unwrap();
+        provider
+            .set_user(test_user(&public_key, false, 1, Some(i64::MAX)))
+            .await;
         tokio::time::pause();
         let guard =
             tokio::spawn(
@@ -303,17 +266,19 @@ mod tests {
         assert!(guard.await.unwrap().is_err());
     }
 
-    async fn create_test_admin(store: &SqliteUserRepository) {
-        store
-            .bootstrap_admin_if_absent(NewAdminAccount {
-                account_id: "test-admin".to_string(),
-                login_name: "test-admin".to_string(),
-                password_hash: None,
-                display_name: None,
-                email: None,
-                avatar_url: None,
-            })
-            .await
-            .unwrap();
+    fn test_user(
+        public_key_pem: &str,
+        enabled: bool,
+        key_version: i64,
+        expires_at: Option<i64>,
+    ) -> UserConfig {
+        UserConfig {
+            username: "alice".to_string(),
+            public_key_pem: public_key_pem.to_string(),
+            expires_at: expires_at.map(|value| value.to_string()),
+            permissions: vec![PERMISSION_PROXY_CONNECT_TCP.to_string()],
+            enabled,
+            key_version: Some(key_version),
+        }
     }
 }

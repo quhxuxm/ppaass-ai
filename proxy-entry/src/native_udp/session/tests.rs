@@ -4,18 +4,14 @@ use super::{
     duration_until_expiry, run_session, session_expired_at,
 };
 use crate::access_log::AccessRecorder;
-use crate::config::ProxyConfig;
+use crate::config::{ProxyConfig, UserConfig};
 use crate::connection::EgressState;
 use crate::error::ProxyError;
-use crate::user_manager::UserManager;
+use crate::user_manager::{AuthorizationProvider, TestAuthorizationProvider, UserManager};
 use protocol::udp_transport::{UdpSessionCodec, UdpSessionRole};
-use proxy_user_store::{
-    Result as StoreResult, SqliteUserRepository, UserRecord, UserRepository, UserUpdate,
-};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
-use tempfile::TempDir;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -23,29 +19,8 @@ use tokio::time::Instant;
 struct NeverRespondingUserRepository;
 
 #[async_trait::async_trait]
-impl UserRepository for NeverRespondingUserRepository {
-    async fn get_user(&self, _username: &str) -> StoreResult<Option<UserRecord>> {
-        std::future::pending().await
-    }
-
-    async fn list_users(&self) -> StoreResult<Vec<UserRecord>> {
-        std::future::pending().await
-    }
-
-    async fn create_user(
-        &self,
-        _username: &str,
-        _public_key_pem: &str,
-        _expires_at: Option<i64>,
-    ) -> StoreResult<UserRecord> {
-        std::future::pending().await
-    }
-
-    async fn update_user(&self, _username: &str, _update: UserUpdate) -> StoreResult<UserRecord> {
-        std::future::pending().await
-    }
-
-    async fn delete_user(&self, _username: &str) -> StoreResult<()> {
+impl AuthorizationProvider for NeverRespondingUserRepository {
+    async fn get_user(&self, _username: &str) -> crate::error::Result<Option<UserConfig>> {
         std::future::pending().await
     }
 }
@@ -238,13 +213,13 @@ fn absolute_expiry_uses_the_epoch_boundary_without_second_rounding() {
 #[tokio::test]
 async fn session_closes_at_absolute_expiry_without_inbound_activity() {
     let expires_at = common::current_timestamp() + 10;
-    let repository: Arc<dyn UserRepository> = Arc::new(NeverRespondingUserRepository);
-    let user_manager = Arc::new(UserManager::new(repository));
+    let user_manager = Arc::new(UserManager::new(Arc::new(NeverRespondingUserRepository)));
     let config: ProxyConfig = toml::from_str(
         r#"
 listen_addr = "127.0.0.1:0"
-users_database_path = "users.sqlite3"
-access_log_database_path = "access.sqlite3"
+entry_id = "entry-test"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "control-token"
 "#,
     )
     .unwrap();
@@ -277,18 +252,15 @@ access_log_database_path = "access.sqlite3"
 
 #[tokio::test]
 async fn periodic_revalidation_fails_closed_within_five_seconds() {
-    let directory = TempDir::new().unwrap();
-    let repository: Arc<dyn UserRepository> = Arc::new(
-        SqliteUserRepository::connect(directory.path().join("users.sqlite3"))
-            .await
-            .unwrap(),
-    );
-    let user_manager = Arc::new(UserManager::new(repository));
+    let user_manager = Arc::new(UserManager::new(Arc::new(
+        TestAuthorizationProvider::default(),
+    )));
     let config: ProxyConfig = toml::from_str(
         r#"
 listen_addr = "127.0.0.1:0"
-users_database_path = "users.sqlite3"
-access_log_database_path = "access.sqlite3"
+entry_id = "entry-test"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "control-token"
 udp_session_authorization_recheck_secs = 1
 "#,
     )

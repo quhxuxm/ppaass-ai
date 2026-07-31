@@ -6,6 +6,7 @@
 use crate::access_log::AccessRecorder;
 use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
+use crate::control_plane::{AccessEventSink, RemoteControlPlane};
 use crate::error::Result;
 use crate::transport_identity::load_transport_identity_private_key;
 use crate::user_manager::UserManager;
@@ -15,10 +16,6 @@ use common::{
 };
 use futures::StreamExt;
 use protocol::{CompressionMode, RsaKeyPair};
-use proxy_user_store::{
-    AccessLogRepository, SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository,
-    UserRepository,
-};
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -77,52 +74,22 @@ impl ProxyServer {
         ))?);
         info!("已安全加载 Proxy TCP/Yamux 传输身份私钥");
 
-        // Proxy 对主用户库只有读取能力；访问历史写入物理隔离的第二个 SQLite。
-        let database_path = &config.users_database_path;
-        let access_database_path = &config.access_log_database_path;
-        SqliteAccessLogRepository::validate_distinct_database_paths(
-            access_database_path,
-            database_path,
-        )
-        .map_err(|error| {
-            crate::error::ProxyError::Configuration(format!("访问记录数据库路径不安全：{error}"))
-        })?;
-        let sqlite = Arc::new(
-            SqliteUserRepository::connect_read_only(database_path)
-                .await
-                .map_err(|error| {
-                    crate::error::ProxyError::Configuration(format!(
-                        "以只读模式打开用户数据库 {database_path} 失败：{error}"
-                    ))
-                })?,
-        );
-        let access_file_permissions = if config.access_log_database_group_writable {
-            SqliteFilePermissions::OwnerAndGroup
-        } else {
-            SqliteFilePermissions::OwnerOnly
-        };
-        let access_sqlite = Arc::new(
-            SqliteAccessLogRepository::connect_with_permissions(
-                access_database_path,
-                access_file_permissions,
-            )
-            .await
-            .map_err(|error| {
+        let transport_identity_public_key_pem =
+            transport_identity.public_key_to_pem().map_err(|error| {
                 crate::error::ProxyError::Configuration(format!(
-                    "打开访问记录数据库 {access_database_path} 失败：{error}"
+                    "无法派生 Proxy 传输身份公钥：{error}"
                 ))
-            })?,
-        );
+            })?;
+        let control_plane =
+            RemoteControlPlane::connect(&config, &transport_identity_public_key_pem).await?;
         info!(
-            user_database = %sqlite.path().display(),
-            access_database = %access_sqlite.path().display(),
-            ?access_file_permissions,
-            "已启用只读用户 Repository 与独立访问记录 Repository"
+            entry_id = config.entry_id,
+            registry_control_url = config.registry_control_url,
+            "已启用远程 Registry 授权与访问记录控制面"
         );
-        let user_repository = sqlite as Arc<dyn UserRepository>;
-        let access_repository = access_sqlite as Arc<dyn AccessLogRepository>;
-        let access_recorder = AccessRecorder::start(access_repository);
-        let user_manager = Arc::new(UserManager::new(user_repository));
+        let access_recorder =
+            AccessRecorder::start(control_plane.clone() as Arc<dyn AccessEventSink>);
+        let user_manager = Arc::new(UserManager::new(control_plane));
 
         // 出站状态在启动时构建；auto 模式会缓存初始路由表，并在默认路由不可用时刷新。
         let egress_state = Arc::new(EgressState::new(

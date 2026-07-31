@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readStyles } from "./read-styles.mjs";
 
-const view = await readFile(
-  new URL("../src/views/PacketCaptureView.vue", import.meta.url),
-  "utf8"
-);
-const styles = await readFile(
-  new URL("../src/styles.css", import.meta.url),
-  "utf8"
-);
+const view = (
+  await Promise.all([
+    readFile(
+      new URL("../src/views/PacketCaptureView.vue", import.meta.url),
+      "utf8"
+    ),
+    readFile(
+      new URL("../src/composables/usePacketCaptureView.ts", import.meta.url),
+      "utf8"
+    )
+  ])
+).join("\n");
+const styles = await readStyles();
 const workspace = await readFile(
   new URL("../src/AgentWorkspace.vue", import.meta.url),
   "utf8"

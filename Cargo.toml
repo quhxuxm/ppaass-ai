@@ -2,7 +2,7 @@
 members = [
     "desktop-agent-be",
     "proxy-entry",
-    "proxy-user-store",
+    "proxy-control-protocol",
     "proxy-registry",
     "common",
     "protocol",

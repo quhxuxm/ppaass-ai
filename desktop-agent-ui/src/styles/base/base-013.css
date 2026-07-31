@@ -1,0 +1,357 @@
+.toml-string {
+  color: #ff7aa8;
+}
+
+.toml-number {
+  color: #6aa2ff;
+}
+
+.toml-boolean {
+  color: #ff4b85;
+}
+
+.toml-date {
+  color: #59a0ff;
+}
+
+.spinner {
+  border-color: rgba(11, 94, 215, 0.14);
+  border-top-color: #f60057;
+}
+
+.toast.success::before {
+  background: #00c58e;
+}
+
+.toast.info::before {
+  background: #ffd100;
+}
+
+.toast.error::before {
+  background: #f60057;
+}
+
+.status-pill.online {
+  background: #dcf9ef;
+  color: #007a58;
+}
+
+/* Distributed swatch palette: keep the reference ratio, but blend colors into
+   roles instead of showing literal color bars. */
+:root,
+.app-frame {
+  --p-primary-color: #e93a74 !important;
+  --p-primary-hover-color: #cf2b68 !important;
+  --p-primary-active-color: #ad2059 !important;
+  --p-primary-50: #fff2f7 !important;
+  --p-primary-100: #ffe0eb !important;
+  --p-primary-200: #ffc3d8 !important;
+  --p-primary-500: #e93a74 !important;
+  --p-primary-600: #cf2b68 !important;
+  --p-primary-700: #ad2059 !important;
+  --p-button-primary-background: #e93a74 !important;
+  --p-button-primary-hover-background: #cf2b68 !important;
+  --p-button-primary-active-background: #ad2059 !important;
+}
+
+body {
+  background:
+    radial-gradient(circle at 12% 4%, rgba(246, 0, 87, 0.11), rgba(246, 0, 87, 0) 30%),
+    radial-gradient(circle at 72% 0%, rgba(255, 209, 0, 0.1), rgba(255, 209, 0, 0) 28%),
+    radial-gradient(circle at 84% 84%, rgba(0, 197, 142, 0.095), rgba(0, 197, 142, 0) 28%),
+    radial-gradient(circle at 26% 92%, rgba(11, 94, 215, 0.08), rgba(11, 94, 215, 0) 26%),
+    linear-gradient(135deg, #fffaf4 0%, #f6fbf8 48%, #fff5f8 100%);
+}
+
+.app-frame {
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.14)),
+    radial-gradient(circle at 8% 0%, rgba(246, 0, 87, 0.1), rgba(246, 0, 87, 0) 34%),
+    radial-gradient(circle at 78% 12%, rgba(255, 209, 0, 0.09), rgba(255, 209, 0, 0) 32%),
+    radial-gradient(circle at 88% 76%, rgba(0, 197, 142, 0.08), rgba(0, 197, 142, 0) 30%),
+    radial-gradient(circle at 28% 95%, rgba(11, 94, 215, 0.075), rgba(11, 94, 215, 0) 28%),
+    var(--app-bg);
+}
+
+.brand-mark {
+  background:
+    radial-gradient(circle at 28% 22%, rgba(255, 209, 0, 0.82), transparent 28%),
+    radial-gradient(circle at 78% 72%, rgba(0, 197, 142, 0.78), transparent 32%),
+    linear-gradient(135deg, #e93a74 0%, #cf2b68 46%, #0b5ed7 100%);
+  color: #ffffff;
+}
+
+.nav-button.p-button.active {
+  background:
+    linear-gradient(135deg, rgba(246, 0, 87, 0.18) 0%, rgba(255, 209, 0, 0.16) 46%, rgba(0, 197, 142, 0.15) 72%, rgba(11, 94, 215, 0.13) 100%),
+    rgba(255, 255, 255, 0.56) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(233, 58, 116, 0.5),
+    0 10px 22px rgba(11, 94, 215, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.p-button.p-button-primary,
+.toolbar .p-button.p-button-primary {
+  background:
+    linear-gradient(135deg, rgba(255, 224, 82, 0.82) 0%, rgba(255, 209, 0, 0.46) 34%, rgba(233, 58, 116, 0.64) 78%, rgba(207, 43, 104, 0.7) 100%);
+  color: #171a22;
+  box-shadow:
+    0 12px 24px rgba(233, 58, 116, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+}
+
+.p-button.p-button-primary:not(:disabled):hover,
+.toolbar .p-button.p-button-primary:not(:disabled):hover {
+  background:
+    linear-gradient(135deg, rgba(255, 226, 92, 0.86) 0%, rgba(255, 209, 0, 0.48) 34%, rgba(233, 58, 116, 0.7) 78%, rgba(173, 32, 89, 0.76) 100%) !important;
+  color: #171a22 !important;
+  box-shadow:
+    0 14px 28px rgba(233, 58, 116, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+}
+
+.overview-card::before {
+  background: linear-gradient(90deg, rgba(233, 58, 116, 0.72) 0%, rgba(255, 209, 0, 0.64) 46%, rgba(0, 197, 142, 0.58) 72%, rgba(11, 94, 215, 0.52) 100%);
+}
+
+.panel {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 253, 248, 0.68)),
+    linear-gradient(135deg, rgba(246, 0, 87, 0.026), rgba(255, 209, 0, 0.03) 46%, rgba(0, 197, 142, 0.028) 72%, rgba(11, 94, 215, 0.025));
+}
+
+.hourly-segment.download,
+.legend-dot.download {
+  background: linear-gradient(180deg, rgba(255, 209, 0, 0.76) 0%, rgba(233, 58, 116, 0.88) 68%, rgba(207, 43, 104, 0.9) 100%);
+}
+
+.hourly-segment.upload,
+.legend-dot.upload {
+  background: linear-gradient(180deg, rgba(0, 197, 142, 0.82) 0%, rgba(11, 94, 215, 0.8) 100%);
+}
+
+/* Component-role palette: distribute the reference colors by UI purpose instead
+   of mixing them into rainbow strips. */
+:root,
+.app-frame {
+  --app-primary: #e44f82;
+  --app-primary-strong: #c83d70;
+  --app-success: #17b889;
+  --app-coral: #e44f82;
+  --app-violet: #3267c9;
+  --app-cyan: #17b889;
+  --app-lemon: #f3c63c;
+  --p-primary-color: #e44f82 !important;
+  --p-primary-hover-color: #c83d70 !important;
+  --p-primary-active-color: #a92f5e !important;
+  --p-primary-50: #fff2f7 !important;
+  --p-primary-100: #ffe1ec !important;
+  --p-primary-200: #ffc5da !important;
+  --p-primary-500: #e44f82 !important;
+  --p-primary-600: #c83d70 !important;
+  --p-primary-700: #a92f5e !important;
+  --p-button-text-primary-color: #3267c9 !important;
+  --p-button-text-primary-hover-background: rgba(23, 184, 137, 0.13) !important;
+  --p-button-outlined-primary-color: #3267c9 !important;
+  --p-button-outlined-primary-border-color: rgba(50, 103, 201, 0.22) !important;
+  --p-button-outlined-primary-hover-background: rgba(23, 184, 137, 0.12) !important;
+  --p-button-primary-background: #f3c63c !important;
+  --p-button-primary-hover-background: #e8b731 !important;
+  --p-button-primary-active-background: #d5a327 !important;
+  --p-form-field-hover-border-color: rgba(23, 184, 137, 0.48) !important;
+  --p-form-field-focus-border-color: rgba(50, 103, 201, 0.46) !important;
+}
+
+.brand-mark {
+  background: linear-gradient(135deg, #e44f82 0%, #3267c9 100%);
+  color: #ffffff;
+  box-shadow:
+    0 14px 30px rgba(228, 79, 130, 0.16),
+    0 8px 20px rgba(50, 103, 201, 0.12);
+}
+
+.nav-button.p-button.active {
+  background:
+    linear-gradient(135deg, rgba(50, 103, 201, 0.18), rgba(23, 184, 137, 0.12)),
+    rgba(255, 255, 255, 0.58) !important;
+  color: #253653 !important;
+  box-shadow:
+    inset 3px 0 0 rgba(50, 103, 201, 0.56),
+    0 10px 22px rgba(50, 103, 201, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.nav-button.p-button.active .p-button-icon,
+.nav-button.p-button.active .p-button-label {
+  color: #253653 !important;
+}
+
+.p-button.p-button-primary,
+.toolbar .p-button.p-button-primary {
+  background: linear-gradient(135deg, #ffe070 0%, #f3c63c 54%, #e98a8e 100%);
+  color: #1d2430;
+  box-shadow:
+    0 12px 24px rgba(217, 161, 39, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.p-button.p-button-primary:not(:disabled):hover,
+.toolbar .p-button.p-button-primary:not(:disabled):hover {
+  background: linear-gradient(135deg, #ffe582 0%, #f0bd36 56%, #dc7484 100%) !important;
+  color: #1d2430 !important;
+  box-shadow:
+    0 14px 28px rgba(217, 161, 39, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.44) !important;
+}
+
+.sidebar-toggle.p-button:hover,
+.nav-button.p-button:hover,
+.preset-button:hover,
+.rule-chip-remove:hover,
+.p-button.p-button-text:not(:disabled):hover,
+.p-button.p-button-outlined:not(:disabled):hover,
+.icon-button:hover:not(:disabled),
+.ghost-button:hover,
+.overview-drag-handle:hover {
+  border-color: rgba(23, 184, 137, 0.32) !important;
+  background: rgba(23, 184, 137, 0.12) !important;
+  color: #3267c9 !important;
+}
+
+.sidebar-toggle.p-button:hover .p-button-icon,
+.sidebar-toggle.p-button:hover .p-button-label,
+.p-button.p-button-text:not(:disabled):hover .p-button-icon,
+.p-button.p-button-text:not(:disabled):hover .p-button-label,
+.p-button.p-button-outlined:not(:disabled):hover .p-button-icon,
+.p-button.p-button-outlined:not(:disabled):hover .p-button-label {
+  color: #3267c9 !important;
+}
+
+.panel {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 253, 248, 0.68)),
+    linear-gradient(135deg, rgba(228, 79, 130, 0.024), rgba(23, 184, 137, 0.024));
+}
+
+.overview-card::before {
+  height: 2px;
+  opacity: 0.78;
+  background: rgba(50, 103, 201, 0.5);
+}
+
+.overview-card:nth-child(4n + 1)::before {
+  background: rgba(228, 79, 130, 0.56);
+}
+
+.overview-card:nth-child(4n + 2)::before {
+  background: rgba(243, 198, 60, 0.62);
+}
+
+.overview-card:nth-child(4n + 3)::before {
+  background: rgba(23, 184, 137, 0.52);
+}
+
+.overview-card:nth-child(4n + 4)::before {
+  background: rgba(50, 103, 201, 0.5);
+}
+
+.overview-card:nth-child(4n + 1) {
+  border-color: rgba(228, 79, 130, 0.22);
+}
+
+.overview-card:nth-child(4n + 2) {
+  border-color: rgba(243, 198, 60, 0.28);
+}
+
+.overview-card:nth-child(4n + 3) {
+  border-color: rgba(23, 184, 137, 0.22);
+}
+
+.overview-card:nth-child(4n + 4) {
+  border-color: rgba(50, 103, 201, 0.2);
+}
+
+.metric-tile:nth-child(4n + 1) i,
+.metric-tile:nth-child(4n + 1) svg,
+.forwarding-method:nth-child(4n + 1) i,
+.rule-scope-item:nth-child(4n + 1) i {
+  color: #e44f82;
+}
+
+.metric-tile:nth-child(4n + 2) i,
+.metric-tile:nth-child(4n + 2) svg,
+.forwarding-method:nth-child(4n + 2) i,
+.rule-scope-item:nth-child(4n + 2) i {
+  color: #b98b00;
+}
+
+.metric-tile:nth-child(4n + 3) i,
+.metric-tile:nth-child(4n + 3) svg,
+.forwarding-method:nth-child(4n + 3) i,
+.rule-scope-item:nth-child(4n + 3) i,
+.log-line-debug {
+  color: #0f9f78;
+}
+
+.metric-tile:nth-child(4n + 4) i,
+.metric-tile:nth-child(4n + 4) svg,
+.forwarding-method:nth-child(4n + 4) i,
+.rule-scope-item:nth-child(4n + 4) i,
+.log-line-info {
+  color: #3267c9;
+}
+
+.log-line-debug {
+  border-left-color: #0f9f78;
+}
+
+.log-line-info {
+  border-left-color: #3267c9;
+}
+
+.hourly-segment.download,
+.legend-dot.download {
+  background: linear-gradient(180deg, #f3c63c 0%, #e44f82 100%);
+}
+
+.hourly-segment.upload,
+.legend-dot.upload {
+  background: linear-gradient(180deg, #17b889 0%, #3267c9 100%);
+}
+
+.p-tag-info,
+.p-badge-info,
+.metric-badge.neutral,
+.p-tag.p-tag-info,
+.p-badge.p-badge-info {
+  background: #e7f0ff !important;
+  color: #245bb7 !important;
+}
+
+.p-tag-success,
+.p-badge-success,
+.metric-badge.good,
+.p-tag.p-tag-success,
+.p-badge.p-badge-success,
+.status-pill.online {
+  background: #def8ef !important;
+  color: #087454 !important;
+}
+
+.p-tag-warn,
+.p-badge-warn,
+.p-tag.p-tag-warn,
+.p-badge.p-badge-warn {
+  background: #fff2c6 !important;
+  color: #806000 !important;
+}
+
+.p-tag-danger,
+.p-badge-danger {
+  background: #ffe3ee !important;
+  color: #9b2859 !important;
+}
+
+/* White surface palette: colors identify component roles, while controls stay
+   light and fresh instead of using dense fills. */

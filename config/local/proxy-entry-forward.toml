@@ -4,11 +4,9 @@
 # 监听传入 agent 连接的地址
 listen_addr = "0.0.0.0:9090"
 
-# SQLite 用户数据库由 proxy-registry 管理，Proxy 只读。
-users_database_path = "data/proxy-users.sqlite3"
-
-# 访问记录使用独立的可写 SQLite 数据库。
-access_log_database_path = "data/proxy-access.sqlite3"
+entry_id = "entry-forward-local"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 
 transport_identity_private_key_path = "data/proxy-forward-identity-private.pem"
 

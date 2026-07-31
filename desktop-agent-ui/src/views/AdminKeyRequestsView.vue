@@ -368,48 +368,4 @@ function defaultExpiry() {
   </Dialog>
 </template>
 
-<style scoped>
-.admin-request-page { display: grid; gap: 18px; }
-.admin-request-heading { display: flex; justify-content: space-between; gap: 20px; align-items: end; }
-.admin-request-heading h2 { margin: 3px 0 5px; font-size: 28px; }
-.admin-request-heading p, .admin-request-heading .eyebrow { margin: 0; color: var(--app-text-muted); }
-.eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-.admin-request-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
-.admin-request-card { display: grid; gap: 14px; padding: 18px; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface); }
-.admin-request-identity { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
-.admin-request-identity > div { min-width: 0; display: grid; }
-.admin-request-identity strong, .admin-request-identity span, .admin-request-identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.admin-request-avatar { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; object-fit: cover; background: var(--app-muted-surface); color: var(--app-primary-strong); font-weight: 800; }
-.admin-request-kind { padding: 6px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
-.admin-request-kind.initial { color: #0f8f67; background: rgba(16,185,129,.14); }
-.admin-request-kind.rotate { color: #d97706; background: rgba(245,158,11,.14); }
-.admin-request-meta { display: flex; gap: 8px; align-items: center; color: var(--app-text-muted); font-size: 13px; }
-.admin-request-meta :deep(.app-icon) { width: 20px; height: 20px; }
-.admin-request-message { min-height: 88px; padding: 13px 14px; border-radius: 14px; background: var(--app-muted-surface); }
-.admin-request-message small { color: var(--app-text-muted); }
-.admin-request-message p { margin: 7px 0 0; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.muted { color: var(--app-text-muted); }
-.admin-request-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.admin-request-loading, .admin-request-empty { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--app-text-muted); text-align: center; }
-.admin-request-empty :deep(.app-icon) { width: 50px; height: 50px; }
-.admin-request-error { display: flex; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 12px; color: #ef6c91; background: rgba(239,108,145,.1); }
-.approval-dialog-content { display: grid; gap: 18px; }
-.approval-user-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 15px; border-radius: 13px; background: var(--app-muted-surface); }
-.approval-user-summary span { color: var(--app-text-muted); }
-.approval-proxy-list { display: grid; gap: 8px; margin: 0; padding: 14px; border: 1px solid var(--app-border); border-radius: 14px; }
-.approval-proxy-list legend, .approval-expiry > span { font-weight: 800; }
-.approval-proxy-list > small { color: var(--app-text-muted); }
-.approval-proxy-row { display: flex; gap: 11px; align-items: center; padding: 10px; border-radius: 10px; background: var(--app-muted-surface); cursor: pointer; }
-.approval-proxy-row > span { min-width: 0; display: grid; }
-.approval-proxy-row small { color: var(--app-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.approval-proxy-empty { padding: 15px; color: var(--app-text-muted); text-align: center; }
-.approval-expiry { display: grid; gap: 8px; }
-.rejection-copy { line-height: 1.7; }
-.rejection-dialog-content, .rejection-reason { display: grid; gap: 10px; }
-.rejection-reason > span { font-weight: 800; }
-.rejection-reason > small { color: var(--app-text-muted); text-align: right; }
-@media (max-width: 720px) {
-  .admin-request-heading { align-items: stretch; flex-direction: column; }
-  .admin-request-list { grid-template-columns: 1fr; }
-}
-</style>
+<style scoped src="../styles/admin-key-requests.css"></style>

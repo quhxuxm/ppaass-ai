@@ -322,8 +322,9 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 - `listen_addr`: Proxy 监听地址。
 - Proxy 在 `listen_addr` 的同一数值端口绑定 TCP 与 raw UDP；启用原生 UDP 模式时防火墙必须同时放行 UDP。
-- `users_database_path`: 必填的只读用户 SQLite 路径。
-- `access_log_database_path`: 必填且物理独立的访问记录 SQLite 路径。
+- `registry_control_url`: 必填的 Registry 控制面 HTTPS 地址（仅回环开发允许 HTTP）。
+- `registry_control_token_path`: 必填的控制面 Token 文件。
+- `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
 - `transport_identity_private_key_path`: 必填的 Proxy TCP/Yamux 传输身份私钥。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
@@ -344,7 +345,7 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 - `proxy-entry/src/config/user_config.rs`
 - `proxy-entry/src/user_manager.rs`
-- `proxy-user-store/src/repository.rs`
+- `proxy-registry/src/store/repository.rs`
 
 字段：
 
@@ -461,12 +462,14 @@ cd desktop-agent-ui && npm run tauri dev
 - `unit-test.yml`: Debian container，Rust 1.93，build workspace，跑 unit tests。
 - `integration-test.yml`: 启动 mock target、proxy、agent，然后跑 integration tests。
 - `rust-clippy.yml`: Clippy SARIF 分析。
-- `deploy-proxy-entry-and-registry.yml`: 手动选择 production/dev/qa，构建 Proxy Entry、Proxy Registry 和 Vue，上传并以隔离的 SQLite/身份密钥目录重启。
+- `deploy-proxy-registry.yml`: 手动选择 production/dev/qa，部署两个 Registry 进程和 Caddy。
+- `deploy-proxy-entry.yml`: 使用独立主机凭据部署无 SQLite 依赖的 Entry 数据面。
 - `checkmarx-one.yml` / `codescan.yml`: 安全/代码扫描。
 
 部署脚本：
 
 - `start-proxy-entry.sh`: Linux Proxy supervisor，支持 start/stop/status/restart，可 systemd 外独立守护。
+- `start-proxy-registry.sh`: 启动单个 Registry 实例，分别支持公开和控制监听地址。
 - `start-agent.bat`: Windows Agent；TUN 开启时安装/使用最高权限计划任务。
 - `start-agent.sh` / `start-agent.command`: macOS/Linux Agent；macOS TUN helper 自动安装。
 

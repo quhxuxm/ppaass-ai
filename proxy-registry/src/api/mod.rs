@@ -1,17 +1,4 @@
-use axum::{
-    Json, Router,
-    body::{Body, Bytes},
-    extract::{
-        ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, State,
-        rejection::{BytesRejection, JsonRejection, QueryRejection},
-    },
-    http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
-    middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::{any, get, post, put},
-};
-use protocol::RsaKeyPair;
-use proxy_user_store::{
+use crate::store::{
     AccessLogRepository, AccessProtocol, AccessRecord, AccountActor, AccountRepository,
     AccountRole, AccountStatus, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
@@ -26,6 +13,19 @@ use proxy_user_store::{
     ProxyAddressUpdate, UserOrigin, UserRecord, UserRepository, UserRepositoryError, UserUpdate,
     WebAccount, normalize_username, parse_expires_at,
 };
+use axum::{
+    Json, Router,
+    body::{Body, Bytes},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, State,
+        rejection::{BytesRejection, JsonRejection, QueryRejection},
+    },
+    http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{any, get, post, put},
+};
+use protocol::RsaKeyPair;
 use rand::RngExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};

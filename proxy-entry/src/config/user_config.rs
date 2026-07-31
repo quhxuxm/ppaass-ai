@@ -54,8 +54,22 @@ impl UserConfig {
 }
 
 fn parse_expires_at(username: &str, expires_at: &str) -> Result<i64> {
-    proxy_user_store::parse_expires_at(username, expires_at)
-        .map_err(|error| ProxyError::Configuration(error.to_string()))
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+    let expires_at = expires_at.trim();
+    if expires_at.is_empty() {
+        return Err(ProxyError::Configuration(format!(
+            "用户 {username} 的 expires_at 不能为空"
+        )));
+    }
+    if let Ok(timestamp) = expires_at.parse::<i64>() {
+        return Ok(timestamp);
+    }
+    OffsetDateTime::parse(expires_at, &Rfc3339)
+        .map(|datetime| datetime.unix_timestamp())
+        .map_err(|_| {
+            ProxyError::Configuration(format!("用户 {username} 的 expires_at 无效：{expires_at}"))
+        })
 }
 
 #[cfg(test)]

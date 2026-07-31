@@ -1,6 +1,6 @@
 use super::*;
 use protocol::RsaKeyPair;
-use proxy_user_store::{
+use proxy_registry::store::{
     AccountRole, AccountStatus, NewManagedUser, NewProxyAddress, NewUser, ProxyAddressRepository,
     UserOrigin,
 };

@@ -8,14 +8,25 @@ const vueSources = readdirSync(sourceRoot, { recursive: true })
   .filter((path) => path.endsWith('.vue'))
   .sort()
   .map((path) => readFileSync(join(sourceRoot, path), 'utf8'))
+const controllerSources = readdirSync(sourceRoot, { recursive: true })
+  .filter(
+    (path) =>
+      path.endsWith('.ts') &&
+      (path === 'appController.ts' || path.startsWith('controller')),
+  )
+  .sort()
+  .map((path) => readFileSync(join(sourceRoot, path), 'utf8'))
 const app = [
-  readFileSync(join(sourceRoot, 'appController.ts'), 'utf8'),
+  ...controllerSources,
   ...vueSources,
 ].join('\n')
-const styles = readFileSync(
-  new URL('../src/styles.css', import.meta.url),
-  'utf8',
-)
+const styles = [
+  readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8'),
+  ...readdirSync(join(sourceRoot, 'styles'), { recursive: true })
+    .filter((path) => path.endsWith('.css'))
+    .sort()
+    .map((path) => readFileSync(join(sourceRoot, 'styles', path), 'utf8')),
+].join('\n')
 const editorStyles = readFileSync(
   new URL('../src/styles/user-editor.css', import.meta.url),
   'utf8',

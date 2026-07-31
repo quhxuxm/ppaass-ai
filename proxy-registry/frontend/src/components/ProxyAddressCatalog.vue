@@ -386,3 +386,4 @@ function confirmDelete(address: ProxyAddress): void {
 </template>
 
 <style scoped src="./ProxyAddressCatalog.css"></style>
+<style scoped src="./ProxyAddressCatalogResponsive.css"></style>

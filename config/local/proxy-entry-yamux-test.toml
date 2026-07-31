@@ -1,8 +1,9 @@
 # Local native encrypted UDP plus full-TCP smoke-test proxy.
 
 listen_addr = "0.0.0.0:18080"
-users_database_path = "data/proxy-users.sqlite3"
-access_log_database_path = "data/proxy-yamux-test-access.sqlite3"
+entry_id = "entry-yamux-test"
+registry_control_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 transport_identity_private_key_path = "data/proxy-yamux-test-identity-private.pem"
 log_level = "info"
 log_dir = "logs"
