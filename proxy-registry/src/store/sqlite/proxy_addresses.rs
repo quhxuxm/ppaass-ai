@@ -310,17 +310,25 @@ impl SqliteUserRepository {
         let current = fetch_proxy_address(&mut transaction, &proxy_address_id)
             .await?
             .ok_or_else(|| UserRepositoryError::ProxyAddressNotFound(proxy_address_id.clone()))?;
-        if current.enabled {
-            return Err(UserRepositoryError::ProxyAddressMustBeDisabled(
-                proxy_address_id,
-            ));
-        }
-        ensure_proxy_address_unassigned(&mut transaction, &current.proxy_address_id).await?;
+        let timestamp = now();
+        sqlx::query(
+            "UPDATE web_accounts SET updated_at = ? WHERE account_id IN \
+             (SELECT account_id FROM account_proxy_addresses WHERE proxy_address_id = ?)",
+        )
+        .bind(timestamp)
+        .bind(&current.proxy_address_id)
+        .execute(&mut *transaction)
+        .await?;
+        let unassigned_accounts =
+            sqlx::query("DELETE FROM account_proxy_addresses WHERE proxy_address_id = ?")
+                .bind(&current.proxy_address_id)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
         sqlx::query("DELETE FROM proxy_addresses WHERE proxy_address_id = ?")
             .bind(&current.proxy_address_id)
             .execute(&mut *transaction)
             .await?;
-        let timestamp = now();
         insert_agent_event(&mut transaction, PROFILES_CHANGED_EVENT, None, timestamp).await?;
         insert_agent_event(
             &mut transaction,
@@ -332,7 +340,7 @@ impl SqliteUserRepository {
         transaction.commit().await?;
         info!(
             proxy_address_id = current.proxy_address_id,
-            "Proxy 地址目录项已删除"
+            unassigned_accounts, "Proxy 地址目录项已删除"
         );
         Ok(())
     }

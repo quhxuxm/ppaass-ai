@@ -38,6 +38,35 @@ fn proxy_addresses_are_canonical_and_strictly_validated() {
 }
 
 #[tokio::test]
+async fn only_assigned_address_can_be_deleted_and_unassigns_accounts() {
+    let (_directory, store) = test_store().await;
+    let created = store
+        .create_managed_user(managed_user(
+            "acc-only-address",
+            "only-address-user",
+            "only-address-user",
+            AccountRole::User,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.assigned_proxy_addresses.len(), 1);
+
+    store
+        .delete_proxy_address(TEST_PROXY_ADDRESS_ID)
+        .await
+        .unwrap();
+
+    assert!(store.list_proxy_addresses().await.unwrap().is_empty());
+    let unassigned = store
+        .get_managed_user("acc-only-address")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(unassigned.assigned_proxy_addresses.is_empty());
+}
+
+#[tokio::test]
 async fn assigned_addresses_are_atomic_unique_and_cannot_be_disabled() {
     let (_directory, store) = test_store().await;
     create_admin(&store, "address-admin").await;

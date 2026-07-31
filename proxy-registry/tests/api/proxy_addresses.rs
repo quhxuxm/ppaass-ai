@@ -34,7 +34,7 @@ async fn missing_assignment_uses_the_stable_agent_error_code() {
 }
 
 #[tokio::test]
-async fn admin_catalog_and_user_assignments_enforce_safe_reassignment() {
+async fn admin_catalog_allows_deleting_an_assigned_enabled_address() {
     let (_directory, app) = test_app().await;
     let (cookie, csrf) = login_admin(&app).await;
     let response = app
@@ -118,52 +118,77 @@ async fn admin_catalog_and_user_assignments_enforce_safe_reassignment() {
         .clone()
         .oneshot(
             Request::builder()
-                .method("PATCH")
-                .uri("/api/v1/admin/users/assigned-user")
-                .header(header::COOKIE, &cookie)
-                .header("x-csrf-token", &csrf)
+                .method("POST")
+                .uri("/api/v1/agent/login")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"proxy_address_ids": [TEST_PROXY_ADDRESS_ID]}).to_string(),
+                    json!({
+                        "username": "assigned-user",
+                        "password": "assigned-user-password"
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        json_body(response).await["proxy_addresses"][0]["proxy_address_id"],
-        TEST_PROXY_ADDRESS_ID
-    );
+    let agent_token = json_body(response).await["agent_access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    for (method, expected) in [
-        ("PATCH", StatusCode::OK),
-        ("DELETE", StatusCode::NO_CONTENT),
-    ] {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(format!("/api/v1/admin/proxy-addresses/{proxy_address_id}"))
-            .header(header::COOKIE, &cookie)
-            .header("x-csrf-token", &csrf);
-        let body = if method == "PATCH" {
-            request = request.header("content-type", "application/json");
-            Body::from(
-                json!({
-                    "enabled": false,
-                    "audit_reason": "停用未分配服务器"
-                })
-                .to_string(),
-            )
-        } else {
-            Body::empty()
-        };
-        let response = app
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected);
-    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/admin/proxy-addresses/{proxy_address_id}"))
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/admin/users")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let users = json_body(response).await;
+    let assigned_user = users["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["account"]["login_name"] == "assigned-user")
+        .unwrap();
+    assert_eq!(assigned_user["proxy_addresses"], json!([]));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agent/me")
+                .header(header::AUTHORIZATION, format!("Bearer {agent_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "proxy_address_not_assigned"
+    );
 }
 
 #[tokio::test]

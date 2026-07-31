@@ -135,7 +135,7 @@ async function setEnabled(): Promise<void> {
 function confirmDelete(address: ProxyAddress): void {
   confirm.require({
     header: '删除 Proxy 地址',
-    message: `确定删除“${address.label}”吗？`,
+    message: `确定删除“${address.label}”吗？使用该节点的用户将变为未分配 Proxy 状态。`,
     icon: 'pi pi-trash',
     acceptLabel: '删除',
     rejectLabel: '取消',
@@ -244,13 +244,12 @@ function confirmDelete(address: ProxyAddress): void {
               @click="openEdit(item)"
             />
             <Button
-              v-tooltip.top="item.enabled ? '请先停用节点' : '删除节点'"
+              v-tooltip.top="'删除节点'"
               icon="pi pi-trash"
               severity="danger"
               text
               rounded
               aria-label="删除 Proxy 地址"
-              :disabled="item.enabled"
               @click="confirmDelete(item)"
             />
           </div>
@@ -281,7 +280,7 @@ function confirmDelete(address: ProxyAddress): void {
           <i class="pi pi-ban" /> {{ disabledCount }} 个停用
         </span>
       </div>
-      <small><i class="pi pi-info-circle" /> 节点停用后，已分配账号将无法再领取该地址。</small>
+      <small><i class="pi pi-info-circle" /> 删除节点会自动解除相关用户的 Proxy 分配。</small>
     </footer>
   </section>
 

@@ -271,9 +271,6 @@ impl From<UserRepositoryError> for ApiError {
             UserRepositoryError::ProxyAddressDisabled(_) => {
                 Self::conflict("proxy_address_disabled", "不能分配已停用的 Proxy 地址")
             }
-            UserRepositoryError::ProxyAddressMustBeDisabled(_) => {
-                Self::conflict("proxy_address_not_disabled", "Proxy 地址必须先停用才能删除")
-            }
             UserRepositoryError::ProxyAddressNotAssigned(_) => Self::conflict(
                 "proxy_address_not_assigned",
                 "账号尚未分配可用的 Proxy 地址，请联系管理员",

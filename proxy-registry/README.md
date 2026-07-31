@@ -368,7 +368,8 @@ schema v8 新增 `proxy_addresses` 地址目录和 `account_proxy_addresses` 账
 管理员创建用户、编辑用户或批准密钥申请时，都必须通过 `proxy_address_ids` 选择
 1 到 32 个不同的已启用目录项。重复 ID 会被拒绝，不会静默去重；账号变更、审批生成
 密钥和地址关系替换在同一 repository 事务中提交。仍被账号引用的地址不能停用；目录项
-必须先停用且没有任何引用后才能删除。
+可以直接删除，删除事务会先清除其全部账号分配再删除目录项。没有其他已分配节点的账号
+随后进入未分配状态，Agent 登录或同步按稳定的 `proxy_address_not_assigned` 错误关闭代理。
 
 管理员用户列表显示每个账号当前分配的目录项，Agent UI 则从不展示远端地址。业务层只
 依赖 `ProxyAddressRepository` 和账号 repository；SQLite 表和 SQL 不进入 Axum handler，

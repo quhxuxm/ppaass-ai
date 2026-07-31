@@ -150,6 +150,9 @@ assert.match(
   /'topbar-logout-action',[\s\S]*?'agent-handoff-logout': isAgentHandoffSession[\s\S]*?label="退出登录"[\s\S]*?aria-label="退出登录"/,
 )
 assert.doesNotMatch(app, /class="mobile-logout-action"/)
+assert.doesNotMatch(app, /:disabled="item\.enabled"/)
+assert.match(app, /使用该节点的用户将变为未分配 Proxy 状态/)
+assert.match(app, /删除节点会自动解除相关用户的 Proxy 分配/)
 assert.match(
   styles,
   /\.topbar-logout-action\.agent-handoff-logout\s*\{[^}]*display:\s*none;/s,

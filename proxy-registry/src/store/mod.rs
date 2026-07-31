@@ -147,9 +147,6 @@ pub enum UserRepositoryError {
     #[error("Proxy 地址已停用，不能分配：{0}")]
     ProxyAddressDisabled(String),
 
-    #[error("Proxy 地址必须先停用才能删除：{0}")]
-    ProxyAddressMustBeDisabled(String),
-
     #[error("账号没有分配可用的 Proxy 地址：{0}")]
     ProxyAddressNotAssigned(String),
 }
