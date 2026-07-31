@@ -2,11 +2,11 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use proxy_registry::{
     AccessBatchRepository, AccessLogRepository, AgentAccessTokenService,
-    AgentDeviceAuthorizationGuard, AgentWebSessionHandoffStore, AppState, ControlState,
-    ControlTokenVerifier, PasswordService, PrivateKeyCipher, ProxyEntryRepository, SessionStore,
-    SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository, UserRepository,
-    bool_env, bootstrap_admin, build_control_router, build_router, ensure_key_encryption_binding,
-    init_tracing, registry_instance_id, select_database_file_permissions, validate_listen_address,
+    AgentWebSessionHandoffStore, AppState, ControlState, ControlTokenVerifier, PasswordService,
+    PrivateKeyCipher, ProxyEntryRepository, SessionStore, SqliteAccessLogRepository,
+    SqliteFilePermissions, SqliteUserRepository, UserRepository, bool_env, bootstrap_admin,
+    build_control_router, build_router, ensure_key_encryption_binding, init_tracing,
+    registry_instance_id, select_database_file_permissions, validate_listen_address,
 };
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 use time::OffsetDateTime;
@@ -19,7 +19,6 @@ use runtime::serve_public_and_control;
 const KEY_ENCRYPTION_SECRET_ENV: &str = "PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET";
 const ALLOW_REGISTRATION_ENV: &str = "PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION";
 const SECURE_COOKIES_ENV: &str = "PPAASS_PROXY_REGISTRY_SECURE_COOKIES";
-const TRUST_PROXY_HEADERS_ENV: &str = "PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS";
 const DATABASE_GROUP_READABLE_ENV: &str = "PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE";
 const ACCESS_LOG_DATABASE_GROUP_WRITABLE_ENV: &str =
     "PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE";
@@ -137,11 +136,6 @@ async fn main() -> Result<()> {
     let secure_cookies = bool_env(SECURE_COOKIES_ENV)?.unwrap_or(!args.listen.ip().is_loopback());
     let allow_registration =
         bool_env(ALLOW_REGISTRATION_ENV)?.unwrap_or(args.listen.ip().is_loopback());
-    let trust_proxy_headers = bool_env(TRUST_PROXY_HEADERS_ENV)?.unwrap_or(false);
-    if trust_proxy_headers && !args.listen.ip().is_loopback() {
-        bail!("{TRUST_PROXY_HEADERS_ENV}=true 仅允许用于回环监听后的受信反向代理");
-    }
-
     let control_token = env::var(CONTROL_TOKEN_ENV)
         .with_context(|| format!("必须设置环境变量 {CONTROL_TOKEN_ENV}"))?;
     let control_token_verifier = ControlTokenVerifier::new(&control_token)?;
@@ -162,7 +156,6 @@ async fn main() -> Result<()> {
         web_session_handoffs: AgentWebSessionHandoffStore::new(store.clone()),
         private_keys,
         allow_registration,
-        device_authorization_guard: AgentDeviceAuthorizationGuard::new(trust_proxy_headers),
     };
     let app = build_router(state, Some(args.frontend_dist));
     let control_app = build_control_router(ControlState {

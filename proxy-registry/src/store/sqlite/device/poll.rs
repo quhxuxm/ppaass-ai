@@ -6,10 +6,9 @@ impl SqliteUserRepository {
         &self,
         device_code_hash: &str,
         now: i64,
-        minimum_interval_seconds: u32,
     ) -> Result<AgentDeviceAuthorizationPoll> {
         let device_code_hash = normalize_code_hash("device_code_hash", device_code_hash)?;
-        if now < 0 || minimum_interval_seconds == 0 {
+        if now < 0 {
             return Err(
                 ValidationError::InvalidAccountField("设备授权轮询参数无效".to_string()).into(),
             );
@@ -18,73 +17,19 @@ impl SqliteUserRepository {
             "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
              WHERE device_code_hash = ?"
         );
-        let initial = sqlx::query(&query)
+        let record = sqlx::query(&query)
             .bind(&device_code_hash)
             .fetch_optional(&self.pool)
             .await?
             .map(row_to_agent_device_authorization)
             .transpose()?;
-        let Some(initial) = initial else {
-            return Ok(AgentDeviceAuthorizationPoll::NotFound);
-        };
-        if let Some(result) = non_pending_device_authorization_poll(&initial, now)? {
-            return Ok(result);
-        }
-
-        // 只有 pending challenge 需要写入轮询时间。无效随机 device code 和已结束
-        // challenge 走上面的只读快路径，避免公开轮询接口争抢 SQLite 写锁。
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let record = sqlx::query(&query)
-            .bind(&device_code_hash)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .map(row_to_agent_device_authorization)
-            .transpose()?;
         let Some(record) = record else {
-            transaction.rollback().await?;
             return Ok(AgentDeviceAuthorizationPoll::NotFound);
         };
         if let Some(result) = non_pending_device_authorization_poll(&record, now)? {
-            transaction.commit().await?;
             return Ok(result);
         }
-
-        let minimum_interval = i64::from(minimum_interval_seconds);
-        let result = if let Some(last_polled_at) = record.last_polled_at {
-            let next_allowed = last_polled_at.saturating_add(minimum_interval);
-            if now < next_allowed {
-                AgentDeviceAuthorizationPoll::SlowDown {
-                    retry_after_seconds: u32::try_from(next_allowed - now)
-                        .unwrap_or(minimum_interval_seconds),
-                }
-            } else {
-                sqlx::query(
-                    "UPDATE agent_device_authorizations SET last_polled_at = ? \
-                     WHERE device_code_hash = ? AND status = 'pending'",
-                )
-                .bind(now)
-                .bind(&device_code_hash)
-                .execute(&mut *transaction)
-                .await?;
-                AgentDeviceAuthorizationPoll::Pending {
-                    retry_after_seconds: minimum_interval_seconds,
-                }
-            }
-        } else {
-            sqlx::query(
-                "UPDATE agent_device_authorizations SET last_polled_at = ? \
-                 WHERE device_code_hash = ? AND status = 'pending'",
-            )
-            .bind(now)
-            .bind(&device_code_hash)
-            .execute(&mut *transaction)
-            .await?;
-            AgentDeviceAuthorizationPoll::Pending {
-                retry_after_seconds: minimum_interval_seconds,
-            }
-        };
-        transaction.commit().await?;
-        Ok(result)
+        Ok(AgentDeviceAuthorizationPoll::Pending)
     }
 
     #[instrument(

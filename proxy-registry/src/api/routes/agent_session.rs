@@ -5,12 +5,11 @@ use crate::agent_tokens::AGENT_PROFILE_REFRESH_SECONDS;
 pub(crate) async fn agent_login(
     State(state): State<AppState>,
     headers: HeaderMap,
-    OptionalPeerAddress(peer): OptionalPeerAddress,
     payload: Result<Json<PasswordLoginRequest>, JsonRejection>,
 ) -> Result<Json<AgentCredentialResponse>, ApiError> {
     validate_native_agent_request(&headers)?;
     let request = payload.map_err(ApiError::from_json_rejection)?.0;
-    let account = authenticate_password_account(&state, &headers, peer, request).await?;
+    let account = authenticate_password_account(&state, request).await?;
     let (profile, private_key, proxy_addresses) = load_agent_credentials(&state, &account).await?;
     state
         .accounts

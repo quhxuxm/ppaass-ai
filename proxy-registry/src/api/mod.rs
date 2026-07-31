@@ -17,10 +17,10 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{
-        ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, State,
+        DefaultBodyLimit, FromRequest, Path, Query, State,
         rejection::{BytesRejection, JsonRejection, QueryRejection},
     },
-    http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post, put},
@@ -29,7 +29,7 @@ use protocol::RsaKeyPair;
 use rand::RngExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
-use std::{convert::Infallible, future, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower_http::{services::ServeDir, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{info, instrument, warn};
@@ -39,7 +39,6 @@ use crate::{
     agent_tokens::AgentAccessTokenService,
     auth::{AuthenticatedSession, PasswordService, SessionStore, append_set_cookie, random_token},
     error::ApiError,
-    rate_limit::{AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint},
     secrets::PrivateKeyCipher,
     web_handoffs::{
         AGENT_WEB_SESSION_HANDOFF_TTL_SECONDS, AgentWebSessionHandoffConsumeError,
@@ -88,27 +87,6 @@ pub struct AppState {
     pub web_session_handoffs: AgentWebSessionHandoffStore,
     pub private_keys: PrivateKeyCipher,
     pub allow_registration: bool,
-    pub device_authorization_guard: AgentDeviceAuthorizationGuard,
-}
-
-struct OptionalPeerAddress(Option<SocketAddr>);
-
-impl<S> FromRequestParts<S> for OptionalPeerAddress
-where
-    S: Send + Sync,
-{
-    type Rejection = Infallible;
-
-    fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        let address = parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ConnectInfo(address)| *address);
-        future::ready(Ok(Self(address)))
-    }
 }
 
 mod helpers;

@@ -1,7 +1,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn agent_device_flow_rate_limits_and_delivers_credentials_once() {
+async fn agent_device_flow_delivers_credentials_once() {
     let (_directory, app) = test_app().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;
     create_approved_user(
@@ -27,9 +27,11 @@ async fn agent_device_flow_rate_limits_and_delivers_credentials_once() {
     );
 
     let response = poll_device_authorization(&app, &device_code).await;
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(response.headers().contains_key(header::RETRY_AFTER));
-    assert_eq!(json_body(response).await["error"]["code"], "slow_down");
+    assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "authorization_pending"
+    );
 
     let response = app
         .clone()
@@ -187,7 +189,6 @@ async fn failed_credential_construction_does_not_burn_device_code() {
             )
             .unwrap(),
             allow_registration: true,
-            device_authorization_guard: AgentDeviceAuthorizationGuard::default(),
         },
         None,
     );

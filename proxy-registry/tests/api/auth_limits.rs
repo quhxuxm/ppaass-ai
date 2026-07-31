@@ -98,60 +98,7 @@ async fn registration_and_admin_creation_share_the_eight_character_password_mini
 }
 
 #[tokio::test]
-async fn public_registration_is_strictly_limited_by_trusted_peer_address() {
-    let (_directory, app) = test_app().await;
-    for index in 0..REGISTRATION_CLIENT_CAPACITY as usize {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/auth/register")
-                    .extension(ConnectInfo(
-                        "203.0.113.90:31000".parse::<SocketAddr>().unwrap(),
-                    ))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "username": format!("limited-registration-{index}"),
-                            "password": "short"
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/register")
-                .extension(ConnectInfo(
-                    "203.0.113.90:31001".parse::<SocketAddr>().unwrap(),
-                ))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "username": "registration-rate-exhausted",
-                        "password": "short"
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(response.headers().contains_key(header::RETRY_AFTER));
-    assert_eq!(json_body(response).await["error"]["code"], "rate_limited");
-}
-
-#[tokio::test]
-async fn password_login_limits_ip_and_account_without_account_enumeration() {
+async fn password_login_does_not_reveal_account_existence() {
     let (_directory, store, _sessions, _handoffs, _private_keys, app) =
         test_app_with_components().await;
     register_user(&app, "disabled-user", "disabled-user-password").await;
@@ -169,7 +116,7 @@ async fn password_login_limits_ip_and_account_without_account_enumeration() {
                     account_id: "acc_admin".to_string(),
                     login_name: "admin".to_string(),
                 }),
-                audit_reason: Some("测试登录限流停用账号".to_string()),
+                audit_reason: Some("测试登录停用账号".to_string()),
                 ..ManagedUserUpdate::default()
             },
         )
@@ -198,45 +145,4 @@ async fn password_login_limits_ip_and_account_without_account_enumeration() {
     let disabled_body = json_body(disabled_response).await;
     assert_eq!(json_body(missing_response).await, disabled_body);
     assert_eq!(json_body(malformed_response).await, disabled_body);
-
-    let oversized_password = "x".repeat(257);
-    for index in 0..LOGIN_ACCOUNT_CAPACITY as u16 {
-        let response = login_from_peer(
-            &app,
-            "distributed-target",
-            &oversized_password,
-            &format!("198.51.100.{}:33000", index + 1),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-    let response = login_from_peer(
-        &app,
-        "distributed-target",
-        &oversized_password,
-        "198.51.100.200:33000",
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(response.headers().contains_key(header::RETRY_AFTER));
-
-    for index in 0..LOGIN_CLIENT_CAPACITY as usize {
-        let response = login_from_peer(
-            &app,
-            &format!("credential-stuffing-{index}"),
-            &oversized_password,
-            "192.0.2.80:34000",
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-    let response = login_from_peer(
-        &app,
-        "credential-stuffing-exhausted",
-        &oversized_password,
-        "192.0.2.80:34001",
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(json_body(response).await["error"]["code"], "rate_limited");
 }

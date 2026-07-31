@@ -294,12 +294,11 @@ pub trait AgentDeviceAuthorizationRepository: Send + Sync {
         now: i64,
     ) -> Result<AgentDeviceAuthorizationDecision>;
 
-    /// 原子执行轮询限频；已消费的 challenge 不再返回账号快照。
+    /// 查询设备授权状态；已消费的 challenge 不再返回账号快照。
     async fn poll_agent_device_authorization(
         &self,
         device_code_hash: &str,
         now: i64,
-        minimum_interval_seconds: u32,
     ) -> Result<AgentDeviceAuthorizationPoll>;
 
     /// 在响应已成功构造后，以账号快照为 CAS 条件把 challenge 标记为已领取。

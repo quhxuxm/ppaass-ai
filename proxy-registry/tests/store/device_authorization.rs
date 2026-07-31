@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn device_authorization_is_rate_limited_and_finalized_exactly_once() {
+async fn device_authorization_can_be_polled_and_finalized_exactly_once() {
     let (_directory, store) = test_store().await;
     let managed = store
         .create_managed_user(managed_user(
@@ -38,21 +38,17 @@ async fn device_authorization_is_rate_limited_and_finalized_exactly_once() {
 
     assert_eq!(
         store
-            .poll_agent_device_authorization(&device_code_hash, 101, 5)
+            .poll_agent_device_authorization(&device_code_hash, 101)
             .await
             .unwrap(),
-        AgentDeviceAuthorizationPoll::Pending {
-            retry_after_seconds: 5
-        }
+        AgentDeviceAuthorizationPoll::Pending
     );
     assert_eq!(
         store
-            .poll_agent_device_authorization(&device_code_hash, 102, 5)
+            .poll_agent_device_authorization(&device_code_hash, 102)
             .await
             .unwrap(),
-        AgentDeviceAuthorizationPoll::SlowDown {
-            retry_after_seconds: 4
-        }
+        AgentDeviceAuthorizationPoll::Pending
     );
     assert_eq!(
         store
@@ -80,11 +76,11 @@ async fn device_authorization_is_rate_limited_and_finalized_exactly_once() {
     );
 
     let first_poll = store
-        .poll_agent_device_authorization(&device_code_hash, 105, 5)
+        .poll_agent_device_authorization(&device_code_hash, 105)
         .await
         .unwrap();
     let second_poll = store
-        .poll_agent_device_authorization(&device_code_hash, 105, 5)
+        .poll_agent_device_authorization(&device_code_hash, 105)
         .await
         .unwrap();
     assert!(matches!(
@@ -139,7 +135,7 @@ async fn device_authorization_is_rate_limited_and_finalized_exactly_once() {
     );
     assert!(matches!(
         store
-            .poll_agent_device_authorization(&device_code_hash, 107, 5)
+            .poll_agent_device_authorization(&device_code_hash, 107)
             .await
             .unwrap(),
         AgentDeviceAuthorizationPoll::Consumed

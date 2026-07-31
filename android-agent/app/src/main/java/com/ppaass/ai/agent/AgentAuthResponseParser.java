@@ -156,8 +156,7 @@ final class AgentAuthResponseParser {
         return value;
     }
 
-    private static String optionalAvatarUrl(String value)
-            throws AgentAuthClient.AuthException {
+    private static String optionalAvatarUrl(String value) {
         if (value == null) {
             return "";
         }
@@ -165,7 +164,9 @@ final class AgentAuthResponseParser {
                 || !(value.startsWith("data:image/png;base64,")
                 || value.startsWith("data:image/jpeg;base64,")
                 || value.startsWith("data:image/webp;base64,"))) {
-            throw invalidResponse();
+            // Avatar data is presentational and must never invalidate otherwise
+            // valid Agent credentials or stop an SSE profile refresh.
+            return "";
         }
         return value;
     }

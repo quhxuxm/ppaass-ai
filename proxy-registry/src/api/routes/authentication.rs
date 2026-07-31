@@ -18,7 +18,6 @@ pub(crate) async fn get_auth_providers(State(state): State<AppState>) -> Json<Pr
 pub(crate) async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
-    OptionalPeerAddress(peer): OptionalPeerAddress,
     payload: Result<Json<RegistrationRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
@@ -26,11 +25,6 @@ pub(crate) async fn register(
         return Err(ApiError::forbidden("普通用户注册未启用"));
     }
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
-    let _permit = state.device_authorization_guard.enter(
-        DeviceAuthorizationEndpoint::Registration,
-        &headers,
-        peer,
-    )?;
     let username = normalize_username(&request.username)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let password_hash = state
@@ -60,29 +54,19 @@ pub(crate) async fn register(
 pub(crate) async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
-    OptionalPeerAddress(peer): OptionalPeerAddress,
     payload: Result<Json<PasswordLoginRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_browser_mutation(&headers)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
-    let account = authenticate_password_account(&state, &headers, peer, request).await?;
+    let account = authenticate_password_account(&state, request).await?;
     finish_login(&state, account).await
 }
 
 pub(crate) async fn authenticate_password_account(
     state: &AppState,
-    headers: &HeaderMap,
-    peer: Option<SocketAddr>,
     request: PasswordLoginRequest,
 ) -> Result<WebAccount, ApiError> {
     let normalized_login_name = normalize_username(&request.username).ok();
-    let _permit = state.device_authorization_guard.enter_login(
-        headers,
-        peer,
-        normalized_login_name
-            .as_deref()
-            .unwrap_or("<invalid-login-name>"),
-    )?;
     let record = match normalized_login_name {
         Some(login_name) => state.accounts.get_login_record(&login_name).await?,
         None => None,

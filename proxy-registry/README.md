@@ -225,7 +225,7 @@ Content-Type: application/json
 ```
 
 响应包含 256 位随机 `device_code`、12 字符短码、相对验证地址、600 秒有效期和 5 秒
-最小轮询间隔：
+建议轮询间隔：
 
 ```json
 {
@@ -246,9 +246,6 @@ Agent 以 JSON `{"device_code":"..."}` 轮询
 `POST /api/v1/agent/device-authorizations/token`。服务端响应约定：
 
 - `428 authorization_pending`：尚未确认；带 `Retry-After`。
-- `429 slow_down`：轮询过快；必须按 `Retry-After` 等待。
-- `429 rate_limited`：服务端全局或来源限流；Agent 保留 challenge 并按
-  `Retry-After` 重试。
 - `403 access_denied`：用户拒绝。
 - `400 expired_token`：challenge 已过期。
 - `400 invalid_device_code`：设备码无效或已经消费。

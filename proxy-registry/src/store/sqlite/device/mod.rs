@@ -52,15 +52,8 @@ impl AgentDeviceAuthorizationRepository for SqliteUserRepository {
         &self,
         device_code_hash: &str,
         now: i64,
-        minimum_interval_seconds: u32,
     ) -> Result<AgentDeviceAuthorizationPoll> {
-        SqliteUserRepository::poll_agent_device_authorization(
-            self,
-            device_code_hash,
-            now,
-            minimum_interval_seconds,
-        )
-        .await
+        SqliteUserRepository::poll_agent_device_authorization(self, device_code_hash, now).await
     }
 
     async fn finalize_agent_device_authorization(

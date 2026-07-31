@@ -60,6 +60,55 @@ public class AgentAuthJsonCodecTest {
     }
 
     @Test
+    public void invalidOptionalAvatarDoesNotInvalidateProfileSynchronization()
+            throws Exception {
+        String json = "{"
+                + "\"account\":{\"role\":\"user\",\"status\":\"active\","
+                + "\"linked_username\":\"alice\","
+                + "\"avatar_url\":\"https://legacy.example/avatar.png\"},"
+                + "\"profile\":{\"username\":\"alice\",\"permissions\":[],"
+                + "\"proxy_addresses\":[\"proxy-a.example:80\"],\"enabled\":true,"
+                + "\"key_version\":4,\"expires_at\":4102444800},"
+                + "\"key_state\":\"active\","
+                + "\"agent_access_token\":\"rotated_token_456\","
+                + "\"agent_access_token_expires_at\":4102444800,"
+                + "\"refresh_after_seconds\":300}";
+        AgentAuthDtos.ProfileSyncResponse response = AgentAuthJsonCodec.decode(
+                json.getBytes(StandardCharsets.UTF_8),
+                AgentAuthDtos.ProfileSyncResponse.class);
+
+        AgentAuthClient.ProfileSyncResult parsed =
+                AgentAuthResponseParser.parseProfileSync(response, "alice");
+
+        assertEquals("", parsed.avatarUrl);
+        assertTrue(parsed.profileEnabled);
+    }
+
+    @Test
+    public void supportedAvatarIsAppliedDuringProfileSynchronization()
+            throws Exception {
+        String avatar = "data:image/png;base64,iVBORw0KGgo=";
+        String json = "{"
+                + "\"account\":{\"role\":\"user\",\"status\":\"active\","
+                + "\"linked_username\":\"alice\",\"avatar_url\":\"" + avatar + "\"},"
+                + "\"profile\":{\"username\":\"alice\",\"permissions\":[],"
+                + "\"proxy_addresses\":[\"proxy-a.example:80\"],\"enabled\":true,"
+                + "\"key_version\":4,\"expires_at\":4102444800},"
+                + "\"key_state\":\"active\","
+                + "\"agent_access_token\":\"rotated_token_456\","
+                + "\"agent_access_token_expires_at\":4102444800,"
+                + "\"refresh_after_seconds\":300}";
+        AgentAuthDtos.ProfileSyncResponse response = AgentAuthJsonCodec.decode(
+                json.getBytes(StandardCharsets.UTF_8),
+                AgentAuthDtos.ProfileSyncResponse.class);
+
+        AgentAuthClient.ProfileSyncResult parsed =
+                AgentAuthResponseParser.parseProfileSync(response, "alice");
+
+        assertEquals(avatar, parsed.avatarUrl);
+    }
+
+    @Test
     public void scalarCoercionAndDuplicateSensitiveFieldsAreRejected() {
         String coerced = "{\"account\":{\"role\":7}}";
         String duplicate = "{\"agent_access_token\":\"first\","

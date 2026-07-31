@@ -3,16 +3,10 @@ use super::super::*;
 #[instrument(skip(state, headers, payload))]
 pub(crate) async fn start_agent_device_authorization(
     State(state): State<AppState>,
-    OptionalPeerAddress(peer): OptionalPeerAddress,
     headers: HeaderMap,
     payload: Result<Json<AgentDeviceAuthorizationStartRequest>, JsonRejection>,
 ) -> Result<Json<AgentDeviceAuthorizationStartResponse>, ApiError> {
     validate_native_agent_request(&headers)?;
-    let _permit = state.device_authorization_guard.enter(
-        DeviceAuthorizationEndpoint::Start,
-        &headers,
-        peer,
-    )?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let platform = normalize_agent_platform(&request.platform)?;
     let client_name = request
@@ -198,45 +192,23 @@ pub(crate) async fn deny_agent_device_authorization(
 #[instrument(skip(state, headers, payload))]
 pub(crate) async fn poll_agent_device_authorization(
     State(state): State<AppState>,
-    OptionalPeerAddress(peer): OptionalPeerAddress,
     headers: HeaderMap,
     payload: Result<Json<AgentDeviceTokenRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_native_agent_request(&headers)?;
-    let _permit = state.device_authorization_guard.enter(
-        DeviceAuthorizationEndpoint::Poll,
-        &headers,
-        peer,
-    )?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let device_code_hash = agent_device_code_hash(&request.device_code)?;
     let poll = state
         .device_authorizations
-        .poll_agent_device_authorization(
-            &device_code_hash,
-            current_timestamp(),
-            AGENT_DEVICE_POLL_INTERVAL_SECONDS,
-        )
+        .poll_agent_device_authorization(&device_code_hash, current_timestamp())
         .await?;
     let (account_id, expected_auth_version) = match poll {
-        AgentDeviceAuthorizationPoll::Pending {
-            retry_after_seconds,
-        } => {
+        AgentDeviceAuthorizationPoll::Pending => {
             return Err(ApiError::device_authorization_error(
                 StatusCode::PRECONDITION_REQUIRED,
                 "authorization_pending",
                 "等待用户在浏览器中确认",
-                Some(retry_after_seconds),
-            ));
-        }
-        AgentDeviceAuthorizationPoll::SlowDown {
-            retry_after_seconds,
-        } => {
-            return Err(ApiError::device_authorization_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "slow_down",
-                "轮询过于频繁，请按 Retry-After 稍后重试",
-                Some(retry_after_seconds),
+                Some(AGENT_DEVICE_POLL_INTERVAL_SECONDS),
             ));
         }
         AgentDeviceAuthorizationPoll::Denied => {

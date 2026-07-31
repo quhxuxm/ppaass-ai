@@ -78,12 +78,7 @@ pub enum AgentDeviceAuthorizationDecision {
 pub enum AgentDeviceAuthorizationPoll {
     NotFound,
     Expired,
-    Pending {
-        retry_after_seconds: u32,
-    },
-    SlowDown {
-        retry_after_seconds: u32,
-    },
+    Pending,
     Denied,
     Consumed,
     Authorized {

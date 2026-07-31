@@ -165,7 +165,7 @@ final class AgentProfileSyncManager {
             } else {
                 AgentSessionStore.recordSyncFailure(context, error.failure);
             }
-            Log.w(TAG, "Agent state synchronization failed after SSE event");
+            Log.w(TAG, "Agent state synchronization failed after SSE event", error);
         } catch (IOException | RuntimeException error) {
             if (isCurrent(expectedGeneration)) {
                 AgentSessionStore.recordSyncFailure(

@@ -20,9 +20,6 @@ pub(super) use std::{
 pub(super) use tempfile::TempDir;
 pub(super) use tower::ServiceExt;
 
-pub(super) const LOGIN_CLIENT_CAPACITY: f64 = 10.0;
-pub(super) const LOGIN_ACCOUNT_CAPACITY: f64 = 6.0;
-pub(super) const REGISTRATION_CLIENT_CAPACITY: f64 = 3.0;
 pub(super) const AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS: i64 = 10 * 60;
 pub(super) const AGENT_DEVICE_POLL_INTERVAL_SECONDS: u32 = 5;
 pub(super) const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
@@ -165,7 +162,6 @@ pub(super) async fn test_app_with_components() -> (
         web_session_handoffs: web_session_handoffs.clone(),
         private_keys: private_keys.clone(),
         allow_registration: true,
-        device_authorization_guard: AgentDeviceAuthorizationGuard::default(),
     };
     (
         directory,

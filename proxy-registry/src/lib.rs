@@ -6,7 +6,6 @@ mod api;
 mod auth;
 mod control_api;
 mod error;
-mod rate_limit;
 mod secrets;
 mod startup;
 pub mod store;
@@ -27,9 +26,6 @@ pub use api::{
 pub use auth::{PasswordError, PasswordService, SessionStore, session_token, validate_password};
 pub use control_api::{ControlState, ControlTokenVerifier, build_control_router};
 pub use error::ApiError;
-pub use rate_limit::{
-    AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint, RateLimitState, resolve_client_ip,
-};
 pub use secrets::{PrivateKeyCipher, PrivateKeyCipherError};
 pub use startup::{
     bool_env, bootstrap_admin, ensure_key_encryption_binding, init_tracing, registry_instance_id,
