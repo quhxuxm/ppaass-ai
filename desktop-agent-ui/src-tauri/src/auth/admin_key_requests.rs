@@ -79,6 +79,16 @@ struct ProxyAddressResponse {
     enabled: bool,
     created_at: i64,
     updated_at: i64,
+    #[serde(rename = "entry_id")]
+    _entry_id: Option<String>,
+    #[serde(rename = "entry_version")]
+    _entry_version: Option<String>,
+    #[serde(rename = "entry_first_registered_at")]
+    _entry_first_registered_at: Option<i64>,
+    #[serde(rename = "entry_last_heartbeat_at")]
+    _entry_last_heartbeat_at: Option<i64>,
+    #[serde(rename = "entry_online")]
+    _entry_online: Option<bool>,
 }
 
 #[derive(Deserialize)]

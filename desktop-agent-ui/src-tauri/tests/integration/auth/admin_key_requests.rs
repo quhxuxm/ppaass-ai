@@ -72,7 +72,12 @@ fn proxy_addresses() -> serde_json::Value {
             "address": "proxy.example.com:443",
             "enabled": true,
             "created_at": 1_800_000_000_i64,
-            "updated_at": 1_800_000_001_i64
+            "updated_at": 1_800_000_001_i64,
+            "entry_id": "entry-production-01",
+            "entry_version": "0.1.0",
+            "entry_first_registered_at": 1_800_000_000_i64,
+            "entry_last_heartbeat_at": 1_800_000_010_i64,
+            "entry_online": true
         }]
     })
 }

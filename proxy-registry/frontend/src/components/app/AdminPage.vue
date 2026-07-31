@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import { useAppControllerContext } from '../../appController'
@@ -22,10 +22,22 @@ const {
 } = useAppControllerContext()
 
 let proxyRefreshTimer: number | null = null
+const proxyRefreshing = ref(false)
+
+async function refreshProxyCatalog(): Promise<void> {
+  if (proxyRefreshing.value) return
+  proxyRefreshing.value = true
+  try {
+    await refreshProxyAddresses()
+  } finally {
+    proxyRefreshing.value = false
+  }
+}
+
 onMounted(() => {
   proxyRefreshTimer = window.setInterval(() => {
     if (activeAdminSection.value === 'proxies') {
-      void refreshProxyAddresses()
+      void refreshProxyCatalog()
     }
   }, 30_000)
 })
@@ -93,7 +105,9 @@ onBeforeUnmount(() => {
       v-if="activeAdminSection === 'proxies'"
       :addresses="proxyAddresses"
       :loading="adminLoading"
+      :refreshing="proxyRefreshing"
       @changed="refreshAdminUsers"
+      @refresh="refreshProxyCatalog"
     />
     <AdminAccessPanel v-if="activeAdminSection === 'audit'" />
     <AdminUsersPanel v-if="activeAdminSection === 'users'" />

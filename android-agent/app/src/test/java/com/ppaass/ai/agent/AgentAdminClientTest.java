@@ -45,6 +45,20 @@ public final class AgentAdminClientTest {
     }
 
     @Test
+    public void registeredEntryMetadataDoesNotInvalidateProxyCatalog()
+            throws Exception {
+        FakeTransport transport = new FakeTransport(ok(proxyAddressesJson()));
+
+        List<AgentAdminModels.ProxyAddress> addresses =
+                new AgentAdminClient(transport).listProxyAddresses(TOKEN);
+
+        assertEquals(1, addresses.size());
+        assertEquals("proxy_main", addresses.get(0).id);
+        assertEquals("140.82.30.214:80", addresses.get(0).address);
+        assertTrue(addresses.get(0).enabled);
+    }
+
+    @Test
     public void approvalSendsFutureExpiryAndSelectedProxyIds() throws Exception {
         FakeTransport transport = new FakeTransport(ok(keyRequestsJson("approved")));
         AgentAdminClient client = new AgentAdminClient(transport);
@@ -156,7 +170,14 @@ public final class AgentAdminClientTest {
                 + "\"proxy_address_id\":\"proxy_main\","
                 + "\"label\":\"生产 Proxy\","
                 + "\"address\":\"140.82.30.214:80\","
-                + "\"enabled\":true"
+                + "\"enabled\":true,"
+                + "\"created_at\":1770000000,"
+                + "\"updated_at\":1770000300,"
+                + "\"entry_id\":\"entry_production_1\","
+                + "\"entry_version\":\"1.2.3\","
+                + "\"entry_first_registered_at\":1770000000,"
+                + "\"entry_last_heartbeat_at\":1770000300,"
+                + "\"entry_online\":true"
                 + "}]}";
     }
 

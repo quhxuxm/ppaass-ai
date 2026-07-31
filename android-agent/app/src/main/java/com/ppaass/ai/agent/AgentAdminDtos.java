@@ -42,6 +42,13 @@ final class AgentAdminDtos {
         public String label;
         public String address;
         public Boolean enabled;
+        public Long created_at;
+        public Long updated_at;
+        public String entry_id;
+        public String entry_version;
+        public Long entry_first_registered_at;
+        public Long entry_last_heartbeat_at;
+        public Boolean entry_online;
 
         public ProxyAddress() {
         }

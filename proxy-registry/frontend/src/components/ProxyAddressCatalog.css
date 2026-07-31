@@ -10,6 +10,7 @@
 .catalog-header,
 .catalog-title,
 .catalog-title-line,
+.catalog-header-actions,
 .catalog-address,
 .catalog-actions,
 .catalog-footer,
@@ -77,8 +78,9 @@
   line-height: 1.55;
 }
 
-.catalog-add-button {
+.catalog-header-actions {
   flex: 0 0 auto;
+  gap: 8px;
 }
 
 .catalog-body {

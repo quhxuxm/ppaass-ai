@@ -44,8 +44,12 @@
     flex-direction: column;
   }
 
-  .catalog-add-button {
+  .catalog-header-actions {
     width: 100%;
+  }
+
+  .catalog-header-actions .p-button {
+    flex: 1;
   }
 
   .catalog-body {

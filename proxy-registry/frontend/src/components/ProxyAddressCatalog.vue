@@ -20,9 +20,10 @@ import {
 const props = defineProps<{
   addresses: ProxyAddress[]
   loading: boolean
+  refreshing: boolean
 }>()
 
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{ changed: []; refresh: [] }>()
 const toast = useToast()
 const confirm = useConfirm()
 const visible = ref(false)
@@ -171,12 +172,18 @@ function confirmDelete(address: ProxyAddress): void {
           <p>集中维护可分配给账号的远端 Proxy 节点，具体地址不会暴露在 Agent 界面。</p>
         </div>
       </div>
-      <Button
-        class="catalog-add-button"
-        label="新增节点"
-        icon="pi pi-plus"
-        @click="openCreate"
-      />
+      <div class="catalog-header-actions">
+        <Button
+          :label="refreshing ? '刷新中' : '刷新状态'"
+          icon="pi pi-refresh"
+          severity="secondary"
+          outlined
+          :loading="refreshing"
+          :disabled="loading || refreshing"
+          @click="emit('refresh')"
+        />
+        <Button label="新增节点" icon="pi pi-plus" @click="openCreate" />
+      </div>
     </header>
 
     <div class="catalog-body">
