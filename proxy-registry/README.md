@@ -39,7 +39,7 @@ RUST_LOG=proxy_registry=debug,tower_http=info \
 
 ## GitHub Actions 分离部署
 
-Entry 和 Registry 使用两个独立的手动工作流，可以部署到不同服务器：
+Entry 和 Registry 使用两个独立的手动工作流，应用运行时不要求部署在同一服务器：
 
 - `.github/workflows/deploy-proxy-registry.yml`：构建 Registry 和 Vue，部署两个 Registry
   进程，并让 Caddy 同时负载均衡公开 Web API 与内部控制 API。
@@ -47,10 +47,11 @@ Entry 和 Registry 使用两个独立的手动工作流，可以部署到不同�
   接触 SQLite。
 
 两个工作流都绑定所选的 GitHub Environment（`production`、`dev` 或 `qa`）。
-Registry 主机使用 `<ENV>_REGISTRY_REMOTE_HOST/USER/PASSWORD`，Entry 主机使用
-`<ENV>_ENTRY_REMOTE_HOST/USER/PASSWORD`。远端用户当前必须是能够管理 systemd、
-系统用户和 Caddy 的 root 用户。两边共同需要经过核验的
-`PPAASS_DEPLOY_SSH_KNOWN_HOSTS`。
+两个工作流都按所选环境读取 `<ENV>_REMOTE_HOST/USER/PASSWORD`，例如
+`production` 对应 `PRODUCTION_REMOTE_HOST/USER/PASSWORD`；因此同一环境的两个
+工作流当前默认部署到同一台服务器。部署使用密码方式的 SSH/SCP，并显式关闭客户端
+公钥认证；服务器主机指纹在该次工作流首次连接时自动接受，不需要额外配置 known_hosts
+Secret。远端用户当前必须是能够管理 systemd、系统用户和 Caddy 的 root 用户。
 Registry 主机需预先安装 systemd、Caddy、OpenSSL 和 curl；Entry 主机需预先安装
 systemd、OpenSSL 和 curl。
 

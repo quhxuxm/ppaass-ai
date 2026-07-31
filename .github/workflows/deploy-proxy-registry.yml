@@ -7,7 +7,7 @@ on:
         description: Select environment
         required: true
         type: choice
-        options: [production, dev, qa]
+        options: [registry_production]
 
 permissions:
   contents: read
@@ -102,38 +102,22 @@ jobs:
 
       - name: Resolve Registry host
         env:
-          PROD_HOST: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_HOST }}
-          PROD_USER: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_USER }}
-          PROD_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_REMOTE_PASSWORD }}
-          DEV_HOST: ${{ secrets.DEV_REGISTRY_REMOTE_HOST }}
-          DEV_USER: ${{ secrets.DEV_REGISTRY_REMOTE_USER }}
-          DEV_PASSWORD: ${{ secrets.DEV_REGISTRY_REMOTE_PASSWORD }}
-          QA_HOST: ${{ secrets.QA_REGISTRY_REMOTE_HOST }}
-          QA_USER: ${{ secrets.QA_REGISTRY_REMOTE_USER }}
-          QA_PASSWORD: ${{ secrets.QA_REGISTRY_REMOTE_PASSWORD }}
-          KNOWN_HOSTS: ${{ secrets.PPAASS_DEPLOY_SSH_KNOWN_HOSTS }}
+          REMOTE_HOST: ${{ secrets[format('{0}_REMOTE_HOST', inputs.environment)] }}
+          REMOTE_USER: ${{ secrets[format('{0}_REMOTE_USER', inputs.environment)] }}
+          REMOTE_PASSWORD: ${{ secrets[format('{0}_REMOTE_PASSWORD', inputs.environment)] }}
         run: |
           set -euo pipefail
-          case "${{ inputs.environment }}" in
-            production) host="$PROD_HOST"; user="$PROD_USER"; password="$PROD_PASSWORD" ;;
-            dev) host="$DEV_HOST"; user="$DEV_USER"; password="$DEV_PASSWORD" ;;
-            qa) host="$QA_HOST"; user="$QA_USER"; password="$QA_PASSWORD" ;;
-          esac
-          : "${host:?Registry remote host is required}"
-          : "${user:?Registry remote user is required}"
-          : "${password:?Registry remote password is required}"
-          : "${KNOWN_HOSTS:?PPAASS_DEPLOY_SSH_KNOWN_HOSTS is required}"
-          case "$host" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
-          case "$user" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
-          case "$password" in *$'\n'*|*$'\r'*) exit 1 ;; esac
+          : "${REMOTE_HOST:?${{ inputs.environment }}_REMOTE_HOST is required}"
+          : "${REMOTE_USER:?${{ inputs.environment }}_REMOTE_USER is required}"
+          : "${REMOTE_PASSWORD:?${{ inputs.environment }}_REMOTE_PASSWORD is required}"
+          case "$REMOTE_HOST" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
+          case "$REMOTE_USER" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
+          case "$REMOTE_PASSWORD" in *$'\n'*|*$'\r'*) exit 1 ;; esac
           {
-            printf 'REMOTE_HOST=%s\n' "$host"
-            printf 'REMOTE_USER=%s\n' "$user"
-            printf 'REMOTE_PASSWORD<<PPAASS_EOF\n%s\nPPAASS_EOF\n' "$password"
+            printf 'REMOTE_HOST=%s\n' "$REMOTE_HOST"
+            printf 'REMOTE_USER=%s\n' "$REMOTE_USER"
+            printf 'REMOTE_PASSWORD=%s\n' "$REMOTE_PASSWORD"
           } >>"$GITHUB_ENV"
-          mkdir -p ~/.ssh
-          printf '%s\n' "$KNOWN_HOSTS" >~/.ssh/known_hosts
-          chmod 0600 ~/.ssh/known_hosts
 
       - name: Deploy two Registry instances and Caddy
         run: |
@@ -142,7 +126,12 @@ jobs:
           sudo apt-get install -y sshpass
           export SSHPASS="$REMOTE_PASSWORD"
           remote_root="/tmp/ppaass-registry-$GITHUB_SHA"
-          ssh_options=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+          ssh_options=(
+            -o PubkeyAuthentication=no
+            -o PreferredAuthentications=password
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$RUNNER_TEMP/ppaass-deploy-known-hosts"
+          )
           sshpass -e ssh "${ssh_options[@]}" "$REMOTE_USER@$REMOTE_HOST" \
             "install -d -m 0700 '$remote_root'"
           sshpass -e scp "${ssh_options[@]}" .deploy/proxy-registry.tgz \

@@ -63,7 +63,20 @@ frontend_assignments="$(
     exit 1
 }
 
-require_text .github/workflows/deploy-proxy-entry.yml 'PRODUCTION_ENTRY_REMOTE_HOST'
-require_text .github/workflows/deploy-proxy-registry.yml 'PRODUCTION_REGISTRY_REMOTE_HOST'
+for workflow in \
+    .github/workflows/deploy-proxy-entry.yml \
+    .github/workflows/deploy-proxy-registry.yml
+do
+    require_text "$workflow" "secrets[format('{0}_REMOTE_HOST', inputs.environment)]"
+    require_text "$workflow" "secrets[format('{0}_REMOTE_USER', inputs.environment)]"
+    require_text "$workflow" "secrets[format('{0}_REMOTE_PASSWORD', inputs.environment)]"
+    require_text "$workflow" 'PubkeyAuthentication=no'
+    require_text "$workflow" 'PreferredAuthentications=password'
+    require_text "$workflow" 'StrictHostKeyChecking=accept-new'
+    reject_text "$workflow" '_ENTRY_REMOTE_'
+    reject_text "$workflow" '_REGISTRY_REMOTE_'
+    reject_text "$workflow" 'PPAASS_DEPLOY_SSH_KNOWN_HOSTS'
+    reject_text "$workflow" 'StrictHostKeyChecking=yes'
+done
 
 echo "Proxy Entry/Registry split deployment checks passed"

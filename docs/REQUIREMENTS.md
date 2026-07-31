@@ -252,22 +252,21 @@ GitHub Actions workflows should build, test and deploy the platform.
 - The build workflow builds the project and runs unit tests.
 - The integration workflow runs end-to-end integration tests.
 - Deploy workflows:
-  - Deploy Proxy Entry and Proxy Registry independently so they may run on different Linux servers.
+  - Deploy Proxy Entry and Proxy Registry with independent workflows; their runtime architecture must not require co-location.
   - Deploy two Registry processes behind Caddy; deploy Entry without SQLite or Caddy.
-  - Use separate `<ENV>_ENTRY_REMOTE_*` and `<ENV>_REGISTRY_REMOTE_*` SSH credentials.
+  - Resolve the selected deployment server from `<ENV>_REMOTE_HOST/USER/PASSWORD`.
+  - The Entry and Registry workflows currently share the selected environment's deployment credentials and therefore target the same server by default.
+  - Authenticate SSH/SCP deployments with the configured password, disable client public-key authentication and accept the server host key on first connection without requiring a known_hosts secret.
   - Read the root administrator password from the repository secret `PPAASS_WEB_ADMIN_PASSWORD`; never commit the password or generated runtime secrets.
   - Validate/install or upgrade Caddy when needed, proxy HTTPS/443 to the Registry loopback listener and preserve automatic renewal. For the current public-IP deployment, use an ACME short-lived IP certificate with TLS-ALPN-01 on 443 so renewal does not require port 80.
   - The deployment workflow should be triggered manually with an environment selector:
     - `production`
     - `dev`
     - `qa`
-  - Target Linux server hostname, username and password are read from role-specific repository secrets:
+  - Target Linux server hostname, username and password are read from repository secrets selected by `inputs.environment`:
     - For `production` env:
-      - `PRODUCTION_ENTRY_REMOTE_HOST/USER/PASSWORD`
-      - `PRODUCTION_REGISTRY_REMOTE_HOST/USER/PASSWORD`
+      - `PRODUCTION_REMOTE_HOST/USER/PASSWORD`
     - For `dev` env:
-      - `DEV_ENTRY_REMOTE_HOST/USER/PASSWORD`
-      - `DEV_REGISTRY_REMOTE_HOST/USER/PASSWORD`
+      - `DEV_REMOTE_HOST/USER/PASSWORD`
     - For `qa` env:
-      - `QA_ENTRY_REMOTE_HOST/USER/PASSWORD`
-      - `QA_REGISTRY_REMOTE_HOST/USER/PASSWORD`
+      - `QA_REMOTE_HOST/USER/PASSWORD`
