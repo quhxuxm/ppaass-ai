@@ -70,11 +70,24 @@ impl SqliteUserRepository {
     }
 
     async fn purge_agent_events_before(&self, before: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM registry_agent_events WHERE created_at < ?")
-            .bind(before)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
+        let mut transaction = self.pool.begin().await?;
+        let latest: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(event_id) FROM registry_agent_events")
+                .fetch_one(&mut *transaction)
+                .await?;
+        let Some(latest) = latest else {
+            transaction.commit().await?;
+            return Ok(0);
+        };
+        let result =
+            sqlx::query("DELETE FROM registry_agent_events WHERE created_at < ? AND event_id < ?")
+                .bind(before)
+                .bind(latest)
+                .execute(&mut *transaction)
+                .await?;
+        let removed = result.rows_affected();
+        transaction.commit().await?;
+        Ok(removed)
     }
 }
 

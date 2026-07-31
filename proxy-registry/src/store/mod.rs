@@ -23,8 +23,9 @@ pub use model::{
     NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewAgentWebSessionHandoff,
     NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser, NewUserAccount,
     PRIVATE_KEY_READ_PERMISSION, PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION,
-    ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, UserOrigin, UserRecord, UserUpdate,
-    WebAccount, default_proxy_permissions,
+    ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, UserAuthorizationSnapshotPage,
+    UserAuthorizationSnapshotQuery, UserOrigin, UserRecord, UserUpdate, WebAccount,
+    default_proxy_permissions,
 };
 pub use repository::{
     AccessBatchRepository, AccessLogRepository, AccountRepository,
@@ -149,6 +150,12 @@ pub enum UserRepositoryError {
 
     #[error("账号没有分配可用的 Proxy 地址：{0}")]
     ProxyAddressNotAssigned(String),
+
+    #[error("授权快照修订号冲突：期望 {expected}，实际 {actual}")]
+    AuthorizationSnapshotRevisionConflict { expected: u64, actual: u64 },
+
+    #[error("授权快照分页大小必须为 1..=256，实际为 {0}")]
+    InvalidAuthorizationSnapshotLimit(u16),
 }
 
 pub type Result<T> = std::result::Result<T, UserRepositoryError>;

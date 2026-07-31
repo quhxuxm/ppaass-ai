@@ -8,6 +8,7 @@ entry_id = "entry-local"
 advertised_address = "127.0.0.1:8080"
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
+authorization_database_path = "data/proxy-entry-authorization.sqlite3"
 
 # 日志级别：trace、debug、info、warn、error
 log_level = "info"

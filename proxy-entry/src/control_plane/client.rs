@@ -1,80 +1,74 @@
 use std::{
-    collections::HashMap,
     fs,
     net::SocketAddr,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
-use dashmap::DashMap;
 use proxy_control_protocol::{
-    ACCESS_BATCHES_PATH, AUTHORIZATION_RESOLVE_PATH, AccessBatchRequest, AccessBatchResponse,
-    AccessEvent, AuthorizationResolveRequest, AuthorizationResolveResponse,
+    ACCESS_BATCHES_PATH, AccessBatchRequest, AccessBatchResponse, AccessEvent,
 };
 use reqwest::{Client, StatusCode, Url, header};
-use tokio::{
-    sync::{Mutex, RwLock},
-    time::Instant,
-};
-use tracing::debug;
+use tokio::sync::Mutex;
 
-use super::AccessEventSink;
+use super::{AccessEventSink, authorization_store::AuthorizationStore};
 use crate::{
-    config::{ProxyConfig, UserConfig},
+    config::ProxyConfig,
     error::{ProxyError, Result},
 };
 
 const MAX_CONTROL_TOKEN_BYTES: u64 = 512;
 
-#[derive(Clone)]
-pub(super) struct CachedAuthorization {
-    pub value: Option<UserConfig>,
-    pub cached_at: Instant,
-}
-
 pub struct RemoteControlPlane {
     pub(super) client: Client,
+    pub(super) events_client: Client,
     pub(super) base_url: Url,
     pub(super) token: Arc<str>,
     pub(super) entry_id: Arc<str>,
     pub(super) advertised_address: Arc<str>,
-    pub(super) cache_max_age: Duration,
-    pub(super) cache: RwLock<HashMap<String, CachedAuthorization>>,
-    pub(super) request_locks: DashMap<String, Arc<Mutex<()>>>,
+    pub(super) request_timeout: Duration,
+    pub(super) authorization_store: AuthorizationStore,
+    pub(super) authorization_refresh: Mutex<()>,
     pub(super) last_event_id: AtomicU64,
 }
 
 impl RemoteControlPlane {
-    pub(crate) fn new(config: &ProxyConfig) -> Result<Arc<Self>> {
+    pub async fn new(config: &ProxyConfig) -> Result<Arc<Self>> {
         validate_entry_id(&config.entry_id)?;
         let advertised_address = validate_advertised_address(&config.advertised_address)?;
         let base_url = validate_registry_url(&config.registry_url)?;
         let token = load_control_token(Path::new(&config.registry_control_token_path))?;
         let timeout = Duration::from_secs(config.control_request_timeout_secs.clamp(1, 60));
-        let client = Client::builder()
-            .connect_timeout(timeout.min(Duration::from_secs(10)))
+        let client = control_client_builder(timeout)
             .timeout(timeout)
-            // Product policy accepts Registry certificates without chain or hostname validation.
-            .danger_accept_invalid_certs(true)
-            .user_agent(concat!("ppaass-proxy-entry/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|error| {
                 ProxyError::Configuration(format!("创建 Registry 控制面 HTTP 客户端失败：{error}"))
             })?;
+        // SSE 响应会持续存在，不能复用带整个请求总时限的普通控制面客户端。
+        // 连接和响应头仍由 events.rs 单独限时，响应体则允许长期流式读取。
+        let events_client = control_client_builder(timeout).build().map_err(|error| {
+            ProxyError::Configuration(format!("创建 Registry 事件流 HTTP 客户端失败：{error}"))
+        })?;
+        let authorization_store = AuthorizationStore::open(
+            Path::new(&config.authorization_database_path),
+            base_url.as_str(),
+            &config.entry_id,
+        )
+        .await?;
+        let initial_revision = authorization_store.initial_revision().unwrap_or(0);
         Ok(Arc::new(Self {
             client,
+            events_client,
             base_url,
             token: Arc::from(token),
             entry_id: Arc::from(config.entry_id.as_str()),
             advertised_address: Arc::from(advertised_address),
-            cache_max_age: Duration::from_secs(config.authorization_cache_max_age_secs),
-            cache: RwLock::new(HashMap::new()),
-            request_locks: DashMap::new(),
-            last_event_id: AtomicU64::new(0),
+            request_timeout: timeout,
+            authorization_store,
+            authorization_refresh: Mutex::new(()),
+            last_event_id: AtomicU64::new(initial_revision),
         }))
     }
 
@@ -87,55 +81,14 @@ impl RemoteControlPlane {
     pub(super) fn bearer_value(&self) -> String {
         format!("Bearer {}", self.token)
     }
+}
 
-    pub(super) async fn clear_authorization_cache(&self) {
-        self.cache.write().await.clear();
-        debug!("已使 Proxy Entry 授权缓存全部失效");
-    }
-
-    pub(super) async fn fetch_authorization(&self, username: &str) -> Result<Option<UserConfig>> {
-        let response = self
-            .client
-            .post(self.endpoint(AUTHORIZATION_RESOLVE_PATH)?)
-            .header(header::AUTHORIZATION, self.bearer_value())
-            .json(&AuthorizationResolveRequest {
-                username: username.to_string(),
-            })
-            .send()
-            .await
-            .map_err(|error| {
-                ProxyError::ControlPlane(format!("查询 Registry 用户授权失败：{error}"))
-            })?;
-        if response.status() != StatusCode::OK {
-            return Err(control_status_error("查询用户授权", response.status()));
-        }
-        let resolved = response
-            .json::<AuthorizationResolveResponse>()
-            .await
-            .map_err(|error| {
-                ProxyError::ControlPlane(format!("Registry 用户授权响应无效：{error}"))
-            })?;
-        self.last_event_id
-            .fetch_max(resolved.revision, Ordering::Release);
-        resolved
-            .authorization
-            .map(|authorization| {
-                if authorization.username != username {
-                    return Err(ProxyError::ControlPlane(
-                        "Registry 返回了不匹配的用户名".to_string(),
-                    ));
-                }
-                Ok(UserConfig {
-                    username: authorization.username,
-                    public_key_pem: authorization.public_key_pem,
-                    expires_at: authorization.expires_at.map(|value| value.to_string()),
-                    permissions: authorization.permissions,
-                    enabled: authorization.enabled,
-                    key_version: Some(authorization.key_version),
-                })
-            })
-            .transpose()
-    }
+fn control_client_builder(timeout: Duration) -> reqwest::ClientBuilder {
+    Client::builder()
+        .connect_timeout(timeout.min(Duration::from_secs(10)))
+        // Product policy accepts Registry certificates without chain or hostname validation.
+        .danger_accept_invalid_certs(true)
+        .user_agent(concat!("ppaass-proxy-entry/", env!("CARGO_PKG_VERSION")))
 }
 
 #[async_trait::async_trait]

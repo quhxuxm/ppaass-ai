@@ -11,6 +11,7 @@ entry_id = "entry-test"
 advertised_address = "proxy.example.com:443"
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "control-token"
+authorization_database_path = "authorization.sqlite3"
 {extra}
 "#
     ))
@@ -46,7 +47,6 @@ fn relay_and_control_defaults_are_bounded() {
     assert_eq!(config.udp_session_max_flows, 256);
     assert_eq!(config.udp_session_authorization_recheck_secs, 5);
     assert_eq!(config.control_request_timeout_secs, 10);
-    assert_eq!(config.authorization_cache_max_age_secs, 5);
 }
 
 #[test]
@@ -62,6 +62,10 @@ fn control_plane_fields_are_required() {
         "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"\n\
          advertised_address = \"proxy.example.com:443\"\n\
          registry_url = \"http://127.0.0.1:8797\"",
+        "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"\n\
+         advertised_address = \"proxy.example.com:443\"\n\
+         registry_url = \"http://127.0.0.1:8797\"\n\
+         registry_control_token_path = \"control-token\"",
     ] {
         assert!(toml::from_str::<ProxyConfig>(raw).is_err());
     }
@@ -76,6 +80,11 @@ fn removed_sqlite_fields_are_rejected() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn removed_authorization_cache_age_is_rejected() {
+    assert!(parse_config("authorization_cache_max_age_secs = 5").is_err());
 }
 
 #[test]
@@ -126,21 +135,16 @@ fn udp_limits_are_configurable() {
 }
 
 #[test]
-fn authorization_intervals_are_limited_to_five_seconds() {
+fn authorization_recheck_is_limited_to_five_seconds() {
     for value in [1, 3, 5] {
-        let config = parse_config(&format!(
-            "udp_session_authorization_recheck_secs = {value}\n\
-             authorization_cache_max_age_secs = {value}"
-        ))
-        .unwrap();
+        let config =
+            parse_config(&format!("udp_session_authorization_recheck_secs = {value}")).unwrap();
         assert_eq!(config.udp_session_authorization_recheck_secs, value);
-        assert_eq!(config.authorization_cache_max_age_secs, value);
     }
     for value in [0, 6, u64::MAX] {
         assert!(
             parse_config(&format!("udp_session_authorization_recheck_secs = {value}")).is_err()
         );
-        assert!(parse_config(&format!("authorization_cache_max_age_secs = {value}")).is_err());
     }
 }
 

@@ -68,9 +68,11 @@ Registry 的两个进程共享
 
 控制面没有依赖 Redis、数据库触发器或进程内唯一消费者。授权变更由业务事务使用普通
 SQL 写入事件表；每个 Registry 进程轮询同一中央存储并向本进程上的 SSE 连接广播。
-Entry 的授权缓存最多保留五秒，收到事件即失效；访问记录使用
-`entry_id + batch_id` 做普通 SQL 幂等写入。将来把 SQLite 替换为中央数据库时，Entry
-和 Agent 的协议不需要变化。
+Entry 注册成功或收到授权变更事件后读取完整的公钥授权快照，并在校验成功后原子替换
+最后一次成功快照。首份完整快照到达前认证默认拒绝；此后 Registry 暂时不可用不会影响
+快照中已有用户。中断期间发生的停用、删除、撤权或密钥轮换会在恢复连接并成功同步后
+整体生效。访问记录使用 `entry_id + batch_id` 做普通 SQL 幂等写入。将来把 SQLite
+替换为中央数据库时，Entry 和 Agent 的协议不需要变化。
 
 首次从旧的同机部署拆分时：
 
@@ -300,9 +302,10 @@ Desktop Agent 登录后会在左侧账户区显示角色和权限。具有 `key.
 直接写入本机配置；Agent 原本正在运行时会使用新凭据自动重启。缺失或过期密钥仍必须走
 管理员审批，Agent 按钮不会绕过该规则。管理员还会看到进入完整用户管理页面的入口。
 
-SQLite 模式下，已经建立的 TCP/Yamux relay 与原生 UDP 会话都会按 Proxy 的
-`udp_session_authorization_recheck_secs` 周期重新检查账号启用状态、对应 TCP/UDP
-权限、密钥版本和绝对过期时间，停用、撤权、提前过期或轮换密钥后最迟 5 秒关闭。
+已经建立的 TCP/Yamux relay 与原生 UDP 会话都会按 Proxy 的
+`udp_session_authorization_recheck_secs` 周期从本地最后一次成功快照重新检查账号启用
+状态、对应 TCP/UDP 权限、密钥版本和绝对过期时间。Registry 可用时，停用、撤权、提前
+过期或轮换密钥在新快照同步后最迟一个复核周期生效；控制面中断期间则延迟到恢复同步。
 TCP 承载的共享 UDP relay 只在真正创建新 flow 前复核授权，Existing/AtCapacity
 不增加查询，并使用不超过 1 秒的成功授权快照合并突发查询；原生 UDP 的
 `OpenData` flow 保持同样的检查边界。
@@ -382,22 +385,37 @@ Token 保护的 `/control/v1/entries/register` 上报稳定 ID、版本和 `adve
 
 ## Entry 与 Registry 数据边界
 
-Entry 只配置控制面，不配置数据库：
+Entry 配置控制面和仅属于本节点的公开授权副本数据库：
 
 ```toml
 entry_id = "entry-production"
 advertised_address = "entry.example.com:443"
 registry_url = "https://registry.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
+authorization_database_path = "/var/lib/ppaass-entry/authorization.sqlite3"
 ```
 
-Proxy Registry 是用户、账号和访问记录 schema 的唯一所有者；Entry 不链接存储 crate，
-也不打开 SQLite。旧数据库里已有的 `origin=legacy` 记录继续保留，但服务不再提供文件
-导入入口。legacy public-only 记录没有可登录领取的私钥，因此仍不能参与普通用户密钥
-申请流程。
+Proxy Registry 是用户、账号和访问记录权威 schema 的唯一所有者；Entry 不链接 Registry
+存储 crate，也不打开 Registry 的数据库。Entry 自己的 SQLite 只保存 Registry 下发的公开
+授权副本，不包含私钥、密码、会话或访问记录。旧数据库里已有的 `origin=legacy` 记录继续
+保留，但服务不再提供文件导入入口。legacy public-only 记录没有可登录领取的私钥，因此
+仍不能参与普通用户密钥申请流程。
 
 Entry 在 TCP 和 UDP 都监听成功后才启动注册心跳与授权 SSE；构造和部署阶段都不探测
 Registry。Registry 暂时不可用只会触发后台重试，不会阻止 Entry 数据面进程启动。
+Entry 会在注册成功后获取完整授权快照，并在 SSE 通知变更时重新获取。同步使用按用户名
+排序的 keyset cursor 分页，每页最多 256 条；第一页返回数据库 revision，后续页必须携带
+同一个 revision。存在下一页时当前页固定填满 256 条，末页可以少于 256 条，因此十万用户
+最多需要 391 页。翻页期间授权发生变化时 Registry 返回 `409 Conflict`，Entry 清理
+暂存页并从第一页重试，不会提交混合版本。
+
+Entry 每次只校验并写入一页本地 SQLite staging，所有页面完成后才在单个本地事务中原子
+切换 active 副本；刷新失败不会清空已有快照。认证按用户名主键查询本地数据库，不把所有
+公钥常驻内存。尚未取得首份快照时，Entry 保持运行但拒绝用户认证；已提交的最后成功快照
+可跨 Registry 中断和 Entry 重启继续使用。
+`GET /control/v1/authorizations/snapshot` 的每一页在同一个数据库只读事务中返回公开授权和
+持久事件 revision；`GET /control/v1/events` 使用该 revision 驱动后续刷新。两个接口均
+使用与 Entry 注册相同的 Bearer Token，不返回私钥或账号密码。
 `registry_url` 可使用 HTTP 或 HTTPS；按当前部署要求，Entry 的 Registry HTTPS 客户端
 不校验证书链和主机名。
 

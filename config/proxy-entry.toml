@@ -9,6 +9,7 @@ entry_id = "entry-production"
 advertised_address = "proxy.example.com:80"
 registry_url = "https://registry.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
+authorization_database_path = "/var/lib/ppaass-entry/authorization.sqlite3"
 
 # 日志级别：trace、debug、info、warn、error
 # 远端生产配置保留 warn，便于看到连接失败/带宽软上限等异常，又避免 debug/info 带来的额外 I/O。

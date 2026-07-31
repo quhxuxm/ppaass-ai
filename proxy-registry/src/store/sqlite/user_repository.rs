@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_AUTHORIZATION_SNAPSHOT_PAGE_SIZE: u16 = 256;
+
 impl SqliteUserRepository {
     /// 使用完整的新用户模型创建 Proxy profile。
     pub async fn create_user_record(&self, user: NewUser) -> Result<UserRecord> {
@@ -62,6 +64,78 @@ impl SqliteUserRepository {
             .into_iter()
             .map(row_to_user)
             .collect()
+    }
+
+    #[instrument(skip(self))]
+    async fn read_authorization_snapshot_page(
+        &self,
+        query: UserAuthorizationSnapshotQuery,
+    ) -> Result<UserAuthorizationSnapshotPage> {
+        if query.limit == 0 || query.limit > MAX_AUTHORIZATION_SNAPSHOT_PAGE_SIZE {
+            return Err(UserRepositoryError::InvalidAuthorizationSnapshotLimit(
+                query.limit,
+            ));
+        }
+        let mut transaction = self.pool.begin().await?;
+        let revision: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(event_id), 0) FROM registry_agent_events")
+                .fetch_one(&mut *transaction)
+                .await?;
+        let revision = u64::try_from(revision).map_err(|_| {
+            UserRepositoryError::InvalidSchema(
+                "registry_agent_events.event_id 不能表示为非负修订号".to_string(),
+            )
+        })?;
+        if let Some(expected) = query.expected_revision
+            && expected != revision
+        {
+            transaction.rollback().await?;
+            return Err(UserRepositoryError::AuthorizationSnapshotRevisionConflict {
+                expected,
+                actual: revision,
+            });
+        }
+
+        let fetch_limit = i64::from(query.limit) + 1;
+        let sql = if query.after_username.is_some() {
+            format!(
+                "SELECT {USER_SELECT} FROM users WHERE username > ? \
+                 ORDER BY username LIMIT ?"
+            )
+        } else {
+            format!("SELECT {USER_SELECT} FROM users ORDER BY username LIMIT ?")
+        };
+        let rows = if let Some(after_username) = query.after_username {
+            sqlx::query(&sql)
+                .bind(after_username)
+                .bind(fetch_limit)
+                .fetch_all(&mut *transaction)
+                .await?
+        } else {
+            sqlx::query(&sql)
+                .bind(fetch_limit)
+                .fetch_all(&mut *transaction)
+                .await?
+        };
+        let mut users = rows
+            .into_iter()
+            .map(row_to_user)
+            .collect::<Result<Vec<_>>>()?;
+        transaction.commit().await?;
+        let has_more = users.len() > usize::from(query.limit);
+        users.truncate(usize::from(query.limit));
+        let next_cursor = has_more.then(|| {
+            users
+                .last()
+                .expect("非零分页大小有下一页时当前页不能为空")
+                .username
+                .clone()
+        });
+        Ok(UserAuthorizationSnapshotPage {
+            revision,
+            users,
+            next_cursor,
+        })
     }
 
     #[instrument(skip(self, public_key_pem), fields(username))]
@@ -294,6 +368,13 @@ impl UserRepository for SqliteUserRepository {
 
     async fn list_users(&self) -> Result<Vec<UserRecord>> {
         SqliteUserRepository::list_users(self).await
+    }
+
+    async fn read_authorization_snapshot_page(
+        &self,
+        query: UserAuthorizationSnapshotQuery,
+    ) -> Result<UserAuthorizationSnapshotPage> {
+        SqliteUserRepository::read_authorization_snapshot_page(self, query).await
     }
 
     async fn create_user(

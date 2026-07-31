@@ -61,3 +61,24 @@ async fn web_session_handoff_can_be_issued_and_consumed_across_repositories_once
         AgentWebSessionHandoffConsume::NotFound
     );
 }
+
+#[tokio::test]
+async fn purging_agent_events_preserves_the_latest_revision_anchor() {
+    let (_directory, store) = test_store().await;
+    store
+        .create_user("alice", &public_key(), None)
+        .await
+        .unwrap();
+    store.create_user("bob", &public_key(), None).await.unwrap();
+    let latest = store.latest_agent_event_revision().await.unwrap();
+
+    let removed = store.purge_agent_events_before(i64::MAX).await.unwrap();
+    assert!(removed > 0);
+    assert_eq!(store.latest_agent_event_revision().await.unwrap(), latest);
+    let remaining = store.list_agent_events_after(0, 100).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].revision, latest);
+
+    assert_eq!(store.purge_agent_events_before(i64::MAX).await.unwrap(), 0);
+    assert_eq!(store.latest_agent_event_revision().await.unwrap(), latest);
+}

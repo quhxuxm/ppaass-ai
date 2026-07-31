@@ -47,6 +47,7 @@ entry_id = "entry-test"
 advertised_address = "proxy.example.com:443"
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "control-token"
+authorization_database_path = "authorization.sqlite3"
 {extra}
 "#
     ))

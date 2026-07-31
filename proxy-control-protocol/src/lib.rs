@@ -5,10 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const CONTROL_PROTOCOL_VERSION: u16 = 3;
+pub const CONTROL_PROTOCOL_VERSION: u16 = 4;
 pub const CONTROL_HEALTH_PATH: &str = "/control/v1/health";
 pub const ENTRY_REGISTRATION_PATH: &str = "/control/v1/entries/register";
-pub const AUTHORIZATION_RESOLVE_PATH: &str = "/control/v1/authorizations/resolve";
+pub const AUTHORIZATION_SNAPSHOT_PATH: &str = "/control/v1/authorizations/snapshot";
 pub const AUTHORIZATION_EVENTS_PATH: &str = "/control/v1/events";
 pub const ACCESS_BATCHES_PATH: &str = "/control/v1/access-batches";
 
@@ -17,6 +17,9 @@ pub const MAX_ENTRY_VERSION_BYTES: usize = 64;
 pub const MAX_ADVERTISED_ADDRESS_BYTES: usize = 512;
 pub const MAX_BATCH_ID_BYTES: usize = 128;
 pub const MAX_ACCESS_EVENTS_PER_BATCH: usize = 200;
+pub const DEFAULT_AUTHORIZATION_SNAPSHOT_LIMIT: u16 = 256;
+pub const MAX_AUTHORIZATION_SNAPSHOT_LIMIT: u16 = 256;
+pub const MAX_AUTHORIZATION_SNAPSHOT_ENTRIES: usize = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlHealthResponse {
@@ -41,17 +44,6 @@ pub struct EntryRegistrationResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthorizationResolveRequest {
-    pub username: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthorizationResolveResponse {
-    pub authorization: Option<AuthorizationSnapshot>,
-    pub revision: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationSnapshot {
     pub username: String,
     pub public_key_pem: String,
@@ -59,6 +51,23 @@ pub struct AuthorizationSnapshot {
     pub enabled: bool,
     pub key_version: i64,
     pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationSnapshotQuery {
+    /// 首页面省略；后续页面使用上一页返回的最后一个用户名。
+    pub after_username: Option<String>,
+    /// 首页面省略；后续页面必须携带首页面返回的同一个 revision。
+    pub revision: Option<u64>,
+    pub limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationSnapshotResponse {
+    pub authorizations: Vec<AuthorizationSnapshot>,
+    pub revision: u64,
+    /// 有下一页时等于本页最后一个用户名；服务端必须填满请求的 limit。
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

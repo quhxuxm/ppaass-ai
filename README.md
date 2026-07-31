@@ -73,9 +73,10 @@ cargo run --release -p proxy-registry
 cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 ```
 
-3. Register a user and approve the user's key request. Proxy Registry is the
-   only owner of the SQLite databases; Proxy Entry uses its authenticated
-   control API and never opens SQLite.
+3. Register a user and approve the user's key request. Proxy Registry remains
+   the only owner of the authoritative user and access databases. Proxy Entry
+   replicates only the public authorization snapshot into its own local SQLite
+   database through the authenticated control API.
 
 4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Registry.
 
@@ -165,6 +166,7 @@ entry_id = "entry-local"                   # Stable identity for idempotent batc
 advertised_address = "proxy.example.com:8080" # Public address registered in the node catalog
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
+authorization_database_path = "data/proxy-entry-authorizations.sqlite3"
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
 udp_session_limit_per_username = 64        # Per-user sessions for multiple devices/restarts
@@ -172,10 +174,13 @@ udp_session_channel_size = 256             # Datagrams queued per native UDP ses
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
 
-Proxy Registry exclusively owns schema migrations, user data and access history. Proxy Entry resolves
-authorization over the versioned control API, keeps a cache for at most five seconds, invalidates it
-from Registry SSE events, and sends access history in idempotent batches. A control outage therefore
-fails closed after the bounded cache expires.
+Proxy Registry exclusively owns schema migrations, user data and access history. Proxy Entry downloads
+a revision-bound, username-cursor-paginated public-authorization snapshot over the versioned control API.
+It stages each page in local SQLite and atomically replaces its last-known-good snapshot only after every
+page succeeds. Entry fails closed until the first complete snapshot is available; afterwards a control
+outage does not interrupt users in that snapshot.
+Changes made during an outage take effect after Entry reconnects and completes a new snapshot sync.
+Access history is sent to Registry in idempotent batches.
 After TCP and UDP listeners bind successfully, Entry registers `advertised_address` in the shared
 Registry node catalog and refreshes its heartbeat every 30 seconds; startup does not wait for Registry.
 

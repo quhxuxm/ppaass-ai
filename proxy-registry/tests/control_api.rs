@@ -8,14 +8,13 @@ use axum::{
 use http_body_util::BodyExt;
 use protocol::RsaKeyPair;
 use proxy_control_protocol::{
-    ACCESS_BATCHES_PATH, AUTHORIZATION_RESOLVE_PATH, AccessBatchRequest, AccessEvent,
-    AccessProtocol, AuthorizationResolveRequest, AuthorizationResolveResponse,
-    CONTROL_PROTOCOL_VERSION, ENTRY_REGISTRATION_PATH, EntryRegistrationRequest,
-    EntryRegistrationResponse,
+    ACCESS_BATCHES_PATH, AUTHORIZATION_SNAPSHOT_PATH, AccessBatchRequest, AccessEvent,
+    AccessProtocol, AuthorizationSnapshotResponse, CONTROL_PROTOCOL_VERSION,
+    ENTRY_REGISTRATION_PATH, EntryRegistrationRequest, EntryRegistrationResponse,
 };
 use proxy_registry::store::{
-    AccessLogRepository, ProxyAddressRepository, SqliteAccessLogRepository, SqliteUserRepository,
-    UserRepository,
+    AccessLogRepository, AgentEventRepository, ProxyAddressRepository, SqliteAccessLogRepository,
+    SqliteUserRepository, UserRepository,
 };
 use proxy_registry::{AgentEventHub, ControlState, ControlTokenVerifier, build_control_router};
 use serde::Serialize;
@@ -26,6 +25,16 @@ const TEST_TOKEN: &str = "test-control-token-0123456789-abcdef";
 
 async fn test_router() -> (
     Router,
+    Arc<SqliteUserRepository>,
+    Arc<SqliteAccessLogRepository>,
+    TempDir,
+) {
+    let (users, access, directory) = test_repositories().await;
+    let router = router_for(users.clone(), access.clone()).await;
+    (router, users, access, directory)
+}
+
+async fn test_repositories() -> (
     Arc<SqliteUserRepository>,
     Arc<SqliteAccessLogRepository>,
     TempDir,
@@ -41,16 +50,22 @@ async fn test_router() -> (
             .await
             .unwrap(),
     );
+    (users, access, directory)
+}
+
+async fn router_for(
+    users: Arc<SqliteUserRepository>,
+    access: Arc<SqliteAccessLogRepository>,
+) -> Router {
     let events = AgentEventHub::start(users.clone()).await.unwrap();
-    let router = build_control_router(ControlState {
+    build_control_router(ControlState {
         instance_id: Arc::from("registry-test"),
         users: users.clone(),
-        access_batches: access.clone(),
-        proxy_entries: users.clone(),
+        access_batches: access,
+        proxy_entries: users,
         agent_events: events,
         token_verifier: ControlTokenVerifier::new(TEST_TOKEN).unwrap(),
-    });
-    (router, users, access, directory)
+    })
 }
 
 fn authorized_json_request(path: &str, body: impl Serialize) -> Request<Body> {
@@ -63,51 +78,135 @@ fn authorized_json_request(path: &str, body: impl Serialize) -> Request<Body> {
         .unwrap()
 }
 
-#[tokio::test]
-async fn authorization_endpoint_is_token_protected_and_returns_only_public_profile() {
-    let (app, users, _access, _directory) = test_router().await;
-    let key = RsaKeyPair::generate(2048)
+fn authorized_get_request(path: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+        .body(Body::empty())
         .unwrap()
-        .public_key_to_pem()
-        .unwrap();
-    users.create_user("alice", &key, Some(12345)).await.unwrap();
+}
 
+async fn get_snapshot(app: Router, path: &str) -> AuthorizationSnapshotResponse {
+    let response = app.oneshot(authorized_get_request(path)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn authorization_snapshot_is_token_protected_and_supports_an_empty_page() {
+    let (app, _users, _access, _directory) = test_router().await;
     let unauthorized = app
         .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri(AUTHORIZATION_RESOLVE_PATH)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    serde_json::to_vec(&AuthorizationResolveRequest {
-                        username: "alice".to_string(),
-                    })
-                    .unwrap(),
-                ))
+                .method("GET")
+                .uri(AUTHORIZATION_SNAPSHOT_PATH)
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
+    let snapshot = get_snapshot(app, AUTHORIZATION_SNAPSHOT_PATH).await;
+    assert_eq!(snapshot.revision, 0);
+    assert!(snapshot.authorizations.is_empty());
+    assert_eq!(snapshot.next_cursor, None);
+}
+
+#[tokio::test]
+async fn authorization_snapshot_uses_username_keyset_pagination() {
+    let (users, access, _directory) = test_repositories().await;
+    let key = RsaKeyPair::generate(2048)
+        .unwrap()
+        .public_key_to_pem()
+        .unwrap();
+    users.create_user("charlie", &key, None).await.unwrap();
+    users.create_user("bob", &key, None).await.unwrap();
+    users.create_user("alice", &key, Some(12345)).await.unwrap();
+    let expected_revision = users.latest_agent_event_revision().await.unwrap();
+    let app = router_for(users, access).await;
+
+    let first = get_snapshot(
+        app.clone(),
+        &format!("{AUTHORIZATION_SNAPSHOT_PATH}?limit=2"),
+    )
+    .await;
+    assert_eq!(first.revision, expected_revision);
+    assert_eq!(
+        first
+            .authorizations
+            .iter()
+            .map(|authorization| authorization.username.as_str())
+            .collect::<Vec<_>>(),
+        ["alice", "bob"]
+    );
+    assert_eq!(first.next_cursor.as_deref(), Some("bob"));
+    assert_eq!(first.authorizations[0].public_key_pem, key.trim());
+    assert_eq!(
+        first.authorizations[0].permissions,
+        proxy_registry::store::default_proxy_permissions()
+    );
+    assert!(first.authorizations[0].enabled);
+    assert_eq!(first.authorizations[0].key_version, 1);
+    assert_eq!(first.authorizations[0].expires_at, Some(12345));
+
+    let second = get_snapshot(
+        app,
+        &format!(
+            "{AUTHORIZATION_SNAPSHOT_PATH}?after_username=bob&revision={expected_revision}&limit=2"
+        ),
+    )
+    .await;
+    assert_eq!(second.revision, expected_revision);
+    assert_eq!(second.authorizations.len(), 1);
+    assert_eq!(second.authorizations[0].username, "charlie");
+    assert_eq!(second.next_cursor, None);
+}
+
+#[tokio::test]
+async fn authorization_snapshot_rejects_revision_changes_between_pages() {
+    let (users, access, _directory) = test_repositories().await;
+    let key = RsaKeyPair::generate(2048)
+        .unwrap()
+        .public_key_to_pem()
+        .unwrap();
+    users.create_user("alice", &key, None).await.unwrap();
+    users.create_user("bob", &key, None).await.unwrap();
+    let app = router_for(users.clone(), access).await;
+    let first = get_snapshot(
+        app.clone(),
+        &format!("{AUTHORIZATION_SNAPSHOT_PATH}?limit=1"),
+    )
+    .await;
+    users.create_user("charlie", &key, None).await.unwrap();
+
     let response = app
-        .oneshot(authorized_json_request(
-            AUTHORIZATION_RESOLVE_PATH,
-            AuthorizationResolveRequest {
-                username: "alice".to_string(),
-            },
-        ))
+        .clone()
+        .oneshot(authorized_get_request(&format!(
+            "{AUTHORIZATION_SNAPSHOT_PATH}?after_username=alice&revision={}&limit=1",
+            first.revision
+        )))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let resolved: AuthorizationResolveResponse = serde_json::from_slice(&body).unwrap();
-    let authorization = resolved.authorization.unwrap();
-    assert_eq!(authorization.username, "alice");
-    assert_eq!(authorization.public_key_pem, key.trim());
-    assert_eq!(authorization.expires_at, Some(12345));
-    assert_eq!(authorization.key_version, 1);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    for invalid_query in ["after_username=alice", "revision=1", "limit=0", "limit=257"] {
+        let response = app
+            .clone()
+            .oneshot(authorized_get_request(&format!(
+                "{AUTHORIZATION_SNAPSHOT_PATH}?{invalid_query}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{invalid_query}"
+        );
+    }
 }
 
 #[tokio::test]

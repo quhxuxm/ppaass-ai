@@ -15,11 +15,12 @@ use crate::{
     ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
     NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser,
     NewUserAccount, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate,
-    ProxyEntryRegistration, ProxyEntryRepository, Result, UserOrigin, UserRecord, UserRepository,
-    UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_audit_reason,
-    normalize_key_request_message, normalize_key_request_rejection_reason, normalize_permissions,
-    normalize_proxy_address, normalize_proxy_address_id, normalize_proxy_address_ids,
-    normalize_proxy_address_label, normalize_public_key_pem, normalize_username, validate_user,
+    ProxyEntryRegistration, ProxyEntryRepository, Result, UserAuthorizationSnapshotPage,
+    UserAuthorizationSnapshotQuery, UserOrigin, UserRecord, UserRepository, UserRepositoryError,
+    UserUpdate, ValidationError, WebAccount, normalize_audit_reason, normalize_key_request_message,
+    normalize_key_request_rejection_reason, normalize_permissions, normalize_proxy_address,
+    normalize_proxy_address_id, normalize_proxy_address_ids, normalize_proxy_address_label,
+    normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{

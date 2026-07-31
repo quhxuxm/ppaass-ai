@@ -121,6 +121,12 @@ async fn server_construction_does_not_require_a_reachable_registry() {
     let mut config = support::proxy_config("");
     config.registry_url = "http://127.0.0.1:9".to_string();
     config.registry_control_token_path = token_path.display().to_string();
+    config.authorization_database_path = directory
+        .path()
+        .join("nested")
+        .join("authorization.sqlite3")
+        .display()
+        .to_string();
 
     tokio::time::timeout(std::time::Duration::from_secs(2), ProxyServer::new(config))
         .await

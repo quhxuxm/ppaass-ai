@@ -23,6 +23,18 @@ pub(super) fn spawn_entry_registration(control: Weak<RemoteControlPlane>) {
             };
             let (delay, succeeded) = match register_entry(&control_plane).await {
                 Ok(response) => {
+                    match control_plane.refresh_authorizations().await {
+                        Ok(revision) => info!(
+                            entry_id = %control_plane.entry_id,
+                            revision,
+                            "Proxy Entry 已刷新 Registry 授权快照"
+                        ),
+                        Err(error) => warn!(
+                            %error,
+                            entry_id = %control_plane.entry_id,
+                            "Proxy Entry 注册成功，但刷新授权快照失败；继续使用最后成功快照"
+                        ),
+                    }
                     info!(
                         entry_id = %control_plane.entry_id,
                         registry_instance_id = response.registry_instance_id,

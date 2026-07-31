@@ -20,16 +20,12 @@ pub struct ProxyConfig {
     /// 仅当前服务账号可读的控制面 Bearer Token 文件。
     pub registry_control_token_path: String,
 
+    /// Entry 本地持久化的最后成功授权快照；不能放在版本 release 目录中。
+    pub authorization_database_path: String,
+
     /// 单个控制面 HTTP 请求的超时时间。
     #[serde(default = "default_control_request_timeout_secs")]
     pub control_request_timeout_secs: u64,
-
-    /// 授权快照本地缓存的最长有效时间。安全边界固定为 1..=5 秒。
-    #[serde(
-        default = "default_authorization_cache_max_age_secs",
-        deserialize_with = "deserialize_authorization_cache_max_age_secs"
-    )]
-    pub authorization_cache_max_age_secs: u64,
 
     #[serde(default = "default_async_runtime_stack_size_mb")]
     pub async_runtime_stack_size_mb: usize,
@@ -165,26 +161,6 @@ fn default_connect_timeout_secs() -> u64 {
 
 fn default_control_request_timeout_secs() -> u64 {
     10
-}
-
-fn default_authorization_cache_max_age_secs() -> u64 {
-    5
-}
-
-fn deserialize_authorization_cache_max_age_secs<'de, D>(
-    deserializer: D,
-) -> std::result::Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = u64::deserialize(deserializer)?;
-    if (1..=5).contains(&value) {
-        Ok(value)
-    } else {
-        Err(de::Error::custom(
-            "authorization_cache_max_age_secs must be between 1 and 5",
-        ))
-    }
 }
 
 fn default_tcp_relay_idle_timeout_secs() -> u64 {

@@ -31,10 +31,10 @@ toml.workspace = true
 time.workspace = true
 async-trait.workspace = true
 parking_lot.workspace = true
-dashmap.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
+sqlx.workspace = true
 serde_json.workspace = true
 libc.workspace = true
 pretty-hex.workspace = true

@@ -1,7 +1,9 @@
 mod authorization;
+mod authorization_store;
 mod client;
 mod events;
 mod registration;
+mod snapshot;
 
 pub use client::{
     RemoteControlPlane, load_control_token, validate_advertised_address, validate_entry_id,

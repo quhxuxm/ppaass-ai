@@ -34,16 +34,21 @@ pub(super) fn spawn_authorization_event_listener(control: Weak<RemoteControlPlan
 
 async fn consume_event_stream(control: &RemoteControlPlane) -> crate::error::Result<()> {
     let mut request = control
-        .client
+        .events_client
         .get(control.endpoint(AUTHORIZATION_EVENTS_PATH)?)
         .header(header::AUTHORIZATION, control.bearer_value());
     let last_event_id = control.last_event_id.load(Ordering::Acquire);
     if last_event_id != 0 {
         request = request.header("Last-Event-ID", last_event_id.to_string());
     }
-    let response = request.send().await.map_err(|error| {
-        crate::error::ProxyError::ControlPlane(format!("连接 Registry 授权事件流失败：{error}"))
-    })?;
+    let response = tokio::time::timeout(control.request_timeout, request.send())
+        .await
+        .map_err(|_| {
+            crate::error::ProxyError::ControlPlane("等待 Registry 授权事件流响应头超时".to_string())
+        })?
+        .map_err(|error| {
+            crate::error::ProxyError::ControlPlane(format!("连接 Registry 授权事件流失败：{error}"))
+        })?;
     if !response.status().is_success() {
         return Err(crate::error::ProxyError::ControlPlane(format!(
             "Registry 授权事件流返回 HTTP {}",
@@ -53,7 +58,6 @@ async fn consume_event_stream(control: &RemoteControlPlane) -> crate::error::Res
     let mut chunks = response.bytes_stream();
     let mut buffer = Vec::new();
     let mut event_name = String::new();
-    let mut event_id = None;
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk.map_err(|error| {
             crate::error::ProxyError::ControlPlane(format!("读取 Registry 授权事件失败：{error}"))
@@ -75,16 +79,12 @@ async fn consume_event_stream(control: &RemoteControlPlane) -> crate::error::Res
                     event_name.as_str(),
                     "authorization_changed" | "authorization_reset"
                 ) {
-                    control.clear_authorization_cache().await;
-                }
-                if let Some(event_id) = event_id.take() {
-                    control.last_event_id.fetch_max(event_id, Ordering::Release);
+                    // 刷新失败会让事件流重连，并且不会推进事件游标或破坏旧快照。
+                    control.refresh_authorizations().await?;
                 }
                 event_name.clear();
             } else if let Some(value) = line.strip_prefix("event:") {
                 event_name = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("id:") {
-                event_id = value.trim().parse::<u64>().ok();
             }
         }
         if buffer.len() > MAX_SSE_BUFFER_BYTES {

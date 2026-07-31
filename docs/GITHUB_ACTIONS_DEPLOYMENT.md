@@ -92,6 +92,18 @@ GitHub Environment：`entry_production`
 | --- | --- | --- |
 | `ENTRY_PRODUCTION_RUNTIME_ROOT` | `/opt/ppaass-entry` | 只能使用 `/opt` 或 `/srv` 下的目录 |
 
+### Entry 本地授权副本数据库
+
+正式部署模板将 `authorization_database_path` 固定为
+`/var/lib/ppaass-entry/authorization.sqlite3`。安装脚本不会从 GitHub 注入这个路径，
+因此不需要新增 GitHub Secret 或 Variable。
+
+Registry 数据库是授权数据的权威来源；Entry 数据库只保存从 Registry 完整同步的公开
+授权副本。该副本位于 `/var/lib/ppaass-entry`，不在
+`/opt/ppaass-entry/releases/<release SHA>` 下，因此发布切换、回滚或清理旧 release 都不会
+删除它。目录归 `ppaass-proxy-entry` 服务账号所有，systemd 服务使用 `UMask=0077`，新建
+的数据库及其 SQLite 辅助文件默认仅该账号可访问。
+
 ## 同机并行部署与稳定主密钥
 
 Entry 和 Registry 可以配置相同的远程服务器地址，同时启动两个独立工作流。Entry

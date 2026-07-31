@@ -66,7 +66,8 @@ Proxy 是服务端出口。
 
 它做的事情：
 
-- 读取 `proxy-entry.toml`，并以只读方式连接 Proxy Registry 管理的 SQLite 用户库。
+- 读取 `proxy-entry.toml`，通过 Registry 控制 API 同步公开授权，并按用户名查询 Entry
+  自己的 SQLite last-known-good 副本；它从不打开 Registry 的权威用户库。
 - 在同一个数值端口同时监听 Agent 的入站 TCP 和 raw UDP。TCP 入站先 peek 首包判断是 direct framed PPAASS 还是 raw Yamux；UDP 入站按原生协议建立、查找和维护认证 session。
 - 对每条 direct framed 连接或 Yamux 子流执行流式 PPAASS Auth，再等待 `ConnectRequest`；原生 UDP 则先做 RSA 身份认证/会话建立，再处理被逐包认证的 `Connect/Data/Close` 数据报。
 - 根据目标类型进入 TCP relay、单目标 UDP、共享 UDP relay、Proxy DNS 或上游转发。
@@ -316,8 +317,14 @@ Proxy Entry 收到通过认证的 Connect 请求后，直接按目标地址建�
 - `advertised_address`: 必填的 Agent 公网连接地址；格式为 `host:port`，注册后自动合并到 Proxy 节点目录。
 - `registry_url`: 必填的 Registry HTTP 或 HTTPS 地址；Entry 不校验 HTTPS 证书链或主机名。
 - `registry_control_token_path`: 必填的控制面 Token 文件。
+- `authorization_database_path`: 必填的 Entry 本地公开授权副本 SQLite 路径；生产环境使用
+  `/var/lib/ppaass-entry/authorization.sqlite3`。
 - `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
 - Entry 在 TCP/UDP 监听成功后每 30 秒向 Registry 注册心跳；超过 90 秒未收到心跳时，管理界面显示离线。
+- 每次注册成功及收到授权 SSE 变更后，Entry 以 revision 绑定的 username keyset cursor
+  分页获取公钥授权，每页写入本地 staging，全部完成后原子替换 last-known-good。首份快照
+  前认证默认拒绝；首份成功后 Registry 中断不会影响已有用户，中断期间的停用、撤权、
+  删除和密钥轮换在恢复同步后生效。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
 - `[yamux]`: Proxy 作为 `tcp` 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接进入 PPAASS 流协议处理；raw UDP 入站进入独立的 session packet codec。
@@ -454,7 +461,7 @@ cd desktop-agent-ui && npm run tauri dev
 - `integration-test.yml`: 启动 mock target、proxy、agent，然后跑 integration tests。
 - `rust-clippy.yml`: Clippy SARIF 分析。
 - `deploy-proxy-registry.yml`: 使用 `registry_production` Environment 部署两个 Registry 进程和 Caddy。
-- `deploy-proxy-entry.yml`: 使用 `entry_production` Environment 部署无 SQLite 依赖的 Entry 数据面。
+- `deploy-proxy-entry.yml`: 使用 `entry_production` Environment 部署 Entry 数据面及其本地公开授权副本 SQLite；不接触 Registry 权威数据库。
 - `checkmarx-one.yml` / `codescan.yml`: 安全/代码扫描。
 
 完整的 GitHub Secrets、Variables 和 PEM 配置示例见

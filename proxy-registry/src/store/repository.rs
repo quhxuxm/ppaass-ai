@@ -9,8 +9,9 @@ use crate::{
     KeyRequestApproval, KeyRequestApprovalResult, KeyRequestRejection, LoginRecord, ManagedUser,
     ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
     NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress,
-    NewUserAccount, ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, Result, UserRecord,
-    UserUpdate, WebAccount,
+    NewUserAccount, ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, Result,
+    UserAuthorizationSnapshotPage, UserAuthorizationSnapshotQuery, UserRecord, UserUpdate,
+    WebAccount,
 };
 
 /// Registry 实例间共享的 Agent 失效通知日志。
@@ -62,6 +63,15 @@ pub trait UserRepository: Send + Sync {
     async fn get_user(&self, username: &str) -> Result<Option<UserRecord>>;
 
     async fn list_users(&self) -> Result<Vec<UserRecord>>;
+
+    /// 在同一个数据库读快照中返回一页授权用户与对应的事件修订号。
+    ///
+    /// SQLite 实现使用单个只读事务；未来中央数据库适配器必须使用 repeatable-read
+    /// 或更强隔离级别，保证同一页内 revision 与用户行来自同一个一致性快照。
+    async fn read_authorization_snapshot_page(
+        &self,
+        query: UserAuthorizationSnapshotQuery,
+    ) -> Result<UserAuthorizationSnapshotPage>;
 
     async fn create_user(
         &self,

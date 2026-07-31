@@ -5,7 +5,7 @@ use crate::store::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{
         IntoResponse, Response,
@@ -15,11 +15,13 @@ use axum::{
 };
 use futures::{StreamExt, stream};
 use proxy_control_protocol::{
-    ACCESS_BATCHES_PATH, AUTHORIZATION_EVENTS_PATH, AUTHORIZATION_RESOLVE_PATH, AccessBatchRequest,
-    AccessBatchResponse, AccessProtocol as ControlAccessProtocol, AuthorizationEvent,
-    AuthorizationResolveRequest, AuthorizationResolveResponse, AuthorizationSnapshot,
-    CONTROL_HEALTH_PATH, CONTROL_PROTOCOL_VERSION, ControlHealthResponse, ENTRY_REGISTRATION_PATH,
-    MAX_ACCESS_EVENTS_PER_BATCH, MAX_BATCH_ID_BYTES, MAX_ENTRY_ID_BYTES,
+    ACCESS_BATCHES_PATH, AUTHORIZATION_EVENTS_PATH, AUTHORIZATION_SNAPSHOT_PATH,
+    AccessBatchRequest, AccessBatchResponse, AccessProtocol as ControlAccessProtocol,
+    AuthorizationEvent, AuthorizationSnapshot, AuthorizationSnapshotQuery,
+    AuthorizationSnapshotResponse, CONTROL_HEALTH_PATH, CONTROL_PROTOCOL_VERSION,
+    ControlHealthResponse, DEFAULT_AUTHORIZATION_SNAPSHOT_LIMIT, ENTRY_REGISTRATION_PATH,
+    MAX_ACCESS_EVENTS_PER_BATCH, MAX_AUTHORIZATION_SNAPSHOT_LIMIT, MAX_BATCH_ID_BYTES,
+    MAX_ENTRY_ID_BYTES,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -85,7 +87,7 @@ pub fn build_control_router(state: ControlState) -> Router {
     Router::new()
         .route(CONTROL_HEALTH_PATH, get(control_health))
         .route(ENTRY_REGISTRATION_PATH, post(entries::register_entry))
-        .route(AUTHORIZATION_RESOLVE_PATH, post(resolve_authorization))
+        .route(AUTHORIZATION_SNAPSHOT_PATH, get(get_authorization_snapshot))
         .route(AUTHORIZATION_EVENTS_PATH, get(authorization_events))
         .route(ACCESS_BATCHES_PATH, post(ingest_access_batch))
         .with_state(state)
@@ -107,29 +109,67 @@ async fn control_health(State(state): State<ControlState>) -> Json<ControlHealth
     })
 }
 
-async fn resolve_authorization(
+async fn get_authorization_snapshot(
     State(state): State<ControlState>,
     headers: HeaderMap,
-    Json(request): Json<AuthorizationResolveRequest>,
-) -> Result<Json<AuthorizationResolveResponse>, ControlApiError> {
+    Query(query): Query<AuthorizationSnapshotQuery>,
+) -> Result<Json<AuthorizationSnapshotResponse>, ControlApiError> {
     require_control_token(&state, &headers)?;
-    let authorization =
-        state
-            .users
-            .get_user(&request.username)
-            .await?
-            .map(|user| AuthorizationSnapshot {
-                username: user.username,
-                public_key_pem: user.public_key_pem,
-                permissions: user.permissions,
-                enabled: user.enabled,
-                key_version: user.key_version,
-                expires_at: user.expires_at,
-            });
-    Ok(Json(AuthorizationResolveResponse {
-        authorization,
-        revision: state.agent_events.latest_revision(),
+    let query = validate_authorization_snapshot_query(query)?;
+    let snapshot = state.users.read_authorization_snapshot_page(query).await?;
+    let authorizations = snapshot
+        .users
+        .into_iter()
+        .map(authorization_from_user)
+        .collect();
+    Ok(Json(AuthorizationSnapshotResponse {
+        authorizations,
+        revision: snapshot.revision,
+        next_cursor: snapshot.next_cursor,
     }))
+}
+
+fn validate_authorization_snapshot_query(
+    query: AuthorizationSnapshotQuery,
+) -> Result<crate::store::UserAuthorizationSnapshotQuery, ControlApiError> {
+    if query.after_username.is_some() != query.revision.is_some() {
+        return Err(ControlApiError::bad_request(
+            "after_username 与 revision 必须同时提供或同时省略",
+        ));
+    }
+    let limit = query.limit.unwrap_or(DEFAULT_AUTHORIZATION_SNAPSHOT_LIMIT);
+    if limit == 0 || limit > MAX_AUTHORIZATION_SNAPSHOT_LIMIT {
+        return Err(ControlApiError::bad_request(format!(
+            "limit 必须是 1..={MAX_AUTHORIZATION_SNAPSHOT_LIMIT}"
+        )));
+    }
+    let after_username = query
+        .after_username
+        .map(|cursor| {
+            let normalized = crate::store::normalize_username(&cursor)
+                .map_err(|error| ControlApiError::bad_request(error.to_string()))?;
+            if normalized != cursor {
+                return Err(ControlApiError::bad_request("after_username 不是规范游标"));
+            }
+            Ok(normalized)
+        })
+        .transpose()?;
+    Ok(crate::store::UserAuthorizationSnapshotQuery {
+        after_username,
+        expected_revision: query.revision,
+        limit,
+    })
+}
+
+fn authorization_from_user(user: crate::store::UserRecord) -> AuthorizationSnapshot {
+    AuthorizationSnapshot {
+        username: user.username,
+        public_key_pem: user.public_key_pem,
+        permissions: user.permissions,
+        enabled: user.enabled,
+        key_version: user.key_version,
+        expires_at: user.expires_at,
+    }
 }
 
 struct ControlEventStreamState {
@@ -142,6 +182,8 @@ async fn authorization_events(
     headers: HeaderMap,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ControlApiError> {
     require_control_token(&state, &headers)?;
+    // 先订阅再读取游标，避免两步之间到达的广播被永久漏掉；重复事件是安全的。
+    let receiver = state.agent_events.subscribe();
     let initial_revision = state.agent_events.latest_revision();
     let requested_revision = headers
         .get("Last-Event-ID")
@@ -149,7 +191,7 @@ async fn authorization_events(
         .and_then(|value| value.parse::<u64>().ok());
     let updates = stream::unfold(
         ControlEventStreamState {
-            receiver: state.agent_events.subscribe(),
+            receiver,
             deadline: tokio::time::Instant::now()
                 + Duration::from_secs(CONTROL_EVENT_CONNECTION_SECONDS),
         },
@@ -310,6 +352,16 @@ impl ControlApiError {
 
 impl From<crate::store::UserRepositoryError> for ControlApiError {
     fn from(error: crate::store::UserRepositoryError) -> Self {
+        if let crate::store::UserRepositoryError::AuthorizationSnapshotRevisionConflict {
+            expected,
+            actual,
+        } = &error
+        {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: format!("授权快照已变化：期望修订号 {expected}，实际为 {actual}"),
+            };
+        }
         if let crate::store::UserRepositoryError::ProxyEntryAddressConflict(address) = &error {
             return Self {
                 status: StatusCode::CONFLICT,

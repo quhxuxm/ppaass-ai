@@ -48,6 +48,98 @@ async fn creates_updates_and_persists_user() {
 }
 
 #[tokio::test]
+async fn authorization_snapshot_pages_users_with_its_database_revision() {
+    let (_directory, store) = test_store().await;
+    store.create_user("bob", &public_key(), None).await.unwrap();
+    store
+        .create_user("alice", &public_key(), Some(1_893_456_000))
+        .await
+        .unwrap();
+    let expected_revision = store.latest_agent_event_revision().await.unwrap();
+
+    let first = store
+        .read_authorization_snapshot_page(UserAuthorizationSnapshotQuery {
+            after_username: None,
+            expected_revision: None,
+            limit: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.revision, expected_revision);
+    assert_eq!(
+        first
+            .users
+            .iter()
+            .map(|user| user.username.as_str())
+            .collect::<Vec<_>>(),
+        ["alice"]
+    );
+    assert_eq!(first.users[0].expires_at, Some(1_893_456_000));
+    assert_eq!(first.next_cursor.as_deref(), Some("alice"));
+
+    let second = store
+        .read_authorization_snapshot_page(UserAuthorizationSnapshotQuery {
+            after_username: first.next_cursor,
+            expected_revision: Some(first.revision),
+            limit: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(second.revision, expected_revision);
+    assert_eq!(second.users.len(), 1);
+    assert_eq!(second.users[0].username, "bob");
+    assert_eq!(second.users[0].expires_at, None);
+    assert_eq!(second.next_cursor, None);
+}
+
+#[tokio::test]
+async fn authorization_snapshot_rejects_a_stale_revision_between_pages() {
+    let (_directory, store) = test_store().await;
+    store
+        .create_user("alice", &public_key(), None)
+        .await
+        .unwrap();
+    let first = store
+        .read_authorization_snapshot_page(UserAuthorizationSnapshotQuery {
+            after_username: None,
+            expected_revision: None,
+            limit: 1,
+        })
+        .await
+        .unwrap();
+    store.create_user("bob", &public_key(), None).await.unwrap();
+
+    let error = store
+        .read_authorization_snapshot_page(UserAuthorizationSnapshotQuery {
+            after_username: Some("alice".to_string()),
+            expected_revision: Some(first.revision),
+            limit: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        UserRepositoryError::AuthorizationSnapshotRevisionConflict {
+            expected,
+            actual
+        } if expected == first.revision && actual > expected
+    ));
+
+    let invalid_limit = store
+        .read_authorization_snapshot_page(UserAuthorizationSnapshotQuery {
+            after_username: None,
+            expected_revision: None,
+            limit: 257,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        invalid_limit,
+        UserRepositoryError::InvalidAuthorizationSnapshotLimit(257)
+    ));
+}
+
+#[tokio::test]
 async fn public_key_update_invalidates_managed_private_key() {
     let (_directory, store) = test_store().await;
     store

@@ -58,7 +58,7 @@ impl ProxyServer {
     #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
-        let control_plane = RemoteControlPlane::new(&config)?;
+        let control_plane = RemoteControlPlane::new(&config).await?;
         info!(
             entry_id = config.entry_id,
             registry_url = config.registry_url,

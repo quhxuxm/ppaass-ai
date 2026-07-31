@@ -20,7 +20,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Entry installation must run as root." >&2
     exit 1
 fi
-for command in systemctl; do
+for command in stat systemctl; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Entry host." >&2
         exit 1
@@ -30,6 +30,7 @@ done
 service_user="ppaass-proxy-entry"
 data_root="/var/lib/ppaass-entry"
 secret_root="$data_root/secrets"
+authorization_database="$data_root/authorization.sqlite3"
 log_root="/var/log/ppaass/proxy-entry"
 release_root="$RUNTIME_ROOT/releases/$RELEASE_SHA"
 current_link="$RUNTIME_ROOT/current"
@@ -46,6 +47,26 @@ fi
 install -d -m 0755 "$RUNTIME_ROOT" "$RUNTIME_ROOT/releases" "$release_root"
 install -d -o "$service_user" -g "$service_user" -m 0750 \
     "$data_root" "$secret_root" "$log_root"
+if [ -L "$authorization_database" ]; then
+    echo "Refusing symbolic-link authorization database: $authorization_database" >&2
+    exit 1
+fi
+if [ -e "$authorization_database" ]; then
+    if [ ! -f "$authorization_database" ]; then
+        echo "Authorization database path is not a regular file: $authorization_database" >&2
+        exit 1
+    fi
+    expected_uid="$(id -u "$service_user")"
+    expected_gid="$(id -g "$service_user")"
+    actual_uid="$(stat -c '%u' "$authorization_database")"
+    actual_gid="$(stat -c '%g' "$authorization_database")"
+    actual_mode="$(stat -c '%a' "$authorization_database")"
+    if [ "$actual_uid" != "$expected_uid" ] || [ "$actual_gid" != "$expected_gid" ] || \
+       [ "$actual_mode" != "600" ]; then
+        echo "Authorization database must be owned by $service_user:$service_user with mode 0600." >&2
+        exit 1
+    fi
+fi
 install -m 0755 "$bundle/proxy-entry" "$release_root/proxy-entry"
 install -o "$service_user" -g "$service_user" -m 0600 \
     "$bundle/control-token" "$secret_root/registry-control-token"
@@ -55,6 +76,7 @@ sed \
     -e "s|^advertised_address = .*|advertised_address = \"$ADVERTISED_ADDRESS\"|" \
     -e "s|^registry_url = .*|registry_url = \"$REGISTRY_URL\"|" \
     -e "s|^registry_control_token_path = .*|registry_control_token_path = \"$secret_root/registry-control-token\"|" \
+    -e "s|^authorization_database_path = .*|authorization_database_path = \"$authorization_database\"|" \
     "$bundle/proxy-entry.toml" >"$release_root/proxy-entry.toml"
 chmod 0644 "$release_root/proxy-entry.toml"
 ln -sfn "$release_root" "$current_link"
@@ -69,6 +91,7 @@ After=network-online.target
 Type=simple
 User=$service_user
 Group=$service_user
+UMask=0077
 WorkingDirectory=$current_link
 ExecStart=$current_link/proxy-entry --config $current_link/proxy-entry.toml --log-dir $log_root
 Restart=always

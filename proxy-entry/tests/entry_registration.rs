@@ -10,11 +10,11 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode, header},
-    routing::post,
+    routing::{get, post},
 };
 use proxy_control_protocol::{
-    CONTROL_PROTOCOL_VERSION, ENTRY_REGISTRATION_PATH, EntryRegistrationRequest,
-    EntryRegistrationResponse,
+    AUTHORIZATION_SNAPSHOT_PATH, AuthorizationSnapshotResponse, CONTROL_PROTOCOL_VERSION,
+    ENTRY_REGISTRATION_PATH, EntryRegistrationRequest, EntryRegistrationResponse,
 };
 use proxy_entry::server::ProxyServer;
 use tokio::sync::Mutex;
@@ -24,7 +24,19 @@ const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 #[derive(Clone, Default)]
 struct RegistrationState {
     attempts: Arc<AtomicUsize>,
+    snapshot_attempts: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<(String, EntryRegistrationRequest)>>>,
+}
+
+async fn authorization_snapshot(
+    State(state): State<RegistrationState>,
+) -> Json<AuthorizationSnapshotResponse> {
+    state.snapshot_attempts.fetch_add(1, Ordering::AcqRel);
+    Json(AuthorizationSnapshotResponse {
+        authorizations: Vec::new(),
+        revision: 1,
+        next_cursor: None,
+    })
 }
 
 async fn register_entry(
@@ -63,6 +75,7 @@ async fn registration_starts_after_listening_and_retries_in_background() {
     let state = RegistrationState::default();
     let app = Router::new()
         .route(ENTRY_REGISTRATION_PATH, post(register_entry))
+        .route(AUTHORIZATION_SNAPSHOT_PATH, get(authorization_snapshot))
         .with_state(state.clone());
     let registry_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let registry_address = registry_listener.local_addr().unwrap();
@@ -79,6 +92,11 @@ async fn registration_starts_after_listening_and_retries_in_background() {
     let mut config = support::proxy_config("");
     config.registry_url = format!("http://{registry_address}");
     config.registry_control_token_path = token_path.display().to_string();
+    config.authorization_database_path = directory
+        .path()
+        .join("authorization.sqlite3")
+        .display()
+        .to_string();
     config.advertised_address = "Proxy.Example.com:443".to_string();
 
     let server = ProxyServer::new(config).await.unwrap();
@@ -87,13 +105,16 @@ async fn registration_starts_after_listening_and_retries_in_background() {
 
     let entry_task = tokio::spawn(server.run());
     tokio::time::timeout(Duration::from_secs(4), async {
-        while state.attempts.load(Ordering::Acquire) < 2 {
+        while state.attempts.load(Ordering::Acquire) < 2
+            || state.snapshot_attempts.load(Ordering::Acquire) < 1
+        {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
     .expect("Entry 应在首次注册失败后继续后台重试");
     assert!(!entry_task.is_finished(), "注册失败不应停止 Entry 服务");
+    assert_eq!(state.snapshot_attempts.load(Ordering::Acquire), 1);
 
     let requests = state.requests.lock().await;
     assert_eq!(requests.len(), 2);
