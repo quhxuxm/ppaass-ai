@@ -22,6 +22,7 @@ pub(crate) async fn get_agent_events(
     validate_native_agent_request(&headers)?;
     let account = authenticate_agent_token(&state, &headers).await?;
     let account_id = account.account_id;
+    let initial_revision = state.agent_events.latest_revision();
     let updates = stream::unfold(
         EventStreamState {
             account_id: account_id.clone(),
@@ -37,7 +38,7 @@ pub(crate) async fn get_agent_events(
                         Ok(event) if event.is_visible_to(&stream.account_id) => {
                             let item = Event::default()
                                 .id(event.revision.to_string())
-                                .event(event.kind)
+                                .event(event.kind.as_ref())
                                 .data("{}");
                             return Some((Ok(item), stream));
                         }
@@ -52,8 +53,9 @@ pub(crate) async fn get_agent_events(
             }
         },
     );
-    let initial = stream::once(async {
+    let initial = stream::once(async move {
         Ok(Event::default()
+            .id(initial_revision.to_string())
             .event("sync")
             .data("{}")
             .retry(Duration::from_secs(1)))

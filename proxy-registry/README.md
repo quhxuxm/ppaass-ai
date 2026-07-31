@@ -11,6 +11,9 @@
   当前适配器使用 SQLite。
 - Web 读写用户 SQLite，Proxy 仅只读该库；访问记录使用单独的共享 SQLite。全部服务
   日志使用 `tracing`，不会记录密码、Cookie 或私钥。
+- 多个 Proxy Registry 通过共享数据库中的事件日志同步 Agent SSE 通知。事件由业务事务
+  使用普通 SQL 显式写入，不依赖数据库触发器；每个 Registry 实例独立轮询并只向连接
+  在本实例上的 Agent 广播。
 
 ## 首次启动与管理员账号
 
@@ -52,10 +55,12 @@ workflow 只在远端数据库没有启用的根管理员 `admin` 时使用管�
 `admin` 的密码；其他管理员账号不能替代根管理员。
 服务器合法更换 SSH 主机密钥时，应先通过独立渠道核验新指纹，再更新
 `PPAASS_DEPLOY_SSH_KNOWN_HOSTS`。
-生产环境由 Caddy 2.11.4 或更高版本监听 TCP/443，再反向代理到只监听
-`127.0.0.1:8787` 的 Axum 服务。workflow 会检查服务器上的 Caddy 版本；未安装或版本
-过低时，会校验官方发布包的 SHA-512 后自动安装。Proxy Registry 始终使用 Secure Cookie，
-不会把回环 HTTP 端口暴露到公网。
+生产环境由 Caddy 2.11.4 或更高版本监听 TCP/443，再负载均衡到只监听
+`127.0.0.1:8787` 和 `127.0.0.1:8788` 的两个 Axum 进程。Caddy 对两个上游执行
+`/healthz` 主动健康检查，并使用粘性 Cookie 保持进程内 Web 会话；Agent 一次性网页登录
+交接码存放在共享 SQLite，因此可以跨进程签发和领取。workflow 会检查服务器上的 Caddy
+版本；未安装或版本过低时，会校验官方发布包的 SHA-512 后自动安装。Proxy Registry 始终
+使用 Secure Cookie，不会把回环 HTTP 端口暴露到公网。
 
 当 `PPAASS_WEB_PUBLIC_HOST` 是公网 IPv4 地址时，Caddy 会向 Let's Encrypt 申请
 `shortlived` IP 证书，并通过 TLS-ALPN-01 在 TCP/443 上完成验证。Caddy 会在证书到期
@@ -107,16 +112,17 @@ workflow 将 root 拥有的二进制、脚本和配置安装到
 或旧位置和新位置同时存在用户数据库，workflow 会明确失败，不会静默选择一份数据。
 用户数据库会原地调整为 Web 拥有的 `0640`，不会复制或重建。
 
-部署会先启动 Proxy Registry。它完成用户 schema 迁移，并把旧用户数据库里的历史访问
+部署会先启动 `registry-1`。它完成用户 schema 迁移，并把旧用户数据库里的历史访问
 记录与保留期设置幂等迁移到新的访问记录数据库；核对导入结果后会清空主库旧记录并
-截断对应 WAL，避免访问历史继续残留在用户库。`/healthz` 成功后才启动只读用户库的
-Proxy。systemd 冷启动也会让 Proxy 等待 Web 健康，避免 Proxy 在 schema 迁移前打开
-数据库。
+截断对应 WAL，避免访问历史继续残留在用户库。随后启动 `registry-2` 并分别校验两个
+实例的 `/healthz` 和 `instance_id`，最后才启动只读用户库的 Proxy。systemd 冷启动也会
+让 Proxy 等待 Web 健康，避免 Proxy 在 schema 迁移前打开数据库。
 
 默认配置：
 
 - 对外地址：`https://<PPAASS_WEB_PUBLIC_HOST>`（Caddy TCP/443）
-- Axum 回环地址：`http://127.0.0.1:8787`
+- Axum 回环地址：`http://127.0.0.1:8787`（`registry-1`）和
+  `http://127.0.0.1:8788`（`registry-2`）
 - 服务运行目录：`/opt/ppaass`
 - Caddy 持久化目录：`/var/lib/ppaass-caddy`
 - 用户 SQLite：`/var/lib/ppaass/users/proxy-users.sqlite3`
@@ -135,6 +141,8 @@ export PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION="true"
 export PPAASS_PROXY_REGISTRY_SECURE_COOKIES="true"
 # 仅当 Axum 回环监听且前方是受信反向代理时启用，用于按真实客户端 IP 限频。
 export PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS="true"
+# 多实例部署时设置唯一名称；未设置时默认使用 registry-<监听端口>。
+export PPAASS_PROXY_REGISTRY_INSTANCE_ID="registry-1"
 ```
 
 Axum 本身只提供 HTTP，默认只允许监听回环地址。本地开发或手动启动时继续使用：

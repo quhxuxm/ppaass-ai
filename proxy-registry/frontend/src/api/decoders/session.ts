@@ -25,8 +25,14 @@ export function decodeSession(
     boolValue(root.agent_handoff) ??
     boolValue(root.agentHandoff) ??
     false
+  const registryInstanceId =
+    stringValue(source.registry_instance_id) ??
+    stringValue(source.registryInstanceId) ??
+    stringValue(root.registry_instance_id) ??
+    stringValue(root.registryInstanceId) ??
+    'unknown'
 
-  return { authenticated, account, agentHandoff }
+  return { registryInstanceId, authenticated, account, agentHandoff }
 }
 
 export function decodeAgentDeviceAuthorization(

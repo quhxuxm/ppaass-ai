@@ -66,6 +66,38 @@ pub(super) async fn third_party_oauth_routes_are_not_exposed() {
     }
 }
 
+#[tokio::test]
+pub(super) async fn health_and_session_identify_the_serving_registry_instance() {
+    let (_directory, app) = test_app().await;
+    let health = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
+    assert_eq!(json_body(health).await["instance_id"], "registry-test");
+
+    let session = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(session).await["registry_instance_id"],
+        "registry-test"
+    );
+}
+
 pub(super) async fn test_app_with_components() -> (
     TempDir,
     Arc<SqliteUserRepository>,
@@ -106,11 +138,14 @@ pub(super) async fn test_app_with_components() -> (
         .await
         .unwrap();
     let sessions = SessionStore::new(false);
-    let web_session_handoffs = AgentWebSessionHandoffStore::new();
+    let web_session_handoffs = AgentWebSessionHandoffStore::new(store.clone());
     let private_keys = PrivateKeyCipher::new(MASTER_SECRET).unwrap();
     let agent_tokens = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
-    let agent_events = crate::agent_events::AgentEventHub::new();
+    let agent_events = crate::agent_events::AgentEventHub::start(store.clone())
+        .await
+        .unwrap();
     let state = AppState {
+        instance_id: Arc::from("registry-test"),
         users: store.clone(),
         accounts: store.clone(),
         access_logs: store.clone(),

@@ -167,8 +167,12 @@ async fn failed_credential_construction_does_not_burn_device_code() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
+    let broken_agent_events = crate::agent_events::AgentEventHub::start(store.clone())
+        .await
+        .unwrap();
     let broken_app = build_router(
         AppState {
+            instance_id: Arc::from("registry-test-broken"),
             users: store.clone(),
             accounts: store.clone(),
             access_logs: store.clone(),
@@ -178,8 +182,8 @@ async fn failed_credential_construction_does_not_burn_device_code() {
             passwords: PasswordService::new(1).await.unwrap(),
             sessions: SessionStore::new(false),
             agent_tokens: AgentAccessTokenService::new(MASTER_SECRET).unwrap(),
-            agent_events: crate::agent_events::AgentEventHub::new(),
-            web_session_handoffs: AgentWebSessionHandoffStore::new(),
+            agent_events: broken_agent_events,
+            web_session_handoffs: AgentWebSessionHandoffStore::new(store.clone()),
             private_keys: PrivateKeyCipher::new(
                 "different-test-secret-that-cannot-decrypt-existing-keys",
             )

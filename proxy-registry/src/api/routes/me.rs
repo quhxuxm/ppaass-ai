@@ -62,9 +62,6 @@ pub(crate) async fn update_my_profile(
         )
         .await?;
     let account = managed.account.ok_or_else(ApiError::internal)?;
-    state
-        .agent_events
-        .publish_profile_changed(&account.account_id);
     info!(account_id = account.account_id, "用户更新个人资料");
     Ok(Json(account))
 }
@@ -108,9 +105,6 @@ pub(crate) async fn change_my_password(
         .await?;
 
     state.sessions.revoke_account(&account.account_id);
-    state
-        .agent_events
-        .publish_profile_changed(&account.account_id);
     let cookie = state.sessions.clear(&headers);
     let mut response = StatusCode::NO_CONTENT.into_response();
     append_set_cookie(response.headers_mut(), cookie);
@@ -153,9 +147,6 @@ pub(crate) async fn rotate_my_key(
         payload.and_then(|Json(request)| request.reason),
     )
     .await?;
-    state
-        .agent_events
-        .publish_profile_changed(&session.account.account_id);
     info!(username = response.username, "用户重生成自己的 RSA 密钥");
     Ok(Json(response))
 }
@@ -233,7 +224,6 @@ pub(crate) async fn submit_my_key_request(
         kind = request.kind.as_str(),
         "用户提交密钥申请"
     );
-    state.agent_events.publish_admin_key_requests_changed();
     Ok((status, Json(SelfKeyRequestResponse::from_request(request))).into_response())
 }
 

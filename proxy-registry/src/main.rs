@@ -32,6 +32,7 @@ const TRUST_PROXY_HEADERS_ENV: &str = "PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS
 const DATABASE_GROUP_READABLE_ENV: &str = "PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE";
 const ACCESS_LOG_DATABASE_GROUP_WRITABLE_ENV: &str =
     "PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE";
+const INSTANCE_ID_ENV: &str = "PPAASS_PROXY_REGISTRY_INSTANCE_ID";
 const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
 const MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES: u64 = 64 * 1024;
 const MIN_PROXY_IDENTITY_RSA_BITS: usize = 2048;
@@ -78,6 +79,7 @@ async fn main() -> Result<()> {
     init_tracing();
     let args = Args::parse();
     validate_listen_address(args.listen, args.allow_insecure_remote)?;
+    let instance_id = registry_instance_id(args.listen)?;
     let proxy_identity_public_key_pem =
         load_proxy_identity_public_key(&args.proxy_identity_public_key)?;
 
@@ -151,17 +153,18 @@ async fn main() -> Result<()> {
     }
 
     let state = AppState {
+        instance_id: instance_id.clone(),
         users: store.clone(),
         accounts: store.clone(),
         access_logs,
         device_authorizations: store.clone(),
         audit_logs: store.clone(),
-        proxy_addresses: store,
+        proxy_addresses: store.clone(),
         passwords,
         sessions: SessionStore::new(secure_cookies),
         agent_tokens,
-        agent_events: proxy_registry::AgentEventHub::new(),
-        web_session_handoffs: AgentWebSessionHandoffStore::new(),
+        agent_events: proxy_registry::AgentEventHub::start(store.clone()).await?,
+        web_session_handoffs: AgentWebSessionHandoffStore::new(store.clone()),
         private_keys,
         proxy_identity_public_key_pem,
         allow_registration,
@@ -171,7 +174,7 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("无法监听 {}", args.listen))?;
-    info!(address = %args.listen, "PPAASS Proxy 用户管理服务已启动");
+    info!(address = %args.listen, instance_id = %instance_id, "PPAASS Proxy 用户管理服务已启动");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -359,6 +362,26 @@ fn validate_listen_address(address: SocketAddr, allow_insecure_remote: bool) -> 
         );
     }
     Ok(())
+}
+
+fn registry_instance_id(listen: SocketAddr) -> Result<Arc<str>> {
+    let value = match env::var(INSTANCE_ID_ENV) {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => format!("registry-{}", listen.port()),
+        Err(env::VarError::NotUnicode(_)) => {
+            bail!("环境变量 {INSTANCE_ID_ENV} 必须是有效 UTF-8")
+        }
+    };
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        bail!("环境变量 {INSTANCE_ID_ENV} 必须为 1..=64 个 ASCII 字母、数字、点、下划线或连字符");
+    }
+    Ok(Arc::from(value))
 }
 
 fn init_tracing() {

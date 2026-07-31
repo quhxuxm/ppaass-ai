@@ -146,6 +146,13 @@ impl SqliteUserRepository {
         let created = fetch_proxy_address(&mut transaction, &proxy_address_id)
             .await?
             .ok_or_else(|| UserRepositoryError::ProxyAddressNotFound(proxy_address_id.clone()))?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            timestamp,
+        )
+        .await?;
         transaction.commit().await?;
         info!(proxy_address_id, address, "Proxy 地址目录项已创建");
         Ok(created)
@@ -274,6 +281,20 @@ impl SqliteUserRepository {
             )
             .await?;
         }
+        insert_agent_event(
+            &mut transaction,
+            PROFILES_CHANGED_EVENT,
+            None,
+            current.updated_at,
+        )
+        .await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            current.updated_at,
+        )
+        .await?;
         transaction.commit().await?;
         info!(proxy_address_id, "Proxy 地址目录项已更新");
         Ok(current)
@@ -295,6 +316,15 @@ impl SqliteUserRepository {
             .bind(&current.proxy_address_id)
             .execute(&mut *transaction)
             .await?;
+        let timestamp = now();
+        insert_agent_event(&mut transaction, PROFILES_CHANGED_EVENT, None, timestamp).await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            timestamp,
+        )
+        .await?;
         transaction.commit().await?;
         info!(
             proxy_address_id = current.proxy_address_id,

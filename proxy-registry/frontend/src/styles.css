@@ -652,6 +652,14 @@ a:focus-visible {
   color: #667085;
 }
 
+.admin-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .content-loading {
   min-height: 280px;
   display: grid;

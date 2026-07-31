@@ -4,20 +4,22 @@ use crate::{
     AccountRepository, AccountRole, AccountStatus, AgentDeviceAuthorization,
     AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
     AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll,
-    AgentDeviceAuthorizationRepository, AgentDeviceAuthorizationStatus, ApprovedKeyMaterial,
-    AuditAction, AuditEvent, AuditEventQuery, AuditLogRepository, AuditTargetKind,
-    BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
-    EncryptedPrivateKey, ExternalIdentity, KeyEncryptionBinding, KeyGenerationRequest,
-    KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult, KeyRequestKind,
-    KeyRequestRejection, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
-    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, ProxyAddress, ProxyAddressRepository,
-    ProxyAddressUpdate, Result, UserOrigin, UserRecord, UserRepository, UserRepositoryError,
-    UserUpdate, ValidationError, WebAccount, normalize_audit_reason, normalize_key_request_message,
-    normalize_key_request_rejection_reason, normalize_permissions, normalize_proxy_address,
-    normalize_proxy_address_id, normalize_proxy_address_ids, normalize_proxy_address_label,
-    normalize_public_key_pem, normalize_username, validate_user,
+    AgentDeviceAuthorizationRepository, AgentDeviceAuthorizationStatus,
+    AgentWebSessionHandoffConsume, AgentWebSessionHandoffCreate, AgentWebSessionHandoffRepository,
+    ApprovedKeyMaterial, AuditAction, AuditEvent, AuditEventQuery, AuditLogRepository,
+    AuditTargetKind, BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS,
+    DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION, EncryptedPrivateKey, ExternalIdentity,
+    KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation, KeyRequestApproval,
+    KeyRequestApprovalResult, KeyRequestKind, KeyRequestRejection, KeyRequestStatus, LoginRecord,
+    MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
+    ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
+    NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser,
+    NewUserAccount, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate, Result, UserOrigin,
+    UserRecord, UserRepository, UserRepositoryError, UserUpdate, ValidationError, WebAccount,
+    normalize_audit_reason, normalize_key_request_message, normalize_key_request_rejection_reason,
+    normalize_permissions, normalize_proxy_address, normalize_proxy_address_id,
+    normalize_proxy_address_ids, normalize_proxy_address_label, normalize_public_key_pem,
+    normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{
@@ -39,7 +41,7 @@ use tracing::{info, instrument, warn};
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 // Persisted metadata key retained across the Proxy Registry rename.
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 11;
+const SQLITE_SCHEMA_VERSION: i64 = 12;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -148,6 +150,8 @@ struct DeviceAuthorizationMaintenance {
 
 mod access_repository;
 mod account;
+mod agent_events;
+mod agent_web_session_handoffs;
 mod audit_logs;
 mod connection;
 mod database_queries;
@@ -155,6 +159,7 @@ mod device;
 mod file_permissions;
 mod migration_access;
 mod migration_account_audits;
+mod migration_agent_events;
 mod migration_audits;
 mod migration_device;
 mod migration_key_requests;
@@ -167,12 +172,14 @@ mod proxy_addresses;
 mod rows;
 mod user_repository;
 
+use agent_events::*;
 use audit_logs::*;
 use database_queries::*;
 #[cfg(unix)]
 use file_permissions::*;
 use migration_access::*;
 use migration_account_audits::*;
+use migration_agent_events::*;
 use migration_audits::*;
 use migration_device::*;
 use migration_key_requests::*;

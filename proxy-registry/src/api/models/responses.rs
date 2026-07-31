@@ -4,6 +4,7 @@ use super::super::*;
 pub(crate) struct HealthResponse {
     pub(crate) status: &'static str,
     pub(crate) version: &'static str,
+    pub(crate) instance_id: Arc<str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -13,6 +14,7 @@ pub(crate) struct ProvidersResponse {
 
 #[derive(Serialize)]
 pub(crate) struct SessionResponse {
+    pub(crate) registry_instance_id: Arc<str>,
     pub(crate) authenticated: bool,
     pub(crate) account: Option<WebAccount>,
     pub(crate) agent_handoff: bool,
@@ -22,6 +24,7 @@ pub(crate) struct SessionResponse {
 
 #[derive(Serialize)]
 pub(crate) struct AuthenticationResponse {
+    pub(crate) registry_instance_id: Arc<str>,
     pub(crate) account: WebAccount,
     pub(crate) csrf_token: String,
     pub(crate) session_expires_at: i64,

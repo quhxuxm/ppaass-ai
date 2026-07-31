@@ -39,7 +39,6 @@ pub(crate) async fn admin_create_proxy_address(
         proxy_address_id = created.proxy_address_id,
         "管理员创建 Proxy 地址目录项"
     );
-    state.agent_events.publish_admin_key_requests_changed();
     Ok((
         StatusCode::CREATED,
         Json(ProxyAddressResponse::from(created)),
@@ -78,8 +77,6 @@ pub(crate) async fn admin_update_proxy_address(
         proxy_address_id = updated.proxy_address_id,
         "管理员更新 Proxy 地址目录项"
     );
-    state.agent_events.publish_all_profiles_changed();
-    state.agent_events.publish_admin_key_requests_changed();
     Ok(Json(updated.into()))
 }
 
@@ -100,7 +97,5 @@ pub(crate) async fn admin_delete_proxy_address(
         admin_account_id = session.account.account_id,
         proxy_address_id, "管理员删除 Proxy 地址目录项"
     );
-    state.agent_events.publish_all_profiles_changed();
-    state.agent_events.publish_admin_key_requests_changed();
     Ok(StatusCode::NO_CONTENT)
 }

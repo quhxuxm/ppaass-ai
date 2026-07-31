@@ -86,6 +86,20 @@ impl SqliteUserRepository {
                     "刚创建的 key_generation_requests 记录不可见".to_string(),
                 )
             })?;
+        insert_agent_event(
+            &mut transaction,
+            KEY_REQUEST_CHANGED_EVENT,
+            Some(&account.account_id),
+            timestamp,
+        )
+        .await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            timestamp,
+        )
+        .await?;
         transaction.commit().await?;
         info!(
             request_id,

@@ -731,6 +731,7 @@ async function refreshSelf(): Promise<void> {
     self.value = nextSelf
     if (nextSelf.account) {
       session.value = {
+        registryInstanceId: session.value?.registryInstanceId ?? 'unknown',
         authenticated: true,
         account: nextSelf.account,
         agentHandoff: session.value?.agentHandoff ?? false,
@@ -2527,7 +2528,15 @@ function clearAgentAuthorizationLocation(): void {
             <h1>用户管理</h1>
             <p>管理账户、代理连接和有效期，并可触发密钥生成；连接凭据只由账户本人授权的 Agent 领取。</p>
           </div>
-          <Button label="新建普通用户" icon="pi pi-user-plus" @click="openCreate" />
+          <div class="admin-heading-actions">
+            <Tag
+              :value="`Registry：${session?.registryInstanceId || 'unknown'}`"
+              severity="info"
+              icon="pi pi-server"
+              rounded
+            />
+            <Button label="新建普通用户" icon="pi pi-user-plus" @click="openCreate" />
+          </div>
         </div>
 
         <div class="summary-grid admin-summary">

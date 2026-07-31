@@ -79,7 +79,6 @@ jobs:
           {
             echo "PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_USERNAME=admin"
             echo "PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION=true"
-            echo "PPAASS_PROXY_REGISTRY_LISTEN_ADDR=127.0.0.1:8787"
             printf 'PPAASS_PROXY_REGISTRY_PUBLIC_HOST=%q\n' "$WEB_PUBLIC_HOST"
             echo "PPAASS_PROXY_REGISTRY_SECURE_COOKIES=true"
             echo "PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS=true"
@@ -568,6 +567,8 @@ jobs:
           if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
             systemctl stop ppaass-caddy.service 2>/dev/null || true
             systemctl stop ppaass-proxy-entry.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-registry-1.service 2>/dev/null || true
+            systemctl stop ppaass-proxy-registry-2.service 2>/dev/null || true
             systemctl stop ppaass-proxy-registry.service 2>/dev/null || true
             # Stop units from deployments made before the component rename.
             systemctl stop ppaass-proxy.service 2>/dev/null || true
@@ -690,6 +691,8 @@ jobs:
                 systemctl stop ppaass-caddy.service 2>/dev/null || true
               fi
               if [ "$WEB_START_ATTEMPTED" = true ]; then
+                systemctl stop ppaass-proxy-registry-1.service 2>/dev/null || true
+                systemctl stop ppaass-proxy-registry-2.service 2>/dev/null || true
                 systemctl stop ppaass-proxy-registry.service 2>/dev/null || true
               fi
               if [ "$PROXY_START_ATTEMPTED" = true ]; then
@@ -734,11 +737,8 @@ jobs:
           . "$STAGING_DIR/proxy-registry.env"
           set +a
           WEB_PUBLIC_HOST="${PPAASS_PROXY_REGISTRY_PUBLIC_HOST:?}"
-          WEB_LISTEN_ADDR="${PPAASS_PROXY_REGISTRY_LISTEN_ADDR:?}"
-          if [ "$WEB_LISTEN_ADDR" != "127.0.0.1:8787" ]; then
-            echo "Proxy Registry must listen only on 127.0.0.1:8787 behind Caddy, got $WEB_LISTEN_ADDR" >&2
-            exit 1
-          fi
+          WEB_LISTEN_ADDR_PRIMARY="127.0.0.1:8787"
+          WEB_LISTEN_ADDR_SECONDARY="127.0.0.1:8788"
           case "$WEB_PUBLIC_HOST" in
             *[!0-9A-Za-z._-]*|'')
               echo "Invalid Proxy Registry public host: $WEB_PUBLIC_HOST" >&2
@@ -1206,7 +1206,13 @@ jobs:
             }
 
             encode zstd gzip
-            reverse_proxy 127.0.0.1:8787
+            reverse_proxy 127.0.0.1:8787 127.0.0.1:8788 {
+              lb_policy cookie ppaass_registry_backend
+              health_uri /healthz
+              health_interval 10s
+              health_timeout 3s
+              lb_try_duration 2s
+            }
 
             header {
               Strict-Transport-Security "max-age=31536000"
@@ -1232,8 +1238,8 @@ jobs:
           cat > /etc/systemd/system/ppaass-proxy-entry.service <<EOF
           [Unit]
           Description=PPAASS Proxy Entry
-          Wants=network-online.target ppaass-proxy-registry.service
-          After=network-online.target ppaass-proxy-registry.service
+          Wants=network-online.target ppaass-proxy-registry-1.service ppaass-proxy-registry-2.service
+          After=network-online.target ppaass-proxy-registry-1.service ppaass-proxy-registry-2.service
 
           [Service]
           Type=simple
@@ -1241,7 +1247,7 @@ jobs:
           Group=$PROXY_GROUP
           SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
           WorkingDirectory=$RUNTIME_DIR
-          Environment=PPAASS_PROXY_REGISTRY_LISTEN_ADDR=$WEB_LISTEN_ADDR
+          Environment=PPAASS_PROXY_REGISTRY_LISTEN_ADDR=$WEB_LISTEN_ADDR_PRIMARY
           Environment=PPAASS_PROXY_ENTRY_IDENTITY_PRIVATE_KEY=$PROXY_IDENTITY_PRIVATE_KEY
           Environment=PPAASS_PROXY_ENTRY_IDENTITY_PUBLIC_KEY=$PROXY_IDENTITY_PUBLIC_KEY
           ExecStartPre=$RUNTIME_DIR/start-proxy-registry.sh wait-health
@@ -1272,9 +1278,13 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-          cat > /etc/systemd/system/ppaass-proxy-registry.service <<EOF
+          write_proxy_registry_service() {
+            service_name="$1"
+            instance_id="$2"
+            listen_addr="$3"
+            cat > "/etc/systemd/system/$service_name" <<EOF
           [Unit]
-          Description=PPAASS Proxy Registry
+          Description=PPAASS Proxy Registry ($instance_id)
           Wants=network-online.target
           After=network-online.target
 
@@ -1284,6 +1294,8 @@ jobs:
           Group=$WEB_GROUP
           SupplementaryGroups=$USER_READ_GROUP $ACCESS_GROUP
           WorkingDirectory=$RUNTIME_DIR
+          Environment=PPAASS_PROXY_REGISTRY_INSTANCE_ID=$instance_id
+          Environment=PPAASS_PROXY_REGISTRY_LISTEN_ADDR=$listen_addr
           Environment=PPAASS_PROXY_REGISTRY_RUNTIME_ENV_FILE=$RUNTIME_DIR/proxy-registry.env
           Environment=PPAASS_PROXY_REGISTRY_SECRET_DIR=$SECRET_DIR
           Environment=PPAASS_PROXY_REGISTRY_DATABASE=$DATABASE_FILE
@@ -1319,13 +1331,23 @@ jobs:
           [Install]
           WantedBy=multi-user.target
           EOF
+          }
+
+          write_proxy_registry_service \
+            ppaass-proxy-registry-1.service \
+            registry-1 \
+            "$WEB_LISTEN_ADDR_PRIMARY"
+          write_proxy_registry_service \
+            ppaass-proxy-registry-2.service \
+            registry-2 \
+            "$WEB_LISTEN_ADDR_SECONDARY"
 
           cat > /etc/systemd/system/ppaass-caddy.service <<EOF
           [Unit]
           Description=PPAASS Caddy HTTPS reverse proxy
           Wants=network-online.target
-          Wants=ppaass-proxy-registry.service
-          After=network-online.target ppaass-proxy-registry.service
+          Wants=ppaass-proxy-registry-1.service ppaass-proxy-registry-2.service
+          After=network-online.target ppaass-proxy-registry-1.service ppaass-proxy-registry-2.service
 
           [Service]
           Type=simple
@@ -1359,14 +1381,19 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-          systemctl disable ppaass-proxy.service ppaass-proxy-web.service 2>/dev/null || true
+          systemctl disable \
+            ppaass-proxy.service \
+            ppaass-proxy-web.service \
+            ppaass-proxy-registry.service 2>/dev/null || true
           rm -f \
             /etc/systemd/system/ppaass-proxy.service \
-            /etc/systemd/system/ppaass-proxy-web.service
+            /etc/systemd/system/ppaass-proxy-web.service \
+            /etc/systemd/system/ppaass-proxy-registry.service
           systemctl daemon-reload
           systemctl enable \
             ppaass-proxy-entry.service \
-            ppaass-proxy-registry.service \
+            ppaass-proxy-registry-1.service \
+            ppaass-proxy-registry-2.service \
             ppaass-caddy.service
 
           require_active_service() {
@@ -1380,27 +1407,32 @@ jobs:
           }
 
           wait_for_proxy_registry_internal() {
+            registry_port="$1"
+            expected_instance_id="$2"
+            registry_service="$3"
             proxy_registry_healthy=false
             for health_attempt in $(seq 1 30); do
-              if curl \
+              health_response="$(curl \
                 --fail \
                 --silent \
                 --show-error \
                 --noproxy '*' \
                 --connect-timeout 3 \
                 --max-time 5 \
-                "http://127.0.0.1:8787/healthz" >/dev/null 2>&1; then
+                "http://127.0.0.1:$registry_port/healthz" 2>/dev/null || true)"
+              if printf '%s' "$health_response" \
+                | grep -Fq "\"instance_id\":\"$expected_instance_id\""; then
                 proxy_registry_healthy=true
                 break
               fi
               sleep 1
             done
             if [ "$proxy_registry_healthy" != true ]; then
-              echo "Proxy Registry internal health check failed on 127.0.0.1:8787" >&2
-              journalctl -u ppaass-proxy-registry.service -n 100 --no-pager || true
+              echo "Proxy Registry $expected_instance_id internal health check failed on 127.0.0.1:$registry_port" >&2
+              journalctl -u "$registry_service" -n 100 --no-pager || true
               return 1
             fi
-            echo "Verified Proxy Registry internal health on http://127.0.0.1:8787/healthz"
+            echo "Verified Proxy Registry $expected_instance_id on http://127.0.0.1:$registry_port/healthz"
           }
 
           wait_for_proxy_registry_public() {
@@ -1432,17 +1464,30 @@ jobs:
           # the access-log database. Keep Proxy Entry stopped until that work is healthy
           # so its read-only user-database open always sees the current schema.
           WEB_START_ATTEMPTED=true
-          systemctl restart ppaass-proxy-registry.service
-          require_active_service ppaass-proxy-registry.service
-          wait_for_proxy_registry_internal
+          systemctl restart ppaass-proxy-registry-1.service
+          require_active_service ppaass-proxy-registry-1.service
+          wait_for_proxy_registry_internal \
+            8787 \
+            registry-1 \
+            ppaass-proxy-registry-1.service
 
           # The password only bootstraps the fixed root admin account. Once the
           # Web process is healthy, remove it and restart so it is absent from
           # both the filesystem and the long-running process environment.
           rm -f "$ADMIN_PASSWORD_FILE"
-          systemctl restart ppaass-proxy-registry.service
-          require_active_service ppaass-proxy-registry.service
-          wait_for_proxy_registry_internal
+          systemctl restart ppaass-proxy-registry-1.service
+          require_active_service ppaass-proxy-registry-1.service
+          wait_for_proxy_registry_internal \
+            8787 \
+            registry-1 \
+            ppaass-proxy-registry-1.service
+
+          systemctl restart ppaass-proxy-registry-2.service
+          require_active_service ppaass-proxy-registry-2.service
+          wait_for_proxy_registry_internal \
+            8788 \
+            registry-2 \
+            ppaass-proxy-registry-2.service
 
           PROXY_START_ATTEMPTED=true
           systemctl restart ppaass-proxy-entry.service
@@ -1483,7 +1528,8 @@ jobs:
           fi
 
           systemctl --no-pager --full status ppaass-proxy-entry.service
-          systemctl --no-pager --full status ppaass-proxy-registry.service
+          systemctl --no-pager --full status ppaass-proxy-registry-1.service
+          systemctl --no-pager --full status ppaass-proxy-registry-2.service
           systemctl --no-pager --full status ppaass-caddy.service
 
           DEPLOY_SUCCEEDED=true

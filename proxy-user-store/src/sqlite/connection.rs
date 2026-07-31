@@ -210,6 +210,9 @@ impl SqliteUserRepository {
         if schema_version < 11 {
             create_v11_operation_audits(&mut transaction).await?;
         }
+        if schema_version < 12 {
+            create_v12_agent_event_log(&mut transaction).await?;
+        }
         ensure_v5_indexes(&mut transaction).await?;
         let revoked_compromised_profiles =
             revoke_compromised_bundled_demo_profiles(&mut transaction).await?;
@@ -227,7 +230,7 @@ impl SqliteUserRepository {
 
         if schema_version < SQLITE_SCHEMA_VERSION {
             // 版本号是迁移的提交标记，必须最后写入。
-            sqlx::query("PRAGMA user_version = 11")
+            sqlx::query("PRAGMA user_version = 12")
                 .execute(&mut *transaction)
                 .await?;
         }

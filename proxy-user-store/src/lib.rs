@@ -13,19 +13,22 @@ pub use model::{
     AccountActor, AccountRole, AccountStatus, AgentDeviceAuthorization,
     AgentDeviceAuthorizationClaim, AgentDeviceAuthorizationDecision,
     AgentDeviceAuthorizationFinalize, AgentDeviceAuthorizationPoll, AgentDeviceAuthorizationStatus,
+    AgentEventRecord, AgentWebSessionHandoffConsume, AgentWebSessionHandoffCreate,
     ApprovedKeyMaterial, AuditAction, AuditEvent, AuditEventQuery, AuditTargetKind,
     BootstrapOutcome, DEFAULT_ACCESS_LOG_RETENTION_DAYS, DEPRECATED_AGENT_CONFIG_VIEW_PERMISSION,
     EncryptedPrivateKey, ExternalIdentity, KEY_ROTATE_PERMISSION, KeyEncryptionBinding,
     KeyGenerationRequest, KeyPairRotation, KeyRequestApproval, KeyRequestApprovalResult,
     KeyRequestKind, KeyRequestRejection, KeyRequestStatus, LoginRecord, MAX_ACCESS_LOG_QUERY_LIMIT,
     MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS, ManagedUser, ManagedUserUpdate,
-    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewKeyGenerationRequest,
-    NewManagedUser, NewProxyAddress, NewUser, NewUserAccount, PRIVATE_KEY_READ_PERMISSION,
-    PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION, ProxyAddress, ProxyAddressUpdate,
-    UserOrigin, UserRecord, UserUpdate, WebAccount, default_proxy_permissions,
+    NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewAgentWebSessionHandoff,
+    NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser, NewUserAccount,
+    PRIVATE_KEY_READ_PERMISSION, PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION,
+    ProxyAddress, ProxyAddressUpdate, UserOrigin, UserRecord, UserUpdate, WebAccount,
+    default_proxy_permissions,
 };
 pub use repository::{
-    AccessLogRepository, AccountRepository, AgentDeviceAuthorizationRepository, AuditLogRepository,
+    AccessLogRepository, AccountRepository, AgentDeviceAuthorizationRepository,
+    AgentEventRepository, AgentWebSessionHandoffRepository, AuditLogRepository,
     ProxyAddressRepository, UserRepository,
 };
 pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};

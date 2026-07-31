@@ -107,9 +107,10 @@ assert.doesNotMatch(
   /grantedAgentPermissions\.length\} \/ \$\{agentPermissionOptions\.length\}/,
 )
 assert.match(sessionTypes, /agentHandoff: boolean/)
+assert.match(sessionTypes, /registryInstanceId: string/)
 assert.match(
   sessionDecoder,
-  /boolValue\(source\.agent_handoff\)[\s\S]*?return \{ authenticated, account, agentHandoff \}/,
+  /boolValue\(source\.agent_handoff\)[\s\S]*?stringValue\(source\.registry_instance_id\)[\s\S]*?return \{ registryInstanceId, authenticated, account, agentHandoff \}/,
 )
 assert.match(
   app,
@@ -118,6 +119,10 @@ assert.match(
 assert.match(
   app,
   /agentHandoff: session\.value\?\.agentHandoff \?\? false/,
+)
+assert.match(
+  app,
+  /Registry：\$\{session\?\.registryInstanceId \|\| 'unknown'\}/,
 )
 assert.match(
   app,

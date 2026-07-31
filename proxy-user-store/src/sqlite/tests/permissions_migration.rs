@@ -22,6 +22,7 @@ async fn v7_migration_removes_deprecated_agent_config_view_permission() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v12_registry_coordination_tables(&store).await;
     drop_v8_proxy_address_tables(&store).await;
     drop_v11_operation_audits(&store).await;
     drop_v10_account_disable_audits(&store).await;

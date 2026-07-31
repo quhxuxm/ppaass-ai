@@ -53,7 +53,7 @@ fn normalize_avatar_data_url(value: &str) -> Result<String, ApiError> {
         "data:image/webp;base64" => "image/webp",
         _ => return Err(ApiError::bad_request("头像只支持 PNG、JPEG 或 WebP 格式")),
     };
-    if encoded.len() > ((MAX_AVATAR_BYTES + 2) / 3) * 4 + 8 {
+    if encoded.len() > MAX_AVATAR_BYTES.div_ceil(3) * 4 + 8 {
         return Err(ApiError::bad_request("头像文件不能超过 1 MiB"));
     }
     let bytes = base64::engine::general_purpose::STANDARD

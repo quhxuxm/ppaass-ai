@@ -194,6 +194,23 @@ pub(super) async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -
         &["account_id", "proxy_address_id", "assigned_at"],
     )
     .await?;
+    require_columns(
+        transaction,
+        "registry_agent_events",
+        &["event_id", "kind", "account_id", "created_at"],
+    )
+    .await?;
+    require_columns(
+        transaction,
+        "agent_web_session_handoffs",
+        &[
+            "code_hash",
+            "account_id",
+            "account_auth_version",
+            "expires_at",
+        ],
+    )
+    .await?;
     let retention_days: Option<String> =
         sqlx::query_scalar("SELECT value FROM app_metadata WHERE key = ?")
             .bind(ACCESS_LOG_RETENTION_DAYS_KEY)

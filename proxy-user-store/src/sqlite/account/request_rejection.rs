@@ -70,6 +70,20 @@ impl SqliteUserRepository {
             },
         )
         .await?;
+        insert_agent_event(
+            &mut transaction,
+            KEY_REQUEST_CHANGED_EVENT,
+            Some(&request.account_id),
+            timestamp,
+        )
+        .await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            timestamp,
+        )
+        .await?;
         let request = fetch_key_request_by_id(&mut transaction, &request_id)
             .await?
             .ok_or_else(|| {
@@ -110,6 +124,21 @@ impl SqliteUserRepository {
                 .execute(&mut *transaction)
                 .await?;
         }
+        let timestamp = now();
+        insert_agent_event(
+            &mut transaction,
+            PROFILE_CHANGED_EVENT,
+            Some(&account.account_id),
+            timestamp,
+        )
+        .await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            timestamp,
+        )
+        .await?;
         transaction.commit().await?;
         info!(account_id, "托管用户已删除");
         Ok(())

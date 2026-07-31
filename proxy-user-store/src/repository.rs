@@ -3,13 +3,48 @@ use async_trait::async_trait;
 use crate::{
     AccessLogSettings, AccessRecord, AgentDeviceAuthorization, AgentDeviceAuthorizationClaim,
     AgentDeviceAuthorizationDecision, AgentDeviceAuthorizationFinalize,
-    AgentDeviceAuthorizationPoll, AuditEvent, AuditEventQuery, BootstrapOutcome,
+    AgentDeviceAuthorizationPoll, AgentEventRecord, AgentWebSessionHandoffConsume,
+    AgentWebSessionHandoffCreate, AuditEvent, AuditEventQuery, BootstrapOutcome,
     EncryptedPrivateKey, KeyEncryptionBinding, KeyGenerationRequest, KeyPairRotation,
     KeyRequestApproval, KeyRequestApprovalResult, KeyRequestRejection, LoginRecord, ManagedUser,
     ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
-    NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUserAccount, ProxyAddress,
-    ProxyAddressUpdate, Result, UserRecord, UserUpdate, WebAccount,
+    NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress,
+    NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord, UserUpdate, WebAccount,
 };
+
+/// Registry 实例间共享的 Agent 失效通知日志。
+///
+/// 每个 Registry 实例维护自己的读取游标；读取事件不会全局消费或删除事件。
+#[async_trait]
+pub trait AgentEventRepository: Send + Sync {
+    async fn latest_agent_event_revision(&self) -> Result<u64>;
+
+    async fn list_agent_events_after(
+        &self,
+        revision: u64,
+        limit: u32,
+    ) -> Result<Vec<AgentEventRecord>>;
+
+    async fn purge_agent_events_before(&self, before: i64) -> Result<u64>;
+}
+
+/// Registry 实例间共享的一次性 Agent 网页会话交接。
+#[async_trait]
+pub trait AgentWebSessionHandoffRepository: Send + Sync {
+    async fn create_agent_web_session_handoff(
+        &self,
+        handoff: NewAgentWebSessionHandoff,
+        now: i64,
+        maximum_entries: u32,
+        maximum_entries_per_account: u32,
+    ) -> Result<AgentWebSessionHandoffCreate>;
+
+    async fn consume_agent_web_session_handoff(
+        &self,
+        code_hash: &str,
+        now: i64,
+    ) -> Result<AgentWebSessionHandoffConsume>;
+}
 
 /// 管理员可见的操作审计查询接口。
 #[async_trait]

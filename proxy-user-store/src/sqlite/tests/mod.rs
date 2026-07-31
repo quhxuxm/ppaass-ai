@@ -65,6 +65,17 @@ pub(super) async fn drop_v11_operation_audits(store: &SqliteUserRepository) {
         .unwrap();
 }
 
+pub(super) async fn drop_v12_registry_coordination_tables(store: &SqliteUserRepository) {
+    sqlx::query("DROP TABLE agent_web_session_handoffs")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE registry_agent_events")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+}
+
 pub(super) fn account_actor(account_id: &str, login_name: &str) -> AccountActor {
     AccountActor {
         account_id: account_id.to_string(),
@@ -146,6 +157,7 @@ pub(super) fn initial_approval(
 mod access;
 mod account_creation;
 mod account_security;
+mod coordination;
 mod device_authorization;
 mod key_binding;
 mod key_requests;

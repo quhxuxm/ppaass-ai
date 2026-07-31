@@ -26,6 +26,7 @@ async fn migrates_v8_key_request_reviewer_names() {
         })
         .await
         .unwrap();
+    drop_v12_registry_coordination_tables(&store).await;
     drop_v11_operation_audits(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
@@ -126,6 +127,7 @@ async fn migrates_v4_database_to_agent_device_authorization_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v12_registry_coordination_tables(&store).await;
     drop_v11_operation_audits(&store).await;
     drop_v8_proxy_address_tables(&store).await;
     drop_v10_account_disable_audits(&store).await;
@@ -253,6 +255,7 @@ async fn migrates_v2_database_to_key_request_schema() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v12_registry_coordination_tables(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v11_operation_audits(&store).await;
     drop_v8_proxy_address_tables(&store).await;
@@ -328,6 +331,7 @@ async fn migrates_v3_duplicate_access_rows_into_address_counts() {
         .execute(&store.pool)
         .await
         .unwrap();
+    drop_v12_registry_coordination_tables(&store).await;
     drop_v10_account_disable_audits(&store).await;
     drop_v11_operation_audits(&store).await;
     drop_v9_key_request_columns(&store).await;
@@ -412,7 +416,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 12")
+    sqlx::query("PRAGMA user_version = 13")
         .execute(&pool)
         .await
         .unwrap();
@@ -431,5 +435,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 }

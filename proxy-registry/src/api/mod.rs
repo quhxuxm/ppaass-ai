@@ -79,6 +79,7 @@ const REQUIRED_WEB_USER_PERMISSIONS: [&str; 4] = [
 
 #[derive(Clone)]
 pub struct AppState {
+    pub instance_id: Arc<str>,
     pub users: Arc<dyn UserRepository>,
     pub accounts: Arc<dyn AccountRepository>,
     pub access_logs: Arc<dyn AccessLogRepository>,

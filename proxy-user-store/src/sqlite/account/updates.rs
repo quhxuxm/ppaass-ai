@@ -106,20 +106,18 @@ impl SqliteUserRepository {
                 })?;
             ensure_active_admin(&administrator)?;
         }
-        if newly_disabled {
-            if let Some(actor) = disabled_by.as_ref() {
-                let reviewer = fetch_account_by_id(&mut transaction, &actor.account_id)
-                    .await?
-                    .filter(|candidate| {
-                        candidate.login_name == actor.login_name
-                            && candidate.role == AccountRole::Admin
-                            && candidate.status == AccountStatus::Active
-                    })
-                    .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
-                        account_id: actor.account_id.clone(),
-                    })?;
-                debug_assert_eq!(reviewer.login_name, actor.login_name);
-            }
+        if newly_disabled && let Some(actor) = disabled_by.as_ref() {
+            let reviewer = fetch_account_by_id(&mut transaction, &actor.account_id)
+                .await?
+                .filter(|candidate| {
+                    candidate.login_name == actor.login_name
+                        && candidate.role == AccountRole::Admin
+                        && candidate.status == AccountStatus::Active
+                })
+                .ok_or_else(|| UserRepositoryError::ReviewerNotActiveAdmin {
+                    account_id: actor.account_id.clone(),
+                })?;
+            debug_assert_eq!(reviewer.login_name, actor.login_name);
         }
 
         let mut profile = match account.linked_username.as_deref() {
@@ -298,6 +296,20 @@ impl SqliteUserRepository {
             }
         }
 
+        insert_agent_event(
+            &mut transaction,
+            PROFILE_CHANGED_EVENT,
+            Some(&account.account_id),
+            account.updated_at,
+        )
+        .await?;
+        insert_agent_event(
+            &mut transaction,
+            ADMIN_KEY_REQUESTS_CHANGED_EVENT,
+            None,
+            account.updated_at,
+        )
+        .await?;
         let managed = fetch_managed_for_account(&mut transaction, account).await?;
         transaction.commit().await?;
         info!(account_id, "托管用户配置已更新");
@@ -459,6 +471,15 @@ impl SqliteUserRepository {
             },
         )
         .await?;
+        if let Some(account) = target_account.as_ref() {
+            insert_agent_event(
+                &mut transaction,
+                PROFILE_CHANGED_EVENT,
+                Some(&account.account_id),
+                timestamp,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         info!(username, key_version = new_version, "用户密钥对已轮换");
         Ok(user)

@@ -51,6 +51,7 @@ export interface ProxyProfile extends ProfileSummary {
 export type ManagedProxyProfile = ProfileSummary
 
 export interface SessionState {
+  registryInstanceId: string
   authenticated: boolean
   account: AccountSummary | null
   agentHandoff: boolean

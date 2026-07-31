@@ -52,6 +52,13 @@ impl SqliteUserRepository {
                 });
             }
         };
+        insert_agent_event(
+            &mut transaction,
+            PROFILE_CHANGED_EVENT,
+            Some(&account.account_id),
+            updated_at,
+        )
+        .await?;
         transaction.commit().await?;
         info!(
             account_id = account.account_id,

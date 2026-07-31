@@ -1,9 +1,10 @@
 use super::super::*;
 
-pub(crate) async fn health() -> Json<HealthResponse> {
+pub(crate) async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
+        instance_id: state.instance_id,
     })
 }
 
@@ -114,6 +115,7 @@ pub(crate) async fn finish_login(
         .await?;
     let (session, cookie) = state.sessions.issue(&account);
     let mut response = Json(AuthenticationResponse {
+        registry_instance_id: state.instance_id.clone(),
         account,
         csrf_token: session.csrf_token,
         session_expires_at: session.expires_at,
@@ -150,6 +152,7 @@ pub(crate) async fn get_session(
         .await
     {
         Ok(session) => SessionResponse {
+            registry_instance_id: state.instance_id.clone(),
             authenticated: true,
             account: Some(session.account),
             agent_handoff: session.agent_handoff,
@@ -157,6 +160,7 @@ pub(crate) async fn get_session(
             expires_at: Some(session.expires_at),
         },
         Err(error) if error.is_unauthorized() => SessionResponse {
+            registry_instance_id: state.instance_id.clone(),
             authenticated: false,
             account: None,
             agent_handoff: false,

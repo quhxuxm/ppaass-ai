@@ -100,11 +100,6 @@ pub(crate) async fn admin_update_user(
     state.sessions.require_csrf(&session, &headers)?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let managed = resolve_managed_user(&state, &identifier).await?;
-    let target_account_id = managed
-        .account
-        .as_ref()
-        .map(|account| account.account_id.clone());
-
     let expires_at = match request.expires_at {
         PatchField::Missing => None,
         PatchField::Null => Some(None),
@@ -218,10 +213,6 @@ pub(crate) async fn admin_update_user(
         admin_account_id = session.account.account_id,
         identifier, "管理员更新用户"
     );
-    if let Some(account_id) = target_account_id {
-        state.agent_events.publish_profile_changed(&account_id);
-    }
-    state.agent_events.publish_admin_key_requests_changed();
     Ok(Json(updated.into()))
 }
 
@@ -235,10 +226,6 @@ pub(crate) async fn admin_delete_user(
     let session = require_admin(&state, &headers).await?;
     state.sessions.require_csrf(&session, &headers)?;
     let managed = resolve_managed_user(&state, &identifier).await?;
-    let target_account_id = managed
-        .account
-        .as_ref()
-        .map(|account| account.account_id.clone());
     if let Some(account) = managed.account {
         state
             .accounts
@@ -259,10 +246,6 @@ pub(crate) async fn admin_delete_user(
         admin_account_id = session.account.account_id,
         identifier, "管理员删除用户"
     );
-    if let Some(account_id) = target_account_id {
-        state.agent_events.publish_profile_changed(&account_id);
-    }
-    state.agent_events.publish_admin_key_requests_changed();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -278,10 +261,6 @@ pub(crate) async fn admin_rotate_key(
     state.sessions.require_csrf(&session, &headers)?;
     let Json(payload) = payload.map_err(ApiError::from_json_rejection)?;
     let mut managed = resolve_managed_user(&state, &identifier).await?;
-    let target_account_id = managed
-        .account
-        .as_ref()
-        .map(|account| account.account_id.clone());
     if managed.account.is_none() {
         return Err(ApiError::bad_request(
             "legacy 用户没有可登录的 Web 账号，不能生成无人可领取的密钥",
@@ -321,9 +300,6 @@ pub(crate) async fn admin_rotate_key(
     );
     managed.profile = Some(updated_profile);
     managed.has_private_key = true;
-    if let Some(account_id) = target_account_id {
-        state.agent_events.publish_profile_changed(&account_id);
-    }
     Ok(Json(AdminKeyRotationResponse {
         user: managed.into(),
         key_version,

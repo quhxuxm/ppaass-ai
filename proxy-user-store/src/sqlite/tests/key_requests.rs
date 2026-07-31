@@ -281,7 +281,8 @@ async fn concurrent_approval_only_commits_one_keypair() {
     let second_public = public_key();
     let expires_at = now() + 3600;
     let first_store = store.clone();
-    let second_store = store.clone();
+    // 使用独立连接池模拟两个 Proxy Registry 进程，而不是只在同一个池内并发。
+    let second_store = SqliteUserRepository::connect(&store.path).await.unwrap();
     let first = tokio::spawn(async move {
         first_store
             .approve_key_generation_request(KeyRequestApproval {

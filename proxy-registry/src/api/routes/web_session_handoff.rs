@@ -13,6 +13,7 @@ pub(crate) async fn create_agent_web_session_handoff(
     let issued = state
         .web_session_handoffs
         .issue(&account)
+        .await
         .map_err(|error| match error {
             AgentWebSessionHandoffIssueError::Capacity => ApiError::device_authorization_error(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -20,6 +21,7 @@ pub(crate) async fn create_agent_web_session_handoff(
                 "当前账户管理交接请求过多，请稍后重试",
                 Some(30),
             ),
+            AgentWebSessionHandoffIssueError::Storage => ApiError::internal(),
         })?;
     info!(
         account_id = account.account_id,
@@ -43,6 +45,7 @@ pub(crate) async fn consume_agent_web_session_handoff(
     let claim = state
         .web_session_handoffs
         .consume(&request.code)
+        .await
         .map_err(|error| {
             match error {
                 AgentWebSessionHandoffConsumeError::InvalidOrConsumed => {
@@ -50,6 +53,9 @@ pub(crate) async fn consume_agent_web_session_handoff(
                 }
                 AgentWebSessionHandoffConsumeError::Expired => {
                     tracing::debug!("拒绝已过期的 Agent Web 会话交接码");
+                }
+                AgentWebSessionHandoffConsumeError::Storage => {
+                    return ApiError::internal();
                 }
             }
             ApiError::bad_request("账户管理交接链接无效、已过期或已使用")

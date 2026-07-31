@@ -17,6 +17,15 @@ fn requires_explicit_opt_in_for_non_loopback_http() {
 }
 
 #[test]
+fn derives_a_stable_default_instance_id_from_the_listen_port() {
+    let listen = "127.0.0.1:8788".parse().unwrap();
+    assert_eq!(
+        registry_instance_id(listen).unwrap().as_ref(),
+        "registry-8788"
+    );
+}
+
+#[test]
 fn database_group_modes_can_be_enabled_by_cli_or_service_environment() {
     assert_eq!(
         select_database_file_permissions(
