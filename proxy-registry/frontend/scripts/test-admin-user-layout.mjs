@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const sourceRoot = fileURLToPath(new URL('../src', import.meta.url))
+const vueSources = readdirSync(sourceRoot, { recursive: true })
+  .filter((path) => path.endsWith('.vue'))
+  .sort()
+  .map((path) => readFileSync(join(sourceRoot, path), 'utf8'))
+const app = [
+  readFileSync(join(sourceRoot, 'appController.ts'), 'utf8'),
+  ...vueSources,
+].join('\n')
 const styles = readFileSync(
   new URL('../src/styles.css', import.meta.url),
   'utf8',

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "test": "node scripts/test-admin-user-layout.mjs && node scripts/test-profile-avatar.mjs",
+    "test": "node scripts/test-vue-file-size.mjs && node scripts/test-admin-user-layout.mjs && node scripts/test-profile-avatar.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
