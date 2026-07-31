@@ -6,10 +6,32 @@
   nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Get-Service -Name PPAASSAgentService -ErrorAction SilentlyContinue) { Stop-Service -Name PPAASSAgentService -Force -ErrorAction SilentlyContinue; (Get-Service -Name PPAASSAgentService -ErrorAction SilentlyContinue).WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(15)); & sc.exe delete PPAASSAgentService | Out-Null }"'
 !macroend
 
+; Remove only application-owned configuration files. Keep credentials, captures,
+; and any other user data so uninstall does not destroy unrelated persisted data.
+!macro PPAASS_REMOVE_AGENT_CONFIG_ROOT APP_DATA_ROOT
+  SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\agent.toml" NORMAL
+  Delete "${APP_DATA_ROOT}\com.ppaass.agent\agent.toml"
+  SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\config\local\agent.toml" NORMAL
+  Delete "${APP_DATA_ROOT}\com.ppaass.agent\config\local\agent.toml"
+  SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\config\remote\agent.toml" NORMAL
+  Delete "${APP_DATA_ROOT}\com.ppaass.agent\config\remote\agent.toml"
+  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config\local"
+  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config\remote"
+  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config"
+  RMDir "${APP_DATA_ROOT}\com.ppaass.agent"
+!macroend
+
+!macro PPAASS_REMOVE_AGENT_CONFIG
+  !insertmacro PPAASS_REMOVE_AGENT_CONFIG_ROOT $APPDATA
+  !insertmacro PPAASS_REMOVE_AGENT_CONFIG_ROOT $LOCALAPPDATA
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro PPAASS_REMOVE_AGENT_SERVICE
+  !insertmacro PPAASS_REMOVE_AGENT_CONFIG
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro PPAASS_REMOVE_AGENT_SERVICE
+  !insertmacro PPAASS_REMOVE_AGENT_CONFIG
 !macroend

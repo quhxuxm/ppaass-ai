@@ -2,11 +2,30 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
     <DirectoryRef Id="TARGETDIR">
+      <Directory Id="AppDataFolder">
+        <Directory Id="PpaassRoamingDataDir" Name="com.ppaass.agent">
+          <Directory Id="PpaassRoamingConfigDir" Name="config">
+            <Directory Id="PpaassRoamingLocalConfigDir" Name="local" />
+            <Directory Id="PpaassRoamingRemoteConfigDir" Name="remote" />
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="PpaassLocalDataDir" Name="com.ppaass.agent">
+          <Directory Id="PpaassLocalConfigDir" Name="config">
+            <Directory Id="PpaassLocalLocalConfigDir" Name="local" />
+            <Directory Id="PpaassLocalRemoteConfigDir" Name="remote" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
       <Component Id="PpaassAgentServiceCleanup" Guid="*">
         <RegistryKey
           Root="HKLM"
           Key="Software\PPAASS\PPAASS Desktop Agent"
-          Action="createAndRemoveOnUninstall"
         >
           <RegistryValue
             Name="InstallerOwnsAgentServiceCleanup"
@@ -21,6 +40,82 @@
           Stop="both"
           Remove="uninstall"
           Wait="yes"
+        />
+        <RemoveFile
+          Id="RemovePpaassRoamingRootConfig"
+          Directory="PpaassRoamingDataDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassRoamingLocalConfig"
+          Directory="PpaassRoamingLocalConfigDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassRoamingRemoteConfig"
+          Directory="PpaassRoamingRemoteConfigDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassLocalRootConfig"
+          Directory="PpaassLocalDataDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassLocalLocalConfig"
+          Directory="PpaassLocalLocalConfigDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassLocalRemoteConfig"
+          Directory="PpaassLocalRemoteConfigDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassRoamingLocalConfigDir"
+          Directory="PpaassRoamingLocalConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassRoamingRemoteConfigDir"
+          Directory="PpaassRoamingRemoteConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassRoamingConfigDir"
+          Directory="PpaassRoamingConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassRoamingDataDir"
+          Directory="PpaassRoamingDataDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassLocalLocalConfigDir"
+          Directory="PpaassLocalLocalConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassLocalRemoteConfigDir"
+          Directory="PpaassLocalRemoteConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassLocalConfigDir"
+          Directory="PpaassLocalConfigDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassLocalDataDir"
+          Directory="PpaassLocalDataDir"
+          On="both"
         />
       </Component>
     </DirectoryRef>
