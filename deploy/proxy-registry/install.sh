@@ -23,6 +23,57 @@ for command in systemctl caddy curl; do
     }
 done
 
+ensure_caddy_service() {
+    local caddy_binary
+
+    if systemctl cat caddy.service >/dev/null 2>&1; then
+        return
+    fi
+    caddy_binary="$(command -v caddy)"
+    case "$caddy_binary" in
+        /*[[:space:]]*|'')
+            echo "Caddy binary path is unsafe: $caddy_binary" >&2
+            exit 1
+            ;;
+        /*) ;;
+        *)
+            echo "Caddy binary path must be absolute: $caddy_binary" >&2
+            exit 1
+            ;;
+    esac
+    if ! getent group caddy >/dev/null; then
+        groupadd --system caddy
+    fi
+    if ! id caddy >/dev/null 2>&1; then
+        useradd --system --gid caddy --create-home \
+            --home-dir /var/lib/caddy --shell /usr/sbin/nologin \
+            --comment "Caddy web server" caddy
+    fi
+    install -d -o caddy -g caddy -m 0750 /var/lib/caddy
+    cat >/etc/systemd/system/caddy.service <<EOF
+[Unit]
+Description=Caddy
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=$caddy_binary run --environ --config /etc/caddy/Caddyfile
+ExecReload=$caddy_binary reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 wait_for_http_health() {
     local label="$1"
     local url="$2"
@@ -181,6 +232,7 @@ EOF
 
 write_registry_unit 1 8787 8797
 write_registry_unit 2 8788 8798
+ensure_caddy_service
 
 install -d -m 0755 /etc/caddy
 cat >/etc/caddy/Caddyfile <<EOF
@@ -205,9 +257,12 @@ $REGISTRY_HOST {
     }
 }
 EOF
+caddy fmt --overwrite /etc/caddy/Caddyfile
+chmod 0644 /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile
 
 systemctl daemon-reload
+systemctl cat caddy.service >/dev/null
 systemctl enable ppaass-proxy-registry-1.service \
     ppaass-proxy-registry-2.service caddy.service
 systemctl restart ppaass-proxy-registry-1.service
