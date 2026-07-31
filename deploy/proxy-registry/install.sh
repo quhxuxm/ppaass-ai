@@ -16,31 +16,32 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Registry installation must run as root." >&2
     exit 1
 fi
-for command in systemctl caddy curl; do
+for command in systemctl caddy curl readlink runuser; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Registry host." >&2
         exit 1
     }
 done
+caddy_binary="$(readlink -f "$(command -v caddy)")"
+case "$caddy_binary" in
+    /tmp/*|/root/*|/home/*|*[[:space:]]*|'')
+        echo "Caddy binary must use a stable system path: $caddy_binary" >&2
+        exit 1
+        ;;
+    /*) ;;
+    *)
+        echo "Caddy binary path must be absolute: $caddy_binary" >&2
+        exit 1
+        ;;
+esac
+[ -x "$caddy_binary" ] || {
+    echo "Caddy binary is not executable: $caddy_binary" >&2
+    exit 1
+}
 
 ensure_caddy_service() {
-    local caddy_binary
-
-    if systemctl cat caddy.service >/dev/null 2>&1; then
-        return
-    fi
-    caddy_binary="$(command -v caddy)"
-    case "$caddy_binary" in
-        /*[[:space:]]*|'')
-            echo "Caddy binary path is unsafe: $caddy_binary" >&2
-            exit 1
-            ;;
-        /*) ;;
-        *)
-            echo "Caddy binary path must be absolute: $caddy_binary" >&2
-            exit 1
-            ;;
-    esac
+    systemctl unmask caddy.service >/dev/null 2>&1 || true
+    systemctl daemon-reload
     if ! getent group caddy >/dev/null; then
         groupadd --system caddy
     fi
@@ -50,7 +51,13 @@ ensure_caddy_service() {
             --comment "Caddy web server" caddy
     fi
     install -d -o caddy -g caddy -m 0750 /var/lib/caddy
-    cat >/etc/systemd/system/caddy.service <<EOF
+    chown -R caddy:caddy /var/lib/caddy
+    runuser -u caddy -- test -x "$caddy_binary" || {
+        echo "Caddy user cannot execute $caddy_binary." >&2
+        exit 1
+    }
+    if ! systemctl cat caddy.service >/dev/null 2>&1; then
+        cat >/etc/systemd/system/caddy.service <<EOF
 [Unit]
 Description=Caddy
 Documentation=https://caddyserver.com/docs/
@@ -71,6 +78,18 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
+EOF
+    fi
+    install -d -m 0755 /etc/systemd/system/caddy.service.d
+    cat >/etc/systemd/system/caddy.service.d/ppaass.conf <<EOF
+[Service]
+User=caddy
+Group=caddy
+Environment=HOME=/var/lib/caddy
+ExecStart=
+ExecStart=$caddy_binary run --environ --config /etc/caddy/Caddyfile
+ExecReload=
+ExecReload=$caddy_binary reload --config /etc/caddy/Caddyfile --force
 EOF
 }
 
@@ -257,9 +276,10 @@ $REGISTRY_HOST {
     }
 }
 EOF
-caddy fmt --overwrite /etc/caddy/Caddyfile
+"$caddy_binary" fmt --overwrite /etc/caddy/Caddyfile
 chmod 0644 /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile
+runuser -u caddy -- env HOME=/var/lib/caddy \
+    "$caddy_binary" validate --config /etc/caddy/Caddyfile
 
 systemctl daemon-reload
 systemctl cat caddy.service >/dev/null
