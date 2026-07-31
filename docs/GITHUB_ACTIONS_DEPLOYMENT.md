@@ -51,7 +51,7 @@ GitHub Environment：`registry_production`
 | `REGISTRY_PRODUCTION_REMOTE_PASSWORD` | `<部署服务器的强密码>` | SSH 密码，不能包含换行 |
 | `REGISTRY_PRODUCTION_WEB_ADMIN_PASSWORD` | `<至少 8 位的管理员密码>` | 首次创建根管理员时使用；当前工作流每次部署都要求提供，但不会覆盖已有管理员密码 |
 | `REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET` | `<至少 32 位的随机主密钥>` | 加密 Registry 托管的用户私钥和 Token；升级、重启和数据库迁移时必须保持不变 |
-| `REGISTRY_PRODUCTION_CONTROL_TOKEN` | `<至少 32 位的随机 Token>` | Entry 调用 Registry HTTPS 控制 API 的 Bearer Token，不能包含空白；内容必须与 Entry 对应 Secret 相同 |
+| `REGISTRY_PRODUCTION_CONTROL_TOKEN` | `<至少 32 位的随机 Token>` | Entry 调用 Registry HTTP/HTTPS 控制 API 的 Bearer Token，不能包含空白；内容必须与 Entry 对应 Secret 相同 |
 
 ### 必须的 Variables
 
@@ -76,14 +76,15 @@ GitHub Environment：`entry_production`
 | `ENTRY_PRODUCTION_REMOTE_HOST` | `203.0.113.20` | Entry 部署服务器 IP 或 DNS 名称，不带协议、端口或路径 |
 | `ENTRY_PRODUCTION_REMOTE_USER` | `root` | 当前必须是 UID 0 的 `root`；远端安装命令不会调用 `sudo` |
 | `ENTRY_PRODUCTION_REMOTE_PASSWORD` | `<部署服务器的强密码>` | SSH 密码，不能包含换行 |
-| `ENTRY_PRODUCTION_CONTROL_TOKEN` | `<与 Registry 完全相同的 Token>` | Entry 调用 Registry HTTPS 控制 API 的 Bearer Token |
+| `ENTRY_PRODUCTION_CONTROL_TOKEN` | `<与 Registry 完全相同的 Token>` | Entry 调用 Registry HTTP/HTTPS 控制 API 的 Bearer Token |
 
 ### 必须的 Variables
 
 | Variable | 示例 | 约束与用途 |
 | --- | --- | --- |
 | `ENTRY_PRODUCTION_ID` | `entry-production-01` | Entry 的稳定唯一标识；不同 Entry 不能重复 |
-| `ENTRY_PRODUCTION_REGISTRY_HOST` | `registry.example.com` | Registry 公共地址；内容必须与 `REGISTRY_PRODUCTION_REGISTRY_HOST` 相同 |
+| `ENTRY_PRODUCTION_ADVERTISED_ADDRESS` | `entry.example.com:443` | Agent 应连接的公网 `host:port`；Entry 会把它注册并合并到 Proxy 地址目录 |
+| `ENTRY_PRODUCTION_REGISTRY_URL` | `https://registry.example.com:443` | Registry 的完整 HTTP/HTTPS 基础 URL，不得包含认证信息、路径、查询参数或 fragment |
 
 ### 可选的 Variable
 
@@ -94,13 +95,24 @@ GitHub Environment：`entry_production`
 ## 同机并行部署与稳定主密钥
 
 Entry 和 Registry 可以配置相同的远程服务器地址，同时启动两个独立工作流。Entry
-安装脚本会等待 Registry 的外部控制健康接口就绪后再启动服务；Registry 安装脚本也会
-验证公开 API 和控制 API 的外部 HTTPS 地址。这样可以处理 Registry 构建时间比 Entry
-更长的情况，但 Registry 自身的配置错误仍会阻止整个部署完成。
+安装脚本不连接或等待 Registry；Entry 成功监听 TCP/UDP 后，由后台 Tokio 任务立即注册，
+失败时独立重试，不影响数据面进程启动。Registry 安装脚本仍会验证自身公开 API 和控制
+API 的外部地址。
 
 Registry 只使用 `REGISTRY_PRODUCTION_REGISTRY_HOST`。Caddy 在同一个站点中将
 `/control` 和 `/control/*` 请求转发到 Control 监听端口，其余请求转发到 Registry
-Web/API 监听端口。`ENTRY_PRODUCTION_REGISTRY_HOST` 必须填写同一个 Host。
+Web/API 监听端口。`ENTRY_PRODUCTION_REGISTRY_URL` 需要把协议和可选端口一并写入：
+HTTPS 可填 `https://registry.example.com:443`，明文 HTTP 可填
+`http://registry.example.com:80`。其中主机名应与
+`REGISTRY_PRODUCTION_REGISTRY_HOST` 指向同一个 Registry。
+
+Registry 部署脚本通过外部 Caddy 地址确认公开 API 和 Control API 均返回 HTTP 200。
+考虑到部署目标可能使用自签名证书，这两个外部 HTTPS 自检不校验证书链或主机名；
+本地两个 Registry 实例的 HTTP 健康检查不受影响。
+
+从旧配置升级时，应新增 `ENTRY_PRODUCTION_REGISTRY_URL` 并填写上述完整 URL，然后
+删除旧的 `ENTRY_PRODUCTION_REGISTRY_HOST` 和 `ENTRY_PRODUCTION_REGISTRY_SCHEME`；
+新工作流不再读取旧变量或自动补全协议。
 
 `REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET` 与服务器已有
 `/var/lib/ppaass/secrets/proxy-registry-key-encryption-secret` 不一致时，Registry 会
@@ -133,6 +145,8 @@ ssh root@registry-host "cat /var/lib/ppaass/secrets/proxy-registry-key-encryptio
 - `REGISTRY_PRODUCTION_WEB_PUBLIC_HOST`
 - `REGISTRY_PRODUCTION_CONTROL_PUBLIC_HOST`
 - `ENTRY_PRODUCTION_CONTROL_PUBLIC_HOST`
+- `ENTRY_PRODUCTION_REGISTRY_HOST`
+- `ENTRY_PRODUCTION_REGISTRY_SCHEME`
 - `PPAASS_PROXY_ENTRY_ID`
 - `PPAASS_REGISTRY_RUNTIME_ROOT`
 - `PPAASS_ENTRY_RUNTIME_ROOT`

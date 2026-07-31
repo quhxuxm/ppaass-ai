@@ -23,13 +23,13 @@ pub use model::{
     NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization, NewAgentWebSessionHandoff,
     NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser, NewUserAccount,
     PRIVATE_KEY_READ_PERMISSION, PROXY_CONNECT_TCP_PERMISSION, PROXY_CONNECT_UDP_PERMISSION,
-    ProxyAddress, ProxyAddressUpdate, UserOrigin, UserRecord, UserUpdate, WebAccount,
-    default_proxy_permissions,
+    ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, UserOrigin, UserRecord, UserUpdate,
+    WebAccount, default_proxy_permissions,
 };
 pub use repository::{
     AccessBatchRepository, AccessLogRepository, AccountRepository,
     AgentDeviceAuthorizationRepository, AgentEventRepository, AgentWebSessionHandoffRepository,
-    AuditLogRepository, ProxyAddressRepository, UserRepository,
+    AuditLogRepository, ProxyAddressRepository, ProxyEntryRepository, UserRepository,
 };
 pub use sqlite::{SqliteFilePermissions, SqliteUserRepository};
 pub use validation::{
@@ -137,6 +137,9 @@ pub enum UserRepositoryError {
 
     #[error("Proxy 地址已存在：{0}")]
     ProxyAddressConflict(String),
+
+    #[error("Proxy Entry 上报地址已由其他节点占用：{0}")]
+    ProxyEntryAddressConflict(String),
 
     #[error("Proxy 地址仍被账号分配，必须先重新分配：{0}")]
     ProxyAddressInUse(String),

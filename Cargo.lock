@@ -2602,6 +2602,7 @@ name = "proxy-control-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2610,6 +2611,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "bytes",
  "clap",
  "common",

@@ -293,18 +293,3 @@ pub fn device_verification_url(base_url: &Url, value: &str) -> Result<Url, Strin
     }
     Ok(url)
 }
-
-pub fn build_proxy_registry_client() -> Result<Client, String> {
-    Client::builder()
-        // Proxy Registry is the control plane that provisions this Agent. Routing its
-        // login or private-key requests through the Agent's own data-plane proxy
-        // would create a dependency loop when HTTP_PROXY points at this Agent.
-        .no_proxy()
-        .cookie_store(true)
-        .redirect(Policy::none())
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(20))
-        .user_agent(concat!("ppaass-desktop-agent/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| format!("初始化 Proxy Registry 客户端失败：{error}"))
-}

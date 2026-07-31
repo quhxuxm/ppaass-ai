@@ -9,7 +9,8 @@ use crate::{
     KeyRequestApproval, KeyRequestApprovalResult, KeyRequestRejection, LoginRecord, ManagedUser,
     ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
     NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress,
-    NewUserAccount, ProxyAddress, ProxyAddressUpdate, Result, UserRecord, UserUpdate, WebAccount,
+    NewUserAccount, ProxyAddress, ProxyAddressUpdate, ProxyEntryRegistration, Result, UserRecord,
+    UserUpdate, WebAccount,
 };
 
 /// Registry 实例间共享的 Agent 失效通知日志。
@@ -203,6 +204,12 @@ pub trait ProxyAddressRepository: Send + Sync {
     ) -> Result<ProxyAddress>;
 
     async fn delete_proxy_address(&self, proxy_address_id: &str) -> Result<()>;
+}
+
+/// Proxy Entry 注册心跳与可分配地址目录的原子合并接口。
+#[async_trait]
+pub trait ProxyEntryRepository: Send + Sync {
+    async fn register_proxy_entry(&self, registration: ProxyEntryRegistration) -> Result<()>;
 }
 
 /// Proxy 访问记录及其保留策略的数据库无关接口。

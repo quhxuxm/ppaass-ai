@@ -11,7 +11,10 @@ pub struct ProxyConfig {
     /// 当前数据面实例的稳定标识，用于访问记录幂等键和运行日志。
     pub entry_id: String,
 
-    /// Proxy Registry 内部控制面的 HTTPS 基础地址。
+    /// Agent 可连接的公网 host:port；Entry 注册时上报给 Registry。
+    pub advertised_address: String,
+
+    /// Proxy Registry 控制面的 HTTP 或 HTTPS 基础地址。
     pub registry_url: String,
 
     /// 仅当前服务账号可读的控制面 Bearer Token 文件。

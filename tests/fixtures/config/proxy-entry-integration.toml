@@ -3,8 +3,9 @@
 # 监听传入 agent 连接的地址；同一端口同时监听 TCP 和 PPAASS 原生加密 UDP。
 listen_addr = "0.0.0.0:8080"
 
-# Registry 控制面；授权读取和访问记录上报均通过这个接口完成。
+# Entry 注册信息与 Registry 控制面；授权读取和访问记录上报均通过这个接口完成。
 entry_id = "entry-local"
+advertised_address = "127.0.0.1:8080"
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 

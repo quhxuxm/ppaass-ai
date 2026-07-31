@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import { useAppControllerContext } from '../../appController'
@@ -15,9 +16,22 @@ const {
   openCreate,
   proxyAddresses,
   refreshAdminUsers,
+  refreshProxyAddresses,
   selectAdminSection,
   session,
 } = useAppControllerContext()
+
+let proxyRefreshTimer: number | null = null
+onMounted(() => {
+  proxyRefreshTimer = window.setInterval(() => {
+    if (activeAdminSection.value === 'proxies') {
+      void refreshProxyAddresses()
+    }
+  }, 30_000)
+})
+onBeforeUnmount(() => {
+  if (proxyRefreshTimer !== null) window.clearInterval(proxyRefreshTimer)
+})
 </script>
 
 <template>

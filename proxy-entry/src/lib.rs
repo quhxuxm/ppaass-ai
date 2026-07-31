@@ -88,6 +88,7 @@ fn log_startup_configuration(config: &ProxyConfig) {
             .unwrap_or("默认路由")
     );
     info!("Proxy Entry 实例：{}", config.entry_id);
+    info!("Proxy Entry 公网地址：{}", config.advertised_address);
     info!("Registry 地址：{}", config.registry_url);
 }
 

@@ -145,7 +145,7 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/admin/users` | 管理员创建已批准用户并生成密钥，必须指定未来有效期 |
 | `GET/PATCH/DELETE` | `/api/v1/admin/users/{username}` | 管理员查询、修改或删除用户（删除前必须先停用，密钥字段始终脱敏） |
 | `POST` | `/api/v1/admin/users/{username}/rotate-key` | 管理员轮换仍有效的密钥（不返回密钥材料） |
-| `GET/POST` | `/api/v1/admin/proxy-addresses` | 管理员查询或新增 Agent 可用的 Proxy 地址 |
+| `GET/POST` | `/api/v1/admin/proxy-addresses` | 管理员查询或新增 Agent 可用的 Proxy 地址；查询包含已注册 Entry 的心跳状态 |
 | `PATCH/DELETE` | `/api/v1/admin/proxy-addresses/{proxy_address_id}` | 管理员修改、停用或删除 Proxy 地址 |
 | `GET` | `/api/v1/admin/key-requests` | 管理员列出待审批密钥申请 |
 | `POST` | `/api/v1/admin/key-requests/{request_id}/approve` | 批准申请并生成密钥，必须指定未来有效期 |
@@ -374,12 +374,18 @@ schema v8 新增 `proxy_addresses` 地址目录和 `account_proxy_addresses` 账
 依赖 `ProxyAddressRepository` 和账号 repository；SQLite 表和 SQL 不进入 Axum handler，
 后续增加其他数据库时可以用新适配器保持同一事务语义和 API 契约。
 
+schema v13 在同一地址目录中增加可空的 Entry 注册字段。Entry 每 30 秒通过受 Bearer
+Token 保护的 `/control/v1/entries/register` 上报稳定 ID、版本和 `advertised_address`。
+首次注册会自动创建启用节点；若同地址人工节点已经存在，则原位绑定并保留标签、启用状态
+和账号分配。最后心跳超过 90 秒时控制台显示离线；在线状态由查询时间推导，不使用触发器。
+
 ## Entry 与 Registry 数据边界
 
 Entry 只配置控制面，不配置数据库：
 
 ```toml
 entry_id = "entry-production"
+advertised_address = "entry.example.com:443"
 registry_url = "https://registry.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
 ```
@@ -388,6 +394,11 @@ Proxy Registry 是用户、账号和访问记录 schema 的唯一所有者；Ent
 也不打开 SQLite。旧数据库里已有的 `origin=legacy` 记录继续保留，但服务不再提供文件
 导入入口。legacy public-only 记录没有可登录领取的私钥，因此仍不能参与普通用户密钥
 申请流程。
+
+Entry 在 TCP 和 UDP 都监听成功后才启动注册心跳与授权 SSE；构造和部署阶段都不探测
+Registry。Registry 暂时不可用只会触发后台重试，不会阻止 Entry 数据面进程启动。
+`registry_url` 可使用 HTTP 或 HTTPS；按当前部署要求，Entry 的 Registry HTTPS 客户端
+不校验证书链和主机名。
 
 在 Unix 上，本地默认将两个 SQLite 的主文件及 sidecar 设为 `0600`。生产部署中两个
 Registry 进程使用同一无登录 UID，因此不再需要把数据库授权给 Entry。控制 Token 使用

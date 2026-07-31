@@ -241,6 +241,16 @@ pub(crate) struct ProxyAddressResponse {
     pub(crate) enabled: bool,
     pub(crate) created_at: i64,
     pub(crate) updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_first_registered_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_last_heartbeat_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_online: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -296,6 +306,12 @@ impl From<ManagedUser> for AdminManagedUserResponse {
 
 impl From<ProxyAddress> for ProxyAddressResponse {
     fn from(address: ProxyAddress) -> Self {
+        let entry_online = address.entry_last_heartbeat_at.map(|last_heartbeat| {
+            last_heartbeat
+                >= OffsetDateTime::now_utc()
+                    .unix_timestamp()
+                    .saturating_sub(PROXY_ENTRY_ONLINE_WINDOW_SECONDS)
+        });
         Self {
             proxy_address_id: address.proxy_address_id,
             label: address.label,
@@ -303,6 +319,11 @@ impl From<ProxyAddress> for ProxyAddressResponse {
             enabled: address.enabled,
             created_at: address.created_at,
             updated_at: address.updated_at,
+            entry_id: address.entry_id,
+            entry_version: address.entry_version,
+            entry_first_registered_at: address.entry_first_registered_at,
+            entry_last_heartbeat_at: address.entry_last_heartbeat_at,
+            entry_online,
         }
     }
 }

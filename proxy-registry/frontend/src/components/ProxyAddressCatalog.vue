@@ -8,6 +8,7 @@ import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
+import ProxyNodeStatus from './ProxyNodeStatus.vue'
 import {
   ApiError,
   createProxyAddress,
@@ -207,19 +208,14 @@ function confirmDelete(address: ProxyAddress): void {
           <div class="catalog-identity">
             <strong :title="item.label">{{ item.label }}</strong>
             <small>
-              {{ item.enabled ? '可分配给用户并由 Agent 连接' : '保留配置，不再下发给 Agent' }}
+              {{ item.entryId ? `Entry ${item.entryId} · ${item.entryVersion || 'unknown'}` : (item.enabled ? '可分配给用户并由 Agent 连接' : '保留配置，不再下发给 Agent') }}
             </small>
           </div>
           <span class="catalog-address" :title="item.address">
             <i class="pi pi-link" />
             <code>{{ item.address }}</code>
           </span>
-          <Tag
-            class="catalog-status"
-            :value="item.enabled ? '运行中' : '已停用'"
-            :severity="item.enabled ? 'success' : 'secondary'"
-            rounded
-          />
+          <ProxyNodeStatus class="catalog-status" :node="item" />
           <div class="catalog-actions">
             <Button
               v-if="item.enabled"

@@ -86,10 +86,6 @@ final class AgentAuthConfig {
                 || "/".equals(parsed.getRawPath()))) {
             throw new IllegalArgumentException("proxy_registry_url must be a service root");
         }
-        if ("http".equals(scheme) && !isLoopbackHost(host)) {
-            throw new IllegalArgumentException("remote proxy_registry_url must use HTTPS");
-        }
-
         try {
             return new URI(
                     scheme,

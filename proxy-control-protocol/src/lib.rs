@@ -5,13 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const CONTROL_PROTOCOL_VERSION: u16 = 2;
+pub const CONTROL_PROTOCOL_VERSION: u16 = 3;
 pub const CONTROL_HEALTH_PATH: &str = "/control/v1/health";
+pub const ENTRY_REGISTRATION_PATH: &str = "/control/v1/entries/register";
 pub const AUTHORIZATION_RESOLVE_PATH: &str = "/control/v1/authorizations/resolve";
 pub const AUTHORIZATION_EVENTS_PATH: &str = "/control/v1/events";
 pub const ACCESS_BATCHES_PATH: &str = "/control/v1/access-batches";
 
 pub const MAX_ENTRY_ID_BYTES: usize = 128;
+pub const MAX_ENTRY_VERSION_BYTES: usize = 64;
+pub const MAX_ADVERTISED_ADDRESS_BYTES: usize = 512;
 pub const MAX_BATCH_ID_BYTES: usize = 128;
 pub const MAX_ACCESS_EVENTS_PER_BATCH: usize = 200;
 
@@ -20,6 +23,21 @@ pub struct ControlHealthResponse {
     pub status: String,
     pub protocol_version: u16,
     pub registry_instance_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryRegistrationRequest {
+    pub entry_id: String,
+    pub version: String,
+    pub protocol_version: u16,
+    pub advertised_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryRegistrationResponse {
+    pub registry_instance_id: String,
+    pub protocol_version: u16,
+    pub received_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

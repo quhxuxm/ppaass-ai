@@ -40,6 +40,8 @@ pub struct ProxyServer {
     egress_state: Arc<EgressState>,
     // 成功访问异步写入与用户主库物理隔离的 SQLite。
     access_recorder: AccessRecorder,
+    // Registry 控制面在监听成功后启动注册心跳和授权事件后台任务。
+    control_plane: Arc<RemoteControlPlane>,
 }
 
 #[derive(Clone)]
@@ -56,7 +58,7 @@ impl ProxyServer {
     #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
-        let control_plane = RemoteControlPlane::connect(&config).await?;
+        let control_plane = RemoteControlPlane::new(&config)?;
         info!(
             entry_id = config.entry_id,
             registry_url = config.registry_url,
@@ -64,7 +66,7 @@ impl ProxyServer {
         );
         let access_recorder =
             AccessRecorder::start(control_plane.clone() as Arc<dyn AccessEventSink>);
-        let user_manager = Arc::new(UserManager::new(control_plane));
+        let user_manager = Arc::new(UserManager::new(control_plane.clone()));
 
         // 出站状态在启动时构建；auto 模式会缓存初始路由表，并在默认路由不可用时刷新。
         let egress_state = Arc::new(EgressState::new(
@@ -77,6 +79,7 @@ impl ProxyServer {
             user_manager,
             egress_state,
             access_recorder,
+            control_plane,
         })
     }
 
@@ -97,6 +100,7 @@ impl ProxyServer {
             self.access_recorder.clone(),
         );
         tokio::pin!(udp_listener);
+        self.control_plane.start_background_tasks();
         info!(
             "代理服务器正在监听 {}（TCP + 原生加密 UDP）",
             self.config.listen_addr

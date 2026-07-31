@@ -21,24 +21,37 @@ pub fn normalize_proxy_registry_url(value: &str) -> Result<Url, String> {
             "Proxy Registry 地址只能填写服务根地址，不能包含路径、查询参数或片段".to_string(),
         );
     }
-    let host = url
-        .host_str()
+    url.host_str()
         .ok_or_else(|| "Proxy Registry 地址缺少主机名".to_string())?;
-    if url.scheme() == "http" && !is_loopback_host(host) {
-        return Err("远程 Proxy Registry 必须使用 HTTPS；HTTP 仅允许本机回环地址".to_string());
-    }
     url.set_path("/");
     Ok(url)
 }
 
-pub(crate) fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false)
+fn proxy_registry_client_builder() -> ClientBuilder {
+    Client::builder()
+        // Registry control traffic must not depend on the Agent's own data-plane proxy.
+        .no_proxy()
+        .redirect(Policy::none())
+        // Product policy accepts Registry certificates without chain or hostname validation.
+        .danger_accept_invalid_certs(true)
+        .user_agent(concat!("ppaass-desktop-agent/", env!("CARGO_PKG_VERSION")))
+}
+
+pub fn build_proxy_registry_client() -> Result<Client, String> {
+    proxy_registry_client_builder()
+        .cookie_store(true)
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("初始化 Proxy Registry 客户端失败：{error}"))
+}
+
+pub(crate) fn build_proxy_registry_sse_client() -> Result<Client, String> {
+    proxy_registry_client_builder()
+        // SSE is long-lived, so unlike ordinary API requests it has no total timeout.
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| format!("无法初始化 Agent SSE 客户端：{error}"))
 }
 
 pub(crate) fn endpoint(base_url: &Url, path: &str) -> Result<Url, String> {

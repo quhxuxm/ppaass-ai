@@ -92,8 +92,9 @@ App 会校验账号状态、密钥版本和有效期，从 Proxy Registry 下载
 Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 `http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Registry 端口>`
 连接开发机。Proxy 地址不再由 Debug 或 Release 包内置，而由管理员在 Proxy Registry 分配；
-本地调试若分配了回环地址，应为相应端口配置第二条 `adb reverse`。Release 构建继续使用
-main 目录中的 HTTPS 正式认证地址和原生 UDP 默认模式。认证地址不会展示在登录页。
+本地调试若分配了回环地址，应为相应端口配置第二条 `adb reverse`。Release 构建使用
+main 目录中配置的 HTTP 或 HTTPS Registry 地址和原生 UDP 默认模式。Agent 对 Registry 的
+HTTPS 请求不校验证书链和主机名，HTTP 请求允许连接远程地址；认证地址不会展示在登录页。
 
 登录页只使用用户名和密码登录，并提供记住用户名和密码及新用户注册入口，不提供浏览器或设备
 授权登录。记住的登录信息按产品要求存放在应用私有 SharedPreferences 中；取消“记住”会

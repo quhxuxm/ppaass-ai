@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    net::IpAddr,
+    net::SocketAddr,
     path::Path,
     sync::{
         Arc,
@@ -13,15 +13,14 @@ use std::{
 use dashmap::DashMap;
 use proxy_control_protocol::{
     ACCESS_BATCHES_PATH, AUTHORIZATION_RESOLVE_PATH, AccessBatchRequest, AccessBatchResponse,
-    AccessEvent, AuthorizationResolveRequest, AuthorizationResolveResponse, CONTROL_HEALTH_PATH,
-    CONTROL_PROTOCOL_VERSION, ControlHealthResponse,
+    AccessEvent, AuthorizationResolveRequest, AuthorizationResolveResponse,
 };
 use reqwest::{Client, StatusCode, Url, header};
 use tokio::{
     sync::{Mutex, RwLock},
     time::Instant,
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 use super::AccessEventSink;
 use crate::{
@@ -42,6 +41,7 @@ pub struct RemoteControlPlane {
     pub(super) base_url: Url,
     pub(super) token: Arc<str>,
     pub(super) entry_id: Arc<str>,
+    pub(super) advertised_address: Arc<str>,
     pub(super) cache_max_age: Duration,
     pub(super) cache: RwLock<HashMap<String, CachedAuthorization>>,
     pub(super) request_locks: DashMap<String, Arc<Mutex<()>>>,
@@ -49,32 +49,33 @@ pub struct RemoteControlPlane {
 }
 
 impl RemoteControlPlane {
-    pub(crate) async fn connect(config: &ProxyConfig) -> Result<Arc<Self>> {
+    pub(crate) fn new(config: &ProxyConfig) -> Result<Arc<Self>> {
         validate_entry_id(&config.entry_id)?;
+        let advertised_address = validate_advertised_address(&config.advertised_address)?;
         let base_url = validate_registry_url(&config.registry_url)?;
         let token = load_control_token(Path::new(&config.registry_control_token_path))?;
         let timeout = Duration::from_secs(config.control_request_timeout_secs.clamp(1, 60));
         let client = Client::builder()
             .connect_timeout(timeout.min(Duration::from_secs(10)))
             .timeout(timeout)
+            // Product policy accepts Registry certificates without chain or hostname validation.
+            .danger_accept_invalid_certs(true)
             .user_agent(concat!("ppaass-proxy-entry/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|error| {
                 ProxyError::Configuration(format!("创建 Registry 控制面 HTTP 客户端失败：{error}"))
             })?;
-        let control = Arc::new(Self {
+        Ok(Arc::new(Self {
             client,
             base_url,
             token: Arc::from(token),
             entry_id: Arc::from(config.entry_id.as_str()),
+            advertised_address: Arc::from(advertised_address),
             cache_max_age: Duration::from_secs(config.authorization_cache_max_age_secs),
             cache: RwLock::new(HashMap::new()),
             request_locks: DashMap::new(),
             last_event_id: AtomicU64::new(0),
-        });
-        control.verify_health().await?;
-        super::events::spawn_authorization_event_listener(Arc::downgrade(&control));
-        Ok(control)
+        }))
     }
 
     pub(super) fn endpoint(&self, path: &str) -> Result<Url> {
@@ -90,41 +91,6 @@ impl RemoteControlPlane {
     pub(super) async fn clear_authorization_cache(&self) {
         self.cache.write().await.clear();
         debug!("已使 Proxy Entry 授权缓存全部失效");
-    }
-
-    async fn verify_health(&self) -> Result<()> {
-        let response = self
-            .client
-            .get(self.endpoint(CONTROL_HEALTH_PATH)?)
-            .send()
-            .await
-            .map_err(|error| {
-                ProxyError::ControlPlane(format!("Registry 控制面健康检查失败：{error}"))
-            })?;
-        if response.status() != StatusCode::OK {
-            return Err(ProxyError::ControlPlane(format!(
-                "Registry 控制面健康检查返回 HTTP {}",
-                response.status()
-            )));
-        }
-        let health = response
-            .json::<ControlHealthResponse>()
-            .await
-            .map_err(|error| {
-                ProxyError::ControlPlane(format!("Registry 控制面健康响应无效：{error}"))
-            })?;
-        if health.protocol_version != CONTROL_PROTOCOL_VERSION {
-            return Err(ProxyError::ControlPlane(format!(
-                "Registry 控制协议版本不兼容：Entry={}，Registry={}",
-                CONTROL_PROTOCOL_VERSION, health.protocol_version
-            )));
-        }
-        info!(
-            registry_instance_id = health.registry_instance_id,
-            protocol_version = health.protocol_version,
-            "Registry 控制面连接和协议校验成功"
-        );
-        Ok(())
     }
 
     pub(super) async fn fetch_authorization(&self, username: &str) -> Result<Option<UserConfig>> {
@@ -198,7 +164,7 @@ impl AccessEventSink for RemoteControlPlane {
     }
 }
 
-fn control_status_error(operation: &str, status: StatusCode) -> ProxyError {
+pub(super) fn control_status_error(operation: &str, status: StatusCode) -> ProxyError {
     ProxyError::ControlPlane(format!("{operation}返回 HTTP {status}"))
 }
 
@@ -217,6 +183,61 @@ pub fn validate_entry_id(entry_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_advertised_address(value: &str) -> Result<String> {
+    if value.is_empty()
+        || value.len() > proxy_control_protocol::MAX_ADVERTISED_ADDRESS_BYTES
+        || value.chars().any(char::is_whitespace)
+        || value.contains(['/', '\\', '?', '#', '@'])
+        || value.contains("://")
+    {
+        return Err(invalid_advertised_address());
+    }
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        if address.port() == 0 {
+            return Err(invalid_advertised_address());
+        }
+        return Ok(address.to_string());
+    }
+
+    let (host, port_text) = value
+        .rsplit_once(':')
+        .ok_or_else(invalid_advertised_address)?;
+    let port = port_text
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or_else(invalid_advertised_address)?;
+    if host.is_empty() || host.len() > 253 || host.contains(':') || !host.is_ascii() {
+        return Err(invalid_advertised_address());
+    }
+    if !host.split('.').all(valid_hostname_label) {
+        return Err(invalid_advertised_address());
+    }
+    Ok(format!("{}:{port}", host.to_ascii_lowercase()))
+}
+
+fn valid_hostname_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && label
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && label
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn invalid_advertised_address() -> ProxyError {
+    ProxyError::Configuration(
+        "advertised_address 必须是域名、IPv4 或方括号 IPv6 加非零端口".to_string(),
+    )
+}
+
 pub fn validate_registry_url(value: &str) -> Result<Url> {
     let mut url = Url::parse(value)
         .map_err(|error| ProxyError::Configuration(format!("registry_url 无效：{error}")))?;
@@ -225,17 +246,9 @@ pub fn validate_registry_url(value: &str) -> Result<Url> {
             "registry_url 不能包含 query 或 fragment".to_string(),
         ));
     }
-    let secure = url.scheme() == "https";
-    let loopback_http = url.scheme() == "http"
-        && url.host_str().is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host
-                    .parse::<IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
-    if !secure && !loopback_http {
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(ProxyError::Configuration(
-            "registry_url 必须使用 HTTPS；仅回环地址允许 HTTP".to_string(),
+            "registry_url 必须是包含主机名的 HTTP 或 HTTPS 地址".to_string(),
         ));
     }
     url.set_path("/");

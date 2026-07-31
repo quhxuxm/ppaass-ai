@@ -160,6 +160,9 @@ The requirements in this section are normative and supersede any older conflicti
 - Frontend tests run before deployment, and the deployed Registry frontend exposes a version marker matching the deployed commit.
 - Linux start scripts provide start/stop/status supervision, PID handling, log setup, configuration validation and health checks for `proxy-entry` and `proxy-registry`. Windows also has a `start-proxy-entry.bat` helper.
 - Production deployment builds and deploys both renamed services. Proxy Registry listens on `127.0.0.1:8787` and is exposed through Caddy on HTTPS/443 with automatic certificate renewal, while Proxy Entry retains its configured TCP/raw-UDP data-plane port.
+- Proxy Entry startup must not probe or wait for Registry. After TCP and UDP bind successfully, it registers its stable ID, version and configured public `advertised_address` in a background task, heartbeats every 30 seconds and retries independently after failures.
+- Registry merges Entry registrations into the shared Proxy address catalog with ordinary SQL. The same SQLite database is visible to every Registry process, and an Entry is shown offline after 90 seconds without a heartbeat.
+- Windows/macOS, Android and Proxy Entry accept both HTTP and HTTPS Registry URLs. Their internal Registry HTTPS clients intentionally skip certificate-chain and hostname validation without changing process-global TLS defaults.
 - CI must reject any tracked or unignored Rust, TypeScript, Vue, JavaScript, HTML, CSS, shell, YAML, PowerShell or batch source/configuration file longer than 400 lines. Large features must be split into focused modules/components.
 
 ## Architecture requirements
@@ -254,6 +257,7 @@ GitHub Actions workflows should build, test and deploy the platform.
 - Deploy workflows:
   - Deploy Proxy Entry and Proxy Registry with independent workflows; their runtime architecture must not require co-location.
   - Deploy two Registry processes behind Caddy; deploy Entry without SQLite or Caddy.
+  - Do not contact Registry from the Entry deployment step; inject the required Entry `advertised_address` and let the running Entry register itself.
   - Resolve the selected deployment server from `<ENV>_REMOTE_HOST/USER/PASSWORD`.
   - Use separate `entry_production` and `registry_production` environments so Entry and Registry may target different servers.
   - Prefix every GitHub Actions Secret and Variable with the selected role-specific environment; shared runtime values such as the control token and Registry public host use role-scoped names whose contents must match.

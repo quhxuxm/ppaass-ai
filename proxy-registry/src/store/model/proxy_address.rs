@@ -8,6 +8,10 @@ pub struct ProxyAddress {
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    pub entry_id: Option<String>,
+    pub entry_version: Option<String>,
+    pub entry_first_registered_at: Option<i64>,
+    pub entry_last_heartbeat_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

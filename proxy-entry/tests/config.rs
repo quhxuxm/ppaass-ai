@@ -8,6 +8,7 @@ fn parse_config(extra: &str) -> Result<ProxyConfig, toml::de::Error> {
         r#"
 listen_addr = "127.0.0.1:0"
 entry_id = "entry-test"
+advertised_address = "proxy.example.com:443"
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "control-token"
 {extra}
@@ -54,6 +55,12 @@ fn control_plane_fields_are_required() {
         r#"listen_addr = "127.0.0.1:0""#,
         "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"",
         "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"\n\
+         registry_url = \"http://127.0.0.1:8797\"\n\
+         registry_control_token_path = \"control-token\"",
+        "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"\n\
+         advertised_address = \"proxy.example.com:443\"",
+        "listen_addr = \"127.0.0.1:0\"\nentry_id = \"entry-test\"\n\
+         advertised_address = \"proxy.example.com:443\"\n\
          registry_url = \"http://127.0.0.1:8797\"",
     ] {
         assert!(toml::from_str::<ProxyConfig>(raw).is_err());

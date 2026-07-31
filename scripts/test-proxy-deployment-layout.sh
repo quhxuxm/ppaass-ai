@@ -52,9 +52,22 @@ require_text config/proxy-entry.toml 'registry_control_token_path = '
 require_text tests/fixtures/config/proxy-entry-integration.toml 'registry_url = "http://127.0.0.1:8797"'
 require_text .github/workflows/deploy-proxy-entry.yml 'cp config/proxy-entry.toml "$bundle/proxy-entry.toml"'
 require_text .github/workflows/deploy-proxy-entry.yml "printf 'REGISTRY_URL=%q"
+require_text .github/workflows/deploy-proxy-entry.yml "printf 'ADVERTISED_ADDRESS=%q"
+require_text .github/workflows/deploy-proxy-entry.yml "_ADVERTISED_ADDRESS', inputs.environment)"
+reject_text .github/workflows/deploy-proxy-entry.yml 'REGISTRY_SCHEME'
+require_text .github/workflows/deploy-proxy-entry.yml 'REGISTRY_URL: ${{ vars[format('
+require_text .github/workflows/deploy-proxy-entry.yml "_REGISTRY_URL', inputs.environment)"
+reject_text .github/workflows/deploy-proxy-entry.yml "_REGISTRY_HOST', inputs.environment)"
+require_text .github/workflows/deploy-proxy-entry.yml "printf 'REGISTRY_URL=%q\\n' \"\$REGISTRY_URL\""
+require_text .github/workflows/deploy-proxy-entry.yml 'bash deploy/proxy-entry/validate-registry-url.sh "$REGISTRY_URL"'
+require_text .github/workflows/deploy-proxy-entry.yml 'install -m 0755 deploy/proxy-entry/validate-registry-url.sh'
 reject_text .github/workflows/deploy-proxy-entry.yml "printf 'CONTROL_URL=%q"
+reject_text .github/workflows/deploy-proxy-entry.yml 'control/v1/health'
 require_text deploy/proxy-entry/install.sh ': "${REGISTRY_URL:?}"'
+require_text deploy/proxy-entry/install.sh ': "${ADVERTISED_ADDRESS:?}"'
+require_text deploy/proxy-entry/install.sh '"$bundle/validate-registry-url.sh" "$REGISTRY_URL"'
 require_text deploy/proxy-entry/install.sh 'registry_url = \"$REGISTRY_URL\"'
+require_text deploy/proxy-entry/install.sh 'advertised_address = \"$ADVERTISED_ADDRESS\"'
 reject_text deploy/proxy-entry/install.sh '$CONTROL_URL'
 reject_text deploy/proxy-entry/install.sh 'registry_control_url'
 reject_text deploy/proxy-entry/install.sh 'sqlite'
@@ -87,8 +100,17 @@ reject_text deploy/proxy-registry/install.sh 'uri strip_prefix /control'
 reject_text deploy/proxy-registry/install.sh 'CONTROL_HOST'
 reject_text deploy/proxy-registry/install.sh '$PUBLIC_HOST'
 require_text deploy/proxy-registry/install.sh '"https://$REGISTRY_HOST/control/v1/health"'
+require_text deploy/proxy-registry/install.sh 'local tls_policy="${4:-verify}"'
+require_text deploy/proxy-registry/install.sh 'insecure) curl_options+=(--insecure)'
+require_text deploy/proxy-registry/install.sh '300 insecure'
+external_insecure_checks="$(grep -Fc '    300 insecure' deploy/proxy-registry/install.sh)"
+[ "$external_insecure_checks" -eq 2 ] || {
+    echo "Both Registry external health checks must disable TLS verification." >&2
+    exit 1
+}
 require_text deploy/proxy-registry/install.sh 'REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET in the registry_production GitHub Environment'
-require_text deploy/proxy-entry/install.sh 'Waiting for the Registry control plane before starting Entry.'
+reject_text deploy/proxy-entry/install.sh 'Waiting for the Registry control plane before starting Entry.'
+reject_text deploy/proxy-entry/install.sh 'wait_for_http_health'
 require_text deploy/proxy-entry/install.sh 'journalctl -u "$entry_service"'
 
 awk '
@@ -140,7 +162,7 @@ do
 done
 
 require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_ID', inputs.environment)]"
-require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_REGISTRY_HOST', inputs.environment)]"
+require_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_REGISTRY_URL', inputs.environment)]"
 reject_text .github/workflows/deploy-proxy-entry.yml "vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)]"
 require_text .github/workflows/deploy-proxy-entry.yml "secrets[format('{0}_CONTROL_TOKEN', inputs.environment)]"
 require_text .github/workflows/deploy-proxy-registry.yml "vars[format('{0}_REGISTRY_HOST', inputs.environment)]"
@@ -159,5 +181,38 @@ require_text .github/workflows/deploy-proxy-entry.yml 'options: [entry_productio
 require_text .github/workflows/deploy-proxy-registry.yml 'options: [registry_production]'
 require_text docs/GITHUB_ACTIONS_DEPLOYMENT.md 'ENTRY_PRODUCTION_REMOTE_HOST'
 require_text docs/GITHUB_ACTIONS_DEPLOYMENT.md 'REGISTRY_PRODUCTION_REMOTE_HOST'
+
+for registry_url in \
+    'http://registry.example.com:80' \
+    'https://registry.example.com:443' \
+    'https://registry.example.com' \
+    'https://127.0.0.1:8443' \
+    'https://[2001:db8::1]:443'
+do
+    bash deploy/proxy-entry/validate-registry-url.sh "$registry_url"
+done
+
+for registry_url in \
+    'registry.example.com' \
+    'ftp://registry.example.com' \
+    'https://' \
+    'https://user@registry.example.com' \
+    'https://registry.example.com/path' \
+    'https://registry.example.com/' \
+    'https://registry.example.com?query=yes' \
+    'https://registry.example.com#fragment' \
+    'https://user:password@registry.example.com' \
+    'https://registry.example.com:0' \
+    'https://registry.example.com:65536' \
+    'https://registry.example.com:not-a-port' \
+    'https://registry.example.com pipe' \
+    'https://registry\\example.com' \
+    'https://registry|example.com'
+do
+    if bash deploy/proxy-entry/validate-registry-url.sh "$registry_url" >/dev/null 2>&1; then
+        echo "Invalid Registry URL was accepted: $registry_url" >&2
+        exit 1
+    fi
+done
 
 echo "Proxy Entry/Registry split deployment checks passed"

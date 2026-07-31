@@ -65,6 +65,15 @@ export function createAdminDataActions(
     }
   }
 
+  async function refreshProxyAddresses(): Promise<void> {
+    if (!isAdmin.value) return
+    try {
+      proxyAddresses.value = await listProxyAddresses()
+    } catch (error) {
+      services.showError('无法刷新 Proxy 节点目录', error)
+    }
+  }
+
   async function refreshAuditEvents(): Promise<void> {
     auditEventsLoading.value = true
     try {
@@ -169,7 +178,7 @@ export function createAdminDataActions(
   }
 
   return {
-    refreshAdminUsers, refreshAuditEvents, selectAdminSection,
+    refreshAdminUsers, refreshProxyAddresses, refreshAuditEvents, selectAdminSection,
     filterAuditEvents, loadMoreAuditEvents, saveRetentionDays,
   }
 }

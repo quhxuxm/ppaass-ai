@@ -3,7 +3,7 @@ use clap::Parser;
 use proxy_registry::{
     AccessBatchRepository, AccessLogRepository, AgentAccessTokenService,
     AgentDeviceAuthorizationGuard, AgentWebSessionHandoffStore, AppState, ControlState,
-    ControlTokenVerifier, PasswordService, PrivateKeyCipher, SessionStore,
+    ControlTokenVerifier, PasswordService, PrivateKeyCipher, ProxyEntryRepository, SessionStore,
     SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository, UserRepository,
     bool_env, bootstrap_admin, build_control_router, build_router, ensure_key_encryption_binding,
     init_tracing, registry_instance_id, select_database_file_permissions, validate_listen_address,
@@ -169,6 +169,7 @@ async fn main() -> Result<()> {
         instance_id: instance_id.clone(),
         users: store.clone() as Arc<dyn UserRepository>,
         access_batches: access_logs.clone() as Arc<dyn AccessBatchRepository>,
+        proxy_entries: store.clone() as Arc<dyn ProxyEntryRepository>,
         agent_events,
         token_verifier: control_token_verifier,
     });

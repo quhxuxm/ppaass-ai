@@ -1,5 +1,5 @@
 import { ApiError, type ProxyAddress } from '../types'
-import { asRecord, boolValue, stringValue } from '../values'
+import { asRecord, boolValue, numberValue, stringValue } from '../values'
 
 export function decodeProxyAddress(value: unknown): ProxyAddress {
   const root = asRecord(value)
@@ -16,5 +16,21 @@ export function decodeProxyAddress(value: unknown): ProxyAddress {
     address,
     label: stringValue(root?.label) ?? address,
     enabled: boolValue(root?.enabled) ?? true,
+    entryId:
+      stringValue(root?.entry_id) ?? stringValue(root?.entryId) ?? null,
+    entryVersion:
+      stringValue(root?.entry_version) ??
+      stringValue(root?.entryVersion) ??
+      null,
+    entryFirstRegisteredAt:
+      numberValue(root?.entry_first_registered_at) ??
+      numberValue(root?.entryFirstRegisteredAt) ??
+      null,
+    entryLastHeartbeatAt:
+      numberValue(root?.entry_last_heartbeat_at) ??
+      numberValue(root?.entryLastHeartbeatAt) ??
+      null,
+    entryOnline:
+      boolValue(root?.entry_online) ?? boolValue(root?.entryOnline) ?? null,
   }
 }

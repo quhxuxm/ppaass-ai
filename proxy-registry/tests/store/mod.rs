@@ -15,7 +15,7 @@ use std::{
 use tempfile::TempDir;
 
 pub(super) const TEST_PROXY_ADDRESS_ID: &str = "pxy_test";
-pub(super) const SQLITE_SCHEMA_VERSION: i64 = 12;
+pub(super) const SQLITE_SCHEMA_VERSION: i64 = 13;
 pub(super) const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
 pub(super) const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 pub(super) const COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS: [&str; 1] = [r#"-----BEGIN PUBLIC KEY-----
@@ -138,6 +138,19 @@ pub(super) async fn drop_v12_registry_coordination_tables(store: &SqliteUserRepo
         .unwrap();
 }
 
+pub(super) async fn drop_v13_proxy_entry_columns(store: &SqliteUserRepository) {
+    for statement in [
+        "DROP INDEX idx_proxy_addresses_entry_heartbeat",
+        "DROP INDEX idx_proxy_addresses_entry_id",
+        "ALTER TABLE proxy_addresses DROP COLUMN entry_last_heartbeat_at",
+        "ALTER TABLE proxy_addresses DROP COLUMN entry_first_registered_at",
+        "ALTER TABLE proxy_addresses DROP COLUMN entry_version",
+        "ALTER TABLE proxy_addresses DROP COLUMN entry_id",
+    ] {
+        sqlx::query(statement).execute(store.pool()).await.unwrap();
+    }
+}
+
 pub(super) fn account_actor(account_id: &str, login_name: &str) -> AccountActor {
     AccountActor {
         account_id: account_id.to_string(),
@@ -229,5 +242,6 @@ mod permissions;
 mod permissions_migration;
 mod proxy_address_migration;
 mod proxy_addresses;
+mod proxy_entries;
 mod read_only;
 mod users;

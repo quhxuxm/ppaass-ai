@@ -78,6 +78,11 @@ export interface ProxyAddress {
   label: string
   address: string
   enabled: boolean
+  entryId: string | null
+  entryVersion: string | null
+  entryFirstRegisteredAt: number | null
+  entryLastHeartbeatAt: number | null
+  entryOnline: boolean | null
 }
 
 export interface KeyRequest {

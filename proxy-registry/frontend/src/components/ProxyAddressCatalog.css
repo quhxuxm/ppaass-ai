@@ -98,7 +98,7 @@
   min-width: 0;
   display: grid;
   grid-template-columns:
-    52px minmax(140px, 0.85fr) minmax(220px, 1.25fr) 92px
+    52px minmax(140px, 0.85fr) minmax(220px, 1.25fr) 150px
     minmax(230px, auto);
   align-items: center;
 }

@@ -1,6 +1,8 @@
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
-use crate::store::{AccessBatchRepository, AccessProtocol, NewAccessRecord, UserRepository};
+use crate::store::{
+    AccessBatchRepository, AccessProtocol, NewAccessRecord, ProxyEntryRepository, UserRepository,
+};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
@@ -16,7 +18,7 @@ use proxy_control_protocol::{
     ACCESS_BATCHES_PATH, AUTHORIZATION_EVENTS_PATH, AUTHORIZATION_RESOLVE_PATH, AccessBatchRequest,
     AccessBatchResponse, AccessProtocol as ControlAccessProtocol, AuthorizationEvent,
     AuthorizationResolveRequest, AuthorizationResolveResponse, AuthorizationSnapshot,
-    CONTROL_HEALTH_PATH, CONTROL_PROTOCOL_VERSION, ControlHealthResponse,
+    CONTROL_HEALTH_PATH, CONTROL_PROTOCOL_VERSION, ControlHealthResponse, ENTRY_REGISTRATION_PATH,
     MAX_ACCESS_EVENTS_PER_BATCH, MAX_BATCH_ID_BYTES, MAX_ENTRY_ID_BYTES,
 };
 use serde::Serialize;
@@ -74,6 +76,7 @@ pub struct ControlState {
     pub instance_id: Arc<str>,
     pub users: Arc<dyn UserRepository>,
     pub access_batches: Arc<dyn AccessBatchRepository>,
+    pub proxy_entries: Arc<dyn ProxyEntryRepository>,
     pub agent_events: AgentEventHub,
     pub token_verifier: ControlTokenVerifier,
 }
@@ -81,6 +84,7 @@ pub struct ControlState {
 pub fn build_control_router(state: ControlState) -> Router {
     Router::new()
         .route(CONTROL_HEALTH_PATH, get(control_health))
+        .route(ENTRY_REGISTRATION_PATH, post(entries::register_entry))
         .route(AUTHORIZATION_RESOLVE_PATH, post(resolve_authorization))
         .route(AUTHORIZATION_EVENTS_PATH, get(authorization_events))
         .route(ACCESS_BATCHES_PATH, post(ingest_access_batch))
@@ -92,6 +96,8 @@ pub fn build_control_router(state: ControlState) -> Router {
         ))
         .layer(TraceLayer::new_for_http())
 }
+
+mod entries;
 
 async fn control_health(State(state): State<ControlState>) -> Json<ControlHealthResponse> {
     Json(ControlHealthResponse {
@@ -304,6 +310,12 @@ impl ControlApiError {
 
 impl From<crate::store::UserRepositoryError> for ControlApiError {
     fn from(error: crate::store::UserRepositoryError) -> Self {
+        if let crate::store::UserRepositoryError::ProxyEntryAddressConflict(address) = &error {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: format!("Proxy Entry 地址已被其他节点占用：{address}"),
+            };
+        }
         warn!(%error, "Proxy 控制面存储操作失败");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

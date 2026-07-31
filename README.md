@@ -162,6 +162,7 @@ The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are i
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 entry_id = "entry-local"                   # Stable identity for idempotent batches
+advertised_address = "proxy.example.com:8080" # Public address registered in the node catalog
 registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
@@ -175,6 +176,8 @@ Proxy Registry exclusively owns schema migrations, user data and access history.
 authorization over the versioned control API, keeps a cache for at most five seconds, invalidates it
 from Registry SSE events, and sends access history in idempotent batches. A control outage therefore
 fails closed after the bounded cache expires.
+After TCP and UDP listeners bind successfully, Entry registers `advertised_address` in the shared
+Registry node catalog and refreshes its heartbeat every 30 seconds; startup does not wait for Registry.
 
 See [`proxy-registry/README.md`](proxy-registry/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 

@@ -209,6 +209,11 @@ final class AgentAuthHttpTransport {
 
     @SuppressWarnings("deprecation")
     HttpURLConnection openConnection(URL url) throws IOException {
+        return AgentRegistryTlsPolicy.apply(openNetworkConnection(url));
+    }
+
+    @SuppressWarnings("deprecation")
+    private HttpURLConnection openNetworkConnection(URL url) throws IOException {
         if (AgentAuthConfig.isLoopbackHost(url.getHost())) {
             return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
         }

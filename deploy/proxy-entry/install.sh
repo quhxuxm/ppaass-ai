@@ -7,77 +7,25 @@ bundle="${1:?bundle directory is required}"
 
 : "${RELEASE_SHA:?}"
 : "${ENTRY_ID:?}"
+: "${ADVERTISED_ADDRESS:?}"
 : "${REGISTRY_URL:?}"
 : "${RUNTIME_ROOT:=/opt/ppaass-entry}"
 
 case "$RELEASE_SHA" in *[!0-9a-f]*|'') exit 2 ;; esac
 case "$ENTRY_ID" in *[!0-9A-Za-z._:-]*|'') exit 2 ;; esac
-case "$REGISTRY_URL" in https://*) ;; *) echo "REGISTRY_URL must use HTTPS" >&2; exit 2 ;; esac
+"$bundle/validate-registry-url.sh" "$REGISTRY_URL"
+case "$ADVERTISED_ADDRESS" in *[[:space:]/\\?#@]*|*://*|'') echo "Invalid ADVERTISED_ADDRESS" >&2; exit 2 ;; esac
 case "$RUNTIME_ROOT" in /opt/*|/srv/*) ;; *) echo "Unsafe RUNTIME_ROOT" >&2; exit 2 ;; esac
 if [ "$(id -u)" -ne 0 ]; then
     echo "Entry installation must run as root." >&2
     exit 1
 fi
-for command in systemctl curl; do
+for command in systemctl; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Entry host." >&2
         exit 1
     }
 done
-
-wait_for_http_health() {
-    local label="$1"
-    local url="$2"
-    local timeout_seconds="$3"
-    local retry_delay=5
-    local deadline_epoch
-    local attempt=0
-    local status=000
-    local response_file
-    local error_file
-
-    deadline_epoch="$(($(date +%s) + timeout_seconds))"
-    response_file="$(mktemp)"
-    error_file="$(mktemp)"
-    while [ "$(date +%s)" -lt "$deadline_epoch" ]; do
-        attempt=$((attempt + 1))
-        : >"$response_file"
-        : >"$error_file"
-        status=000
-        if status="$(
-            curl --silent --show-error \
-                --connect-timeout 5 --max-time 10 \
-                --output "$response_file" \
-                --write-out '%{http_code}' \
-                "$url" 2>"$error_file"
-        )" && [ "$status" = 200 ]; then
-            rm -f "$response_file" "$error_file"
-            echo "$label is ready."
-            return 0
-        fi
-        if [ "$attempt" -eq 1 ] || [ $((attempt % 12)) -eq 0 ]; then
-            echo "Waiting for $label at $url (last HTTP status: $status)." >&2
-            if [ -s "$error_file" ]; then
-                head -c 512 "$error_file" >&2
-                echo >&2
-            fi
-        fi
-        sleep "$retry_delay"
-    done
-
-    echo "$label did not become ready at $url (last HTTP status: $status)." >&2
-    if [ -s "$error_file" ]; then
-        head -c 2048 "$error_file" >&2
-        echo >&2
-    fi
-    if [ -s "$response_file" ]; then
-        echo "Last response body:" >&2
-        head -c 2048 "$response_file" >&2
-        echo >&2
-    fi
-    rm -f "$response_file" "$error_file"
-    return 1
-}
 
 service_user="ppaass-proxy-entry"
 data_root="/var/lib/ppaass-entry"
@@ -104,6 +52,7 @@ install -o "$service_user" -g "$service_user" -m 0600 \
 
 sed \
     -e "s|^entry_id = .*|entry_id = \"$ENTRY_ID\"|" \
+    -e "s|^advertised_address = .*|advertised_address = \"$ADVERTISED_ADDRESS\"|" \
     -e "s|^registry_url = .*|registry_url = \"$REGISTRY_URL\"|" \
     -e "s|^registry_control_token_path = .*|registry_control_token_path = \"$secret_root/registry-control-token\"|" \
     "$bundle/proxy-entry.toml" >"$release_root/proxy-entry.toml"
@@ -138,11 +87,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable "$entry_service"
-echo "Waiting for the Registry control plane before starting Entry."
-wait_for_http_health \
-    "Registry control plane" \
-    "$REGISTRY_URL/control/v1/health" \
-    600
 if ! systemctl restart "$entry_service"; then
     systemctl status "$entry_service" --no-pager --full >&2 || true
     journalctl -u "$entry_service" -n 100 --no-pager >&2 || true

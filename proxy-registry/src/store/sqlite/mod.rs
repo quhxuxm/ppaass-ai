@@ -14,12 +14,12 @@ use crate::{
     MAX_ACCESS_LOG_QUERY_LIMIT, MAX_ACCESS_LOG_RETENTION_DAYS, MIN_ACCESS_LOG_RETENTION_DAYS,
     ManagedUser, ManagedUserUpdate, NewAccessRecord, NewAdminAccount, NewAgentDeviceAuthorization,
     NewAgentWebSessionHandoff, NewKeyGenerationRequest, NewManagedUser, NewProxyAddress, NewUser,
-    NewUserAccount, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate, Result, UserOrigin,
-    UserRecord, UserRepository, UserRepositoryError, UserUpdate, ValidationError, WebAccount,
-    normalize_audit_reason, normalize_key_request_message, normalize_key_request_rejection_reason,
-    normalize_permissions, normalize_proxy_address, normalize_proxy_address_id,
-    normalize_proxy_address_ids, normalize_proxy_address_label, normalize_public_key_pem,
-    normalize_username, validate_user,
+    NewUserAccount, ProxyAddress, ProxyAddressRepository, ProxyAddressUpdate,
+    ProxyEntryRegistration, ProxyEntryRepository, Result, UserOrigin, UserRecord, UserRepository,
+    UserRepositoryError, UserUpdate, ValidationError, WebAccount, normalize_audit_reason,
+    normalize_key_request_message, normalize_key_request_rejection_reason, normalize_permissions,
+    normalize_proxy_address, normalize_proxy_address_id, normalize_proxy_address_ids,
+    normalize_proxy_address_label, normalize_public_key_pem, normalize_username, validate_user,
 };
 use async_trait::async_trait;
 use sqlx::{
@@ -41,7 +41,7 @@ use tracing::{info, instrument, warn};
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 // Persisted metadata key retained across the Proxy Registry rename.
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 12;
+const SQLITE_SCHEMA_VERSION: i64 = 13;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -165,10 +165,12 @@ mod migration_device;
 mod migration_key_requests;
 mod migration_permissions;
 mod migration_proxy_addresses;
+mod migration_proxy_entries;
 mod migration_users;
 mod migration_validation;
 mod normalization;
 mod proxy_addresses;
+mod proxy_entries;
 mod rows;
 mod user_repository;
 
@@ -185,6 +187,7 @@ use migration_device::*;
 use migration_key_requests::*;
 use migration_permissions::*;
 use migration_proxy_addresses::*;
+use migration_proxy_entries::*;
 use migration_users::*;
 use migration_validation::*;
 use normalization::*;

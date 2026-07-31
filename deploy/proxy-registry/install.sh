@@ -97,12 +97,23 @@ wait_for_http_health() {
     local label="$1"
     local url="$2"
     local timeout_seconds="$3"
+    local tls_policy="${4:-verify}"
     local retry_delay=5
     local deadline_epoch
     local attempt=0
     local status=000
     local response_file
     local error_file
+    local -a curl_options=(
+        --silent --show-error
+        --connect-timeout 5 --max-time 10
+    )
+
+    case "$tls_policy" in
+        verify) ;;
+        insecure) curl_options+=(--insecure) ;;
+        *) echo "Invalid health-check TLS policy: $tls_policy" >&2; return 2 ;;
+    esac
 
     deadline_epoch="$(($(date +%s) + timeout_seconds))"
     response_file="$(mktemp)"
@@ -113,8 +124,7 @@ wait_for_http_health() {
         : >"$error_file"
         status=000
         if status="$(
-            curl --silent --show-error \
-                --connect-timeout 5 --max-time 10 \
+            curl "${curl_options[@]}" \
                 --output "$response_file" \
                 --write-out '%{http_code}' \
                 "$url" 2>"$error_file"
@@ -325,9 +335,9 @@ systemctl reload-or-restart caddy.service
 wait_for_http_health \
     "Registry public API" \
     "https://$REGISTRY_HOST/healthz" \
-    300
+    300 insecure
 wait_for_http_health \
     "Registry control API" \
     "https://$REGISTRY_HOST/control/v1/health" \
-    300
+    300 insecure
 echo "Registry $RELEASE_SHA deployed with two instances."

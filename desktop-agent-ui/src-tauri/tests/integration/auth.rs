@@ -145,13 +145,16 @@ async fn proxy_registry_client_ignores_http_proxy_environment() {
 }
 
 #[test]
-fn proxy_registry_url_only_allows_loopback_http() {
+fn proxy_registry_url_accepts_remote_http_and_https() {
     assert!(normalize_proxy_registry_url("http://127.0.0.1:8787").is_ok());
     assert!(normalize_proxy_registry_url("http://localhost:8787/").is_ok());
     assert!(normalize_proxy_registry_url("http://[::1]:8787").is_ok());
+    assert!(normalize_proxy_registry_url("http://proxy.example.com").is_ok());
+    assert!(normalize_proxy_registry_url("http://192.0.2.10:8787").is_ok());
     assert!(normalize_proxy_registry_url("https://proxy.example.com").is_ok());
-    assert!(normalize_proxy_registry_url("http://proxy.example.com").is_err());
     assert!(normalize_proxy_registry_url("https://proxy.example.com/path").is_err());
+    assert!(normalize_proxy_registry_url("https://user@proxy.example.com").is_err());
+    assert!(normalize_proxy_registry_url("https://proxy.example.com?query=1").is_err());
     assert!(normalize_proxy_registry_url("file:///tmp/proxy").is_err());
 }
 
@@ -160,7 +163,8 @@ fn account_management_page_url_uses_the_validated_proxy_registry_root() {
     let url = account_management_page_url("http://127.0.0.1:8787").unwrap();
     assert_eq!(url.as_str(), "http://127.0.0.1:8787/");
 
-    assert!(account_management_page_url("http://proxy.example.com").is_err());
+    let remote_url = account_management_page_url("http://proxy.example.com").unwrap();
+    assert_eq!(remote_url.as_str(), "http://proxy.example.com/");
     assert!(account_management_page_url("https://proxy.example.com/path").is_err());
 }
 
@@ -359,4 +363,5 @@ mod permission_sync;
 mod profile_identity;
 mod proxy_addresses;
 mod server_events;
+mod tls;
 mod web_handoff;

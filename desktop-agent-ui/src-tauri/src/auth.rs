@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::Write;
-use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
@@ -14,7 +13,7 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use protocol::RsaKeyPair;
-use reqwest::{redirect::Policy, Client, Response, StatusCode};
+use reqwest::{redirect::Policy, Client, ClientBuilder, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;

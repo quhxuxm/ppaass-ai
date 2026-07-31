@@ -20,12 +20,7 @@ impl AgentServerEventStream {
     pub async fn connect(base_url: &str, access_token: &str) -> Result<Self, String> {
         let base_url = normalize_proxy_registry_url(base_url)?;
         let url = endpoint(&base_url, "api/v1/agent/events")?;
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .no_proxy()
-            .build()
-            .map_err(|_| "无法初始化 Agent SSE 客户端".to_string())?;
+        let client = build_proxy_registry_sse_client()?;
         let response = client
             .get(url)
             .bearer_auth(access_token)

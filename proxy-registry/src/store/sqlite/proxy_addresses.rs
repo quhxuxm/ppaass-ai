@@ -1,7 +1,7 @@
 use super::*;
 
-const PROXY_ADDRESS_SELECT: &str =
-    "proxy_address_id, label, address, enabled, created_at, updated_at";
+const PROXY_ADDRESS_SELECT: &str = "proxy_address_id, label, address, enabled, created_at, updated_at, \
+     entry_id, entry_version, entry_first_registered_at, entry_last_heartbeat_at";
 
 fn row_to_proxy_address(row: SqliteRow) -> Result<ProxyAddress> {
     Ok(ProxyAddress {
@@ -11,6 +11,10 @@ fn row_to_proxy_address(row: SqliteRow) -> Result<ProxyAddress> {
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        entry_id: row.try_get("entry_id")?,
+        entry_version: row.try_get("entry_version")?,
+        entry_first_registered_at: row.try_get("entry_first_registered_at")?,
+        entry_last_heartbeat_at: row.try_get("entry_last_heartbeat_at")?,
     })
 }
 

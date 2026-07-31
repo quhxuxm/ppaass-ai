@@ -313,9 +313,11 @@ Proxy Entry 收到通过认证的 Connect 请求后，直接按目标地址建�
 
 - `listen_addr`: Proxy 监听地址。
 - Proxy 在 `listen_addr` 的同一数值端口绑定 TCP 与 raw UDP；启用原生 UDP 模式时防火墙必须同时放行 UDP。
-- `registry_url`: 必填的 Registry HTTPS 地址（仅回环开发允许 HTTP）。
+- `advertised_address`: 必填的 Agent 公网连接地址；格式为 `host:port`，注册后自动合并到 Proxy 节点目录。
+- `registry_url`: 必填的 Registry HTTP 或 HTTPS 地址；Entry 不校验 HTTPS 证书链或主机名。
 - `registry_control_token_path`: 必填的控制面 Token 文件。
 - `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
+- Entry 在 TCP/UDP 监听成功后每 30 秒向 Registry 注册心跳；超过 90 秒未收到心跳时，管理界面显示离线。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
 - `[yamux]`: Proxy 作为 `tcp` 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接进入 PPAASS 流协议处理；raw UDP 入站进入独立的 session packet codec。
