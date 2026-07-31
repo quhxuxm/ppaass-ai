@@ -228,6 +228,7 @@ public class MainActivity extends MainActivityAccountManagement {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
+        dismissDnsFilterInputOnOutsideTouch(event);
         handleScreenSwipeEvent(event);
         return super.dispatchTouchEvent(event);
     }

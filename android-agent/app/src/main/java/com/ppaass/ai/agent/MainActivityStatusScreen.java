@@ -204,6 +204,13 @@ protected void buildStatusScreen(LinearLayout root) {
         dnsFilterInput.setContentDescription(tr("过滤代理 DNS 记录"));
         styleInput(dnsFilterInput);
         dnsFilterInput.setPadding(dp(11), 0, dp(11), 0);
+        dnsFilterInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                dismissDnsFilterInput();
+                return true;
+            }
+            return false;
+        });
         dnsFilterToolbar.addView(dnsFilterInput, new LinearLayout.LayoutParams(
                 0,
                 dp(42),

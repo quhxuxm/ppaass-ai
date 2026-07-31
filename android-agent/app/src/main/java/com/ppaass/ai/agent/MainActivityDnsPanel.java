@@ -24,6 +24,35 @@ import java.util.*;
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
 abstract class MainActivityDnsPanel extends MainActivityConnectivity {
 
+protected void dismissDnsFilterInputOnOutsideTouch(MotionEvent event) {
+        if (event == null
+                || event.getActionMasked() != MotionEvent.ACTION_DOWN
+                || dnsFilterInput == null
+                || !dnsFilterInput.hasFocus()) {
+            return;
+        }
+        Rect inputBounds = new Rect();
+        if (!dnsFilterInput.getGlobalVisibleRect(inputBounds)
+                || !inputBounds.contains((int) event.getRawX(), (int) event.getRawY())) {
+            dismissDnsFilterInput();
+        }
+    }
+
+protected void dismissDnsFilterInput() {
+        if (dnsFilterInput == null) {
+            return;
+        }
+        dnsFilterInput.clearFocus();
+        if (mainScrollView != null) {
+            mainScrollView.requestFocus();
+        }
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(
+                Context.INPUT_METHOD_SERVICE);
+        if (keyboard != null) {
+            keyboard.hideSoftInputFromWindow(dnsFilterInput.getWindowToken(), 0);
+        }
+    }
+
 protected void updateDnsRecords() {
         if (dnsRecordList == null) {
             return;
