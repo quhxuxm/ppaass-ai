@@ -92,7 +92,7 @@ pub(in crate::tun_handler) fn spawn_packet_bridge(
     (tun_to_stack, stack_to_tun)
 }
 
-pub(super) fn tun_packet_is_safe_for_netstack(packet: &[u8]) -> bool {
+pub fn tun_packet_is_safe_for_netstack(packet: &[u8]) -> bool {
     let Some(version) = packet.first().map(|byte| byte >> 4) else {
         return false;
     };

@@ -9,8 +9,7 @@ use super::{
 pub const UDP_AUTH_NONCE_LEN: usize = 32;
 pub const UDP_MASTER_KEY_LEN: usize = 32;
 pub const UDP_MAX_RSA_FIELD_LEN: usize = 1_024;
-pub const UDP_OAEP_LABEL: &str = "ppaass/native-udp/auth-response/v2";
-const UDP_AUTH_OK_SIGNATURE_DOMAIN: &[u8] = b"ppaass/native-udp/auth-ok-signature/v2\0";
+pub const UDP_OAEP_LABEL: &str = "ppaass/native-udp/auth-response/v3";
 
 /// Cleartext first flight. It carries only identity/challenge context and a
 /// signature made with the user's private key; it never carries session key material.
@@ -28,16 +27,12 @@ pub struct UdpAuthInit {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UdpAuthOk {
     pub encrypted_session_secret: Vec<u8>,
-    /// RSA-PSS-SHA256 signature by the pinned Proxy transport identity.
-    pub proxy_signature: Vec<u8>,
 }
 
 impl UdpAuthOk {
     fn validate_shape(&self) -> UdpTransportResult<()> {
         if self.encrypted_session_secret.is_empty()
             || self.encrypted_session_secret.len() > UDP_MAX_RSA_FIELD_LEN
-            || self.proxy_signature.is_empty()
-            || self.proxy_signature.len() > UDP_MAX_RSA_FIELD_LEN
         {
             return Err(UdpTransportError::AuthenticationFailed);
         }
@@ -50,7 +45,6 @@ impl std::fmt::Debug for UdpAuthOk {
         formatter
             .debug_struct("UdpAuthOk")
             .field("encrypted_session_secret", &"[REDACTED]")
-            .field("proxy_signature", &"[REDACTED]")
             .finish()
     }
 }
@@ -110,43 +104,13 @@ pub fn udp_auth_proof_digest(
     let username_bytes = username.as_bytes();
     let username_len = u32::try_from(username_bytes.len()).unwrap_or(u32::MAX);
     let mut hasher = Sha256::new();
-    hasher.update(b"ppaass/native-udp/auth-proof/v2\0");
+    hasher.update(b"ppaass/native-udp/auth-proof/v3\0");
     hasher.update(session_id);
     hasher.update(username_len.to_be_bytes());
     hasher.update(username_bytes);
     hasher.update(timestamp.to_be_bytes());
     hasher.update(client_nonce);
     hasher.finalize().into()
-}
-
-/// Canonical response transcript verified with the pinned Proxy identity
-/// before the client attempts OAEP decryption.
-pub fn udp_auth_ok_signature_transcript(
-    session_id: &UdpSessionId,
-    auth_proof_digest: &[u8; 32],
-    encrypted_session_secret: &[u8],
-) -> UdpTransportResult<Vec<u8>> {
-    if encrypted_session_secret.is_empty() || encrypted_session_secret.len() > UDP_MAX_RSA_FIELD_LEN
-    {
-        return Err(UdpTransportError::AuthenticationFailed);
-    }
-    let ciphertext_len = u32::try_from(encrypted_session_secret.len())
-        .map_err(|_| UdpTransportError::AuthenticationFailed)?;
-    let mut transcript = Vec::with_capacity(
-        UDP_AUTH_OK_SIGNATURE_DOMAIN.len()
-            + 1
-            + session_id.len()
-            + auth_proof_digest.len()
-            + 4
-            + encrypted_session_secret.len(),
-    );
-    transcript.extend_from_slice(UDP_AUTH_OK_SIGNATURE_DOMAIN);
-    transcript.push(UDP_TRANSPORT_VERSION);
-    transcript.extend_from_slice(session_id);
-    transcript.extend_from_slice(auth_proof_digest);
-    transcript.extend_from_slice(&ciphertext_len.to_be_bytes());
-    transcript.extend_from_slice(encrypted_session_secret);
-    Ok(transcript)
 }
 
 /// Encode an AuthInit as a complete cleartext UDP datagram with the shared

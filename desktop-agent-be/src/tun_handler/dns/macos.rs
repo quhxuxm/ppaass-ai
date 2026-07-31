@@ -237,7 +237,7 @@ pub(super) fn system_dns_servers() -> Vec<SystemDnsServer> {
     servers
 }
 
-pub(super) fn parse_macos_dns_servers(output: &str) -> Vec<SystemDnsServer> {
+pub fn parse_macos_dns_servers(output: &str) -> Vec<SystemDnsServer> {
     let mut servers = Vec::new();
     let mut block_ips: Vec<IpAddr> = Vec::new();
     let mut block_if_name: Option<String> = None;

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) struct ProxyFlowTracker {
+pub struct ProxyFlowTracker {
     pub(super) listen_port: Option<u16>,
     pub(super) flows: HashMap<String, ProxyFlowState>,
     pub(super) flow_order: VecDeque<String>,
@@ -10,7 +10,7 @@ pub(super) struct ProxyFlowTracker {
 }
 
 impl ProxyFlowTracker {
-    pub(super) fn new(listen_port: Option<u16>) -> Self {
+    pub fn new(listen_port: Option<u16>) -> Self {
         Self {
             listen_port,
             flows: HashMap::new(),
@@ -21,7 +21,7 @@ impl ProxyFlowTracker {
         }
     }
 
-    pub(super) fn observe(
+    pub fn observe(
         &mut self,
         packet: &CapturedPacket,
         flow_key: &str,
@@ -310,7 +310,7 @@ pub(super) fn detected_proxy_protocol_in_payload(
     }
 }
 
-pub(super) fn flow_key(packet: &CapturedPacket) -> String {
+pub fn flow_key(packet: &CapturedPacket) -> String {
     let left = endpoint(&packet.source, packet.source_port);
     let right = endpoint(&packet.destination, packet.destination_port);
     if left <= right {

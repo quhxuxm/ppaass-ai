@@ -42,6 +42,5 @@ flowchart LR
     UdpMessages --> UdpDispatch["UDP flow 分流"]
     ConnectDispatch -->|"普通 TCP/UDP"| Target["目标服务器"]
     ConnectDispatch -->|"Address::UdpRelay"| UdpRelay["共享 UDP relay"]
-    ConnectDispatch -->|"forward_mode"| Upstream["上游 PPAASS Proxy"]
     UdpDispatch --> Target
     UdpDispatch --> UdpRelay

@@ -94,14 +94,6 @@ where
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let rsa = RsaKeyPair::from_private_key_pem(&private_key_pem)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let proxy_identity_public_key_pem = config.proxy_identity_public_key_pem().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "未配置可信的 Proxy 传输身份公钥",
-        )
-    })?;
-    let proxy_identity_public_key = RsaKeyPair::from_public_key_pem(&proxy_identity_public_key_pem)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Proxy 传输身份公钥格式无效"))?;
     let digest = udp_auth_proof_digest(&session_id, &username, timestamp, &client_nonce);
     let proof = rsa
         .sign_pss_sha256(&digest)
@@ -134,23 +126,6 @@ where
                 Ok((header, auth_ok)) if header.session_id == session_id => auth_ok,
                 Ok(_) | Err(_) => continue,
             };
-            let proxy_signature_transcript = udp_auth_ok_signature_transcript(
-                &session_id,
-                &digest,
-                &auth_ok.encrypted_session_secret,
-            )
-            .map_err(udp_protocol_error)?;
-            verify_pss_sha256(
-                &proxy_identity_public_key,
-                &proxy_signature_transcript,
-                &auth_ok.proxy_signature,
-            )
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "Proxy 原生 UDP 传输身份验证失败",
-                )
-            })?;
             let secret_bytes = match rsa
                 .decrypt_oaep_sha256_labelled(UDP_OAEP_LABEL, &auth_ok.encrypted_session_secret)
             {

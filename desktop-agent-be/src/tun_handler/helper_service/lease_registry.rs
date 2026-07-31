@@ -1,17 +1,14 @@
 use super::*;
 
 impl LeaseRegistry {
-    pub(super) fn trusted_state_paths(&self) -> (PathBuf, PathBuf) {
+    pub fn trusted_state_paths(&self) -> (PathBuf, PathBuf) {
         (
             tun_helper_route_state_path(&self.state_path),
             tun_helper_dns_state_path(&self.state_path),
         )
     }
 
-    pub(super) fn confine_start_request(
-        &self,
-        mut request: TunStartRequest,
-    ) -> Result<TunStartRequest> {
+    pub fn confine_start_request(&self, mut request: TunStartRequest) -> Result<TunStartRequest> {
         let (route_state, dns_state) = self.trusted_state_paths();
         request.route_state_file = Some(confine_requested_state_path(
             "route",
@@ -26,7 +23,7 @@ impl LeaseRegistry {
         Ok(request)
     }
 
-    pub(super) fn persist(&self) -> Result<()> {
+    pub fn persist(&self) -> Result<()> {
         if self.leases.is_empty() {
             match fs::remove_file(&self.state_path) {
                 Ok(()) => {
@@ -81,7 +78,7 @@ impl LeaseRegistry {
         Ok(())
     }
 
-    pub(super) fn stage_before<T>(
+    pub fn stage_before<T>(
         &mut self,
         metadata: PersistedTunLease,
         install: impl FnOnce() -> Result<T>,
@@ -102,11 +99,7 @@ impl LeaseRegistry {
         Ok(())
     }
 
-    pub(super) fn set_pf_enable_token(
-        &mut self,
-        lease_id: &str,
-        token: Option<String>,
-    ) -> Result<()> {
+    pub fn set_pf_enable_token(&mut self, lease_id: &str, token: Option<String>) -> Result<()> {
         let lease = self
             .leases
             .get_mut(lease_id)
@@ -154,7 +147,7 @@ impl LeaseRegistry {
         )
     }
 
-    pub(super) fn stop_owned_with_artifact_cleanup(
+    pub fn stop_owned_with_artifact_cleanup(
         &mut self,
         lease_id: &str,
         route_state_hint: Option<String>,
@@ -207,7 +200,7 @@ impl LeaseRegistry {
         )
     }
 
-    pub(super) fn stop_with_artifact_cleanup(
+    pub fn stop_with_artifact_cleanup(
         &mut self,
         lease_id: &str,
         _route_state_hint: Option<String>,
@@ -301,7 +294,7 @@ impl LeaseRegistry {
         Ok(())
     }
 
-    pub(super) fn cleanup_orphans_for(&mut self, operation: &str) -> Result<()> {
+    pub fn cleanup_orphans_for(&mut self, operation: &str) -> Result<()> {
         let live_lease_ids = self
             .leases
             .values()
@@ -318,13 +311,13 @@ impl LeaseRegistry {
         self.stop_all()
     }
 
-    pub(super) fn route_state_owned_by_another(&self, lease_id: &str, path: &str) -> bool {
+    pub fn route_state_owned_by_another(&self, lease_id: &str, path: &str) -> bool {
         self.leases.iter().any(|(active_id, lease)| {
             active_id != lease_id && lease.metadata.route_state_file.as_deref() == Some(path)
         })
     }
 
-    pub(super) fn dns_state_owned_by_another(&self, lease_id: &str, path: &str) -> bool {
+    pub fn dns_state_owned_by_another(&self, lease_id: &str, path: &str) -> bool {
         self.leases.iter().any(|(active_id, lease)| {
             active_id != lease_id && lease.metadata.dns_state_file.as_deref() == Some(path)
         })

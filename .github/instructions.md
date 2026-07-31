@@ -65,13 +65,18 @@ These instructions apply to all code changes in this repository. Follow them unl
   - happy path,
   - boundary cases,
   - error cases.
-- Prefer `#[test]` unit tests close to the code.
-- Use integration tests (`tests/`) for end-to-end behavior.
+- Put all Rust tests in the crate's top-level `tests/` directory, including focused
+  unit-style coverage.
+- Keep production `src/` free of test attributes, `cfg(test)`, test modules, and
+  test-only source files.
+- Exercise behavior through public APIs; expose only the smallest safe API needed
+  for low-level coverage.
+- Run `sh scripts/check-rust-test-layout.sh` after moving or adding Rust tests.
 
 ## 9) Common commands (run before finalizing changes)
 - `cargo fmt`
 - `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all-features`
+- `cargo test --workspace --all-features --locked`
 
 ## 10) When requirements are unclear
 Before implementing, ask concise clarifying questions about:

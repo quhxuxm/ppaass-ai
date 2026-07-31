@@ -16,43 +16,40 @@ use crate::models::{
 };
 
 mod admin_key_requests;
+mod inspection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentPermissionTrust {
+pub enum AgentPermissionTrust {
     CachedUnverified,
     ServerVerified,
 }
 
 #[derive(Clone)]
-pub(crate) struct AuthenticatedAgentSession {
-    pub(crate) account: AgentAuthAccount,
-    pub(crate) account_status: AgentAuthAccountStatus,
-    pub(crate) proxy_addresses: Vec<String>,
-    pub(crate) permission_trust: AgentPermissionTrust,
-    pub(crate) private_key_path: PathBuf,
-    pub(crate) proxy_identity_public_key_path: PathBuf,
-    pub(crate) proxy_registry_url: String,
-    pub(crate) agent_access_token: Option<AgentAccessToken>,
+pub struct AuthenticatedAgentSession {
+    pub account: AgentAuthAccount,
+    pub account_status: AgentAuthAccountStatus,
+    pub proxy_addresses: Vec<String>,
+    pub permission_trust: AgentPermissionTrust,
+    pub private_key_path: PathBuf,
+    pub proxy_registry_url: String,
+    pub agent_access_token: Option<AgentAccessToken>,
 }
 
 #[derive(Clone)]
-pub(crate) struct AgentSessionCredentials {
+pub struct AgentSessionCredentials {
     private_key_path: PathBuf,
-    proxy_identity_public_key_path: PathBuf,
     proxy_registry_url: String,
     agent_access_token: Option<AgentAccessToken>,
 }
 
 impl AgentSessionCredentials {
-    pub(crate) fn new(
+    pub fn new(
         private_key_path: PathBuf,
-        proxy_identity_public_key_path: PathBuf,
         proxy_registry_url: String,
         agent_access_token: Option<AgentAccessToken>,
     ) -> Self {
         Self {
             private_key_path,
-            proxy_identity_public_key_path,
             proxy_registry_url,
             agent_access_token,
         }
@@ -60,7 +57,7 @@ impl AgentSessionCredentials {
 }
 
 impl AuthenticatedAgentSession {
-    pub(crate) fn new(
+    pub fn new(
         account: AgentAuthAccount,
         account_status: AgentAuthAccountStatus,
         proxy_addresses: Vec<String>,
@@ -77,7 +74,6 @@ impl AuthenticatedAgentSession {
             proxy_addresses,
             permission_trust,
             private_key_path: credentials.private_key_path,
-            proxy_identity_public_key_path: credentials.proxy_identity_public_key_path,
             proxy_registry_url: credentials.proxy_registry_url,
             agent_access_token: credentials.agent_access_token,
         }
@@ -85,17 +81,17 @@ impl AuthenticatedAgentSession {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingAgentDeviceAuthorization {
-    pub(crate) id: u64,
+pub struct PendingAgentDeviceAuthorization {
+    pub id: u64,
     pub(crate) device_code: Zeroizing<String>,
-    pub(crate) proxy_registry_url: String,
-    pub(crate) config_path: PathBuf,
-    pub(crate) user_code: String,
-    pub(crate) expires_at: i64,
-    pub(crate) interval_seconds: u32,
+    pub proxy_registry_url: String,
+    pub config_path: PathBuf,
+    pub user_code: String,
+    pub expires_at: i64,
+    pub interval_seconds: u32,
 }
 
-pub(crate) struct AgentRuntime {
+pub struct AgentRuntime {
     pub(crate) agent: Mutex<Option<EmbeddedAgent>>,
     pub(crate) auth_operation: tokio::sync::Mutex<()>,
     authenticated_session: Mutex<Option<AuthenticatedAgentSession>>,
@@ -124,7 +120,7 @@ pub(crate) struct EmbeddedAgent {
 }
 
 impl AgentRuntime {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             agent: Mutex::new(None),
             auth_operation: tokio::sync::Mutex::new(()),
@@ -148,36 +144,32 @@ impl AgentRuntime {
         }
     }
 
-    pub(crate) fn is_authenticated(&self) -> bool {
+    pub fn is_authenticated(&self) -> bool {
         self.authenticated_session
             .lock()
             .map(|session| session.is_some())
             .unwrap_or(false)
     }
 
-    pub(crate) fn require_authenticated(&self) -> Result<(), String> {
+    pub fn require_authenticated(&self) -> Result<(), String> {
         self.is_authenticated()
             .then_some(())
             .ok_or_else(|| "请先登录 Proxy Registry 账号".to_string())
     }
 
-    pub(crate) fn authenticated_session(
-        &self,
-    ) -> Result<Option<AuthenticatedAgentSession>, String> {
+    pub fn authenticated_session(&self) -> Result<Option<AuthenticatedAgentSession>, String> {
         self.authenticated_session
             .lock()
             .map_err(|_| "登录状态锁已损坏".to_string())
             .map(|session| session.clone())
     }
 
-    pub(crate) fn require_authenticated_session(
-        &self,
-    ) -> Result<AuthenticatedAgentSession, String> {
+    pub fn require_authenticated_session(&self) -> Result<AuthenticatedAgentSession, String> {
         self.authenticated_session()?
             .ok_or_else(|| "请先登录 Proxy Registry 账号".to_string())
     }
 
-    pub(crate) fn set_authenticated_session(
+    pub fn set_authenticated_session(
         &self,
         session: AuthenticatedAgentSession,
     ) -> Result<(), String> {
@@ -194,14 +186,14 @@ impl AgentRuntime {
         Ok(())
     }
 
-    pub(crate) fn permission_sync_error(&self) -> Result<Option<String>, String> {
+    pub fn permission_sync_error(&self) -> Result<Option<String>, String> {
         self.permission_sync_error
             .lock()
             .map_err(|_| "权限同步状态锁已损坏".to_string())
             .map(|error| error.clone())
     }
 
-    pub(crate) fn set_permission_sync_error(&self, error: Option<String>) -> Result<(), String> {
+    pub fn set_permission_sync_error(&self, error: Option<String>) -> Result<(), String> {
         *self
             .permission_sync_error
             .lock()
@@ -209,7 +201,7 @@ impl AgentRuntime {
         Ok(())
     }
 
-    pub(crate) fn update_authenticated_session_from_sync(
+    pub fn update_authenticated_session_from_sync(
         &self,
         expected_username: &str,
         expected_token: &str,
@@ -242,7 +234,7 @@ impl AgentRuntime {
         Ok(Some(session.clone()))
     }
 
-    pub(crate) fn clear_authenticated_proxy_addresses(
+    pub fn clear_authenticated_proxy_addresses(
         &self,
         expected_username: &str,
         expected_token: &str,
@@ -267,9 +259,7 @@ impl AgentRuntime {
         Ok(Some(session.clone()))
     }
 
-    pub(crate) fn take_authenticated_session(
-        &self,
-    ) -> Result<Option<AuthenticatedAgentSession>, String> {
+    pub fn take_authenticated_session(&self) -> Result<Option<AuthenticatedAgentSession>, String> {
         let result = self
             .authenticated_session
             .lock()
@@ -283,7 +273,7 @@ impl AgentRuntime {
         result
     }
 
-    pub(crate) fn set_pending_device_authorization(
+    pub fn set_pending_device_authorization(
         &self,
         device_code: Zeroizing<String>,
         proxy_registry_url: String,
@@ -311,7 +301,7 @@ impl AgentRuntime {
         Ok(challenge)
     }
 
-    pub(crate) fn pending_device_authorization(
+    pub fn pending_device_authorization(
         &self,
     ) -> Result<Option<PendingAgentDeviceAuthorization>, String> {
         self.pending_device_authorization
@@ -320,7 +310,7 @@ impl AgentRuntime {
             .map(|challenge| challenge.clone())
     }
 
-    pub(crate) fn cancel_pending_device_authorization(&self) -> Result<(), String> {
+    pub fn cancel_pending_device_authorization(&self) -> Result<(), String> {
         self.pending_device_authorization
             .lock()
             .map_err(|_| "设备登录状态锁已损坏".to_string())?
@@ -328,10 +318,7 @@ impl AgentRuntime {
         Ok(())
     }
 
-    pub(crate) fn take_pending_device_authorization_if(
-        &self,
-        expected_id: u64,
-    ) -> Result<bool, String> {
+    pub fn take_pending_device_authorization_if(&self, expected_id: u64) -> Result<bool, String> {
         let mut challenge = self
             .pending_device_authorization
             .lock()
@@ -347,7 +334,7 @@ impl AgentRuntime {
     }
 
     #[cfg(windows)]
-    pub(crate) fn set_verified_proxy_auth_status(
+    pub fn set_verified_proxy_auth_status(
         &self,
         status: VerifiedProxyAuthStatus,
     ) -> Result<(), String> {
@@ -362,16 +349,14 @@ impl AgentRuntime {
     }
 
     #[cfg(windows)]
-    pub(crate) fn verified_proxy_auth_status(
-        &self,
-    ) -> Result<Option<VerifiedProxyAuthStatus>, String> {
+    pub fn verified_proxy_auth_status(&self) -> Result<Option<VerifiedProxyAuthStatus>, String> {
         self.verified_proxy_auth_status
             .lock()
             .map_err(|_| "Proxy 账号状态锁已损坏".to_string())
             .map(|status| status.clone())
     }
 
-    pub(crate) fn set_authenticated_account_status(
+    pub fn set_authenticated_account_status(
         &self,
         username: &str,
         status: AgentAuthAccountStatus,
@@ -390,6 +375,3 @@ impl AgentRuntime {
         Ok(Some(current.clone()))
     }
 }
-
-#[cfg(test)]
-mod tests;

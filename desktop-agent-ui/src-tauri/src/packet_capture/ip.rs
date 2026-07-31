@@ -64,7 +64,7 @@ pub(crate) fn parse_ipv6_packet(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_packet(
+pub fn build_packet(
     number: usize,
     timestamp_ms: u64,
     ip_version: u8,

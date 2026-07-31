@@ -54,7 +54,7 @@ The requirements in this section are normative and supersede any older conflicti
 - Proxy Registry supports local account registration and password login only; OAuth providers are not exposed.
 - Passwords must contain at least eight Unicode characters, must not exceed 256 UTF-8 bytes and are stored as Argon2id hashes. Users can change their own password after supplying the current password; a successful change invalidates their existing Web sessions.
 - Browser authentication uses an opaque server-side session in an HttpOnly cookie, CSRF protection for state-changing requests, request-rate limits and non-enumerating authentication errors. There is no shared administrator token.
-- The fixed root administrator is `admin`; its initial password is supplied by the deployment secret `PPAASS_WEB_ADMIN_PASSWORD`. It cannot be disabled, demoted or deleted. Other administrator and normal-user accounts can be disabled, and only disabled accounts can be deleted.
+- The fixed root administrator is `admin`; its initial password is supplied by the Registry deployment secret `<REGISTRY_ENV>_WEB_ADMIN_PASSWORD` (currently `REGISTRY_PRODUCTION_WEB_ADMIN_PASSWORD`). It cannot be disabled, demoted or deleted. Other administrator and normal-user accounts can be disabled, and only disabled accounts can be deleted.
 - Web-login status and Proxy-connection status are independent. An administrator must be able to disable an account even when it has no assigned Proxy address or no generated Proxy profile.
 - Administrator accounts may also own a Proxy profile and keys and use the Agent. Their data-plane TCP/UDP permissions are still checked against their own profile.
 - The Desktop Agent on Windows/macOS and the Android Agent must show a login gate before exposing the workspace. Agent login uses the native password API directly and must not require browser login.
@@ -138,7 +138,7 @@ The requirements in this section are normative and supersede any older conflicti
 
 ### Network, TUN and packet-capture behavior
 
-- TCP/Yamux authentication uses protocol version 3. Unknown users, stale timestamps, invalid signatures and replayed requests receive the same unsigned generic failure. Only after the Agent proves possession of the current private key with a fresh, non-replayed request may Proxy Entry return a Proxy-identity-signed `UserDisabled` or `UserExpired` terminal status.
+- TCP/Yamux authentication uses protocol version 4. Unknown users, stale timestamps, invalid signatures and replayed requests receive the same generic failure. Only after the Agent proves possession of the current private key with a fresh, non-replayed request may Proxy Entry return a specific `UserDisabled` or `UserExpired` terminal status. Proxy Entry does not own a transport identity key and does not sign authentication responses.
 - Retryable network failures must remain distinct from authoritative account-disabled, profile-disabled, key-expired and permission-denied failures.
 - Proxy Entry enforces a configurable per-username limit for concurrently authenticated native UDP sessions in addition to global capacity limits. The per-username default is 64 and the effective value is capped by the global session limit.
 - Established TCP/Yamux relays and native UDP sessions recheck account/profile status, the relevant TCP/UDP permission, key version and absolute expiration at least once every five seconds. Revocation, disablement, key rotation or expiration must terminate affected traffic within that bound; a shared TCP/Yamux UDP relay also rechecks before creating a new flow.
@@ -223,7 +223,7 @@ Proxy Registry owns user CRUD through its database-independent repository traits
   - The TCP data-forwarding path should use `tokio::io::copy_bidirectional` to relay data between client, Agent, Proxy Entry and target.
 - Flow:
   - The direct framed TCP path and TCP-mode Yamux business substreams should include 3 processes:
-    - *Authentication process*: Agent signs a domain-separated transcript containing the protocol version, username, timestamp and client nonce with RSA-PSS-SHA256. Proxy Entry verifies freshness, replay protection and the user's signature, then generates the master secret, server nonce and session ID. It encrypts that session envelope to the user with labelled RSA-OAEP-SHA256 and signs the canonical response with the pinned Proxy transport identity. After verification/decryption, both sides derive independent per-direction AEAD record keys.
+    - *Authentication process*: Agent signs a domain-separated transcript containing the protocol version, username, timestamp and client nonce with RSA-PSS-SHA256. Proxy Entry verifies freshness, replay protection and the user's signature, then generates the master secret, server nonce and session ID. It encrypts that session envelope to the user's public key with labelled RSA-OAEP-SHA256. After decryption, both sides derive independent per-direction AEAD record keys.
     - *Connect process*: Agent sends the target address through the authenticated encrypted record layer, and Proxy Entry connects to the target.
     - *Data forwarding process*: Agent and Proxy Entry relay data bidirectionally through the authenticated encrypted record layer.
   - Native UDP mode should use the authenticated datagram session protocol described above instead of pretending a UDP datagram is an ordered Auth/Connect/Data byte stream. UDP flow identity, target metadata, payload, and bounded fragmentation metadata should be carried in authenticated datagrams.
@@ -255,18 +255,16 @@ GitHub Actions workflows should build, test and deploy the platform.
   - Deploy Proxy Entry and Proxy Registry with independent workflows; their runtime architecture must not require co-location.
   - Deploy two Registry processes behind Caddy; deploy Entry without SQLite or Caddy.
   - Resolve the selected deployment server from `<ENV>_REMOTE_HOST/USER/PASSWORD`.
-  - The Entry and Registry workflows currently share the selected environment's deployment credentials and therefore target the same server by default.
+  - Use separate `entry_production` and `registry_production` environments so Entry and Registry may target different servers.
+  - Prefix every GitHub Actions Secret and Variable with the selected role-specific environment; shared runtime values such as the control token and control host use separate names whose contents must match.
   - Authenticate SSH/SCP deployments with the configured password, disable client public-key authentication and accept the server host key on first connection without requiring a known_hosts secret.
-  - Read the root administrator password from the repository secret `PPAASS_WEB_ADMIN_PASSWORD`; never commit the password or generated runtime secrets.
+  - Read the root administrator password from `REGISTRY_PRODUCTION_WEB_ADMIN_PASSWORD`; never commit the password or generated runtime secrets.
   - Validate/install or upgrade Caddy when needed, proxy HTTPS/443 to the Registry loopback listener and preserve automatic renewal. For the current public-IP deployment, use an ACME short-lived IP certificate with TLS-ALPN-01 on 443 so renewal does not require port 80.
   - The deployment workflow should be triggered manually with an environment selector:
-    - `production`
-    - `dev`
-    - `qa`
+    - `entry_production` for Entry
+    - `registry_production` for Registry
   - Target Linux server hostname, username and password are read from repository secrets selected by `inputs.environment`:
-    - For `production` env:
-      - `PRODUCTION_REMOTE_HOST/USER/PASSWORD`
-    - For `dev` env:
-      - `DEV_REMOTE_HOST/USER/PASSWORD`
-    - For `qa` env:
-      - `QA_REMOTE_HOST/USER/PASSWORD`
+    - For `entry_production`:
+      - `ENTRY_PRODUCTION_REMOTE_HOST/USER/PASSWORD`
+    - For `registry_production`:
+      - `REGISTRY_PRODUCTION_REMOTE_HOST/USER/PASSWORD`

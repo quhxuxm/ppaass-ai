@@ -16,8 +16,5 @@ mod copy_io;
 mod server;
 mod tcp;
 
-use copy_io::RelayCopyIo;
-use tcp::{TcpRelayTimeouts, can_ignore_tcp_shutdown_error, relay_tcp_with_half_close};
-
-#[cfg(test)]
-mod tests;
+pub use copy_io::RelayCopyIo;
+pub use tcp::{TcpRelayTimeouts, can_ignore_tcp_shutdown_error, relay_tcp_with_half_close};

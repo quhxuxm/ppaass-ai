@@ -30,9 +30,9 @@ mkdir -p config keys
 echo "   Created: config/, keys/"
 
 # Check configuration
-if [ ! -f "config/local/proxy-entry.toml" ]; then
+if [ ! -f "config/proxy-entry.toml" ]; then
     echo ""
-    echo "⚠️  Proxy configuration not found. Please ensure config/local/proxy-entry.toml exists."
+    echo "⚠️  Proxy configuration not found. Please ensure config/proxy-entry.toml exists."
 else
     echo ""
     echo "✅ Configuration files found!"
@@ -45,7 +45,7 @@ cat << "EOF"
 ╚══════════════════════════════════════════════════════════════╝
 
 1️⃣  Start Proxy Entry:
-   ./target/release/proxy-entry --config config/local/proxy-entry.toml
+   ./target/release/proxy-entry --config config/proxy-entry.toml
 
 2️⃣  Start Proxy Registry and register the user
 
@@ -71,7 +71,7 @@ cat << "EOF"
 ║                    Quick Commands                            ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Start Proxy Entry:  ./target/release/proxy-entry --config config/local/proxy-entry.toml
+Start Proxy Entry:  ./target/release/proxy-entry --config config/proxy-entry.toml
 Start Agent:  ./target/release/desktop-agent --config config/agent.toml
 
 EOF

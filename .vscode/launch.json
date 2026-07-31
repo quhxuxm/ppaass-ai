@@ -18,7 +18,7 @@
             },
             "args": [
                 "--config",
-                "config/local/agent.toml"
+                "tests/fixtures/config/agent-integration.toml"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
@@ -45,7 +45,7 @@
             },
             "args": [
                 "--config",
-                "config/local/proxy-entry.toml"
+                "tests/fixtures/config/proxy-entry-integration.toml"
             ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
@@ -107,58 +107,6 @@
             ],
             "stopOnEntry": false,
             "console": "integratedTerminal"
-        },
-        {
-            "name": "Debug Agent (Forward)",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--package",
-                    "desktop-agent",
-                ],
-                "filter": {
-                    "name": "desktop-agent",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config",
-                "config/local/agent-forward.toml"
-            ],
-            "cwd": "${workspaceFolder}",
-            "sourceLanguages": [
-                "rust"
-            ],
-            "stopOnEntry": false,
-            "console": "integratedTerminal"
-        },
-        {
-            "name": "Debug Proxy Entry (Forward)",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--package",
-                    "proxy-entry",
-                ],
-                "filter": {
-                    "name": "proxy-entry",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config",
-                "config/local/proxy-entry-forward.toml"
-            ],
-            "cwd": "${workspaceFolder}",
-            "sourceLanguages": [
-                "rust"
-            ],
-            "stopOnEntry": false,
-            "console": "integratedTerminal"
         }
     ],
     "compounds": [
@@ -167,14 +115,6 @@
             "configurations": [
                 "Debug Agent",
                 "Debug Proxy Entry",
-            ]
-        },
-        {
-            "name": "Debug Agent & Proxy Entry (Forward)",
-            "configurations": [
-                "Debug Agent (Forward)",
-                "Debug Proxy Entry (Forward)",
-                "Debug Proxy Entry"
             ]
         }
     ]

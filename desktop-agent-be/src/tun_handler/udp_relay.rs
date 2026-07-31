@@ -14,7 +14,7 @@ use common::spawn_guarded;
 use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 pub(super) use state::UdpRelay;
-use state::{UdpRelayRequest, UdpRelayState, UdpRelayStats};
+pub use state::{UdpFlowKey, UdpRelayRequest, UdpRelayState, UdpRelayStats};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -174,7 +174,7 @@ async fn connect_udp_relay_stream(
     Ok(connected.into_async_io())
 }
 
-async fn send_udp_request_batch<W>(
+pub async fn send_udp_request_batch<W>(
     writer: &mut W,
     state: &mut UdpRelayState,
     first_request: UdpRelayRequest,
@@ -293,6 +293,3 @@ fn spawn_udp_relay_stats_logger(stats: Arc<UdpRelayStats>, shutdown: Cancellatio
         }
     });
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,7 +1,7 @@
 use super::*;
 
 #[instrument(skip_all, fields(username = %username))]
-pub(crate) async fn authenticate_and_download(
+pub async fn authenticate_and_download(
     proxy_registry_url: &str,
     username: &str,
     password: &str,
@@ -36,7 +36,6 @@ pub(crate) async fn authenticate_and_download(
             account: response.account,
             profile: response.profile,
             public_key_pem: response.public_key_pem,
-            proxy_identity_public_key_pem: response.proxy_identity_public_key_pem,
             private_key_pem: response.private_key_pem,
             csrf_token: String::new(),
             _session_expires_at: None,
@@ -55,7 +54,7 @@ pub(crate) async fn authenticate_and_download(
 }
 
 #[instrument(skip_all, fields(username = %username))]
-pub(crate) async fn authenticate_rotate_and_download(
+pub async fn authenticate_rotate_and_download(
     proxy_registry_url: &str,
     username: &str,
     password: &str,
@@ -156,7 +155,12 @@ pub(crate) async fn authenticate_rotate_and_download(
         .post(endpoint(&base_url, "api/v1/me/rotate-key")?)
         .header("x-csrf-token", csrf_token.as_str());
     let rotate_result = match audit_reason {
-        Some(reason) => rotate_request.json(&RotateKeyPayload { reason }).send().await,
+        Some(reason) => {
+            rotate_request
+                .json(&RotateKeyPayload { reason })
+                .send()
+                .await
+        }
         None => rotate_request.send().await,
     };
     let rotate_response = match rotate_result {
@@ -189,7 +193,6 @@ pub(crate) async fn authenticate_rotate_and_download(
     }
     let private_key_pem = Zeroizing::new(rotated.private_key_pem);
     validate_key_pair(&private_key_pem, &rotated.public_key_pem)?;
-    validate_proxy_identity_public_key(&rotated.proxy_identity_public_key_pem)?;
 
     info!(
         username = %profile.username,
@@ -208,7 +211,6 @@ pub(crate) async fn authenticate_rotate_and_download(
             expires_at: profile.expires_at,
         },
         private_key_pem,
-        proxy_identity_public_key_pem: rotated.proxy_identity_public_key_pem,
         proxy_registry_url: normalized_url,
         agent_access_token: None,
     })

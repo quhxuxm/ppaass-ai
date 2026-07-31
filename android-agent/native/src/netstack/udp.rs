@@ -32,7 +32,7 @@ type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UdpRoute {
+pub enum UdpRoute {
     Direct,
     Proxy,
     Block,
@@ -387,7 +387,5 @@ pub(super) async fn handle_tun_udp(
 }
 
 mod routing;
+pub use routing::classify_udp_route;
 use routing::*;
-
-#[cfg(test)]
-mod route_tests;

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn service_request_is_mutating(request: &ServiceRequest) -> bool {
+pub fn service_request_is_mutating(request: &ServiceRequest) -> bool {
     matches!(
         request,
         ServiceRequest::Start { .. }
@@ -11,10 +11,7 @@ pub(crate) fn service_request_is_mutating(request: &ServiceRequest) -> bool {
     )
 }
 
-pub(crate) fn handle_service_request(
-    runtime: &AgentRuntime,
-    request: ServiceRequest,
-) -> ServiceResponse {
+pub fn handle_service_request(runtime: &AgentRuntime, request: ServiceRequest) -> ServiceResponse {
     match request {
         ServiceRequest::Start { config_path } => match start_service_agent(runtime, &config_path) {
             Ok(state) => service_state_ok(runtime, state),
@@ -139,19 +136,10 @@ pub(crate) fn validate_authorized_service_config_path(
 
     let configured_private_key = service_config_string(&config, &["private_key_path"])
         .ok_or_else(|| "Windows Service Agent 配置缺少托管私钥，请先登录".to_string())?;
-    let configured_proxy_identity =
-        service_config_string(&config, &["proxy_identity_public_key_path"]).ok_or_else(|| {
-            "Windows Service Agent 配置缺少托管 Proxy 身份公钥，请先登录".to_string()
-        })?;
     ensure_same_canonical_path(
         &resolve_configured_path(app_data_dir, configured_private_key),
         &persisted.private_key_path,
         "私钥",
-    )?;
-    ensure_same_canonical_path(
-        &resolve_configured_path(app_data_dir, configured_proxy_identity),
-        &persisted.proxy_identity_public_key_path,
-        "Proxy 身份公钥",
     )?;
 
     Ok((
@@ -190,7 +178,7 @@ pub(crate) fn ensure_same_canonical_path(
     Ok(())
 }
 
-pub(crate) fn validate_service_config_path_for_root(
+pub fn validate_service_config_path_for_root(
     config_path: &str,
     config_root: &Path,
 ) -> Result<PathBuf, String> {
@@ -211,11 +199,6 @@ pub(crate) fn validate_service_config_path_for_root(
     let private_key_path = service_config_string(&config, &["private_key_path"])
         .ok_or_else(|| "Windows Service Agent 配置缺少托管私钥，请先登录".to_string())?;
     validate_managed_private_key_path(&app_data_dir, private_key_path)?;
-    let proxy_identity_public_key_path =
-        service_config_string(&config, &["proxy_identity_public_key_path"]).ok_or_else(|| {
-            "Windows Service Agent 配置缺少托管 Proxy 身份公钥，请先登录".to_string()
-        })?;
-    validate_managed_proxy_identity_public_key_path(&app_data_dir, proxy_identity_public_key_path)?;
 
     if let Some(configured_wintun) = service_config_string(&config, &["tun", "wintun_file"]) {
         let trusted_wintun = trusted_windows_wintun_path()?;

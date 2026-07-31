@@ -49,7 +49,7 @@ use crate::telemetry::agent_traffic_snapshot;
 
 pub(crate) const SERVICE_ARG: &str = "--ppaass-agent-service";
 pub(crate) const INSTALL_SERVICE_ARG: &str = "--ppaass-install-service";
-pub(crate) const SERVICE_CONFIG_ROOT_ARG: &str = "--ppaass-service-config-root";
+pub const SERVICE_CONFIG_ROOT_ARG: &str = "--ppaass-service-config-root";
 
 const SERVICE_NAME: &str = "PPAASSAgentService";
 const SERVICE_DISPLAY_NAME: &str = "PPAASS Agent Service";
@@ -57,18 +57,16 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SERVICE_IPC_ADDR: &str = "127.0.0.1:17981";
 const SERVICE_IPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const SERVICE_IPC_IO_TIMEOUT: Duration = Duration::from_secs(8);
-const MAX_SERVICE_IPC_REQUEST_BYTES: u64 = 64 * 1024;
+pub const MAX_SERVICE_IPC_REQUEST_BYTES: u64 = 64 * 1024;
 const MAX_SERVICE_IPC_RESPONSE_BYTES: u64 = 1024 * 1024;
 const SERVICE_SESSION_FILE_NAME: &str = "service-session.json";
-const SERVICE_SESSION_FILE_VERSION: u8 = 1;
-const SERVICE_SESSION_TOKEN_BYTES: usize = 32;
-const SERVICE_SESSION_TOKEN_HEX_LEN: usize = SERVICE_SESSION_TOKEN_BYTES * 2;
+pub const SERVICE_SESSION_FILE_VERSION: u8 = 1;
+pub const SERVICE_SESSION_TOKEN_BYTES: usize = 32;
+pub const SERVICE_SESSION_TOKEN_HEX_LEN: usize = SERVICE_SESSION_TOKEN_BYTES * 2;
 const MAX_SERVICE_SESSION_FILE_BYTES: u64 = 4 * 1024;
-const SERVICE_DESIRED_STATE_FILE_NAME: &str = "service-runtime-state.json";
+pub const SERVICE_DESIRED_STATE_FILE_NAME: &str = "service-runtime-state.json";
 const SERVICE_DESIRED_STATE_FILE_VERSION: u8 = 1;
 const MAX_SERVICE_DESIRED_STATE_FILE_BYTES: u64 = 1024;
-const MANAGED_PROXY_IDENTITY_PUBLIC_KEY_FILE: &str = "proxy-identity-public.pem";
-
 static SERVICE_CONFIG_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static UI_SERVICE_SESSION_TOKEN: Mutex<Option<Zeroizing<String>>> = Mutex::new(None);
 
@@ -80,13 +78,10 @@ mod runtime_service;
 mod session;
 mod state_store;
 
-pub(crate) use client::*;
-pub(crate) use installation::*;
-pub(crate) use path_validation::*;
-pub(crate) use request_handler::*;
+pub use client::*;
+pub use installation::*;
+pub use path_validation::*;
+pub use request_handler::*;
 pub(crate) use runtime_service::*;
-pub(crate) use session::*;
-pub(crate) use state_store::*;
-
-#[cfg(test)]
-mod tests;
+pub use session::*;
+pub use state_store::*;

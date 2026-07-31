@@ -6,20 +6,17 @@
 //! 记录层密钥；认证成功后的协议帧全部受 AEAD 保护。
 
 use super::*;
-use protocol::crypto::{encrypt_oaep_sha256_labelled, verify_pss_sha256};
+use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 use protocol::tcp_transport::{
     TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TCP_OAEP_LABEL, TCP_SERVER_NONCE_LEN,
     TCP_SESSION_ID_LEN, TcpSessionCipher, TcpSessionRole, TcpSessionSecret,
-    encode_tcp_session_secret, tcp_auth_failure_signature_transcript, tcp_auth_request_transcript,
-    tcp_auth_response_signature_transcript, tcp_auth_transcript_hash,
+    encode_tcp_session_secret, tcp_auth_request_transcript, tcp_auth_transcript_hash,
 };
 use rand::Rng;
 
-const GENERIC_AUTH_FAILURE_MESSAGE: &str = "Authentication failed";
+pub const GENERIC_AUTH_FAILURE_MESSAGE: &str = "Authentication failed";
 
-fn signed_terminal_auth_failure_response(
-    transport_identity: &RsaKeyPair,
-    auth_transcript_hash: &[u8; 32],
+pub fn terminal_auth_failure_response(
     code: AuthFailureCode,
     message: &str,
 ) -> Result<AuthResponse> {
@@ -28,17 +25,10 @@ fn signed_terminal_auth_failure_response(
         AuthFailureCode::UserDisabled | AuthFailureCode::UserExpired
     ) {
         return Err(ProxyError::Authentication(
-            "Refusing to sign a non-terminal authentication failure".to_string(),
+            "Refusing to expose a non-terminal authentication failure".to_string(),
         ));
     }
-    let signature_transcript = tcp_auth_failure_signature_transcript(
-        TCP_HANDSHAKE_VERSION,
-        auth_transcript_hash,
-        code,
-        message,
-    )?;
-    let proxy_signature = transport_identity.sign_pss_sha256(&signature_transcript)?;
-    let response = AuthResponse::signed_failure(code, message, proxy_signature);
+    let response = AuthResponse::terminal_failure(code, message);
     response.validate_shape()?;
     Ok(response)
 }
@@ -85,8 +75,7 @@ impl ServerConnection {
 
     /// 发送统一的未认证失败响应。
     ///
-    /// 在客户端证明持有当前私钥之前，不使用 Proxy 传输身份签名，也不返回
-    /// 内部原因，避免用户名存在性差异和未认证的签名 CPU oracle。
+    /// 在客户端证明持有当前私钥之前不返回内部原因，避免用户名存在性差异。
     #[instrument(skip(self))]
     pub async fn send_auth_error(&mut self) -> Result<()> {
         let auth_response = AuthResponse::failure(GENERIC_AUTH_FAILURE_MESSAGE);
@@ -94,18 +83,12 @@ impl ServerConnection {
         self.send_response(ProxyResponse::Auth(auth_response)).await
     }
 
-    async fn send_signed_terminal_auth_error_for_transcript(
+    async fn send_terminal_auth_error(
         &mut self,
-        auth_transcript_hash: &[u8; 32],
         code: AuthFailureCode,
         message: &str,
     ) -> Result<()> {
-        let auth_response = signed_terminal_auth_failure_response(
-            self.transport_identity.as_ref(),
-            auth_transcript_hash,
-            code,
-            message,
-        )?;
+        let auth_response = terminal_auth_failure_response(code, message)?;
         self.send_response(ProxyResponse::Auth(auth_response)).await
     }
 
@@ -193,27 +176,19 @@ impl ServerConnection {
         }
 
         // 只有已经证明持有当前私钥、且 challenge 新鲜且未重放的用户，才会
-        // 收到 Agent 可采信的 signed Disabled/Expired 状态。
+        // 收到明确的 Disabled/Expired 状态。
         if !user_config.enabled {
             warn!("用户 {} 已停用，拒绝建立 agent 连接", user_config.username);
-            self.send_signed_terminal_auth_error_for_transcript(
-                &transcript_hash,
-                AuthFailureCode::UserDisabled,
-                "User disabled",
-            )
-            .await?;
+            self.send_terminal_auth_error(AuthFailureCode::UserDisabled, "User disabled")
+                .await?;
             return Err(ProxyError::Authentication("User disabled".to_string()));
         }
 
         // 用户过期属于认证边界的一部分：过期账号不再进入后续 CONNECT/relay 阶段。
         if user_config.is_expired_at(current_time)? {
             warn!("用户 {} 已过期，拒绝建立 agent 连接", user_config.username);
-            self.send_signed_terminal_auth_error_for_transcript(
-                &transcript_hash,
-                AuthFailureCode::UserExpired,
-                "User expired",
-            )
-            .await?;
+            self.send_terminal_auth_error(AuthFailureCode::UserExpired, "User expired")
+                .await?;
             return Err(ProxyError::Authentication("User expired".to_string()));
         }
 
@@ -246,22 +221,6 @@ impl ServerConnection {
                         "Failed to encrypt authentication response".to_string(),
                     )
                 })?;
-        let proxy_signature_transcript = tcp_auth_response_signature_transcript(
-            TCP_HANDSHAKE_VERSION,
-            &transcript_hash,
-            &encrypted_session,
-        )
-        .map_err(|_| {
-            ProxyError::Authentication(
-                "Failed to build Proxy identity signature context".to_string(),
-            )
-        })?;
-        let proxy_signature = self
-            .transport_identity
-            .sign_pss_sha256(&proxy_signature_transcript)
-            .map_err(|_| {
-                ProxyError::Authentication("Failed to sign authentication response".to_string())
-            })?;
         let session_cipher = TcpSessionCipher::new(
             TcpSessionRole::Proxy,
             master_secret,
@@ -273,7 +232,7 @@ impl ServerConnection {
         .map_err(|_| {
             ProxyError::Authentication("Failed to initialize TCP session protection".to_string())
         })?;
-        let auth_response = AuthResponse::success(encrypted_session, proxy_signature);
+        let auth_response = AuthResponse::success(encrypted_session);
         auth_response.validate_shape().map_err(|_| {
             ProxyError::Authentication("Invalid authentication response".to_string())
         })?;
@@ -288,7 +247,7 @@ impl ServerConnection {
         self.authorization = Some(authorization);
 
         // 成功 AuthResponse 本身保持明文 envelope（会话材料已经 OAEP 加密）；
-        // 发送完成后一次性切换到 v3 记录层，此后不接受任何明文业务帧。
+        // 发送完成后一次性切换到 v4 记录层，此后不接受任何明文业务帧。
         self.cipher_state
             .set_session_cipher(Arc::new(session_cipher))?;
 
@@ -345,6 +304,3 @@ impl ServerConnection {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

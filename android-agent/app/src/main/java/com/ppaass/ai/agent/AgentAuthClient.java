@@ -193,14 +193,6 @@ final class AgentAuthClient {
         transport.cancel();
     }
 
-    boolean isCancelled() {
-        return transport.isCancelled();
-    }
-
-    static void validateProxyIdentityPublicKey(String publicKeyPem) throws AuthException {
-        AgentKeyValidator.validateProxyIdentityPublicKey(publicKeyPem);
-    }
-
     static int devicePollDelaySeconds(
             int currentIntervalSeconds,
             int retryAfterSeconds,
@@ -287,7 +279,6 @@ final class AgentAuthClient {
         final long keyVersion;
         final long expiresAt;
         final String privateKeyPem;
-        final String proxyIdentityPublicKeyPem;
         final String accessToken;
         final long accessTokenExpiresAt;
         final int refreshAfterSeconds;
@@ -302,7 +293,6 @@ final class AgentAuthClient {
                 long keyVersion,
                 long expiresAt,
                 String privateKeyPem,
-                String proxyIdentityPublicKeyPem,
                 String accessToken,
                 long accessTokenExpiresAt,
                 int refreshAfterSeconds) {
@@ -315,7 +305,6 @@ final class AgentAuthClient {
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
             this.privateKeyPem = privateKeyPem;
-            this.proxyIdentityPublicKeyPem = proxyIdentityPublicKeyPem;
             this.accessToken = accessToken;
             this.accessTokenExpiresAt = accessTokenExpiresAt;
             this.refreshAfterSeconds = refreshAfterSeconds;

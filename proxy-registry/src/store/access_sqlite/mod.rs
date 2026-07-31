@@ -48,7 +48,5 @@ mod helpers;
 mod legacy;
 mod repository;
 
+pub use connection::access_pool_options;
 use helpers::*;
-
-#[cfg(test)]
-mod tests;

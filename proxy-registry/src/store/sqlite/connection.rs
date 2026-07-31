@@ -152,6 +152,17 @@ impl SqliteUserRepository {
         &self.path
     }
 
+    #[doc(hidden)]
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    #[doc(hidden)]
+    pub fn with_max_user_accounts(mut self, maximum: i64) -> Self {
+        self.max_user_accounts = maximum.max(1);
+        self
+    }
+
     async fn migrate(&self) -> Result<()> {
         // Proxy 与 Web 可能同时启动。IMMEDIATE 在读取版本前取得写锁，确保只有一个
         // 进程执行升级，另一个进程随后会看到已经提交的新版本。
@@ -269,7 +280,8 @@ impl SqliteUserRepository {
     }
 
     #[cfg(unix)]
-    pub(super) fn apply_file_permissions(&self) -> Result<()> {
+    #[doc(hidden)]
+    pub fn apply_file_permissions(&self) -> Result<()> {
         let mode = self.file_permissions.unix_mode();
         for path in database_files(&self.path) {
             secure_open_and_set_mode(&path, mode, false)?;
@@ -278,7 +290,8 @@ impl SqliteUserRepository {
     }
 
     #[cfg(not(unix))]
-    pub(super) fn apply_file_permissions(&self) -> Result<()> {
+    #[doc(hidden)]
+    pub fn apply_file_permissions(&self) -> Result<()> {
         Ok(())
     }
 }

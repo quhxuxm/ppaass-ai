@@ -62,7 +62,7 @@ pub(crate) fn active_macos_tun_replacement_reasons(
     Ok(reasons)
 }
 
-pub(crate) fn existing_macos_tun_helper_state_files(
+pub fn existing_macos_tun_helper_state_files(
     state_paths: &MacosTunHelperStatePaths,
 ) -> Result<Vec<String>, String> {
     let mut existing = Vec::new();
@@ -121,7 +121,7 @@ pub(crate) fn launchd_job_has_pid(label: &str) -> bool {
     launchd_print_has_pid(&String::from_utf8_lossy(&output.stdout))
 }
 
-pub(crate) fn launchd_print_has_pid(output: &str) -> bool {
+pub fn launchd_print_has_pid(output: &str) -> bool {
     output.lines().any(|line| {
         line.trim()
             .strip_prefix("pid = ")
@@ -148,7 +148,7 @@ pub(crate) fn macos_route_interface(target: &str) -> Option<String> {
     parse_macos_route_interface(&String::from_utf8_lossy(&output.stdout))
 }
 
-pub(crate) fn parse_macos_route_interface(output: &str) -> Option<String> {
+pub fn parse_macos_route_interface(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         line.trim()
             .strip_prefix("interface:")
@@ -158,7 +158,7 @@ pub(crate) fn parse_macos_route_interface(output: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn tun_interface_matches(interface: &str, configured_tun_name: &str) -> bool {
+pub fn tun_interface_matches(interface: &str, configured_tun_name: &str) -> bool {
     interface == configured_tun_name
         || (interface.starts_with("utun") && configured_tun_name.starts_with("utun"))
 }

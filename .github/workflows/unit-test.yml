@@ -36,8 +36,8 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets --release --locked
 
-      - name: Unit Tests
-        run: cargo test --workspace --lib --bins --locked
+      - name: Rust Tests
+        run: cargo test --workspace --locked
 
   proxy-registry-frontend:
     name: Proxy Registry frontend

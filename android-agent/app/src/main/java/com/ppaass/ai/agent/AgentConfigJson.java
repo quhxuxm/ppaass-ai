@@ -57,12 +57,9 @@ final class AgentConfigJson {
                         prefs.getString("direct_access_rules", DefaultConfig.DIRECT_ACCESS_RULES))));
         final String username;
         final String privateKeyPem;
-        final String proxyIdentityPublicKeyPem;
         try {
             username = ManagedCredentials.username(context);
             privateKeyPem = ManagedCredentials.readPrivateKey(context);
-            proxyIdentityPublicKeyPem =
-                    ManagedCredentials.readProxyIdentityPublicKey(context);
         } catch (IOException error) {
             throw new JSONException(error.getMessage());
         }
@@ -71,7 +68,6 @@ final class AgentConfigJson {
                 .put("proxy_addrs", new JSONArray(proxyAddresses))
                 .put("username", username)
                 .put("private_key_pem", privateKeyPem)
-                .put("proxy_identity_public_key_pem", proxyIdentityPublicKeyPem)
                 .put("transport_mode", transportMode)
                 .put("udp_session_pool_size", parseClampedInt(
                         controlledString(

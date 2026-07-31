@@ -137,7 +137,7 @@ pub async fn run_all_tests(agent_addr: &str) -> Result<IntegrationTestResults> {
 }
 
 impl IntegrationTestResults {
-    fn add_test(&mut self, result: TestResult) {
+    pub fn add_test(&mut self, result: TestResult) {
         self.total_tests += 1;
         if result.passed {
             self.passed += 1;
@@ -151,31 +151,5 @@ impl IntegrationTestResults {
             );
         }
         self.test_details.push(result);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_integration_results() {
-        let mut results = IntegrationTestResults {
-            total_tests: 0,
-            passed: 0,
-            failed: 0,
-            test_details: Vec::new(),
-        };
-
-        results.add_test(TestResult {
-            name: "Test 1".to_string(),
-            passed: true,
-            error: None,
-            duration_ms: 100,
-        });
-
-        assert_eq!(results.total_tests, 1);
-        assert_eq!(results.passed, 1);
-        assert_eq!(results.failed, 0);
     }
 }

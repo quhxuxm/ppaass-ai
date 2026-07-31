@@ -10,32 +10,33 @@ struct AgentPermissionSyncResponse {
     refresh_after_seconds: u64,
 }
 
-pub(crate) struct AgentPermissionSnapshot {
-    pub(crate) role: String,
-    pub(crate) display_name: Option<String>,
-    pub(crate) avatar_url: Option<String>,
-    pub(crate) permissions: Option<Vec<String>>,
-    pub(crate) proxy_addresses: Vec<String>,
-    pub(crate) profile_enabled: Option<bool>,
-    pub(crate) key_version: Option<i64>,
-    pub(crate) expires_at: Option<i64>,
-    pub(crate) account_status: AgentAuthAccountStatus,
-    pub(crate) token: AgentAccessToken,
+pub struct AgentPermissionSnapshot {
+    pub role: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub permissions: Option<Vec<String>>,
+    pub proxy_addresses: Vec<String>,
+    pub profile_enabled: Option<bool>,
+    pub key_version: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub account_status: AgentAuthAccountStatus,
+    pub token: AgentAccessToken,
 }
 
 #[derive(Debug)]
-pub(crate) struct AgentPermissionSyncFailure {
-    pub(crate) message: String,
-    pub(crate) credentials_invalid: bool,
-    pub(crate) proxy_address_not_assigned: bool,
+pub struct AgentPermissionSyncFailure {
+    pub message: String,
+    pub credentials_invalid: bool,
+    pub proxy_address_not_assigned: bool,
 }
 
-pub(crate) async fn fetch_agent_permission_snapshot(
+pub async fn fetch_agent_permission_snapshot(
     proxy_registry_url: &str,
     access_token: &str,
     expected_username: &str,
 ) -> Result<AgentPermissionSnapshot, AgentPermissionSyncFailure> {
-    let base_url = normalize_proxy_registry_url(proxy_registry_url).map_err(|_| transient_config_error())?;
+    let base_url =
+        normalize_proxy_registry_url(proxy_registry_url).map_err(|_| transient_config_error())?;
     let client = build_proxy_registry_client().map_err(transient_error)?;
     let response = client
         .get(endpoint(&base_url, "api/v1/agent/me").map_err(transient_error)?)
@@ -150,7 +151,7 @@ fn validate_permission_sync_response(
     })
 }
 
-pub(crate) fn apply_permission_snapshot(
+pub fn apply_permission_snapshot(
     current: &AgentAuthAccount,
     snapshot: &AgentPermissionSnapshot,
 ) -> (AgentAuthAccount, AgentAuthAccountStatus, Option<String>) {
@@ -202,86 +203,5 @@ fn transient_error(message: String) -> AgentPermissionSyncFailure {
         message,
         credentials_invalid: false,
         proxy_address_not_assigned: false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn account(role: &str) -> AgentAuthAccount {
-        AgentAuthAccount {
-            username: "alice".to_string(),
-            display_name: None,
-            avatar_url: None,
-            role: role.to_string(),
-            permissions: vec!["old.permission".to_string()],
-            key_version: 7,
-            expires_at: Some(4_000_000_000),
-        }
-    }
-
-    #[test]
-    fn snapshot_updates_permissions_without_changing_current_key_material_version() {
-        let snapshot = AgentPermissionSnapshot {
-            role: "user".to_string(),
-            display_name: Some("小爱".to_string()),
-            avatar_url: None,
-            permissions: Some(vec!["agent.packet_capture".to_string()]),
-            proxy_addresses: vec!["proxy.example.com:443".to_string()],
-            profile_enabled: Some(true),
-            key_version: Some(7),
-            expires_at: Some(4_100_000_000),
-            account_status: AgentAuthAccountStatus::Active,
-            token: validated_agent_access_token("A".repeat(43), 4_000_000_000, 10).unwrap(),
-        };
-        let (updated, status, warning) = apply_permission_snapshot(&account("user"), &snapshot);
-        assert_eq!(updated.permissions, ["agent.packet_capture"]);
-        assert_eq!(updated.display_name.as_deref(), Some("小爱"));
-        assert_eq!(updated.expires_at, Some(4_100_000_000));
-        assert_eq!(status, AgentAuthAccountStatus::Active);
-        assert!(warning.is_none());
-        assert_eq!(snapshot.token.refresh_after_seconds, 60);
-    }
-
-    #[test]
-    fn changed_key_version_preserves_local_version_and_marks_account_expired() {
-        let snapshot = AgentPermissionSnapshot {
-            role: "admin".to_string(),
-            display_name: None,
-            avatar_url: None,
-            permissions: Some(Vec::new()),
-            proxy_addresses: vec!["proxy.example.com:443".to_string()],
-            profile_enabled: Some(true),
-            key_version: Some(8),
-            expires_at: None,
-            account_status: AgentAuthAccountStatus::Active,
-            token: validated_agent_access_token("B".repeat(43), 4_000_000_000, 300).unwrap(),
-        };
-        let (updated, status, warning) = apply_permission_snapshot(&account("user"), &snapshot);
-        assert_eq!(updated.role, "admin");
-        assert_eq!(updated.key_version, 7);
-        assert_eq!(status, AgentAuthAccountStatus::Expired);
-        assert!(warning.unwrap().contains("重新登录"));
-    }
-
-    #[test]
-    fn missing_profile_clears_stale_user_permissions() {
-        let snapshot = AgentPermissionSnapshot {
-            role: "user".to_string(),
-            display_name: None,
-            avatar_url: None,
-            permissions: None,
-            proxy_addresses: Vec::new(),
-            profile_enabled: None,
-            key_version: None,
-            expires_at: None,
-            account_status: AgentAuthAccountStatus::Expired,
-            token: validated_agent_access_token("C".repeat(43), 4_000_000_000, 300).unwrap(),
-        };
-        let (updated, status, warning) = apply_permission_snapshot(&account("user"), &snapshot);
-        assert!(updated.permissions.is_empty());
-        assert_eq!(status, AgentAuthAccountStatus::Expired);
-        assert!(warning.is_none());
     }
 }

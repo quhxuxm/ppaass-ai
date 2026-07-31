@@ -11,13 +11,6 @@
 !macro PPAASS_REMOVE_AGENT_CONFIG_ROOT APP_DATA_ROOT
   SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\agent.toml" NORMAL
   Delete "${APP_DATA_ROOT}\com.ppaass.agent\agent.toml"
-  SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\config\local\agent.toml" NORMAL
-  Delete "${APP_DATA_ROOT}\com.ppaass.agent\config\local\agent.toml"
-  SetFileAttributes "${APP_DATA_ROOT}\com.ppaass.agent\config\remote\agent.toml" NORMAL
-  Delete "${APP_DATA_ROOT}\com.ppaass.agent\config\remote\agent.toml"
-  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config\local"
-  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config\remote"
-  RMDir "${APP_DATA_ROOT}\com.ppaass.agent\config"
   RMDir "${APP_DATA_ROOT}\com.ppaass.agent"
 !macroend
 

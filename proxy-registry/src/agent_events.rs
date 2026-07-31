@@ -18,20 +18,20 @@ const EVENT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const EVENT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AgentServerEvent {
-    pub(crate) revision: u64,
-    pub(crate) kind: Arc<str>,
-    account_id: Option<Arc<str>>,
+pub struct AgentServerEvent {
+    pub revision: u64,
+    pub kind: Arc<str>,
+    pub account_id: Option<Arc<str>>,
 }
 
 impl AgentServerEvent {
-    pub(crate) fn is_visible_to(&self, account_id: &str) -> bool {
+    pub fn is_visible_to(&self, account_id: &str) -> bool {
         self.account_id
             .as_deref()
             .is_none_or(|target| target == account_id)
     }
 
-    pub(crate) fn affects_proxy_authorization(&self) -> bool {
+    pub fn affects_proxy_authorization(&self) -> bool {
         matches!(
             self.kind.as_ref(),
             "profile_changed" | "profiles_changed" | "sync"
@@ -67,7 +67,7 @@ impl AgentEventHub {
         Ok(Self { inner })
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<AgentServerEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<AgentServerEvent> {
         self.inner.sender.subscribe()
     }
 
@@ -180,47 +180,5 @@ async fn purge_expired_events(repository: &dyn AgentEventRepository) {
         Ok(0) => {}
         Ok(purged) => debug!(purged, "已清理过期的 Agent 事件日志"),
         Err(error) => warn!(%error, "清理过期 Agent 事件日志失败，将在下个周期重试"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::{NewProxyAddress, ProxyAddressRepository, SqliteUserRepository};
-    use tempfile::TempDir;
-
-    #[tokio::test]
-    async fn independent_registry_hubs_receive_the_same_sqlite_event() {
-        let directory = TempDir::new().unwrap();
-        let path = directory.path().join("users.sqlite3");
-        let first_store = Arc::new(SqliteUserRepository::connect(&path).await.unwrap());
-        let second_store = Arc::new(SqliteUserRepository::connect(&path).await.unwrap());
-        let first_hub = AgentEventHub::start(first_store.clone()).await.unwrap();
-        let second_hub = AgentEventHub::start(second_store).await.unwrap();
-        let mut first_receiver = first_hub.subscribe();
-        let mut second_receiver = second_hub.subscribe();
-
-        first_store
-            .create_proxy_address(NewProxyAddress {
-                proxy_address_id: "proxy-event-test".to_string(),
-                label: "Event test".to_string(),
-                address: "127.0.0.1:8080".to_string(),
-                enabled: true,
-            })
-            .await
-            .unwrap();
-
-        let first = tokio::time::timeout(Duration::from_secs(2), first_receiver.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let second = tokio::time::timeout(Duration::from_secs(2), second_receiver.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(first, second);
-        assert_eq!(first.kind.as_ref(), "admin_key_requests_changed");
-        assert!(first.is_visible_to("any-account"));
-        assert!(first.revision > 0);
     }
 }

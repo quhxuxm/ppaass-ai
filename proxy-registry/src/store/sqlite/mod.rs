@@ -190,6 +190,3 @@ use migration_validation::*;
 use normalization::*;
 use proxy_addresses::*;
 use rows::*;
-
-#[cfg(test)]
-mod tests;

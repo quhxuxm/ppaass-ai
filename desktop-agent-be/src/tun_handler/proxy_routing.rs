@@ -14,13 +14,13 @@ use std::sync::Arc;
 /// unwinding. The managers are shared with the non-TUN listeners, so leaving a
 /// physical-interface bind behind after TUN startup fails would break their
 /// later proxy connections.
-pub(super) struct ProxySessionBindGuard {
+pub struct ProxySessionBindGuard {
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
 }
 
 impl ProxySessionBindGuard {
-    pub(super) fn new(
+    pub fn new(
         tcp_sessions: Arc<YamuxSessionManager>,
         udp_sessions: Arc<YamuxSessionManager>,
     ) -> Self {
@@ -30,7 +30,7 @@ impl ProxySessionBindGuard {
         }
     }
 
-    pub(super) fn clear(&self) {
+    pub fn clear(&self) {
         self.tcp_sessions.set_proxy_bind_ip(None);
         self.tcp_sessions.set_proxy_bind_interface(None);
         self.udp_sessions.set_proxy_bind_ip(None);
@@ -192,58 +192,4 @@ pub(super) fn install_route_guard(
         &proxy_ips,
         config.proxy_dns,
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::AgentConfig;
-    use std::net::{IpAddr, Ipv4Addr};
-
-    const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "127.0.0.1:10080"
-username = "user1"
-private_key_path = "keys/user1.pem"
-"#;
-
-    #[test]
-    fn proxy_session_bind_guard_clears_both_shared_managers_on_drop() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        let config = Arc::new(config);
-        let proxy_addrs = Arc::new(vec!["127.0.0.1:8080".to_string()]);
-        let tcp_sessions = Arc::new(YamuxSessionManager::new(
-            config.clone(),
-            proxy_addrs.clone(),
-        ));
-        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config, proxy_addrs));
-        let bind_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
-        let bind_interface = common::BindInterface {
-            name: Some("physical0".to_string()),
-            index: Some(7),
-        };
-
-        {
-            let _guard = ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
-            tcp_sessions.set_proxy_bind_ip(Some(bind_ip));
-            tcp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
-            udp_sessions.set_proxy_bind_ip(Some(bind_ip));
-            udp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
-
-            assert_eq!(tcp_sessions.proxy_bind_ip_for_test(), Some(bind_ip));
-            assert_eq!(
-                tcp_sessions.proxy_bind_interface_for_test(),
-                Some(bind_interface.clone())
-            );
-            assert_eq!(udp_sessions.proxy_bind_ip_for_test(), Some(bind_ip));
-            assert_eq!(
-                udp_sessions.proxy_bind_interface_for_test(),
-                Some(bind_interface)
-            );
-        }
-
-        assert_eq!(tcp_sessions.proxy_bind_ip_for_test(), None);
-        assert_eq!(tcp_sessions.proxy_bind_interface_for_test(), None);
-        assert_eq!(udp_sessions.proxy_bind_ip_for_test(), None);
-        assert_eq!(udp_sessions.proxy_bind_interface_for_test(), None);
-    }
 }

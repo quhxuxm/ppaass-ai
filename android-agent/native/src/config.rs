@@ -17,10 +17,6 @@ pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
     pub username: String,
     pub private_key_pem: String,
-    /// Pinned Proxy TCP/Yamux transport identity public key provisioned by
-    /// Proxy Registry. TCP connections fail closed when it is missing.
-    #[serde(default)]
-    pub proxy_identity_public_key_pem: Option<String>,
 
     #[serde(default)]
     pub transport_mode: TransportMode,
@@ -70,13 +66,6 @@ impl fmt::Debug for AndroidAgentConfig {
             .field("proxy_address_count", &self.proxy_addrs.len())
             .field("username", &self.username)
             .field("private_key_pem", &RedactedPrivateKey)
-            .field(
-                "proxy_identity_public_key_configured",
-                &self
-                    .proxy_identity_public_key_pem
-                    .as_deref()
-                    .is_some_and(|pem| !pem.trim().is_empty()),
-            )
             .field("transport_mode", &self.transport_mode)
             .field("udp_session_pool_size", &self.udp_session_pool_size)
             .field(
@@ -152,15 +141,6 @@ impl AndroidAgentConfig {
                 "private_key_pem must not be empty".to_string(),
             ));
         }
-        if self
-            .proxy_identity_public_key_pem
-            .as_deref()
-            .is_none_or(|pem| pem.trim().is_empty())
-        {
-            return Err(AndroidAgentError::Connection(
-                "proxy_identity_public_key_pem must not be empty".to_string(),
-            ));
-        }
         Ok(())
     }
 
@@ -181,14 +161,6 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
         Ok(self.private_key_pem.clone())
-    }
-
-    fn proxy_identity_public_key_pem(&self) -> std::result::Result<String, String> {
-        self.proxy_identity_public_key_pem
-            .as_deref()
-            .filter(|pem| !pem.trim().is_empty())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| "Proxy identity public key not configured".to_string())
     }
 
     fn timeout_duration(&self) -> Duration {
@@ -277,94 +249,4 @@ fn default_tun_mtu() -> u16 {
 
 fn default_proxy_dns() -> bool {
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tun_allows_quic_by_default() {
-        let config = AndroidTunConfig::default();
-
-        assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
-    }
-
-    #[test]
-    fn agent_transport_defaults_to_udp() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
-        )
-        .unwrap();
-        assert_eq!(config.transport_mode, TransportMode::Udp);
-    }
-
-    #[test]
-    fn agent_debug_redacts_private_key() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"super-secret-private-key"}"#,
-        )
-        .unwrap();
-
-        let rendered = format!("{config:?}");
-        assert!(rendered.contains("private_key_pem: <redacted>"));
-        assert!(rendered.contains("proxy_address_count: 1"));
-        assert!(!rendered.contains("super-secret-private-key"));
-        assert!(!rendered.contains("127.0.0.1:8080"));
-    }
-
-    #[test]
-    fn agent_transport_accepts_auto() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,
-        )
-        .unwrap();
-        assert_eq!(config.transport_mode, TransportMode::Auto);
-    }
-
-    #[test]
-    fn udp_session_pool_defaults_to_four_and_is_bounded() {
-        let default_config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
-        )
-        .unwrap();
-        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
-
-        let disabled: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":0}"#,
-        )
-        .unwrap();
-        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
-
-        let excessive: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":64}"#,
-        )
-        .unwrap();
-        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
-    }
-
-    #[test]
-    fn rejects_removed_quic_transport_mode() {
-        let result = serde_json::from_str::<AndroidAgentConfig>(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"quic"}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_removed_quic_connection_pool_field() {
-        let result = serde_json::from_str::<AndroidAgentConfig>(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"udp","quic_connection_pool_size":4}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn explicit_quic_policy_blocks_quic() {
-        let config: AndroidTunConfig = serde_json::from_str(r#"{"quic_policy":"block"}"#).unwrap();
-
-        assert_eq!(config.effective_quic_policy(), QuicPolicy::Block);
-    }
 }

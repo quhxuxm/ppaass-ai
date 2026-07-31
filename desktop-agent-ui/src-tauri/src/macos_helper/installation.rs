@@ -73,7 +73,7 @@ pub(crate) fn install_macos_tun_helper(
     Ok(())
 }
 
-pub(crate) fn macos_tun_helper_install_script(
+pub fn macos_tun_helper_install_script(
     source: &Path,
     socket_path: &str,
     allowed_uid: u32,

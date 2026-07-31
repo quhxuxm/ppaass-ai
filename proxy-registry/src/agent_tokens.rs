@@ -13,7 +13,7 @@ const TOKEN_VERSION: u8 = 1;
 const NONCE_BYTES: usize = 12;
 const MIN_MASTER_SECRET_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
-const TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
+pub const AGENT_ACCESS_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 pub const AGENT_PROFILE_REFRESH_SECONDS: u32 = 60;
 const KEY_DERIVATION_DOMAIN: &[u8] = b"ppaass-agent-access-token-key-v1\0";
 const TOKEN_AAD: &[u8] = b"ppaass-agent-access-token-v1";
@@ -78,7 +78,8 @@ impl AgentAccessTokenService {
         self.verify_at(token, now())
     }
 
-    fn issue_at(
+    #[doc(hidden)]
+    pub fn issue_at(
         &self,
         account_id: &str,
         issued_at: i64,
@@ -87,7 +88,7 @@ impl AgentAccessTokenService {
             return Err(AgentAccessTokenError::InvalidToken);
         }
         let expires_at = issued_at
-            .checked_add(TOKEN_TTL_SECONDS)
+            .checked_add(AGENT_ACCESS_TOKEN_TTL_SECONDS)
             .ok_or(AgentAccessTokenError::InvalidToken)?;
         let plaintext = serde_json::to_vec(&TokenPayload {
             account_id: account_id.to_string(),
@@ -116,7 +117,8 @@ impl AgentAccessTokenService {
         })
     }
 
-    fn verify_at(
+    #[doc(hidden)]
+    pub fn verify_at(
         &self,
         token: &str,
         timestamp: i64,
@@ -166,52 +168,4 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MASTER_SECRET: &str = "test-only-agent-token-secret-with-32-bytes";
-
-    #[test]
-    fn profile_refresh_interval_keeps_permission_changes_prompt() {
-        assert_eq!(AGENT_PROFILE_REFRESH_SECONDS, 60);
-    }
-
-    #[test]
-    fn token_survives_service_recreation_and_rejects_tampering() {
-        let service = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
-        let issued = service.issue_at("acc_alice", 1_000).unwrap();
-        let recreated = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
-        assert_eq!(
-            recreated.verify_at(&issued.token, 1_001).unwrap(),
-            AgentAccessTokenClaims {
-                account_id: "acc_alice".to_string(),
-                expires_at: 1_000 + TOKEN_TTL_SECONDS,
-            }
-        );
-
-        let mut tampered = issued.token.into_bytes();
-        let last = tampered.last_mut().unwrap();
-        *last = if *last == b'A' { b'B' } else { b'A' };
-        assert!(
-            recreated
-                .verify_at(std::str::from_utf8(&tampered).unwrap(), 1_001)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn token_expires_and_another_master_secret_cannot_read_it() {
-        let service = AgentAccessTokenService::new(MASTER_SECRET).unwrap();
-        let issued = service.issue_at("acc_alice", 1_000).unwrap();
-        assert!(matches!(
-            service.verify_at(&issued.token, issued.expires_at),
-            Err(AgentAccessTokenError::Expired)
-        ));
-        let other =
-            AgentAccessTokenService::new("different-agent-token-secret-with-32-bytes").unwrap();
-        assert!(other.verify_at(&issued.token, 1_001).is_err());
-    }
 }

@@ -17,19 +17,72 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Registry installation must run as root." >&2
     exit 1
 fi
-for command in systemctl openssl caddy curl; do
+for command in systemctl caddy curl; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Registry host." >&2
         exit 1
     }
 done
 
+wait_for_http_health() {
+    local label="$1"
+    local url="$2"
+    local timeout_seconds="$3"
+    local retry_delay=5
+    local deadline_epoch
+    local attempt=0
+    local status=000
+    local response_file
+    local error_file
+
+    deadline_epoch="$(($(date +%s) + timeout_seconds))"
+    response_file="$(mktemp)"
+    error_file="$(mktemp)"
+    while [ "$(date +%s)" -lt "$deadline_epoch" ]; do
+        attempt=$((attempt + 1))
+        : >"$response_file"
+        : >"$error_file"
+        status=000
+        if status="$(
+            curl --silent --show-error \
+                --connect-timeout 5 --max-time 10 \
+                --output "$response_file" \
+                --write-out '%{http_code}' \
+                "$url" 2>"$error_file"
+        )" && [ "$status" = 200 ]; then
+            rm -f "$response_file" "$error_file"
+            echo "$label is ready."
+            return 0
+        fi
+        if [ "$attempt" -eq 1 ] || [ $((attempt % 12)) -eq 0 ]; then
+            echo "Waiting for $label at $url (last HTTP status: $status)." >&2
+            if [ -s "$error_file" ]; then
+                head -c 512 "$error_file" >&2
+                echo >&2
+            fi
+        fi
+        sleep "$retry_delay"
+    done
+
+    echo "$label did not become ready at $url (last HTTP status: $status)." >&2
+    if [ -s "$error_file" ]; then
+        head -c 2048 "$error_file" >&2
+        echo >&2
+    fi
+    if [ -s "$response_file" ]; then
+        echo "Last response body:" >&2
+        head -c 2048 "$response_file" >&2
+        echo >&2
+    fi
+    rm -f "$response_file" "$error_file"
+    return 1
+}
+
 service_user="ppaass-proxy-registry"
 state_root="/var/lib/ppaass"
 user_data_root="$state_root/users"
 access_data_root="$state_root/access"
 secret_root="$state_root/secrets"
-identity_root="$state_root/identity"
 log_root="/var/log/ppaass/proxy-registry"
 release_root="$RUNTIME_ROOT/releases/$RELEASE_SHA"
 current_link="$RUNTIME_ROOT/current"
@@ -45,7 +98,6 @@ fi
 install -d -m 0755 "$RUNTIME_ROOT" "$RUNTIME_ROOT/releases"
 install -d -o "$service_user" -g "$service_user" -m 0750 \
     "$user_data_root" "$access_data_root" "$secret_root" "$log_root"
-install -d -m 0755 "$identity_root"
 install -d -m 0755 "$release_root" "$release_root/frontend"
 install -m 0755 "$bundle/proxy-registry" "$release_root/proxy-registry"
 install -m 0755 "$bundle/start-proxy-registry.sh" \
@@ -63,6 +115,8 @@ fi
 if [ -f "$key_secret" ]; then
     cmp "$bundle/registry-key-secret" "$key_secret" || {
         echo "The supplied Registry key secret does not match existing data." >&2
+        echo "Refusing to replace the stable key at $key_secret." >&2
+        echo "Set REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET in the registry_production GitHub Environment to the original value." >&2
         exit 1
     }
 else
@@ -77,28 +131,6 @@ install -o "$service_user" -g "$service_user" -m 0600 \
 install -o "$service_user" -g "$service_user" -m 0600 \
     "$bundle/admin-password" \
     "$secret_root/proxy-registry-admin-password"
-identity_public="$identity_root/proxy-identity-public.pem"
-if [ -f "$identity_public" ]; then
-    existing_der="$(mktemp)"
-    supplied_der="$(mktemp)"
-    openssl pkey -pubin -in "$identity_public" -outform DER -out "$existing_der"
-    openssl pkey -pubin -in "$bundle/proxy-identity-public.pem" \
-        -outform DER -out "$supplied_der"
-    cmp "$existing_der" "$supplied_der" || {
-        rm -f "$existing_der" "$supplied_der"
-        echo "The supplied Proxy identity does not match existing data." >&2
-        exit 1
-    }
-    rm -f "$existing_der" "$supplied_der"
-else
-    install -o "$service_user" -g "$service_user" -m 0640 \
-        "$bundle/proxy-identity-public.pem" "$identity_public"
-fi
-chown "$service_user:$service_user" "$identity_public"
-chmod 0640 "$identity_public"
-openssl pkey -pubin -in "$identity_public" \
-    -noout >/dev/null
-
 cat >"$release_root/proxy-registry.env" <<EOF
 PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_USERNAME=admin
 PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION=true
@@ -107,7 +139,6 @@ PPAASS_PROXY_REGISTRY_SECURE_COOKIES=true
 PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS=true
 PPAASS_PROXY_REGISTRY_DATABASE=$user_data_root/proxy-users.sqlite3
 PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE=$access_data_root/proxy-access.sqlite3
-PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY=$identity_public
 PPAASS_PROXY_REGISTRY_FRONTEND_DIST=$current_link/frontend
 PPAASS_PROXY_REGISTRY_SECRET_DIR=$secret_root
 RUST_LOG=proxy_registry=info,tower_http=info
@@ -181,13 +212,19 @@ systemctl restart ppaass-proxy-registry-2.service
 systemctl reload-or-restart caddy.service
 
 for port in 8787 8788; do
-    curl --fail --silent --retry 20 --retry-delay 1 \
+    curl --fail --silent --show-error --retry 20 --retry-delay 1 \
         "http://127.0.0.1:$port/healthz" >/dev/null
 done
 for port in 8797 8798; do
-    curl --fail --silent --retry 20 --retry-delay 1 \
+    curl --fail --silent --show-error --retry 20 --retry-delay 1 \
         "http://127.0.0.1:$port/control/v1/health" >/dev/null
 done
-curl --fail --silent --retry 10 --retry-delay 2 \
-    "https://$PUBLIC_HOST/healthz" >/dev/null
+wait_for_http_health \
+    "Registry public API" \
+    "https://$PUBLIC_HOST/healthz" \
+    300
+wait_for_http_health \
+    "Registry control API" \
+    "https://$CONTROL_HOST/control/v1/health" \
+    300
 echo "Registry $RELEASE_SHA deployed with two instances."

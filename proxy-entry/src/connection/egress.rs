@@ -13,8 +13,9 @@ mod stream;
 mod udp_socket;
 
 use auto::AutoInterfaceSelector;
+pub use auto::{default_route, should_refresh_routes};
 use bind::bind_socket_to_interface;
-use dns_resolver::ExplicitDnsResolver;
+pub use dns_resolver::{ExplicitDnsResolver, parse_response, parse_upstream};
 use route_guard::TargetRouteGuard;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use source::{BoundSource, interface_bind_addrs};
@@ -24,9 +25,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 pub use stream::EgressTcpStream;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
+pub use udp_socket::split_domain_target;
 use udp_socket::{
     connect_context_error, connect_udp_addr, connect_udp_default, connect_udp_default_addr,
-    connect_udp_default_resolved, split_domain_target,
+    connect_udp_default_resolved,
 };
 
 // proxy 到目标站点的出站 TCP 缓冲。
@@ -115,7 +117,7 @@ impl EgressState {
         }
     }
 
-    async fn resolve_target(&self, target_addr: &str) -> io::Result<Vec<SocketAddr>> {
+    pub async fn resolve_target(&self, target_addr: &str) -> io::Result<Vec<SocketAddr>> {
         // 数字地址始终直通，配置显式 DNS 后也不能为它发出查询。
         if let Ok(address) = target_addr.parse::<SocketAddr>() {
             return Ok(vec![address]);
@@ -324,6 +326,3 @@ fn tune_egress_tcp_stream(stream: &TcpStream, context: &str) {
         tracing::warn!("设置 {context} 发送缓冲失败，将继续使用系统默认值: {err}");
     }
 }
-
-#[cfg(test)]
-mod tests;

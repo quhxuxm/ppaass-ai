@@ -32,7 +32,7 @@ struct RecentHttpProxyClient {
     total_connections: u64,
 }
 
-pub(crate) struct HttpProxyClientLease {
+pub struct HttpProxyClientLease {
     client: Arc<HttpProxyClient>,
 }
 
@@ -132,7 +132,8 @@ fn http_proxy_client_registry() -> &'static HttpProxyClientRegistry {
 }
 
 // 连接登记只按客户端 IP 聚合；局域网客户端通常会为同一个浏览器打开多个 TCP 连接。
-pub(crate) fn register_http_proxy_client(peer_addr: SocketAddr) -> HttpProxyClientLease {
+#[doc(hidden)]
+pub fn register_http_proxy_client(peer_addr: SocketAddr) -> HttpProxyClientLease {
     http_proxy_client_registry().register(peer_addr)
 }
 
@@ -140,7 +141,7 @@ pub(crate) fn is_http_proxy_client_blocked(ip: IpAddr) -> bool {
     http_proxy_client_registry().is_blocked(ip)
 }
 
-pub(crate) fn http_proxy_clients_json() -> String {
+pub fn http_proxy_clients_json() -> String {
     let registry = http_proxy_client_registry();
     let mut active_by_ip: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut active_ips = HashSet::new();
@@ -228,25 +229,4 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dropped_clients_remain_visible_as_recent_clients() {
-        let peer_addr: SocketAddr = "203.0.113.10:49152".parse().unwrap();
-        let lease = register_http_proxy_client(peer_addr);
-        let active_state = http_proxy_clients_json();
-        assert!(active_state.contains("\"203.0.113.10\""));
-        assert!(active_state.contains("\"active\""));
-
-        drop(lease);
-
-        let recent_state = http_proxy_clients_json();
-        assert!(recent_state.contains("\"recent\""));
-        assert!(recent_state.contains("\"203.0.113.10\""));
-        assert!(recent_state.contains("\"203.0.113.10:49152\""));
-    }
 }

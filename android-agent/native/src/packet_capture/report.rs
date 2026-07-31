@@ -1,11 +1,11 @@
 use super::*;
 
 #[derive(Clone, Serialize)]
-pub(super) struct CaptureReport {
-    pub(super) exists: bool,
-    pub(super) file_size: u64,
-    pub(super) total_packets: usize,
-    pub(super) packets: Vec<CapturedPacket>,
+pub struct CaptureReport {
+    pub exists: bool,
+    pub file_size: u64,
+    pub total_packets: usize,
+    pub packets: Vec<CapturedPacket>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,56 +35,56 @@ pub(super) fn invalidate_report_cache(path: &Path) {
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct CapturedPacket {
-    pub(super) number: usize,
-    pub(super) timestamp_ms: u64,
-    pub(super) direction: &'static str,
-    pub(super) ip_version: u8,
-    pub(super) protocol: String,
-    pub(super) sub_protocol: Option<String>,
-    pub(super) proxy_protocol: Option<String>,
-    pub(super) source: String,
-    pub(super) source_port: Option<u16>,
-    pub(super) destination: String,
-    pub(super) destination_port: Option<u16>,
-    pub(super) length: usize,
-    pub(super) summary: String,
-    pub(super) payload_length: usize,
-    pub(super) payload_preview_length: usize,
-    pub(super) payload_truncated: bool,
-    pub(super) payload_hex: String,
-    pub(super) payload_text: String,
-    pub(super) protocol_layers: Vec<ProtocolLayer>,
+pub struct CapturedPacket {
+    pub number: usize,
+    pub timestamp_ms: u64,
+    pub direction: &'static str,
+    pub ip_version: u8,
+    pub protocol: String,
+    pub sub_protocol: Option<String>,
+    pub proxy_protocol: Option<String>,
+    pub source: String,
+    pub source_port: Option<u16>,
+    pub destination: String,
+    pub destination_port: Option<u16>,
+    pub length: usize,
+    pub summary: String,
+    pub payload_length: usize,
+    pub payload_preview_length: usize,
+    pub payload_truncated: bool,
+    pub payload_hex: String,
+    pub payload_text: String,
+    pub protocol_layers: Vec<ProtocolLayer>,
     #[serde(skip)]
-    pub(super) tcp_sequence: Option<u32>,
+    pub tcp_sequence: Option<u32>,
     #[serde(skip)]
-    pub(super) tcp_flags: Option<u8>,
+    pub tcp_flags: Option<u8>,
     #[serde(skip)]
-    pub(super) payload: Vec<u8>,
+    pub payload: Vec<u8>,
     #[serde(skip)]
-    pub(super) analysis_payload_truncated: bool,
+    pub analysis_payload_truncated: bool,
     #[serde(skip)]
-    pub(super) proxy_marker: Option<ProxyPacketMarker>,
+    pub proxy_marker: Option<ProxyPacketMarker>,
     #[serde(skip)]
-    pub(super) legacy_proxy_session: Option<u64>,
+    pub legacy_proxy_session: Option<u64>,
     #[serde(skip)]
-    pub(super) direction_tracked: bool,
+    pub direction_tracked: bool,
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct ProtocolLayer {
-    pub(super) name: String,
-    pub(super) summary: String,
-    pub(super) fields: Vec<ProtocolField>,
+pub struct ProtocolLayer {
+    pub name: String,
+    pub summary: String,
+    pub fields: Vec<ProtocolField>,
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct ProtocolField {
-    pub(super) name: String,
-    pub(super) value: String,
+pub struct ProtocolField {
+    pub name: String,
+    pub value: String,
 }
 
-pub(super) fn read_report(
+pub fn read_report(
     path: &Path,
     limit: usize,
     proxy_listen_port: Option<u16>,

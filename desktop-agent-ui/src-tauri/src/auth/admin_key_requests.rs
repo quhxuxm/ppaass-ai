@@ -12,13 +12,13 @@ const MAX_ADMIN_KEY_REQUESTS: usize = 2_000;
 const MAX_ADMIN_PROXY_ADDRESSES: usize = 512;
 
 #[derive(Debug)]
-pub(crate) struct AgentAdminHttpError {
-    pub(crate) message: String,
-    pub(crate) status: Option<StatusCode>,
+pub struct AgentAdminHttpError {
+    pub message: String,
+    pub status: Option<StatusCode>,
 }
 
 impl AgentAdminHttpError {
-    pub(crate) fn is_conflict(&self) -> bool {
+    pub fn is_conflict(&self) -> bool {
         self.status == Some(StatusCode::CONFLICT)
     }
 }
@@ -114,7 +114,7 @@ struct RejectKeyRequestPayload<'a> {
     reason: &'a str,
 }
 
-pub(crate) async fn fetch_agent_admin_key_request_inbox(
+pub async fn fetch_agent_admin_key_request_inbox(
     proxy_registry_url: &str,
     access_token: &str,
 ) -> Result<AgentAdminKeyRequestInbox, AgentAdminHttpError> {
@@ -135,7 +135,7 @@ pub(crate) async fn fetch_agent_admin_key_request_inbox(
     validate_admin_inbox(requests, addresses)
 }
 
-pub(crate) async fn approve_agent_admin_key_request(
+pub async fn approve_agent_admin_key_request(
     proxy_registry_url: &str,
     access_token: &str,
     request_id: &str,
@@ -164,7 +164,7 @@ pub(crate) async fn approve_agent_admin_key_request(
     validate_decision(&decision, request_id, "approved")
 }
 
-pub(crate) async fn reject_agent_admin_key_request(
+pub async fn reject_agent_admin_key_request(
     proxy_registry_url: &str,
     access_token: &str,
     request_id: &str,

@@ -2,13 +2,13 @@ use super::*;
 use tokio::net::UdpSocket;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ProxyRoute {
+pub struct ProxyRoute {
     pub(crate) local_ip: IpAddr,
     pub(crate) bind_interface: Option<BindInterface>,
 }
 
 /// 根据 `proxy_addrs` 中的地址，探测 OS 选择的本地出口地址和接口，以便安装 TUN 旁路路由。
-pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
+pub async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
     let routes = list_routes();
 
     for entry in proxy_addrs {
@@ -49,7 +49,7 @@ pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRo
     None
 }
 
-pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
+pub fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
     let routes = list_routes()?;
     let route = default_route(&routes, want_v6)?;
     route_bind_interface(route)
@@ -110,7 +110,7 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
 
 /// TUN 路由安装要求至少获得一个非回环 proxy IP。唯一例外是所有配置项都
 /// 明确解析为回环地址，此时 proxy 本就在本机，不需要安装物理出口旁路。
-pub(crate) fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> {
+pub fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> {
     let proxy_ips = resolve_proxy_ips(proxy_addrs);
     if !proxy_ips.is_empty() {
         return Ok(proxy_ips);
@@ -184,10 +184,8 @@ pub(super) fn route_next_hop(
         .unwrap_or((fallback_gateway, fallback_if_index))
 }
 
-#[cfg(all(test, target_os = "macos"))]
-pub(super) fn parse_macos_route_get_next_hop(
-    output: &str,
-) -> Option<(Option<IpAddr>, Option<u32>)> {
+#[cfg(target_os = "macos")]
+pub fn parse_macos_route_get_next_hop(output: &str) -> Option<(Option<IpAddr>, Option<u32>)> {
     let mut gateway = None;
     let mut if_index = None;
 
@@ -268,7 +266,7 @@ pub(super) fn interface_name_for_index(if_index: Option<u32>) -> Option<String> 
         .map(|interface| interface.name)
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub(super) fn interface_index_for_name(name: &str) -> Option<u32> {
     let interface = if_addrs::get_if_addrs()
         .ok()?

@@ -20,16 +20,16 @@ pub(crate) async fn open_user_account_management(
                 .agent_access_token
                 .as_ref()
                 .ok_or_else(|| "当前 Agent 登录缺少账户交接凭据，请重新登录".to_string())?;
-            request_account_management_handoff(&session.proxy_registry_url, access_token.value.as_str())
-                .await?
+            request_account_management_handoff(
+                &session.proxy_registry_url,
+                access_token.value.as_str(),
+            )
+            .await?
         }
         None => {
             let config_path = current_ui_config_path(&runtime)
                 .or_else(locate_config_path)
-                .ok_or_else(|| {
-                    "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。"
-                        .to_string()
-                })?;
+                .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?;
             let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
             account_management_page_url(&proxy_registry_url)
                 .map_err(|_| "Agent 账户服务配置无效，请联系管理员".to_string())?
@@ -91,9 +91,7 @@ pub(crate) async fn login_and_provision_agent(
     }
     let config_path = current_ui_config_path(&runtime)
         .or_else(locate_config_path)
-        .ok_or_else(|| {
-            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?;
+        .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?;
     let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let downloaded =
         authenticate_and_download(&proxy_registry_url, &username, password.as_str()).await?;
@@ -138,9 +136,7 @@ pub(crate) async fn rotate_agent_key(
 
     let config_path = current_ui_config_path(&runtime)
         .or_else(locate_config_path)
-        .ok_or_else(|| {
-            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?;
+        .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?;
     let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let was_running = get_agent_state_inner(&runtime)?.running;
     let downloaded = authenticate_rotate_and_download(
@@ -189,9 +185,7 @@ pub(crate) async fn start_agent_device_login(
     runtime.cancel_pending_device_authorization()?;
     let config_path = current_ui_config_path(&runtime)
         .or_else(locate_config_path)
-        .ok_or_else(|| {
-            "找不到 Agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?;
+        .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?;
     let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let started = start_device_authorization(&proxy_registry_url).await?;
     let verification_url = started.verification_url.clone();

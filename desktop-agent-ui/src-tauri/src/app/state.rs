@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn load_agent_config_inner(
+pub fn load_agent_config_inner(
     runtime: &AgentRuntime,
     path: Option<String>,
 ) -> Result<LoadedAgentConfig, String> {
@@ -9,10 +9,7 @@ pub(crate) fn load_agent_config_inner(
         Some(value) => PathBuf::from(value),
         None => current_ui_config_path(runtime)
             .or_else(locate_config_path)
-            .ok_or_else(|| {
-                "找不到 agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。"
-                    .to_string()
-            })?,
+            .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?,
     };
 
     let (loaded, _) = enforce_managed_config_path_for_account(&config_path, &session.account)?;
@@ -60,17 +57,10 @@ fn save_agent_config_candidate(
         &candidate.raw,
         &session.account.username,
         &session.private_key_path,
-        &session.proxy_identity_public_key_path,
         &session.proxy_registry_url,
     )?;
     write_config_file(&config_path, &managed_raw)?;
-
-    let loaded = if let Some(primary_path) = primary_agent_config_path(&config_path) {
-        write_config_file(&primary_path, &managed_raw)?;
-        load_config_from_path(&primary_path)?
-    } else {
-        load_config_from_path(&config_path)?
-    };
+    let loaded = load_config_from_path(&config_path)?;
 
     apply_ui_log_level(runtime, &loaded.summary.log_level);
     remember_trusted_ui_config(runtime, &loaded)?;
@@ -82,7 +72,7 @@ fn save_agent_config_candidate(
     prepare_config_for_account(loaded, &session.account)
 }
 
-pub(crate) fn remember_trusted_ui_config(
+pub fn remember_trusted_ui_config(
     runtime: &AgentRuntime,
     loaded: &LoadedAgentConfig,
 ) -> Result<(), String> {
@@ -94,7 +84,7 @@ pub(crate) fn remember_trusted_ui_config(
     Ok(())
 }
 
-pub(crate) fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState, String> {
+pub fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState, String> {
     let session = runtime.authenticated_session()?;
     let config = if let Some(authenticated) = session.as_ref() {
         match current_ui_config_path(runtime).or_else(locate_config_path) {
@@ -111,7 +101,7 @@ pub(crate) fn agent_auth_state(runtime: &AgentRuntime) -> Result<AgentAuthState,
                 }
             },
             None => {
-                let message = "找不到 Agent 配置文件，保留当前登录状态并暂不返回配置".to_string();
+                let message = "找不到 agent.toml，保留当前登录状态并暂不返回配置".to_string();
                 warn!("{message}");
                 runtime.logs.push(message);
                 None
@@ -140,7 +130,7 @@ pub(crate) fn restore_agent_login_on_startup(
         return Ok(());
     };
     let config_path = locate_config_path().ok_or_else(|| {
-        "持久登录凭据存在，但找不到 Agent 配置文件；将保留凭据并等待下次启动恢复".to_string()
+        "持久登录凭据存在，但找不到 agent.toml；将保留凭据并等待下次启动恢复".to_string()
     })?;
     let proxy_registry_url = proxy_registry_url_from_config(&config_path)?;
     let loaded = if persisted.proxy_assignment_missing {
@@ -166,7 +156,6 @@ pub(crate) fn restore_agent_login_on_startup(
             &config_path,
             &persisted.account.username,
             &persisted.private_key_path,
-            &persisted.proxy_identity_public_key_path,
         )?
     };
     apply_ui_log_level(runtime, &loaded.summary.log_level);
@@ -179,7 +168,6 @@ pub(crate) fn restore_agent_login_on_startup(
         persisted.proxy_addresses,
         AgentSessionCredentials::new(
             persisted.private_key_path,
-            persisted.proxy_identity_public_key_path,
             proxy_registry_url,
             persisted.agent_access_token,
         ),
@@ -247,7 +235,7 @@ pub(crate) fn start_verified_proxy_auth_status_listener(
     });
 }
 
-pub(crate) fn verified_auth_failure_reason(
+pub fn verified_auth_failure_reason(
     code: protocol::AuthFailureCode,
     failure_username: &str,
     current_username: &str,
@@ -372,7 +360,7 @@ pub(crate) fn report_verified_proxy_auth_status(
     runtime.server_event_notify.notify_one();
 }
 
-pub(crate) fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {
+pub fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {
     runtime
         .ui_config_path
         .lock()

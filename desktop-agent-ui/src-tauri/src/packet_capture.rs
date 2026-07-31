@@ -1,7 +1,6 @@
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-#[cfg(test)]
 use std::io::Cursor;
 use std::io::{BufReader, ErrorKind, Read};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -17,19 +16,19 @@ const DEFAULT_RETURNED_PACKETS: usize = 1_000;
 const PROXY_HANDSHAKE_PREFIX_LEN: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct PacketCaptureReport {
-    pub(crate) file: String,
-    pub(crate) exists: bool,
-    pub(crate) file_size: u64,
-    pub(crate) modified_at_ms: Option<u128>,
-    pub(crate) total_packets: usize,
-    pub(crate) returned_packets: usize,
-    pub(crate) truncated: bool,
-    pub(crate) upload_packets: usize,
-    pub(crate) upload_bytes: u64,
-    pub(crate) download_packets: usize,
-    pub(crate) download_bytes: u64,
-    pub(crate) packets: Vec<CapturedPacket>,
+pub struct PacketCaptureReport {
+    pub file: String,
+    pub exists: bool,
+    pub file_size: u64,
+    pub modified_at_ms: Option<u128>,
+    pub total_packets: usize,
+    pub returned_packets: usize,
+    pub truncated: bool,
+    pub upload_packets: usize,
+    pub upload_bytes: u64,
+    pub download_packets: usize,
+    pub download_bytes: u64,
+    pub packets: Vec<CapturedPacket>,
 }
 
 #[derive(Clone)]
@@ -45,24 +44,24 @@ struct CachedPacketCapture {
 static PACKET_CAPTURE_CACHE: OnceLock<Mutex<Option<CachedPacketCapture>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct CapturedPacket {
-    pub(crate) number: usize,
-    pub(crate) timestamp_ms: u64,
-    pub(crate) direction: &'static str,
-    pub(crate) ip_version: u8,
-    pub(crate) protocol: String,
-    pub(crate) sub_protocol: Option<String>,
-    pub(crate) proxy_protocol: Option<String>,
-    pub(crate) source: String,
-    pub(crate) source_port: Option<u16>,
-    pub(crate) destination: String,
-    pub(crate) destination_port: Option<u16>,
-    pub(crate) length: usize,
-    pub(crate) summary: String,
-    pub(crate) payload_length: usize,
-    pub(crate) payload_hex: String,
-    pub(crate) payload_text: String,
-    pub(crate) protocol_layers: Vec<ProtocolLayer>,
+pub struct CapturedPacket {
+    pub number: usize,
+    pub timestamp_ms: u64,
+    pub direction: &'static str,
+    pub ip_version: u8,
+    pub protocol: String,
+    pub sub_protocol: Option<String>,
+    pub proxy_protocol: Option<String>,
+    pub source: String,
+    pub source_port: Option<u16>,
+    pub destination: String,
+    pub destination_port: Option<u16>,
+    pub length: usize,
+    pub summary: String,
+    pub payload_length: usize,
+    pub payload_hex: String,
+    pub payload_text: String,
+    pub protocol_layers: Vec<ProtocolLayer>,
     #[serde(skip)]
     tcp_sequence: Option<u32>,
     #[serde(skip)]
@@ -70,19 +69,19 @@ pub(crate) struct CapturedPacket {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ProtocolLayer {
-    pub(crate) name: String,
-    pub(crate) summary: String,
-    pub(crate) fields: Vec<ProtocolField>,
+pub struct ProtocolLayer {
+    pub name: String,
+    pub summary: String,
+    pub fields: Vec<ProtocolField>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ProtocolField {
-    pub(crate) name: String,
-    pub(crate) value: String,
+pub struct ProtocolField {
+    pub name: String,
+    pub value: String,
 }
 
-pub(crate) fn read_packet_capture(
+pub fn read_packet_capture(
     path: &Path,
     limit: Option<usize>,
     proxy_listen_port: Option<u16>,
@@ -157,13 +156,11 @@ enum ByteOrder {
     Big,
 }
 
-#[cfg(test)]
-fn parse_pcap(bytes: &[u8], limit: usize) -> Result<PacketCaptureReport, String> {
+pub fn parse_pcap(bytes: &[u8], limit: usize) -> Result<PacketCaptureReport, String> {
     parse_pcap_reader(Cursor::new(bytes), limit, None)
 }
 
-#[cfg(test)]
-fn parse_pcap_for_proxy(
+pub fn parse_pcap_for_proxy(
     bytes: &[u8],
     limit: usize,
     proxy_listen_port: u16,
@@ -304,11 +301,8 @@ mod stream;
 mod web;
 
 pub(crate) use dns::*;
-pub(crate) use ip::*;
-pub(crate) use layers::*;
-pub(crate) use quic::*;
-pub(crate) use stream::*;
+pub use ip::*;
+pub use layers::*;
+pub use quic::*;
+pub use stream::*;
 pub(crate) use web::*;
-
-#[cfg(test)]
-mod tests;

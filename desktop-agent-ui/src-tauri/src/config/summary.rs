@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
+pub fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
     let value = toml::from_str::<Value>(raw).map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     if value_at(&value, &["quic_connection_pool_size"]).is_some() {
         return Err(

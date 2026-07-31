@@ -49,7 +49,7 @@ pub(crate) fn windows_service_matches_installation(config_root: &Path) -> Result
         && sc_service_is_auto_start(&output))
 }
 
-pub(crate) fn sc_service_is_auto_start(output: &str) -> bool {
+pub fn sc_service_is_auto_start(output: &str) -> bool {
     output.lines().any(|line| {
         line.split_once(':').is_some_and(|(name, value)| {
             name.trim().eq_ignore_ascii_case("START_TYPE")
@@ -125,7 +125,7 @@ pub(crate) fn extract_service_exe_path(command_line: &str) -> Option<String> {
         .map(|path| path.to_string())
 }
 
-pub(crate) fn extract_command_argument_path(command_line: &str, argument: &str) -> Option<String> {
+pub fn extract_command_argument_path(command_line: &str, argument: &str) -> Option<String> {
     let (_, remaining) = command_line.split_once(argument)?;
     let remaining = remaining.trim_start();
     if let Some(quoted) = remaining.strip_prefix('"') {

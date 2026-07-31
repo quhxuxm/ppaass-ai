@@ -132,10 +132,10 @@ cargo build --release --workspace
 
 ```bash
 # Windows
-.\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
+.\target\release\proxy-entry.exe --config config\proxy-entry.toml
 
 # Linux/macOS
-./target/release/proxy-entry --config config/local/proxy-entry.toml
+./target/release/proxy-entry --config config/proxy-entry.toml
 ```
 
 ### 3. Add a User

@@ -3,7 +3,7 @@ use crate::yamux_session::proxy_connection::new_direct_tcp_target_stream;
 use common::TransportMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProxyStreamRoute {
+pub enum ProxyStreamRoute {
     Auto,
     DirectTcp,
     NativeUdp,
@@ -11,7 +11,7 @@ enum ProxyStreamRoute {
     InvalidManager,
 }
 
-fn proxy_stream_route(
+pub fn proxy_stream_route(
     mode: TransportMode,
     manager_transport: TransportProtocol,
     transport: TransportProtocol,
@@ -45,8 +45,8 @@ impl YamuxSessionManager {
                 let (stream, stream_id) = new_direct_tcp_target_stream(
                     &self.config,
                     &self.proxy_addrs,
-                    self.get_proxy_bind_ip(),
-                    self.get_proxy_bind_interface(),
+                    self.proxy_bind_ip(),
+                    self.proxy_bind_interface(),
                     address,
                 )
                 .await?;
@@ -125,8 +125,8 @@ impl YamuxSessionManager {
                     let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new(
                         &self.config,
                         &self.proxy_addrs,
-                        self.get_proxy_bind_ip(),
-                        self.get_proxy_bind_interface(),
+                        self.proxy_bind_ip(),
+                        self.proxy_bind_interface(),
                     );
                     let connection = UdpClientConnection::connect(&adapter)
                         .await
@@ -180,95 +180,12 @@ impl YamuxSessionManager {
     }
 }
 
-fn is_native_udp_timeout(error: &AgentError) -> bool {
+pub fn is_native_udp_timeout(error: &AgentError) -> bool {
     match error {
         AgentError::Io(error) => error.kind() == std::io::ErrorKind::TimedOut,
         AgentError::Connection(message) => {
             message.contains("原生 UDP 认证响应超时") || message.contains("连接原生 UDP proxy 超时")
         }
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn udp_mode_routes_tcp_direct_and_udp_over_native_udp() {
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Udp,
-                TransportProtocol::Tcp,
-                TransportProtocol::Tcp,
-            ),
-            ProxyStreamRoute::DirectTcp
-        );
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Udp,
-                TransportProtocol::Udp,
-                TransportProtocol::Udp,
-            ),
-            ProxyStreamRoute::NativeUdp
-        );
-    }
-
-    #[test]
-    fn tcp_mode_routes_tcp_direct_and_udp_over_yamux() {
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Tcp,
-                TransportProtocol::Tcp,
-                TransportProtocol::Tcp,
-            ),
-            ProxyStreamRoute::DirectTcp
-        );
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Tcp,
-                TransportProtocol::Udp,
-                TransportProtocol::Udp,
-            ),
-            ProxyStreamRoute::Yamux
-        );
-    }
-
-    #[test]
-    fn auto_mode_routes_udp_through_runtime_fallback_path() {
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Auto,
-                TransportProtocol::Udp,
-                TransportProtocol::Udp,
-            ),
-            ProxyStreamRoute::Auto
-        );
-        assert!(is_native_udp_timeout(&AgentError::Connection(
-            "原生 UDP 认证响应超时".into()
-        )));
-        assert!(!is_native_udp_timeout(&AgentError::Connection(
-            "authentication failed".into()
-        )));
-    }
-
-    #[test]
-    fn mismatched_manager_is_rejected_before_transport_selection() {
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Udp,
-                TransportProtocol::Tcp,
-                TransportProtocol::Udp,
-            ),
-            ProxyStreamRoute::InvalidManager
-        );
-        assert_eq!(
-            proxy_stream_route(
-                TransportMode::Udp,
-                TransportProtocol::Udp,
-                TransportProtocol::Tcp,
-            ),
-            ProxyStreamRoute::InvalidManager
-        );
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn normalize_agent_config_paths(
+pub fn normalize_agent_config_paths(
     config: &mut desktop_agent_be::config::AgentConfig,
     base_dir: &Path,
 ) {
@@ -36,7 +36,7 @@ pub(crate) fn normalize_agent_config_paths(
     }
 }
 
-pub(crate) fn resolve_agent_state_path(
+pub fn resolve_agent_state_path(
     base_dir: &Path,
     configured: Option<&str>,
     default_name: &str,
@@ -130,5 +130,5 @@ pub(crate) fn find_agent_base_dir(config_path: &Path) -> Option<PathBuf> {
 pub(crate) fn is_agent_base_dir(path: &Path) -> bool {
     path.join("wintun.dll").is_file()
         || path.join("desktop-agent-be").is_dir()
-        || (path.join("config/local/agent.toml").is_file() && path.join("keys").is_dir())
+        || (path.join("config/agent.toml").is_file() && path.join("keys").is_dir())
 }

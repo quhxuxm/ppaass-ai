@@ -6,18 +6,18 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub(crate) const AUTHENTICATION_UNCONFIRMED: u8 = 0;
-pub(crate) const AUTHENTICATION_USER_EXPIRED: u8 = 1;
-pub(crate) const AUTHENTICATION_USER_DISABLED: u8 = 2;
-pub(crate) const AUTHENTICATION_VERIFIED_ACTIVE: u8 = 3;
+pub const AUTHENTICATION_UNCONFIRMED: u8 = 0;
+pub const AUTHENTICATION_USER_EXPIRED: u8 = 1;
+pub const AUTHENTICATION_USER_DISABLED: u8 = 2;
+pub const AUTHENTICATION_VERIFIED_ACTIVE: u8 = 3;
 
 #[derive(Default)]
-pub(crate) struct VerifiedAuthenticationState {
+pub struct VerifiedAuthenticationState {
     status: AtomicU8,
 }
 
 impl VerifiedAuthenticationState {
-    pub(crate) fn status(&self) -> u8 {
+    pub fn status(&self) -> u8 {
         self.status.load(Ordering::Acquire)
     }
 
@@ -30,7 +30,8 @@ impl VerifiedAuthenticationState {
         self.record_status_for_username(expected_username, status.username(), next_status);
     }
 
-    fn record_status_for_username(
+    #[doc(hidden)]
+    pub fn record_status_for_username(
         &self,
         expected_username: &str,
         status_username: &str,
@@ -48,7 +49,7 @@ impl VerifiedAuthenticationState {
         if previous_status != next_status {
             warn!(
                 previous_status,
-                next_status, "Proxy identity confirmed a new Android Agent account status"
+                next_status, "Proxy reported a new Android Agent account status"
             );
         }
     }
@@ -76,28 +77,4 @@ pub(crate) async fn monitor_verified_authentication_statuses(
         }
     }
     debug!("Android Agent verified authentication monitor stopped");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verified_status_can_recover_after_expiration() {
-        let state = VerifiedAuthenticationState::default();
-        state.record_status_for_username("alice", "alice", AUTHENTICATION_USER_EXPIRED);
-        assert_eq!(state.status(), AUTHENTICATION_USER_EXPIRED);
-        state.record_status_for_username("alice", "alice", AUTHENTICATION_VERIFIED_ACTIVE);
-        assert_eq!(state.status(), AUTHENTICATION_VERIFIED_ACTIVE);
-    }
-
-    #[test]
-    fn verified_status_for_another_login_is_ignored() {
-        let state = VerifiedAuthenticationState::default();
-        state.record_status_for_username("new-login", "old-login", AUTHENTICATION_USER_EXPIRED);
-        assert_eq!(state.status(), AUTHENTICATION_UNCONFIRMED);
-
-        state.record_status_for_username("new-login", "new-login", AUTHENTICATION_USER_DISABLED);
-        assert_eq!(state.status(), AUTHENTICATION_USER_DISABLED);
-    }
 }

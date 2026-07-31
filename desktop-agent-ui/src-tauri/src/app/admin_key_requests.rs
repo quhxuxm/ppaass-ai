@@ -127,30 +127,32 @@ async fn fetch_and_apply_admin_inbox(
             "管理员 Agent 审批凭据缺失，请重新登录".to_string(),
         );
     };
-    let inbox =
-        match fetch_agent_admin_key_request_inbox(&session.proxy_registry_url, token.value.as_str())
-            .await
+    let inbox = match fetch_agent_admin_key_request_inbox(
+        &session.proxy_registry_url,
+        token.value.as_str(),
+    )
+    .await
+    {
+        Ok(inbox) => inbox,
+        Err(error)
+            if matches!(
+                error.status,
+                Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
+            ) =>
         {
-            Ok(inbox) => inbox,
-            Err(error)
-                if matches!(
-                    error.status,
-                    Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
-                ) =>
-            {
-                runtime.clear_admin_key_request_inbox()?;
-                runtime.server_event_notify.notify_one();
-                let update = AgentAdminKeyRequestUpdate {
-                    inbox: AgentAdminKeyRequestInbox::default(),
-                    error: Some(error.message.clone()),
-                };
-                emit_admin_update(app, &update);
-                return Err(error.message);
-            }
-            Err(error) => {
-                return emit_admin_poll_error(app, runtime, error.message);
-            }
-        };
+            runtime.clear_admin_key_request_inbox()?;
+            runtime.server_event_notify.notify_one();
+            let update = AgentAdminKeyRequestUpdate {
+                inbox: AgentAdminKeyRequestInbox::default(),
+                error: Some(error.message.clone()),
+            };
+            emit_admin_update(app, &update);
+            return Err(error.message);
+        }
+        Err(error) => {
+            return emit_admin_poll_error(app, runtime, error.message);
+        }
+    };
     let current = active_admin_session(runtime)?;
     if !current.is_some_and(|current| {
         current.account.username == session.account.username

@@ -168,13 +168,17 @@ impl ServerConnection {
     }
 }
 
-async fn send_udp_relay_response_batch_with_timeout(
-    writer: &mut FramedWriter,
+pub async fn send_udp_relay_response_batch_with_timeout<W>(
+    writer: &mut W,
     response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
     first_response: QueuedUdpRelayResponse,
     stream_id: &str,
     write_timeout: Duration,
-) -> Result<()> {
+) -> Result<()>
+where
+    W: futures::Sink<ProxyResponse> + Unpin,
+    W::Error: std::fmt::Display,
+{
     match tokio::time::timeout(
         write_timeout,
         send_udp_relay_response_batch(writer, response_rx, first_response, stream_id),
@@ -189,12 +193,16 @@ async fn send_udp_relay_response_batch_with_timeout(
     }
 }
 
-async fn send_udp_relay_response_batch(
-    writer: &mut FramedWriter,
+async fn send_udp_relay_response_batch<W>(
+    writer: &mut W,
     response_rx: &mut tokio::sync::mpsc::Receiver<QueuedUdpRelayResponse>,
     first_response: QueuedUdpRelayResponse,
     stream_id: &str,
-) -> Result<()> {
+) -> Result<()>
+where
+    W: futures::Sink<ProxyResponse> + Unpin,
+    W::Error: std::fmt::Display,
+{
     // 首个响应来自 `recv().await`，一定存在；额外响应用 `try_recv` 非阻塞 drain。
     feed_udp_relay_response(writer, first_response, stream_id).await?;
     let mut batch_size = 1usize;
@@ -220,11 +228,15 @@ async fn send_udp_relay_response_batch(
     Ok(())
 }
 
-async fn feed_udp_relay_response(
-    writer: &mut FramedWriter,
+async fn feed_udp_relay_response<W>(
+    writer: &mut W,
     response: QueuedUdpRelayResponse,
     stream_id: &str,
-) -> Result<()> {
+) -> Result<()>
+where
+    W: futures::Sink<ProxyResponse> + Unpin,
+    W::Error: std::fmt::Display,
+{
     let QueuedUdpRelayResponse { packet } = response;
     // 目标响应重新编码成 UdpRelayPacket，再包回当前 stream_id 的 DataPacket。
     // 使用 `feed` 而不是 `send`，让调用方可以批量排队后统一 flush。
@@ -239,88 +251,4 @@ async fn feed_udp_relay_response(
         .await
         .map_err(|e| ProxyError::Connection(format!("Failed to queue UDP relay response: {e}")))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-    struct PendingAgentStream;
-
-    impl AsyncRead for PendingAgentStream {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            Poll::Pending
-        }
-    }
-
-    impl AsyncWrite for PendingAgentStream {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
-            Poll::Pending
-        }
-
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Pending
-        }
-
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    #[tokio::test]
-    async fn udp_relay_response_write_times_out_when_agent_stalls() {
-        let cipher_state = Arc::new(CipherState::new());
-        cipher_state
-            .set_session_cipher(Arc::new(
-                protocol::tcp_transport::TcpSessionCipher::new(
-                    protocol::tcp_transport::TcpSessionRole::Proxy,
-                    [1; 32],
-                    [2; 32],
-                    [3; 32],
-                    [4; 32],
-                    [5; 16],
-                )
-                .unwrap(),
-            ))
-            .unwrap();
-        let framed = proxy_framed_stream(PendingAgentStream, ProxyCodec::new(cipher_state));
-        let (mut writer, _reader) = framed.split();
-        let (_response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
-        let response = QueuedUdpRelayResponse {
-            packet: UdpRelayPacket {
-                flow_id: 7,
-                address: Address::Ipv4 {
-                    addr: [127, 0, 0, 1],
-                    port: 443,
-                },
-                data: b"pong".to_vec(),
-            },
-        };
-
-        let err = send_udp_relay_response_batch_with_timeout(
-            &mut writer,
-            &mut response_rx,
-            response,
-            "udp-relay-test",
-            Duration::from_millis(20),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Timed out writing UDP relay responses")
-        );
-    }
 }

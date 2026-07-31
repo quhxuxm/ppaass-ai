@@ -13,18 +13,16 @@ pub const TCP_MAX_USERNAME_LEN: usize = 256;
 pub const TCP_MAX_RSA_FIELD_LEN: usize = 1_024;
 pub const TCP_MAX_AUTH_ERROR_LEN: usize = 512;
 pub const TCP_SESSION_SECRET_MAX_SIZE: usize = 512;
-pub const TCP_OAEP_LABEL: &str = "ppaass/tcp-yamux/auth-response/v3";
+pub const TCP_OAEP_LABEL: &str = "ppaass/tcp-yamux/auth-response/v4";
 
-const AUTH_REQUEST_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-request/v3\0";
-const AUTH_RESPONSE_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-response-signature/v3\0";
-const AUTH_REPLAY_KEY_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-key/v3\0";
-const AUTH_REPLAY_USER_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-user/v3\0";
+const AUTH_REQUEST_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-request/v4\0";
+const AUTH_REPLAY_KEY_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-key/v4\0";
+const AUTH_REPLAY_USER_DOMAIN: &[u8] = b"ppaass/tcp-yamux/auth-replay-user/v4\0";
 
 /// Stable, machine-readable reason carried by a failed TCP authentication response.
 ///
-/// A client must only act on this value after verifying the accompanying Proxy
-/// transport-identity signature. An unsigned or invalidly signed value is
-/// untrusted input and must not be treated as an account state transition.
+/// The Proxy only returns terminal account state after validating the Agent's
+/// fresh, non-replayed authentication proof.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
@@ -33,12 +31,6 @@ pub enum AuthFailureCode {
     UserDisabled = 2,
     #[default]
     Other = 255,
-}
-
-impl AuthFailureCode {
-    fn transcript_value(self) -> u8 {
-        self as u8
-    }
 }
 
 /// Secret response encrypted to the authenticated user's public key.
@@ -154,73 +146,6 @@ pub fn tcp_auth_replay_user_key(username: &str) -> Result<[u8; 32]> {
     Ok(hasher.finalize().into())
 }
 
-/// Canonical transcript signed by the Proxy transport identity.
-///
-/// The signature is checked with a pinned public key before the client performs
-/// OAEP decryption. The ciphertext itself carries and cryptographically binds
-/// the client nonce, server nonce, session id and master secret.
-pub fn tcp_auth_response_signature_transcript(
-    version: u8,
-    auth_transcript_hash: &[u8; 32],
-    encrypted_session: &[u8],
-) -> Result<Vec<u8>> {
-    if version != TCP_HANDSHAKE_VERSION {
-        return Err(ProtocolError::VersionMismatch);
-    }
-    if encrypted_session.is_empty() || encrypted_session.len() > TCP_MAX_RSA_FIELD_LEN {
-        return Err(ProtocolError::InvalidMessage(
-            "invalid encrypted authentication response length".to_string(),
-        ));
-    }
-    let ciphertext_len = u32::try_from(encrypted_session.len()).map_err(|_| {
-        ProtocolError::InvalidMessage("encrypted authentication response is too long".to_string())
-    })?;
-    let mut transcript =
-        Vec::with_capacity(AUTH_RESPONSE_DOMAIN.len() + 1 + 1 + 32 + 4 + encrypted_session.len());
-    transcript.extend_from_slice(AUTH_RESPONSE_DOMAIN);
-    transcript.push(version);
-    // Only successful responses are signed. This byte prevents a future
-    // extension from reinterpreting the same signature as a failure response.
-    transcript.push(1);
-    transcript.extend_from_slice(auth_transcript_hash);
-    transcript.extend_from_slice(&ciphertext_len.to_be_bytes());
-    transcript.extend_from_slice(encrypted_session);
-    Ok(transcript)
-}
-
-/// Canonical transcript signed by the Proxy transport identity for a failed
-/// authentication response.
-///
-/// The request transcript hash prevents replaying a genuine terminal account
-/// status into another Agent login attempt. The stable failure code and the
-/// human-readable message are both covered by the signature.
-pub fn tcp_auth_failure_signature_transcript(
-    version: u8,
-    auth_transcript_hash: &[u8; 32],
-    code: AuthFailureCode,
-    message: &str,
-) -> Result<Vec<u8>> {
-    if version != TCP_HANDSHAKE_VERSION {
-        return Err(ProtocolError::VersionMismatch);
-    }
-    validate_tcp_auth_response_message(message)?;
-    let message_len = u16::try_from(message.len()).map_err(|_| {
-        ProtocolError::InvalidMessage("authentication response message is too long".to_string())
-    })?;
-    let mut transcript =
-        Vec::with_capacity(AUTH_RESPONSE_DOMAIN.len() + 1 + 1 + 32 + 1 + 2 + message.len());
-    transcript.extend_from_slice(AUTH_RESPONSE_DOMAIN);
-    transcript.push(version);
-    // Success signatures use 1. Keeping the discriminator in the shared
-    // domain makes the two transcript forms impossible to reinterpret.
-    transcript.push(0);
-    transcript.extend_from_slice(auth_transcript_hash);
-    transcript.push(code.transcript_value());
-    transcript.extend_from_slice(&message_len.to_be_bytes());
-    transcript.extend_from_slice(message.as_bytes());
-    Ok(transcript)
-}
-
 pub(crate) fn validate_tcp_auth_response_message(message: &str) -> Result<()> {
     if message.len() > TCP_MAX_AUTH_ERROR_LEN {
         return Err(ProtocolError::InvalidMessage(
@@ -256,6 +181,3 @@ pub fn decode_tcp_session_secret(bytes: &[u8]) -> Result<TcpSessionSecret> {
     }
     Ok(secret)
 }
-
-#[cfg(test)]
-mod tests;

@@ -103,7 +103,8 @@ async fn handle_proxy_connection(
     }
 }
 
-fn detect_proxy_protocol(first_byte: u8) -> Option<ProxyIngressProtocol> {
+#[doc(hidden)]
+pub fn detect_proxy_protocol(first_byte: u8) -> Option<ProxyIngressProtocol> {
     match first_byte {
         0x05 => Some(ProxyIngressProtocol::Socks5),
         b'C' | b'D' | b'G' | b'H' | b'O' | b'P' | b'T' => Some(ProxyIngressProtocol::Http),
@@ -201,12 +202,10 @@ async fn handle_http_request(
     }
 }
 
-fn request_log_host(uri: &Uri) -> &str {
+#[doc(hidden)]
+pub fn request_log_host(uri: &Uri) -> &str {
     uri.host().unwrap_or("<unknown>")
 }
 
 mod tunnel;
 use tunnel::*;
-
-#[cfg(test)]
-mod tests;

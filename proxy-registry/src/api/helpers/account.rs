@@ -199,7 +199,6 @@ pub(crate) async fn load_private_key(
     Ok(PrivateKeyResponse {
         username: profile.username,
         public_key_pem: profile.public_key_pem,
-        proxy_identity_public_key_pem: state.proxy_identity_public_key_pem.clone(),
         private_key_pem,
         key_version: profile.key_version,
     })
@@ -234,7 +233,6 @@ pub(crate) async fn rotate_profile_key(
     Ok(PrivateKeyResponse {
         username: updated.username,
         public_key_pem: updated.public_key_pem,
-        proxy_identity_public_key_pem: state.proxy_identity_public_key_pem.clone(),
         private_key_pem,
         key_version: updated.key_version,
     })

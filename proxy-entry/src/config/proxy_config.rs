@@ -55,13 +55,6 @@ pub struct ProxyConfig {
     #[serde(default = "default_replay_attack_tolerance")]
     pub replay_attack_tolerance: i64,
 
-    /// PKCS#8 PEM private key for the Proxy TCP/Yamux transport identity.
-    ///
-    /// Proxy startup requires this file. On Unix it must be a regular,
-    /// non-symlink file with no group/world permission bits.
-    #[serde(default)]
-    pub transport_identity_private_key_path: Option<String>,
-
     /// 入站 Yamux acceptor 参数。proxy 对每条 raw TCP 连接都直接维护一个 Yamux session；
     /// 外层 session 数由 agent 端控制。
     #[serde(default)]
@@ -71,23 +64,6 @@ pub struct ProxyConfig {
     /// 当一条 raw Yamux TCP 连接没有任何活跃子流时，超过该时间后主动关闭；0 表示不限制。
     #[serde(default = "default_yamux_session_idle_timeout_secs")]
     pub yamux_session_idle_timeout_secs: u64,
-
-    #[serde(default)]
-    pub forward_mode: bool,
-
-    #[serde(default)]
-    pub upstream_proxy_addrs: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub upstream_username: Option<String>,
-
-    #[serde(default)]
-    pub upstream_private_key_path: Option<String>,
-
-    /// Pinned SubjectPublicKeyInfo PEM for an upstream Proxy transport
-    /// identity. Required whenever forward mode opens a TCP/Yamux connection.
-    #[serde(default)]
-    pub upstream_proxy_identity_public_key_path: Option<String>,
 
     /// 连接目标服务器时绑定的出站网络设备名。
     /// 为空时使用系统默认路由。
@@ -99,7 +75,7 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub dns_upstream_addr: Option<String>,
 
-    /// 上游代理连接超时时间（秒）
+    /// 连接目标服务器的超时时间（秒）。
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
@@ -299,6 +275,3 @@ impl ProxyConfig {
             .min(self.udp_session_limit)
     }
 }
-
-#[cfg(test)]
-mod tests;

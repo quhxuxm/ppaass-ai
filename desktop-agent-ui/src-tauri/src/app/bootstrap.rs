@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn run() {
+pub fn run() {
     #[cfg(target_os = "macos")]
     {
         if std::env::args().any(|arg| arg == TUN_HELPER_SERVICE_ARG) {

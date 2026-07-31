@@ -54,55 +54,27 @@ pub(crate) fn provision_downloaded_credential(
             return Err(error);
         }
     };
-    let proxy_identity_public_key_path = match write_managed_proxy_identity_public_key(
-        app,
-        &downloaded.proxy_identity_public_key_pem,
-    ) {
-        Ok(path) => path,
-        Err(error) => {
-            let _ = destroy_managed_private_key(&private_key_path);
-            #[cfg(windows)]
-            let _ = invalidate_windows_service_session(app);
-            return Err(error);
-        }
-    };
     let loaded = match apply_managed_credentials_to_config(
         config_path,
         &downloaded.account.username,
         &private_key_path,
-        &proxy_identity_public_key_path,
     ) {
         Ok(loaded) => loaded,
         Err(error) => {
-            rollback_downloaded_credential(
-                app,
-                config_path,
-                &private_key_path,
-                &proxy_identity_public_key_path,
-            );
+            rollback_downloaded_credential(app, config_path, &private_key_path);
             return Err(error);
         }
     };
     let ui_config = match prepare_config_for_account(loaded.clone(), &downloaded.account) {
         Ok(config) => config,
         Err(error) => {
-            rollback_downloaded_credential(
-                app,
-                config_path,
-                &private_key_path,
-                &proxy_identity_public_key_path,
-            );
+            rollback_downloaded_credential(app, config_path, &private_key_path);
             return Err(error);
         }
     };
     apply_ui_log_level(runtime, &loaded.summary.log_level);
     if let Err(error) = remember_trusted_ui_config(runtime, &loaded) {
-        rollback_downloaded_credential(
-            app,
-            config_path,
-            &private_key_path,
-            &proxy_identity_public_key_path,
-        );
+        rollback_downloaded_credential(app, config_path, &private_key_path);
         return Err(error);
     }
 
@@ -114,12 +86,7 @@ pub(crate) fn provision_downloaded_credential(
         &downloaded.proxy_addresses,
         agent_access_token.as_ref(),
     ) {
-        rollback_downloaded_credential(
-            app,
-            config_path,
-            &private_key_path,
-            &proxy_identity_public_key_path,
-        );
+        rollback_downloaded_credential(app, config_path, &private_key_path);
         return Err(error);
     }
     if let Err(error) = runtime.set_authenticated_session(AuthenticatedAgentSession::new(
@@ -128,18 +95,12 @@ pub(crate) fn provision_downloaded_credential(
         downloaded.proxy_addresses,
         AgentSessionCredentials::new(
             private_key_path.clone(),
-            proxy_identity_public_key_path.clone(),
             downloaded.proxy_registry_url,
             agent_access_token,
         ),
         AgentPermissionTrust::ServerVerified,
     )) {
-        rollback_downloaded_credential(
-            app,
-            config_path,
-            &private_key_path,
-            &proxy_identity_public_key_path,
-        );
+        rollback_downloaded_credential(app, config_path, &private_key_path);
         return Err(error);
     }
     cleanup_old_managed_private_keys(&private_key_path);
@@ -165,12 +126,10 @@ pub(crate) fn rollback_downloaded_credential(
     app: &tauri::AppHandle,
     config_path: &Path,
     private_key_path: &Path,
-    proxy_identity_public_key_path: &Path,
 ) {
     let _ = destroy_persisted_agent_login(app);
     let _ = clear_managed_credentials_from_config(config_path);
     let _ = destroy_managed_private_key(private_key_path);
-    let _ = destroy_managed_proxy_identity_public_key(proxy_identity_public_key_path);
     #[cfg(windows)]
     let _ = invalidate_windows_service_session(app);
     #[cfg(not(windows))]
@@ -193,11 +152,6 @@ pub(crate) async fn logout_agent(
     let session = runtime.require_authenticated_session()?;
     let mut cleanup_errors = Vec::new();
     if let Err(error) = destroy_managed_private_key(&session.private_key_path) {
-        cleanup_errors.push(error);
-    }
-    if let Err(error) =
-        destroy_managed_proxy_identity_public_key(&session.proxy_identity_public_key_path)
-    {
         cleanup_errors.push(error);
     }
     if let Some(config_path) = current_ui_config_path(&runtime).or_else(locate_config_path) {

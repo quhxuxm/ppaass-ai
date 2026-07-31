@@ -17,7 +17,6 @@ use proxy_control_protocol::{
     CONTROL_PROTOCOL_VERSION, ControlHealthResponse,
 };
 use reqwest::{Client, StatusCode, Url, header};
-use sha2::{Digest, Sha256};
 use tokio::{
     sync::{Mutex, RwLock},
     time::Instant,
@@ -38,7 +37,7 @@ pub(super) struct CachedAuthorization {
     pub cached_at: Instant,
 }
 
-pub(crate) struct RemoteControlPlane {
+pub struct RemoteControlPlane {
     pub(super) client: Client,
     pub(super) base_url: Url,
     pub(super) token: Arc<str>,
@@ -50,10 +49,7 @@ pub(crate) struct RemoteControlPlane {
 }
 
 impl RemoteControlPlane {
-    pub(crate) async fn connect(
-        config: &ProxyConfig,
-        transport_identity_public_key_pem: &str,
-    ) -> Result<Arc<Self>> {
+    pub(crate) async fn connect(config: &ProxyConfig) -> Result<Arc<Self>> {
         validate_entry_id(&config.entry_id)?;
         let base_url = validate_control_url(&config.registry_control_url)?;
         let token = load_control_token(Path::new(&config.registry_control_token_path))?;
@@ -76,9 +72,7 @@ impl RemoteControlPlane {
             request_locks: DashMap::new(),
             last_event_id: AtomicU64::new(0),
         });
-        control
-            .verify_health(transport_identity_public_key_pem)
-            .await?;
+        control.verify_health().await?;
         super::events::spawn_authorization_event_listener(Arc::downgrade(&control));
         Ok(control)
     }
@@ -98,7 +92,7 @@ impl RemoteControlPlane {
         debug!("已使 Proxy Entry 授权缓存全部失效");
     }
 
-    async fn verify_health(&self, transport_identity_public_key_pem: &str) -> Result<()> {
+    async fn verify_health(&self) -> Result<()> {
         let response = self
             .client
             .get(self.endpoint(CONTROL_HEALTH_PATH)?)
@@ -125,18 +119,10 @@ impl RemoteControlPlane {
                 CONTROL_PROTOCOL_VERSION, health.protocol_version
             )));
         }
-        let expected_identity = hex::encode(Sha256::digest(
-            transport_identity_public_key_pem.trim().as_bytes(),
-        ));
-        if health.proxy_identity_sha256 != expected_identity {
-            return Err(ProxyError::ControlPlane(
-                "Entry 传输身份与 Registry 发布给 Agent 的身份不一致".to_string(),
-            ));
-        }
         info!(
             registry_instance_id = health.registry_instance_id,
             protocol_version = health.protocol_version,
-            "Registry 控制面连接和 Proxy 身份校验成功"
+            "Registry 控制面连接和协议校验成功"
         );
         Ok(())
     }
@@ -216,7 +202,7 @@ fn control_status_error(operation: &str, status: StatusCode) -> ProxyError {
     ProxyError::ControlPlane(format!("{operation}返回 HTTP {status}"))
 }
 
-fn validate_entry_id(entry_id: &str) -> Result<()> {
+pub fn validate_entry_id(entry_id: &str) -> Result<()> {
     if entry_id.is_empty()
         || entry_id.len() > proxy_control_protocol::MAX_ENTRY_ID_BYTES
         || !entry_id
@@ -231,7 +217,7 @@ fn validate_entry_id(entry_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_control_url(value: &str) -> Result<Url> {
+pub fn validate_control_url(value: &str) -> Result<Url> {
     let mut url = Url::parse(value).map_err(|error| {
         ProxyError::Configuration(format!("registry_control_url 无效：{error}"))
     })?;
@@ -257,7 +243,7 @@ fn validate_control_url(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn load_control_token(path: &Path) -> Result<String> {
+pub fn load_control_token(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         ProxyError::Configuration(format!(
             "无法读取 Registry 控制面 Token 文件 {}：{error}",
@@ -293,45 +279,4 @@ fn load_control_token(path: &Path) -> Result<String> {
         ));
     }
     Ok(token.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn control_url_requires_https_except_for_loopback_development() {
-        assert!(validate_control_url("https://registry.example.com").is_ok());
-        assert!(validate_control_url("http://127.0.0.1:8797").is_ok());
-        assert!(validate_control_url("http://localhost:8797").is_ok());
-        assert!(validate_control_url("http://registry.example.com").is_err());
-        assert!(validate_control_url("https://registry.example.com?token=bad").is_err());
-    }
-
-    #[test]
-    fn entry_id_rejects_unsafe_or_empty_values() {
-        assert!(validate_entry_id("entry-production:1").is_ok());
-        assert!(validate_entry_id("").is_err());
-        assert!(validate_entry_id("../entry").is_err());
-        assert!(
-            validate_entry_id(&"x".repeat(proxy_control_protocol::MAX_ENTRY_ID_BYTES + 1)).is_err()
-        );
-    }
-
-    #[test]
-    fn control_token_file_is_trimmed_and_validated() {
-        let directory = tempfile::TempDir::new().unwrap();
-        let path = directory.path().join("control-token");
-        let token = "0123456789abcdef0123456789abcdef";
-        fs::write(&path, format!("{token}\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        assert_eq!(load_control_token(&path).unwrap(), token);
-
-        fs::write(&path, "too-short").unwrap();
-        assert!(load_control_token(&path).is_err());
-    }
 }

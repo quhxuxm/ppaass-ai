@@ -83,7 +83,7 @@ pub(crate) fn request_macos_tun_helper_cleanup(
     )?)
 }
 
-pub(crate) fn validate_macos_tun_helper_cleanup_response(
+pub fn validate_macos_tun_helper_cleanup_response(
     response: TunHelperResponse,
 ) -> Result<(), String> {
     match response {
@@ -122,7 +122,7 @@ pub(crate) fn send_macos_tun_helper_request(
     exchange_macos_tun_helper_request(&mut stream, request)
 }
 
-pub(crate) fn exchange_macos_tun_helper_request(
+pub fn exchange_macos_tun_helper_request(
     stream: &mut UnixStream,
     request: &TunHelperRequest,
 ) -> Result<TunHelperResponse, String> {

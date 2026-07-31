@@ -316,6 +316,3 @@ pub fn address_to_string(address: &Address) -> String {
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests;

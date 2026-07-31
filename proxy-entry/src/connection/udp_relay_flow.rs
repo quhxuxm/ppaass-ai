@@ -12,10 +12,10 @@ use tokio::time::Instant;
 // 主 relay 循环收到一个下行响应后，会顺手把队列里已经就绪的响应一起写出。
 // 这个上限避免高回包流量下每个 UDP 包都触发一次 flush，同时也避免单次 drain
 // 过久导致上行读取和 flow_done 清理被饿住。
-pub(super) const UDP_RELAY_RESPONSE_BATCH_LIMIT: usize = 32;
+pub const UDP_RELAY_RESPONSE_BATCH_LIMIT: usize = 32;
 const FLOW_CREATION_BURST: f64 = 64.0;
 const FLOW_CREATION_REFILL_PER_SECOND: f64 = 16.0;
-const FLOW_AUTHORIZATION_COALESCE_WINDOW: Duration = Duration::from_secs(1);
+pub const FLOW_AUTHORIZATION_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 pub(super) struct UdpRelayFlow {
     pub(super) tx: tokio::sync::mpsc::Sender<QueuedUdpRelayData>,
@@ -25,21 +25,21 @@ pub(super) struct QueuedUdpRelayData {
     pub(super) data: Vec<u8>,
 }
 
-pub(crate) struct QueuedUdpRelayResponse {
-    pub(crate) packet: UdpRelayPacket,
+pub struct QueuedUdpRelayResponse {
+    pub packet: UdpRelayPacket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UdpRelayResponseQueueResult {
+pub enum UdpRelayResponseQueueResult {
     Queued,
     Full,
     Closed,
 }
 
 #[derive(Clone)]
-pub(crate) struct UdpRelayFlowChannels {
-    pub(crate) response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
-    pub(crate) flow_done_tx: tokio::sync::mpsc::Sender<u64>,
+pub struct UdpRelayFlowChannels {
+    pub response_tx: tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
+    pub flow_done_tx: tokio::sync::mpsc::Sender<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -59,7 +59,7 @@ pub(super) struct UdpRelayFlowContext {
     flow_task_name: &'static str,
 }
 
-pub(crate) struct UdpRelayFlowSet {
+pub struct UdpRelayFlowSet {
     flows: HashMap<u64, UdpRelayFlow>,
     options: UdpRelayFlowOptions,
     context: UdpRelayFlowContext,
@@ -79,13 +79,13 @@ struct AuthorizationFreshness {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UdpRelayFlowAdmission {
+pub enum UdpRelayFlowAdmission {
     Existing,
     AtCapacity,
     Create,
 }
 
-fn classify_udp_relay_flow_admission(
+pub fn classify_udp_relay_flow_admission(
     flow_exists: bool,
     active_flow_count: usize,
     max_flows: usize,
@@ -133,7 +133,7 @@ impl AuthorizationFreshness {
 }
 
 impl UdpRelayFlowSet {
-    pub(crate) fn new(
+    pub fn new(
         proxy_config: &ProxyConfig,
         egress_state: Arc<EgressState>,
         access_recorder: crate::access_log::AccessRecorder,
@@ -164,16 +164,16 @@ impl UdpRelayFlowSet {
         }
     }
 
-    pub(crate) fn with_authorization(mut self, authorization: ConnectionAuthorization) -> Self {
+    pub fn with_authorization(mut self, authorization: ConnectionAuthorization) -> Self {
         self.flow_authorization = Some(authorization);
         self
     }
 
-    pub(crate) fn idle_timeout(&self) -> Duration {
+    pub fn idle_timeout(&self) -> Duration {
         self.options.idle_timeout
     }
 
-    pub(crate) fn remove(&mut self, flow_id: u64) {
+    pub fn remove(&mut self, flow_id: u64) {
         if self.flows.remove(&flow_id).is_some() {
             debug!(
                 "{} flow {flow_id} 已清理，active_flows={}",
@@ -183,13 +183,13 @@ impl UdpRelayFlowSet {
         }
     }
 
-    pub(crate) fn record_authorization_success(&mut self, now: Instant) {
+    pub fn record_authorization_success(&mut self, now: Instant) {
         if self.flow_authorization.is_some() {
             self.authorization_freshness.record_success(now);
         }
     }
 
-    pub(crate) async fn dispatch(&mut self, relay_packet: UdpRelayPacket) -> Result<()> {
+    pub async fn dispatch(&mut self, relay_packet: UdpRelayPacket) -> Result<()> {
         let flow_id = relay_packet.flow_id;
 
         match classify_udp_relay_flow_admission(
@@ -280,7 +280,7 @@ impl UdpRelayFlowSet {
     }
 }
 
-pub(crate) fn udp_relay_channel_size(config: &ProxyConfig) -> usize {
+pub fn udp_relay_channel_size(config: &ProxyConfig) -> usize {
     config.udp_relay_channel_size.max(1)
 }
 
@@ -374,7 +374,7 @@ async fn spawn_udp_relay_flow(
     Ok(UdpRelayFlow { tx })
 }
 
-fn try_queue_udp_relay_response(
+pub fn try_queue_udp_relay_response(
     response_tx: &tokio::sync::mpsc::Sender<QueuedUdpRelayResponse>,
     response: QueuedUdpRelayResponse,
     relay_label: &str,
@@ -389,6 +389,3 @@ fn try_queue_udp_relay_response(
         Err(TrySendError::Closed(_)) => UdpRelayResponseQueueResult::Closed,
     }
 }
-
-#[cfg(test)]
-mod tests;

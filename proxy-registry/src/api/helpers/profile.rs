@@ -159,35 +159,3 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nickname_is_trimmed_and_limited_by_unicode_characters() {
-        assert_eq!(
-            normalize_nickname(Some("  六个中文字  ".to_string())).unwrap(),
-            Some("六个中文字".to_string())
-        );
-        assert!(normalize_nickname(Some("超过六个中文字".to_string())).is_err());
-    }
-
-    #[test]
-    fn avatar_dimensions_must_be_exactly_64_by_64() {
-        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-        png.extend_from_slice(&64_u32.to_be_bytes());
-        png.extend_from_slice(&64_u32.to_be_bytes());
-        let value = format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&png)
-        );
-        assert!(normalize_avatar_data_url(&value).is_ok());
-        png[23] = 63;
-        let wrong_height = format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&png)
-        );
-        assert!(normalize_avatar_data_url(&wrong_height).is_err());
-    }
-}

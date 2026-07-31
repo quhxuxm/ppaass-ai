@@ -1,10 +1,10 @@
 use super::*;
 
-pub(crate) fn account_management_page_url(value: &str) -> Result<Url, String> {
+pub fn account_management_page_url(value: &str) -> Result<Url, String> {
     normalize_proxy_registry_url(value)
 }
 
-pub(crate) fn normalize_proxy_registry_url(value: &str) -> Result<Url, String> {
+pub fn normalize_proxy_registry_url(value: &str) -> Result<Url, String> {
     let value = value.trim();
     if value.is_empty() {
         return Err("请输入 Proxy Registry 地址".to_string());
@@ -17,7 +17,9 @@ pub(crate) fn normalize_proxy_registry_url(value: &str) -> Result<Url, String> {
         return Err("Proxy Registry 地址不能包含用户名或密码".to_string());
     }
     if url.query().is_some() || url.fragment().is_some() || !matches!(url.path(), "" | "/") {
-        return Err("Proxy Registry 地址只能填写服务根地址，不能包含路径、查询参数或片段".to_string());
+        return Err(
+            "Proxy Registry 地址只能填写服务根地址，不能包含路径、查询参数或片段".to_string(),
+        );
     }
     let host = url
         .host_str()
@@ -45,7 +47,7 @@ pub(crate) fn endpoint(base_url: &Url, path: &str) -> Result<Url, String> {
         .map_err(|_| "构造 Proxy Registry API 地址失败".to_string())
 }
 
-pub(crate) fn validated_agent_access_token(
+pub fn validated_agent_access_token(
     value: String,
     expires_at: i64,
     refresh_after_seconds: u64,
@@ -106,7 +108,7 @@ pub(crate) async fn read_bounded_response(
     Ok((status, bytes))
 }
 
-pub(crate) fn map_api_error(status: StatusCode, error: ErrorDetail) -> String {
+pub fn map_api_error(status: StatusCode, error: ErrorDetail) -> String {
     match error.code.as_str() {
         "invalid_credentials" => "用户名或密码错误".to_string(),
         "key_request_required" => {
@@ -149,7 +151,7 @@ pub(crate) async fn best_effort_logout(client: &Client, base_url: &Url, csrf_tok
     }
 }
 
-pub(crate) fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> Result<(), String> {
+pub fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> Result<(), String> {
     let key_pair = RsaKeyPair::from_private_key_pem(private_key_pem)
         .map_err(|_| "Proxy Registry 返回的私钥格式无效".to_string())?;
     RsaKeyPair::from_public_key_pem(public_key_pem)
@@ -163,16 +165,6 @@ pub(crate) fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> 
     Ok(())
 }
 
-pub(crate) fn validate_proxy_identity_public_key(public_key_pem: &str) -> Result<(), String> {
-    if public_key_pem.len() > 64 * 1024 {
-        return Err("Proxy Registry 返回的 Proxy 身份公钥过大".to_string());
-    }
-    let public_key = RsaKeyPair::from_public_key_pem(public_key_pem)
-        .map_err(|_| "Proxy Registry 返回的 Proxy 身份公钥格式无效".to_string())?;
-    validate_rsa_public_key_size(&public_key)
-        .map_err(|_| "Proxy Registry 返回的 Proxy 身份公钥强度无效".to_string())
-}
-
 pub(crate) fn normalize_pem(value: &str) -> String {
     value
         .lines()
@@ -183,7 +175,7 @@ pub(crate) fn normalize_pem(value: &str) -> String {
         .to_string()
 }
 
-pub(crate) fn managed_private_key_file_name(username: &str, key_version: i64) -> String {
+pub fn managed_private_key_file_name(username: &str, key_version: i64) -> String {
     let username_digest = Sha256::digest(username.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))

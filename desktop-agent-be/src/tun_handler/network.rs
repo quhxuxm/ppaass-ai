@@ -4,14 +4,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tracing::error;
 
 #[derive(Clone, Copy)]
-pub(super) struct TunNetworks {
+pub struct TunNetworks {
     ipv4: Ipv4Addr,
     ipv4_prefix: u8,
     ipv6: Option<(Ipv6Addr, u8)>,
 }
 
 impl TunNetworks {
-    pub(super) fn new(ipv4: Ipv4Addr, ipv4_prefix: u8, ipv6: Option<(Ipv6Addr, u8)>) -> Self {
+    pub fn new(ipv4: Ipv4Addr, ipv4_prefix: u8, ipv6: Option<(Ipv6Addr, u8)>) -> Self {
         // 保存 TUN 自身网段，用于运行时检测目标地址是否异常落回 TUN。
         Self {
             ipv4,
@@ -20,7 +20,7 @@ impl TunNetworks {
         }
     }
 
-    pub(super) fn contains_ip(self, ip: IpAddr) -> bool {
+    pub fn contains_ip(self, ip: IpAddr) -> bool {
         // IPv6 未配置时，只检测 IPv4 TUN 网段。
         match ip {
             IpAddr::V4(ip) => ipv4_in_cidr(ip, self.ipv4, self.ipv4_prefix),
@@ -30,7 +30,7 @@ impl TunNetworks {
         }
     }
 
-    pub(super) fn is_ipv4_broadcast(self, ip: IpAddr) -> bool {
+    pub fn is_ipv4_broadcast(self, ip: IpAddr) -> bool {
         let IpAddr::V4(ip) = ip else {
             return false;
         };
@@ -45,7 +45,7 @@ impl TunNetworks {
     }
 }
 
-pub(super) fn is_tun_local_udp_target(
+pub fn is_tun_local_udp_target(
     source: SocketAddr,
     target: SocketAddr,
     tun_networks: TunNetworks,
@@ -53,7 +53,7 @@ pub(super) fn is_tun_local_udp_target(
     tun_networks.contains_ip(source.ip()) && tun_networks.contains_ip(target.ip())
 }
 
-pub(super) fn reject_tun_target(
+pub fn reject_tun_target(
     transport: &str,
     source: SocketAddr,
     target: SocketAddr,
@@ -72,7 +72,7 @@ pub(super) fn reject_tun_target(
     Err(AgentError::Connection(message))
 }
 
-pub(super) fn address_for_tun_target(target: SocketAddr, proxy_dns: bool) -> (Address, bool) {
+pub fn address_for_tun_target(target: SocketAddr, proxy_dns: bool) -> (Address, bool) {
     // proxy_dns 开启时，所有 53 端口请求转成协议虚拟地址，由 proxy 端解析上游 DNS。
     if proxy_dns && target.port() == 53 {
         return (
@@ -86,7 +86,7 @@ pub(super) fn address_for_tun_target(target: SocketAddr, proxy_dns: bool) -> (Ad
     (socket_addr_to_address(target), false)
 }
 
-pub(super) fn parse_cidr_v4(s: &str) -> Result<(Ipv4Addr, u8)> {
+pub fn parse_cidr_v4(s: &str) -> Result<(Ipv4Addr, u8)> {
     // TUN IPv4 必须显式写成 CIDR，便于同时配置地址和路由前缀。
     let (ip, prefix) = s
         .split_once('/')
@@ -105,7 +105,7 @@ pub(super) fn parse_cidr_v4(s: &str) -> Result<(Ipv4Addr, u8)> {
     Ok((ip, prefix))
 }
 
-pub(super) fn parse_cidr_v6(s: &str) -> Result<(Ipv6Addr, u8)> {
+pub fn parse_cidr_v6(s: &str) -> Result<(Ipv6Addr, u8)> {
     // IPv6 配置可选，但一旦提供也必须是合法 CIDR。
     let (ip, prefix) = s
         .split_once('/')
@@ -148,7 +148,7 @@ fn ipv6_in_cidr(ip: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
     (u128::from_be_bytes(ip.octets()) & mask) == (u128::from_be_bytes(network.octets()) & mask)
 }
 
-pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {
+pub fn socket_addr_to_address(addr: SocketAddr) -> Address {
     // 保留 IP 字面量，避免已经解析出的 TUN 目标再次走 DNS。
     match addr.ip() {
         IpAddr::V4(v4) => Address::Ipv4 {
@@ -159,29 +159,5 @@ pub(super) fn socket_addr_to_address(addr: SocketAddr) -> Address {
             addr: v6.octets(),
             port: addr.port(),
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tun_local_udp_target_matches_source_and_target_inside_tun_network() {
-        let networks = TunNetworks::new(Ipv4Addr::new(10, 10, 10, 1), 24, None);
-        let source = "10.10.10.1:137".parse().unwrap();
-        let target = "10.10.10.1:137".parse().unwrap();
-
-        assert!(is_tun_local_udp_target(source, target, networks));
-    }
-
-    #[test]
-    fn reversed_external_to_tun_target_is_not_local_udp_noise() {
-        let networks = TunNetworks::new(Ipv4Addr::new(10, 10, 10, 1), 24, None);
-        let source = "8.8.8.8:443".parse().unwrap();
-        let target = "10.10.10.1:443".parse().unwrap();
-
-        assert!(!is_tun_local_udp_target(source, target, networks));
-        assert!(reject_tun_target("UDP", source, target, networks).is_err());
     }
 }

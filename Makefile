@@ -16,14 +16,14 @@ run-agent:
 	cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
 run-proxy-entry:
-	cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
+	cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 
 ## Development
 dev-agent:
 	RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
 dev-proxy-entry:
-	RUST_LOG=debug cargo run -p proxy-entry -- --config config/local/proxy-entry.toml
+	RUST_LOG=debug cargo run -p proxy-entry -- --config config/proxy-entry.toml
 
 ## Testing
 test:
@@ -59,7 +59,7 @@ clean:
 ## Setup
 setup:
 	mkdir -p config keys
-	cp config/agent.toml.example config/agent.toml || true
-	test -f config/local/proxy-entry.toml
+	test -f config/agent.toml
+	test -f config/proxy-entry.toml
 
 .PHONY: build-all build-agent build-proxy-entry run-agent run-proxy-entry dev-agent dev-proxy-entry test fmt clippy check clean setup

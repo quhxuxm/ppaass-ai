@@ -42,8 +42,7 @@ pub(in crate::tun_handler::route) fn proxy_bypass_next_hop(
 
 /// 计算 proxy 旁路路由时不能直接采用已有的 proxy /32（或 /128）自身，
 /// 否则旧 helper 留下的过期网关会被当作“当前正确下一跳”并通过验证。
-#[cfg(any(test, target_os = "macos"))]
-pub(in crate::tun_handler::route) fn proxy_bypass_next_hop_from_routes(
+pub fn proxy_bypass_next_hop_from_routes(
     routes: &[Route],
     destination: IpAddr,
     fallback_gateway: Option<IpAddr>,
@@ -63,8 +62,7 @@ pub(in crate::tun_handler::route) fn proxy_bypass_next_hop_from_routes(
         .unwrap_or((fallback_gateway, fallback_if_index))
 }
 
-#[cfg(any(test, target_os = "macos"))]
-pub(in crate::tun_handler::route) fn route_is_split_default(route: &Route) -> bool {
+pub fn route_is_split_default(route: &Route) -> bool {
     if route.prefix() != 1 {
         return false;
     }
@@ -126,7 +124,7 @@ pub(in crate::tun_handler::route) fn install_local_network_bypass_routes(
     Ok(())
 }
 
-pub(in crate::tun_handler::route) fn local_network_bypass_routes(
+pub fn local_network_bypass_routes(
     default_v4_gw: Option<IpAddr>,
     default_v4_if: Option<u32>,
 ) -> Vec<Route> {
@@ -149,7 +147,7 @@ pub(in crate::tun_handler::route) fn local_network_bypass_routes(
         .collect()
 }
 
-pub(in crate::tun_handler::route) fn route_add_error_is_already_exists(message: &str) -> bool {
+pub fn route_add_error_is_already_exists(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("file exists")
         || message.contains("already in table")

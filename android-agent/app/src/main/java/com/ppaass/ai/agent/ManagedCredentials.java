@@ -20,9 +20,6 @@ final class ManagedCredentials {
     static final String PREF_PRIVATE_KEY_FILE = "managed_private_key_file";
     static final String PREF_PRIVATE_KEY_LENGTH = "managed_private_key_length";
     static final String PREF_PRIVATE_KEY_SHA256 = "managed_private_key_sha256";
-    static final String PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM =
-            "managed_proxy_identity_public_key_pem";
-
     private ManagedCredentials() {
     }
 
@@ -34,7 +31,6 @@ final class ManagedCredentials {
         long keyVersion = result.keyVersion;
         long expiresAt = result.expiresAt;
         String privateKeyPem = result.privateKeyPem;
-        String proxyIdentityPublicKeyPem = result.proxyIdentityPublicKeyPem;
         String normalizedUsername = username == null ? "" : username.trim();
         if (normalizedUsername.isEmpty() || keyVersion < 0) {
             throw new IOException("Proxy Registry 返回的用户凭据无效");
@@ -45,11 +41,6 @@ final class ManagedCredentials {
         if (privateKeyBytes.length == 0
                 || privateKeyBytes.length > ManagedCredentialFiles.MAX_PRIVATE_KEY_BYTES) {
             throw new IOException("Proxy Registry 返回的私钥大小无效");
-        }
-        try {
-            AgentAuthClient.validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);
-        } catch (AgentAuthClient.AuthException error) {
-            throw new IOException(error.getMessage(), error);
         }
         String privateKeySha256 = ManagedCredentialFiles.sha256Hex(privateKeyBytes);
 
@@ -103,9 +94,6 @@ final class ManagedCredentials {
                     .putString(PREF_PRIVATE_KEY_FILE, fileName)
                     .putLong(PREF_PRIVATE_KEY_LENGTH, privateKeyBytes.length)
                     .putString(PREF_PRIVATE_KEY_SHA256, privateKeySha256)
-                    .putString(
-                            PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM,
-                            proxyIdentityPublicKeyPem)
                     .remove("username")
                     .remove("private_key_pem");
             AgentSessionStore.installInto(editor, result);
@@ -141,7 +129,6 @@ final class ManagedCredentials {
                                 .remove(PREF_PRIVATE_KEY_FILE)
                                 .remove(PREF_PRIVATE_KEY_LENGTH)
                                 .remove(PREF_PRIVATE_KEY_SHA256)
-                                .remove(PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM)
                                 .remove("username")
                                 .remove("private_key_pem");
                         AgentSessionStore.clearFrom(editor);
@@ -184,17 +171,6 @@ final class ManagedCredentials {
                 StandardCharsets.UTF_8);
     }
 
-    static String readProxyIdentityPublicKey(Context context) throws IOException {
-        String publicKeyPem = preferences(context)
-                .getString(PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM, "");
-        try {
-            AgentAuthClient.validateProxyIdentityPublicKey(publicKeyPem);
-        } catch (AgentAuthClient.AuthException error) {
-            throw new IOException("Agent 托管的 Proxy 身份公钥不存在或已损坏，请重新登录", error);
-        }
-        return publicKeyPem;
-    }
-
     static boolean matches(
             Context context,
             String username,
@@ -205,26 +181,21 @@ final class ManagedCredentials {
         String fileName = preferences.getString(PREF_PRIVATE_KEY_FILE, "");
         long expectedLength = preferences.getLong(PREF_PRIVATE_KEY_LENGTH, -1);
         String expectedSha256 = preferences.getString(PREF_PRIVATE_KEY_SHA256, "");
-        String proxyIdentityPublicKeyPem =
-                preferences.getString(PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM, "");
         if (!username.equals(storedUsername)
                 || keyVersion != preferences.getLong(PREF_KEY_VERSION, -1)
                 || expiresAt != preferences.getLong(PREF_EXPIRES_AT, -1)
                 || fileName == null
-                || fileName.isEmpty()
-                || proxyIdentityPublicKeyPem == null
-                || proxyIdentityPublicKeyPem.isEmpty()) {
+                || fileName.isEmpty()) {
             return false;
         }
         try {
-            AgentAuthClient.validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);
             File directory = ManagedCredentialFiles.credentialsDirectory(context);
             ManagedCredentialFiles.requireOwnerOnlyPermissions(directory, true);
             return ManagedCredentialFiles.credentialFileMatches(
                     ManagedCredentialFiles.checkedCredentialFile(directory, fileName),
                     expectedLength,
                     expectedSha256);
-        } catch (IOException | AgentAuthClient.AuthException error) {
+        } catch (IOException error) {
             return false;
         }
     }
@@ -262,7 +233,6 @@ final class ManagedCredentials {
                 .remove(PREF_PRIVATE_KEY_FILE)
                 .remove(PREF_PRIVATE_KEY_LENGTH)
                 .remove(PREF_PRIVATE_KEY_SHA256)
-                .remove(PREF_PROXY_IDENTITY_PUBLIC_KEY_PEM)
                 .remove(AgentAuthSession.PREF_SERVER_AUTHENTICATION_STATUS)
                 .remove("username")
                 .remove("private_key_pem");

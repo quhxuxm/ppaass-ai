@@ -9,7 +9,7 @@ pub(super) async fn connect_udp_relay_stream(
         .await
 }
 
-pub(super) async fn send_udp_relay_request_batch<W>(
+pub async fn send_udp_relay_request_batch<W>(
     writer: &mut W,
     state: &mut UdpRelayState,
     first_request: UdpRelayRequest,

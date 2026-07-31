@@ -18,7 +18,6 @@ pub enum QuicPolicy {
     /// 强制阻断所有 UDP/443，不区分直连或代理路径。
     Block,
 }
-
 impl QuicPolicy {
     /// 判断该 UDP/443 datagram 是否应该丢弃。
     pub fn should_block_udp443(self) -> bool {
@@ -36,7 +35,6 @@ impl QuicPolicy {
         }
     }
 }
-
 /// UDP/443 的低成本累计计数器。
 ///
 /// 计数器只在 TUN 分流点按包递增，不做高频日志；调用方周期性 `snapshot_and_reset`
@@ -80,49 +78,5 @@ impl QuicUdpStats {
             proxied: self.proxied.swap(0, Ordering::Relaxed),
             blocked: self.blocked.swap(0, Ordering::Relaxed),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quic_policy_only_blocks_when_policy_is_block() {
-        assert!(!QuicPolicy::Allow.should_block_udp443());
-        assert!(QuicPolicy::Block.should_block_udp443());
-    }
-
-    #[test]
-    fn quic_policy_uses_snake_case_config_values() {
-        let policy: QuicPolicy = toml::from_str("value = \"block\"")
-            .map(|wrapper: PolicyWrapper| wrapper.value)
-            .unwrap();
-
-        assert_eq!(policy, QuicPolicy::Block);
-    }
-
-    #[test]
-    fn quic_stats_snapshot_resets_counters() {
-        let stats = QuicUdpStats::default();
-        stats.record_direct();
-        stats.record_proxied();
-        stats.record_blocked();
-
-        assert_eq!(
-            stats.snapshot_and_reset(),
-            QuicUdpStatsSnapshot {
-                observed: 3,
-                direct: 1,
-                proxied: 1,
-                blocked: 1,
-            }
-        );
-        assert_eq!(stats.snapshot_and_reset(), QuicUdpStatsSnapshot::default());
-    }
-
-    #[derive(Deserialize)]
-    struct PolicyWrapper {
-        value: QuicPolicy,
     }
 }

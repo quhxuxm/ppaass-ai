@@ -356,7 +356,3 @@ pub fn normalize_key_request_rejection_reason(
     }
     Ok(Some(reason.to_string()))
 }
-
-#[cfg(test)]
-#[path = "validation/tests.rs"]
-mod tests;

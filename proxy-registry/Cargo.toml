@@ -16,7 +16,6 @@ base64.workspace = true
 clap.workspace = true
 dashmap.workspace = true
 futures.workspace = true
-hex.workspace = true
 http-body-util.workspace = true
 rand.workspace = true
 rsa.workspace = true

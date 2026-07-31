@@ -13,7 +13,7 @@ struct AgentWebSessionHandoffResponse {
 }
 
 #[instrument(skip_all)]
-pub(crate) async fn request_account_management_handoff(
+pub async fn request_account_management_handoff(
     proxy_registry_url: &str,
     agent_access_token: &str,
 ) -> Result<Url, String> {
@@ -42,10 +42,7 @@ pub(crate) async fn request_account_management_handoff(
     account_management_handoff_url(&base_url, &handoff.handoff_path)
 }
 
-pub(crate) fn account_management_handoff_url(
-    base_url: &Url,
-    handoff_path: &str,
-) -> Result<Url, String> {
+pub fn account_management_handoff_url(base_url: &Url, handoff_path: &str) -> Result<Url, String> {
     if handoff_path.is_empty()
         || handoff_path.len() > MAX_HANDOFF_PATH_BYTES
         || !handoff_path.starts_with('/')

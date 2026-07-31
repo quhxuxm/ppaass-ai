@@ -244,17 +244,17 @@ pub(super) fn reassemble_tcp_session(
     }
 }
 
-pub(super) fn tcp_has_flag(packet: &CapturedPacket, flag: u8) -> bool {
+pub fn tcp_has_flag(packet: &CapturedPacket, flag: u8) -> bool {
     packet.tcp_flags.is_some_and(|flags| flags & flag != 0)
 }
 
-pub(super) fn tcp_payload_sequence(packet: &CapturedPacket) -> Option<u32> {
+pub fn tcp_payload_sequence(packet: &CapturedPacket) -> Option<u32> {
     packet
         .tcp_sequence
         .map(|sequence| sequence.wrapping_add(u32::from(tcp_has_flag(packet, TCP_FLAG_SYN))))
 }
 
-pub(super) fn tcp_sequence_span(packet: &CapturedPacket) -> u32 {
+pub fn tcp_sequence_span(packet: &CapturedPacket) -> u32 {
     (packet.payload_length as u32)
         .wrapping_add(u32::from(tcp_has_flag(packet, TCP_FLAG_SYN)))
         .wrapping_add(u32::from(tcp_has_flag(packet, TCP_FLAG_FIN)))

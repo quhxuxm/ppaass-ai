@@ -6,25 +6,25 @@
 //! agent 本地直连，或通过 [`YamuxSessionManager`] 转发到 proxy。
 //! `direct_access` 规则与 TUN UDP 的 `proxy_udp` 开关共同决定具体路径。
 
-mod device;
-mod direct_domain_cache;
+pub mod device;
+pub mod direct_domain_cache;
 mod direct_egress;
-mod dns;
-mod dns_proxy;
+pub mod dns;
+pub mod dns_proxy;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
-pub(crate) mod helper_service;
+pub mod helper_service;
 mod netstack;
-mod network;
-mod packet_capture;
+pub mod network;
+pub mod packet_capture;
 pub(crate) use packet_capture::CapturedTcpStream;
 pub use packet_capture::PacketCaptureController;
-mod proxy_routing;
-mod route;
-mod tasks;
+pub mod proxy_routing;
+pub mod route;
+pub mod tasks;
 mod tcp;
 mod udp;
-mod udp_relay;
+pub mod udp_relay;
 
 use crate::config::TunConfig;
 use crate::direct_access::DirectAccessChecker;
@@ -91,7 +91,7 @@ struct TunForwardContext {
 
 /// 公开入口：构建 TUN 设备，连接到 netstack，运行转发循环直到 `shutdown` 触发。
 #[instrument(skip(config, proxy_addrs, resources, shutdown))]
-pub async fn run_tun_mode(
+pub(crate) async fn run_tun_mode(
     config: TunConfig,
     transport_mode: TransportMode,
     proxy_addrs: Vec<String>,

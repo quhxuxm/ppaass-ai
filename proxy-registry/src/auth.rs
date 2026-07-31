@@ -21,8 +21,8 @@ use zeroize::Zeroizing;
 use crate::error::ApiError;
 
 mod tokens;
-pub use tokens::random_token;
-use tokens::{clear_session_cookie, session_cookie, session_token};
+use tokens::{clear_session_cookie, session_cookie};
+pub use tokens::{random_token, session_token};
 
 pub const SESSION_COOKIE_NAME: &str = "ppaass_session";
 pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
@@ -130,7 +130,7 @@ fn argon2() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-fn validate_password(password: &str) -> Result<(), PasswordError> {
+pub fn validate_password(password: &str) -> Result<(), PasswordError> {
     if password.chars().count() < PASSWORD_MIN_CHARS {
         return Err(PasswordError::TooShort);
     }
@@ -178,7 +178,8 @@ impl SessionStore {
         )
     }
 
-    fn with_limits(
+    #[doc(hidden)]
+    pub fn with_limits(
         secure_cookies: bool,
         max_sessions: usize,
         max_sessions_per_account: usize,
@@ -204,7 +205,8 @@ impl SessionStore {
         self.issue_at_with_source(&account.account_id, account.auth_version, now(), true)
     }
 
-    fn issue_at(
+    #[doc(hidden)]
+    pub fn issue_at(
         &self,
         account_id: &str,
         auth_version: i64,
@@ -351,9 +353,13 @@ impl SessionStore {
             .map(|entry| entry.key().clone())
     }
 
-    #[cfg(test)]
-    pub(crate) fn active_session_count(&self) -> usize {
+    pub fn active_session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    #[doc(hidden)]
+    pub fn is_active(&self, session: &AuthenticatedSessionToken) -> bool {
+        self.sessions.contains_key(session._token.as_str())
     }
 }
 
@@ -386,6 +392,3 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         })
         == 0
 }
-
-#[cfg(test)]
-mod tests;

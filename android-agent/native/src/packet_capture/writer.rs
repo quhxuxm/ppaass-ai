@@ -7,7 +7,7 @@ pub(super) struct CaptureRecord {
     pub(super) packet: Vec<u8>,
 }
 
-pub(super) struct PacketWriter {
+pub struct PacketWriter {
     pub(super) sender: Option<SyncSender<CaptureRecord>>,
     pub(super) writer: Option<JoinHandle<()>>,
     pub(super) dropped_packets: AtomicU64,
@@ -15,16 +15,17 @@ pub(super) struct PacketWriter {
 }
 
 #[derive(Default)]
-pub(super) struct WriterHealth {
+pub struct WriterHealth {
     pub(super) failed: AtomicBool,
 }
 
 impl WriterHealth {
-    pub(super) fn is_healthy(&self) -> bool {
+    pub fn is_healthy(&self) -> bool {
         !self.failed.load(Ordering::Acquire)
     }
 
-    pub(super) fn mark_failed(&self, error: impl fmt::Display) {
+    #[doc(hidden)]
+    pub fn mark_failed(&self, error: impl fmt::Display) {
         if !self.failed.swap(true, Ordering::AcqRel) {
             warn!("Android PCAP writer stopped after an I/O failure: {error}");
         }
@@ -44,7 +45,7 @@ impl PacketWriter {
         Self::start_writer(file)
     }
 
-    pub(super) fn open_or_append(path: &Path) -> io::Result<Self> {
+    pub fn open_or_append(path: &Path) -> io::Result<Self> {
         ensure_capture_parent(path)?;
         if let Some(file) = open_compatible_capture_for_append(path)? {
             return Self::start_writer(file);
@@ -71,7 +72,7 @@ impl PacketWriter {
         })
     }
 
-    pub(super) fn record(&self, packet: &[u8]) -> io::Result<()> {
+    pub fn record(&self, packet: &[u8]) -> io::Result<()> {
         if !self.is_healthy() {
             return Err(io::Error::new(
                 ErrorKind::BrokenPipe,
@@ -193,7 +194,8 @@ pub(super) fn open_compatible_capture_for_append(path: &Path) -> io::Result<Opti
     Ok(Some(file))
 }
 
-pub(super) fn scan_compatible_capture(reader: &mut impl BufRead, file_len: u64) -> io::Result<u64> {
+#[doc(hidden)]
+pub fn scan_compatible_capture(reader: &mut impl BufRead, file_len: u64) -> io::Result<u64> {
     let mut header = [0u8; 24];
     match reader.read_exact(&mut header) {
         Ok(()) if header == global_header() => {}
@@ -263,7 +265,8 @@ pub(super) fn skip_buffered_exact(
     Ok(true)
 }
 
-pub(super) fn global_header() -> [u8; 24] {
+#[doc(hidden)]
+pub fn global_header() -> [u8; 24] {
     let mut header = [0u8; 24];
     header[..4].copy_from_slice(&0xa1b2c3d4_u32.to_le_bytes());
     header[4..6].copy_from_slice(&2_u16.to_le_bytes());

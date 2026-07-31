@@ -54,8 +54,8 @@ npm run build
 1. Review the checked-in local configurations:
 
 ```bash
-${EDITOR:-vi} config/local/agent.toml
-${EDITOR:-vi} config/local/proxy-entry.toml
+${EDITOR:-vi} config/agent.toml
+${EDITOR:-vi} config/proxy-entry.toml
 ```
 
 2. Start Proxy Registry with a control token, then start Proxy Entry with the
@@ -68,10 +68,9 @@ export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-byte
 umask 077
 mkdir -p data
 printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
-cargo run --release -p proxy-registry -- \
-  --proxy-identity-public-key data/proxy-identity-public.pem
+cargo run --release -p proxy-registry
 
-cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
+cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 ```
 
 3. Register a user and approve the user's key request. Proxy Registry is the
@@ -111,6 +110,12 @@ npm run tauri dev
 ### Desktop TUN Helper Mode
 
 macOS TUN mode can run the existing `desktop-agent` binary in a privileged helper mode so the normal agent does not need to ask for sudo on every start. `start-agent.sh` and `start-agent.command` install the already-built `desktop-agent` automatically when `[tun] enabled = true` and `macos_helper_enabled = true`, then expose `/var/run/ppaass-ai/tun-helper.sock` to the current UID. No separate helper binary is built. On Windows, `start-agent.bat` creates a highest-privilege scheduled task the first time TUN mode is started, then uses that task for later starts.
+
+### GitHub Actions Deployment
+
+See [`docs/GITHUB_ACTIONS_DEPLOYMENT.md`](docs/GITHUB_ACTIONS_DEPLOYMENT.md) for
+the complete Secrets and Variables checklist, environment examples, and
+password-based remote deployment details.
 
 ## Configuration
 
@@ -152,14 +157,13 @@ Android also provides runtime packet capture for VPN/TUN and explicit HTTP/SOCKS
 
 The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 
-### Proxy Configuration (`config/local/proxy-entry.toml`)
+### Proxy Configuration (`config/proxy-entry.toml`)
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
 entry_id = "entry-local"                   # Stable identity for idempotent batches
 registry_control_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
-transport_identity_private_key_path = "data/proxy-identity-private.pem" # Required PKCS#8 identity
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
 udp_session_limit_per_username = 64        # Per-user sessions for multiple devices/restarts
@@ -247,8 +251,11 @@ ppaass-ai/
 ### Running Tests
 
 ```bash
-# Unit tests
-cargo test --workspace
+# All Rust test targets, including each crate's top-level tests/
+cargo test --workspace --locked
+
+# Enforce the repository-wide Rust test layout
+sh scripts/check-rust-test-layout.sh
 
 # Integration and performance tests
 ./run-tests.sh all

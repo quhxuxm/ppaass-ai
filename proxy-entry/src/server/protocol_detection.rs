@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) async fn peek_connection_header(
+pub async fn peek_connection_header(
     stream: &TcpStream,
     timeout: Duration,
 ) -> io::Result<Option<[u8; 4]>> {
@@ -22,7 +22,7 @@ pub(super) async fn peek_connection_header(
     .unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "入站连接首包超时")))
 }
 
-pub(super) fn looks_like_yamux_header(header: &[u8; 4]) -> bool {
+pub fn looks_like_yamux_header(header: &[u8; 4]) -> bool {
     let version = header[0];
     let frame_type = header[1];
     let flags = u16::from_be_bytes([header[2], header[3]]);

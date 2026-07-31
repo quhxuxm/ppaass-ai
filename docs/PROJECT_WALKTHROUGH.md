@@ -196,7 +196,6 @@ Mermaid 源码：[07-proxy-state-machine.mmd](diagrams/07-proxy-state-machine.mm
 - `proxy-entry/src/connection/connect.rs`: Connect 分流。
 - `proxy-entry/src/connection/relay.rs`: TCP/单目标 UDP 中继。
 - `proxy-entry/src/connection/udp_relay.rs`: 共享 UDP relay。
-- `proxy-entry/src/connection/upstream.rs`: forward mode 连接上游 PPAASS proxy。
 - `protocol/src/udp_transport/`: raw UDP listener 使用的认证、packet codec、防重放和重组规则。
 
 ## 10. UDP 的两种代理承载
@@ -278,21 +277,13 @@ TUN 模式里的关键细节：
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
-## 13. Proxy 出站与 forward mode
-
-普通模式：
+## 13. Proxy 出站
 
 ![Proxy 出站](diagrams/11-proxy-egress.svg)
 
 Mermaid 源码：[11-proxy-egress.mmd](diagrams/11-proxy-egress.mmd)
 
-forward mode：
-
-![forward mode](diagrams/12-forward-mode.svg)
-
-Mermaid 源码：[12-forward-mode.mmd](diagrams/12-forward-mode.mmd)
-
-forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Proxy 的客户端”同时存在，连接上游时复用 `common::ClientConnection` 的 Auth/Connect 逻辑。
+Proxy Entry 收到通过认证的 Connect 请求后，直接按目标地址建立出站连接；不再支持把流量级联到另一个 Proxy Entry。
 
 ## 14. 配置关系
 
@@ -325,11 +316,9 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 - `registry_control_url`: 必填的 Registry 控制面 HTTPS 地址（仅回环开发允许 HTTP）。
 - `registry_control_token_path`: 必填的控制面 Token 文件。
 - `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
-- `transport_identity_private_key_path`: 必填的 Proxy TCP/Yamux 传输身份私钥。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
 - `[yamux]`: Proxy 作为 `tcp` 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接进入 PPAASS 流协议处理；raw UDP 入站进入独立的 session packet codec。
-- `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。
 - `auth_timeout_secs`、`tcp_relay_idle_timeout_secs`、`yamux_session_idle_timeout_secs`。
@@ -427,11 +416,11 @@ Mermaid 源码：[15-testing-topology.mmd](diagrams/15-testing-topology.mmd)
 
 主要文件：
 
-- `tests/src/mock_target.rs`: HTTP、TCP echo、UDP echo 目标。
-- `tests/src/mock_client.rs`: HTTP client、SOCKS5 TCP/UDP client。
-- `tests/src/integration_tests.rs`: 功能链路测试。
-- `tests/src/performance_tests.rs`: 并发压测、延迟直方图、吞吐、系统指标。
-- `tests/src/report.rs`: HTML/JSON/Markdown 报告。
+- `tests/src/mock_target/`: HTTP、TCP echo、UDP echo 目标。
+- `tests/src/mock_client/`: HTTP client、SOCKS5 TCP/UDP client。
+- `tests/src/integration_tests/`: 功能链路测试。
+- `tests/src/performance_tests/`: 并发压测、延迟直方图、吞吐、系统指标。
+- `tests/src/report/`: HTML/JSON/Markdown 报告。
 - `run-tests.sh`: 启动测试工具的脚本。
 
 典型运行顺序：
@@ -443,7 +432,7 @@ cargo build --release --workspace
 ./run-tests.sh mock-target
 
 # 终端 2
-cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
+cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml
 
 # 终端 3：启动 Desktop Agent UI，登录后由认证 session 下发运行时 Proxy 地址
 cd desktop-agent-ui && npm run tauri dev
@@ -453,7 +442,7 @@ cd desktop-agent-ui && npm run tauri dev
 ./run-tests.sh performance 100 60
 ```
 
-注意：文档和 CI 中有的示例使用 `127.0.0.1:7070`，当前 `config/local/agent.toml` 里是 `0.0.0.0:10080`。跑测试时要让 `AGENT_ADDR` 和实际配置一致。
+集成测试夹具 `tests/fixtures/config/agent-integration.toml` 监听 `127.0.0.1:7080`；跑测试时要让 `AGENT_ADDR` 与该地址一致。
 
 ## 18. CI 与部署
 
@@ -462,9 +451,12 @@ cd desktop-agent-ui && npm run tauri dev
 - `unit-test.yml`: Debian container，Rust 1.93，build workspace，跑 unit tests。
 - `integration-test.yml`: 启动 mock target、proxy、agent，然后跑 integration tests。
 - `rust-clippy.yml`: Clippy SARIF 分析。
-- `deploy-proxy-registry.yml`: 手动选择 production/dev/qa，部署两个 Registry 进程和 Caddy。
-- `deploy-proxy-entry.yml`: 使用独立主机凭据部署无 SQLite 依赖的 Entry 数据面。
+- `deploy-proxy-registry.yml`: 使用 `registry_production` Environment 部署两个 Registry 进程和 Caddy。
+- `deploy-proxy-entry.yml`: 使用 `entry_production` Environment 部署无 SQLite 依赖的 Entry 数据面。
 - `checkmarx-one.yml` / `codescan.yml`: 安全/代码扫描。
+
+完整的 GitHub Secrets、Variables 和 PEM 配置示例见
+[`GITHUB_ACTIONS_DEPLOYMENT.md`](GITHUB_ACTIONS_DEPLOYMENT.md)。
 
 部署脚本：
 
@@ -490,7 +482,7 @@ cd desktop-agent-ui && npm run tauri dev
 11. `desktop-agent-be/src/tun_handler/*`：最后再读 TUN，因为它依赖前面所有概念。
 12. `desktop-agent-ui/src-tauri/src/app.rs` 和 `agent.rs`：看 UI 如何嵌入 Agent。
 13. `android-agent/native/src/netstack.rs` 和 `yamux_session.rs`：看 Android 如何复用核心。
-14. `tests/src/integration_tests.rs`：用测试把理解闭环。
+14. `tests/src/integration_tests/`：用测试把理解闭环。
 
 ## 20. 常见容易误解的点
 

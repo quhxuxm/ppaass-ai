@@ -242,14 +242,13 @@ fn toggle_tun_mode_and_restart(
     let session = runtime.require_authenticated_session()?;
     let config_path = config_path
         .or_else(locate_config_path)
-        .ok_or_else(|| "找不到 Agent 配置文件".to_string())?;
+        .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?;
     let candidate = load_config_from_path(&config_path)?;
     validate_config_candidate_against_trusted_baseline(&runtime, &session.account, &candidate)?;
     let managed = apply_managed_credentials_to_config(
         &config_path,
         &session.account.username,
         &session.private_key_path,
-        &session.proxy_identity_public_key_path,
     )?;
     let config = toggle_tun_enabled_in_config(Some(Path::new(&managed.path)))?;
     let enabled = config.summary.tun_enabled;

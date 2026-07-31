@@ -128,7 +128,7 @@ pub(super) fn large_response_size(query: Option<&str>) -> u64 {
         .clamp(1, MAX_LARGE_RESPONSE_SIZE_BYTES)
 }
 
-pub(super) fn parse_range_header(
+pub fn parse_range_header(
     range: Option<&str>,
     size: u64,
 ) -> std::result::Result<Option<(u64, u64)>, ()> {

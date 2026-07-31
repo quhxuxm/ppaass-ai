@@ -170,7 +170,7 @@ pub(super) fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>)
     }
 }
 
-pub(super) fn allocate_dns_id(
+pub fn allocate_dns_id(
     pending: &HashMap<u16, PendingDnsRequest>,
     next_id: &mut u16,
 ) -> Option<u16> {
@@ -184,12 +184,12 @@ pub(super) fn allocate_dns_id(
     None
 }
 
-pub(super) fn dns_id(packet: &[u8]) -> Option<u16> {
+pub fn dns_id(packet: &[u8]) -> Option<u16> {
     let bytes = packet.get(..2)?;
     Some(u16::from_be_bytes([bytes[0], bytes[1]]))
 }
 
-pub(super) fn write_dns_id(packet: &mut [u8], id: u16) {
+pub fn write_dns_id(packet: &mut [u8], id: u16) {
     let bytes = id.to_be_bytes();
     packet[0] = bytes[0];
     packet[1] = bytes[1];

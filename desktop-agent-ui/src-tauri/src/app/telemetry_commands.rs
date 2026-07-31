@@ -48,7 +48,8 @@ pub(crate) async fn get_packet_capture(
         require_packet_capture_permission(&runtime)?;
         let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
             Some(value) => PathBuf::from(value),
-            None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
+            None => locate_config_path()
+                .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?,
         };
         let config = desktop_agent_be::config::AgentConfig::load(&config_path)
             .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;

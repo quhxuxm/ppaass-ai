@@ -18,22 +18,22 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 use tracing::{debug, trace, warn};
 
-const FLOW_CREATION_BURST: f64 = 64.0;
+pub const FLOW_CREATION_BURST: f64 = 64.0;
 const FLOW_CREATION_REFILL_PER_SECOND: f64 = 16.0;
 const FLOW_AUTHORIZATION_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
-pub(super) struct SessionContext {
-    pub(super) socket: Arc<UdpSocket>,
-    pub(super) config: Arc<ProxyConfig>,
-    pub(super) user_manager: Arc<UserManager>,
-    pub(super) egress_state: Arc<EgressState>,
-    pub(super) access_recorder: AccessRecorder,
-    pub(super) username: String,
-    pub(super) authenticated_public_key_pem: String,
-    pub(super) authenticated_key_version: Option<i64>,
-    pub(super) expires_at: Option<i64>,
-    pub(super) peer: SocketAddr,
+pub struct SessionContext {
+    pub socket: Arc<UdpSocket>,
+    pub config: Arc<ProxyConfig>,
+    pub user_manager: Arc<UserManager>,
+    pub egress_state: Arc<EgressState>,
+    pub access_recorder: AccessRecorder,
+    pub username: String,
+    pub authenticated_public_key_pem: String,
+    pub authenticated_key_version: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub peer: SocketAddr,
 }
 
 struct ChannelState {
@@ -41,13 +41,11 @@ struct ChannelState {
     abort_handle: AbortHandle,
 }
 
-mod admission;
-mod lifecycle;
+pub mod admission;
+pub mod lifecycle;
 mod runner;
 
 use admission::*;
-pub(super) use lifecycle::*;
-pub(super) use runner::{ChannelEvent, run_session};
-
-#[cfg(test)]
-mod tests;
+pub use lifecycle::*;
+pub(super) use runner::ChannelEvent;
+pub use runner::run_session;

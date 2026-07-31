@@ -48,13 +48,7 @@ use crate::{
 };
 
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024;
-#[cfg(not(test))]
 const REQUEST_TIMEOUT_SECONDS: u64 = 30;
-// Parallel API tests intentionally exercise several real 2048-bit RSA key generations.
-// Give those CPU-bound test requests enough time on smaller CI runners without weakening
-// the production request deadline.
-#[cfg(test)]
-const REQUEST_TIMEOUT_SECONDS: u64 = 180;
 const MAX_AGENT_PRIVATE_KEY_BYTES: usize = 16 * 1024;
 const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
 const DEFAULT_ACCESS_RECORD_LIMIT: u32 = 100;
@@ -92,7 +86,6 @@ pub struct AppState {
     pub agent_events: crate::AgentEventHub,
     pub web_session_handoffs: AgentWebSessionHandoffStore,
     pub private_keys: PrivateKeyCipher,
-    pub proxy_identity_public_key_pem: Arc<str>,
     pub allow_registration: bool,
     pub device_authorization_guard: AgentDeviceAuthorizationGuard,
 }
@@ -126,7 +119,43 @@ use helpers::*;
 use models::*;
 use routes::*;
 
+#[doc(hidden)]
+pub fn agent_default_permissions() -> Vec<String> {
+    default_web_permissions()
+}
+
+#[doc(hidden)]
+pub fn include_required_agent_permissions(permissions: Vec<String>) -> Vec<String> {
+    with_required_web_permissions(permissions)
+}
+
+#[doc(hidden)]
+pub fn hash_agent_user_code(value: &str) -> Result<String, ApiError> {
+    agent_user_code_hash(value)
+}
+
+#[doc(hidden)]
+pub fn resolve_assigned_proxy_addresses(
+    managed: &ManagedUser,
+    account: &WebAccount,
+) -> Result<Vec<String>, ApiError> {
+    assigned_proxy_addresses(managed, account)
+}
+
 pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
+    build_router_with_timeout(
+        state,
+        frontend_dist,
+        Duration::from_secs(REQUEST_TIMEOUT_SECONDS),
+    )
+}
+
+#[doc(hidden)]
+pub fn build_router_with_timeout(
+    state: AppState,
+    frontend_dist: Option<PathBuf>,
+    request_timeout: Duration,
+) -> Router {
     let v1 = Router::new()
         .route("/auth/providers", get(get_auth_providers))
         .route("/auth/register", post(register))
@@ -246,7 +275,7 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(REQUEST_TIMEOUT_SECONDS),
+            request_timeout,
         ))
         .layer(TraceLayer::new_for_http().make_span_with(
             |request: &axum::http::Request<axum::body::Body>| {
@@ -262,7 +291,7 @@ pub fn build_router(state: AppState, frontend_dist: Option<PathBuf>) -> Router {
         .layer(middleware::from_fn(add_security_headers))
 }
 
-fn request_path_for_trace<B>(request: &axum::http::Request<B>) -> &str {
+pub fn request_path_for_trace<B>(request: &axum::http::Request<B>) -> &str {
     request.uri().path()
 }
 
@@ -308,6 +337,3 @@ async fn add_security_headers(request: axum::extract::Request, next: Next) -> Re
     }
     response
 }
-
-#[cfg(test)]
-mod tests;

@@ -4,11 +4,9 @@
 //! which supplies server-managed Proxy addresses as runtime-only data. This
 //! binary keeps only the hidden macOS helper service entry point.
 
-mod cli;
-
 use anyhow::Result;
 use clap::Parser;
-use cli::CliArgs;
+use desktop_agent_be::cli::CliArgs;
 
 fn main() -> Result<()> {
     let args = CliArgs::parse();

@@ -28,13 +28,12 @@ use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 mod tcp;
-#[cfg(test)]
-mod tests;
-mod udp_associate;
-mod udp_relay;
+pub mod udp_associate;
+pub mod udp_relay;
 
 use tcp::{handle_tcp_bind, handle_tcp_connect};
 use udp_associate::handle_udp_associate;
+pub use udp_associate::resolve_udp_associate_reply_addr;
 
 #[instrument(skip(stream, tcp_sessions, udp_sessions, direct_checker, packet_capture))]
 pub async fn handle_socks5_connection(

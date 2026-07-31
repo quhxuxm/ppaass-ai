@@ -8,34 +8,34 @@ pub(crate) struct ServiceRequestEnvelopeRef<'a> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ServiceRequestEnvelope {
-    pub(crate) auth_token: String,
-    pub(crate) request: ServiceRequest,
+pub struct ServiceRequestEnvelope {
+    pub auth_token: String,
+    pub request: ServiceRequest,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ServiceSessionAuthorization {
-    pub(crate) version: u8,
-    pub(crate) token: String,
+pub struct ServiceSessionAuthorization {
+    pub version: u8,
+    pub token: String,
     #[serde(
         default,
         rename = "ui_process_id",
         skip_serializing_if = "Option::is_none"
     )]
-    pub(crate) _legacy_ui_process_id: Option<u32>,
+    pub _legacy_ui_process_id: Option<u32>,
     #[serde(
         default,
         rename = "ui_process_creation_time",
         skip_serializing_if = "Option::is_none"
     )]
-    pub(crate) _legacy_ui_process_creation_time: Option<u64>,
+    pub _legacy_ui_process_creation_time: Option<u64>,
     #[serde(
         default,
         rename = "expires_at",
         skip_serializing_if = "Option::is_none"
     )]
-    pub(crate) _legacy_expires_at: Option<i64>,
+    pub _legacy_expires_at: Option<i64>,
 }
 
 impl Drop for ServiceSessionAuthorization {
@@ -45,9 +45,9 @@ impl Drop for ServiceSessionAuthorization {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ServiceLoginBinding {
-    pub(crate) username: String,
-    pub(crate) key_version: i64,
+pub struct ServiceLoginBinding {
+    pub username: String,
+    pub key_version: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

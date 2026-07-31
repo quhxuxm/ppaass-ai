@@ -19,23 +19,3 @@ pub struct CliArgs {
     #[arg(long, hide = true)]
     pub log_level: Option<String>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn product_cli_rejects_public_proxy_address_arguments() {
-        assert!(
-            CliArgs::try_parse_from(["desktop-agent", "--proxy", "proxy.example.com:443"]).is_err()
-        );
-        assert!(
-            CliArgs::try_parse_from([
-                "desktop-agent",
-                "--managed-proxy-address",
-                "proxy.example.com:443"
-            ])
-            .is_err()
-        );
-    }
-}

@@ -41,10 +41,10 @@ pub(crate) enum MacosTunHelperStatus {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MacosTunHelperStatePaths {
-    route: PathBuf,
-    dns: PathBuf,
-    lease: PathBuf,
+pub struct MacosTunHelperStatePaths {
+    pub route: PathBuf,
+    pub dns: PathBuf,
+    pub lease: PathBuf,
 }
 
 mod installation;
@@ -53,11 +53,8 @@ mod replacement;
 mod service;
 mod startup;
 
-pub(crate) use installation::*;
-pub(crate) use protocol::*;
-pub(crate) use replacement::*;
+pub use installation::*;
+pub use protocol::*;
+pub use replacement::*;
 pub(crate) use service::*;
-pub(crate) use startup::*;
-
-#[cfg(test)]
-mod tests;
+pub use startup::*;

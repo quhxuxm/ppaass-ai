@@ -140,7 +140,7 @@ fn cleanup_pf_state(token: &mut Option<String>) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn macos_pf_dns_rules(
+pub fn macos_pf_dns_rules(
     tun_if_name: &str,
     dns_capture_target: Ipv4Addr,
     dns_servers: &[SystemDnsServer],
@@ -280,7 +280,7 @@ fn macos_pf_release_token(token: Option<&str>) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn pf_token_already_released(message: &str) -> bool {
+pub fn pf_token_already_released(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("invalid argument")
         || message.contains("no such")
@@ -327,19 +327,5 @@ pub(super) fn command_output_message(output: &std::process::Output) -> String {
         }
     } else {
         stderr
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::pf_token_already_released;
-
-    #[test]
-    fn stale_pf_enable_token_release_is_idempotent() {
-        assert!(pf_token_already_released(
-            "pfctl: DIOCSTOPREF: Invalid argument"
-        ));
-        assert!(pf_token_already_released("token not found"));
-        assert!(!pf_token_already_released("permission denied"));
     }
 }

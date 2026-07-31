@@ -8,16 +8,34 @@ mod control_api;
 mod error;
 mod rate_limit;
 mod secrets;
+mod startup;
 pub mod store;
 mod web_handoffs;
 
 pub use store::*;
 
-pub use agent_events::AgentEventHub;
-pub use agent_tokens::{AgentAccessTokenError, AgentAccessTokenService};
-pub use api::{AppState, build_router};
-pub use auth::{PasswordError, PasswordService, SessionStore};
+pub use agent_events::{AgentEventHub, AgentServerEvent};
+pub use agent_tokens::{
+    AGENT_ACCESS_TOKEN_TTL_SECONDS, AGENT_PROFILE_REFRESH_SECONDS, AgentAccessTokenClaims,
+    AgentAccessTokenError, AgentAccessTokenService,
+};
+pub use api::{
+    AppState, agent_default_permissions, build_router, build_router_with_timeout,
+    hash_agent_user_code, include_required_agent_permissions, request_path_for_trace,
+    resolve_assigned_proxy_addresses,
+};
+pub use auth::{PasswordError, PasswordService, SessionStore, session_token, validate_password};
 pub use control_api::{ControlState, ControlTokenVerifier, build_control_router};
-pub use rate_limit::AgentDeviceAuthorizationGuard;
+pub use error::ApiError;
+pub use rate_limit::{
+    AgentDeviceAuthorizationGuard, DeviceAuthorizationEndpoint, RateLimitState, resolve_client_ip,
+};
 pub use secrets::{PrivateKeyCipher, PrivateKeyCipherError};
-pub use web_handoffs::AgentWebSessionHandoffStore;
+pub use startup::{
+    bool_env, bootstrap_admin, ensure_key_encryption_binding, init_tracing, registry_instance_id,
+    select_database_file_permissions, validate_listen_address,
+};
+pub use web_handoffs::{
+    AGENT_WEB_SESSION_HANDOFF_TTL_SECONDS, AgentWebSessionHandoffConsumeError,
+    AgentWebSessionHandoffIssueError, AgentWebSessionHandoffStore,
+};

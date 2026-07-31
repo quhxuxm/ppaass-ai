@@ -44,7 +44,8 @@ pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_validateKeyPair<'loc
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
-fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> bool {
+#[doc(hidden)]
+pub fn validate_key_pair(private_key_pem: &str, public_key_pem: &str) -> bool {
     let Ok(private_key) = RsaKeyPair::from_private_key_pem(private_key_pem) else {
         return false;
     };
@@ -274,23 +275,4 @@ fn throw(env: &mut Env<'_>, message: String) {
         jni::jni_str!("java/lang/IllegalStateException"),
         JNIString::new(message),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_key_pair;
-    use protocol::RsaKeyPair;
-
-    #[test]
-    fn managed_key_pair_validation_rejects_mismatched_or_invalid_pem() {
-        let first = RsaKeyPair::generate(2048).unwrap();
-        let second = RsaKeyPair::generate(2048).unwrap();
-        let first_private = first.private_key_to_pem().unwrap();
-        let first_public = first.public_key_to_pem().unwrap();
-        let second_public = second.public_key_to_pem().unwrap();
-
-        assert!(validate_key_pair(&first_private, &first_public));
-        assert!(!validate_key_pair(&first_private, &second_public));
-        assert!(!validate_key_pair("not a private key", &first_public));
-    }
 }

@@ -21,7 +21,7 @@ pub(crate) fn cleanup_stale_routes_checked(route_state_file: Option<&str>) -> Re
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(super) enum RouteKind {
+pub enum RouteKind {
     ProxyBypass,
     /// 局域网/链路本地/组播旁路路由，避免 TUN split-default 抢走
     /// 依赖物理网络接口语义的发现与投屏流量。
@@ -35,31 +35,31 @@ pub(super) enum RouteKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RouteRecord {
-    pub(super) kind: RouteKind,
-    pub(super) destination: IpAddr,
-    pub(super) prefix: u8,
-    pub(super) gateway: Option<IpAddr>,
+pub struct RouteRecord {
+    pub kind: RouteKind,
+    pub destination: IpAddr,
+    pub prefix: u8,
+    pub gateway: Option<IpAddr>,
     #[serde(default)]
-    pub(super) if_name: Option<String>,
-    pub(super) if_index: Option<u32>,
+    pub if_name: Option<String>,
+    pub if_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct RouteState {
-    pub(super) version: u8,
-    pub(super) pid: u32,
-    pub(super) created_unix_secs: u64,
-    pub(super) routes: Vec<RouteRecord>,
+pub struct RouteState {
+    pub version: u8,
+    pub pid: u32,
+    pub created_unix_secs: u64,
+    pub routes: Vec<RouteRecord>,
 }
 
-pub(super) struct RouteLease {
-    pub(super) path: PathBuf,
-    pub(super) state: RouteState,
+pub struct RouteLease {
+    pub path: PathBuf,
+    pub state: RouteState,
 }
 
 impl RouteLease {
-    pub(super) fn new(route_state_file: Option<&str>) -> Self {
+    pub fn new(route_state_file: Option<&str>) -> Self {
         Self {
             path: route_state_file_path(route_state_file),
             state: RouteState {
@@ -131,7 +131,7 @@ impl RouteLease {
         }
     }
 
-    pub(super) fn record_installed(&mut self, kind: RouteKind, route: &Route) -> Result<()> {
+    pub fn record_installed(&mut self, kind: RouteKind, route: &Route) -> Result<()> {
         self.state.routes.push(RouteRecord::from_route(kind, route));
         self.persist().map_err(|e| {
             AgentError::Connection(format!(
@@ -174,7 +174,7 @@ impl RouteLease {
         persist_result
     }
 
-    pub(super) fn clear(&mut self) -> std::io::Result<()> {
+    pub fn clear(&mut self) -> std::io::Result<()> {
         remove_file_if_exists(&self.path)?;
         self.state.routes.clear();
         Ok(())
@@ -212,7 +212,7 @@ impl RouteRecord {
         route
     }
 
-    pub(super) fn matches_route(&self, route: &Route) -> bool {
+    pub fn matches_route(&self, route: &Route) -> bool {
         route.destination() == self.destination
             && route.prefix() == self.prefix
             && gateways_match(self.gateway, route.gateway(), self.destination)

@@ -24,24 +24,21 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tracing::{error, warn};
 
-const PCAP_SNAPLEN: u32 = 65_535;
+pub const PCAP_SNAPLEN: u32 = 65_535;
 
-mod stream;
-mod writer;
+pub mod stream;
+pub mod writer;
 
-pub(crate) use stream::CapturedTcpStream;
-use stream::synthetic_udp_packet;
-#[cfg(test)]
-use stream::{TcpCaptureFlow, internet_checksum, synthetic_tcp_packet};
-use writer::PacketCapture;
-#[cfg(test)]
-use writer::global_header;
+pub use stream::CapturedTcpStream;
+pub use stream::{TcpCaptureFlow, internet_checksum, synthetic_tcp_packet, synthetic_udp_packet};
+pub use writer::{PacketCapture, global_header};
 const PCAP_LINKTYPE_RAW: u32 = 101;
-const IPV4_HEADER_LEN: usize = 20;
-const IPV6_HEADER_LEN: usize = 40;
+pub const IPV4_HEADER_LEN: usize = 20;
+pub const IPV6_HEADER_LEN: usize = 40;
 const TCP_HEADER_LEN: usize = 20;
-const UDP_HEADER_LEN: usize = 8;
-const MAX_SYNTHETIC_TCP_PAYLOAD: usize = PCAP_SNAPLEN as usize - IPV6_HEADER_LEN - TCP_HEADER_LEN;
+pub const UDP_HEADER_LEN: usize = 8;
+pub const MAX_SYNTHETIC_TCP_PAYLOAD: usize =
+    PCAP_SNAPLEN as usize - IPV6_HEADER_LEN - TCP_HEADER_LEN;
 const MAX_SYNTHETIC_UDP_PAYLOAD: usize = PCAP_SNAPLEN as usize - IPV6_HEADER_LEN - UDP_HEADER_LEN;
 const CAPTURE_QUEUE_PACKETS: usize = 4_096;
 const WRITER_BUFFER_BYTES: usize = 256 * 1024;
@@ -99,7 +96,7 @@ impl PacketCaptureController {
         Ok(())
     }
 
-    pub(super) fn record(&self, packet: &[u8]) -> io::Result<()> {
+    pub fn record(&self, packet: &[u8]) -> io::Result<()> {
         let capture = self.active.load_full();
         match capture {
             Some(capture) => capture.record(packet),
@@ -107,7 +104,7 @@ impl PacketCaptureController {
         }
     }
 
-    pub(crate) fn capture_tcp_stream(&self, stream: TcpStream) -> CapturedTcpStream {
+    pub fn capture_tcp_stream(&self, stream: TcpStream) -> CapturedTcpStream {
         CapturedTcpStream::new(stream, self.clone())
     }
 
@@ -145,6 +142,3 @@ impl PacketCaptureController {
         drop(capture);
     }
 }
-
-#[cfg(test)]
-mod tests;

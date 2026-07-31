@@ -50,7 +50,7 @@ pub(crate) fn icmp_layer(name: &str, transport: &[u8]) -> ProtocolLayer {
     )
 }
 
-pub(crate) fn analyze_application_protocol(
+pub fn analyze_application_protocol(
     protocol: &str,
     source_port: Option<u16>,
     destination_port: Option<u16>,

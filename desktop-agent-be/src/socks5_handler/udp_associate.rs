@@ -78,7 +78,7 @@ fn udp_associate_bind_addr(control_local_ip: Option<IpAddr>) -> SocketAddr {
     }
 }
 
-pub(super) fn resolve_udp_associate_reply_addr(
+pub fn resolve_udp_associate_reply_addr(
     bind_addr: SocketAddr,
     control_local_ip: Option<IpAddr>,
 ) -> SocketAddr {

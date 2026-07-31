@@ -131,7 +131,7 @@ pub(in crate::tun_handler::route) fn replace_one_macos_scoped_default(
 }
 
 #[cfg(target_os = "macos")]
-pub(in crate::tun_handler::route) fn macos_scoped_default_command(
+pub fn macos_scoped_default_command(
     action: &str,
     if_name: &str,
     gateway: IpAddr,

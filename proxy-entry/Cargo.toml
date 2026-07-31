@@ -36,7 +36,6 @@ mimalloc = { workspace = true, optional = true }
 rand.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 serde_json.workspace = true
-sha2.workspace = true
 libc.workspace = true
 pretty-hex.workspace = true
 socket2.workspace = true

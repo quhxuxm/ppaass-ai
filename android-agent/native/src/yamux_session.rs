@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-#[cfg(test)]
-use common::YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE;
 use common::{
     AuthenticatedConnection, ClientStream, TransportMode, UdpClientConnection, UdpClientStream,
     YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
@@ -60,7 +58,7 @@ pub struct AndroidYamuxSessionManager {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProxyStreamRoute {
+pub enum ProxyStreamRoute {
     Auto,
     DirectTcp,
     NativeUdp,
@@ -87,6 +85,30 @@ impl AndroidYamuxSessionManager {
             "udp_proxy_connections",
             TransportProtocol::Udp,
         )
+    }
+
+    #[doc(hidden)]
+    pub fn udp_session_pool_size(&self) -> usize {
+        self.udp_sessions.len()
+    }
+
+    #[doc(hidden)]
+    pub fn udp_fallback_slot_count(&self) -> usize {
+        self.auto_udp_fallback_to_yamux.len()
+    }
+
+    #[doc(hidden)]
+    pub fn udp_fallback_to_yamux(&self, slot: usize) -> bool {
+        self.auto_udp_fallback_to_yamux
+            .get(slot)
+            .is_some_and(|fallback| fallback.load(Ordering::Acquire))
+    }
+
+    #[doc(hidden)]
+    pub fn set_udp_fallback_to_yamux(&self, slot: usize, enabled: bool) {
+        if let Some(fallback) = self.auto_udp_fallback_to_yamux.get(slot) {
+            fallback.store(enabled, Ordering::Release);
+        }
     }
 
     fn new_for_transport(
@@ -128,7 +150,8 @@ impl AndroidYamuxSessionManager {
 mod connection;
 mod pool;
 
-fn proxy_stream_route(
+#[doc(hidden)]
+pub fn proxy_stream_route(
     transport_mode: TransportMode,
     manager_transport: TransportProtocol,
     target_transport: TransportProtocol,
@@ -149,7 +172,8 @@ fn proxy_stream_route(
     }
 }
 
-fn is_native_udp_timeout(error: &AndroidAgentError) -> bool {
+#[doc(hidden)]
+pub fn is_native_udp_timeout(error: &AndroidAgentError) -> bool {
     match error {
         AndroidAgentError::Io(error) => error.kind() == io::ErrorKind::TimedOut,
         AndroidAgentError::Connection(message) => {
@@ -211,7 +235,8 @@ impl AsyncWrite for AndroidYamuxTargetStream {
 
 impl Unpin for AndroidYamuxTargetStream {}
 
-fn is_yamux_actual_target_connect_error(message: &str) -> bool {
+#[doc(hidden)]
+pub fn is_yamux_actual_target_connect_error(message: &str) -> bool {
     message.starts_with("连接失败:")
         || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
         || message == "连接目标响应超时"
@@ -243,6 +268,3 @@ fn target_label(address: &Address) -> String {
         Address::UdpRelay => "udp-relay".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests;

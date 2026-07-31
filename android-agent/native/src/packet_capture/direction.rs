@@ -18,7 +18,7 @@ pub(super) fn explicit_proxy_direction(
 }
 
 #[derive(Default)]
-pub(super) struct WindowDirectionTracker {
+pub struct WindowDirectionTracker {
     pub(super) flows: HashMap<String, WindowDirectionState>,
 }
 
@@ -28,7 +28,7 @@ pub(super) struct WindowDirectionState {
 }
 
 impl WindowDirectionTracker {
-    pub(super) fn observe(&mut self, packet: &CapturedPacket, flow_key: &str) -> &'static str {
+    pub fn observe(&mut self, packet: &CapturedPacket, flow_key: &str) -> &'static str {
         let source = endpoint(&packet.source, packet.source_port);
         let state =
             self.flows
@@ -45,7 +45,7 @@ impl WindowDirectionTracker {
         }
     }
 
-    pub(super) fn release(&mut self, packet: &CapturedPacket, flow_key: &str) {
+    pub fn release(&mut self, packet: &CapturedPacket, flow_key: &str) {
         let should_remove = self.flows.get_mut(flow_key).is_some_and(|state| {
             state.retained_packets = state.retained_packets.saturating_sub(1);
             state.retained_packets == 0
@@ -54,6 +54,10 @@ impl WindowDirectionTracker {
             self.flows.remove(flow_key);
         }
         debug_assert!(packet.direction_tracked);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.flows.is_empty()
     }
 }
 
@@ -95,7 +99,7 @@ impl ProxyFlowState {
     }
 }
 
-pub(super) struct ProxyFlowObservation {
-    pub(super) session_id: u64,
+pub struct ProxyFlowObservation {
+    pub session_id: u64,
     pub(super) protocol: Option<String>,
 }

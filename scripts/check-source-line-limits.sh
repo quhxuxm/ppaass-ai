@@ -20,3 +20,6 @@ if [ -n "$violations" ]; then
     printf '%s\n' "$violations"
     exit 1
 fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+sh "$script_dir/check-rust-test-layout.sh"

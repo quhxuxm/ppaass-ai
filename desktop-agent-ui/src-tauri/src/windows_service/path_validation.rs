@@ -53,62 +53,6 @@ pub(crate) fn validate_managed_private_key_path(
     Ok(())
 }
 
-pub(crate) fn validate_managed_proxy_identity_public_key_path(
-    app_data_dir: &Path,
-    configured_path: &str,
-) -> Result<(), String> {
-    let configured = Path::new(configured_path);
-    if configured.file_name().and_then(|value| value.to_str())
-        != Some(MANAGED_PROXY_IDENTITY_PUBLIC_KEY_FILE)
-    {
-        return Err(
-            "Windows Service Proxy 身份公钥文件名必须为 proxy-identity-public.pem".to_string(),
-        );
-    }
-
-    let candidate = if configured.is_absolute() {
-        configured.to_path_buf()
-    } else {
-        app_data_dir.join(configured)
-    };
-
-    // Reject an arbitrary absolute/UNC location before canonicalization. The
-    // service runs elevated, so even probing a user-selected network or local
-    // path would unnecessarily expand its privileged filesystem surface.
-    let candidate_parent = candidate
-        .parent()
-        .ok_or_else(|| "Windows Service Proxy 身份公钥路径缺少父目录".to_string())?;
-    if !windows_credentials_dir_candidates(app_data_dir)
-        .iter()
-        .any(|directory| {
-            lexical_path_for_compare(candidate_parent) == lexical_path_for_compare(directory)
-        })
-    {
-        return Err("Windows Service Proxy 身份公钥必须来自受管 credentials 目录".to_string());
-    }
-
-    let canonical_credentials = canonical_windows_credentials_dirs(app_data_dir);
-    if canonical_credentials.is_empty() {
-        return Err("Windows Service 无法定位受管 credentials 目录".to_string());
-    }
-    let canonical_key = fs::canonicalize(&candidate)
-        .map_err(|err| format!("无法定位 Windows Service Proxy 身份公钥：{err}"))?;
-    let metadata = fs::metadata(&canonical_key)
-        .map_err(|err| format!("无法读取 Windows Service Proxy 身份公钥元数据：{err}"))?;
-    if !metadata.is_file()
-        || canonical_key.file_name().and_then(|value| value.to_str())
-            != Some(MANAGED_PROXY_IDENTITY_PUBLIC_KEY_FILE)
-        || !canonical_credentials
-            .iter()
-            .any(|directory| canonical_key.parent() == Some(directory.as_path()))
-    {
-        return Err(
-            "Windows Service Proxy 身份公钥必须是受管 credentials 目录中的固定文件".to_string(),
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn windows_credentials_dir_candidates(app_data_dir: &Path) -> Vec<PathBuf> {
     let mut roots = vec![app_data_dir.to_path_buf()];
     let Some(roaming_or_local) = app_data_dir.parent() else {
@@ -138,17 +82,7 @@ pub(crate) fn canonical_windows_credentials_dirs(app_data_dir: &Path) -> Vec<Pat
         .collect()
 }
 
-pub(crate) fn lexical_path_for_compare(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('/', "\\")
-        .trim_start_matches(r"\\?\")
-        .to_lowercase()
-}
-
-pub(crate) fn validate_service_managed_path(
-    app_data_dir: &Path,
-    value: &str,
-) -> Result<(), String> {
+pub fn validate_service_managed_path(app_data_dir: &Path, value: &str) -> Result<(), String> {
     validate_service_relative_path(value)?;
 
     let canonical_root = canonical_managed_config_root_dir(app_data_dir)?;
@@ -167,13 +101,13 @@ pub(crate) fn validate_service_managed_path(
     Ok(())
 }
 
-pub(crate) fn normalized_path_is_within(path: &Path, root: &Path) -> bool {
+pub fn normalized_path_is_within(path: &Path, root: &Path) -> bool {
     let path = normalized_path_for_compare(path);
     let root = normalized_path_for_compare(root);
     path == root || path.starts_with(&format!("{root}\\"))
 }
 
-pub(crate) fn validate_service_relative_path(value: &str) -> Result<(), String> {
+pub fn validate_service_relative_path(value: &str) -> Result<(), String> {
     let path = Path::new(value);
     if path.is_absolute()
         || path.components().any(|component| {

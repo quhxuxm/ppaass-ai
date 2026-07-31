@@ -4,6 +4,23 @@
 
 This document provides examples of using the PPAASS integration and performance testing tools.
 
+## Rust Test Layout
+
+Rust tests live in each crate's top-level `tests/` directory and run as Cargo integration-test
+targets. Production `src/` directories must not contain `#[cfg(test)]`, `#[test]`,
+`#[tokio::test]`, test modules, or test-only source files. Tests should exercise a crate through
+its public API; when low-level coverage is required, expose only the smallest safe API needed for
+that behavior.
+
+The repository guard checks both sides of this rule: it rejects test code or test-named modules
+under `src/`, and it rejects `include!`, `#[path = ...]`, or `../src` bypasses from Cargo
+integration tests.
+
+```bash
+sh scripts/check-rust-test-layout.sh
+cargo test --workspace --locked
+```
+
 ## Setup
 
 Before running tests, you need to have three components running:
@@ -50,7 +67,7 @@ The mock servers provide:
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
+cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml
 ```
 
 **Expected Output:**
@@ -65,7 +82,7 @@ cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
 cd /path/to/ppaass-ai
 cargo run --release -p desktop-agent-be --features integration-test-harness \
   --bin desktop-agent-integration-harness -- \
-  --config config/local/agent-forward.toml \
+  --config tests/fixtures/config/agent-integration.toml \
   --managed-proxy-address 127.0.0.1:8080
 ```
 
@@ -274,9 +291,9 @@ For network testing (components on different machines):
 
 You can modify the test sources to create custom scenarios:
 
-1. Edit `tests/src/integration_tests.rs` to add new test cases
-2. Edit `tests/src/performance_tests.rs` to adjust load patterns
-3. Edit `tests/src/mock_target.rs` to add new endpoints
+1. Edit `tests/src/integration_tests/` to add new test cases
+2. Edit `tests/src/performance_tests/` to adjust load patterns
+3. Edit `tests/src/mock_target/` to add new endpoints
 
 ### Continuous Integration
 
@@ -303,10 +320,10 @@ jobs:
         run: ./run-tests.sh mock-target &
         
       - name: Start proxy
-        run: cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml &
+        run: cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml &
         
       - name: Start test-only agent harness
-        run: cargo run --release -p desktop-agent-be --features integration-test-harness --bin desktop-agent-integration-harness -- --config config/local/agent-forward.toml --managed-proxy-address 127.0.0.1:8080 &
+        run: cargo run --release -p desktop-agent-be --features integration-test-harness --bin desktop-agent-integration-harness -- --config tests/fixtures/config/agent-integration.toml --managed-proxy-address 127.0.0.1:8080 &
         
       - name: Run integration tests
         run: ./run-tests.sh integration

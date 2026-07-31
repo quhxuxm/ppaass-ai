@@ -11,19 +11,6 @@ pub(crate) fn write_managed_private_key(
     write_private_key_to_dir(&credentials_dir, &file_name, private_key_pem)
 }
 
-pub(crate) fn write_managed_proxy_identity_public_key(
-    app: &tauri::AppHandle,
-    public_key_pem: &str,
-) -> Result<PathBuf, String> {
-    validate_proxy_identity_public_key(public_key_pem)?;
-    let credentials_dir = managed_credentials_dir(app)?;
-    write_private_key_to_dir(
-        &credentials_dir,
-        PROXY_IDENTITY_PUBLIC_KEY_FILE,
-        public_key_pem,
-    )
-}
-
 pub(crate) fn persist_agent_login(
     app: &tauri::AppHandle,
     account: &AgentAuthAccount,
@@ -96,8 +83,7 @@ pub(crate) fn managed_credentials_dir(app: &tauri::AppHandle) -> Result<PathBuf,
     Ok(app_data_dir.join(CREDENTIALS_DIR))
 }
 
-#[cfg(test)]
-pub(crate) fn persist_agent_login_to_dir(
+pub fn persist_agent_login_to_dir(
     credentials_dir: &Path,
     account: &AgentAuthAccount,
     account_status: AgentAuthAccountStatus,
@@ -181,7 +167,7 @@ fn persist_agent_login_to_dir_internal(
     Ok(())
 }
 
-pub(crate) fn load_persisted_agent_login_from_dir(
+pub fn load_persisted_agent_login_from_dir(
     credentials_dir: &Path,
 ) -> Result<Option<PersistedAgentLogin>, String> {
     let record_path = credentials_dir.join(PERSISTED_AGENT_LOGIN_FILE);
@@ -222,19 +208,11 @@ pub(crate) fn load_persisted_agent_login_from_dir(
         &record.account.username,
         record.account.key_version,
     ));
-    let proxy_identity_public_key_path = credentials_dir.join(PROXY_IDENTITY_PUBLIC_KEY_FILE);
     validate_persisted_credential_file(&private_key_path, MAX_PRIVATE_KEY_RESPONSE_BYTES as u64)?;
-    validate_persisted_credential_file(
-        &proxy_identity_public_key_path,
-        MAX_PRIVATE_KEY_RESPONSE_BYTES as u64,
-    )?;
     let private_key_pem = fs::read_to_string(&private_key_path)
         .map_err(|error| format!("读取持久登录私钥失败：{error}"))?;
     RsaKeyPair::from_private_key_pem(&private_key_pem)
         .map_err(|_| "持久登录私钥格式无效".to_string())?;
-    let proxy_identity_public_key_pem = fs::read_to_string(&proxy_identity_public_key_path)
-        .map_err(|error| format!("读取持久登录 Proxy 身份公钥失败：{error}"))?;
-    validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
 
     Ok(Some(PersistedAgentLogin {
         account: record.account,
@@ -243,7 +221,6 @@ pub(crate) fn load_persisted_agent_login_from_dir(
         proxy_assignment_missing: record.proxy_assignment_missing,
         resume_after_proxy_assignment: record.resume_after_proxy_assignment,
         private_key_path,
-        proxy_identity_public_key_path,
         agent_access_token,
     }))
 }
@@ -292,16 +269,6 @@ pub(crate) fn destroy_managed_private_key(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("同步托管私钥清理失败：{error}"))?;
     drop(file);
     fs::remove_file(path).map_err(|error| format!("删除托管私钥失败：{error}"))
-}
-
-pub(crate) fn destroy_managed_proxy_identity_public_key(path: &Path) -> Result<(), String> {
-    if path.file_name().and_then(|value| value.to_str()) != Some(PROXY_IDENTITY_PUBLIC_KEY_FILE) {
-        return Err("拒绝删除非托管 Proxy 身份公钥文件".to_string());
-    }
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| format!("删除 Proxy 身份公钥失败：{error}"))?;
-    }
-    Ok(())
 }
 
 pub(crate) fn require_active_profile(me: &MeResponse) -> Result<&MeProfile, String> {

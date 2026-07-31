@@ -1,7 +1,7 @@
 use super::*;
 
 #[instrument(skip_all)]
-pub(crate) async fn start_device_authorization(
+pub async fn start_device_authorization(
     proxy_registry_url: &str,
 ) -> Result<StartedDeviceAuthorization, String> {
     let base_url = normalize_proxy_registry_url(proxy_registry_url)
@@ -50,7 +50,7 @@ pub(crate) async fn start_device_authorization(
 }
 
 #[instrument(skip_all)]
-pub(crate) async fn poll_device_authorization(
+pub async fn poll_device_authorization(
     proxy_registry_url: &str,
     device_code: &str,
     default_interval_seconds: u32,
@@ -150,7 +150,6 @@ pub(crate) fn validate_device_token(
         account,
         profile,
         public_key_pem,
-        proxy_identity_public_key_pem,
         private_key_pem,
         csrf_token: _,
         _session_expires_at: _,
@@ -189,7 +188,6 @@ pub(crate) fn validate_device_token(
     let proxy_addresses = profile.proxy_addresses.unwrap_or_default();
     validate_managed_proxy_addresses(&proxy_addresses, false)?;
     validate_key_pair(&private_key_pem, &public_key_pem)?;
-    validate_proxy_identity_public_key(&proxy_identity_public_key_pem)?;
     let agent_access_token = validated_agent_access_token(
         agent_access_token,
         agent_access_token_expires_at,
@@ -207,10 +205,21 @@ pub(crate) fn validate_device_token(
             expires_at: profile.expires_at,
         },
         private_key_pem,
-        proxy_identity_public_key_pem,
         proxy_registry_url,
         agent_access_token: Some(agent_access_token),
     })
+}
+
+pub fn validate_device_token_payload(
+    payload: &str,
+    proxy_registry_url: String,
+) -> Result<DownloadedCredential, String> {
+    if payload.len() > MAX_PRIVATE_KEY_RESPONSE_BYTES {
+        return Err("Proxy Registry 返回的设备登录响应过大".to_string());
+    }
+    let token = serde_json::from_str::<AgentDeviceTokenResponse>(payload)
+        .map_err(|_| "Proxy Registry 返回的设备登录响应格式无效".to_string())?;
+    validate_device_token(token, proxy_registry_url)
 }
 
 pub(crate) async fn decode_device_authorization_error(
@@ -245,7 +254,7 @@ pub(crate) async fn decode_device_authorization_error(
     }
 }
 
-pub(crate) fn validate_device_code(value: &str) -> Result<(), String> {
+pub fn validate_device_code(value: &str) -> Result<(), String> {
     if value.len() != 43
         || !value
             .bytes()
@@ -268,7 +277,7 @@ pub(crate) fn validate_user_code(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn device_verification_url(base_url: &Url, value: &str) -> Result<Url, String> {
+pub fn device_verification_url(base_url: &Url, value: &str) -> Result<Url, String> {
     if value.is_empty() || value.len() > 2048 {
         return Err("Proxy Registry 返回的设备登录地址无效".to_string());
     }
@@ -285,7 +294,7 @@ pub(crate) fn device_verification_url(base_url: &Url, value: &str) -> Result<Url
     Ok(url)
 }
 
-pub(crate) fn build_proxy_registry_client() -> Result<Client, String> {
+pub fn build_proxy_registry_client() -> Result<Client, String> {
     Client::builder()
         // Proxy Registry is the control plane that provisions this Agent. Routing its
         // login or private-key requests through the Agent's own data-plane proxy

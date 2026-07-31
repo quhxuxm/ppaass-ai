@@ -8,16 +8,14 @@ use crate::config::ProxyConfig;
 use crate::connection::{EgressState, ServerConnection};
 use crate::control_plane::{AccessEventSink, RemoteControlPlane};
 use crate::error::Result;
-use crate::transport_identity::load_transport_identity_private_key;
 use crate::user_manager::UserManager;
 use common::{
     DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, configure_proxy_tcp_stream,
     spawn_guarded,
 };
 use futures::StreamExt;
-use protocol::{CompressionMode, RsaKeyPair};
+use protocol::CompressionMode;
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,7 +26,7 @@ use tracing::{debug, error, info, instrument, warn};
 mod protocol_detection;
 mod task_cleanup;
 
-use protocol_detection::{looks_like_yamux_header, peek_connection_header};
+pub use protocol_detection::{looks_like_yamux_header, peek_connection_header};
 use task_cleanup::{abort_stream_tasks, prune_finished_stream_tasks};
 
 const YAMUX_SESSION_TASK_PRUNE_INTERVAL_SECS: u64 = 5;
@@ -38,8 +36,6 @@ pub struct ProxyServer {
     config: Arc<ProxyConfig>,
     // 用户表在认证路径读取，内部用锁保证并发读安全。
     user_manager: Arc<UserManager>,
-    // TCP/Yamux 成功与失败认证响应由该独立传输身份签名；Agent pin 对应公钥。
-    transport_identity: Arc<RsaKeyPair>,
     // 出站连接状态在启动时初始化，避免每次 CONNECT 都重新解析出站策略。
     egress_state: Arc<EgressState>,
     // 成功访问异步写入与用户主库物理隔离的 SQLite。
@@ -51,7 +47,6 @@ struct ConnectionContext {
     // 拆成 context 是为了让 accept loop 只负责接入，把连接生命周期移动到独立任务。
     proxy_config: Arc<ProxyConfig>,
     user_manager: Arc<UserManager>,
-    transport_identity: Arc<RsaKeyPair>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     compression_mode: CompressionMode,
@@ -61,27 +56,7 @@ impl ProxyServer {
     #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
-        let identity_path = config
-            .transport_identity_private_key_path
-            .as_deref()
-            .ok_or_else(|| {
-                crate::error::ProxyError::Configuration(
-                    "必须配置 transport_identity_private_key_path".to_string(),
-                )
-            })?;
-        let transport_identity = Arc::new(load_transport_identity_private_key(Path::new(
-            identity_path,
-        ))?);
-        info!("已安全加载 Proxy TCP/Yamux 传输身份私钥");
-
-        let transport_identity_public_key_pem =
-            transport_identity.public_key_to_pem().map_err(|error| {
-                crate::error::ProxyError::Configuration(format!(
-                    "无法派生 Proxy 传输身份公钥：{error}"
-                ))
-            })?;
-        let control_plane =
-            RemoteControlPlane::connect(&config, &transport_identity_public_key_pem).await?;
+        let control_plane = RemoteControlPlane::connect(&config).await?;
         info!(
             entry_id = config.entry_id,
             registry_control_url = config.registry_control_url,
@@ -100,7 +75,6 @@ impl ProxyServer {
         Ok(Self {
             config,
             user_manager,
-            transport_identity,
             egress_state,
             access_recorder,
         })
@@ -119,7 +93,6 @@ impl ProxyServer {
             udp_socket,
             self.config.clone(),
             self.user_manager.clone(),
-            self.transport_identity.clone(),
             self.egress_state.clone(),
             self.access_recorder.clone(),
         );
@@ -141,7 +114,6 @@ impl ProxyServer {
                             let context = ConnectionContext {
                                 proxy_config: self.config.clone(),
                                 user_manager: self.user_manager.clone(),
-                                transport_identity: self.transport_identity.clone(),
                                 egress_state: self.egress_state.clone(),
                                 access_recorder: self.access_recorder.clone(),
                                 compression_mode: self.config.get_compression_mode(),
@@ -280,7 +252,6 @@ where
     let ConnectionContext {
         proxy_config,
         user_manager,
-        transport_identity,
         egress_state,
         access_recorder,
         compression_mode,
@@ -292,7 +263,6 @@ where
         compression_mode,
         proxy_config.clone(),
         user_manager.clone(),
-        transport_identity,
         egress_state,
         access_recorder,
     );
@@ -348,6 +318,3 @@ where
 
     connection.handle_connect_request(&username).await
 }
-
-#[cfg(test)]
-mod tests;

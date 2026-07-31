@@ -2,7 +2,7 @@
 //!
 //! 认证后的第一条 `ConnectRequest` 会到这里。它不直接搬数据，而是先根据
 //! `Address` 和 `TransportProtocol` 决定后续生命周期：直连 TCP/UDP、
-//! 共享 UDP relay，或 forward 到上游 proxy。
+//! 或共享 UDP relay。
 
 use super::*;
 use crate::config::{PERMISSION_PROXY_CONNECT_TCP, PERMISSION_PROXY_CONNECT_UDP};
@@ -42,15 +42,7 @@ impl ServerConnection {
                     )
                     .await;
             }
-            if self.proxy_config.forward_mode {
-                return self.handle_upstream_connect(connect_request).await;
-            }
             return self.handle_udp_relay_connect(connect_request).await;
-        }
-
-        // 检查是否启用了转发模式
-        if self.proxy_config.forward_mode {
-            return self.handle_upstream_connect(connect_request).await;
         }
 
         // 普通 Domain/IPv4/IPv6 目标到这里才会被转换成 Tokio 可连接的 host:port。
@@ -124,63 +116,6 @@ impl ServerConnection {
     fn target_addr_for_request(&self, address: &Address) -> Result<String> {
         // ProxyDns 是特殊地址类型，需要在 proxy 端决定真正的 DNS 上游。
         target_addr_for_address(&self.proxy_config, address)
-    }
-
-    async fn handle_upstream_connect(&mut self, connect_request: ConnectRequest) -> Result<()> {
-        debug!("正在将请求转发到上游代理");
-
-        // 转发模式下 proxy 作为客户端连接下一跳 proxy，再把 agent 流量接过去。
-        // 对 agent 来说下游 proxy 仍像目标连接；对本 proxy 来说上游 proxy 是 AsyncRead/AsyncWrite。
-        match UpstreamConnection::connect(
-            &self.proxy_config,
-            connect_request.address.clone(),
-            connect_request.transport,
-        )
-        .await
-        {
-            Ok(upstream_conn) => {
-                debug!("已连接到上游代理");
-                // 上游 connect 可能较慢；成功响应前必须再次检查，避免在等待期间
-                // 已撤销的身份得到一条新 active relay。
-                let permission = match connect_request.transport {
-                    TransportProtocol::Tcp => PERMISSION_PROXY_CONNECT_TCP,
-                    TransportProtocol::Udp => PERMISSION_PROXY_CONNECT_UDP,
-                };
-                if !self
-                    .send_authorized_connect_success(
-                        &connect_request.request_id,
-                        "Connected through upstream",
-                        permission,
-                    )
-                    .await?
-                {
-                    return Ok(());
-                }
-                self.record_successful_access(connect_request.transport, &connect_request.address);
-
-                let mut upstream_conn = upstream_conn;
-                // 上游连接也是一个 AsyncRead/AsyncWrite，复用普通 TCP 中继逻辑。
-                let relay_result = self
-                    .relay(
-                        connect_request.request_id,
-                        &mut upstream_conn,
-                        connect_request.transport,
-                    )
-                    .await;
-                upstream_conn.close().await;
-                relay_result?;
-            }
-            Err(e) => {
-                error!("连接上游代理失败：{}", e);
-                self.send_connect_error(
-                    connect_request.request_id,
-                    format!("Upstream error: {}", e),
-                )
-                .await?;
-            }
-        }
-
-        Ok(())
     }
 
     async fn handle_tcp_connect(

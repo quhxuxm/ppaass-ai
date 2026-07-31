@@ -27,17 +27,17 @@ pub(in crate::tun_handler) struct UdpRelay {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct UdpRelayRequest {
-    pub(super) client: SocketAddr,
-    pub(super) target: SocketAddr,
-    pub(super) address: Address,
-    pub(super) packet: Vec<u8>,
+pub struct UdpRelayRequest {
+    pub client: SocketAddr,
+    pub target: SocketAddr,
+    pub address: Address,
+    pub packet: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq)]
-pub(super) struct UdpFlowKey {
-    pub(super) client: SocketAddr,
-    pub(super) target: SocketAddr,
+pub struct UdpFlowKey {
+    pub client: SocketAddr,
+    pub target: SocketAddr,
 }
 
 impl PartialEq for UdpFlowKey {
@@ -53,7 +53,7 @@ impl Hash for UdpFlowKey {
     }
 }
 
-pub(super) struct UdpRelayState {
+pub struct UdpRelayState {
     // (client,target) -> flow_id，保证同一 UDP flow 在 proxy 端对应同一个 UDP socket。
     pub(super) flow_ids: HashMap<UdpFlowKey, u64>,
     // flow_id -> (client,target)，用于把 proxy 响应写回正确的 netstack 方向。
@@ -63,7 +63,7 @@ pub(super) struct UdpRelayState {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct UdpRelayStats {
+pub struct UdpRelayStats {
     pub(super) sent_packets: AtomicU64,
     pub(super) sent_payload_bytes: AtomicU64,
     pub(super) send_batches: AtomicU64,
@@ -85,7 +85,7 @@ pub(super) struct UdpRelayStatsSnapshot {
 }
 
 impl UdpRelayStats {
-    pub(super) fn record_sent_batch(&self, packets: usize, payload_bytes: usize) {
+    pub fn record_sent_batch(&self, packets: usize, payload_bytes: usize) {
         self.sent_packets
             .fetch_add(packets as u64, Ordering::Relaxed);
         self.sent_payload_bytes
@@ -97,13 +97,13 @@ impl UdpRelayStats {
         }
     }
 
-    pub(super) fn record_response(&self, payload_bytes: usize) {
+    pub fn record_response(&self, payload_bytes: usize) {
         self.response_packets.fetch_add(1, Ordering::Relaxed);
         self.response_payload_bytes
             .fetch_add(payload_bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn record_queue_drop(&self) {
+    pub fn record_queue_drop(&self) {
         self.queue_drops.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -121,7 +121,7 @@ impl UdpRelayStats {
 }
 
 impl UdpRelayState {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             flow_ids: HashMap::new(),
             flows: HashMap::new(),
@@ -130,7 +130,7 @@ impl UdpRelayState {
         }
     }
 
-    pub(super) fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
+    pub fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
         let key = UdpFlowKey { client, target };
         if let Some(id) = self.flow_ids.get(&key) {
             self.last_seen.insert(*id, Instant::now());
@@ -144,7 +144,7 @@ impl UdpRelayState {
         id
     }
 
-    pub(super) fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
+    pub fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
         self.flows.get(&flow_id).copied()
     }
 

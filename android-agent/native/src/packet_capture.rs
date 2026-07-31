@@ -22,30 +22,30 @@ use tracing::warn;
 
 const DLT_RAW: u32 = 101;
 const PCAP_SNAPLEN: u32 = 65_535;
-const IPV4_HEADER_LEN: usize = 20;
-const IPV6_HEADER_LEN: usize = 40;
+pub const IPV4_HEADER_LEN: usize = 20;
+pub const IPV6_HEADER_LEN: usize = 40;
 const TCP_HEADER_LEN: usize = 20;
 const PROXY_CAPTURE_TCP_OPTION_LEN: usize = 8;
 const SYNTHETIC_TCP_HEADER_LEN: usize = TCP_HEADER_LEN + PROXY_CAPTURE_TCP_OPTION_LEN;
-const MAX_SYNTHETIC_TCP_PAYLOAD: usize = 16 * 1024;
-const CAPTURE_QUEUE_PACKETS: usize = 1_024;
+pub const MAX_SYNTHETIC_TCP_PAYLOAD: usize = 16 * 1024;
+pub const CAPTURE_QUEUE_PACKETS: usize = 1_024;
 const WRITER_BATCH_PACKETS: usize = 512;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const APPEND_SCAN_BUFFER_BYTES: usize = 256 * 1024;
 const MAX_RETURNED_PACKETS: usize = 2_000;
 const PROXY_HANDSHAKE_PREFIX_LEN: usize = 16 * 1024;
 const MAX_PACKET_ANALYSIS_BYTES: usize = 16 * 1024;
-const MAX_PACKET_PAYLOAD_PREVIEW_BYTES: usize = 4 * 1024;
+pub const MAX_PACKET_PAYLOAD_PREVIEW_BYTES: usize = 4 * 1024;
 const MAX_REASSEMBLED_TCP_BYTES: usize = 512 * 1024;
-const MAX_HTTP_START_LINE_BYTES: usize = 512;
+pub const MAX_HTTP_START_LINE_BYTES: usize = 512;
 const MAX_HTTP_HEADER_FIELDS: usize = 16;
 const MAX_HTTP_HEADER_NAME_BYTES: usize = 64;
-const MAX_HTTP_HEADER_VALUE_BYTES: usize = 256;
+pub const MAX_HTTP_HEADER_VALUE_BYTES: usize = 256;
 const MAX_PROXY_FLOW_STATES: usize = 2_048;
 const MAX_PROXY_SESSION_LABELS: usize = 4_096;
 const MAX_PROXY_PENDING_SEGMENTS: usize = 64;
-const TCP_FLAG_FIN: u8 = 0x01;
-const TCP_FLAG_SYN: u8 = 0x02;
+pub const TCP_FLAG_FIN: u8 = 0x01;
+pub const TCP_FLAG_SYN: u8 = 0x02;
 const TCP_FLAG_RST: u8 = 0x04;
 // RFC 6994 reserves TCP option kind 253 for experiments. The four-byte ExID
 // keeps this app-local metadata distinguishable from other experiments. These
@@ -54,7 +54,7 @@ const PROXY_CAPTURE_TCP_OPTION_KIND: u8 = 253;
 const PROXY_CAPTURE_TCP_OPTION_EXPERIMENT_ID: [u8; 4] = *b"PAAS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProxyIngressProtocol {
+pub enum ProxyIngressProtocol {
     Http,
     Socks5,
 }
@@ -84,7 +84,7 @@ impl ProxyIngressProtocol {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProxyPacketDirection {
+pub enum ProxyPacketDirection {
     Upload,
     Download,
 }
@@ -114,9 +114,9 @@ impl ProxyPacketDirection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ProxyPacketMarker {
-    protocol: ProxyIngressProtocol,
-    direction: ProxyPacketDirection,
+pub struct ProxyPacketMarker {
+    pub protocol: ProxyIngressProtocol,
+    pub direction: ProxyPacketDirection,
 }
 
 struct CaptureRuntime {
@@ -137,14 +137,22 @@ fn runtime() -> &'static CaptureRuntime {
     })
 }
 
-pub(crate) fn is_enabled() -> bool {
+#[doc(hidden)]
+pub fn active_writer_health() -> Option<Arc<WriterHealth>> {
+    runtime()
+        .active
+        .load_full()
+        .map(|writer| writer.health.clone())
+}
+
+pub fn is_enabled() -> bool {
     runtime()
         .active
         .load_full()
         .is_some_and(|writer| writer.is_healthy())
 }
 
-pub(crate) fn set_enabled(path: PathBuf, enabled: bool) -> io::Result<()> {
+pub fn set_enabled(path: PathBuf, enabled: bool) -> io::Result<()> {
     let state = runtime();
     let _transition = state.transition.lock();
     *state.path.lock() = Some(path.clone());
@@ -185,16 +193,14 @@ pub(crate) fn clear(path: PathBuf) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn record(packet: &[u8]) {
+#[doc(hidden)]
+pub fn record(packet: &[u8]) {
     if let Some(writer) = runtime().active.load_full() {
         let _ = writer.record(packet);
     }
 }
 
-pub(crate) fn capture_tcp_stream(
-    stream: TcpStream,
-    protocol: ProxyIngressProtocol,
-) -> CapturedTcpStream {
+pub fn capture_tcp_stream(stream: TcpStream, protocol: ProxyIngressProtocol) -> CapturedTcpStream {
     CapturedTcpStream::new(stream, protocol)
 }
 
@@ -231,15 +237,18 @@ mod report;
 mod stream;
 mod writer;
 
-use application::*;
+pub use application::{analyze_application, analyze_http};
+pub use direction::ProxyFlowObservation;
+pub use direction::WindowDirectionTracker;
 use direction::*;
+pub use formatting::short_protocol;
 use formatting::*;
-use packet_parser::*;
+pub use packet_parser::parse_ip_packet;
 use proxy_tracker::*;
+pub use proxy_tracker::{ProxyFlowTracker, flow_key};
 use reassembly::*;
+pub use reassembly::{tcp_has_flag, tcp_payload_sequence, tcp_sequence_span};
 use report::*;
-pub(crate) use stream::*;
-use writer::*;
-
-#[cfg(test)]
-mod tests;
+pub use report::{CaptureReport, CapturedPacket, ProtocolField, ProtocolLayer, read_report};
+pub use stream::*;
+pub use writer::{PacketWriter, WriterHealth, global_header, scan_compatible_capture};

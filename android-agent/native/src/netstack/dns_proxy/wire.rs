@@ -147,7 +147,7 @@ pub(super) fn allocate_dns_id(
     None
 }
 
-pub(super) fn dns_id(packet: &[u8]) -> Option<u16> {
+pub fn dns_id(packet: &[u8]) -> Option<u16> {
     let bytes = packet.get(..2)?;
     Some(u16::from_be_bytes([bytes[0], bytes[1]]))
 }
@@ -180,7 +180,7 @@ pub(super) struct DnsQuestion {
     pub(super) question_end: usize,
 }
 
-pub(super) fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
+pub fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
     let question = parse_dns_question(packet)?;
     Some((question.query, question.record_type))
 }
@@ -205,7 +205,7 @@ pub(super) fn parse_dns_question(packet: &[u8]) -> Option<DnsQuestion> {
     })
 }
 
-pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
+pub fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     if packet.len() < 12 {
         return None;
     }

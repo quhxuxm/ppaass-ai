@@ -4,12 +4,12 @@
 //! 独占协议层 `UdpSessionCodec` 与重放窗口，再按外层 `flow_id` 将 UDP 目标
 //! 分发到独立 worker。任何队列拥塞都以丢弃单个 UDP 包处理，不引入重传或有序语义。
 
-mod auth;
+pub mod auth;
 mod channel;
-mod listener;
-mod session;
+pub mod listener;
+pub mod session;
 
-pub(crate) use listener::run_listener;
+pub use listener::run_listener;
 
 use protocol::udp_transport::UdpSessionId;
 

@@ -20,12 +20,12 @@ const ACCESS_LOG_RETRY_MAX_SECONDS: u64 = 5;
 
 /// 可廉价 clone 并注入每条连接/UDP flow 的非阻塞访问记录器。
 #[derive(Clone, Default)]
-pub(crate) struct AccessRecorder {
+pub struct AccessRecorder {
     sender: Option<mpsc::Sender<AccessEvent>>,
 }
 
 impl AccessRecorder {
-    pub(crate) fn start(sink: Arc<dyn AccessEventSink>) -> Self {
+    pub fn start(sink: Arc<dyn AccessEventSink>) -> Self {
         let (sender, receiver) = mpsc::channel(ACCESS_LOG_CHANNEL_SIZE);
         tokio::spawn(run_writer(sink, receiver));
         Self {
@@ -35,7 +35,7 @@ impl AccessRecorder {
 
     /// 仅记录 proxy 已经成功建立的真实目标。虚拟的 ProxyDns/UdpRelay 地址由其
     /// 真正目标 flow 负责，避免产生误导性或重复记录。
-    pub(crate) fn record(&self, username: &str, transport: TransportProtocol, address: &Address) {
+    pub fn record(&self, username: &str, transport: TransportProtocol, address: &Address) {
         let Some(sender) = self.sender.as_ref() else {
             return;
         };
@@ -69,7 +69,7 @@ impl AccessRecorder {
     }
 }
 
-fn access_target(address: &Address) -> Option<(String, u16)> {
+pub fn access_target(address: &Address) -> Option<(String, u16)> {
     match address {
         Address::Domain { host, port } => Some((host.clone(), *port)),
         Address::Ipv4 { addr, port } => Some((Ipv4Addr::from(*addr).to_string(), *port)),
@@ -145,81 +145,4 @@ fn new_batch_id() -> String {
     let mut random = [0_u8; 16];
     rand::rng().fill(&mut random);
     hex::encode(random)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{access_target, run_writer};
-    use crate::{
-        control_plane::AccessEventSink,
-        error::{ProxyError, Result},
-    };
-    use protocol::Address;
-    use proxy_control_protocol::{AccessEvent, AccessProtocol};
-    use std::sync::Arc;
-    use tokio::sync::{Mutex, Notify, mpsc};
-
-    #[derive(Default)]
-    struct RetrySink {
-        batch_ids: Mutex<Vec<String>>,
-        delivered: Notify,
-    }
-
-    #[async_trait::async_trait]
-    impl AccessEventSink for RetrySink {
-        async fn submit_access_batch(&self, batch_id: &str, _events: &[AccessEvent]) -> Result<()> {
-            let mut ids = self.batch_ids.lock().await;
-            ids.push(batch_id.to_string());
-            if ids.len() == 1 {
-                return Err(ProxyError::ControlPlane("模拟响应丢失".to_string()));
-            }
-            self.delivered.notify_one();
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn maps_real_targets_without_virtual_addresses() {
-        assert_eq!(
-            access_target(&Address::Domain {
-                host: "example.com".to_string(),
-                port: 443,
-            }),
-            Some(("example.com".to_string(), 443))
-        );
-        assert_eq!(
-            access_target(&Address::Ipv4 {
-                addr: [192, 0, 2, 1],
-                port: 53,
-            }),
-            Some(("192.0.2.1".to_string(), 53))
-        );
-        assert_eq!(access_target(&Address::ProxyDns { port: 53 }), None);
-        assert_eq!(access_target(&Address::UdpRelay), None);
-    }
-
-    #[tokio::test]
-    async fn retries_a_batch_with_the_same_id() {
-        let sink = Arc::new(RetrySink::default());
-        let (sender, receiver) = mpsc::channel(2);
-        tokio::spawn(run_writer(sink.clone(), receiver));
-        sender
-            .send(AccessEvent {
-                username: "alice".to_string(),
-                protocol: AccessProtocol::Tcp,
-                target_host: "example.com".to_string(),
-                target_port: 443,
-                accessed_at: 1,
-            })
-            .await
-            .unwrap();
-        drop(sender);
-        tokio::time::timeout(std::time::Duration::from_secs(3), sink.delivered.notified())
-            .await
-            .unwrap();
-
-        let batch_ids = sink.batch_ids.lock().await;
-        assert_eq!(batch_ids.len(), 2);
-        assert_eq!(batch_ids[0], batch_ids[1]);
-    }
 }

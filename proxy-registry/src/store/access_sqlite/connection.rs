@@ -83,6 +83,11 @@ impl SqliteAccessLogRepository {
         &self.path
     }
 
+    #[doc(hidden)]
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     async fn migrate(&self) -> Result<()> {
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let schema_version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -195,7 +200,8 @@ impl SqliteAccessLogRepository {
     }
 }
 
-pub(super) fn access_pool_options() -> SqlitePoolOptions {
+#[doc(hidden)]
+pub fn access_pool_options() -> SqlitePoolOptions {
     SqlitePoolOptions::new()
         .min_connections(1)
         .max_connections(1)

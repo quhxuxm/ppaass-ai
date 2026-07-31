@@ -75,7 +75,6 @@ final class AgentAuthDtos {
         public Account account;
         public Profile profile;
         public String public_key_pem;
-        public String proxy_identity_public_key_pem;
         public String private_key_pem;
         public String csrf_token;
         public Long session_expires_at;

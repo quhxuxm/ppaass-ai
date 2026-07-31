@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const CONTROL_PROTOCOL_VERSION: u16 = 1;
+pub const CONTROL_PROTOCOL_VERSION: u16 = 2;
 pub const CONTROL_HEALTH_PATH: &str = "/control/v1/health";
 pub const AUTHORIZATION_RESOLVE_PATH: &str = "/control/v1/authorizations/resolve";
 pub const AUTHORIZATION_EVENTS_PATH: &str = "/control/v1/events";
@@ -20,7 +20,6 @@ pub struct ControlHealthResponse {
     pub status: String,
     pub protocol_version: u16,
     pub registry_instance_id: String,
-    pub proxy_identity_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

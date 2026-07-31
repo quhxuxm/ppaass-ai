@@ -172,17 +172,13 @@ try {
     await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")
   );
   assert.equal(
-    tauriConfig.bundle.resources["../../config/remote/agent.toml"],
-    "config/remote/agent.toml"
-  );
-  assert.equal(
-    tauriConfig.bundle.resources["../../config/local/agent.toml"],
-    "config/local/agent.toml"
+    tauriConfig.bundle.resources["../../config/agent.toml"],
+    "config/agent.toml"
   );
   assert.equal(tauriConfig.bundle.resources["../../keys/user1.pem"], undefined);
   assert.equal(tauriConfig.bundle.resources["../../keys/user2.pem"], undefined);
   const packagedAgentConfig = await readFile(
-    new URL("../../config/remote/agent.toml", import.meta.url),
+    new URL("../../config/agent.toml", import.meta.url),
     "utf8"
   );
   assert.match(packagedAgentConfig, /^proxy_registry_url = "https:\/\/140\.82\.30\.214"$/m);
@@ -197,10 +193,14 @@ try {
     summarizeRaw
   } = await server.ssrLoadModule("/src/configToml.ts");
   const { useDesktopAgent } = await server.ssrLoadModule("/src/composables/useDesktopAgent.ts");
+  const { loadFallbackConfig, fallbackAgentState } =
+    await server.ssrLoadModule("/src/fallbacks.ts");
 
   assert.doesNotMatch(fallbackRawConfig, /\busername\s*=/);
   assert.doesNotMatch(fallbackRawConfig, /\bprivate_key_path\s*=/);
   assert.doesNotMatch(fallbackRawConfig, /\bproxy_registry_url\s*=/);
+  assert.equal(loadFallbackConfig().path, "agent.toml");
+  assert.equal(fallbackAgentState().config_path, "agent.toml");
 
   const redacted = redactManagedIdentityFromToml([
     'username = "attacker"',

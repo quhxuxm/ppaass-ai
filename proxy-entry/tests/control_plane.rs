@@ -1,0 +1,105 @@
+use protocol::{Address, TransportProtocol};
+use proxy_control_protocol::AccessEvent;
+use proxy_entry::access_log::{AccessRecorder, access_target};
+use proxy_entry::control_plane::{
+    AccessEventSink, load_control_token, validate_control_url, validate_entry_id,
+};
+use proxy_entry::error::{ProxyError, Result};
+use std::sync::Arc;
+use tokio::sync::{Mutex, Notify};
+
+#[derive(Default)]
+struct RetrySink {
+    batch_ids: Mutex<Vec<String>>,
+    delivered: Notify,
+}
+
+#[async_trait::async_trait]
+impl AccessEventSink for RetrySink {
+    async fn submit_access_batch(&self, batch_id: &str, _events: &[AccessEvent]) -> Result<()> {
+        let mut ids = self.batch_ids.lock().await;
+        ids.push(batch_id.to_string());
+        if ids.len() == 1 {
+            return Err(ProxyError::ControlPlane("模拟响应丢失".to_string()));
+        }
+        self.delivered.notify_one();
+        Ok(())
+    }
+}
+
+#[test]
+fn maps_real_targets_without_virtual_addresses() {
+    assert_eq!(
+        access_target(&Address::Domain {
+            host: "example.com".to_string(),
+            port: 443,
+        }),
+        Some(("example.com".to_string(), 443))
+    );
+    assert_eq!(
+        access_target(&Address::Ipv4 {
+            addr: [192, 0, 2, 1],
+            port: 53,
+        }),
+        Some(("192.0.2.1".to_string(), 53))
+    );
+    assert_eq!(access_target(&Address::ProxyDns { port: 53 }), None);
+    assert_eq!(access_target(&Address::UdpRelay), None);
+}
+
+#[tokio::test]
+async fn retries_a_batch_with_the_same_id() {
+    let sink = Arc::new(RetrySink::default());
+    let recorder = AccessRecorder::start(sink.clone());
+    recorder.record(
+        "alice",
+        TransportProtocol::Tcp,
+        &Address::Domain {
+            host: "example.com".to_string(),
+            port: 443,
+        },
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), sink.delivered.notified())
+        .await
+        .unwrap();
+
+    let batch_ids = sink.batch_ids.lock().await;
+    assert_eq!(batch_ids.len(), 2);
+    assert_eq!(batch_ids[0], batch_ids[1]);
+}
+
+#[test]
+fn control_url_requires_https_except_for_loopback_development() {
+    assert!(validate_control_url("https://registry.example.com").is_ok());
+    assert!(validate_control_url("http://127.0.0.1:8797").is_ok());
+    assert!(validate_control_url("http://localhost:8797").is_ok());
+    assert!(validate_control_url("http://registry.example.com").is_err());
+    assert!(validate_control_url("https://registry.example.com?token=bad").is_err());
+}
+
+#[test]
+fn entry_id_rejects_unsafe_or_empty_values() {
+    assert!(validate_entry_id("entry-production:1").is_ok());
+    assert!(validate_entry_id("").is_err());
+    assert!(validate_entry_id("../entry").is_err());
+    assert!(
+        validate_entry_id(&"x".repeat(proxy_control_protocol::MAX_ENTRY_ID_BYTES + 1)).is_err()
+    );
+}
+
+#[test]
+fn control_token_file_is_trimmed_and_validated() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let path = directory.path().join("control-token");
+    let token = "0123456789abcdef0123456789abcdef";
+    std::fs::write(&path, format!("{token}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert_eq!(load_control_token(&path).unwrap(), token);
+
+    std::fs::write(&path, "too-short").unwrap();
+    assert!(load_control_token(&path).is_err());
+}

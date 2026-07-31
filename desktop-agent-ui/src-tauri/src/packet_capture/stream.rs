@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn analyze_reassembled_tcp_streams(packets: &mut [CapturedPacket]) {
+pub fn analyze_reassembled_tcp_streams(packets: &mut [CapturedPacket]) {
     let mut streams = HashMap::<String, Vec<Vec<usize>>>::new();
     for (index, packet) in packets.iter().enumerate() {
         let Some(sequence) = packet

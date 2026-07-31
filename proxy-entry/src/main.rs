@@ -1,31 +1,10 @@
-//! proxy 可执行入口。
-//!
-//! 这里负责把“进程级”的事情准备好：读取配置、覆盖命令行参数、初始化日志、
-//! 校验出站网卡配置、构建 Tokio runtime，然后把真正的网络服务交给 `ProxyServer`。
-//! 具体的认证、CONNECT 分流和数据中继都在 `server` 与 `connection` 模块中。
+//! Proxy Entry CLI 薄入口。
 
-mod access_log;
-mod config;
-mod connection;
-mod control_plane;
-mod error;
-mod native_udp;
-mod server;
-mod transport_identity;
-mod user_manager;
-
-use crate::config::ProxyConfig;
-use crate::server::ProxyServer;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use clap::Parser;
-use common::{init_tracing, panic_payload_message};
-use futures::FutureExt;
 #[cfg(feature = "mimalloc-allocator")]
 use mimalloc::MiMalloc;
-use std::collections::BTreeSet;
-use std::panic::AssertUnwindSafe;
-use std::time::Duration;
-use tracing::{error, info, warn};
+use proxy_entry::config::ProxyConfig;
 
 #[cfg(feature = "mimalloc-allocator")]
 #[global_allocator]
@@ -90,116 +69,5 @@ fn main() -> Result<()> {
         config.outbound_interface = Some(outbound_interface);
     }
 
-    // 日志初始化要在大部分 info!/warn! 之前完成；配置了 log_dir 时提前创建目录。
-    if let Some(ref log_dir) = config.log_dir {
-        std::fs::create_dir_all(log_dir)?;
-    }
-    let _guard = init_tracing(
-        config.log_dir.as_deref(),
-        &config.log_file,
-        &config.log_level,
-    );
-    validate_outbound_interface(&config)?;
-
-    // 构建 Tokio 运行时，线程数可配置
-    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
-    runtime_builder.thread_stack_size(config.async_runtime_stack_size_mb * 1024 * 1024);
-    runtime_builder.enable_all();
-
-    if let Some(threads) = config.runtime_threads {
-        info!("配置 Tokio 运行时工作线程数：{}", threads);
-        runtime_builder.worker_threads(threads);
-    }
-
-    let runtime = runtime_builder.build()?;
-
-    runtime.block_on(async {
-        info!("PPAASS Proxy 启动中");
-        info!("监听地址：{}", config.listen_addr);
-        info!("日志级别：{}", config.log_level);
-        info!(
-            "日志目录：{}",
-            config.log_dir.as_deref().unwrap_or("控制台")
-        );
-        if config.log_dir.is_some() {
-            info!("日志文件：{}", config.log_file);
-        }
-        if let Some(threads) = config.runtime_threads {
-            info!("运行时线程数：{}", threads);
-        } else {
-            info!("运行时线程数：默认（CPU 核心数）");
-        }
-        info!(
-            "出站网络设备：{}",
-            config
-                .outbound_interface
-                .as_deref()
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or("默认路由")
-        );
-        info!("Proxy Entry 实例：{}", config.entry_id);
-        info!("Registry 控制面：{}", config.registry_control_url);
-
-        // 主监听循环外面包一层 panic 恢复：单次服务 run panic 后重新建 listener。
-        // 普通错误仍返回给进程，避免配置/绑定等硬错误被无限重启掩盖。
-        loop {
-            let server = ProxyServer::new(config.clone()).await?;
-            match AssertUnwindSafe(server.run()).catch_unwind().await {
-                Ok(Ok(())) => break,
-                Ok(Err(err)) => return Err(err.into()),
-                Err(payload) => {
-                    error!(
-                        "proxy 主服务 panic，准备重启监听循环：{}",
-                        panic_payload_message(payload.as_ref())
-                    );
-                    warn!("500ms 后重启 proxy 主服务");
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        }
-        Ok(())
-    })
-}
-
-fn validate_outbound_interface(config: &ProxyConfig) -> Result<()> {
-    // 未配置出站设备时不做校验，运行时交给系统默认路由处理。
-    let Some(interface) = config
-        .outbound_interface
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    else {
-        return Ok(());
-    };
-
-    if interface.eq_ignore_ascii_case("auto") {
-        // auto 是逻辑设备名，不需要出现在系统网卡列表中。
-        info!("自动绑定出站网络设备：{}", interface);
-        return Ok(());
-    }
-    // 显式设备名在启动时提前校验，避免连接到来后才报“设备不存在”。
-    let interfaces = if_addrs::get_if_addrs()
-        .map_err(|e| anyhow!("读取本机网络设备列表失败：{e}"))?
-        .into_iter()
-        .map(|iface| iface.name)
-        .collect::<BTreeSet<_>>();
-    info!(
-        "本机网络设备列表：{}",
-        interfaces.iter().cloned().collect::<Vec<_>>().join(", ")
-    );
-    if interfaces.contains(interface) {
-        return Ok(());
-    }
-    // 报错中列出本机设备名，便于用户在 Windows/macOS 上修正配置。
-    let available = if interfaces.is_empty() {
-        "<未发现可用网络设备>".to_string()
-    } else {
-        interfaces.into_iter().collect::<Vec<_>>().join(", ")
-    };
-
-    Err(anyhow!(
-        "配置的出站网络设备不存在：{interface}。请删除 outbound_interface 以使用系统默认路由，\
-         改为当前机器上的设备名，或设置 outbound_interface = \"auto\" 自动绑定原始默认路由设备。\
-         可用设备：{available}"
-    ))
+    proxy_entry::run(config)
 }

@@ -200,37 +200,3 @@ impl Encoder<Message> for MessageCodec {
         self.inner.encode(Bytes::from(data), dst)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn oversized_preauth_length_prefix_is_rejected_immediately() {
-        let state = Arc::new(CipherState::new());
-        let mut codec = MessageCodec::new(state);
-        let mut input =
-            BytesMut::from(&(MAX_UNPROTECTED_AUTH_FRAME_SIZE as u32 + 1).to_be_bytes()[..]);
-
-        assert!(codec.decode(&mut input).is_err());
-        assert_eq!(input.len(), 4);
-    }
-
-    #[test]
-    fn previous_tcp_protocol_envelope_has_no_fallback() {
-        let legacy = Message {
-            version: PROTOCOL_VERSION - 1,
-            message_type: MessageType::AuthRequest,
-            compression: 0,
-            sequence: 0,
-            payload: Vec::new(),
-        };
-        let encoded = bitcode::serialize(&legacy).unwrap();
-        let mut input = BytesMut::new();
-        input.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
-        input.extend_from_slice(&encoded);
-        let mut codec = MessageCodec::new(Arc::new(CipherState::new()));
-
-        assert!(codec.decode(&mut input).is_err());
-    }
-}

@@ -12,13 +12,10 @@ mod message;
 mod reassembly;
 mod replay;
 
-#[cfg(test)]
-mod tests;
-
 pub use auth::{
     UDP_OAEP_LABEL, UdpAuthInit, UdpAuthOk, UdpSessionSecret, decode_auth_init, decode_auth_ok,
     decode_session_secret, encode_auth_init, encode_auth_ok, encode_session_secret,
-    udp_auth_ok_signature_transcript, udp_auth_proof_digest,
+    udp_auth_proof_digest,
 };
 pub use crypto::{
     DecryptedUdpFragment, UdpDirectionalKeyMaterial, UdpSessionCodec, UdpSessionCrypto,
@@ -33,7 +30,7 @@ pub use replay::ReplayWindow;
 /// Four-byte discriminator at the start of every encrypted UDP datagram.
 pub const UDP_TRANSPORT_MAGIC: [u8; 4] = *b"PUDP";
 /// Wire format version for the native UDP transport.
-pub const UDP_TRANSPORT_VERSION: u8 = 2;
+pub const UDP_TRANSPORT_VERSION: u8 = 3;
 /// Maximum complete UDP datagram size, including header and authentication tag.
 ///
 /// 1351 bytes plus IPv6/UDP headers is 1399 bytes. The extra byte lets an

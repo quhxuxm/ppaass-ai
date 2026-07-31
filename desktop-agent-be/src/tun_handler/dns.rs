@@ -9,10 +9,8 @@ use std::net::Ipv4Addr;
 use tracing::debug;
 
 #[cfg(target_os = "macos")]
-mod macos;
+pub mod macos;
 mod state;
-#[cfg(test)]
-mod tests;
 #[cfg(windows)]
 mod windows;
 
@@ -41,9 +39,9 @@ impl DnsGuard {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(super) struct SystemDnsServer {
-    pub(super) ip: IpAddr,
-    pub(super) interface_name: Option<String>,
+pub struct SystemDnsServer {
+    pub ip: IpAddr,
+    pub interface_name: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -105,7 +103,7 @@ pub(super) fn flush_system_dns_cache() {
 #[cfg(not(target_os = "macos"))]
 pub(super) fn flush_system_dns_cache() {}
 
-fn parse_dns_server_ips(output: &str) -> Vec<IpAddr> {
+pub fn parse_dns_server_ips(output: &str) -> Vec<IpAddr> {
     output
         .lines()
         .filter_map(|line| parse_dns_server_ip_line(line.trim()))

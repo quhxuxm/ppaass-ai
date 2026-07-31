@@ -13,11 +13,9 @@ stateDiagram-v2
     ConnectDispatch --> TcpRelay: Domain/IPv4/IPv6 + TCP
     ConnectDispatch --> UdpRelaySingle: Domain/IPv4/IPv6/ProxyDns + UDP
     ConnectDispatch --> SharedUdpRelay: Address UdpRelay
-    ConnectDispatch --> UpstreamProxy: forward_mode=true
     TcpRelay --> StreamClosed
     UdpRelaySingle --> StreamClosed
     SharedUdpRelay --> StreamClosed
-    UpstreamProxy --> StreamClosed
     StreamClosed --> YamuxSession: Yamux 子流结束，等待下一个子流
     StreamClosed --> TcpClosed: direct framed 连接结束
     YamuxSession --> TcpClosed: 外层 TCP/Yamux 关闭

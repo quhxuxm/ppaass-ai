@@ -50,18 +50,19 @@ struct PendingDnsRequest {
     expires_at: Instant,
 }
 
-struct DnsResponseSummary {
-    status: String,
-    answers: Vec<String>,
-    min_ttl: Option<u32>,
+pub struct DnsResponseSummary {
+    pub status: String,
+    pub answers: Vec<String>,
+    pub min_ttl: Option<u32>,
 }
 
 mod cache;
 mod direct;
 mod wire;
-use cache::*;
+pub use cache::DnsResponseCache;
 use direct::*;
 use wire::*;
+pub use wire::{dns_id, parse_dns_query, parse_dns_response};
 
 impl DnsProxy {
     pub(super) fn spawn(
@@ -287,6 +288,3 @@ async fn connect_dns_stream(
         .connect_to_target(Address::ProxyDns { port: 53 }, TransportProtocol::Udp)
         .await
 }
-
-#[cfg(test)]
-mod tests;

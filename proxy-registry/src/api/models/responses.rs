@@ -58,7 +58,6 @@ pub(crate) struct AgentDeviceTokenResponse {
     pub(crate) account: WebAccount,
     pub(crate) profile: AgentDeviceProfileResponse,
     pub(crate) public_key_pem: String,
-    pub(crate) proxy_identity_public_key_pem: Arc<str>,
     #[serde(serialize_with = "serialize_zeroizing_string")]
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) csrf_token: String,
@@ -83,7 +82,6 @@ pub(crate) struct AgentCredentialResponse {
     pub(crate) account: WebAccount,
     pub(crate) profile: AgentDeviceProfileResponse,
     pub(crate) public_key_pem: String,
-    pub(crate) proxy_identity_public_key_pem: Arc<str>,
     #[serde(serialize_with = "serialize_zeroizing_string")]
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) agent_access_token: String,
@@ -259,7 +257,6 @@ pub(crate) struct AuditEventsResponse {
 pub(crate) struct PrivateKeyResponse {
     pub(crate) username: String,
     pub(crate) public_key_pem: String,
-    pub(crate) proxy_identity_public_key_pem: Arc<str>,
     #[serde(serialize_with = "serialize_zeroizing_string")]
     pub(crate) private_key_pem: Zeroizing<String>,
     pub(crate) key_version: i64,

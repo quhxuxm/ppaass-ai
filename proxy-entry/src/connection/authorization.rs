@@ -12,7 +12,7 @@ const MIN_AUTHORIZATION_RECHECK_SECS: u64 = 1;
 const MAX_AUTHORIZATION_RECHECK_SECS: u64 = 5;
 
 #[derive(Clone)]
-pub(crate) struct ConnectionAuthorization {
+pub struct ConnectionAuthorization {
     user_manager: Arc<UserManager>,
     username: String,
     authenticated_public_key_pem: String,
@@ -21,7 +21,7 @@ pub(crate) struct ConnectionAuthorization {
 }
 
 impl ConnectionAuthorization {
-    pub(crate) fn new(user_manager: Arc<UserManager>, user: &UserConfig) -> Result<Self> {
+    pub fn new(user_manager: Arc<UserManager>, user: &UserConfig) -> Result<Self> {
         Ok(Self {
             user_manager,
             username: user.username.clone(),
@@ -31,7 +31,7 @@ impl ConnectionAuthorization {
         })
     }
 
-    pub(crate) async fn validate(&self, permission: &str) -> Result<()> {
+    pub async fn validate(&self, permission: &str) -> Result<()> {
         let user = self
             .user_manager
             .get_user(&self.username)
@@ -79,7 +79,7 @@ impl ConnectionAuthorization {
 
     /// 守护一条 active relay。该 future 正常情况下不会成功返回；绝对过期或
     /// 周期重验失败时返回错误，relay 的外层 biased select 会立即关闭连接。
-    pub(crate) async fn enforce(&self, permission: &'static str, recheck_secs: u64) -> Result<()> {
+    pub async fn enforce(&self, permission: &'static str, recheck_secs: u64) -> Result<()> {
         let period = Duration::from_secs(recheck_secs.clamp(
             MIN_AUTHORIZATION_RECHECK_SECS,
             MAX_AUTHORIZATION_RECHECK_SECS,
@@ -158,127 +158,4 @@ fn duration_until_expiry(expires_at: i64, now: SystemTime) -> Duration {
         return Duration::MAX;
     };
     deadline.duration_since(now).unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::PERMISSION_PROXY_CONNECT_TCP;
-    use crate::user_manager::TestAuthorizationProvider;
-    use protocol::RsaKeyPair;
-
-    #[tokio::test]
-    async fn absolute_expiry_closes_idle_connection() {
-        let expires_at = common::current_timestamp() + 30;
-        let public_key = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap();
-        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
-            &public_key,
-            true,
-            1,
-            Some(expires_at),
-        )]));
-        let manager = Arc::new(UserManager::new(provider));
-        let user = manager.get_user("alice").await.unwrap().unwrap();
-        let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
-
-        tokio::time::pause();
-        let guard =
-            tokio::spawn(
-                async move { authorization.enforce(PERMISSION_PROXY_CONNECT_TCP, 5).await },
-            );
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(20)).await;
-        assert!(!guard.is_finished());
-
-        tokio::time::advance(Duration::from_secs(15)).await;
-        assert!(guard.await.unwrap().is_err());
-    }
-
-    #[tokio::test]
-    async fn key_version_rejects_public_key_aba() {
-        let public_key_a = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap();
-        let public_key_b = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap();
-        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
-            &public_key_a,
-            true,
-            1,
-            Some(i64::MAX),
-        )]));
-        let manager = Arc::new(UserManager::new(provider.clone()));
-        let user = manager.get_user("alice").await.unwrap().unwrap();
-        let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
-
-        provider
-            .set_user(test_user(&public_key_b, true, 2, Some(i64::MAX)))
-            .await;
-        provider
-            .set_user(test_user(&public_key_a, true, 3, Some(i64::MAX)))
-            .await;
-
-        assert!(
-            authorization
-                .validate(PERMISSION_PROXY_CONNECT_TCP)
-                .await
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn periodic_recheck_closes_disabled_connection_within_five_seconds() {
-        let public_key = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap();
-        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
-            &public_key,
-            true,
-            1,
-            Some(i64::MAX),
-        )]));
-        let manager = Arc::new(UserManager::new(provider.clone()));
-        let user = manager.get_user("alice").await.unwrap().unwrap();
-        let authorization = ConnectionAuthorization::new(manager, &user).unwrap();
-
-        // 模拟 ConnectSuccess 刚发送后管理员停用账号。guard 的周期不受 relay
-        // activity/idle timer 影响，最迟第五秒独立唤醒并关闭。
-        provider
-            .set_user(test_user(&public_key, false, 1, Some(i64::MAX)))
-            .await;
-        tokio::time::pause();
-        let guard =
-            tokio::spawn(
-                async move { authorization.enforce(PERMISSION_PROXY_CONNECT_TCP, 5).await },
-            );
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(4)).await;
-        assert!(!guard.is_finished());
-
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert!(guard.await.unwrap().is_err());
-    }
-
-    fn test_user(
-        public_key_pem: &str,
-        enabled: bool,
-        key_version: i64,
-        expires_at: Option<i64>,
-    ) -> UserConfig {
-        UserConfig {
-            username: "alice".to_string(),
-            public_key_pem: public_key_pem.to_string(),
-            expires_at: expires_at.map(|value| value.to_string()),
-            permissions: vec![PERMISSION_PROXY_CONNECT_TCP.to_string()],
-            enabled,
-            key_version: Some(key_version),
-        }
-    }
 }

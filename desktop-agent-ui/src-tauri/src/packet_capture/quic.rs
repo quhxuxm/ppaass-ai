@@ -77,7 +77,7 @@ pub(crate) fn hex_bytes(bytes: &[u8]) -> String {
         .join(" ")
 }
 
-pub(crate) fn application_protocol_name(layer: &ProtocolLayer) -> String {
+pub fn application_protocol_name(layer: &ProtocolLayer) -> String {
     match layer.name.as_str() {
         "Domain Name System" => "DNS",
         "Transport Layer Security" => "TLS",

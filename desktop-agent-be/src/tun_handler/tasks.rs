@@ -16,8 +16,7 @@ use super::udp_relay::UdpRelay;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::StreamExt;
 pub(super) use packet_bridge::spawn_packet_bridge;
-#[cfg(test)]
-use packet_bridge::tun_packet_is_safe_for_netstack;
+pub use packet_bridge::tun_packet_is_safe_for_netstack;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +29,7 @@ type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
 type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UdpRoute {
+pub enum UdpRoute {
     Direct,
     Proxy,
     Block,
@@ -254,7 +253,7 @@ pub(super) fn spawn_udp_sessions(
     })
 }
 
-fn classify_udp_route(
+pub fn classify_udp_route(
     target_port: u16,
     quic_policy: QuicPolicy,
     proxy_udp: bool,
@@ -275,11 +274,11 @@ fn classify_udp_route(
     }
 }
 
-fn should_start_udp_relay(proxy_udp: bool, quic_policy: QuicPolicy) -> bool {
+pub fn should_start_udp_relay(proxy_udp: bool, quic_policy: QuicPolicy) -> bool {
     proxy_udp || !quic_policy.should_block_udp443()
 }
 
-fn should_consult_udp_domain_cache(proxy_udp: bool, target_port: u16) -> bool {
+pub fn should_consult_udp_domain_cache(proxy_udp: bool, target_port: u16) -> bool {
     proxy_udp || target_port == 443
 }
 
@@ -307,6 +306,3 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
         }
     });
 }
-
-#[cfg(test)]
-mod tests;

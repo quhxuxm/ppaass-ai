@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn packet_capture_runtime_status(
+pub fn packet_capture_runtime_status(
     runtime: &AgentRuntime,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     #[cfg(windows)]
@@ -11,7 +11,7 @@ pub(crate) fn packet_capture_runtime_status(
     packet_capture_runtime_status_local(runtime)
 }
 
-pub(crate) fn packet_capture_runtime_status_local(
+pub fn packet_capture_runtime_status_local(
     runtime: &AgentRuntime,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     let guard = runtime
@@ -32,7 +32,7 @@ pub(crate) fn packet_capture_runtime_status_local(
     })
 }
 
-pub(crate) fn set_packet_capture_runtime_enabled(
+pub fn set_packet_capture_runtime_enabled(
     runtime: &AgentRuntime,
     enabled: bool,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
@@ -44,7 +44,7 @@ pub(crate) fn set_packet_capture_runtime_enabled(
     set_packet_capture_runtime_enabled_local(runtime, enabled)
 }
 
-pub(crate) fn set_packet_capture_runtime_enabled_local(
+pub fn set_packet_capture_runtime_enabled_local(
     runtime: &AgentRuntime,
     enabled: bool,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
@@ -71,7 +71,7 @@ pub(crate) fn set_packet_capture_runtime_enabled_local(
     })
 }
 
-pub(crate) fn clear_packet_capture_runtime(
+pub fn clear_packet_capture_runtime(
     runtime: &AgentRuntime,
     config_path: Option<String>,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
@@ -85,7 +85,7 @@ pub(crate) fn clear_packet_capture_runtime(
     clear_packet_capture_runtime_local(runtime, config_path)
 }
 
-pub(crate) fn clear_packet_capture_runtime_local(
+pub fn clear_packet_capture_runtime_local(
     runtime: &AgentRuntime,
     config_path: Option<String>,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
@@ -102,7 +102,8 @@ pub(crate) fn clear_packet_capture_runtime_local(
         None => {
             let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
                 Some(value) => PathBuf::from(value),
-                None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
+                None => locate_config_path()
+                    .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?,
             };
             let config = desktop_agent_be::config::AgentConfig::load(&config_path)
                 .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;
@@ -123,7 +124,7 @@ pub(crate) fn clear_packet_capture_runtime_local(
 }
 
 #[cfg(windows)]
-pub(crate) fn packet_capture_service_request(
+pub fn packet_capture_service_request(
     request: &ServiceRequest,
 ) -> Result<PacketCaptureRuntimeStatus, String> {
     let response = send_service_request(request)?;

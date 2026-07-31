@@ -26,8 +26,8 @@ New-Item -ItemType Directory -Force -Path "config", "keys" | Out-Null
 Write-Host "   Created: config/, keys/" -ForegroundColor Gray
 
 # Check configuration
-if (-not (Test-Path "config\local\proxy-entry.toml")) {
-    Write-Host "`n⚠️  Proxy Entry configuration not found. Please ensure config\local\proxy-entry.toml exists." -ForegroundColor Yellow
+if (-not (Test-Path "config\proxy-entry.toml")) {
+    Write-Host "`n⚠️  Proxy Entry configuration not found. Please ensure config\proxy-entry.toml exists." -ForegroundColor Yellow
 } else {
     Write-Host "`n✅ Configuration files found!" -ForegroundColor Green
 }
@@ -39,7 +39,7 @@ Write-Host @"
 ╚══════════════════════════════════════════════════════════════╝
 
 1️⃣  Start Proxy Entry:
-   .\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
+   .\target\release\proxy-entry.exe --config config\proxy-entry.toml
 
 2️⃣  Start Proxy Registry and register the user
 
@@ -65,7 +65,7 @@ Write-Host @"
 ║                    Quick Commands                            ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Start Proxy Entry:  .\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
+Start Proxy Entry:  .\target\release\proxy-entry.exe --config config\proxy-entry.toml
 Start Agent:  .\target\release\desktop-agent.exe --config config\agent.toml
 
 "@ -ForegroundColor White

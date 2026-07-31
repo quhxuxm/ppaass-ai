@@ -6,7 +6,7 @@ mod repository;
 mod sqlite;
 mod validation;
 
-pub use access_sqlite::SqliteAccessLogRepository;
+pub use access_sqlite::{SqliteAccessLogRepository, access_pool_options};
 pub use model::{
     AGENT_EGRESS_EDIT_PERMISSION, AGENT_PACKET_CAPTURE_PERMISSION,
     AGENT_RUNTIME_THREADS_EDIT_PERMISSION, AccessLogSettings, AccessProtocol, AccessRecord,

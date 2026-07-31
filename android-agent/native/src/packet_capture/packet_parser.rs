@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn parse_ip_packet(
+pub fn parse_ip_packet(
     number: usize,
     timestamp_ms: u64,
     length: usize,

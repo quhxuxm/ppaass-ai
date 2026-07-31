@@ -14,7 +14,7 @@ use tracing::instrument;
 const DESKTOP_PROXY_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug)]
-pub(super) struct AgentClientConfig<'a> {
+pub struct AgentClientConfig<'a> {
     config: &'a AgentConfig,
     proxy_addrs: &'a [String],
     bind_ip: Option<IpAddr>,
@@ -22,7 +22,7 @@ pub(super) struct AgentClientConfig<'a> {
 }
 
 impl<'a> AgentClientConfig<'a> {
-    pub(super) fn new(
+    pub fn new(
         config: &'a AgentConfig,
         proxy_addrs: &'a [String],
         bind_ip: Option<IpAddr>,
@@ -53,16 +53,6 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
         read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
-    }
-
-    fn proxy_identity_public_key_pem(&self) -> std::result::Result<String, String> {
-        let path = self
-            .config
-            .proxy_identity_public_key_path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .ok_or_else(|| "Proxy identity public key path not configured".to_string())?;
-        read_to_string(path).map_err(|e| e.to_string())
     }
 
     fn timeout_duration(&self) -> Duration {
@@ -117,26 +107,4 @@ pub(super) async fn new_direct_tcp_target_stream(
         .connect_to_target(address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use common::ClientConnectionConfig;
-
-    const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "0.0.0.0:10080"
-username = "user1"
-private_key_path = "keys/user1.pem"
-compression_mode = "gzip"
-"#;
-
-    #[test]
-    fn connection_config_adapter_forwards_compression_mode() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        let proxy_addrs = vec!["127.0.0.1:8080".to_string()];
-        let adapter = AgentClientConfig::new(&config, &proxy_addrs, None, None);
-
-        assert_eq!(adapter.compression_mode(), CompressionMode::Gzip);
-    }
 }

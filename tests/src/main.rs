@@ -1,13 +1,9 @@
 mod cli;
-pub mod integration_tests;
-pub mod mock_client;
-pub mod mock_target;
-pub mod performance_tests;
-pub mod report;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
+use integration_test_support::{integration_tests, mock_target, performance_tests, report};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]

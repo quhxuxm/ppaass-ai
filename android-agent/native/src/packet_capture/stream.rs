@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) struct CapturedTcpStream {
+pub struct CapturedTcpStream {
     inner: TcpStream,
     flow: Option<TcpCaptureFlow>,
 }
@@ -97,16 +97,27 @@ impl AsyncWrite for CapturedTcpStream {
     }
 }
 
-pub(super) struct TcpCaptureFlow {
-    pub(super) client: SocketAddr,
-    pub(super) server: SocketAddr,
-    pub(super) protocol: ProxyIngressProtocol,
-    pub(super) client_sequence: u32,
-    pub(super) server_sequence: u32,
+pub struct TcpCaptureFlow {
+    client: SocketAddr,
+    server: SocketAddr,
+    protocol: ProxyIngressProtocol,
+    client_sequence: u32,
+    server_sequence: u32,
 }
 
 impl TcpCaptureFlow {
-    pub(super) fn record_client_to_server(&mut self, payload: &[u8]) {
+    #[doc(hidden)]
+    pub fn new(client: SocketAddr, server: SocketAddr, protocol: ProxyIngressProtocol) -> Self {
+        Self {
+            client,
+            server,
+            protocol,
+            client_sequence: 1,
+            server_sequence: 1,
+        }
+    }
+
+    pub fn record_client_to_server(&mut self, payload: &[u8]) {
         self.record_payload(true, payload);
     }
 
@@ -180,7 +191,8 @@ impl TcpCaptureFlow {
     }
 }
 
-pub(super) fn synthetic_proxy_tcp_packet(
+#[doc(hidden)]
+pub fn synthetic_proxy_tcp_packet(
     source: SocketAddr,
     destination: SocketAddr,
     sequence: u32,
@@ -207,8 +219,8 @@ pub(super) fn synthetic_proxy_tcp_packet(
     finish_transport_packet(source, destination, 6, segment, 16, packet_id)
 }
 
-#[cfg(test)]
-pub(super) fn synthetic_tcp_packet(
+#[doc(hidden)]
+pub fn synthetic_tcp_packet(
     source: SocketAddr,
     destination: SocketAddr,
     sequence: u32,
@@ -227,8 +239,8 @@ pub(super) fn synthetic_tcp_packet(
     )
 }
 
-#[cfg(test)]
-pub(super) fn synthetic_tcp_packet_with_flags(
+#[doc(hidden)]
+pub fn synthetic_tcp_packet_with_flags(
     source: SocketAddr,
     destination: SocketAddr,
     sequence: u32,

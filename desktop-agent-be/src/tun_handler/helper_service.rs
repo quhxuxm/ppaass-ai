@@ -31,65 +31,65 @@ use tracing::{debug, error, info, warn};
 use tun_rs::DeviceBuilder;
 
 const HELPER_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(20);
-const HELPER_LEASE_STATE_VERSION: u8 = 1;
+pub const HELPER_LEASE_STATE_VERSION: u8 = 1;
 const HELPER_LEASE_STATE_SUFFIX: &str = ".leases.json";
 static HELPER_LEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[allow(dead_code)]
-struct TunSystemLease {
-    route_guard: Option<RouteGuard>,
-    metadata: PersistedTunLease,
+pub struct TunSystemLease {
+    pub route_guard: Option<RouteGuard>,
+    pub metadata: PersistedTunLease,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedTunLease {
-    lease_id: String,
-    owner_pid: u32,
+pub struct PersistedTunLease {
+    pub lease_id: String,
+    pub owner_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    owner_start_time: Option<ProcessStartTime>,
+    pub owner_start_time: Option<ProcessStartTime>,
     #[serde(default)]
-    cleanup_requested: bool,
-    route_state_file: Option<String>,
-    dns_state_file: Option<String>,
+    pub cleanup_requested: bool,
+    pub route_state_file: Option<String>,
+    pub dns_state_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pf_enable_token: Option<String>,
+    pub pf_enable_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    route_recovery: Option<PersistedRouteRecovery>,
+    pub route_recovery: Option<PersistedRouteRecovery>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-struct ProcessStartTime {
-    unix_secs: u64,
-    micros: u64,
+pub struct ProcessStartTime {
+    pub unix_secs: u64,
+    pub micros: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedRouteRecovery {
-    request: TunStartRequest,
-    actual_name: String,
-    tun_if_index: u32,
-    tun_ipv4: Ipv4Addr,
-    dns_capture_target: Ipv4Addr,
-    proxy_ips: Vec<IpAddr>,
+pub struct PersistedRouteRecovery {
+    pub request: TunStartRequest,
+    pub actual_name: String,
+    pub tun_if_index: u32,
+    pub tun_ipv4: Ipv4Addr,
+    pub dns_capture_target: Ipv4Addr,
+    pub proxy_ips: Vec<IpAddr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedLeaseState {
-    version: u8,
-    leases: Vec<PersistedTunLease>,
+pub struct PersistedLeaseState {
+    pub version: u8,
+    pub leases: Vec<PersistedTunLease>,
 }
 
 impl PersistedTunLease {
-    fn clear_runtime_proxy_addresses(&mut self) {
+    pub fn clear_runtime_proxy_addresses(&mut self) {
         if let Some(recovery) = self.route_recovery.as_mut() {
             recovery.request.proxy_addrs.clear();
         }
     }
 }
 
-struct LeaseRegistry {
-    state_path: PathBuf,
-    leases: HashMap<String, TunSystemLease>,
+pub struct LeaseRegistry {
+    pub state_path: PathBuf,
+    pub leases: HashMap<String, TunSystemLease>,
 }
 
 struct PreparedTun {
@@ -236,7 +236,4 @@ mod state;
 
 use client::handle_client;
 use socket_io::*;
-use state::*;
-
-#[cfg(test)]
-mod tests;
+pub use state::*;

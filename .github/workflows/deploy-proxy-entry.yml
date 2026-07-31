@@ -45,19 +45,15 @@ jobs:
 
       - name: Package Entry release
         env:
-          ENTRY_ID: ${{ vars.PPAASS_PROXY_ENTRY_ID }}
-          CONTROL_HOST: ${{ vars.PPAASS_REGISTRY_CONTROL_PUBLIC_HOST }}
-          RUNTIME_ROOT: ${{ vars.PPAASS_ENTRY_RUNTIME_ROOT }}
-          CONTROL_TOKEN: ${{ secrets.PPAASS_PROXY_CONTROL_TOKEN }}
-          IDENTITY_PRIVATE_KEY: ${{ secrets.PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM }}
-          IDENTITY_PUBLIC_KEY: ${{ secrets.PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM }}
+          ENTRY_ID: ${{ vars[format('{0}_ID', inputs.environment)] }}
+          CONTROL_HOST: ${{ vars[format('{0}_CONTROL_PUBLIC_HOST', inputs.environment)] }}
+          RUNTIME_ROOT: ${{ vars[format('{0}_RUNTIME_ROOT', inputs.environment)] }}
+          CONTROL_TOKEN: ${{ secrets[format('{0}_CONTROL_TOKEN', inputs.environment)] }}
         run: |
           set -euo pipefail
-          : "${ENTRY_ID:?PPAASS_PROXY_ENTRY_ID is required}"
-          : "${CONTROL_HOST:?PPAASS_REGISTRY_CONTROL_PUBLIC_HOST is required}"
-          : "${CONTROL_TOKEN:?PPAASS_PROXY_CONTROL_TOKEN is required}"
-          : "${IDENTITY_PRIVATE_KEY:?PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM is required}"
-          : "${IDENTITY_PUBLIC_KEY:?PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM is required}"
+          : "${ENTRY_ID:?${{ inputs.environment }}_ID is required}"
+          : "${CONTROL_HOST:?${{ inputs.environment }}_CONTROL_PUBLIC_HOST is required}"
+          : "${CONTROL_TOKEN:?${{ inputs.environment }}_CONTROL_TOKEN is required}"
           case "$ENTRY_ID" in *[!0-9A-Za-z._:-]*|'') exit 1 ;; esac
           case "$CONTROL_HOST" in *[!0-9A-Za-z._-]*|'') exit 1 ;; esac
           [ "${#CONTROL_TOKEN}" -ge 32 ]
@@ -67,18 +63,8 @@ jobs:
           mkdir -p "$bundle"
           install -m 0755 target/release/proxy-entry "$bundle/proxy-entry"
           install -m 0755 deploy/proxy-entry/install.sh "$bundle/install.sh"
-          cp config/remote/proxy-entry.toml "$bundle/proxy-entry.toml"
+          cp config/proxy-entry.toml "$bundle/proxy-entry.toml"
           printf '%s' "$CONTROL_TOKEN" >"$bundle/control-token"
-          printf '%s\n' "$IDENTITY_PRIVATE_KEY" >"$bundle/proxy-identity-private.pem"
-          printf '%s\n' "$IDENTITY_PUBLIC_KEY" >"$bundle/expected-public.pem"
-          openssl pkey -in "$bundle/proxy-identity-private.pem" -pubout \
-            -out "$bundle/derived-public.pem"
-          openssl pkey -pubin -in "$bundle/expected-public.pem" -outform DER \
-            -out "$bundle/expected-public.der"
-          openssl pkey -pubin -in "$bundle/derived-public.pem" -outform DER \
-            -out "$bundle/derived-public.der"
-          cmp "$bundle/expected-public.der" "$bundle/derived-public.der"
-          rm "$bundle/"*-public.*
           {
             printf 'RELEASE_SHA=%q\n' "$GITHUB_SHA"
             printf 'ENTRY_ID=%q\n' "$ENTRY_ID"

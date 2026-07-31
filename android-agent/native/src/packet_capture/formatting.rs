@@ -48,7 +48,7 @@ pub(super) fn layer(
     }
 }
 
-pub(super) fn short_protocol(name: &str) -> String {
+pub fn short_protocol(name: &str) -> String {
     match name {
         "Domain Name System" => "DNS",
         "Transport Layer Security" => "TLS",

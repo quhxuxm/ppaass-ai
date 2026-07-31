@@ -21,8 +21,10 @@ use tracing::{debug, instrument, warn};
 
 const MAX_CONCURRENT_SESSION_CONNECTS: usize = 20;
 
-mod connect;
+pub mod connect;
 mod yamux;
+
+pub use connect::{ProxyStreamRoute, is_native_udp_timeout, proxy_stream_route};
 
 #[derive(Clone)]
 struct YamuxSessionHandle {
@@ -121,115 +123,46 @@ impl YamuxSessionManager {
         }
     }
 
-    fn get_proxy_bind_ip(&self) -> Option<IpAddr> {
+    pub fn proxy_bind_ip(&self) -> Option<IpAddr> {
         let guard = self.proxy_bind_ip.read().ok()?;
         *guard
     }
 
-    fn get_proxy_bind_interface(&self) -> Option<BindInterface> {
+    pub fn proxy_bind_interface(&self) -> Option<BindInterface> {
         let guard = self.proxy_bind_interface.read().ok()?;
         guard.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn proxy_bind_ip_for_test(&self) -> Option<IpAddr> {
-        self.get_proxy_bind_ip()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn proxy_bind_interface_for_test(&self) -> Option<BindInterface> {
-        self.get_proxy_bind_interface()
-    }
-
-    fn next_udp_session_slot(&self) -> usize {
+    pub fn next_udp_session_slot(&self) -> usize {
         // 只有 UDP manager 会进入此路径，AgentConfig 已把 pool size 夹到至少 1。
         debug_assert_eq!(self.yamux_transport, TransportProtocol::Udp);
         debug_assert!(!self.udp_sessions.is_empty());
         self.udp_next_index.fetch_add(1, Ordering::AcqRel) % self.udp_sessions.len()
     }
+
+    pub fn native_udp_session_pool_size(&self) -> usize {
+        self.udp_sessions.len()
+    }
+
+    pub fn auto_udp_fallback_slot_count(&self) -> usize {
+        self.auto_udp_fallback_to_yamux.len()
+    }
+
+    pub fn set_auto_udp_fallback(&self, slot: usize, enabled: bool) {
+        self.auto_udp_fallback_to_yamux[slot].store(enabled, Ordering::Release);
+    }
+
+    pub fn auto_udp_fallback(&self, slot: usize) -> bool {
+        self.auto_udp_fallback_to_yamux[slot].load(Ordering::Acquire)
+    }
 }
 
-fn is_yamux_target_connect_error(message: &str) -> bool {
+pub fn is_yamux_target_connect_error(message: &str) -> bool {
     message.starts_with("连接失败:")
         || message == YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
         || message == "连接目标响应超时"
 }
 
-fn is_yamux_session_capacity_error(message: &str) -> bool {
+pub fn is_yamux_session_capacity_error(message: &str) -> bool {
     message == YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "127.0.0.1:10080"
-username = "user1"
-private_key_path = "keys/user1.pem"
-"#;
-
-    #[test]
-    fn yamux_capacity_errors_are_not_target_connect_errors() {
-        assert!(!is_yamux_target_connect_error(
-            YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
-        ));
-        assert!(is_yamux_session_capacity_error(
-            YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE
-        ));
-    }
-
-    #[test]
-    fn yamux_response_timeouts_do_not_close_session() {
-        assert!(is_yamux_target_connect_error(
-            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE
-        ));
-        assert!(is_yamux_target_connect_error("连接目标响应超时"));
-    }
-
-    #[test]
-    fn only_udp_manager_allocates_native_udp_pool() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        let config = Arc::new(config);
-        let proxy_addrs = Arc::new(vec!["127.0.0.1:8080".to_string()]);
-        let tcp_manager = YamuxSessionManager::new(config.clone(), proxy_addrs.clone());
-        let udp_manager = YamuxSessionManager::new_udp(config, proxy_addrs);
-
-        assert!(tcp_manager.udp_sessions.is_empty());
-        assert_eq!(udp_manager.udp_sessions.len(), 4);
-        let slots: Vec<_> = (0..10)
-            .map(|_| udp_manager.next_udp_session_slot())
-            .collect();
-        assert_eq!(slots, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
-    }
-
-    #[test]
-    fn tcp_transport_mode_does_not_allocate_native_udp_pool() {
-        let config: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
-                .unwrap();
-        let manager = YamuxSessionManager::new_udp(
-            Arc::new(config),
-            Arc::new(vec!["127.0.0.1:8080".to_string()]),
-        );
-
-        assert!(manager.udp_sessions.is_empty());
-    }
-
-    #[test]
-    fn auto_fallback_state_is_isolated_per_udp_session_slot() {
-        let config: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
-                .unwrap();
-        let manager = YamuxSessionManager::new_udp(
-            Arc::new(config),
-            Arc::new(vec!["127.0.0.1:8080".to_string()]),
-        );
-
-        assert_eq!(manager.auto_udp_fallback_to_yamux.len(), 4);
-        manager.auto_udp_fallback_to_yamux[1].store(true, Ordering::Release);
-        assert!(!manager.auto_udp_fallback_to_yamux[0].load(Ordering::Acquire));
-        assert!(manager.auto_udp_fallback_to_yamux[1].load(Ordering::Acquire));
-        assert!(!manager.auto_udp_fallback_to_yamux[2].load(Ordering::Acquire));
-    }
 }

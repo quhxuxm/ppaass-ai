@@ -104,7 +104,7 @@ pub(crate) fn macos_tun_helper_socket(config: &desktop_agent_be::config::AgentCo
     }
 }
 
-pub(crate) fn macos_tun_helper_state_paths(
+pub fn macos_tun_helper_state_paths(
     _config_path: &Path,
     config: &desktop_agent_be::config::AgentConfig,
 ) -> Result<MacosTunHelperStatePaths, String> {
@@ -122,7 +122,7 @@ pub(crate) fn macos_tun_helper_state_paths(
     })
 }
 
-pub(crate) fn macos_tun_helper_lease_state_path(socket_path: &Path) -> PathBuf {
+pub fn macos_tun_helper_lease_state_path(socket_path: &Path) -> PathBuf {
     let mut file_name = socket_path
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("tun-helper.sock"))

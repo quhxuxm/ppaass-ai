@@ -1,16 +1,17 @@
+pub mod cli;
 pub mod config;
+pub mod direct_access;
+pub mod error;
 pub mod server;
+pub mod socks5_handler;
+pub mod tcp_relay;
 pub mod telemetry;
+pub mod tun_handler;
+pub mod yamux_session;
 
-mod direct_access;
-mod error;
 mod http_handler;
 mod privilege;
-mod socks5_handler;
-mod tcp_relay;
-mod tun_handler;
 mod tun_helper_client;
-mod yamux_session;
 
 use crate::config::AgentConfig;
 use crate::server::AgentServer;

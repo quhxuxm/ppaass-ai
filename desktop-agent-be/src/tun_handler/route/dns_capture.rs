@@ -60,7 +60,7 @@ pub(super) fn install_dns_capture_routes(
     Ok(())
 }
 
-pub(super) fn dns_capture_route_targets_default_gateway(
+pub fn dns_capture_route_targets_default_gateway(
     ip: IpAddr,
     default_v4_gateway: Option<IpAddr>,
     default_v6_gateway: Option<IpAddr>,
@@ -68,7 +68,7 @@ pub(super) fn dns_capture_route_targets_default_gateway(
     Some(ip) == default_v4_gateway || Some(ip) == default_v6_gateway
 }
 
-pub(super) fn should_install_dns_capture_host_routes() -> bool {
+pub fn should_install_dns_capture_host_routes() -> bool {
     // macOS uses PF route-to and Windows points the TUN adapter at a virtual
     // peer DNS address. Installing a host route for every pre-existing Windows
     // DNS server is both redundant and unsafe: home routers commonly serve as
@@ -77,6 +77,6 @@ pub(super) fn should_install_dns_capture_host_routes() -> bool {
     !cfg!(any(target_os = "macos", windows))
 }
 
-pub(super) fn should_capture_default_gateway_dns_route() -> bool {
+pub fn should_capture_default_gateway_dns_route() -> bool {
     false
 }

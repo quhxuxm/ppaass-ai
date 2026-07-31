@@ -3,14 +3,6 @@ use crate::error::{ProxyError, Result};
 pub const PERMISSION_PROXY_CONNECT_TCP: &str = "proxy.connect.tcp";
 pub const PERMISSION_PROXY_CONNECT_UDP: &str = "proxy.connect.udp";
 
-#[cfg(test)]
-fn default_proxy_permissions() -> Vec<String> {
-    vec![
-        PERMISSION_PROXY_CONNECT_TCP.to_string(),
-        PERMISSION_PROXY_CONNECT_UDP.to_string(),
-    ]
-}
-
 #[derive(Debug, Clone)]
 pub struct UserConfig {
     /// SQLite 用户记录中的认证用户名。
@@ -70,42 +62,4 @@ fn parse_expires_at(username: &str, expires_at: &str) -> Result<i64> {
         .map_err(|_| {
             ProxyError::Configuration(format!("用户 {username} 的 expires_at 无效：{expires_at}"))
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{UserConfig, default_proxy_permissions};
-
-    fn user_with_expiry(expires_at: Option<&str>) -> UserConfig {
-        UserConfig {
-            username: "user1".to_string(),
-            public_key_pem: "public-key".to_string(),
-            expires_at: expires_at.map(str::to_string),
-            permissions: default_proxy_permissions(),
-            enabled: true,
-            key_version: None,
-        }
-    }
-
-    #[test]
-    fn missing_expires_at_never_expires() {
-        let user = user_with_expiry(None);
-
-        assert!(!user.is_expired_at(i64::MAX).unwrap());
-    }
-
-    #[test]
-    fn expires_when_current_time_reaches_configured_time() {
-        let user = user_with_expiry(Some("2030-01-01T00:00:00Z"));
-
-        assert!(!user.is_expired_at(1_893_455_999).unwrap());
-        assert!(user.is_expired_at(1_893_456_000).unwrap());
-    }
-
-    #[test]
-    fn rejects_invalid_expires_at() {
-        let user = user_with_expiry(Some("2030-01-01 00:00:00"));
-
-        assert!(user.expires_at_unix_timestamp().is_err());
-    }
 }

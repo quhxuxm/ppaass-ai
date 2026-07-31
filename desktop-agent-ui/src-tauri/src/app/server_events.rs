@@ -19,23 +19,25 @@ pub(crate) fn start_agent_server_events(app: tauri::AppHandle, runtime: Arc<Agen
                 runtime.server_event_notify.notified().await;
                 continue;
             };
-            let mut stream =
-                match AgentServerEventStream::connect(&session.proxy_registry_url, token.value.as_str())
-                    .await
-                {
-                    Ok(stream) => {
-                        info!(username = %session.account.username, "Agent SSE 事件流已连接");
-                        reconnect_seconds = MIN_RECONNECT_SECONDS;
-                        stream
-                    }
-                    Err(error) => {
-                        warn!(%error, "Agent SSE 事件流连接失败，将退避重连");
-                        runtime.logs.push(error);
-                        wait_before_reconnect(&runtime, reconnect_seconds).await;
-                        reconnect_seconds = (reconnect_seconds * 2).min(MAX_RECONNECT_SECONDS);
-                        continue;
-                    }
-                };
+            let mut stream = match AgentServerEventStream::connect(
+                &session.proxy_registry_url,
+                token.value.as_str(),
+            )
+            .await
+            {
+                Ok(stream) => {
+                    info!(username = %session.account.username, "Agent SSE 事件流已连接");
+                    reconnect_seconds = MIN_RECONNECT_SECONDS;
+                    stream
+                }
+                Err(error) => {
+                    warn!(%error, "Agent SSE 事件流连接失败，将退避重连");
+                    runtime.logs.push(error);
+                    wait_before_reconnect(&runtime, reconnect_seconds).await;
+                    reconnect_seconds = next_reconnect_delay(reconnect_seconds);
+                    continue;
+                }
+            };
 
             loop {
                 let event = tokio::select! {
@@ -58,7 +60,7 @@ pub(crate) fn start_agent_server_events(app: tauri::AppHandle, runtime: Arc<Agen
                 }
             }
             wait_before_reconnect(&runtime, reconnect_seconds).await;
-            reconnect_seconds = (reconnect_seconds * 2).min(MAX_RECONNECT_SECONDS);
+            reconnect_seconds = next_reconnect_delay(reconnect_seconds);
         }
     });
 }
@@ -96,16 +98,6 @@ async fn wait_before_reconnect(runtime: &AgentRuntime, seconds: u64) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reconnect_backoff_is_bounded() {
-        let mut delay = MIN_RECONNECT_SECONDS;
-        for _ in 0..20 {
-            delay = (delay * 2).min(MAX_RECONNECT_SECONDS);
-        }
-        assert_eq!(delay, MAX_RECONNECT_SECONDS);
-    }
+pub fn next_reconnect_delay(current_seconds: u64) -> u64 {
+    current_seconds.saturating_mul(2).min(MAX_RECONNECT_SECONDS)
 }

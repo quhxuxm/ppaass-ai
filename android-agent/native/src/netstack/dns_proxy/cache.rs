@@ -12,17 +12,12 @@ pub(super) struct CachedDnsResponse {
 }
 
 #[derive(Default)]
-pub(super) struct DnsResponseCache {
+pub struct DnsResponseCache {
     entries: HashMap<DnsCacheKey, CachedDnsResponse>,
 }
 
 impl DnsResponseCache {
-    pub(super) fn get(
-        &mut self,
-        query: &str,
-        record_type: &str,
-        request_id: u16,
-    ) -> Option<Vec<u8>> {
+    pub fn get(&mut self, query: &str, record_type: &str, request_id: u16) -> Option<Vec<u8>> {
         self.cleanup_expired();
         let key = dns_cache_key(query, record_type);
         let entry = self.entries.get(&key)?;
@@ -36,7 +31,7 @@ impl DnsResponseCache {
         Some(packet)
     }
 
-    pub(super) fn insert(
+    pub fn insert(
         &mut self,
         query: &str,
         record_type: &str,

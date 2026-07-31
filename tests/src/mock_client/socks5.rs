@@ -10,6 +10,10 @@ impl MockSocks5Client {
         Self { agent_addr }
     }
 
+    pub fn agent_addr(&self) -> &str {
+        &self.agent_addr
+    }
+
     /// 通过 SOCKS5 代理连接目标并收发数据
     pub async fn send_receive(
         &self,

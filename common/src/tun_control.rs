@@ -79,21 +79,3 @@ pub struct TunStartedResponse {
     pub name: String,
     pub if_index: u32,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn helper_state_files_are_scoped_to_the_socket_directory() {
-        let socket = Path::new("/var/run/ppaass-ai/custom-helper.sock");
-        assert_eq!(
-            tun_helper_route_state_path(socket),
-            Path::new("/var/run/ppaass-ai/tun-routes.json")
-        );
-        assert_eq!(
-            tun_helper_dns_state_path(socket),
-            Path::new("/var/run/ppaass-ai/tun-dns.json")
-        );
-    }
-}

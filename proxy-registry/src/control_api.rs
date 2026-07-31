@@ -72,7 +72,6 @@ impl ControlTokenVerifier {
 #[derive(Clone)]
 pub struct ControlState {
     pub instance_id: Arc<str>,
-    pub proxy_identity_sha256: Arc<str>,
     pub users: Arc<dyn UserRepository>,
     pub access_batches: Arc<dyn AccessBatchRepository>,
     pub agent_events: AgentEventHub,
@@ -99,7 +98,6 @@ async fn control_health(State(state): State<ControlState>) -> Json<ControlHealth
         status: "ok".to_string(),
         protocol_version: CONTROL_PROTOCOL_VERSION,
         registry_instance_id: state.instance_id.to_string(),
-        proxy_identity_sha256: state.proxy_identity_sha256.to_string(),
     })
 }
 
@@ -325,6 +323,3 @@ impl IntoResponse for ControlApiError {
             .into_response()
     }
 }
-
-#[cfg(test)]
-mod tests;

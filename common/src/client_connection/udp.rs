@@ -4,11 +4,9 @@
 //! context. Logical UDP channels are multiplexed by `flow_id`; each call to
 //! `poll_write` remains exactly one UDP payload and is never retransmitted.
 
-use protocol::crypto::verify_pss_sha256;
 use protocol::udp_transport::{
     UDP_MAX_DATAGRAM_SIZE, UDP_OAEP_LABEL, UdpAuthInit, UdpSessionCodec, UdpSessionMessage,
-    UdpSessionRole, decode_auth_ok, decode_session_secret, encode_auth_init,
-    udp_auth_ok_signature_transcript, udp_auth_proof_digest,
+    UdpSessionRole, decode_auth_ok, decode_session_secret, encode_auth_init, udp_auth_proof_digest,
 };
 use protocol::{Address, RsaKeyPair, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -55,7 +53,8 @@ struct UdpClientConnectionInner {
     next_flow_id: AtomicU64,
 }
 
-enum ClientCommand {
+#[doc(hidden)]
+pub enum ClientCommand {
     Register {
         flow_id: u64,
         inbound_tx: mpsc::Sender<Vec<u8>>,
@@ -72,6 +71,32 @@ enum ClientCommand {
     Close {
         flow_id: u64,
     },
+}
+
+#[doc(hidden)]
+pub fn udp_client_stream_channel(
+    flow_id: u64,
+    address: Option<Address>,
+    stream_id: String,
+    capacity: usize,
+) -> (
+    UdpClientStream,
+    mpsc::Receiver<ClientCommand>,
+    mpsc::Sender<Vec<u8>>,
+) {
+    let (command_tx, command_rx) = mpsc::channel(capacity.max(1));
+    let (inbound_tx, inbound_rx) = mpsc::channel(capacity.max(1));
+    let stream = UdpClientStream {
+        flow_id,
+        open_address: address,
+        stream_id,
+        command_tx: PollSender::new(command_tx),
+        inbound_rx,
+        read_buf: Vec::new(),
+        read_pos: 0,
+        close_sent: false,
+    };
+    (stream, command_rx, inbound_tx)
 }
 
 impl UdpClientConnection {
@@ -312,6 +337,3 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 fn udp_protocol_error(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
-
-#[cfg(test)]
-mod tests;

@@ -21,10 +21,6 @@ pub struct AgentConfig {
     pub proxy_registry_url: Option<String>,
     pub username: String,
     pub private_key_path: String,
-    /// Pinned Proxy TCP/Yamux transport identity public key PEM file.
-    /// Missing/empty values fail closed when a TCP connection is attempted.
-    #[serde(default)]
-    pub proxy_identity_public_key_path: Option<String>,
     /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
     /// TCP 业务数据不受此字段影响，始终使用 direct framed TCP。
     #[serde(default)]
@@ -295,6 +291,3 @@ impl TunConfig {
         self.quic_policy.unwrap_or_default()
     }
 }
-
-#[cfg(test)]
-mod tests;

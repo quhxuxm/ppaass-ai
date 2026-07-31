@@ -27,19 +27,15 @@ use tracing::{debug, warn};
 mod cache;
 mod parser;
 mod response;
-#[cfg(test)]
-mod tests;
 
-use cache::{DnsResponseCache, DnsResponseSummary};
-use parser::{parse_dns_query, parse_dns_response};
-#[cfg(test)]
-use response::{allocate_dns_id, dns_id};
+pub use cache::{DnsResponseCache, DnsResponseSummary};
+pub use parser::{parse_dns_query, parse_dns_response};
+pub use response::{allocate_dns_id, dns_id, write_dns_id};
 use response::{
     cleanup_pending_dns, handle_dns_response, send_dns_request, try_send_cached_dns_response,
-    write_dns_id,
 };
 
-const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
+pub const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
 const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 const DNS_RESPONSE_CACHE_MAX_ENTRIES: usize = 4096;
@@ -56,15 +52,15 @@ struct DnsProxyRequest {
     packet: Vec<u8>,
 }
 
-struct PendingDnsRequest {
+pub struct PendingDnsRequest {
     // DNS ID 会被改写成 upstream_id；收到响应后再恢复 original_id 给客户端。
-    client: SocketAddr,
-    target: SocketAddr,
-    original_id: u16,
-    query: String,
-    record_type: String,
-    started_at: Instant,
-    expires_at: Instant,
+    pub client: SocketAddr,
+    pub target: SocketAddr,
+    pub original_id: u16,
+    pub query: String,
+    pub record_type: String,
+    pub started_at: Instant,
+    pub expires_at: Instant,
 }
 
 impl DnsProxy {

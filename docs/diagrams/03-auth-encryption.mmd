@@ -13,7 +13,6 @@ sequenceDiagram
     P->>P: 校验时间、权限、过期、RSA-PSS 与 nonce 防重放
     P->>P: 生成 master secret、server_nonce 和 session_id
     P->>P: 用用户公钥 OAEP 加密 session secret
-    P->>P: 用 Proxy 传输身份签名响应 transcript
-    P-->>A: AuthResponse(v2, encrypted_session, proxy_signature)
-    A->>A: 用固定的 Proxy 公钥先验签，再解密并核对 transcript
+    P-->>A: AuthResponse(v2, encrypted_session)
+    A->>A: 用用户私钥解密并核对 session envelope
     A->>A: 双向 HKDF 派生后启用 AEAD

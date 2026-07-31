@@ -309,18 +309,3 @@ fn validate_fragment(fragment: &DecryptedUdpFragment) -> UdpTransportResult<()> 
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_bound_each_session_without_reducing_message_limit() {
-        let config = ReassemblyConfig::default();
-
-        assert_eq!(config.max_entries, 64);
-        assert_eq!(config.max_total_bytes, 1024 * 1024);
-        assert_eq!(config.timeout, Duration::from_secs(1));
-        assert!(config.max_total_bytes >= UDP_MAX_MESSAGE_SIZE);
-    }
-}

@@ -3,7 +3,7 @@ use super::*;
 const MAX_SSE_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentServerEventKind {
+pub enum AgentServerEventKind {
     Sync,
     ProfileChanged,
     ProfilesChanged,
@@ -11,13 +11,13 @@ pub(crate) enum AgentServerEventKind {
     AdminKeyRequestsChanged,
 }
 
-pub(crate) struct AgentServerEventStream {
+pub struct AgentServerEventStream {
     response: Response,
     decoder: SseDecoder,
 }
 
 impl AgentServerEventStream {
-    pub(crate) async fn connect(base_url: &str, access_token: &str) -> Result<Self, String> {
+    pub async fn connect(base_url: &str, access_token: &str) -> Result<Self, String> {
         let base_url = normalize_proxy_registry_url(base_url)?;
         let url = endpoint(&base_url, "api/v1/agent/events")?;
         let client = Client::builder()
@@ -55,7 +55,7 @@ impl AgentServerEventStream {
         })
     }
 
-    pub(crate) async fn next_event(&mut self) -> Result<Option<AgentServerEventKind>, String> {
+    pub async fn next_event(&mut self) -> Result<Option<AgentServerEventKind>, String> {
         loop {
             if let Some(event) = self.decoder.next_event()? {
                 return Ok(Some(event));
@@ -84,13 +84,13 @@ async fn server_event_http_error(response: Response) -> String {
 }
 
 #[derive(Default)]
-struct SseDecoder {
+pub struct SseDecoder {
     buffer: Vec<u8>,
     pending_event: Option<String>,
 }
 
 impl SseDecoder {
-    fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
         if self.buffer.len().saturating_add(chunk.len()) > MAX_SSE_BUFFER_BYTES {
             return Err("Agent SSE 事件过大，已断开连接".to_string());
         }
@@ -98,7 +98,7 @@ impl SseDecoder {
         Ok(())
     }
 
-    fn next_event(&mut self) -> Result<Option<AgentServerEventKind>, String> {
+    pub fn next_event(&mut self) -> Result<Option<AgentServerEventKind>, String> {
         while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
             let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
             line.pop();
@@ -138,71 +138,5 @@ fn parse_event_name(value: &str) -> Option<AgentServerEventKind> {
         "key_request_changed" => Some(AgentServerEventKind::KeyRequestChanged),
         "admin_key_requests_changed" => Some(AgentServerEventKind::AdminKeyRequestsChanged),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn decoder_handles_chunk_boundaries_comments_and_crlf() {
-        let mut decoder = SseDecoder::default();
-        decoder.push(b": keep-alive\r\neve").unwrap();
-        assert_eq!(decoder.next_event().unwrap(), None);
-        decoder
-            .push(b"nt: profile_changed\r\ndata: {}\r\n\r\n")
-            .unwrap();
-        assert_eq!(
-            decoder.next_event().unwrap(),
-            Some(AgentServerEventKind::ProfileChanged)
-        );
-    }
-
-    #[test]
-    fn decoder_ignores_unknown_events() {
-        let mut decoder = SseDecoder::default();
-        decoder.push(b"event: future_event\n\n").unwrap();
-        assert_eq!(decoder.next_event().unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn stream_connects_directly_and_reads_initial_sync() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
-                let read = socket.read(&mut buffer).await.unwrap();
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..read]);
-            }
-            let request = String::from_utf8(request).unwrap();
-            assert!(request.contains("authorization: Bearer test-token"));
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\n\
-                      Content-Type: text/event-stream\r\n\
-                      Connection: close\r\n\r\n\
-                      event: sync\r\ndata: {}\r\n\r\n",
-                )
-                .await
-                .unwrap();
-        });
-
-        let mut stream =
-            AgentServerEventStream::connect(&format!("http://{address}"), "test-token")
-                .await
-                .unwrap();
-        assert_eq!(
-            stream.next_event().await.unwrap(),
-            Some(AgentServerEventKind::Sync)
-        );
-        server.await.unwrap();
     }
 }

@@ -1,21 +1,21 @@
 use super::*;
 
-pub(super) struct CaptureRecord {
+pub struct CaptureRecord {
     seconds: u32,
     micros: u32,
     original_len: u32,
     packet: Vec<u8>,
 }
 
-pub(super) struct PacketCapture {
-    pub(super) sender: Option<SyncSender<CaptureRecord>>,
-    pub(super) writer: Option<JoinHandle<()>>,
-    pub(super) dropped_packets: AtomicU64,
-    pub(super) disabled: AtomicBool,
+pub struct PacketCapture {
+    sender: Option<SyncSender<CaptureRecord>>,
+    writer: Option<JoinHandle<()>>,
+    dropped_packets: AtomicU64,
+    disabled: AtomicBool,
 }
 
 impl PacketCapture {
-    pub(super) fn create(path: &Path) -> io::Result<Self> {
+    pub fn create(path: &Path) -> io::Result<Self> {
         ensure_capture_parent(path)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -53,7 +53,20 @@ impl PacketCapture {
         })
     }
 
-    pub(super) fn record(&self, packet: &[u8]) -> io::Result<()> {
+    pub fn from_sender(sender: SyncSender<CaptureRecord>) -> Self {
+        Self {
+            sender: Some(sender),
+            writer: None,
+            dropped_packets: AtomicU64::new(0),
+            disabled: AtomicBool::new(false),
+        }
+    }
+
+    pub fn dropped_packets(&self) -> u64 {
+        self.dropped_packets.load(Ordering::Relaxed)
+    }
+
+    pub fn record(&self, packet: &[u8]) -> io::Result<()> {
         if self.disabled.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -237,7 +250,7 @@ fn open_compatible_capture_for_append(path: &Path) -> io::Result<Option<File>> {
     Ok(Some(file))
 }
 
-pub(super) fn global_header() -> [u8; 24] {
+pub fn global_header() -> [u8; 24] {
     let mut header = [0u8; 24];
     header[..4].copy_from_slice(&0xa1b2c3d4_u32.to_le_bytes());
     header[4..6].copy_from_slice(&2_u16.to_le_bytes());

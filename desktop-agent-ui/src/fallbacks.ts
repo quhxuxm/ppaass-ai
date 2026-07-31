@@ -3,7 +3,7 @@ import type { AgentConfigSummary, AgentState, ConnectivityReport, LoadedAgentCon
 
 export function loadFallbackConfig(): LoadedAgentConfig {
   return {
-    path: "config/local/agent.toml",
+    path: "agent.toml",
     raw: fallbackRawConfig,
     summary: summarizeRaw(fallbackRawConfig)
   };
@@ -14,7 +14,7 @@ export function fallbackAgentState(): AgentState {
     running: false,
     managed: false,
     pid: null,
-    config_path: "config/local/agent.toml",
+    config_path: "agent.toml",
     binary_path: null,
     logs: ["desktop-agent ready", "proxy route guard initialized", "udp yamux pool ready", "tun mode: disabled"]
   };

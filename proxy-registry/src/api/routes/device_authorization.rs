@@ -310,7 +310,6 @@ pub(crate) async fn poll_agent_device_authorization(
             expires_at: profile.expires_at,
         },
         public_key_pem: private_key.public_key_pem,
-        proxy_identity_public_key_pem: private_key.proxy_identity_public_key_pem,
         private_key_pem: private_key.private_key_pem,
         csrf_token: session.csrf_token.clone(),
         session_expires_at: session.expires_at,

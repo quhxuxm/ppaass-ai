@@ -68,7 +68,7 @@ pub(super) async fn connect_udp_default_addr(dst: SocketAddr) -> io::Result<UdpS
     Ok(socket)
 }
 
-pub(super) fn split_domain_target(target_addr: &str) -> io::Result<(&str, u16)> {
+pub fn split_domain_target(target_addr: &str) -> io::Result<(&str, u16)> {
     // Address::Domain 的 host 历史上允许保存裸 IPv6，因此必须从最后一个冒号拆端口；
     // 例如 `::ffff:127.0.0.1:8787` 应解析成 `::ffff:127.0.0.1` + `8787`。
     let (raw_host, port) = target_addr.rsplit_once(':').ok_or_else(|| {

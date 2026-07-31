@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn write_private_key_to_dir(
+pub fn write_private_key_to_dir(
     credentials_dir: &Path,
     file_name: &str,
     private_key_pem: &str,
@@ -56,7 +56,7 @@ pub(crate) fn cleanup_old_managed_private_keys(current_private_key: &Path) {
     remove_other_managed_private_keys(credentials_dir, current_file_name);
 }
 
-pub(crate) fn remove_other_managed_private_keys(credentials_dir: &Path, current_file_name: &str) {
+pub fn remove_other_managed_private_keys(credentials_dir: &Path, current_file_name: &str) {
     let Ok(entries) = fs::read_dir(credentials_dir) else {
         return;
     };

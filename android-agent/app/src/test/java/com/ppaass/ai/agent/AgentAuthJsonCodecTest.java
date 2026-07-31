@@ -124,7 +124,6 @@ public class AgentAuthJsonCodecTest {
                 + "\"key_version\":4,\"expires_at\":4102444800},"
                 + "\"public_key_pem\":\"public-material\","
                 + "\"private_key_pem\":\"private-material\","
-                + "\"proxy_identity_public_key_pem\":\"proxy-identity\","
                 + "\"agent_access_token\":\"access_token_123\","
                 + "\"agent_access_token_expires_at\":4102444800,"
                 + "\"refresh_after_seconds\":300}";

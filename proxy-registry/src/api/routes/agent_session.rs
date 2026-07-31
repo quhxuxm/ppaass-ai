@@ -116,7 +116,6 @@ fn agent_credential_response(
         account,
         profile: agent_profile_response(profile, proxy_addresses),
         public_key_pem: private_key.public_key_pem,
-        proxy_identity_public_key_pem: private_key.proxy_identity_public_key_pem,
         private_key_pem: private_key.private_key_pem,
         agent_access_token: issued.token,
         agent_access_token_expires_at: issued.expires_at,

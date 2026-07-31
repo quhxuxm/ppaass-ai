@@ -4,8 +4,7 @@ use crate::user_manager::UserManager;
 use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 use protocol::udp_transport::{
     UDP_OAEP_LABEL, UDP_TRANSPORT_VERSION, UdpAuthInit, UdpAuthOk, UdpSessionCodec, UdpSessionId,
-    UdpSessionRole, UdpSessionSecret, encode_auth_ok, encode_session_secret,
-    udp_auth_ok_signature_transcript, udp_auth_proof_digest,
+    UdpSessionRole, UdpSessionSecret, encode_auth_ok, encode_session_secret, udp_auth_proof_digest,
 };
 use rand::Rng;
 
@@ -20,7 +19,6 @@ pub(super) struct PreparedSession {
 pub(super) async fn prepare_session(
     config: &ProxyConfig,
     user_manager: &UserManager,
-    transport_identity: &RsaKeyPair,
     session_id: UdpSessionId,
     auth: &UdpAuthInit,
 ) -> Result<PreparedSession> {
@@ -63,23 +61,10 @@ pub(super) async fn prepare_session(
     .map_err(|_| {
         ProxyError::Authentication("Failed to encrypt UDP authentication response".to_string())
     })?;
-    let proxy_signature_transcript =
-        udp_auth_ok_signature_transcript(&session_id, &expected_proof, &encrypted_session_secret)
-            .map_err(|_| {
-            ProxyError::Authentication(
-                "Failed to build UDP Proxy identity signature context".to_string(),
-            )
-        })?;
-    let proxy_signature = transport_identity
-        .sign_pss_sha256(&proxy_signature_transcript)
-        .map_err(|_| {
-            ProxyError::Authentication("Failed to sign UDP authentication response".to_string())
-        })?;
     let auth_ok_datagram = encode_auth_ok(
         session_id,
         &UdpAuthOk {
             encrypted_session_secret,
-            proxy_signature,
         },
     )
     .map_err(|error| ProxyError::Authentication(error.to_string()))?;
@@ -122,7 +107,7 @@ fn validate_udp_auth(
     user.expires_at_unix_timestamp()
 }
 
-pub(super) async fn validate_session_authorization(
+pub async fn validate_session_authorization(
     user_manager: &UserManager,
     username: &str,
     authenticated_public_key_pem: &str,
@@ -163,137 +148,4 @@ fn validate_active_udp_user(user: &UserConfig, now: i64) -> Result<()> {
         return Err(ProxyError::Authentication("User expired".to_string()));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_session_authorization;
-    use crate::{
-        config::UserConfig,
-        user_manager::{TestAuthorizationProvider, UserManager},
-    };
-    use protocol::RsaKeyPair;
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn live_session_revalidation_detects_disable_permission_revocation_and_key_rotation() {
-        let first_public_key = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap()
-            .trim()
-            .to_string();
-        let provider = Arc::new(TestAuthorizationProvider::new([test_user(
-            &first_public_key,
-            true,
-            vec!["proxy.connect.udp"],
-            Some(i64::MAX),
-            1,
-        )]));
-        let manager = UserManager::new(provider.clone());
-
-        validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-            .await
-            .unwrap();
-
-        provider
-            .set_user(test_user(
-                &first_public_key,
-                false,
-                vec!["proxy.connect.udp"],
-                Some(i64::MAX),
-                1,
-            ))
-            .await;
-        assert!(
-            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-                .await
-                .is_err()
-        );
-
-        provider
-            .set_user(test_user(
-                &first_public_key,
-                true,
-                vec!["proxy.connect.tcp"],
-                Some(i64::MAX),
-                1,
-            ))
-            .await;
-        assert!(
-            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-                .await
-                .is_err()
-        );
-
-        provider
-            .set_user(test_user(
-                &first_public_key,
-                true,
-                vec!["proxy.connect.udp"],
-                Some(common::current_timestamp()),
-                1,
-            ))
-            .await;
-        assert!(
-            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-                .await
-                .is_err()
-        );
-
-        let second_public_key = RsaKeyPair::generate(2048)
-            .unwrap()
-            .public_key_to_pem()
-            .unwrap()
-            .trim()
-            .to_string();
-        provider
-            .set_user(test_user(
-                &second_public_key,
-                true,
-                vec!["proxy.connect.udp"],
-                Some(i64::MAX),
-                2,
-            ))
-            .await;
-        assert!(
-            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-                .await
-                .is_err()
-        );
-
-        // 即使管理员把公钥内容恢复为握手时的 PEM，单调递增的 key_version
-        // 也必须永久淘汰旧会话，避免公钥内容比较的 ABA。
-        provider
-            .set_user(test_user(
-                &first_public_key,
-                true,
-                vec!["proxy.connect.udp"],
-                Some(i64::MAX),
-                3,
-            ))
-            .await;
-        assert!(
-            validate_session_authorization(&manager, "alice", &first_public_key, Some(1))
-                .await
-                .is_err()
-        );
-    }
-
-    fn test_user(
-        public_key_pem: &str,
-        enabled: bool,
-        permissions: Vec<&str>,
-        expires_at: Option<i64>,
-        key_version: i64,
-    ) -> UserConfig {
-        UserConfig {
-            username: "alice".to_string(),
-            public_key_pem: public_key_pem.to_string(),
-            expires_at: expires_at.map(|value| value.to_string()),
-            permissions: permissions.into_iter().map(str::to_string).collect(),
-            enabled,
-            key_version: Some(key_version),
-        }
-    }
 }

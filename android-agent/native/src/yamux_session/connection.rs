@@ -149,7 +149,8 @@ impl AndroidYamuxSessionManager {
         ))
     }
 
-    pub(super) fn next_udp_session_slot(&self) -> usize {
+    #[doc(hidden)]
+    pub fn next_udp_session_slot(&self) -> usize {
         // AndroidAgentConfig 已把 pool size 夹到至少 1，因此这里不会除以 0。
         self.udp_next_index.fetch_add(1, Ordering::AcqRel) % self.udp_sessions.len()
     }

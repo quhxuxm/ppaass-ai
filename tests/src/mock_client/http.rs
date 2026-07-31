@@ -9,6 +9,10 @@ impl MockHttpClient {
         Self { agent_addr }
     }
 
+    pub fn agent_addr(&self) -> &str {
+        &self.agent_addr
+    }
+
     /// 通过代理发送 HTTP GET 请求
     pub async fn get(&self, url: &str) -> Result<(Duration, String)> {
         let (duration, status, _headers, body_bytes) =

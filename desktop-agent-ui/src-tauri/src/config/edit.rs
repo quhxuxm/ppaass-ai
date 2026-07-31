@@ -1,4 +1,4 @@
-pub(crate) fn upsert_toml_bool(raw: &str, section: &str, key: &str, value: bool) -> String {
+pub fn upsert_toml_bool(raw: &str, section: &str, key: &str, value: bool) -> String {
     let mut lines = raw.lines().map(str::to_string).collect::<Vec<_>>();
     let assignment = format!("{key} = {}", if value { "true" } else { "false" });
     let section_header = format!("[{section}]");

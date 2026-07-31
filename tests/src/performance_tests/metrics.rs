@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn calculate_metrics(
+pub fn calculate_metrics(
     histogram: &Histogram<u64>,
     successful: usize,
     failed: usize,
@@ -36,7 +36,7 @@ pub(super) fn calculate_metrics(
     }
 }
 
-pub(super) fn calculate_udp_metrics(
+pub fn calculate_udp_metrics(
     histogram: &Histogram<u64>,
     successful: usize,
     failed: usize,
@@ -73,7 +73,7 @@ pub(super) fn calculate_udp_metrics(
     }
 }
 
-pub(super) fn calculate_tcp_metrics(
+pub fn calculate_tcp_metrics(
     histogram: &Histogram<u64>,
     successful: usize,
     failed: usize,

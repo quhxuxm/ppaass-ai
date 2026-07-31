@@ -123,7 +123,7 @@ pub(crate) fn send_service_request_to(
     serde_json::from_slice(&response).map_err(|err| format!("解析服务响应失败：{err}"))
 }
 
-pub(crate) fn encode_service_request(
+pub fn encode_service_request(
     request: &ServiceRequest,
     auth_token: &str,
 ) -> Result<Vec<u8>, String> {

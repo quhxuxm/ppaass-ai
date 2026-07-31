@@ -109,8 +109,8 @@ impl YamuxSessionManager {
             let config = self.config.clone();
             let proxy_addrs = self.proxy_addrs.clone();
             let semaphore = semaphore.clone();
-            let bind_ip = self.get_proxy_bind_ip();
-            let bind_interface = self.get_proxy_bind_interface();
+            let bind_ip = self.proxy_bind_ip();
+            let bind_interface = self.proxy_bind_interface();
             let transport = self.yamux_transport;
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {

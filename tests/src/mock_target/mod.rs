@@ -24,46 +24,6 @@ mod responses;
 mod servers;
 
 pub(crate) use responses::large_file_byte_at;
-use responses::*;
+pub use responses::parse_range_header;
+use responses::{handle_http_request, handle_tcp_echo};
 pub use servers::{MockH2Server, MockHttpServer, MockTcpServer, MockUdpServer, run_mock_servers};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_mock_http_server() {
-        // 这是一个基础测试，用于确保服务器可以实例化
-        let server = MockHttpServer::new(19090);
-        assert_eq!(server.port, 19090);
-    }
-
-    #[tokio::test]
-    async fn test_mock_tcp_server() {
-        let server = MockTcpServer::new(19091);
-        assert_eq!(server.port, 19091);
-    }
-
-    #[tokio::test]
-    async fn test_mock_udp_server() {
-        let server = MockUdpServer::new(19092);
-        assert_eq!(server.port, 19092);
-    }
-
-    #[test]
-    fn test_range_header_parsing() {
-        assert_eq!(
-            parse_range_header(Some("bytes=10-19"), 100).unwrap(),
-            Some((10, 19))
-        );
-        assert_eq!(
-            parse_range_header(Some("bytes=90-200"), 100).unwrap(),
-            Some((90, 99))
-        );
-        assert_eq!(
-            parse_range_header(Some("bytes=-10"), 100).unwrap(),
-            Some((90, 99))
-        );
-        assert!(parse_range_header(Some("bytes=100-101"), 100).is_err());
-    }
-}

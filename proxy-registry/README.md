@@ -46,33 +46,17 @@ Entry 和 Registry 使用两个独立的手动工作流，应用运行时不要�
 - `.github/workflows/deploy-proxy-entry.yml`：只构建和部署 Entry，不安装 Caddy，也不
   接触 SQLite。
 
-两个工作流都绑定所选的 GitHub Environment（`production`、`dev` 或 `qa`）。
-两个工作流都按所选环境读取 `<ENV>_REMOTE_HOST/USER/PASSWORD`，例如
-`production` 对应 `PRODUCTION_REMOTE_HOST/USER/PASSWORD`；因此同一环境的两个
-工作流当前默认部署到同一台服务器。部署使用密码方式的 SSH/SCP，并显式关闭客户端
-公钥认证；服务器主机指纹在该次工作流首次连接时自动接受，不需要额外配置 known_hosts
-Secret。远端用户当前必须是能够管理 systemd、系统用户和 Caddy 的 root 用户。
+Registry 工作流绑定 `registry_production` GitHub Environment，并读取
+`REGISTRY_PRODUCTION_REMOTE_HOST/USER/PASSWORD`；Entry 工作流绑定
+`entry_production`，并读取 `ENTRY_PRODUCTION_REMOTE_HOST/USER/PASSWORD`。部署使用
+密码方式的 SSH/SCP，并显式关闭客户端公钥认证；服务器主机指纹在该次工作流首次连接时
+自动接受，不需要额外配置 known_hosts Secret。远端用户当前必须是能够管理 systemd、
+系统用户和 Caddy 的 root 用户。
 Registry 主机需预先安装 systemd、Caddy、OpenSSL 和 curl；Entry 主机需预先安装
 systemd、OpenSSL 和 curl。
 
-必须配置以下共享 Secrets：
-
-- `PPAASS_PROXY_CONTROL_TOKEN`：至少 32 字节、无空白；Registry 校验，Entry 以
-  `0600` 文件读取。
-- `PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM` 与
-  `PPAASS_PROXY_IDENTITY_PUBLIC_KEY_PEM`：同一传输身份密钥对。私钥只部署到 Entry，
-  公钥只部署到 Registry；Entry 工作流会在部署前验证二者匹配。
-- `PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET`：Registry 托管用户私钥的稳定主密钥。
-  迁移已有数据库时必须填写原主密钥；部署脚本发现不匹配会停止。
-- `PPAASS_WEB_ADMIN_PASSWORD`：仅在数据库还没有根管理员时用于 bootstrap。
-
-必须配置以下 Variables：
-
-- `PPAASS_WEB_PUBLIC_HOST`：管理员 Web/API 的公开 DNS 名称。
-- `PPAASS_REGISTRY_CONTROL_PUBLIC_HOST`：Entry 访问的控制面 DNS 名称。
-- `PPAASS_PROXY_ENTRY_ID`：当前 Entry 的稳定唯一标识。
-- 可选 `PPAASS_REGISTRY_RUNTIME_ROOT`、`PPAASS_ENTRY_RUNTIME_ROOT`，只允许
-  `/opt` 或 `/srv` 下的目录。
+完整的 Secrets、Variables、Environment 示例、PEM 公私钥格式和安全录入方式见
+[`docs/GITHUB_ACTIONS_DEPLOYMENT.md`](../docs/GITHUB_ACTIONS_DEPLOYMENT.md)。
 
 Registry 的两个进程共享
 `/var/lib/ppaass/users/proxy-users.sqlite3` 和
@@ -90,9 +74,10 @@ Entry 的授权缓存最多保留五秒，收到事件即失效；访问记录�
 
 首次从旧的同机部署拆分时：
 
-1. 保留 Registry 主机上的 `/var/lib/ppaass/users`、`access`、`secrets` 和公钥。
-2. 将原传输私钥安全录入 `PPAASS_PROXY_IDENTITY_PRIVATE_KEY_PEM`，再部署 Entry 主机。
-3. 将对应公钥和原 Registry 加密主密钥录入 Secrets；部署 Registry。
+1. 保留 Registry 主机上的 `/var/lib/ppaass/users`、`access` 和 `secrets`。
+2. 将原 Registry 加密主密钥录入
+   `REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET`，并配置两边相同的控制 Token。
+3. 部署 Registry，再部署 Entry。
 4. 确认两个 Registry 本地健康端点、Caddy HTTPS 端点和 Entry systemd 服务均正常后，
    再下线旧的同机 Entry。
 
@@ -102,8 +87,7 @@ Entry 的授权缓存最多保留五秒，收到事件即失效；访问记录�
 export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
 cargo run -p proxy-registry -- \
   --listen 127.0.0.1:8787 \
-  --control-listen 127.0.0.1:8797 \
-  --proxy-identity-public-key data/proxy-identity-public.pem
+  --control-listen 127.0.0.1:8797
 ```
 
 生产环境保持 Axum 只监听回环地址，由 Caddy 提供 HTTPS。控制域名也必须使用 TLS，
@@ -397,7 +381,6 @@ Entry 只配置控制面，不配置数据库：
 entry_id = "entry-production"
 registry_control_url = "https://registry-control.example.com"
 registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-token"
-transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
 Proxy Registry 是用户、账号和访问记录 schema 的唯一所有者；Entry 不链接存储 crate，
@@ -406,8 +389,8 @@ Proxy Registry 是用户、账号和访问记录 schema 的唯一所有者；Ent
 申请流程。
 
 在 Unix 上，本地默认将两个 SQLite 的主文件及 sidecar 设为 `0600`。生产部署中两个
-Registry 进程使用同一无登录 UID，因此不再需要把数据库授权给 Entry。控制 Token 和
-Entry 传输私钥都使用 `0600` 文件，分别只部署到所需的服务主机。
+Registry 进程使用同一无登录 UID，因此不再需要把数据库授权给 Entry。控制 Token 使用
+`0600` 文件，并分别部署到两个服务主机。
 
 Registry handler 只依赖数据库无关 Repository。将来增加 PostgreSQL 等中央数据库时，
 应新增适配器并在启动阶段选择实现，无需修改 Entry 认证、控制协议或 Axum handler。

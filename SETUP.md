@@ -57,30 +57,28 @@ mkdir -p data
 printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
 cargo run --release -p proxy-registry -- \
   --listen 127.0.0.1:8787 \
-  --control-listen 127.0.0.1:8797 \
-  --proxy-identity-public-key data/proxy-identity-public.pem
+  --control-listen 127.0.0.1:8797
 ```
 
 ### Step 2: Start Proxy Entry
 
-1. Edit `config/local/proxy-entry.toml` if needed:
+1. Edit `config/proxy-entry.toml` if needed:
 
 ```toml
 listen_addr = "0.0.0.0:8080"
 entry_id = "entry-local"
 registry_control_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
-transport_identity_private_key_path = "data/proxy-identity-private.pem"
 ```
 
 2. Start Proxy Entry:
 
 ```bash
 # On Windows
-.\target\release\proxy-entry.exe --config config\local\proxy-entry.toml
+.\target\release\proxy-entry.exe --config config\proxy-entry.toml
 
 # On Linux/macOS
-./target/release/proxy-entry --config config/local/proxy-entry.toml
+./target/release/proxy-entry --config config/proxy-entry.toml
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
@@ -228,7 +226,7 @@ For issues and questions:
 **Start Proxy Entry:**
 
 ```bash
-./target/release/proxy-entry --config config/local/proxy-entry.toml
+./target/release/proxy-entry --config config/proxy-entry.toml
 ```
 
 **Start Agent:**

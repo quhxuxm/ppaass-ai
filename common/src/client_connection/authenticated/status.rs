@@ -6,10 +6,8 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::debug;
 
-/// An authentication failure asserted by the pinned Proxy identity.
+/// A structured authentication failure returned for an Agent login attempt.
 ///
-/// This error is only constructed after verifying a signature that binds the
-/// current Agent authentication request, the stable code and the message.
 /// Callers may downcast the inner error of [`std::io::Error`] to this type.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("Proxy authentication failed for {username} ({code:?}): {message}")]
@@ -33,8 +31,8 @@ impl AuthenticationFailure {
     }
 }
 
-/// Current Proxy account status established by a pinned, signed TCP
-/// authentication response.
+/// Current Proxy account status established by a validated TCP authentication
+/// response.
 ///
 /// Consumers should use this only for status display. Agent connectivity and
 /// stored credentials remain active so a later successful authentication can
@@ -73,13 +71,14 @@ struct UserAuthStatusOrdering {
     max_published_sequence: Option<u128>,
 }
 
-pub(super) struct VerifiedAuthAttempt {
+#[doc(hidden)]
+pub struct VerifiedAuthAttempt {
     username: String,
     sequence: u128,
 }
 
 impl VerifiedAuthAttempt {
-    pub(super) fn begin(username: String) -> Self {
+    pub fn begin(username: String) -> Self {
         let mut ordering = lock_verified_auth_status_ordering();
         let sequence = ordering.next_sequence;
         // A process cannot perform 2^128 authentication attempts during its
@@ -98,7 +97,7 @@ impl VerifiedAuthAttempt {
         Self { username, sequence }
     }
 
-    pub(super) fn publish(&self, status: VerifiedProxyAuthStatus) -> bool {
+    pub fn publish(&self, status: VerifiedProxyAuthStatus) -> bool {
         debug_assert_eq!(status.username(), self.username);
         let mut ordering = lock_verified_auth_status_ordering();
         let Some(user) = ordering.users.get_mut(&self.username) else {
@@ -163,11 +162,10 @@ fn verified_auth_status_sender() -> &'static broadcast::Sender<VerifiedProxyAuth
     })
 }
 
-/// Subscribe to account status established with the configured pinned Proxy
-/// transport identity.
+/// Subscribe to account status established by TCP authentication responses.
 ///
-/// No event is emitted for network errors, unsigned responses, invalid
-/// signatures, or signed non-terminal `Other` failures.
+/// No event is emitted for network errors, generic failures, or structured
+/// non-terminal `Other` failures.
 pub fn subscribe_verified_proxy_auth_statuses() -> broadcast::Receiver<VerifiedProxyAuthStatus> {
     verified_auth_status_sender().subscribe()
 }

@@ -13,13 +13,12 @@ use crate::agent::{
 use crate::auth::{
     account_management_page_url, apply_permission_snapshot, approve_agent_admin_key_request,
     authenticate_and_download, authenticate_rotate_and_download, cleanup_old_managed_private_keys,
-    destroy_managed_private_key, destroy_managed_proxy_identity_public_key,
-    destroy_persisted_agent_login, fetch_agent_admin_key_request_inbox,
-    fetch_agent_permission_snapshot, load_persisted_agent_login, open_system_browser,
-    persist_agent_login, persist_unassigned_agent_login, poll_device_authorization,
-    reject_agent_admin_key_request, request_account_management_handoff, start_device_authorization,
-    write_managed_private_key, write_managed_proxy_identity_public_key, AgentServerEventKind,
-    AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
+    destroy_managed_private_key, destroy_persisted_agent_login,
+    fetch_agent_admin_key_request_inbox, fetch_agent_permission_snapshot,
+    load_persisted_agent_login, open_system_browser, persist_agent_login,
+    persist_unassigned_agent_login, poll_device_authorization, reject_agent_admin_key_request,
+    request_account_management_handoff, start_device_authorization, write_managed_private_key,
+    AgentServerEventKind, AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,
@@ -27,9 +26,8 @@ use crate::config::{
     enforce_managed_config_path_for_account, enforce_managed_identity,
     install_bundled_agent_assets, load_config_from_path, load_default_config,
     loaded_config_from_raw, locate_config_path, make_absolute_path, merge_config_summary,
-    prepare_config_for_account, primary_agent_config_path, proxy_registry_url_from_config,
-    remember_trusted_config_baseline, validate_config_candidate_against_trusted_baseline,
-    write_config_file,
+    prepare_config_for_account, proxy_registry_url_from_config, remember_trusted_config_baseline,
+    validate_config_candidate_against_trusted_baseline, write_config_file,
 };
 use crate::diagnostics::run_connectivity_tests_blocking;
 #[cfg(target_os = "macos")]
@@ -76,14 +74,11 @@ mod state;
 mod telemetry_commands;
 
 pub(crate) use admin_key_requests::*;
-pub(crate) use bootstrap::*;
+pub use bootstrap::*;
 pub(crate) use config_commands::*;
 pub(crate) use login_commands::*;
 pub(crate) use permission_sync::*;
 pub(crate) use provisioning::*;
-pub(crate) use server_events::*;
-pub(crate) use state::*;
+pub use server_events::*;
+pub use state::*;
 pub(crate) use telemetry_commands::*;
-
-#[cfg(test)]
-mod tests;

@@ -39,10 +39,7 @@ final class AgentAuthResponseParser {
 
         String privateKeyPem = requireText(response.private_key_pem);
         String publicKeyPem = requireText(response.public_key_pem);
-        String proxyIdentityPublicKeyPem =
-                requireText(response.proxy_identity_public_key_pem);
         AgentKeyValidator.validateMatchingKeyPair(privateKeyPem, publicKeyPem);
-        AgentKeyValidator.validateProxyIdentityPublicKey(proxyIdentityPublicKeyPem);
 
         return new AgentAuthClient.LoginResult(
                 username,
@@ -54,7 +51,6 @@ final class AgentAuthResponseParser {
                 keyVersion,
                 expiresAt,
                 privateKeyPem,
-                proxyIdentityPublicKeyPem,
                 accessToken(response.agent_access_token),
                 accessTokenExpiresAt(response.agent_access_token_expires_at),
                 refreshSeconds(response.refresh_after_seconds));

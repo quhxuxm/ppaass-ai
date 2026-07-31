@@ -30,20 +30,20 @@ pub(super) struct UdpRelay {
 }
 
 #[derive(Clone, Debug)]
-struct UdpRelayRequest {
-    client: SocketAddr,
-    target: SocketAddr,
-    address: Address,
-    packet: Vec<u8>,
+pub struct UdpRelayRequest {
+    pub client: SocketAddr,
+    pub target: SocketAddr,
+    pub address: Address,
+    pub packet: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct UdpFlowKey {
-    client: SocketAddr,
-    target: SocketAddr,
+pub struct UdpFlowKey {
+    pub client: SocketAddr,
+    pub target: SocketAddr,
 }
 
-struct UdpRelayState {
+pub struct UdpRelayState {
     // (client,target) -> flow_id，保证 Android VPN 内同一 UDP flow 在 proxy 端复用同一个 UDP socket。
     flow_ids: HashMap<UdpFlowKey, u64>,
     // flow_id -> (client,target)，用于把 proxy 响应写回正确的 netstack 方向。
@@ -53,7 +53,7 @@ struct UdpRelayState {
 }
 
 #[derive(Debug, Default)]
-struct UdpRelayStats {
+pub struct UdpRelayStats {
     sent_packets: AtomicU64,
     sent_payload_bytes: AtomicU64,
     send_batches: AtomicU64,
@@ -64,14 +64,14 @@ struct UdpRelayStats {
 }
 
 #[derive(Debug, Default)]
-struct UdpRelayStatsSnapshot {
-    sent_packets: u64,
-    sent_payload_bytes: u64,
-    send_batches: u64,
-    send_batched_packets: u64,
-    response_packets: u64,
-    response_payload_bytes: u64,
-    queue_drops: u64,
+pub struct UdpRelayStatsSnapshot {
+    pub sent_packets: u64,
+    pub sent_payload_bytes: u64,
+    pub send_batches: u64,
+    pub send_batched_packets: u64,
+    pub response_packets: u64,
+    pub response_payload_bytes: u64,
+    pub queue_drops: u64,
 }
 
 impl UdpRelayStats {
@@ -97,7 +97,7 @@ impl UdpRelayStats {
         self.queue_drops.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
+    pub fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
         UdpRelayStatsSnapshot {
             sent_packets: self.sent_packets.swap(0, Ordering::Relaxed),
             sent_payload_bytes: self.sent_payload_bytes.swap(0, Ordering::Relaxed),
@@ -111,7 +111,7 @@ impl UdpRelayStats {
 }
 
 impl UdpRelayState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             flow_ids: HashMap::new(),
             flows: HashMap::new(),
@@ -120,7 +120,7 @@ impl UdpRelayState {
         }
     }
 
-    fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
+    pub fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
         let key = UdpFlowKey { client, target };
         if let Some(id) = self.flow_ids.get(&key) {
             self.last_seen.insert(*id, Instant::now());
@@ -134,7 +134,7 @@ impl UdpRelayState {
         id
     }
 
-    fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
+    pub fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
         self.flows.get(&flow_id).copied()
     }
 
@@ -372,7 +372,5 @@ async fn run_udp_relay(
 }
 
 mod relay_io;
+pub use relay_io::send_udp_relay_request_batch;
 use relay_io::*;
-
-#[cfg(test)]
-mod tests;

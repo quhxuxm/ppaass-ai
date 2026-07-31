@@ -17,7 +17,7 @@ pub(crate) fn service_session_authorization() -> Result<ServiceSessionAuthorizat
     read_service_session_authorization(&service_session_file_path_for_root(config_root)?)
 }
 
-pub(crate) fn read_service_session_authorization(
+pub fn read_service_session_authorization(
     path: &Path,
 ) -> Result<ServiceSessionAuthorization, String> {
     let metadata = fs::symlink_metadata(path)
@@ -37,7 +37,7 @@ pub(crate) fn read_service_session_authorization(
     Ok(authorization)
 }
 
-pub(crate) fn service_session_file_path_for_root(config_root: &Path) -> Result<PathBuf, String> {
+pub fn service_session_file_path_for_root(config_root: &Path) -> Result<PathBuf, String> {
     Ok(service_credentials_dir_for_root(config_root)?.join(SERVICE_SESSION_FILE_NAME))
 }
 
@@ -67,9 +67,7 @@ pub(crate) fn service_desired_running() -> Result<Option<ServiceLoginBinding>, S
     read_service_desired_state(&service_desired_state_file_path_for_root(config_root)?)
 }
 
-pub(crate) fn read_service_desired_state(
-    path: &Path,
-) -> Result<Option<ServiceLoginBinding>, String> {
+pub fn read_service_desired_state(path: &Path) -> Result<Option<ServiceLoginBinding>, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -114,7 +112,7 @@ pub(crate) fn persist_service_desired_running(
     )
 }
 
-pub(crate) fn persist_service_desired_state(
+pub fn persist_service_desired_state(
     path: &Path,
     login_binding: Option<&ServiceLoginBinding>,
 ) -> Result<(), String> {
@@ -173,7 +171,7 @@ pub(crate) fn validate_service_token_format(token: &str) -> Result<(), String> {
     }
 }
 
-pub(crate) fn constant_time_token_eq(left: &[u8], right: &[u8]) -> bool {
+pub fn constant_time_token_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }

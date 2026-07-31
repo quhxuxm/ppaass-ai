@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) struct CapturedTcpStream {
+pub struct CapturedTcpStream {
     inner: TcpStream,
     flow: Option<TcpCaptureFlow>,
 }
@@ -21,7 +21,7 @@ impl CapturedTcpStream {
         Self { inner, flow }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.local_addr()
     }
 }
@@ -101,16 +101,30 @@ impl AsyncWrite for CapturedTcpStream {
     }
 }
 
-pub(super) struct TcpCaptureFlow {
-    pub(super) controller: PacketCaptureController,
-    pub(super) client: SocketAddr,
-    pub(super) server: SocketAddr,
-    pub(super) client_sequence: u32,
-    pub(super) server_sequence: u32,
+pub struct TcpCaptureFlow {
+    controller: PacketCaptureController,
+    client: SocketAddr,
+    server: SocketAddr,
+    client_sequence: u32,
+    server_sequence: u32,
 }
 
 impl TcpCaptureFlow {
-    pub(super) fn record_client_to_server(&mut self, payload: &[u8]) {
+    pub fn new(
+        controller: PacketCaptureController,
+        client: SocketAddr,
+        server: SocketAddr,
+    ) -> Self {
+        Self {
+            controller,
+            client,
+            server,
+            client_sequence: 1,
+            server_sequence: 1,
+        }
+    }
+
+    pub fn record_client_to_server(&mut self, payload: &[u8]) {
         self.record_payload(true, payload);
     }
 
@@ -170,7 +184,7 @@ impl TcpCaptureFlow {
     }
 }
 
-pub(super) fn synthetic_tcp_packet(
+pub fn synthetic_tcp_packet(
     source: SocketAddr,
     destination: SocketAddr,
     sequence: u32,
@@ -190,7 +204,7 @@ pub(super) fn synthetic_tcp_packet(
     finish_transport_packet(source, destination, 6, segment, 16, packet_id)
 }
 
-pub(super) fn synthetic_udp_packet(
+pub fn synthetic_udp_packet(
     source: SocketAddr,
     destination: SocketAddr,
     payload: &[u8],
@@ -320,7 +334,7 @@ fn build_ipv6_packet(
     packet
 }
 
-pub(super) fn internet_checksum(parts: &[&[u8]]) -> u16 {
+pub fn internet_checksum(parts: &[&[u8]]) -> u16 {
     let mut sum = 0u32;
     let mut pending_high_byte = None;
     for part in parts {

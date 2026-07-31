@@ -15,6 +15,7 @@ use crate::logging::UiLogBuffer;
 use crate::models::{AgentConfigSummary, LoadedAgentConfig};
 
 const BUNDLED_AGENT_CONFIG_PATH: &str = "agent.toml";
+const BUNDLED_AGENT_CONFIG_RESOURCE_PATH: &str = "config/agent.toml";
 // Windows Service must load wintun.dll from the protected installation directory.
 // Never deploy executable code into the user-writable Agent data directory.
 const BUNDLED_AGENT_SUPPORT_FILES: &[(&str, &str)] = &[];
@@ -43,12 +44,9 @@ mod permissions;
 mod storage;
 mod summary;
 
-pub(crate) use account_defaults::*;
-pub(crate) use edit::*;
-pub(crate) use paths::*;
-pub(crate) use permissions::*;
-pub(crate) use storage::*;
-pub(crate) use summary::*;
-
-#[cfg(test)]
-mod tests;
+pub use account_defaults::*;
+pub use edit::*;
+pub use paths::*;
+pub use permissions::*;
+pub use storage::*;
+pub use summary::*;

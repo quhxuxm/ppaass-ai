@@ -104,16 +104,3 @@ pub(crate) async fn consume_agent_web_session_handoff(
     );
     Ok(response)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn handoff_path_is_the_exact_account_management_endpoint() {
-        assert_eq!(
-            format!("{AGENT_HANDOFF_PATH_PREFIX}{}", "A".repeat(43)),
-            format!("/api/v1/auth/agent-handoff?code={}", "A".repeat(43))
-        );
-    }
-}

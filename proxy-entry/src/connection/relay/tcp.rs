@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) async fn relay_tcp_with_half_close<T, A>(
+pub async fn relay_tcp_with_half_close<T, A>(
     target_stream: &mut T,
     agent_io: &mut A,
     timeouts: TcpRelayTimeouts,
@@ -85,24 +85,20 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TcpRelayTimeouts {
+pub struct TcpRelayTimeouts {
     idle: Option<Duration>,
     half_close_idle: Option<Duration>,
 }
 
 impl TcpRelayTimeouts {
-    pub(super) fn new(idle_secs: u64, half_close_idle_secs: u64) -> Self {
+    pub fn new(idle_secs: u64, half_close_idle_secs: u64) -> Self {
         Self {
             idle: duration_from_secs(idle_secs),
             half_close_idle: duration_from_secs(half_close_idle_secs),
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn from_durations(
-        idle: Option<Duration>,
-        half_close_idle: Option<Duration>,
-    ) -> Self {
+    pub fn from_durations(idle: Option<Duration>, half_close_idle: Option<Duration>) -> Self {
         Self {
             idle,
             half_close_idle,
@@ -131,7 +127,7 @@ fn duration_from_secs(secs: u64) -> Option<Duration> {
     }
 }
 
-pub(super) fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {
+pub fn can_ignore_tcp_shutdown_error(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::NotConnected

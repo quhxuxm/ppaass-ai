@@ -9,7 +9,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Clone)]
-pub(crate) struct UiLogBuffer {
+pub struct UiLogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
     capacity: usize,
     filter: Arc<Mutex<Option<reload::Handle<EnvFilter, Registry>>>>,
@@ -17,7 +17,7 @@ pub(crate) struct UiLogBuffer {
 }
 
 impl UiLogBuffer {
-    pub(crate) fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             lines: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
@@ -26,7 +26,7 @@ impl UiLogBuffer {
         }
     }
 
-    pub(crate) fn push(&self, line: impl Into<String>) {
+    pub fn push(&self, line: impl Into<String>) {
         let Ok(mut lines) = self.lines.lock() else {
             return;
         };
@@ -36,14 +36,14 @@ impl UiLogBuffer {
         lines.push_back(line.into());
     }
 
-    pub(crate) fn snapshot(&self) -> Vec<String> {
+    pub fn snapshot(&self) -> Vec<String> {
         self.lines
             .lock()
             .map(|lines| lines.iter().cloned().collect())
             .unwrap_or_default()
     }
 
-    pub(crate) fn install_tracing(&self) {
+    pub fn install_tracing(&self) {
         let initial_level = self.log_level.lock().map(|level| *level).unwrap_or("info");
         let (filter, handle) = reload::Layer::new(log_filter(initial_level));
         let layer = fmt::layer()
@@ -71,7 +71,7 @@ impl UiLogBuffer {
         }
     }
 
-    pub(crate) fn set_log_level(&self, log_level: &str) -> Result<(), String> {
+    pub fn set_log_level(&self, log_level: &str) -> Result<(), String> {
         let normalized = normalize_log_level(log_level);
         let handle = self
             .filter
@@ -98,7 +98,7 @@ impl UiLogBuffer {
     }
 }
 
-pub(crate) fn normalize_log_level(log_level: &str) -> &'static str {
+pub fn normalize_log_level(log_level: &str) -> &'static str {
     match log_level.trim().to_ascii_lowercase().as_str() {
         "trace" => "trace",
         "debug" => "debug",

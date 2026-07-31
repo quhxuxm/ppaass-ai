@@ -7,6 +7,15 @@ mod tcp;
 mod udp;
 mod udp_relay;
 
+#[doc(hidden)]
+pub use direct_domain_cache::{DirectDomainCache, MAX_CACHE_IPS, MAX_DOMAINS_PER_IP};
+#[doc(hidden)]
+pub use dns_proxy::{DnsResponseCache, dns_id, parse_dns_query, parse_dns_response};
+#[doc(hidden)]
+pub use udp::{UdpRoute, classify_udp_route};
+#[doc(hidden)]
+pub use udp_relay::{UdpRelayRequest, UdpRelayState, UdpRelayStats, send_udp_relay_request_batch};
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +30,6 @@ use crate::error::Result;
 use crate::fd_device::{AndroidTunDevice, RawFd};
 use crate::yamux_session::AndroidYamuxSessionManager;
 
-use direct_domain_cache::DirectDomainCache;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
 use supervisor::spawn_netstack_supervisor;
 

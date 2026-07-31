@@ -46,10 +46,7 @@ mod lifecycle;
 mod paths;
 mod shutdown;
 
-pub(crate) use capture::*;
+pub use capture::*;
 pub(crate) use lifecycle::*;
-pub(crate) use paths::*;
+pub use paths::*;
 pub(crate) use shutdown::*;
-
-#[cfg(test)]
-mod tests;

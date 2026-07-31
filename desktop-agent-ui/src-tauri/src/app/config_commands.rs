@@ -97,7 +97,6 @@ pub(crate) async fn start_agent(
             &config_path,
             &session.account.username,
             &session.private_key_path,
-            &session.proxy_identity_public_key_path,
         )?;
         remember_trusted_ui_config(&runtime, &loaded)?;
         start_agent_command(&runtime, loaded.path)

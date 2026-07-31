@@ -31,7 +31,7 @@ In separate terminals:
 ```bash
 # Start proxy
 cd /path/to/ppaass-ai
-cargo run --release -p proxy-entry -- --config config/local/proxy-entry.toml
+cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 
 # Start agent
 cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
@@ -163,33 +163,33 @@ Human-readable text format suitable for documentation.
 
 ### Mock Target Servers
 
-**HTTP Server** (`src/mock_target.rs`):
+**HTTP Server** (`src/mock_target/`):
 - `/health` - Returns "OK"
 - `/echo` - Echoes back request body
 - `/large` - Returns 1MB response
 - `/json` - Returns JSON response
 
-**TCP Echo Server** (`src/mock_target.rs`):
+**TCP Echo Server** (`src/mock_target/`):
 - Echoes back all received data
 - Used for SOCKS5 testing
 
 ### Mock Clients
 
-**HTTP Client** (`src/mock_client.rs`):
+**HTTP Client** (`src/mock_client/`):
 - Supports GET and POST requests
 - Connects through agent proxy
 - Measures response time
 
-**SOCKS5 Client** (`src/mock_client.rs`):
+**SOCKS5 Client** (`src/mock_client/`):
 - Performs SOCKS5 handshake
 - Connects to target through agent
 - Sends/receives data with timing
 
 ### Test Modules
 
-- `src/integration_tests.rs` - Integration test suite
-- `src/performance_tests.rs` - Performance test implementation
-- `src/report.rs` - Report generation (HTML, JSON, Markdown)
+- `src/integration_tests/` - Integration test suite
+- `src/performance_tests/` - Performance test implementation
+- `src/report/` - Report generation (HTML, JSON, Markdown)
 
 ## Configuration
 
@@ -241,13 +241,13 @@ cargo test -p integration-tests
 
 ### Adding New Tests
 
-1. Add test function to `src/integration_tests.rs`
+1. Add a test scenario under `src/integration_tests/`
 2. Call from `run_all_tests()`
 3. Update this README
 
 ### Modifying Mock Servers
 
-Edit `src/mock_target.rs` to add new endpoints or modify behavior.
+Edit the modules under `src/mock_target/` to add new endpoints or modify behavior.
 
 ## License
 

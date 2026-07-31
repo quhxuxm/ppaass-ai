@@ -11,7 +11,7 @@ pub(in crate::native_udp) enum ChannelEvent {
     },
 }
 
-pub(in crate::native_udp) async fn run_session(
+pub async fn run_session(
     context: SessionContext,
     mut codec: UdpSessionCodec,
     mut inbound_rx: mpsc::Receiver<Vec<u8>>,

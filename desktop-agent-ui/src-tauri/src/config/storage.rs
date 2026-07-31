@@ -1,12 +1,12 @@
 use super::*;
 
-pub(crate) fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
+pub fn load_config_from_path(path: &Path) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(path);
     let raw = fs::read_to_string(&config_path).map_err(|err| format!("读取配置失败：{err}"))?;
     loaded_config_from_raw(config_path, raw)
 }
 
-pub(crate) fn proxy_registry_url_from_config(path: &Path) -> Result<String, String> {
+pub fn proxy_registry_url_from_config(path: &Path) -> Result<String, String> {
     let config_path = make_absolute_path(path);
     let raw = fs::read_to_string(&config_path)
         .map_err(|_| "无法读取 Agent 认证服务配置，请联系管理员".to_string())?;
@@ -37,7 +37,7 @@ pub(crate) fn load_default_config(
     loaded_config_from_raw(config_path, raw)
 }
 
-pub(crate) fn loaded_config_from_raw(
+pub fn loaded_config_from_raw(
     config_path: PathBuf,
     raw: String,
 ) -> Result<LoadedAgentConfig, String> {
@@ -52,7 +52,7 @@ pub(crate) fn loaded_config_from_raw(
     })
 }
 
-pub(crate) fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
+pub fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -89,33 +89,21 @@ pub(crate) fn write_config_file(path: &Path, raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn apply_managed_credentials_to_config(
+pub fn apply_managed_credentials_to_config(
     path: &Path,
     username: &str,
     private_key_path: &Path,
-    proxy_identity_public_key_path: &Path,
 ) -> Result<LoadedAgentConfig, String> {
     let config_path = make_absolute_path(path);
     let loaded = load_config_from_path(&config_path)?;
     let proxy_registry_url = proxy_registry_url_from_raw(&loaded.raw)?;
-    let raw = enforce_managed_identity(
-        &loaded.raw,
-        username,
-        private_key_path,
-        proxy_identity_public_key_path,
-        &proxy_registry_url,
-    )?;
+    let raw =
+        enforce_managed_identity(&loaded.raw, username, private_key_path, &proxy_registry_url)?;
     write_config_file(&config_path, &raw)?;
-
-    if let Some(primary_path) = primary_agent_config_path(&config_path) {
-        write_config_file(&primary_path, &raw)?;
-        load_config_from_path(&primary_path)
-    } else {
-        load_config_from_path(&config_path)
-    }
+    load_config_from_path(&config_path)
 }
 
-pub(crate) fn clear_managed_credentials_from_config(path: &Path) -> Result<(), String> {
+pub fn clear_managed_credentials_from_config(path: &Path) -> Result<(), String> {
     let config_path = make_absolute_path(path);
     let loaded = load_config_from_path(&config_path)?;
     let mut document = loaded
@@ -124,21 +112,16 @@ pub(crate) fn clear_managed_credentials_from_config(path: &Path) -> Result<(), S
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     document.remove("username");
     document.remove("private_key_path");
-    document.remove("proxy_identity_public_key_path");
     let raw = document.to_string();
     summarize_config(&raw)?;
     write_config_file(&config_path, &raw)?;
-    if let Some(primary_path) = primary_agent_config_path(&config_path) {
-        write_config_file(&primary_path, &raw)?;
-    }
     Ok(())
 }
 
-pub(crate) fn enforce_managed_identity(
+pub fn enforce_managed_identity(
     raw: &str,
     username: &str,
     private_key_path: &Path,
-    proxy_identity_public_key_path: &Path,
     proxy_registry_url: &str,
 ) -> Result<String, String> {
     let mut document = raw
@@ -146,24 +129,19 @@ pub(crate) fn enforce_managed_identity(
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     document["username"] = value(username);
     document["private_key_path"] = value(private_key_path.to_string_lossy().as_ref());
-    document["proxy_identity_public_key_path"] =
-        value(proxy_identity_public_key_path.to_string_lossy().as_ref());
     document["proxy_registry_url"] = value(proxy_registry_url);
     let managed_raw = document.to_string();
     summarize_config(&managed_raw)?;
     Ok(managed_raw)
 }
 
-pub(crate) fn redact_managed_identity(
-    mut loaded: LoadedAgentConfig,
-) -> Result<LoadedAgentConfig, String> {
+pub fn redact_managed_identity(mut loaded: LoadedAgentConfig) -> Result<LoadedAgentConfig, String> {
     let mut document = loaded
         .raw
         .parse::<DocumentMut>()
         .map_err(|err| format!("配置 TOML 解析失败：{err}"))?;
     document.remove("username");
     document.remove("private_key_path");
-    document.remove("proxy_identity_public_key_path");
     document.remove("proxy_registry_url");
     loaded.raw = document.to_string();
     loaded.summary.username.clear();
@@ -171,9 +149,7 @@ pub(crate) fn redact_managed_identity(
     Ok(loaded)
 }
 
-pub(crate) fn toggle_tun_enabled_in_config(
-    path: Option<&Path>,
-) -> Result<LoadedAgentConfig, String> {
+pub fn toggle_tun_enabled_in_config(path: Option<&Path>) -> Result<LoadedAgentConfig, String> {
     let config_path = resolve_config_path(path)?;
     let loaded = load_config_from_path(&config_path)?;
     write_tun_enabled_to_config(&config_path, &loaded.raw, !loaded.summary.tun_enabled)
@@ -182,9 +158,8 @@ pub(crate) fn toggle_tun_enabled_in_config(
 pub(crate) fn resolve_config_path(path: Option<&Path>) -> Result<PathBuf, String> {
     match path {
         Some(path) => Ok(make_absolute_path(path)),
-        None => locate_config_path().ok_or_else(|| {
-            "找不到 agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        }),
+        None => locate_config_path()
+            .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string()),
     }
 }
 
@@ -195,28 +170,7 @@ pub(crate) fn write_tun_enabled_to_config(
 ) -> Result<LoadedAgentConfig, String> {
     let raw = upsert_toml_bool(raw, "tun", "enabled", enabled);
     write_config_file(config_path, &raw)?;
-
-    if let Some(primary_path) = primary_agent_config_path(config_path) {
-        write_config_file(&primary_path, &raw)?;
-        load_config_from_path(&primary_path)
-    } else {
-        load_config_from_path(config_path)
-    }
-}
-
-pub(crate) fn primary_agent_config_path(path: &Path) -> Option<PathBuf> {
-    if path.file_name()?.to_str()? != "agent.toml" {
-        return None;
-    }
-    let local_dir = path.parent()?;
-    if local_dir.file_name()?.to_str()? != "local" {
-        return None;
-    }
-    let config_dir = local_dir.parent()?;
-    if config_dir.file_name()?.to_str()? != "config" {
-        return None;
-    }
-    config_dir.parent().map(|base| base.join("agent.toml"))
+    load_config_from_path(config_path)
 }
 
 pub(crate) fn install_bundled_agent_assets(
@@ -231,9 +185,11 @@ pub(crate) fn install_bundled_agent_assets(
         .map_err(|err| format!("创建 Agent 数据目录失败：{}：{err}", app_data_dir.display()))?;
     let _ = DEPLOYED_AGENT_DATA_DIR.set(app_data_dir.clone());
 
-    let config_resource_path = bundled_agent_config_resource(cfg!(debug_assertions));
-    let bundled_files = std::iter::once((config_resource_path, BUNDLED_AGENT_CONFIG_PATH))
-        .chain(BUNDLED_AGENT_SUPPORT_FILES.iter().copied());
+    let bundled_files = std::iter::once((
+        BUNDLED_AGENT_CONFIG_RESOURCE_PATH,
+        BUNDLED_AGENT_CONFIG_PATH,
+    ))
+    .chain(BUNDLED_AGENT_SUPPORT_FILES.iter().copied());
 
     for (resource_path, deploy_path) in bundled_files {
         let destination = app_data_dir.join(deploy_path);
@@ -296,13 +252,5 @@ pub(crate) fn remove_legacy_bundled_demo_keys(app_data_dir: &Path, logs: &UiLogB
             Ok(()) => logs.push(format!("已清理旧版内置演示私钥：{}", path.display())),
             Err(_) => logs.push(format!("无法清理旧版内置演示私钥：{}", path.display())),
         }
-    }
-}
-
-pub(crate) fn bundled_agent_config_resource(debug: bool) -> &'static str {
-    if debug {
-        "config/local/agent.toml"
-    } else {
-        "config/remote/agent.toml"
     }
 }

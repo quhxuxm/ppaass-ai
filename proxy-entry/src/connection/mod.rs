@@ -15,18 +15,23 @@ mod responses;
 mod target;
 mod udp_relay;
 mod udp_relay_flow;
-mod upstream;
 
 pub use agent_io::AgentIo;
-pub(crate) use authorization::ConnectionAuthorization;
-pub use egress::EgressState;
+pub use auth::{GENERIC_AUTH_FAILURE_MESSAGE, terminal_auth_failure_response};
+pub use authorization::ConnectionAuthorization;
+pub use egress::{
+    EgressState, ExplicitDnsResolver, default_route, parse_response, parse_upstream,
+    should_refresh_routes, split_domain_target,
+};
+pub use relay::{RelayCopyIo, TcpRelayTimeouts, relay_tcp_with_half_close};
 pub use response_sink::BytesToProxyResponseSink;
 pub(crate) use target::target_addr_for_address;
-pub(crate) use udp_relay_flow::{
-    QueuedUdpRelayResponse, UdpRelayFlowChannels, UdpRelayFlowSet, udp_relay_channel_size,
+pub use udp_relay::send_udp_relay_response_batch_with_timeout;
+pub use udp_relay_flow::{
+    FLOW_AUTHORIZATION_COALESCE_WINDOW, QueuedUdpRelayResponse, UdpRelayFlowAdmission,
+    UdpRelayFlowChannels, UdpRelayFlowSet, UdpRelayResponseQueueResult,
+    classify_udp_relay_flow_admission, try_queue_udp_relay_response, udp_relay_channel_size,
 };
-pub(crate) use upstream::UpstreamConnection;
-// UpstreamConnection 在 ServerConnection 定义之后于文件末尾导出
 
 use crate::access_log::AccessRecorder;
 use crate::config::{ProxyConfig, UserConfig};
@@ -41,7 +46,7 @@ use futures::{
 use protocol::{
     Address, AuthFailureCode, AuthRequest, AuthResponse, CipherState, CompressionMode,
     ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
-    UdpRelayPacket, crypto::RsaKeyPair,
+    UdpRelayPacket,
 };
 use std::io;
 use std::sync::Arc;
@@ -77,7 +82,7 @@ pub struct ServerConnection {
     // 握手身份与共享用户源组成的持续授权上下文；active relay 以它处理
     // 停用、撤权、提前过期与密钥轮换。
     authorization: Option<ConnectionAuthorization>,
-    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v3 Auth，
+    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v4 Auth，
     // 认证后一次性设置方向独立的 AEAD 记录层。
     cipher_state: Arc<CipherState>,
     // `peek_auth_username` 会先读走 AuthRequest，这里暂存给后续 authenticate 继续校验。
@@ -86,8 +91,6 @@ pub struct ServerConnection {
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     user_manager: Arc<UserManager>,
-    // 独立的 Proxy TCP/Yamux 传输身份，用于成功和失败握手响应的 PSS 签名。
-    transport_identity: Arc<RsaKeyPair>,
 }
 
 impl ServerConnection {
@@ -96,7 +99,6 @@ impl ServerConnection {
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
         user_manager: Arc<UserManager>,
-        transport_identity: Arc<RsaKeyPair>,
         egress_state: Arc<EgressState>,
         access_recorder: AccessRecorder,
     ) -> Self
@@ -104,7 +106,7 @@ impl ServerConnection {
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         // 每条 Yamux 子 stream 都有独立的编解码器和加密状态。
-        // compression_mode 在 stream 创建时确定，v3 记录层在认证成功后写入同一个 state。
+        // compression_mode 在 stream 创建时确定，v4 记录层在认证成功后写入同一个 state。
         let cipher_state = Arc::new(CipherState::with_compression(compression_mode));
         let framed = proxy_framed_stream(stream, ProxyCodec::new(cipher_state.clone()));
         let (writer, reader) = framed.split();
@@ -120,7 +122,6 @@ impl ServerConnection {
             egress_state,
             access_recorder,
             user_manager,
-            transport_identity,
         }
     }
 }

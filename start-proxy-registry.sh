@@ -89,8 +89,7 @@ load_secret_environment() {
 }
 
 validate_runtime_files() {
-    local public_key frontend
-    public_key="${PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
+    local frontend
     frontend="${PPAASS_PROXY_REGISTRY_FRONTEND_DIST:-proxy-registry-frontend}"
     if [ ! -x ./proxy-registry ]; then
         echo "Error: ./proxy-registry is missing or not executable." >&2
@@ -98,15 +97,6 @@ validate_runtime_files() {
     fi
     if [ ! -f "$frontend/index.html" ]; then
         echo "Error: Registry frontend index is missing: $frontend/index.html" >&2
-        return 1
-    fi
-    if [ -L "$public_key" ] || [ ! -r "$public_key" ] || [ ! -f "$public_key" ]; then
-        echo "Error: Registry requires a provisioned Proxy identity public key: $public_key" >&2
-        return 1
-    fi
-    if ! command -v openssl >/dev/null 2>&1 \
-        || ! openssl pkey -pubin -in "$public_key" -noout >/dev/null 2>&1; then
-        echo "Error: Proxy identity public key is invalid: $public_key" >&2
         return 1
     fi
 }
@@ -126,7 +116,7 @@ permission_args() {
 }
 
 run_proxy_registry() {
-    local listen control_listen database access_database public_key frontend
+    local listen control_listen database access_database frontend
     local database_permission access_permission
 
     load_runtime_environment
@@ -136,7 +126,6 @@ run_proxy_registry() {
     control_listen="${PPAASS_PROXY_REGISTRY_CONTROL_LISTEN_ADDR:-127.0.0.1:8797}"
     database="${PPAASS_PROXY_REGISTRY_DATABASE:-data/proxy-users.sqlite3}"
     access_database="${PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE:-data/proxy-access.sqlite3}"
-    public_key="${PPAASS_PROXY_REGISTRY_PROXY_IDENTITY_PUBLIC_KEY:-data/proxy-identity-public.pem}"
     frontend="${PPAASS_PROXY_REGISTRY_FRONTEND_DIST:-proxy-registry-frontend}"
     database_permission="$(
         permission_args PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE \
@@ -155,7 +144,6 @@ run_proxy_registry() {
         --control-listen "$control_listen"
         --database "$database"
         --access-log-database "$access_database"
-        --proxy-identity-public-key "$public_key"
         --frontend-dist "$frontend"
     )
     [ -n "$database_permission" ] && args+=("$database_permission")

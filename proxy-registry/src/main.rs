@@ -1,44 +1,30 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use proxy_registry::{
-    AccessBatchRepository, AccessLogRepository, AccountRepository, AccountRole, AccountStatus,
-    AgentAccessTokenService, AgentDeviceAuthorizationGuard, AgentWebSessionHandoffStore, AppState,
-    BootstrapOutcome, ControlState, ControlTokenVerifier, NewAdminAccount, PasswordService,
-    PrivateKeyCipher, SessionStore, SqliteAccessLogRepository, SqliteFilePermissions,
-    SqliteUserRepository, UserRepository, build_control_router, build_router,
+    AccessBatchRepository, AccessLogRepository, AgentAccessTokenService,
+    AgentDeviceAuthorizationGuard, AgentWebSessionHandoffStore, AppState, ControlState,
+    ControlTokenVerifier, PasswordService, PrivateKeyCipher, SessionStore,
+    SqliteAccessLogRepository, SqliteFilePermissions, SqliteUserRepository, UserRepository,
+    bool_env, bootstrap_admin, build_control_router, build_router, ensure_key_encryption_binding,
+    init_tracing, registry_instance_id, select_database_file_permissions, validate_listen_address,
 };
-use sha2::Digest;
-#[cfg(test)]
-use std::fs;
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 use time::OffsetDateTime;
 use tracing::{info, warn};
 
 #[path = "main/runtime.rs"]
 mod runtime;
-#[path = "main/startup.rs"]
-mod startup;
-
 use runtime::serve_public_and_control;
-use startup::*;
 
 const KEY_ENCRYPTION_SECRET_ENV: &str = "PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET";
-const BOOTSTRAP_ADMIN_USERNAME_ENV: &str = "PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_USERNAME";
-const BOOTSTRAP_ADMIN_PASSWORD_ENV: &str = "PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD";
-const ROOT_ADMIN_LOGIN_NAME: &str = "admin";
 const ALLOW_REGISTRATION_ENV: &str = "PPAASS_PROXY_REGISTRY_ALLOW_REGISTRATION";
 const SECURE_COOKIES_ENV: &str = "PPAASS_PROXY_REGISTRY_SECURE_COOKIES";
 const TRUST_PROXY_HEADERS_ENV: &str = "PPAASS_PROXY_REGISTRY_TRUST_PROXY_HEADERS";
 const DATABASE_GROUP_READABLE_ENV: &str = "PPAASS_PROXY_REGISTRY_DATABASE_GROUP_READABLE";
 const ACCESS_LOG_DATABASE_GROUP_WRITABLE_ENV: &str =
     "PPAASS_PROXY_REGISTRY_ACCESS_LOG_DATABASE_GROUP_WRITABLE";
-const INSTANCE_ID_ENV: &str = "PPAASS_PROXY_REGISTRY_INSTANCE_ID";
 const CONTROL_TOKEN_ENV: &str = "PPAASS_PROXY_REGISTRY_CONTROL_TOKEN";
 const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
-const MAX_PROXY_IDENTITY_PUBLIC_KEY_BYTES: u64 = 64 * 1024;
-const MIN_PROXY_IDENTITY_RSA_BITS: usize = 2048;
-const MAX_PROXY_IDENTITY_RSA_BITS: usize = 8192;
-
 #[derive(Debug, Parser)]
 #[command(author, version, about = "PPAASS Proxy 用户管理 Web 服务")]
 struct Args {
@@ -66,10 +52,6 @@ struct Args {
     #[arg(long)]
     access_log_database_group_writable: bool,
 
-    /// Proxy TCP/Yamux 传输身份的 SPKI PEM 公钥
-    #[arg(long)]
-    proxy_identity_public_key: PathBuf,
-
     /// Vue 构建产物目录
     #[arg(long, default_value = "proxy-registry/frontend/dist")]
     frontend_dist: PathBuf,
@@ -91,12 +73,6 @@ async fn main() -> Result<()> {
         );
     }
     let instance_id = registry_instance_id(args.listen)?;
-    let proxy_identity_public_key_pem =
-        load_proxy_identity_public_key(&args.proxy_identity_public_key)?;
-    let proxy_identity_sha256: Arc<str> = Arc::from(hex::encode(sha2::Sha256::digest(
-        proxy_identity_public_key_pem.trim().as_bytes(),
-    )));
-
     SqliteAccessLogRepository::validate_distinct_database_paths(
         &args.access_log_database,
         &args.database,
@@ -185,14 +161,12 @@ async fn main() -> Result<()> {
         agent_events: agent_events.clone(),
         web_session_handoffs: AgentWebSessionHandoffStore::new(store.clone()),
         private_keys,
-        proxy_identity_public_key_pem,
         allow_registration,
         device_authorization_guard: AgentDeviceAuthorizationGuard::new(trust_proxy_headers),
     };
     let app = build_router(state, Some(args.frontend_dist));
     let control_app = build_control_router(ControlState {
         instance_id: instance_id.clone(),
-        proxy_identity_sha256,
         users: store.clone() as Arc<dyn UserRepository>,
         access_batches: access_logs.clone() as Arc<dyn AccessBatchRepository>,
         agent_events,
@@ -214,7 +188,3 @@ async fn main() -> Result<()> {
     info!("PPAASS Proxy 用户管理服务已停止");
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "main/tests.rs"]
-mod tests;

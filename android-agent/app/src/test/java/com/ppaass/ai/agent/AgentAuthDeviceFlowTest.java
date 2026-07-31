@@ -1,13 +1,8 @@
 package com.ppaass.ai.agent;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThrows;
 
 import org.junit.Test;
-
-import java.nio.charset.StandardCharsets;
-import java.security.KeyPairGenerator;
-import java.util.Base64;
 
 public class AgentAuthDeviceFlowTest {
     @Test
@@ -71,26 +66,4 @@ public class AgentAuthDeviceFlowTest {
                         17));
     }
 
-    @Test
-    public void proxyIdentityPinRequiresStrongRsaSubjectPublicKeyInfo() throws Exception {
-        AgentAuthClient.validateProxyIdentityPublicKey(publicKeyPem(2048));
-        assertThrows(
-                AgentAuthClient.AuthException.class,
-                () -> AgentAuthClient.validateProxyIdentityPublicKey(publicKeyPem(1024)));
-        assertThrows(
-                AgentAuthClient.AuthException.class,
-                () -> AgentAuthClient.validateProxyIdentityPublicKey("not a public key"));
-    }
-
-    private static String publicKeyPem(int bits) throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-        generator.initialize(bits);
-        String body = Base64.getMimeEncoder(
-                        64,
-                        "\n".getBytes(StandardCharsets.US_ASCII))
-                .encodeToString(generator.generateKeyPair().getPublic().getEncoded());
-        return "-----BEGIN PUBLIC KEY-----\n"
-                + body
-                + "\n-----END PUBLIC KEY-----\n";
-    }
 }

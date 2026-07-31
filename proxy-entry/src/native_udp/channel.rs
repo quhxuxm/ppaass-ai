@@ -1,12 +1,11 @@
 use super::session::{ChannelEvent, SessionContext, udp_idle_timeout};
 use crate::connection::{
-    QueuedUdpRelayResponse, UdpRelayFlowChannels, UdpRelayFlowSet, UpstreamConnection,
-    target_addr_for_address, udp_relay_channel_size,
+    QueuedUdpRelayResponse, UdpRelayFlowChannels, UdpRelayFlowSet, target_addr_for_address,
+    udp_relay_channel_size,
 };
 use protocol::udp_transport::UdpSessionMessage;
 use protocol::{Address, TransportProtocol, UdpRelayPacket};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -20,9 +19,7 @@ pub(super) async fn run_channel_worker(
     outbound_tx: mpsc::Sender<UdpSessionMessage>,
     event_tx: mpsc::UnboundedSender<ChannelEvent>,
 ) {
-    if context.config.forward_mode {
-        run_forward_channel(context, flow_id, address, input_rx, outbound_tx, event_tx).await;
-    } else if matches!(address, Address::UdpRelay) {
+    if matches!(address, Address::UdpRelay) {
         run_udp_relay_channel(context, flow_id, input_rx, outbound_tx, event_tx).await;
     } else {
         run_connected_udp_channel(context, flow_id, address, input_rx, outbound_tx, event_tx).await;
@@ -212,78 +209,5 @@ async fn run_udp_relay_channel(
         }
     };
     drop(flow_set);
-    send_channel_closed(&event_tx, flow_id, close_reason);
-}
-
-async fn run_forward_channel(
-    context: SessionContext,
-    flow_id: u64,
-    address: Address,
-    mut input_rx: mpsc::Receiver<Vec<u8>>,
-    outbound_tx: mpsc::Sender<UdpSessionMessage>,
-    event_tx: mpsc::UnboundedSender<ChannelEvent>,
-) {
-    let mut upstream =
-        match UpstreamConnection::connect(&context.config, address.clone(), TransportProtocol::Udp)
-            .await
-        {
-            Ok(upstream) => upstream,
-            Err(error) => {
-                send_connect_result(
-                    &event_tx,
-                    flow_id,
-                    Some(format!("Upstream UDP connect failed: {error}")),
-                );
-                return;
-            }
-        };
-    if !send_connect_result(&event_tx, flow_id, None) {
-        upstream.close().await;
-        return;
-    }
-
-    context
-        .access_recorder
-        .record(&context.username, TransportProtocol::Udp, &address);
-    let idle_timeout = udp_idle_timeout(&context.config);
-    let idle = tokio::time::sleep(idle_timeout);
-    tokio::pin!(idle);
-    let mut recv_buf = vec![0_u8; MAX_TARGET_UDP_DATAGRAM_SIZE];
-    let close_reason = loop {
-        tokio::select! {
-            _ = &mut idle => break Some("Upstream UDP channel idle timeout".to_string()),
-            input = input_rx.recv() => {
-                let Some(data) = input else { break None };
-                // UpstreamConnection 的 ClientStream 每次完整 write 会生成一个 DataPacket；
-                // 显式 flush 可避免不同原生 UDP 数据报在下一跳之前滞留。
-                if let Err(error) = upstream.write_all(&data).await {
-                    break Some(format!("Upstream UDP write failed: {error}"));
-                }
-                if let Err(error) = upstream.flush().await {
-                    break Some(format!("Upstream UDP flush failed: {error}"));
-                }
-                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-            }
-            received = upstream.read(&mut recv_buf) => {
-                match received {
-                    Ok(0) => break Some("Upstream UDP channel closed".to_string()),
-                    Ok(size) => {
-                        // ClientStream 一次 poll_read 最多取一个 ProxyResponse::Data；65K buffer
-                        // 足以容纳合法 UDP payload，因此这里保持下一跳的数据报边界。
-                        if !try_queue_target_response(
-                            &outbound_tx,
-                            flow_id,
-                            recv_buf[..size].to_vec(),
-                        ) {
-                            break None;
-                        }
-                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                    }
-                    Err(error) => break Some(format!("Upstream UDP read failed: {error}")),
-                }
-            }
-        }
-    };
-    upstream.close().await;
     send_channel_closed(&event_tx, flow_id, close_reason);
 }

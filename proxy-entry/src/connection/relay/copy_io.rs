@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) struct RelayCopyIo<'a, S> {
+pub struct RelayCopyIo<'a, S> {
     inner: &'a mut S,
     label: &'static str,
     activity_tx: watch::Sender<()>,
@@ -9,7 +9,7 @@ pub(super) struct RelayCopyIo<'a, S> {
 }
 
 impl<'a, S> RelayCopyIo<'a, S> {
-    pub(super) fn new(
+    pub fn new(
         inner: &'a mut S,
         label: &'static str,
         activity_tx: watch::Sender<()>,

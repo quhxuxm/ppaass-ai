@@ -26,10 +26,7 @@ pub(in crate::native_udp) async fn wait_until_expired(expires_at: Option<i64>) {
     }
 }
 
-pub(in crate::native_udp) fn duration_until_expiry(
-    expires_at: i64,
-    now: SystemTime,
-) -> Option<Duration> {
+pub fn duration_until_expiry(expires_at: i64, now: SystemTime) -> Option<Duration> {
     if expires_at < 0 {
         return Some(Duration::ZERO);
     }
@@ -38,7 +35,7 @@ pub(in crate::native_udp) fn duration_until_expiry(
     Some(deadline.duration_since(now).unwrap_or_default())
 }
 
-pub(in crate::native_udp) fn session_expired_at(expires_at: Option<i64>, now: SystemTime) -> bool {
+pub fn session_expired_at(expires_at: Option<i64>, now: SystemTime) -> bool {
     let Some(expires_at) = expires_at else {
         return false;
     };

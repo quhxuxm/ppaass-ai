@@ -1,31 +1,31 @@
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FlowAdmission {
+pub enum FlowAdmission {
     Existing,
     AtCapacity,
     Create,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FlowOpenDecision {
+pub enum FlowOpenDecision {
     Existing,
     AtCapacity,
     RateLimited,
     Create,
 }
 
-pub(super) struct FlowCreationBudget {
+pub struct FlowCreationBudget {
     tokens: f64,
     updated_at: Instant,
 }
 
 #[derive(Default)]
-pub(super) struct AuthorizationFreshness {
+pub struct AuthorizationFreshness {
     last_success_at: Option<Instant>,
 }
 
-pub(super) fn classify_flow_admission(
+pub fn classify_flow_admission(
     flow_exists: bool,
     active_flow_count: usize,
     max_flows: usize,
@@ -40,7 +40,7 @@ pub(super) fn classify_flow_admission(
 }
 
 impl FlowCreationBudget {
-    pub(super) fn new(now: Instant) -> Self {
+    pub fn new(now: Instant) -> Self {
         Self {
             tokens: FLOW_CREATION_BURST,
             updated_at: now,
@@ -61,18 +61,18 @@ impl FlowCreationBudget {
 }
 
 impl AuthorizationFreshness {
-    pub(super) fn requires_recheck(&self, now: Instant) -> bool {
+    pub fn requires_recheck(&self, now: Instant) -> bool {
         self.last_success_at.is_none_or(|last_success_at| {
             now.saturating_duration_since(last_success_at) >= FLOW_AUTHORIZATION_COALESCE_WINDOW
         })
     }
 
-    pub(super) fn record_success(&mut self, now: Instant) {
+    pub fn record_success(&mut self, now: Instant) {
         self.last_success_at = Some(now);
     }
 }
 
-pub(super) async fn decide_flow_open<F, Fut>(
+pub async fn decide_flow_open<F, Fut>(
     admission: FlowAdmission,
     budget: &mut FlowCreationBudget,
     freshness: &mut AuthorizationFreshness,

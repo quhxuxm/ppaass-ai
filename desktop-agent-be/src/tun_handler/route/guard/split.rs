@@ -48,12 +48,7 @@ pub(in crate::tun_handler::route) fn required_route_exists(
     Ok(route_list_contains_expected(kind, expected, &routes))
 }
 
-#[cfg(any(test, target_os = "macos"))]
-pub(in crate::tun_handler::route) fn route_list_contains_expected(
-    kind: RouteKind,
-    expected: &Route,
-    routes: &[Route],
-) -> bool {
+pub fn route_list_contains_expected(kind: RouteKind, expected: &Route, routes: &[Route]) -> bool {
     let record = RouteRecord::from_route(kind, expected);
     routes
         .iter()

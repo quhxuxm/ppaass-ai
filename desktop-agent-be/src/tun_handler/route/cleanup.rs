@@ -56,7 +56,7 @@ pub(super) fn delete_recorded_route(mgr: &mut RouteManager, record: &RouteRecord
     false
 }
 
-pub(super) fn should_delete_recorded_route(record: &RouteRecord) -> bool {
+pub fn should_delete_recorded_route(record: &RouteRecord) -> bool {
     #[cfg(target_os = "macos")]
     if matches!(record.kind, RouteKind::MacosScopedDefaultBypass) {
         return false;
@@ -211,7 +211,7 @@ fn delete_route_with_platform_tool(record: &RouteRecord) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn macos_route_delete_command(
+pub fn macos_route_delete_command(
     record: &RouteRecord,
     if_scope: Option<&str>,
     include_gateway: bool,

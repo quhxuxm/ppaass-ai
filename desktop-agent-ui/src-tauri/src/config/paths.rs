@@ -1,18 +1,14 @@
 use super::*;
 
 pub(crate) fn locate_config_path() -> Option<PathBuf> {
-    let file_names = [
-        "agent.toml",
-        "config/local/agent.toml",
-        "config/remote/agent.toml",
-    ];
+    locate_config_path_in(config_search_dirs())
+}
 
-    for base in config_search_dirs() {
-        for file_name in file_names {
-            let path = base.join(file_name);
-            if path.is_file() {
-                return Some(path);
-            }
+pub fn locate_config_path_in(directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    for base in directories {
+        let path = base.join(BUNDLED_AGENT_CONFIG_PATH);
+        if path.is_file() {
+            return Some(path);
         }
     }
     None
@@ -38,7 +34,7 @@ pub(crate) fn bundled_agent_resource_path(
 pub(crate) fn default_agent_config_resource_path(
     app: &tauri::AppHandle,
 ) -> Result<PathBuf, String> {
-    let resource_path = bundled_agent_config_resource(cfg!(debug_assertions));
+    let resource_path = BUNDLED_AGENT_CONFIG_RESOURCE_PATH;
     if let Ok(path) = app.path().resolve(resource_path, BaseDirectory::Resource) {
         if path.is_file() {
             return Ok(path);

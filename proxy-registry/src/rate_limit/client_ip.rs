@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn resolve_client_ip(
+pub fn resolve_client_ip(
     trust_proxy_headers: bool,
     headers: &HeaderMap,
     peer: Option<SocketAddr>,

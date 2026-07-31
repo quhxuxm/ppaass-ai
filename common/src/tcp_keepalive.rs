@@ -35,35 +35,3 @@ fn set_tcp_user_timeout(socket: &Socket) -> io::Result<()> {
 fn set_tcp_user_timeout(_socket: &Socket) -> io::Result<()> {
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use socket2::SockRef;
-    use tokio::io::AsyncWriteExt;
-    use tokio::net::TcpListener;
-
-    #[tokio::test]
-    async fn configures_proxy_tcp_keepalive_on_tokio_stream() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let _ = stream.shutdown().await;
-        });
-
-        let stream = TcpStream::connect(addr).await.unwrap();
-        configure_proxy_tcp_stream(&stream).unwrap();
-        let socket = SockRef::from(&stream);
-        assert!(socket.keepalive().unwrap());
-
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            socket.tcp_user_timeout().unwrap(),
-            Some(PROXY_TCP_USER_TIMEOUT)
-        );
-
-        drop(stream);
-        server.await.unwrap();
-    }
-}

@@ -3,14 +3,14 @@ use std::collections::HashSet;
 use super::*;
 
 impl AgentRuntime {
-    pub(crate) fn admin_key_request_inbox(&self) -> Result<AgentAdminKeyRequestInbox, String> {
+    pub fn admin_key_request_inbox(&self) -> Result<AgentAdminKeyRequestInbox, String> {
         self.admin_key_request_inbox
             .lock()
             .map_err(|_| "管理员密钥申请状态锁已损坏".to_string())
             .map(|inbox| inbox.clone())
     }
 
-    pub(crate) fn replace_admin_key_request_inbox(
+    pub fn replace_admin_key_request_inbox(
         &self,
         next: AgentAdminKeyRequestInbox,
     ) -> Result<(AgentAdminKeyRequestUpdate, Vec<String>), String> {
@@ -39,7 +39,7 @@ impl AgentRuntime {
         ))
     }
 
-    pub(crate) fn remove_admin_key_request(
+    pub fn remove_admin_key_request(
         &self,
         request_id: &str,
     ) -> Result<AgentAdminKeyRequestUpdate, String> {
@@ -56,7 +56,7 @@ impl AgentRuntime {
         })
     }
 
-    pub(crate) fn clear_admin_key_request_inbox(&self) -> Result<(), String> {
+    pub fn clear_admin_key_request_inbox(&self) -> Result<(), String> {
         *self
             .admin_key_request_inbox
             .lock()
@@ -65,7 +65,7 @@ impl AgentRuntime {
         Ok(())
     }
 
-    pub(crate) fn admin_key_request_error_update(
+    pub fn admin_key_request_error_update(
         &self,
         message: String,
     ) -> Result<AgentAdminKeyRequestUpdate, String> {

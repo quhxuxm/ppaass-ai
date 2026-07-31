@@ -6,11 +6,10 @@ use futures::{SinkExt, StreamExt};
 use protocol::{
     Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
     TransportProtocol,
-    crypto::{RsaKeyPair, verify_pss_sha256},
+    crypto::RsaKeyPair,
     tcp_transport::{
         TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
-        TcpSessionRole, decode_tcp_session_secret, tcp_auth_failure_signature_transcript,
-        tcp_auth_request_transcript, tcp_auth_response_signature_transcript,
+        TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
         tcp_auth_transcript_hash,
     },
 };
@@ -50,7 +49,7 @@ where
     /// 在一条已经建立的双向流上执行 PPAASS 认证。
     ///
     /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功并完成上下文
-    /// 校验后才启用 v3 方向独立的记录层密钥。
+    /// 校验后才启用 v4 方向独立的记录层密钥。
     pub async fn authenticate_stream<C>(stream: S, config: &C) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
@@ -59,7 +58,7 @@ where
         let auth_status_attempt = VerifiedAuthAttempt::begin(username.clone());
         let timeout = config.timeout_duration();
 
-        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v3 记录层。
+        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v4 记录层。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
         let framed = Framed::new(stream, AgentCodec::new(cipher_state.clone()));
         let (mut writer, mut reader) = framed.split();
@@ -71,20 +70,6 @@ where
 
         let rsa_keypair = RsaKeyPair::from_private_key_pem(&private_key_pem)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        let proxy_identity_public_key_pem =
-            config.proxy_identity_public_key_pem().map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "未配置可信的 Proxy 传输身份公钥",
-                )
-            })?;
-        let proxy_identity_public_key =
-            RsaKeyPair::from_public_key_pem(&proxy_identity_public_key_pem).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Proxy 传输身份公钥格式无效",
-                )
-            })?;
         let timestamp = crate::current_timestamp();
         let mut client_nonce = [0_u8; TCP_AUTH_NONCE_LEN];
         rand::rng().fill_bytes(&mut client_nonce);
@@ -141,35 +126,6 @@ where
                         "认证失败",
                     ));
                 };
-                if auth_resp.proxy_signature.is_empty() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "认证失败",
-                    ));
-                }
-                let failure_transcript = tcp_auth_failure_signature_transcript(
-                    auth_resp.version,
-                    &transcript_hash,
-                    failure_code,
-                    &auth_resp.message,
-                )
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "认证服务返回了无效的失败响应签名上下文",
-                    )
-                })?;
-                verify_pss_sha256(
-                    &proxy_identity_public_key,
-                    &failure_transcript,
-                    &auth_resp.proxy_signature,
-                )
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "Proxy 认证失败响应身份验证失败",
-                    )
-                })?;
                 let failure = AuthenticationFailure {
                     username,
                     code: failure_code,
@@ -181,30 +137,6 @@ where
                     failure,
                 ));
             }
-            let proxy_signature_transcript = tcp_auth_response_signature_transcript(
-                auth_resp.version,
-                &transcript_hash,
-                &auth_resp.encrypted_session,
-            )
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "认证服务返回了无效的身份签名上下文",
-                )
-            })?;
-            // Verify the pinned Proxy identity before attempting private-key
-            // OAEP decryption or installing any attacker-selected session key.
-            verify_pss_sha256(
-                &proxy_identity_public_key,
-                &proxy_signature_transcript,
-                &auth_resp.proxy_signature,
-            )
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "Proxy 传输身份验证失败",
-                )
-            })?;
             let encoded_secret = rsa_keypair
                 .decrypt_oaep_sha256_labelled(TCP_OAEP_LABEL, &auth_resp.encrypted_session)
                 .map_err(|_| {

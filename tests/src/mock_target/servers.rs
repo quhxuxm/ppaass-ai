@@ -9,6 +9,10 @@ impl MockHttpServer {
         Self { port }
     }
 
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     pub async fn run(&self) -> Result<()> {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let listener = bind_tcp_listener_with_backlog(addr, DEFAULT_TCP_LISTEN_BACKLOG)?;
@@ -43,6 +47,10 @@ pub struct MockH2Server {
 impl MockH2Server {
     pub fn new(port: u16) -> Self {
         Self { port }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -81,6 +89,10 @@ impl MockTcpServer {
         Self { port }
     }
 
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     pub async fn run(&self) -> Result<()> {
         let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         let listener = bind_tcp_listener_with_backlog(addr, DEFAULT_TCP_LISTEN_BACKLOG)?;
@@ -112,6 +124,10 @@ pub struct MockUdpServer {
 impl MockUdpServer {
     pub fn new(port: u16) -> Self {
         Self { port }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub async fn run(&self) -> Result<()> {

@@ -14,7 +14,7 @@ pub(super) fn socks_udp_target(host: &str, port: u16) -> Result<async_socks5::Ad
     }
 }
 
-pub(super) fn quic_version_negotiation_probe(
+pub fn quic_version_negotiation_probe(
     worker_id: usize,
     sequence: u64,
     datagram_size: usize,
@@ -41,7 +41,7 @@ pub(super) fn quic_version_negotiation_probe(
     packet
 }
 
-pub(super) fn parse_quic_version_negotiation_response(buf: &[u8]) -> Option<Vec<u32>> {
+pub fn parse_quic_version_negotiation_response(buf: &[u8]) -> Option<Vec<u32>> {
     if buf.len() < 7 || buf[0] & 0x80 == 0 {
         return None;
     }
@@ -71,6 +71,6 @@ pub(super) fn parse_quic_version_negotiation_response(buf: &[u8]) -> Option<Vec<
     )
 }
 
-pub(super) fn format_quic_version(version: u32) -> String {
+pub fn format_quic_version(version: u32) -> String {
     format!("0x{version:08x}")
 }

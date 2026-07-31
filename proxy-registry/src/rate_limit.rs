@@ -35,7 +35,7 @@ pub(crate) const REGISTRATION_CLIENT_CAPACITY: f64 = 3.0;
 const REGISTRATION_CLIENT_REFILL_PER_SECOND: f64 = 1.0 / 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeviceAuthorizationEndpoint {
+pub enum DeviceAuthorizationEndpoint {
     Start,
     Poll,
     Registration,
@@ -53,7 +53,8 @@ struct GuardInner {
     trust_proxy_headers: bool,
 }
 
-struct RateLimitState {
+#[doc(hidden)]
+pub struct RateLimitState {
     start: EndpointBuckets,
     poll: EndpointBuckets,
     login: LoginBuckets,
@@ -86,11 +87,11 @@ struct BucketConfig {
 mod client_ip;
 mod token_bucket;
 
-use client_ip::resolve_client_ip;
+pub use client_ip::resolve_client_ip;
 use token_bucket::TokenBucket;
 
 #[derive(Debug)]
-pub(crate) struct DeviceAuthorizationPermit {
+pub struct DeviceAuthorizationPermit {
     _permit: OwnedSemaphorePermit,
 }
 
@@ -99,7 +100,8 @@ impl AgentDeviceAuthorizationGuard {
         Self::with_concurrency_limit(trust_proxy_headers, MAX_CONCURRENT_DEVICE_AUTHORIZATIONS)
     }
 
-    fn with_concurrency_limit(trust_proxy_headers: bool, concurrency_limit: usize) -> Self {
+    #[doc(hidden)]
+    pub fn with_concurrency_limit(trust_proxy_headers: bool, concurrency_limit: usize) -> Self {
         Self {
             inner: Arc::new(GuardInner {
                 concurrency: Arc::new(Semaphore::new(concurrency_limit.max(1))),
@@ -110,7 +112,8 @@ impl AgentDeviceAuthorizationGuard {
         }
     }
 
-    pub(crate) fn enter(
+    #[doc(hidden)]
+    pub fn enter(
         &self,
         endpoint: DeviceAuthorizationEndpoint,
         headers: &HeaderMap,
@@ -174,7 +177,8 @@ impl Default for AgentDeviceAuthorizationGuard {
 }
 
 impl RateLimitState {
-    fn new() -> Self {
+    #[doc(hidden)]
+    pub fn new() -> Self {
         Self {
             start: EndpointBuckets::new(BucketConfig {
                 global_capacity: START_GLOBAL_CAPACITY,
@@ -207,7 +211,8 @@ impl RateLimitState {
         }
     }
 
-    fn check(
+    #[doc(hidden)]
+    pub fn check(
         &mut self,
         endpoint: DeviceAuthorizationEndpoint,
         client_ip: Option<IpAddr>,
@@ -218,6 +223,16 @@ impl RateLimitState {
             DeviceAuthorizationEndpoint::Poll => self.poll.check(client_ip, now),
             DeviceAuthorizationEndpoint::Registration => self.registration.check(client_ip, now),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn check_login(
+        &mut self,
+        client_ip: Option<IpAddr>,
+        account_digest: [u8; 32],
+        now: f64,
+    ) -> Option<u32> {
+        self.login.check(client_ip, account_digest, now)
     }
 }
 
@@ -371,6 +386,3 @@ fn rate_limited(retry_after_seconds: u32) -> ApiError {
         Some(retry_after_seconds),
     )
 }
-
-#[cfg(test)]
-mod tests;

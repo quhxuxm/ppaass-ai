@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn helper_lease_state_path(socket_path: &Path) -> PathBuf {
+pub fn helper_lease_state_path(socket_path: &Path) -> PathBuf {
     let mut file_name = socket_path
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("tun-helper.sock"))
@@ -26,7 +26,7 @@ pub(super) fn confine_requested_state_path(
     Ok(trusted.to_string_lossy().into_owned())
 }
 
-pub(super) fn validate_persisted_lease_state_paths(
+pub fn validate_persisted_lease_state_paths(
     metadata: &PersistedTunLease,
     trusted_route: &Path,
     trusted_dns: &Path,
@@ -65,7 +65,7 @@ pub(super) fn validate_persisted_lease_state_paths(
     Ok(())
 }
 
-pub(super) fn load_persisted_leases(path: &Path) -> Result<Vec<PersistedTunLease>> {
+pub fn load_persisted_leases(path: &Path) -> Result<Vec<PersistedTunLease>> {
     let content = match fs::read(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -90,7 +90,7 @@ pub(super) fn load_persisted_leases(path: &Path) -> Result<Vec<PersistedTunLease
     Ok(state.leases)
 }
 
-pub(super) fn persist_lease_state(path: &Path, state: &PersistedLeaseState) -> Result<()> {
+pub fn persist_lease_state(path: &Path, state: &PersistedLeaseState) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("创建 helper lease 状态目录失败：{}", parent.display()))?;
@@ -138,7 +138,7 @@ pub(super) fn sync_parent_directory(path: &Path) -> Result<()> {
         .with_context(|| format!("同步 helper lease 状态目录失败：{}", parent.display()))
 }
 
-pub(super) fn lease_owner_is_alive(metadata: &PersistedTunLease) -> bool {
+pub fn lease_owner_is_alive(metadata: &PersistedTunLease) -> bool {
     if metadata.cleanup_requested {
         return false;
     }
@@ -148,7 +148,7 @@ pub(super) fn lease_owner_is_alive(metadata: &PersistedTunLease) -> bool {
     process_start_time(metadata.owner_pid) == Some(expected_start_time)
 }
 
-pub(super) fn process_start_time(pid: u32) -> Option<ProcessStartTime> {
+pub fn process_start_time(pid: u32) -> Option<ProcessStartTime> {
     let Ok(pid) = i32::try_from(pid) else {
         return None;
     };

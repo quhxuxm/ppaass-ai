@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn classify_udp_route(
+pub fn classify_udp_route(
     target_port: u16,
     quic_policy: QuicPolicy,
     direct_access_match: bool,

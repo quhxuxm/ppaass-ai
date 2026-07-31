@@ -23,7 +23,7 @@ pub(super) fn clear_session_cookie(secure: bool) -> HeaderValue {
     .expect("固定 Cookie header 必须有效")
 }
 
-pub(super) fn session_token(headers: &HeaderMap) -> Option<&str> {
+pub fn session_token(headers: &HeaderMap) -> Option<&str> {
     cookie_value(headers, SESSION_COOKIE_NAME)
 }
 

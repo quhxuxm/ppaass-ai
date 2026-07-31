@@ -31,6 +31,10 @@ impl MockTcpClient {
         Self { target_addr }
     }
 
+    pub fn target_addr(&self) -> &str {
+        &self.target_addr
+    }
+
     /// 发送数据并接收响应
     pub async fn send_receive(&self, data: &[u8]) -> Result<(Duration, Vec<u8>)> {
         let start = Instant::now();

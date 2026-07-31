@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn analyze_application(
+pub fn analyze_application(
     protocol: &str,
     source_port: Option<u16>,
     destination_port: Option<u16>,
@@ -146,7 +146,7 @@ pub(super) fn analyze_application(
     analyze_http(payload)
 }
 
-pub(super) fn analyze_http(payload: &[u8]) -> Option<ProtocolLayer> {
+pub fn analyze_http(payload: &[u8]) -> Option<ProtocolLayer> {
     let first_line_end = payload
         .iter()
         .position(|byte| *byte == b'\n')

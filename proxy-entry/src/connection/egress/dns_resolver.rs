@@ -15,13 +15,13 @@ const DNS_PORT: u16 = 53;
 const DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 const DNS_RESPONSE_MAX_SIZE: usize = u16::MAX as usize;
 
-pub(super) struct ExplicitDnsResolver {
+pub struct ExplicitDnsResolver {
     upstream: SocketAddr,
     timeout: Duration,
 }
 
 impl ExplicitDnsResolver {
-    pub(super) fn from_config(value: Option<&str>) -> io::Result<Option<Self>> {
+    pub fn from_config(value: Option<&str>) -> io::Result<Option<Self>> {
         let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
@@ -34,12 +34,11 @@ impl ExplicitDnsResolver {
         }))
     }
 
-    #[cfg(test)]
-    fn with_timeout(upstream: SocketAddr, timeout: Duration) -> Self {
+    pub fn with_timeout(upstream: SocketAddr, timeout: Duration) -> Self {
         Self { upstream, timeout }
     }
 
-    pub(super) async fn resolve(
+    pub async fn resolve(
         &self,
         egress_state: &EgressState,
         host: &str,
@@ -149,7 +148,7 @@ impl ExplicitDnsResolver {
     }
 }
 
-fn parse_upstream(value: &str) -> io::Result<SocketAddr> {
+pub fn parse_upstream(value: &str) -> io::Result<SocketAddr> {
     if let Ok(address) = value.parse::<SocketAddr>() {
         return Ok(address);
     }
@@ -168,7 +167,7 @@ fn parse_upstream(value: &str) -> io::Result<SocketAddr> {
     ))
 }
 
-fn parse_response(
+pub fn parse_response(
     packet: &[u8],
     query_id: u16,
     name: &Name,
@@ -256,6 +255,3 @@ fn parse_response(
     }
     Ok(addresses)
 }
-
-#[cfg(test)]
-mod tests;

@@ -24,7 +24,7 @@ This document outlines the performance optimizations applied to fix critical per
 - Prevents blocking workers on statistics collection
 
 **Files Modified**:
-- [tests/src/performance_tests.rs](tests/src/performance_tests.rs)
+- [tests/src/performance_tests/](tests/src/performance_tests/)
 
 ### 2. **Added Exponential Backoff** ✅
 **Problem**: Workers immediately retried after failures, overwhelming the system.
@@ -37,7 +37,7 @@ This document outlines the performance optimizations applied to fix critical per
 **Impact**: Should dramatically improve success rate by preventing thundering herd problem.
 
 **Files Modified**:
-- [tests/src/performance_tests.rs](tests/src/performance_tests.rs)
+- [tests/src/performance_tests/](tests/src/performance_tests/)
 
 ### 3. **Reduced Memory Usage** ✅
 **Problem**: 17GB peak memory usage is excessive.
@@ -58,8 +58,8 @@ This document outlines the performance optimizations applied to fix critical per
 **Expected Impact**: Reduce peak memory from ~17GB to <2GB
 
 **Files Modified**:
-- [tests/src/performance_tests.rs](tests/src/performance_tests.rs)
-- [tests/src/mock_client.rs](tests/src/mock_client.rs)
+- [tests/src/performance_tests/](tests/src/performance_tests/)
+- [tests/src/mock_client/](tests/src/mock_client/)
 - [desktop-agent-be/src/http_handler.rs](desktop-agent-be/src/http_handler.rs)
 - [desktop-agent-be/src/connection_pool.rs](desktop-agent-be/src/connection_pool.rs)
 - [proxy-entry/src/connection.rs](proxy-entry/src/connection.rs)
@@ -75,7 +75,7 @@ This document outlines the performance optimizations applied to fix critical per
 **Expected Impact**: Smoother resource usage, better success rate
 
 **Files Modified**:
-- [tests/src/performance_tests.rs](tests/src/performance_tests.rs)
+- [tests/src/performance_tests/](tests/src/performance_tests/)
 
 ### 5. **Optimized Logging** ✅
 **Problem**: `info!` level logging for every request adds overhead.
@@ -85,7 +85,7 @@ This document outlines the performance optimizations applied to fix critical per
 - Reduces I/O and string formatting overhead
 
 **Files Modified**:
-- [tests/src/mock_client.rs](tests/src/mock_client.rs)
+- [tests/src/mock_client/](tests/src/mock_client/)
 
 ### 6. **Added Timeout Protection** ✅
 **Problem**: SOCKS5 reads could hang indefinitely.
@@ -95,7 +95,7 @@ This document outlines the performance optimizations applied to fix critical per
 - Prevents workers from hanging on stalled connections
 
 **Files Modified**:
-- [tests/src/mock_client.rs](tests/src/mock_client.rs)
+- [tests/src/mock_client/](tests/src/mock_client/)
 
 ## Expected Performance Improvements
 

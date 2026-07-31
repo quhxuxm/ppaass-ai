@@ -95,14 +95,14 @@ fn read_routes() -> io::Result<Vec<Route>> {
         .map_err(|e| io::Error::other(format!("读取路由表失败：{e}")))
 }
 
-fn should_refresh_routes(err: &io::Error) -> bool {
+pub fn should_refresh_routes(err: &io::Error) -> bool {
     matches!(
         err.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::AddrNotAvailable
     )
 }
 
-fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
+pub fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
     // 默认路由要求前缀为 0 且 destination 是对应地址族的未指定地址。
     routes.iter().find(|route| {
         if route.prefix() != 0 {
@@ -184,38 +184,4 @@ fn should_refresh_if_addrs(err: &io::Error) -> bool {
         err.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::AddrNotAvailable
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
-
-    #[test]
-    fn default_route_uses_matching_address_family() {
-        let routes = vec![
-            Route::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)), 8).with_if_index(1),
-            Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0).with_if_index(2),
-            Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0).with_if_index(3),
-        ];
-
-        assert_eq!(default_route(&routes, false).unwrap().if_index(), Some(2));
-        assert_eq!(default_route(&routes, true).unwrap().if_index(), Some(3));
-    }
-
-    #[test]
-    fn refreshes_for_missing_or_unusable_cached_routes() {
-        assert!(should_refresh_routes(&io::Error::new(
-            io::ErrorKind::NotFound,
-            "missing default route",
-        )));
-        assert!(should_refresh_routes(&io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            "interface has no address",
-        )));
-        assert!(!should_refresh_routes(&io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "permission",
-        )));
-    }
 }
