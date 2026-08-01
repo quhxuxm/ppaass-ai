@@ -94,6 +94,8 @@ require_text deploy/proxy-registry/install.sh '"$caddy_binary" fmt --overwrite /
 require_text deploy/proxy-registry/install.sh 'runuser -u caddy -- env HOME=/var/lib/caddy'
 require_text deploy/proxy-registry/install.sh 'show_registry_service_diagnostics'
 require_text deploy/proxy-registry/install.sh 'journalctl -u "$service" -n 100 --no-pager'
+require_text deploy/proxy-registry/install.sh 'systemctl restart caddy.service'
+require_text deploy/proxy-registry/install.sh 'journalctl -u caddy.service -n 100 --no-pager'
 require_text deploy/proxy-registry/install.sh 'Registry instance $instance public API'
 require_text deploy/proxy-registry/install.sh 'Registry instance $instance control API'
 reject_text deploy/proxy-registry/install.sh 'curl --fail --silent --show-error --retry 20'
@@ -123,10 +125,10 @@ require_text deploy/proxy-registry/install.sh 'prune_old_releases'
 awk '
     index($0, "Registry instance $instance public API") { public_wait = NR }
     index($0, "Registry instance $instance control API") { control_wait = NR }
-    index($0, "systemctl reload-or-restart caddy.service") { caddy_reload = NR }
+    index($0, "systemctl restart caddy.service") { caddy_restart = NR }
     END {
-        if (!public_wait || !control_wait || !caddy_reload ||
-            public_wait >= caddy_reload || control_wait >= caddy_reload) {
+        if (!public_wait || !control_wait || !caddy_restart ||
+            public_wait >= caddy_restart || control_wait >= caddy_restart) {
             exit 1
         }
     }

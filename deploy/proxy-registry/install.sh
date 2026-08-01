@@ -371,7 +371,12 @@ for instance in 1 2; do
         exit 1
     fi
 done
-systemctl reload-or-restart caddy.service
+if ! systemctl restart caddy.service; then
+    echo "Caddy failed to restart after Registry deployment." >&2
+    systemctl status caddy.service --no-pager --full >&2 || true
+    journalctl -u caddy.service -n 100 --no-pager >&2 || true
+    exit 1
+fi
 wait_for_http_health \
     "Registry public API" \
     "https://$REGISTRY_HOST/healthz" \
