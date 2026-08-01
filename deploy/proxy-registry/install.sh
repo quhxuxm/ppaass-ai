@@ -317,6 +317,13 @@ cat >/etc/caddy/Caddyfile <<EOF
 }
 
 $REGISTRY_HOST {
+    tls {
+        issuer acme https://acme-v02.api.letsencrypt.org/directory {
+            profile shortlived
+            disable_http_challenge
+        }
+    }
+
     @registry_control path /control /control/*
 
     handle @registry_control {
