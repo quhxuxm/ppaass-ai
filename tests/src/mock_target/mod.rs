@@ -24,6 +24,6 @@ mod responses;
 mod servers;
 
 pub(crate) use responses::large_file_byte_at;
-pub use responses::parse_range_header;
+pub use responses::{InvalidRangeHeader, parse_range_header};
 use responses::{handle_http_request, handle_tcp_echo};
 pub use servers::{MockH2Server, MockHttpServer, MockTcpServer, MockUdpServer, run_mock_servers};

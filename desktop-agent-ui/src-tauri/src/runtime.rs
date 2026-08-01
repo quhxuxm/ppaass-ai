@@ -119,6 +119,12 @@ pub(crate) struct EmbeddedAgent {
     pub(crate) packet_capture: desktop_agent_be::PacketCaptureController,
 }
 
+impl Default for AgentRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentRuntime {
     pub fn new() -> Self {
         Self {

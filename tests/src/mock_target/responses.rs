@@ -1,5 +1,8 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidRangeHeader;
+
 pub(super) async fn handle_http_request(
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
@@ -51,7 +54,7 @@ pub(super) fn handle_large_response(
         size,
     ) {
         Ok(range) => range,
-        Err(()) => {
+        Err(InvalidRangeHeader) => {
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(ACCEPT_RANGES, "bytes")
@@ -89,7 +92,7 @@ pub(super) fn handle_fluctuating_large_response(
         size,
     ) {
         Ok(range) => range,
-        Err(()) => {
+        Err(InvalidRangeHeader) => {
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(ACCEPT_RANGES, "bytes")
@@ -131,37 +134,42 @@ pub(super) fn large_response_size(query: Option<&str>) -> u64 {
 pub fn parse_range_header(
     range: Option<&str>,
     size: u64,
-) -> std::result::Result<Option<(u64, u64)>, ()> {
+) -> std::result::Result<Option<(u64, u64)>, InvalidRangeHeader> {
     let Some(range) = range else {
         return Ok(None);
     };
-    let range = range.trim().strip_prefix("bytes=").ok_or(())?;
+    let range = range
+        .trim()
+        .strip_prefix("bytes=")
+        .ok_or(InvalidRangeHeader)?;
     if range.contains(',') {
-        return Err(());
+        return Err(InvalidRangeHeader);
     }
-    let (start, end) = range.split_once('-').ok_or(())?;
+    let (start, end) = range.split_once('-').ok_or(InvalidRangeHeader)?;
 
     if start.is_empty() {
-        let suffix_len = end.parse::<u64>().map_err(|_| ())?;
+        let suffix_len = end.parse::<u64>().map_err(|_| InvalidRangeHeader)?;
         if suffix_len == 0 {
-            return Err(());
+            return Err(InvalidRangeHeader);
         }
         let start = size.saturating_sub(suffix_len);
         return Ok(Some((start, size - 1)));
     }
 
-    let start = start.parse::<u64>().map_err(|_| ())?;
+    let start = start.parse::<u64>().map_err(|_| InvalidRangeHeader)?;
     if start >= size {
-        return Err(());
+        return Err(InvalidRangeHeader);
     }
 
     let end = if end.is_empty() {
         size - 1
     } else {
-        end.parse::<u64>().map_err(|_| ())?.min(size - 1)
+        end.parse::<u64>()
+            .map_err(|_| InvalidRangeHeader)?
+            .min(size - 1)
     };
     if end < start {
-        return Err(());
+        return Err(InvalidRangeHeader);
     }
 
     Ok(Some((start, end)))

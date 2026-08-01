@@ -110,6 +110,12 @@ impl UdpRelayStats {
     }
 }
 
+impl Default for UdpRelayState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UdpRelayState {
     pub fn new() -> Self {
         Self {

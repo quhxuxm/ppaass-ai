@@ -8,13 +8,15 @@ use protocol::tcp_transport::{
     tcp_auth_transcript_hash,
 };
 
-fn cipher_inputs() -> (
+type CipherInputs = (
     [u8; TCP_MASTER_SECRET_LEN],
     [u8; 32],
     [u8; TCP_AUTH_NONCE_LEN],
     [u8; TCP_SERVER_NONCE_LEN],
     [u8; TCP_SESSION_ID_LEN],
-) {
+);
+
+fn cipher_inputs() -> CipherInputs {
     ([1; 32], [2; 32], [3; 32], [4; 32], [5; 16])
 }
 

@@ -38,6 +38,12 @@ pub struct SocksUdpRelayState {
     next_flow_id: u64,
 }
 
+impl Default for SocksUdpRelayState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SocksUdpRelayState {
     pub fn new() -> Self {
         Self {
