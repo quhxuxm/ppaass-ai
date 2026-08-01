@@ -44,7 +44,7 @@ export function createControllerState() {
   const self = ref<SelfView | null>(null)
   const activePage = ref<AppPage>('account')
   const pageLoading = ref(false)
-  const authForm = reactive({ username: '', password: '' })
+  const authForm = reactive({ username: '', password: '', confirmPassword: '' })
   const initialAgentAuthorization = restoreAgentAuthorization()
   const agentAuthorizationActive = ref(initialAgentAuthorization.active)
   const agentAuthorizationCode = ref(initialAgentAuthorization.code)

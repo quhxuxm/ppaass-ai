@@ -15,6 +15,10 @@ assert.match(
 )
 assert.match(profileEditor, /return canvas\.toDataURL\('image\/png'\)/)
 assert.doesNotMatch(profileEditor, /canvas\.toBlob/)
+assert.match(profileEditor, /loadImage\(await readAsDataUrl\(file\)\)/)
+assert.match(profileEditor, /reader\.readAsDataURL\(file\)/)
+assert.doesNotMatch(profileEditor, /URL\.createObjectURL/)
+assert.doesNotMatch(profileEditor, /URL\.revokeObjectURL/)
 assert.match(profileEditor, /本地缩放为 64 × 64 像素并保存处理结果/)
 assert.match(profileEditor, /avatarPreview\.value = await resizeAvatar\(file\)/)
 assert.match(

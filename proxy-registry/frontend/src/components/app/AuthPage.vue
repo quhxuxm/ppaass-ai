@@ -119,6 +119,21 @@ const {
           placeholder="输入密码"
           fluid
         />
+        <template v-if="authMode === 'register'">
+          <label for="auth-confirm-password">确认密码</label>
+          <Password
+            v-model="authForm.confirmPassword"
+            input-id="auth-confirm-password"
+            :feedback="false"
+            :toggle-mask="true"
+            :input-props="{
+              autocomplete: 'new-password',
+              minlength: PASSWORD_MIN_CHARACTERS,
+            }"
+            placeholder="再次输入密码"
+            fluid
+          />
+        </template>
         <Button
           type="submit"
           :label="authMode === 'login' ? '登录' : '注册账户'"

@@ -84,6 +84,7 @@ export function createAccountActions(
       authMode.value = 'login'
       authForm.username = loginUsername
       authForm.password = ''
+      authForm.confirmPassword = ''
       toast.add({
         severity: 'success',
         summary: '密码已更新，请使用新密码重新登录',

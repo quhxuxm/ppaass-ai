@@ -82,19 +82,26 @@ function submit(): void {
 }
 
 async function resizeAvatar(file: File): Promise<string> {
-  const url = URL.createObjectURL(file)
-  try {
-    const image = await loadImage(url)
-    const canvas = document.createElement('canvas')
-    canvas.width = AVATAR_SIZE
-    canvas.height = AVATAR_SIZE
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Canvas is unavailable')
-    context.drawImage(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE)
-    return canvas.toDataURL('image/png')
-  } finally {
-    URL.revokeObjectURL(url)
-  }
+  const image = await loadImage(await readAsDataUrl(file))
+  const canvas = document.createElement('canvas')
+  canvas.width = AVATAR_SIZE
+  canvas.height = AVATAR_SIZE
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Canvas is unavailable')
+  context.drawImage(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE)
+  return canvas.toDataURL('image/png')
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () =>
+      typeof reader.result === 'string'
+        ? resolve(reader.result)
+        : reject(new Error('Image reading failed'))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {

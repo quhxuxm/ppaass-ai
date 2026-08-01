@@ -40,6 +40,10 @@ export function createAuthAgentActions(
       toast.add({ severity: 'warn', summary: '请输入密码', life: 2600 })
       return
     }
+    if (authMode.value === 'register' && !authForm.confirmPassword) {
+      toast.add({ severity: 'warn', summary: '请再次输入密码', life: 2600 })
+      return
+    }
     if (
       authMode.value === 'register' &&
       Array.from(authForm.password).length < PASSWORD_MIN_CHARACTERS
@@ -48,6 +52,17 @@ export function createAuthAgentActions(
         severity: 'warn',
         summary: `密码至少需要 ${PASSWORD_MIN_CHARACTERS} 个字符`,
         life: 3200,
+      })
+      return
+    }
+    if (
+      authMode.value === 'register' &&
+      authForm.password !== authForm.confirmPassword
+    ) {
+      toast.add({
+        severity: 'warn',
+        summary: '两次输入的密码不一致',
+        life: 3000,
       })
       return
     }
@@ -77,6 +92,7 @@ export function createAuthAgentActions(
       )
     } finally {
       authForm.password = ''
+      authForm.confirmPassword = ''
       authLoading.value = false
     }
   }
@@ -98,6 +114,7 @@ export function createAuthAgentActions(
     keyRequestDialogVisible.value = false
     activePage.value = 'account'
     authForm.password = ''
+    authForm.confirmPassword = ''
     agentAuthorization.value = null
     agentAuthorizationOutcome.value = null
     agentAuthorizationError.value = ''
