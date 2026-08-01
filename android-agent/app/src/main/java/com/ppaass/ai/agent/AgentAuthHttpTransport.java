@@ -119,6 +119,7 @@ final class AgentAuthHttpTransport {
             int maximumBytes,
             boolean ignoreCancellation) throws AgentAuthClient.AuthException {
         HttpURLConnection connection = null;
+        String phase = "open";
         try {
             throwIfCancelled(ignoreCancellation);
             connection = openConnection(new URL(baseUrl + path));
@@ -128,12 +129,15 @@ final class AgentAuthHttpTransport {
             }
             configure(connection, method, csrfToken, bearerToken);
             if (body != null) {
+                phase = "write request";
                 writeJsonBody(connection, body);
             }
+            phase = "read status";
             int status = connection.getResponseCode();
             adoptSessionCookie(connection);
             int retryAfter = parseRetryAfterSeconds(
                     connection.getHeaderField("Retry-After"));
+            phase = "read body";
             byte[] responseBody = readBounded(
                     status >= 400
                             ? connection.getErrorStream()
@@ -150,6 +154,7 @@ final class AgentAuthHttpTransport {
                     error);
         } catch (SocketTimeoutException error) {
             throwIfCancelled(ignoreCancellation);
+            Log.w(TAG, "Authentication request timed out during " + phase, error);
             throw new AgentAuthClient.AuthException("连接认证服务超时，请稍后重试", error);
         } catch (ConnectException | UnknownHostException | NoRouteToHostException error) {
             throwIfCancelled(ignoreCancellation);
