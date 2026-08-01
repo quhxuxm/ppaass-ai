@@ -15,7 +15,6 @@ const emit = defineEmits<{
 }>()
 
 const MAX_NICKNAME_CHARACTERS = 6
-const MAX_AVATAR_BYTES = 1024 * 1024
 const AVATAR_SIZE = 64
 const nickname = ref('')
 const avatarPreview = ref<string | null>(null)
@@ -52,10 +51,6 @@ async function onAvatarSelected(event: Event): Promise<void> {
   if (!file) return
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
     error.value = '头像只支持 PNG、JPEG 或 WebP 格式'
-    return
-  }
-  if (file.size > MAX_AVATAR_BYTES) {
-    error.value = '头像文件不能超过 1 MiB'
     return
   }
   try {
@@ -106,9 +101,6 @@ async function resizeAvatar(file: File): Promise<string> {
     if (!context) throw new Error('Canvas is unavailable')
     context.drawImage(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE)
     const avatar = await canvasToPng(canvas)
-    if (avatar.size > MAX_AVATAR_BYTES) {
-      throw new Error('Resized avatar is too large')
-    }
     return readAsDataUrl(avatar)
   } finally {
     URL.revokeObjectURL(url)
@@ -180,7 +172,7 @@ function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
             text
             @click="removeAvatar"
           />
-          <small>PNG、JPEG 或 WebP；原文件不超过 1 MiB，上传时统一缩放为 64 × 64 像素。</small>
+          <small>PNG、JPEG 或 WebP；选择后会在本地缩放为 64 × 64 像素并保存处理结果。</small>
         </div>
       </div>
 

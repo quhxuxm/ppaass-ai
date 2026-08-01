@@ -14,7 +14,11 @@ assert.match(
   /context\.drawImage\(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE\)/,
 )
 assert.match(profileEditor, /canvas\.toBlob\([\s\S]*?'image\/png'/)
-assert.match(profileEditor, /上传时统一缩放为 64 × 64 像素/)
+assert.match(profileEditor, /本地缩放为 64 × 64 像素并保存处理结果/)
+assert.match(profileEditor, /avatarPreview\.value = await resizeAvatar\(file\)/)
+assert.doesNotMatch(profileEditor, /MAX_AVATAR_BYTES/)
+assert.doesNotMatch(profileEditor, /file\.size/)
+assert.doesNotMatch(profileEditor, /1 MiB/)
 assert.doesNotMatch(profileEditor, /readImageDimensions/)
 assert.doesNotMatch(profileEditor, /头像尺寸不能超过/)
 
