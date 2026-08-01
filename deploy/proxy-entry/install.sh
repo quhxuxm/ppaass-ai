@@ -20,7 +20,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "Entry installation must run as root." >&2
     exit 1
 fi
-for command in stat systemctl; do
+for command in find readlink sort stat systemctl; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "$command is required on the Entry host." >&2
         exit 1
@@ -35,6 +35,23 @@ log_root="/var/log/ppaass/proxy-entry"
 release_root="$RUNTIME_ROOT/releases/$RELEASE_SHA"
 current_link="$RUNTIME_ROOT/current"
 entry_service="ppaass-proxy-entry.service"
+
+prune_old_releases() {
+    local current_release
+    local release_line
+    local candidate
+    local retained=0
+
+    current_release="$(readlink -f "$current_link")"
+    while IFS= read -r release_line; do
+        retained=$((retained + 1))
+        candidate="${release_line#* }"
+        if [ "$retained" -gt 3 ] && [ "$candidate" != "$current_release" ]; then
+            rm -rf -- "$candidate"
+        fi
+    done < <(find "$RUNTIME_ROOT/releases" -mindepth 1 -maxdepth 1 \
+        -type d -printf '%T@ %p\n' | sort -nr)
+}
 
 if ! getent group "$service_user" >/dev/null; then
     groupadd --system "$service_user"
@@ -132,4 +149,5 @@ if [ "$stable_checks" -lt 5 ]; then
     journalctl -u "$entry_service" -n 100 --no-pager >&2 || true
     exit 1
 fi
+prune_old_releases
 echo "Entry $ENTRY_ID deployed at release $RELEASE_SHA."

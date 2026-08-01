@@ -118,6 +118,11 @@ async fn server_construction_does_not_require_a_reachable_registry() {
     let directory = tempfile::TempDir::new().unwrap();
     let token_path = directory.path().join("control-token");
     std::fs::write(&token_path, "0123456789abcdef0123456789abcdef").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let mut config = support::proxy_config("");
     config.registry_url = "http://127.0.0.1:9".to_string();
     config.registry_control_token_path = token_path.display().to_string();

@@ -93,6 +93,25 @@ ExecReload=$caddy_binary reload --config /etc/caddy/Caddyfile --force
 EOF
 }
 
+retire_legacy_caddy_service() {
+    local legacy_service="ppaass-caddy.service"
+    local legacy_unit="/etc/systemd/system/$legacy_service"
+
+    systemctl disable "$legacy_service" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$legacy_service"; then
+        systemctl stop "$legacy_service" || true
+    fi
+    if systemctl is-active --quiet "$legacy_service"; then
+        echo "Legacy $legacy_service is still active; refusing to start a second Caddy." >&2
+        exit 1
+    fi
+    rm -f -- "$legacy_unit"
+    rm -f -- /etc/ppaass/Caddyfile
+    rmdir /etc/ppaass >/dev/null 2>&1 || true
+    rm -rf -- /var/lib/ppaass-caddy
+    systemctl reset-failed "$legacy_service" >/dev/null 2>&1 || true
+}
+
 wait_for_http_health() {
     local label="$1"
     local url="$2"
@@ -177,6 +196,23 @@ secret_root="$state_root/secrets"
 log_root="/var/log/ppaass/proxy-registry"
 release_root="$RUNTIME_ROOT/releases/$RELEASE_SHA"
 current_link="$RUNTIME_ROOT/current"
+
+prune_old_releases() {
+    local current_release
+    local release_line
+    local candidate
+    local retained=0
+
+    current_release="$(readlink -f "$current_link")"
+    while IFS= read -r release_line; do
+        retained=$((retained + 1))
+        candidate="${release_line#* }"
+        if [ "$retained" -gt 3 ] && [ "$candidate" != "$current_release" ]; then
+            rm -rf -- "$candidate"
+        fi
+    done < <(find "$RUNTIME_ROOT/releases" -mindepth 1 -maxdepth 1 \
+        -type d -printf '%T@ %p\n' | sort -nr)
+}
 
 if ! getent group "$service_user" >/dev/null; then
     groupadd --system "$service_user"
@@ -306,6 +342,7 @@ chmod 0644 /etc/caddy/Caddyfile
 runuser -u caddy -- env HOME=/var/lib/caddy \
     "$caddy_binary" validate --config /etc/caddy/Caddyfile
 
+retire_legacy_caddy_service
 systemctl daemon-reload
 systemctl cat caddy.service >/dev/null
 systemctl enable ppaass-proxy-registry-1.service \
@@ -343,4 +380,5 @@ wait_for_http_health \
     "Registry control API" \
     "https://$REGISTRY_HOST/control/v1/health" \
     300 insecure
+prune_old_releases
 echo "Registry $RELEASE_SHA deployed with two instances."
