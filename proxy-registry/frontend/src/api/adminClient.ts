@@ -74,13 +74,11 @@ export function deleteManagedUser(username: string): Promise<void> {
 export async function rotateManagedUserKey(
   username: string,
   reason: string,
-): Promise<ManagedUser> {
-  const body = await request<unknown>(
+): Promise<void> {
+  await request<unknown>(
     `/api/v1/admin/users/${encodeURIComponent(username)}/rotate-key`,
     { method: 'POST', body: JSON.stringify({ reason }) },
   )
-  const root = asRecord(body) ?? {}
-  return decodeManagedUser(root.user ?? root.managed_user ?? body)
 }
 
 export async function listPendingKeyRequests(): Promise<KeyRequest[]> {

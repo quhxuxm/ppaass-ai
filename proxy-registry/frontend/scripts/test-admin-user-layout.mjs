@@ -39,6 +39,14 @@ const sessionDecoder = readFileSync(
   new URL('../src/api/decoders/session.ts', import.meta.url),
   'utf8',
 )
+const adminClient = readFileSync(
+  new URL('../src/api/adminClient.ts', import.meta.url),
+  'utf8',
+)
+const rotationClient = adminClient.slice(
+  adminClient.indexOf('export async function rotateManagedUserKey'),
+  adminClient.indexOf('export async function listPendingKeyRequests'),
+)
 
 assert.match(app, /table-style="min-width: 72rem"/)
 assert.doesNotMatch(app, /header="代理 \/ 密钥"/)
@@ -132,6 +140,13 @@ assert.match(sessionTypes, /registryInstanceId: string/)
 assert.match(
   sessionDecoder,
   /boolValue\(source\.agent_handoff\)[\s\S]*?stringValue\(source\.registry_instance_id\)[\s\S]*?return \{ registryInstanceId, authenticated, account, agentHandoff \}/,
+)
+assert.match(rotationClient, /\): Promise<void>/)
+assert.match(rotationClient, /await request<unknown>/)
+assert.doesNotMatch(rotationClient, /decodeManagedUser/)
+assert.match(
+  app,
+  /const previousKeyVersion = user\.profile\?\.keyVersion \?\? 0[\s\S]*?catch \(error\)[\s\S]*?await services\.refreshAdminUsers\(\)[\s\S]*?refreshed\?\.profile\?\.keyVersion[\s\S]*?> previousKeyVersion[\s\S]*?showAdminKeyRotationSuccess\(\)/,
 )
 assert.match(
   app,

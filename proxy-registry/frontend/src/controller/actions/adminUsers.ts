@@ -32,7 +32,7 @@ export function createAdminUserActions(
     editVisible, editingHasEditableFields, editingRequiresAuditReason,
     editingPermissionsChanged, editingProfileReadOnly, editSaving,
     rotationUser, rotationReason, rotationVisible, rotatingUsername,
-    deletingUsername,
+    deletingUsername, adminUsers,
   } = state
 
   function parseAdditionalPermissions(
@@ -304,9 +304,21 @@ export function createAdminUserActions(
     rotationReason.value = ''
     rotationVisible.value = true
   }
+  function showAdminKeyRotationSuccess(): void {
+    rotationVisible.value = false
+    rotationUser.value = null
+    rotationReason.value = ''
+    toast.add({
+      severity: 'success',
+      summary: '用户密钥已重新生成',
+      detail: '新的连接凭据只能由该用户授权的 Agent 领取',
+      life: 5000,
+    })
+  }
 
   async function rotateAdminKey(user: ManagedUser): Promise<void> {
     const username = managedUsername(user)
+    const previousKeyVersion = user.profile?.keyVersion ?? 0
     const reason = rotationReason.value.trim()
     if (!reason) {
       toast.add({
@@ -319,18 +331,18 @@ export function createAdminUserActions(
     rotatingUsername.value = username
     try {
       await rotateManagedUserKey(username, reason)
-      rotationVisible.value = false
-      rotationUser.value = null
-      rotationReason.value = ''
       await services.refreshAdminUsers()
-      toast.add({
-        severity: 'success',
-        summary: '用户密钥已重新生成',
-        detail: '新的连接凭据只能由该用户授权的 Agent 领取',
-        life: 5000,
-      })
+      showAdminKeyRotationSuccess()
     } catch (error) {
-      services.showError('无法重新生成用户密钥', error)
+      await services.refreshAdminUsers()
+      const refreshed = adminUsers.value.find(
+        (candidate) => managedUsername(candidate) === username,
+      )
+      if ((refreshed?.profile?.keyVersion ?? 0) > previousKeyVersion) {
+        showAdminKeyRotationSuccess()
+      } else {
+        services.showError('无法重新生成用户密钥', error)
+      }
     } finally {
       rotatingUsername.value = ''
     }
