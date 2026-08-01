@@ -13,9 +13,18 @@ assert.match(
   profileEditor,
   /context\.drawImage\(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE\)/,
 )
-assert.match(profileEditor, /canvas\.toBlob\([\s\S]*?'image\/png'/)
+assert.match(profileEditor, /return canvas\.toDataURL\('image\/png'\)/)
+assert.doesNotMatch(profileEditor, /canvas\.toBlob/)
 assert.match(profileEditor, /本地缩放为 64 × 64 像素并保存处理结果/)
 assert.match(profileEditor, /avatarPreview\.value = await resizeAvatar\(file\)/)
+assert.match(
+  profileEditor,
+  /avatarPreview\.value = await resizeAvatar\(file\)[\s\S]*?finally \{\s*input\.value = ''/,
+)
+assert.doesNotMatch(
+  profileEditor,
+  /const file = input\.files\?\.\[0\]\s*input\.value = ''/,
+)
 assert.doesNotMatch(profileEditor, /MAX_AVATAR_BYTES/)
 assert.doesNotMatch(profileEditor, /file\.size/)
 assert.doesNotMatch(profileEditor, /1 MiB/)

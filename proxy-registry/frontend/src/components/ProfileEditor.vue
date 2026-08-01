@@ -47,18 +47,19 @@ function chooseAvatar(): void {
 async function onAvatarSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  input.value = ''
   if (!file) return
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-    error.value = '头像只支持 PNG、JPEG 或 WebP 格式'
-    return
-  }
   try {
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      error.value = '头像只支持 PNG、JPEG 或 WebP 格式'
+      return
+    }
     avatarPreview.value = await resizeAvatar(file)
     avatarChanged.value = true
     error.value = ''
   } catch {
     error.value = '无法处理头像图片'
+  } finally {
+    input.value = ''
   }
 }
 
@@ -80,16 +81,6 @@ function submit(): void {
   })
 }
 
-function readAsDataUrl(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () =>
-      typeof reader.result === 'string' ? resolve(reader.result) : reject()
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-}
-
 async function resizeAvatar(file: File): Promise<string> {
   const url = URL.createObjectURL(file)
   try {
@@ -100,8 +91,7 @@ async function resizeAvatar(file: File): Promise<string> {
     const context = canvas.getContext('2d')
     if (!context) throw new Error('Canvas is unavailable')
     context.drawImage(image, 0, 0, AVATAR_SIZE, AVATAR_SIZE)
-    const avatar = await canvasToPng(canvas)
-    return readAsDataUrl(avatar)
+    return canvas.toDataURL('image/png')
   } finally {
     URL.revokeObjectURL(url)
   }
@@ -117,15 +107,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     }
     image.onerror = () => reject(new Error('Image decoding failed'))
     image.src = url
-  })
-}
-
-function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error('PNG encoding failed'))),
-      'image/png',
-    )
   })
 }
 </script>
