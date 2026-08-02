@@ -41,6 +41,9 @@ struct UdpSessionHandle {
 pub struct YamuxSessionManager {
     config: Arc<AgentConfig>,
     proxy_addrs: Arc<Vec<String>>,
+    // TUN 模式安装默认路由前解析并固定 proxy IP，避免系统 DNS 被接管后，
+    // proxy 重连反过来依赖尚未建立的 DNS proxy 通道。
+    proxy_addrs_override: Arc<std::sync::RwLock<Option<Arc<Vec<String>>>>>,
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
@@ -94,6 +97,7 @@ impl YamuxSessionManager {
         Self {
             config,
             proxy_addrs,
+            proxy_addrs_override: Arc::new(std::sync::RwLock::new(None)),
             manager_name,
             yamux_transport,
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
@@ -115,6 +119,20 @@ impl YamuxSessionManager {
         if let Ok(mut guard) = self.proxy_bind_ip.write() {
             *guard = ip;
         }
+    }
+
+    pub fn set_proxy_addrs_override(&self, addrs: Option<Arc<Vec<String>>>) {
+        if let Ok(mut guard) = self.proxy_addrs_override.write() {
+            *guard = addrs;
+        }
+    }
+
+    pub fn proxy_addrs(&self) -> Arc<Vec<String>> {
+        self.proxy_addrs_override
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(|| self.proxy_addrs.clone())
     }
 
     pub fn set_proxy_bind_interface(&self, interface: Option<BindInterface>) {

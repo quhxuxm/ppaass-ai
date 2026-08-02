@@ -25,9 +25,12 @@ fn proxy_session_bind_guard_clears_both_shared_managers_on_drop() {
         name: Some("physical0".to_string()),
         index: Some(7),
     };
+    let pinned_addrs = Arc::new(vec!["192.0.2.20:443".to_string()]);
 
     {
         let _guard = ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
+        tcp_sessions.set_proxy_addrs_override(Some(pinned_addrs.clone()));
+        udp_sessions.set_proxy_addrs_override(Some(pinned_addrs.clone()));
         tcp_sessions.set_proxy_bind_ip(Some(bind_ip));
         tcp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
         udp_sessions.set_proxy_bind_ip(Some(bind_ip));
@@ -40,10 +43,19 @@ fn proxy_session_bind_guard_clears_both_shared_managers_on_drop() {
         );
         assert_eq!(udp_sessions.proxy_bind_ip(), Some(bind_ip));
         assert_eq!(udp_sessions.proxy_bind_interface(), Some(bind_interface));
+        assert_eq!(tcp_sessions.proxy_addrs(), pinned_addrs);
     }
 
     assert_eq!(tcp_sessions.proxy_bind_ip(), None);
     assert_eq!(tcp_sessions.proxy_bind_interface(), None);
     assert_eq!(udp_sessions.proxy_bind_ip(), None);
     assert_eq!(udp_sessions.proxy_bind_interface(), None);
+    assert_eq!(
+        tcp_sessions.proxy_addrs().as_ref(),
+        &["127.0.0.1:8080".to_string()]
+    );
+    assert_eq!(
+        udp_sessions.proxy_addrs().as_ref(),
+        &["127.0.0.1:8080".to_string()]
+    );
 }

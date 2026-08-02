@@ -30,10 +30,8 @@ mod response;
 
 pub use cache::{DnsResponseCache, DnsResponseSummary};
 pub use parser::{parse_dns_query, parse_dns_response};
-pub use response::{allocate_dns_id, dns_id, write_dns_id};
-use response::{
-    cleanup_pending_dns, handle_dns_response, send_dns_request, try_send_cached_dns_response,
-};
+pub use response::{allocate_dns_id, cleanup_pending_dns, dns_id, write_dns_id};
+use response::{handle_dns_response, send_dns_request, try_send_cached_dns_response};
 
 pub const DNS_PENDING_TTL: Duration = Duration::from_secs(10);
 const DNS_REQUEST_CHANNEL_SIZE: usize = 1024;
@@ -195,7 +193,17 @@ async fn run_dns_proxy(
                     let _ = writer.shutdown().await;
                     break;
                 }
-                _ = cleanup.tick() => cleanup_pending_dns(&mut pending),
+                _ = cleanup.tick() => {
+                    let expired = cleanup_pending_dns(&mut pending);
+                    if expired > 0 {
+                        // 请求写入成功但持续没有回复，说明共享 DNS flow 可能已经
+                        // 黑洞化。仅删除 pending 会让后续请求永远复用坏 flow；主动
+                        // 断开后，系统 DNS 客户端的重试会落到新 proxy channel。
+                        warn!("TUN UDP DNS 有 {expired} 个请求超时，主动重建共享连接");
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
+                },
                 maybe_request = rx.recv() => {
                     let Some(request) = maybe_request else {
                         let _ = writer.shutdown().await;

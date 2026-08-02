@@ -107,7 +107,7 @@ impl YamuxSessionManager {
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..to_create {
             let config = self.config.clone();
-            let proxy_addrs = self.proxy_addrs.clone();
+            let proxy_addrs = self.proxy_addrs();
             let semaphore = semaphore.clone();
             let bind_ip = self.proxy_bind_ip();
             let bind_interface = self.proxy_bind_interface();

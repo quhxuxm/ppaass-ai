@@ -125,6 +125,37 @@ pub fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> 
     ))
 }
 
+/// 在 TUN 接管系统 DNS 前把受管 proxy 域名固定成 socket endpoint。
+/// 后续重连只使用这些 IP，避免 DNS proxy 与 proxy 重连互相等待。
+pub fn resolve_proxy_endpoints_checked(proxy_addrs: &[String]) -> Result<Vec<String>> {
+    let mut endpoints = Vec::new();
+    for entry in proxy_addrs {
+        let candidate = if entry.contains(':') {
+            entry.clone()
+        } else {
+            format!("{entry}:443")
+        };
+        match candidate.to_socket_addrs() {
+            Ok(addresses) => {
+                for address in addresses {
+                    let endpoint = address.to_string();
+                    if !endpoints.contains(&endpoint) {
+                        endpoints.push(endpoint);
+                    }
+                }
+            }
+            Err(error) => warn!("TUN 启动前解析受管 Proxy endpoint 失败：{error}"),
+        }
+    }
+
+    if endpoints.is_empty() {
+        return Err(AgentError::Connection(
+            "TUN 启动前未能解析任何 proxy endpoint，拒绝接管系统 DNS".to_string(),
+        ));
+    }
+    Ok(endpoints)
+}
+
 fn proxy_addrs_resolve_to_loopback_only(proxy_addrs: &[String]) -> bool {
     if proxy_addrs.is_empty() {
         return false;

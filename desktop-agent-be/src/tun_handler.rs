@@ -146,9 +146,12 @@ pub(crate) async fn run_tun_mode(
     // 初始化错误或任务 abort 都会自动恢复共享 HTTP/SOCKS manager 的普通路由。
     let proxy_session_bind_guard =
         ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
-    let proxy_bind_interface = configure_proxy_routing(
+    // macOS/Windows 接管系统 DNS 后，运行期再解析 proxy 域名会形成循环依赖：
+    // proxy 重连等待 DNS，而 DNS proxy 又等待 proxy 会话。必须在此时固定 IP endpoint。
+    let resolved_proxy_addrs = route::resolve_proxy_endpoints_checked(&proxy_addrs)?;
+    let (proxy_bind_interface, pinned_proxy_addrs) = configure_proxy_routing(
         &config,
-        &proxy_addrs,
+        &resolved_proxy_addrs,
         &tcp_sessions,
         &udp_sessions,
         &shutdown,
@@ -170,7 +173,7 @@ pub(crate) async fn run_tun_mode(
         ipv4,
         ipv4_prefix,
         ipv6_config,
-        &proxy_addrs,
+        &pinned_proxy_addrs,
         proxy_bind_interface.as_ref(),
     )?;
     let helper_managed_network = system_guard.is_some();
@@ -193,12 +196,12 @@ pub(crate) async fn run_tun_mode(
             ipv4,
             ipv4_prefix,
             tun_if_index,
-            &proxy_addrs,
+            &pinned_proxy_addrs,
         )?)
     };
     let device = Arc::new(device);
     let direct_egress = Arc::new(TunDirectEgress::new(
-        proxy_addrs.clone(),
+        pinned_proxy_addrs,
         proxy_bind_interface.clone(),
         #[cfg(target_os = "macos")]
         helper_managed_network.then(|| config.macos_helper_socket.clone()),

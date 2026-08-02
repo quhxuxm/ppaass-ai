@@ -308,6 +308,14 @@ fn checked_proxy_resolution_returns_non_loopback_literal() {
     );
 }
 
+#[test]
+fn tun_proxy_endpoints_are_resolved_to_ip_literals_before_dns_capture() {
+    let endpoints = resolve_proxy_endpoints_checked(&["192.0.2.1:8080".to_string()]).unwrap();
+
+    assert_eq!(endpoints, vec!["192.0.2.1:8080".to_string()]);
+    assert!(resolve_proxy_endpoints_checked(&[]).is_err());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_does_not_capture_dns_servers_with_host_routes() {

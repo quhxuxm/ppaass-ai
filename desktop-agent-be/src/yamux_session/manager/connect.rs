@@ -42,9 +42,10 @@ impl YamuxSessionManager {
         // 绕过 TCP/UDP 语义隔离。
         match proxy_stream_route(self.config.transport_mode, self.yamux_transport, transport) {
             ProxyStreamRoute::DirectTcp => {
+                let proxy_addrs = self.proxy_addrs();
                 let (stream, stream_id) = new_direct_tcp_target_stream(
                     &self.config,
-                    &self.proxy_addrs,
+                    &proxy_addrs,
                     self.proxy_bind_ip(),
                     self.proxy_bind_interface(),
                     address,
@@ -122,9 +123,10 @@ impl YamuxSessionManager {
                     .as_ref()
                     .is_none_or(|handle| handle.connection.is_closed())
                 {
+                    let proxy_addrs = self.proxy_addrs();
                     let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new(
                         &self.config,
-                        &self.proxy_addrs,
+                        &proxy_addrs,
                         self.proxy_bind_ip(),
                         self.proxy_bind_interface(),
                     );

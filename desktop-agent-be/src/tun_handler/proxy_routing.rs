@@ -31,8 +31,10 @@ impl ProxySessionBindGuard {
     }
 
     pub fn clear(&self) {
+        self.tcp_sessions.set_proxy_addrs_override(None);
         self.tcp_sessions.set_proxy_bind_ip(None);
         self.tcp_sessions.set_proxy_bind_interface(None);
+        self.udp_sessions.set_proxy_addrs_override(None);
         self.udp_sessions.set_proxy_bind_ip(None);
         self.udp_sessions.set_proxy_bind_interface(None);
     }
@@ -50,7 +52,7 @@ pub(super) async fn configure_proxy_routing(
     tcp_sessions: &YamuxSessionManager,
     udp_sessions: &YamuxSessionManager,
     shutdown: &CancellationToken,
-) -> Option<common::BindInterface> {
+) -> (Option<common::BindInterface>, Vec<String>) {
     // 通过 OS 路由决策探测物理出口 IP/接口，用于后续 proxy 连接 bind。
     // macOS 登录项开机自启时，默认路由和网络服务常常晚于进程启动才可用。
     let started = Instant::now();
@@ -93,6 +95,7 @@ pub(super) async fn configure_proxy_routing(
     };
 
     let mut bind_interface = None;
+    let mut pinned_proxy_addrs = proxy_addrs.to_vec();
     if let Some(route) = proxy_route {
         // 这里设置的是 Yamux session manager 的“未来连接”绑定；已有连接不会被迁移。
         bind_interface = route.bind_interface.clone();
@@ -107,6 +110,17 @@ pub(super) async fn configure_proxy_routing(
         tcp_sessions.set_proxy_bind_interface(route.bind_interface.clone());
         udp_sessions.set_proxy_bind_ip(Some(route.local_ip));
         udp_sessions.set_proxy_bind_interface(route.bind_interface);
+
+        // 每次连接只会随机选择一个受管 proxy endpoint。固定为 IP 后需同步
+        // 过滤地址族，否则 IPv4 物理出口可能随机选到 IPv6 endpoint（反之亦然）。
+        let same_family = proxy_addrs
+            .iter()
+            .filter(|address| proxy_endpoint_matches_ip_family(address, route.local_ip))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !same_family.is_empty() {
+            pinned_proxy_addrs = same_family;
+        }
     } else {
         warn!(
             "无法检测物理出口 IP — 代理连接可能会回环进入 TUN。\
@@ -118,12 +132,26 @@ pub(super) async fn configure_proxy_routing(
         udp_sessions.set_proxy_bind_interface(None);
     }
 
+    let pinned_proxy_addrs = Arc::new(pinned_proxy_addrs);
+    tcp_sessions.set_proxy_addrs_override(Some(pinned_proxy_addrs.clone()));
+    udp_sessions.set_proxy_addrs_override(Some(pinned_proxy_addrs.clone()));
+    info!(
+        "TUN 运行期间已固定 {} 个 proxy IP endpoint，后续重连不再依赖系统 DNS",
+        pinned_proxy_addrs.len()
+    );
+
     debug!(
         "TUN 路由预配置完成：设备={} ipv4={} mtu={}",
         config.name, config.ipv4, config.mtu
     );
 
-    bind_interface
+    (bind_interface, pinned_proxy_addrs.as_ref().clone())
+}
+
+fn proxy_endpoint_matches_ip_family(endpoint: &str, local_ip: std::net::IpAddr) -> bool {
+    endpoint
+        .parse::<std::net::SocketAddr>()
+        .is_ok_and(|address| address.is_ipv4() == local_ip.is_ipv4())
 }
 
 fn proxy_route_has_interface(route: &route::ProxyRoute) -> bool {

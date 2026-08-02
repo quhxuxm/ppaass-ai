@@ -1,6 +1,6 @@
 use desktop_agent_be::tun_handler::dns_proxy::*;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[test]
 fn allocate_skips_pending_ids() {
@@ -97,4 +97,25 @@ fn dns_response_cache_rewrites_transaction_id_on_hit() {
     let cached = cache.get("example.com", "A", 0xabcd).unwrap();
     assert_eq!(dns_id(&cached), Some(0xabcd));
     assert_eq!(&cached[2..], &response[2..]);
+}
+
+#[test]
+fn expired_dns_requests_signal_shared_connection_rebuild() {
+    let mut pending = HashMap::new();
+    pending.insert(
+        7,
+        PendingDnsRequest {
+            client: "127.0.0.1:10000".parse().unwrap(),
+            target: "10.10.10.2:53".parse().unwrap(),
+            original_id: 42,
+            query: "stalled.example".to_string(),
+            record_type: "A".to_string(),
+            started_at: Instant::now() - Duration::from_secs(11),
+            expires_at: Instant::now() - Duration::from_secs(1),
+        },
+    );
+
+    assert_eq!(cleanup_pending_dns(&mut pending), 1);
+    assert!(pending.is_empty());
+    assert_eq!(cleanup_pending_dns(&mut pending), 0);
 }

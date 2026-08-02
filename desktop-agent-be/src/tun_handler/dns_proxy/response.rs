@@ -146,13 +146,14 @@ pub(super) async fn handle_dns_response(
         .await
 }
 
-pub(super) fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>) {
+pub fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>) -> usize {
     let now = Instant::now();
     let expired_ids: Vec<u16> = pending
         .iter()
         .filter_map(|(id, request)| (request.expires_at <= now).then_some(*id))
         .collect();
 
+    let expired_count = expired_ids.len();
     for id in expired_ids {
         if let Some(request) = pending.remove(&id) {
             telemetry::emit_dns_resolution(DnsResolutionRecord {
@@ -168,6 +169,7 @@ pub(super) fn cleanup_pending_dns(pending: &mut HashMap<u16, PendingDnsRequest>)
             });
         }
     }
+    expired_count
 }
 
 pub fn allocate_dns_id(

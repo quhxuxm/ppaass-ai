@@ -58,7 +58,8 @@ pub use probe::parse_macos_route_get_next_hop;
 #[cfg(not(target_os = "macos"))]
 use probe::route_next_hop;
 pub use probe::{
-    ProxyRoute, detect_default_route_interface, detect_proxy_route, resolve_proxy_ips_checked,
+    ProxyRoute, detect_default_route_interface, detect_proxy_route,
+    resolve_proxy_endpoints_checked, resolve_proxy_ips_checked,
 };
 pub(super) use state::cleanup_stale_routes;
 #[cfg(target_os = "macos")]
