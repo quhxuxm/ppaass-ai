@@ -2,7 +2,7 @@
 use desktop_agent_be::tun_handler::device::tun_ipv4_destination;
 #[cfg(target_os = "macos")]
 use desktop_agent_be::tun_handler::device::tun_ipv4_interface_prefix;
-use desktop_agent_be::tun_handler::device::tun_ipv4_peer;
+use desktop_agent_be::tun_handler::device::{tun_ipv4_peer, windows_dns_capture_target};
 use std::net::Ipv4Addr;
 
 #[test]
@@ -25,6 +25,11 @@ fn tun_ipv4_peer_can_use_first_host_when_adapter_uses_second_host() {
 fn tun_ipv4_peer_rejects_point_to_point_subnets() {
     assert_eq!(tun_ipv4_peer(Ipv4Addr::new(10, 10, 10, 1), 31), None);
     assert_eq!(tun_ipv4_peer(Ipv4Addr::new(10, 10, 10, 1), 32), None);
+}
+
+#[test]
+fn windows_dns_capture_target_is_outside_private_bypass_ranges() {
+    assert_eq!(windows_dns_capture_target(), Ipv4Addr::new(198, 18, 0, 1));
 }
 
 #[cfg(target_os = "macos")]

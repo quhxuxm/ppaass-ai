@@ -37,7 +37,7 @@ use common::{
     TransportMode, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded,
 };
 #[cfg(windows)]
-use device::tun_ipv4_peer;
+use device::windows_dns_capture_target;
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
 use direct_egress::TunDirectEgress;
@@ -273,21 +273,11 @@ fn install_windows_dns_guard(
     tun_ipv4_prefix: u8,
     dns_state_file: Option<&str>,
 ) -> Option<DnsGuard> {
-    let Some(tun_dns) = tun_ipv4_peer(tun_ipv4, tun_ipv4_prefix) else {
-        // install(false, ...) still restores a lease left by an interrupted older run.
-        cleanup_stale_dns(dns_state_file);
-        if proxy_dns {
-            warn!(
-                "TUN proxy_dns 已启用，但 {} 无可用虚拟 peer 地址；跳过 Windows 系统 DNS 接管",
-                format_args!("{tun_ipv4}/{tun_ipv4_prefix}")
-            );
-        }
-        return None;
-    };
+    let tun_dns = windows_dns_capture_target();
 
     if proxy_dns {
         info!(
-            "Windows TUN proxy_dns 使用虚拟 DNS 地址：{tun_dns} (TUN={tun_ipv4}/{tun_ipv4_prefix})"
+            "Windows TUN proxy_dns 使用专用捕获地址：{tun_dns} (TUN={tun_ipv4}/{tun_ipv4_prefix})"
         );
     }
     DnsGuard::install(
@@ -299,6 +289,7 @@ fn install_windows_dns_guard(
     )
 }
 
+#[cfg(not(windows))]
 fn cleanup_stale_dns(dns_state_file: Option<&str>) {
     // Windows 正常生命周期由 install_windows_dns_guard 持有 guard；本函数用于
     // proxy_dns 关闭、无可用虚拟 peer，以及其他平台清理异常退出遗留的状态。

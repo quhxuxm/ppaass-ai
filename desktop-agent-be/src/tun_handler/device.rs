@@ -33,6 +33,14 @@ pub fn tun_ipv4_peer(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::n
     None
 }
 
+/// Windows DNS Client needs an address routed through Wintun, not an on-link
+/// sibling that can trigger neighbor discovery before an IP packet reaches the
+/// layer-3 adapter. 198.18.0.0/15 is reserved for benchmarking and is outside
+/// the private-network bypass ranges installed by the agent.
+pub fn windows_dns_capture_target() -> std::net::Ipv4Addr {
+    std::net::Ipv4Addr::new(198, 18, 0, 1)
+}
+
 #[cfg(target_os = "macos")]
 pub fn tun_ipv4_destination(
     ipv4: std::net::Ipv4Addr,
