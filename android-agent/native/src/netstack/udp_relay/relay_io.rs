@@ -78,7 +78,7 @@ where
 
 pub(super) async fn handle_udp_relay_response(
     netstack_tx: &UdpWriter,
-    state: &UdpRelayState,
+    state: &mut UdpRelayState,
     response: &[u8],
 ) -> io::Result<usize> {
     // proxy 回复携带 flow_id；这里还原原始 client/target 后写回 Android VPN netstack。

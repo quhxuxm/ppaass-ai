@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
 use android_agent::netstack::{
     UdpRelayRequest, UdpRelayState, UdpRelayStats, send_udp_relay_request_batch,
@@ -18,6 +19,23 @@ fn assigns_stable_flow_ids() {
     assert_eq!(first, second);
     assert_eq!(state.flow(first).unwrap().client, client);
     assert_eq!(state.flow(first).unwrap().target, target);
+}
+
+#[test]
+fn downstream_traffic_keeps_flow_mapping_alive() {
+    let mut state = UdpRelayState::new();
+    let client: SocketAddr = "10.10.10.2:10000".parse().unwrap();
+    let target: SocketAddr = "8.8.8.8:443".parse().unwrap();
+    let flow_id = state.flow_id(client, target);
+    let response_at = Instant::now() + Duration::from_secs(299);
+
+    assert!(state.flow_at(flow_id, response_at).is_some());
+    state.cleanup_expired_at(response_at + Duration::from_secs(299));
+    assert!(
+        state
+            .flow_at(flow_id, response_at + Duration::from_secs(299))
+            .is_some()
+    );
 }
 
 #[tokio::test]

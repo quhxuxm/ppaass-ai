@@ -1,5 +1,8 @@
-use common::client_connection::udp::{ClientCommand, udp_client_stream_channel};
+use common::client_connection::udp::{
+    ClientCommand, prune_closed_udp_streams, udp_client_stream_channel,
+};
 use protocol::Address;
+use std::collections::HashMap;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -50,4 +53,16 @@ async fn stream_rejects_short_read_buffer_without_splitting_datagram() {
     let mut exact = [0u8; 4];
     assert_eq!(stream.read(&mut exact).await.unwrap(), 4);
     assert_eq!(exact, [1, 2, 3, 4]);
+}
+
+#[tokio::test]
+async fn closed_stream_receivers_are_pruned_from_long_lived_session() {
+    let (closed_tx, closed_rx) = tokio::sync::mpsc::channel(1);
+    let (active_tx, _active_rx) = tokio::sync::mpsc::channel(1);
+    drop(closed_rx);
+    let mut streams = HashMap::from([(1, closed_tx), (2, active_tx)]);
+
+    assert_eq!(prune_closed_udp_streams(&mut streams), 1);
+    assert!(!streams.contains_key(&1));
+    assert!(streams.contains_key(&2));
 }

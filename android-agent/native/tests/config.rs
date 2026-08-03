@@ -32,6 +32,18 @@ fn agent_debug_redacts_private_key() {
 }
 
 #[test]
+fn proxy_addresses_are_selected_round_robin() {
+    let config: AndroidAgentConfig = serde_json::from_str(
+        r#"{"proxy_addrs":["proxy-a:8080","proxy-b:8080"],"username":"u","private_key_pem":"key"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.proxy_address_at(0), "proxy-a:8080");
+    assert_eq!(config.proxy_address_at(1), "proxy-b:8080");
+    assert_eq!(config.proxy_address_at(2), "proxy-a:8080");
+}
+
+#[test]
 fn agent_transport_accepts_auto() {
     let config: AndroidAgentConfig = serde_json::from_str(
         r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,

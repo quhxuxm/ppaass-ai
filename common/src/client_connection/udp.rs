@@ -99,6 +99,15 @@ pub fn udp_client_stream_channel(
     (stream, command_rx, inbound_tx)
 }
 
+#[doc(hidden)]
+pub fn prune_closed_udp_streams(streams: &mut HashMap<u64, mpsc::Sender<Vec<u8>>>) -> usize {
+    let before = streams.len();
+    // Drop can fail to enqueue Close while the bounded command channel is full.
+    // The inbound receiver is still an authoritative local liveness signal.
+    streams.retain(|_, inbound_tx| !inbound_tx.is_closed());
+    before - streams.len()
+}
+
 impl UdpClientConnection {
     pub async fn connect<C>(config: &C) -> io::Result<Self>
     where
@@ -297,6 +306,10 @@ async fn run_session_driver(
                 }
             }
             _ = keepalive.tick() => {
+                let pruned = prune_closed_udp_streams(&mut streams);
+                if pruned > 0 {
+                    trace!(pruned, active = streams.len(), "清理本地已关闭的原生 UDP flow");
+                }
                 if last_authenticated_receive.elapsed() >= health_timeout {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,

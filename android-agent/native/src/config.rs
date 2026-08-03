@@ -5,11 +5,15 @@ use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::direct_access::DirectAccessConfig;
 use crate::error::{AndroidAgentError, Result};
 
 pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+// Spread new TCP connections and replacement UDP sessions across every
+// Registry-assigned endpoint instead of pinning Android to the first one.
+static NEXT_PROXY_ADDRESS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,11 +152,23 @@ impl AndroidAgentConfig {
     pub fn effective_udp_session_pool_size(&self) -> usize {
         self.udp_session_pool_size.clamp(1, 8)
     }
+
+    #[doc(hidden)]
+    pub fn proxy_address_at(&self, index: usize) -> String {
+        if self.proxy_addrs.is_empty() {
+            return String::new();
+        }
+        self.proxy_addrs
+            .get(index % self.proxy_addrs.len())
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl ClientConnectionConfig for AndroidAgentConfig {
     fn remote_addr(&self) -> String {
-        self.proxy_addrs.first().cloned().unwrap_or_default()
+        let index = NEXT_PROXY_ADDRESS.fetch_add(1, Ordering::Relaxed);
+        self.proxy_address_at(index)
     }
 
     fn username(&self) -> String {
