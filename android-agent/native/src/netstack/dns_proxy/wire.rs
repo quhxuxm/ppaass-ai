@@ -98,14 +98,14 @@ pub(super) async fn handle_dns_response(
     });
 
     write_dns_id(response, request.original_id);
-    let mut tx = netstack_tx.lock().await;
     debug!(
         "Android TUN DNS response writeback: {} -> {} bytes={}",
         request.target,
         request.client,
         response.len()
     );
-    tx.send((response.to_vec(), request.target, request.client))
+    netstack_tx
+        .send((response.to_vec(), request.target, request.client))
         .await
 }
 

@@ -16,6 +16,8 @@ use super::udp::spawn_udp_sessions;
 use crate::error::{AndroidAgentError, Result};
 use crate::fd_device::AndroidTunDevice;
 
+const NETSTACK_PACKET_BUFFER_SIZE: usize = 2048;
+
 struct NetstackGeneration {
     id: u64,
     shutdown: CancellationToken,
@@ -75,6 +77,9 @@ fn start_netstack_generation(
         .enable_tcp(true)
         .enable_udp(true)
         .enable_icmp(true)
+        .stack_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
+        .udp_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
+        .tcp_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
         .mtu(mtu)
         .build()
         .map_err(|e| AndroidAgentError::Connection(format!("build netstack failed: {e}")))?;

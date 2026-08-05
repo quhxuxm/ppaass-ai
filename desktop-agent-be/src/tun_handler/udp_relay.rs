@@ -4,14 +4,13 @@
 //! 按稳定哈希分片到多条 `Address::UdpRelay` 连接上。适合 QUIC 等高并发 UDP，
 //! 能减少频繁建连，同时避免所有 flow 都挤在单条 relay stream 上。
 
-use super::udp::UdpWriter;
+use super::udp_writer::UdpWriter;
 
 mod state;
 
 use crate::telemetry;
 use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
-use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 pub(super) use state::UdpRelay;
 pub use state::{UdpFlowKey, UdpRelayRequest, UdpRelayState, UdpRelayStats};
@@ -254,8 +253,9 @@ async fn handle_udp_response(
     };
 
     let payload_bytes = packet.data.len();
-    let mut s = netstack_tx.lock().await;
-    s.send((packet.data, flow.target, flow.client)).await?;
+    netstack_tx
+        .send((packet.data, flow.target, flow.client))
+        .await?;
     Ok(payload_bytes)
 }
 

@@ -7,12 +7,11 @@
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
-use crate::direct_access::{DirectAccessChecker, address_to_string};
+use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::telemetry;
 use crate::yamux_session::YamuxSessionManager;
 use common::QuicPolicy;
-use futures::SinkExt;
 use protocol::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,12 +22,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use super::direct_domain_cache::DirectDomainCache;
+use super::udp_writer::UdpWriter;
 
 mod direct;
 
 use direct::{drain_dropped_udp, proxy_target_label, relay_direct_udp};
-
-pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 
@@ -149,8 +147,7 @@ pub(super) async fn handle_tun_udp(
 
     if let Some(connect_target) = direct_target {
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
-        let target_str = address_to_string(&address);
-        debug!("TUN UDP 直连 -> {}", target_str);
+        debug!("TUN UDP 直连 -> {}", target_label);
         relay_direct_udp(DirectUdpRelayContext {
             client,
             original_target: target,
@@ -217,8 +214,7 @@ pub(super) async fn handle_tun_udp(
                         read_target, n, target, client
                     );
                     let pkt = buf[..n].to_vec();
-                    let mut s = netstack_tx_r.lock().await;
-                    if let Err(e) = s.send((pkt, target, client)).await {
+                    if let Err(e) = netstack_tx_r.send((pkt, target, client)).await {
                         debug!("UDP 代理回复错误：{e}");
                         break;
                     }

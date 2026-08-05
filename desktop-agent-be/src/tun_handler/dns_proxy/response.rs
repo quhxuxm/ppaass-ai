@@ -36,8 +36,7 @@ pub(super) async fn try_send_cached_dns_response(
         duration_ms: 0,
     });
 
-    let mut writer = netstack_tx.lock().await;
-    if let Err(e) = writer
+    if let Err(e) = netstack_tx
         .send((response, request.target, request.client))
         .await
     {
@@ -141,8 +140,8 @@ pub(super) async fn handle_dns_response(
     });
 
     write_dns_id(response, request.original_id);
-    let mut s = netstack_tx.lock().await;
-    s.send((response.to_vec(), request.target, request.client))
+    netstack_tx
+        .send((response.to_vec(), request.target, request.client))
         .await
 }
 

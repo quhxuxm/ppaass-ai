@@ -6,6 +6,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
+const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+
 pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
     let DirectUdpRelayContext {
         client,
@@ -64,8 +66,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
                 match received {
                     Ok(n) => {
                         let pkt = buf[..n].to_vec();
-                        let mut s = netstack_tx.lock().await;
-                        if let Err(e) = s.send((pkt, original_target, client)).await {
+                        if let Err(e) = netstack_tx.send((pkt, original_target, client)).await {
                             debug!("UDP 直连回复错误：{e}");
                             break;
                         }
@@ -164,6 +165,7 @@ fn bind_direct_udp(
         Some(Protocol::UDP),
     )?;
     bind_socket_to_interface(&socket, Some(bind_interface), target)?;
+    tune_direct_udp_socket(&socket, target);
 
     let bind_addr = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
@@ -174,6 +176,15 @@ fn bind_direct_udp(
     socket.set_nonblocking(true)?;
 
     UdpSocket::from_std(socket.into())
+}
+
+fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {
+    if let Err(error) = socket.set_recv_buffer_size(DIRECT_UDP_SOCKET_BUFFER_SIZE) {
+        debug!(%target, %error, "设置直连 UDP 接收缓冲失败");
+    }
+    if let Err(error) = socket.set_send_buffer_size(DIRECT_UDP_SOCKET_BUFFER_SIZE) {
+        debug!(%target, %error, "设置直连 UDP 发送缓冲失败");
+    }
 }
 
 pub(super) async fn drain_dropped_udp(

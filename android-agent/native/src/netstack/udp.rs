@@ -2,15 +2,13 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
-use futures::{SinkExt, StreamExt};
-use protocol::TransportProtocol;
+use futures::StreamExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
@@ -19,17 +17,20 @@ use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
 use super::udp_relay::UdpRelay;
-use crate::direct_access::{DirectAccessChecker, address_to_string};
+use super::udp_writer::UdpWriter;
+use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::yamux_session::AndroidYamuxSessionManager;
-
-pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
 type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
 
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
+const DIRECT_UDP_SESSION_CHANNEL_SIZE: usize = 256;
+
+mod proxy;
+use proxy::{ProxyUdpRelayContext, relay_proxy_udp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UdpRoute {
@@ -42,6 +43,7 @@ pub enum UdpRoute {
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
+    pub(super) force_direct: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
@@ -58,7 +60,7 @@ pub(super) fn spawn_udp_sessions(
 ) -> JoinHandle<()> {
     spawn_guarded("android udp sessions", async move {
         let (mut udp_rx, udp_tx) = udp_socket.split();
-        let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
+        let udp_tx = UdpWriter::spawn(udp_tx, shutdown.clone());
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
         let dns_proxy = context
             .proxy_dns
@@ -156,7 +158,9 @@ pub(super) fn spawn_udp_sessions(
                             }
                         }
                     }
-                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(
+                        DIRECT_UDP_SESSION_CHANNEL_SIZE,
+                    );
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
 
@@ -165,6 +169,8 @@ pub(super) fn spawn_udp_sessions(
                         tun_networks: context.tun_networks,
                         // 普通 UDP 会话内部不再处理 proxy_dns，防止二次映射到 Address::ProxyDns。
                         proxy_dns: false,
+                        // This task exists only after the ingress classifier selected Direct.
+                        force_direct: true,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_sessions: context.udp_sessions.clone(),
@@ -213,12 +219,13 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
 pub(super) async fn handle_tun_udp(
     client: SocketAddr,
     target: SocketAddr,
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     context: UdpSessionContext,
 ) -> Result<()> {
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
+        force_direct,
         quic_policy,
         netstack_tx,
         udp_sessions,
@@ -250,11 +257,11 @@ pub(super) async fn handle_tun_udp(
         target.to_string()
     };
 
-    let mut direct_target = None;
+    let mut direct_target = (!proxy_dns_request && force_direct).then_some(target);
     let mut direct_label = target_label.clone();
     let proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request {
+    if direct_target.is_none() && !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if direct_checker.has_domain_direct_rules()
@@ -296,8 +303,7 @@ pub(super) async fn handle_tun_udp(
     if route == UdpRoute::Direct
         && let Some(connect_target) = direct_target
     {
-        let target_str = address_to_string(&address);
-        debug!("Android TUN UDP direct -> {}", target_str);
+        debug!("Android TUN UDP direct -> {}", target_label);
         relay_direct_udp(
             client,
             target,
@@ -312,80 +318,22 @@ pub(super) async fn handle_tun_udp(
     }
 
     let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
-    if proxy_dns_request {
-        debug!("Android TUN UDP DNS -> proxy -> {}", target_label);
-    } else {
-        debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
-    }
-    let proxy_io = match udp_sessions
-        .connect_to_target(proxy_address, TransportProtocol::Udp)
-        .await
-    {
-        Ok(proxy_io) => proxy_io,
-        Err(e) => {
-            debug!("Android TUN UDP proxy connect failed {proxy_label}: {e}");
-            return Err(e);
-        }
-    };
-    let (mut reader, mut writer) = tokio::io::split(proxy_io);
-    let idle_sleep = tokio::time::sleep(UDP_SESSION_IDLE);
-    tokio::pin!(idle_sleep);
-    let mut response_buf = vec![0u8; 65535];
-
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            _ = &mut idle_sleep => {
-                debug!("Android UDP proxy session idle; closing -> {}", target_label);
-                break;
-            }
-            maybe_data = rx.recv() => {
-                let Some(data) = maybe_data else {
-                    break;
-                };
-                trace!(
-                    "Android UDP proxy write -> {} bytes={}",
-                    target_label,
-                    data.len()
-                );
-                if let Err(e) = writer.write_all(&data).await {
-                    debug!("Android UDP proxy write failed: {e}");
-                    break;
-                }
-                if let Err(e) = writer.flush().await {
-                    debug!("Android UDP proxy flush failed: {e}");
-                    break;
-                }
-                idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-            }
-            read = reader.read(&mut response_buf) => {
-                match read {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        trace!(
-                            "Android UDP proxy read <- {} bytes={} writeback {} -> {}",
-                            target_label, n, target, client
-                        );
-                        let pkt = response_buf[..n].to_vec();
-                        let mut tx = netstack_tx.lock().await;
-                        if let Err(e) = tx.send((pkt, target, client)).await {
-                            debug!("Android UDP proxy response writeback failed: {e}");
-                            break;
-                        }
-                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-                    }
-                    Err(e) => {
-                        debug!("Android UDP proxy read failed: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
+    relay_proxy_udp(ProxyUdpRelayContext {
+        client,
+        target,
+        target_label,
+        proxy_label,
+        proxy_dns_request,
+        proxy_address,
+        rx,
+        netstack_tx,
+        udp_sessions,
+        shutdown,
+    })
+    .await
 }
 
 mod routing;
 pub use routing::classify_udp_route;
-use routing::*;
+pub(super) use routing::tune_direct_udp_socket;
+use routing::{drain_dropped_udp, proxy_target_label, relay_direct_udp};

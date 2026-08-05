@@ -7,6 +7,8 @@
 use super::*;
 use common::QuicPolicy;
 
+const NETSTACK_PACKET_BUFFER_SIZE: usize = 2048;
+
 struct NetstackGeneration {
     // generation id 只用于日志，方便判断是否经历过重建。
     id: u64,
@@ -81,6 +83,9 @@ fn start_netstack_generation(
         .enable_tcp(true)
         .enable_udp(true)
         .enable_icmp(true)
+        .stack_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
+        .udp_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
+        .tcp_buffer_size(NETSTACK_PACKET_BUFFER_SIZE)
         .mtu(mtu)
         .build()
         .map_err(|e| AgentError::Connection(format!("构建 netstack 失败：{e}")))?;

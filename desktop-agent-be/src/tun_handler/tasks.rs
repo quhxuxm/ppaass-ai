@@ -13,6 +13,7 @@ use super::tcp::handle_tun_tcp;
 use super::udp::UdpSessionContext;
 use super::udp::handle_tun_udp;
 use super::udp_relay::UdpRelay;
+use super::udp_writer::UdpWriter;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::StreamExt;
 pub(super) use packet_bridge::spawn_packet_bridge;
@@ -27,6 +28,7 @@ use tracing::{debug, warn};
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
 type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
+const DIRECT_UDP_SESSION_CHANNEL_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UdpRoute {
@@ -77,7 +79,7 @@ pub(super) fn spawn_udp_sessions(
     spawn_guarded("desktop udp sessions", async move {
         // UDP 以五元组近似会话化，同一 source/target 复用一个处理任务。
         let (mut udp_rx, udp_tx) = udp_socket.split();
-        let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
+        let udp_tx = UdpWriter::spawn(udp_tx, shutdown.clone());
         let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
@@ -212,7 +214,9 @@ pub(super) fn spawn_udp_sessions(
                         quic_stats.record_direct();
                     }
                     // 新会话先入表，再发送首包，避免首包在任务启动前丢失。
-                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(
+                        DIRECT_UDP_SESSION_CHANNEL_SIZE,
+                    );
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
 
@@ -222,7 +226,9 @@ pub(super) fn spawn_udp_sessions(
                         // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
                         // proxy_dns 标记，避免会话内部二次映射到 Address::ProxyDns。
                         proxy_dns: false,
-                        force_direct: !context.proxy_udp,
+                        // This task is created only after classify_udp_route returned Direct.
+                        // Preserve that decision instead of repeating rule/cache lookups.
+                        force_direct: true,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),

@@ -277,9 +277,12 @@ impl DirectAccessChecker {
     }
 
     fn is_force_proxy_domain(host: &str) -> bool {
-        FORCE_PROXY_DOMAIN_SUFFIXES
-            .iter()
-            .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+        FORCE_PROXY_DOMAIN_SUFFIXES.iter().any(|suffix| {
+            host == *suffix
+                || host
+                    .strip_suffix(suffix)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
     }
 
     fn match_ip(rule: &ParsedRule, ip: &IpAddr) -> bool {

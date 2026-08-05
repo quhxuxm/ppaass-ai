@@ -250,6 +250,8 @@ fn test_google_service_domains_are_forced_proxy_in_rules_mode() {
         port: 443,
     }));
     assert!(checker.is_direct_domain("example.cn"));
+    assert!(checker.is_direct_domain("notgoogle.com"));
+    assert!(checker.is_direct_domain("google.com.example.com"));
 }
 
 #[test]

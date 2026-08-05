@@ -92,8 +92,9 @@ pub(super) async fn handle_udp_relay_response(
     };
 
     let payload_bytes = packet.data.len();
-    let mut tx = netstack_tx.lock().await;
-    tx.send((packet.data, flow.target, flow.client)).await?;
+    netstack_tx
+        .send((packet.data, flow.target, flow.client))
+        .await?;
     Ok(payload_bytes)
 }
 

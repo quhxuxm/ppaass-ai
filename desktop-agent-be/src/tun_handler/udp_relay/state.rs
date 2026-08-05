@@ -15,7 +15,7 @@ use common::spawn_guarded;
 
 use crate::yamux_session::YamuxSessionManager;
 
-use super::super::udp::UdpWriter;
+use super::super::udp_writer::UdpWriter;
 use super::{
     UDP_FLOW_TTL, UDP_RELAY_CHANNEL_SIZE, UDP_RELAY_SHARD_COUNT, run_udp_relay,
     spawn_udp_relay_stats_logger,

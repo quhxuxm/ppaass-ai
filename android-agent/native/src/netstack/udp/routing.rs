@@ -56,8 +56,7 @@ pub(super) async fn relay_direct_udp(
                 match received {
                     Ok(n) => {
                         let pkt = response_buf[..n].to_vec();
-                        let mut tx = netstack_tx.lock().await;
-                        if let Err(e) = tx.send((pkt, original_target, client)).await {
+                        if let Err(e) = netstack_tx.send((pkt, original_target, client)).await {
                             debug!("Android UDP direct response writeback failed: {e}");
                             break;
                         }
@@ -95,7 +94,7 @@ pub(super) fn bind_direct_udp(target: SocketAddr) -> std::io::Result<UdpSocket> 
     UdpSocket::from_std(socket.into())
 }
 
-pub(super) fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {
+pub(in crate::netstack) fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {
     if let Err(err) = socket.set_recv_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
         debug!("Android TUN UDP direct recv buffer setup failed target={target}: {err}");
     }

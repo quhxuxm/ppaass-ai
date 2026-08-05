@@ -6,11 +6,10 @@
 //! 在后续 TCP/UDP IP 连接上还原域名规则。
 
 use super::direct_domain_cache::DirectDomainCache;
-use super::udp::UdpWriter;
+use super::udp_writer::UdpWriter;
 use crate::telemetry::{self, DnsResolutionRecord};
 use crate::yamux_session::YamuxSessionManager;
 use common::spawn_guarded;
-use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
 use std::collections::HashMap;
 use std::convert::TryInto;

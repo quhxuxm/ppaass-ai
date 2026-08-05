@@ -6,6 +6,7 @@ mod supervisor;
 mod tcp;
 mod udp;
 mod udp_relay;
+mod udp_writer;
 
 #[doc(hidden)]
 pub use direct_domain_cache::{DirectDomainCache, MAX_CACHE_IPS, MAX_DOMAINS_PER_IP};

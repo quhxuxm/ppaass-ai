@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{dns::parse_dns_query_packet, spawn_guarded};
-use futures::SinkExt;
 use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -18,7 +17,7 @@ use tracing::{debug, warn};
 
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
-use super::udp::UdpWriter;
+use super::udp_writer::UdpWriter;
 use crate::error::Result;
 use crate::traffic_stats::{self, DnsResolutionRecord};
 

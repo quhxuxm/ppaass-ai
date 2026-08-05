@@ -25,6 +25,7 @@ pub mod tasks;
 mod tcp;
 mod udp;
 pub mod udp_relay;
+mod udp_writer;
 
 use crate::config::TunConfig;
 use crate::direct_access::DirectAccessChecker;

@@ -14,6 +14,7 @@ use crate::yamux_session::YamuxSessionManager;
 use common::{BindInterface, bind_socket_to_interface};
 use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,6 +24,7 @@ use tracing::debug;
 
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const DIRECT_TCP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
@@ -93,20 +95,22 @@ pub(super) async fn handle_tun_tcp(
 
     if let Some(connect_target) = direct_target {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
-        let target_str = format!("{} (原始目标 {})", connect_target, target);
-        let mut target_stream = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
+        let target_str = target_label.as_str();
+        let direct_connect = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
             target: connect_target,
-            target_str: &target_str,
+            target_str,
             direct_egress: direct_egress.as_ref(),
             tcp_sessions: tcp_sessions.as_ref(),
             udp_sessions: udp_sessions.as_ref(),
             tun_networks,
-        })
-        .await?;
+        });
+        let (mut target_stream, prefetched) =
+            connect_with_tun_prefetch(&mut client, direct_connect, target_str).await?;
+        write_prefetched(&mut target_stream, &prefetched).await?;
         match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
-            TcpRelayOptions::standard(&target_str),
+            TcpRelayOptions::standard(target_str),
         )
         .await
         {
@@ -149,8 +153,7 @@ pub(super) async fn handle_tun_tcp(
         // TUN TCP 三次握手已经由 netstack 接住；如果等待 proxy 建连期间完全不读本地流，
         // 浏览器的 TLS/HTTP2 首包会卡在接收窗口里。先缓存少量首包，远端通道建立后
         // 立即写出，可以降低视频分片连接在建连阶段的抖动。
-        proxy_io.write_all(&prefetched).await?;
-        proxy_io.flush().await?;
+        write_prefetched(&mut proxy_io, &prefetched).await?;
     }
     match relay_tcp_bidirectional(
         &mut client,
@@ -186,44 +189,71 @@ async fn connect_proxy_stream_with_tun_prefetch(
     proxy_address: protocol::Address,
     label: &str,
 ) -> Result<(crate::yamux_session::YamuxTargetStream, Vec<u8>)> {
-    let mut connect =
-        Box::pin(tcp_sessions.connect_to_target(proxy_address, TransportProtocol::Tcp));
+    connect_with_tun_prefetch(
+        client,
+        tcp_sessions.connect_to_target(proxy_address, TransportProtocol::Tcp),
+        label,
+    )
+    .await
+}
+
+async fn connect_with_tun_prefetch<T, F>(
+    client: &mut netstack_smoltcp::TcpStream,
+    connect: F,
+    label: &str,
+) -> Result<(T, Vec<u8>)>
+where
+    F: Future<Output = Result<T>>,
+{
+    let mut connect = Box::pin(connect);
     let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
+    let mut chunk = vec![0u8; TUN_TCP_PREFETCH_CHUNK];
 
     loop {
         if prefetched.len() >= TUN_TCP_PREFETCH_LIMIT {
             debug!(
-                "TUN TCP 预读达到 {} 字节上限，暂停读取等待 proxy 建连：{}",
+                "TUN TCP 预读达到 {} 字节上限，暂停读取等待远端建连：{}",
                 TUN_TCP_PREFETCH_LIMIT, label
             );
             let connected = connect.await?;
             return Ok((connected, prefetched));
         }
 
-        let remaining = TUN_TCP_PREFETCH_LIMIT - prefetched.len();
-        let mut buf = vec![0u8; remaining.min(TUN_TCP_PREFETCH_CHUNK)];
+        let read_limit = (TUN_TCP_PREFETCH_LIMIT - prefetched.len()).min(chunk.len());
         tokio::select! {
             connected = &mut connect => {
                 return Ok((connected?, prefetched));
             }
-            read = client.read(&mut buf) => {
+            read = client.read(&mut chunk[..read_limit]) => {
                 let read = read?;
                 if read == 0 {
-                    // 客户端在 proxy 目标通道建好前已经关闭；没有必要继续建立远端连接。
+                    // 客户端在远端通道建好前已经关闭；没有必要继续建立连接。
                     // 如果已经预读到数据，则仍等待 proxy 连接并把这些数据补写出去，
                     // 后续 copy_bidirectional 会自然观察到客户端 EOF 并传播半关闭。
                     if prefetched.is_empty() {
                         return Err(AgentError::Connection(format!(
-                            "TUN TCP 客户端在 proxy 建连前关闭：{label}"
+                            "TUN TCP 客户端在远端建连前关闭：{label}"
                         )));
                     }
                     let connected = connect.await?;
                     return Ok((connected, prefetched));
                 }
-                prefetched.extend_from_slice(&buf[..read]);
+                prefetched.extend_from_slice(&chunk[..read]);
             }
         }
     }
+}
+
+async fn write_prefetched<W>(remote: &mut W, prefetched: &[u8]) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if prefetched.is_empty() {
+        return Ok(());
+    }
+    remote.write_all(prefetched).await?;
+    remote.flush().await?;
+    Ok(())
 }
 
 async fn connect_direct_tcp(
@@ -237,6 +267,7 @@ async fn connect_direct_tcp(
         Some(Protocol::TCP),
     )?;
     bind_socket_to_interface(&socket, bind_interface, target)?;
+    tune_direct_tcp_socket(&socket, target);
     enable_direct_tcp_keepalive(&socket, target);
     socket.set_nonblocking(true)?;
 
@@ -308,7 +339,16 @@ fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {
     if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
         debug!("TUN TCP 直连 keepalive 设置失败 target={target}: {err}");
     }
-    if let Err(err) = socket.set_tcp_nodelay(true) {
-        debug!("TUN TCP 直连 TCP_NODELAY 设置失败 target={target}: {err}");
+}
+
+fn tune_direct_tcp_socket(socket: &Socket, target: SocketAddr) {
+    if let Err(error) = socket.set_tcp_nodelay(true) {
+        debug!("TUN TCP 直连 TCP_NODELAY 设置失败 target={target}: {error}");
+    }
+    if let Err(error) = socket.set_recv_buffer_size(DIRECT_TCP_SOCKET_BUFFER_SIZE) {
+        debug!("TUN TCP 直连接收缓冲设置失败 target={target}: {error}");
+    }
+    if let Err(error) = socket.set_send_buffer_size(DIRECT_TCP_SOCKET_BUFFER_SIZE) {
+        debug!("TUN TCP 直连发送缓冲设置失败 target={target}: {error}");
     }
 }

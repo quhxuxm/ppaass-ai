@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use common::spawn_guarded;
-use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -15,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::ForwardContext;
-use super::udp::UdpWriter;
+use super::udp_writer::UdpWriter;
 use crate::error::Result;
 
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;

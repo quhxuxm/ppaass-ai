@@ -39,8 +39,10 @@ pub(super) async fn try_send_cached_dns_response(
         duration_ms: 0,
     });
 
-    let mut tx = netstack_tx.lock().await;
-    if let Err(e) = tx.send((response, request.target, request.client)).await {
+    if let Err(e) = netstack_tx
+        .send((response, request.target, request.client))
+        .await
+    {
         debug!("Android TUN DNS cached response writeback failed: {e}");
     }
     true
@@ -119,8 +121,7 @@ pub(super) async fn try_send_direct_dns_response(
         started_at,
     );
 
-    let mut tx = netstack_tx.lock().await;
-    if let Err(e) = tx
+    if let Err(e) = netstack_tx
         .send((response.split_off(0), request.target, request.client))
         .await
     {
@@ -145,6 +146,7 @@ pub(super) fn bind_direct_dns_socket(upstream: SocketAddr) -> io::Result<UdpSock
         Some(Protocol::UDP),
     )?;
     protect_direct_socket(&socket)?;
+    super::super::udp::tune_direct_udp_socket(&socket, upstream);
     let bind_addr: SocketAddr = if upstream.is_ipv4() {
         "0.0.0.0:0".parse().expect("valid IPv4 bind address")
     } else {
