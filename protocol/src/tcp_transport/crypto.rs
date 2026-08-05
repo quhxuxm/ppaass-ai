@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
@@ -122,10 +122,78 @@ struct DirectionState {
     nonce_prefix: [u8; NONCE_PREFIX_LEN],
 }
 
-#[derive(Debug)]
 struct SequenceState {
-    next: u64,
-    exhausted: bool,
+    next: AtomicU64,
+    exhausted: AtomicBool,
+}
+
+impl SequenceState {
+    fn new(next: u64) -> Self {
+        Self {
+            next: AtomicU64::new(next),
+            exhausted: AtomicBool::new(false),
+        }
+    }
+
+    fn reserve(&self, error: impl Fn() -> ProtocolError) -> Result<u64> {
+        loop {
+            if self.exhausted.load(Ordering::Relaxed) {
+                return Err(error());
+            }
+            let current = self.next.load(Ordering::Relaxed);
+            if current == u64::MAX {
+                if self
+                    .exhausted
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return Ok(current);
+                }
+                continue;
+            }
+            if self
+                .next
+                .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Ok(current);
+            }
+        }
+    }
+
+    fn expected(&self, wire_sequence: u64) -> Result<()> {
+        if self.exhausted.load(Ordering::Relaxed) {
+            return Err(ProtocolError::Decryption(
+                "TCP receive sequence exhausted".to_string(),
+            ));
+        }
+        let expected = self.next.load(Ordering::Relaxed);
+        if wire_sequence != expected {
+            return Err(ProtocolError::InvalidMessage(format!(
+                "unexpected TCP frame sequence: expected {expected}, got {wire_sequence}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn commit(&self, sequence: u64) -> Result<()> {
+        let committed = if sequence == u64::MAX {
+            self.exhausted
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        } else {
+            self.next
+                .compare_exchange(sequence, sequence + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        };
+        if committed {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidMessage(
+                "TCP receive sequence changed concurrently".to_string(),
+            ))
+        }
+    }
 }
 
 /// Directional AEAD state shared by the framed encoder and decoder.
@@ -133,8 +201,8 @@ pub struct TcpSessionCipher {
     role: TcpSessionRole,
     send: DirectionState,
     receive: DirectionState,
-    send_sequence: Mutex<SequenceState>,
-    receive_sequence: Mutex<SequenceState>,
+    send_sequence: SequenceState,
+    receive_sequence: SequenceState,
 }
 
 impl std::fmt::Debug for TcpSessionCipher {
@@ -200,14 +268,8 @@ impl TcpSessionCipher {
             role,
             send,
             receive,
-            send_sequence: Mutex::new(SequenceState {
-                next: next_send_sequence,
-                exhausted: false,
-            }),
-            receive_sequence: Mutex::new(SequenceState {
-                next: next_receive_sequence,
-                exhausted: false,
-            }),
+            send_sequence: SequenceState::new(next_send_sequence),
+            receive_sequence: SequenceState::new(next_receive_sequence),
         }
     }
 
@@ -217,15 +279,12 @@ impl TcpSessionCipher {
         compression: u8,
         plaintext: &[u8],
     ) -> Result<(u64, Vec<u8>)> {
-        let mut sequence = self.send_sequence.lock().map_err(|_| {
-            ProtocolError::Encryption("TCP send sequence state is unavailable".to_string())
-        })?;
-        if sequence.exhausted {
-            return Err(ProtocolError::Encryption(
-                "TCP send sequence exhausted".to_string(),
-            ));
-        }
-        let current = sequence.next;
+        // Reserve before encryption so concurrent writers never reuse an AEAD
+        // nonce. Encryption errors are fatal to the framed connection, so a
+        // reserved sequence does not need to be rolled back.
+        let current = self
+            .send_sequence
+            .reserve(|| ProtocolError::Encryption("TCP send sequence exhausted".to_string()))?;
         let nonce = make_nonce(self.send.nonce_prefix, current);
         let aad = frame_aad(self.send.direction, message_type, compression, current);
         let ciphertext = self
@@ -239,7 +298,6 @@ impl TcpSessionCipher {
                 },
             )
             .map_err(|_| ProtocolError::Encryption("TCP frame encryption failed".to_string()))?;
-        advance_sequence(&mut sequence);
         Ok((current, ciphertext))
     }
 
@@ -250,20 +308,7 @@ impl TcpSessionCipher {
         wire_sequence: u64,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
-        let mut sequence = self.receive_sequence.lock().map_err(|_| {
-            ProtocolError::Decryption("TCP receive sequence state is unavailable".to_string())
-        })?;
-        if sequence.exhausted {
-            return Err(ProtocolError::Decryption(
-                "TCP receive sequence exhausted".to_string(),
-            ));
-        }
-        if wire_sequence != sequence.next {
-            return Err(ProtocolError::InvalidMessage(format!(
-                "unexpected TCP frame sequence: expected {}, got {wire_sequence}",
-                sequence.next
-            )));
-        }
+        self.receive_sequence.expected(wire_sequence)?;
         let nonce = make_nonce(self.receive.nonce_prefix, wire_sequence);
         let aad = frame_aad(
             self.receive.direction,
@@ -284,16 +329,9 @@ impl TcpSessionCipher {
             .map_err(|_| {
                 ProtocolError::AuthenticationFailed("TCP frame authentication failed".to_string())
             })?;
-        advance_sequence(&mut sequence);
+        // Invalid ciphertext must not consume the expected receive sequence.
+        self.receive_sequence.commit(wire_sequence)?;
         Ok(plaintext)
-    }
-}
-
-fn advance_sequence(sequence: &mut SequenceState) {
-    if sequence.next == u64::MAX {
-        sequence.exhausted = true;
-    } else {
-        sequence.next += 1;
     }
 }
 

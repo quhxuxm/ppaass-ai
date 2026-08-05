@@ -89,11 +89,9 @@ where
     let client_nonce = random_bytes();
     let username = config.username();
     let timestamp = crate::current_timestamp();
-    let private_key_pem = config
-        .private_key_pem()
+    let rsa = config
+        .private_key_pair()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let rsa = RsaKeyPair::from_private_key_pem(&private_key_pem)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     let digest = udp_auth_proof_digest(&session_id, &username, timestamp, &client_nonce);
     let proof = rsa
         .sign_pss_sha256(&digest)

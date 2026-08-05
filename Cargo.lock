@@ -550,6 +550,7 @@ dependencies = [
  "protocol",
  "rand 0.10.1",
  "serde",
+ "sha2 0.11.0",
  "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
@@ -2610,6 +2611,7 @@ name = "proxy-entry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "axum",
  "bytes",

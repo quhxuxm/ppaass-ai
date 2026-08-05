@@ -18,6 +18,7 @@ use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::StreamExt;
 pub(super) use packet_bridge::spawn_packet_bridge;
 pub use packet_bridge::tun_packet_is_safe_for_netstack;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +28,7 @@ use tracing::{debug, warn};
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
-type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
+type UdpSessions = HashMap<UdpSessionKey, UdpSessionTx>;
 const DIRECT_UDP_SESSION_CHANNEL_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,7 +81,10 @@ pub(super) fn spawn_udp_sessions(
         // UDP 以五元组近似会话化，同一 source/target 复用一个处理任务。
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = UdpWriter::spawn(udp_tx, shutdown.clone());
-        let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
+        // Only this dispatcher mutates the map. Flow tasks report completion
+        // through a channel, avoiding a DashMap shard lock on every UDP packet.
+        let mut sessions = UdpSessions::new();
+        let (session_closed_tx, mut session_closed_rx) = tokio::sync::mpsc::unbounded_channel();
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
             DnsProxy::spawn(
@@ -105,6 +109,11 @@ pub(super) fn spawn_udp_sessions(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                closed = session_closed_rx.recv() => {
+                    if let Some(key) = closed {
+                        sessions.remove(&key);
+                    }
+                }
                 msg = udp_rx.next() => {
                     let Some((data, source_addr, target_addr)) = msg else { break };
                     // 只有端口和 DNS 协议结构都匹配时才进入 DnsProxy。
@@ -146,7 +155,7 @@ pub(super) fn spawn_udp_sessions(
 
                     let key = (source_addr, target_addr);
                     // 已存在的 direct 会话优先复用，避免域名缓存过期后把同一 UDP 流切到 proxy。
-                    if let Some(tx) = sessions.get(&key).map(|t| t.clone()) {
+                    if let Some(tx) = sessions.get(&key).cloned() {
                         if target_addr.port() == 443 {
                             quic_stats.record_direct();
                         }
@@ -220,7 +229,7 @@ pub(super) fn spawn_udp_sessions(
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
 
-                    let sessions_c = sessions.clone();
+                    let session_closed_tx = session_closed_tx.clone();
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
                         // DNS 查询已经在上面的分流点单独处理；普通 UDP 会话必须关闭
@@ -250,7 +259,7 @@ pub(super) fn spawn_udp_sessions(
                         {
                             debug!("TUN UDP 会话结束：{e}");
                         }
-                        sessions_c.remove(&key);
+                        let _ = session_closed_tx.send(key);
                     });
                 }
             }

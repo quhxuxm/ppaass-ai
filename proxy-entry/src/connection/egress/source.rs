@@ -1,24 +1,25 @@
+use arc_swap::ArcSwapOption;
 use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, Interface, get_if_addrs};
+use parking_lot::Mutex;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 const IF_ADDRS_CACHE_TTL: Duration = Duration::from_secs(2);
 
-static IF_ADDRS_CACHE: LazyLock<RwLock<InterfaceAddrCache>> =
-    LazyLock::new(|| RwLock::new(InterfaceAddrCache::default()));
+static IF_ADDRS_CACHE: LazyLock<ArcSwapOption<InterfaceAddrCache>> =
+    LazyLock::new(ArcSwapOption::empty);
+static IF_ADDRS_REFRESH: Mutex<()> = Mutex::new(());
 
-#[derive(Default)]
 struct InterfaceAddrCache {
-    interfaces: Vec<Interface>,
-    refreshed_at: Option<Instant>,
+    interfaces: Arc<Vec<Interface>>,
+    refreshed_at: Instant,
 }
 
 impl InterfaceAddrCache {
     fn is_fresh(&self) -> bool {
-        self.refreshed_at
-            .is_some_and(|refreshed_at| refreshed_at.elapsed() < IF_ADDRS_CACHE_TTL)
+        self.refreshed_at.elapsed() < IF_ADDRS_CACHE_TTL
     }
 }
 
@@ -49,33 +50,30 @@ pub(super) fn interface_bind_addrs(
     }
 }
 
-pub(super) fn cached_if_addrs() -> io::Result<Vec<Interface>> {
-    if let Ok(cache) = IF_ADDRS_CACHE.read()
-        && cache.is_fresh()
-    {
+pub(super) fn cached_if_addrs() -> io::Result<Arc<Vec<Interface>>> {
+    if let Some(cache) = IF_ADDRS_CACHE.load_full().filter(|cache| cache.is_fresh()) {
         return Ok(cache.interfaces.clone());
     }
 
-    let mut cache = IF_ADDRS_CACHE
-        .write()
-        .map_err(|_| io::Error::other("网卡地址缓存锁已损坏"))?;
-    if cache.is_fresh() {
+    let _refresh = IF_ADDRS_REFRESH.lock();
+    if let Some(cache) = IF_ADDRS_CACHE.load_full().filter(|cache| cache.is_fresh()) {
         return Ok(cache.interfaces.clone());
     }
-    refresh_if_addrs_locked(&mut cache)
+    refresh_if_addrs_locked()
 }
 
-pub(super) fn refresh_if_addrs() -> io::Result<Vec<Interface>> {
-    let mut cache = IF_ADDRS_CACHE
-        .write()
-        .map_err(|_| io::Error::other("网卡地址缓存锁已损坏"))?;
-    refresh_if_addrs_locked(&mut cache)
+pub(super) fn refresh_if_addrs() -> io::Result<Arc<Vec<Interface>>> {
+    let _refresh = IF_ADDRS_REFRESH.lock();
+    refresh_if_addrs_locked()
 }
 
-fn refresh_if_addrs_locked(cache: &mut InterfaceAddrCache) -> io::Result<Vec<Interface>> {
-    cache.interfaces = get_if_addrs()?;
-    cache.refreshed_at = Some(Instant::now());
-    Ok(cache.interfaces.clone())
+fn refresh_if_addrs_locked() -> io::Result<Arc<Vec<Interface>>> {
+    let interfaces = Arc::new(get_if_addrs()?);
+    IF_ADDRS_CACHE.store(Some(Arc::new(InterfaceAddrCache {
+        interfaces: interfaces.clone(),
+        refreshed_at: Instant::now(),
+    })));
+    Ok(interfaces)
 }
 
 fn interface_bind_addrs_from_snapshot(

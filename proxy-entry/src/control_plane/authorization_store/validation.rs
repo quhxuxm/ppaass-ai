@@ -37,7 +37,7 @@ fn validate_key(username: &str, public_key_pem: &str, key_version: i64) -> Resul
             "Registry 授权快照中的用户 {username} key_version 必须大于等于 1"
         )));
     }
-    protocol::RsaKeyPair::from_public_key_pem(public_key_pem).map_err(|error| {
+    protocol::crypto::parse_public_key_pem_cached(public_key_pem).map_err(|error| {
         ProxyError::ControlPlane(format!(
             "Registry 授权快照中的用户 {username} 公钥无效：{error}"
         ))

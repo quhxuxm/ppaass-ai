@@ -1,13 +1,14 @@
 use super::source::{cached_if_addrs, iface_addr_matches_dst, refresh_if_addrs};
+use arc_swap::ArcSwap;
 use if_addrs::Interface;
 use route_manager::{Route, RouteManager};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::RwLock;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 pub(super) struct AutoInterfaceSelector {
-    routes: RwLock<Vec<Route>>,
+    routes: ArcSwap<Vec<Route>>,
 }
 
 impl AutoInterfaceSelector {
@@ -28,7 +29,7 @@ impl AutoInterfaceSelector {
             }
         };
         Ok(Self {
-            routes: RwLock::new(routes),
+            routes: ArcSwap::from_pointee(routes),
         })
     }
 
@@ -36,13 +37,8 @@ impl AutoInterfaceSelector {
         // 根据目标地址族，从缓存路由表里挑选对应的默认路由出口。
         // 登录自启时 macOS 可能先启动进程、后建立默认路由；缓存失效时刷新一次。
         let dst_ip = dst.ip();
-        let cached_result = {
-            let routes = self
-                .routes
-                .read()
-                .map_err(|_| io::Error::other("auto 出站路由缓存锁已损坏"))?;
-            auto_interface_for_dst(&routes, dst_ip)
-        };
+        let routes = self.routes.load();
+        let cached_result = auto_interface_for_dst(&routes, dst_ip);
         match cached_result {
             Ok(interface) => return Ok(interface),
             Err(err) if should_refresh_routes(&err) => {
@@ -53,13 +49,7 @@ impl AutoInterfaceSelector {
 
         let routes = read_routes()?;
         let refreshed_result = auto_interface_for_dst(&routes, dst_ip);
-        {
-            let mut cached_routes = self
-                .routes
-                .write()
-                .map_err(|_| io::Error::other("auto 出站路由缓存锁已损坏"))?;
-            *cached_routes = routes;
-        }
+        self.routes.store(Arc::new(routes));
 
         match refreshed_result {
             Ok(interface) => {

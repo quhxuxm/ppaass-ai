@@ -30,6 +30,7 @@ bytes.workspace = true
 toml.workspace = true
 time.workspace = true
 async-trait.workspace = true
+arc-swap.workspace = true
 parking_lot.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true

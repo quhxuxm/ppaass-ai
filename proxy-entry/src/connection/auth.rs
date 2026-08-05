@@ -6,7 +6,9 @@
 //! 记录层密钥；认证成功后的协议帧全部受 AEAD 保护。
 
 use super::*;
-use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
+use protocol::crypto::{
+    encrypt_oaep_sha256_labelled, parse_public_key_pem_cached, verify_pss_sha256,
+};
 use protocol::tcp_transport::{
     TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TCP_OAEP_LABEL, TCP_SERVER_NONCE_LEN,
     TCP_SESSION_ID_LEN, TcpSessionCipher, TcpSessionRole, TcpSessionSecret,
@@ -141,7 +143,7 @@ impl ServerConnection {
         // Agent 对域分离 transcript 做 RSA-PSS-SHA256 签名；服务端不再接受
         // 旧版“私钥加密、公钥解密”的原始 RSA 线协议。账号状态只能在这个
         // 私钥证明通过后返回，否则已知用户名会变成状态枚举接口。
-        let user_public_key = match RsaKeyPair::from_public_key_pem(&user_config.public_key_pem) {
+        let user_public_key = match parse_public_key_pem_cached(&user_config.public_key_pem) {
             Ok(public_key) => public_key,
             Err(error) => {
                 self.send_auth_error().await?;

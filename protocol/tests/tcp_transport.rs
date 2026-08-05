@@ -7,6 +7,7 @@ use protocol::tcp_transport::{
     decode_tcp_session_secret, encode_tcp_session_secret, tcp_auth_request_transcript,
     tcp_auth_transcript_hash,
 };
+use std::sync::Arc;
 
 type CipherInputs = (
     [u8; TCP_MASTER_SECRET_LEN],
@@ -282,4 +283,24 @@ fn sequence_exhaustion_fails_closed() {
             .open(MessageType::Data, 0, u64::MAX, &final_frame.1)
             .is_err()
     );
+}
+
+#[test]
+fn concurrent_seals_reserve_unique_sequences_without_a_mutex() {
+    let (agent, _) = cipher_pair();
+    let agent = Arc::new(agent);
+    let mut workers = Vec::new();
+    for index in 0..32_u8 {
+        let agent = agent.clone();
+        workers.push(std::thread::spawn(move || {
+            agent.seal(MessageType::Data, 0, &[index]).unwrap().0
+        }));
+    }
+
+    let mut sequences = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    sequences.sort_unstable();
+    assert_eq!(sequences, (0..32).collect::<Vec<_>>());
 }

@@ -1,5 +1,7 @@
 use super::*;
 
+const OUTBOUND_BATCH_LIMIT: usize = 32;
+
 pub(in crate::native_udp) enum ChannelEvent {
     ConnectResult {
         flow_id: u64,
@@ -252,6 +254,12 @@ pub async fn run_session(
             outbound = outbound_rx.recv() => {
                 let Some(message) = outbound else { continue };
                 send_session_message(&context, &mut codec, &message).await?;
+                // Amortize select/task wakeups for bursty target responses while
+                // keeping receive, expiry, and authorization checks responsive.
+                for _ in 1..OUTBOUND_BATCH_LIMIT {
+                    let Ok(message) = outbound_rx.try_recv() else { break };
+                    send_session_message(&context, &mut codec, &message).await?;
+                }
             }
             event = channel_event_rx.recv() => {
                 let Some(event) = event else { continue };

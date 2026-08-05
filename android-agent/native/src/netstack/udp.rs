@@ -4,6 +4,7 @@ use std::sync::Arc;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
 use futures::StreamExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::collections::HashMap;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
@@ -24,7 +25,7 @@ use crate::yamux_session::AndroidYamuxSessionManager;
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
-type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
+type UdpSessions = HashMap<UdpSessionKey, UdpSessionTx>;
 
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 const DIRECT_UDP_SESSION_CHANNEL_SIZE: usize = 256;
@@ -61,7 +62,10 @@ pub(super) fn spawn_udp_sessions(
     spawn_guarded("android udp sessions", async move {
         let (mut udp_rx, udp_tx) = udp_socket.split();
         let udp_tx = UdpWriter::spawn(udp_tx, shutdown.clone());
-        let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
+        // The dispatcher owns the map; flow tasks send completion notices.
+        // This removes a DashMap shard lock from every proxied UDP packet.
+        let mut sessions = UdpSessions::new();
+        let (session_closed_tx, mut session_closed_rx) = tokio::sync::mpsc::unbounded_channel();
         let dns_proxy = context
             .proxy_dns
             .then(|| DnsProxy::spawn(context.clone(), udp_tx.clone(), shutdown.clone()));
@@ -72,6 +76,11 @@ pub(super) fn spawn_udp_sessions(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                closed = session_closed_rx.recv() => {
+                    if let Some(key) = closed {
+                        sessions.remove(&key);
+                    }
+                }
                 message = udp_rx.next() => {
                     let Some((data, source, target)) = message else { break };
                     // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
@@ -103,7 +112,7 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let key = (source, target);
-                    if let Some(tx) = sessions.get(&key).map(|tx| tx.clone()) {
+                    if let Some(tx) = sessions.get(&key).cloned() {
                         if target.port() == 443 {
                             quic_stats.record_direct();
                         }
@@ -164,7 +173,7 @@ pub(super) fn spawn_udp_sessions(
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
 
-                    let sessions_c = sessions.clone();
+                    let session_closed_tx = session_closed_tx.clone();
                     let session_context = UdpSessionContext {
                         tun_networks: context.tun_networks,
                         // 普通 UDP 会话内部不再处理 proxy_dns，防止二次映射到 Address::ProxyDns。
@@ -182,7 +191,7 @@ pub(super) fn spawn_udp_sessions(
                         if let Err(e) = handle_tun_udp(source, target, rx, session_context).await {
                             debug!("Android TUN UDP direct session ended: {e}");
                         }
-                        sessions_c.remove(&key);
+                        let _ = session_closed_tx.send(key);
                     });
                 }
             }

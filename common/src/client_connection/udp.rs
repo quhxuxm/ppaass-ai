@@ -8,7 +8,7 @@ use protocol::udp_transport::{
     UDP_MAX_DATAGRAM_SIZE, UDP_OAEP_LABEL, UdpAuthInit, UdpSessionCodec, UdpSessionMessage,
     UdpSessionRole, decode_auth_ok, decode_session_secret, encode_auth_init, udp_auth_proof_digest,
 };
-use protocol::{Address, RsaKeyPair, TransportProtocol};
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
 use std::io;
@@ -35,6 +35,7 @@ use session::{authenticate_udp_session, connect_udp_socket};
 pub use stream::UdpClientStream;
 
 const SESSION_COMMAND_CAPACITY: usize = 1024;
+const SESSION_COMMAND_BATCH_LIMIT: usize = 32;
 const STREAM_INBOUND_CAPACITY: usize = 256;
 const AUTH_INITIAL_RETRY: Duration = Duration::from_millis(200);
 const CONTROL_MAX_RETRY: Duration = Duration::from_secs(2);
@@ -230,28 +231,13 @@ async fn run_session_driver(
         tokio::select! {
             command = command_rx.recv() => {
                 let Some(command) = command else { return Ok(()) };
-                let message = match command {
-                    ClientCommand::Register { flow_id, inbound_tx } => {
-                        streams.insert(flow_id, inbound_tx);
-                        None
-                    }
-                    ClientCommand::OpenData { flow_id, address, data } => {
-                        streams.contains_key(&flow_id).then_some(UdpSessionMessage::OpenData {
-                            flow_id,
-                            address,
-                            data,
-                        })
-                    }
-                    ClientCommand::Data { flow_id, data } => {
-                        streams.contains_key(&flow_id).then_some(UdpSessionMessage::Data { flow_id, data })
-                    }
-                    ClientCommand::Close { flow_id } => {
-                        streams.remove(&flow_id);
-                        Some(UdpSessionMessage::Close { flow_id, reason: None })
-                    }
-                };
-                if let Some(message) = message {
-                    send_message(&socket, &mut codec, &message).await?;
+                handle_client_command(&socket, &mut codec, &mut streams, command).await?;
+                // Drain only commands that are already queued. This amortizes
+                // select/task wakeups under high UDP packet rates without
+                // waiting to fill a batch or starving socket receives.
+                for _ in 1..SESSION_COMMAND_BATCH_LIMIT {
+                    let Ok(command) = command_rx.try_recv() else { break };
+                    handle_client_command(&socket, &mut codec, &mut streams, command).await?;
                 }
             }
             received = socket.recv(&mut receive_buffer) => {
@@ -321,6 +307,48 @@ async fn run_session_driver(
             }
         }
     }
+}
+
+async fn handle_client_command(
+    socket: &UdpSocket,
+    codec: &mut UdpSessionCodec,
+    streams: &mut HashMap<u64, mpsc::Sender<Vec<u8>>>,
+    command: ClientCommand,
+) -> io::Result<()> {
+    let message = match command {
+        ClientCommand::Register {
+            flow_id,
+            inbound_tx,
+        } => {
+            streams.insert(flow_id, inbound_tx);
+            None
+        }
+        ClientCommand::OpenData {
+            flow_id,
+            address,
+            data,
+        } => streams
+            .contains_key(&flow_id)
+            .then_some(UdpSessionMessage::OpenData {
+                flow_id,
+                address,
+                data,
+            }),
+        ClientCommand::Data { flow_id, data } => streams
+            .contains_key(&flow_id)
+            .then_some(UdpSessionMessage::Data { flow_id, data }),
+        ClientCommand::Close { flow_id } => {
+            streams.remove(&flow_id);
+            Some(UdpSessionMessage::Close {
+                flow_id,
+                reason: None,
+            })
+        }
+    };
+    if let Some(message) = message {
+        send_message(socket, codec, &message).await?;
+    }
+    Ok(())
 }
 
 async fn send_message(

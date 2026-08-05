@@ -1,7 +1,9 @@
 use crate::config::{PERMISSION_PROXY_CONNECT_UDP, ProxyConfig, UserConfig};
 use crate::error::{ProxyError, Result};
 use crate::user_manager::UserManager;
-use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
+use protocol::crypto::{
+    encrypt_oaep_sha256_labelled, parse_public_key_pem_cached, verify_pss_sha256,
+};
 use protocol::udp_transport::{
     UDP_OAEP_LABEL, UDP_TRANSPORT_VERSION, UdpAuthInit, UdpAuthOk, UdpSessionCodec, UdpSessionId,
     UdpSessionRole, UdpSessionSecret, encode_auth_ok, encode_session_secret, udp_auth_proof_digest,
@@ -28,7 +30,7 @@ pub(super) async fn prepare_session(
         .ok_or_else(|| ProxyError::UserNotFound(auth.username.clone()))?;
     let expires_at = validate_udp_auth(config, &user, auth)?;
 
-    let user_public_key = RsaKeyPair::from_public_key_pem(&user.public_key_pem)
+    let user_public_key = parse_public_key_pem_cached(&user.public_key_pem)
         .map_err(|error| ProxyError::Authentication(format!("Invalid public key: {error}")))?;
     let expected_proof = udp_auth_proof_digest(
         &session_id,

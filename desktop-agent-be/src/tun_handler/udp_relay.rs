@@ -229,13 +229,8 @@ where
 {
     // 每个 TUN UDP datagram 被编码成 UdpRelayPacket，proxy 根据 flow_id/address 发往目标。
     let flow_id = state.flow_id(request.client, request.target);
-    let packet = UdpRelayPacket {
-        flow_id,
-        address: request.address.clone(),
-        data: request.packet.clone(),
-    }
-    .encode()
-    .map_err(io::Error::other)?;
+    let packet = UdpRelayPacket::encode_parts(flow_id, &request.address, &request.packet)
+        .map_err(io::Error::other)?;
 
     writer.write_all(&packet).await
 }

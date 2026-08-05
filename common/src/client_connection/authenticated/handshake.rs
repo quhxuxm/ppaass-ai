@@ -6,7 +6,6 @@ use futures::{SinkExt, StreamExt};
 use protocol::{
     Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
     TransportProtocol,
-    crypto::RsaKeyPair,
     tcp_transport::{
         TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
         TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
@@ -64,12 +63,9 @@ where
         let (mut writer, mut reader) = framed.split();
 
         // 3. 准备认证。
-        let private_key_pem = config
-            .private_key_pem()
+        let rsa_keypair = config
+            .private_key_pair()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let rsa_keypair = RsaKeyPair::from_private_key_pem(&private_key_pem)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         let timestamp = crate::current_timestamp();
         let mut client_nonce = [0_u8; TCP_AUTH_NONCE_LEN];
         rand::rng().fill_bytes(&mut client_nonce);
