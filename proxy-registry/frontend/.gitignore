@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# This project intentionally commits its reproducible npm dependency lock.
+!package-lock.json

@@ -6,23 +6,27 @@ use crate::error::{AgentError, Result};
 use common::BindInterface;
 use route_manager::{Route, RouteManager};
 use serde::{Deserialize, Serialize};
-use std::fs;
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 mod cleanup;
 mod dns_capture;
-mod guard;
+pub mod guard;
 #[cfg(target_os = "macos")]
-mod macos_dns;
+pub mod macos_dns;
 mod probe;
 mod state;
-#[cfg(test)]
-mod tests;
 
 const ROUTE_STATE_VERSION: u8 = 1;
 const ROUTE_STATE_FILE_NAME: &str = "tun-routes.json";
@@ -30,31 +34,40 @@ const ROUTE_STATE_FILE_NAME: &str = "tun-routes.json";
 const PF_DNS_ANCHOR: &str = "com.apple/ppaass-ai-tun-dns";
 
 use cleanup::{cleanup_existing_tun_split_routes, delete_recorded_route};
-#[cfg(all(test, target_os = "macos"))]
-use cleanup::{macos_route_delete_command, should_delete_recorded_route};
-use dns_capture::should_install_dns_capture_host_routes;
+#[cfg(target_os = "macos")]
+pub use cleanup::{macos_route_delete_command, should_delete_recorded_route};
 use dns_capture::{DnsCaptureRouteContext, install_dns_capture_routes};
-#[cfg(test)]
-use dns_capture::{
+pub use dns_capture::{
     dns_capture_route_targets_default_gateway, should_capture_default_gateway_dns_route,
+    should_install_dns_capture_host_routes,
 };
-pub(super) use guard::RouteGuard;
-#[cfg(all(test, target_os = "macos"))]
-use macos_dns::macos_pf_dns_rules;
+pub use guard::RouteGuard;
+#[cfg(target_os = "macos")]
+pub(super) use guard::RouteGuardInstall;
+#[cfg(target_os = "macos")]
+pub(super) use macos_dns::cleanup_macos_pf_dns_capture_with_token;
+#[cfg(target_os = "macos")]
+pub use macos_dns::macos_pf_dns_rules;
 #[cfg(target_os = "macos")]
 use macos_dns::{MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces};
+use probe::find_default_route;
 #[cfg(target_os = "macos")]
 use probe::interface_name_for_index;
-#[cfg(all(test, target_os = "macos"))]
-use probe::parse_macos_route_get_next_hop;
-pub(super) use probe::{
-    ProxyRoute, detect_default_route_interface, detect_proxy_route, resolve_proxy_ips,
+#[cfg(target_os = "macos")]
+pub use probe::parse_macos_route_get_next_hop;
+#[cfg(not(target_os = "macos"))]
+use probe::route_next_hop;
+pub use probe::{
+    ProxyRoute, detect_default_route_interface, detect_proxy_route,
+    resolve_proxy_endpoints_checked, resolve_proxy_ips_checked,
 };
-use probe::{find_default_route, route_next_hop};
 pub(super) use state::cleanup_stale_routes;
 #[cfg(target_os = "macos")]
+pub(super) use state::cleanup_stale_routes_checked;
+use state::is_unspecified_gateway;
+#[cfg(target_os = "macos")]
 use state::now_unix_secs;
-use state::{RouteKind, RouteLease, RouteRecord, is_unspecified_gateway};
+pub use state::{RouteKind, RouteLease, RouteRecord, RouteState};
 
 pub(super) fn refresh_macos_scoped_default_bypass() {
     guard::refresh_macos_scoped_default_bypass();

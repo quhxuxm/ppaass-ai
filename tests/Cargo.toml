@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[lib]
+name = "integration_test_support"
+path = "src/lib.rs"
+
 [[bin]]
 name = "integration-tests"
 path = "src/main.rs"

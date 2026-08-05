@@ -28,6 +28,30 @@ export function domainsAndAddressesToDirectRules(domains: string[], addresses: s
   return rules;
 }
 
+export function selectedDomainsToNewDirectRules(
+  selectedDomains: string[],
+  addresses: string[],
+  existingRules: string[]
+) {
+  const domains = [
+    ...new Map(
+      selectedDomains
+        .map((domain) => domain.trim().replace(/\.$/, ""))
+        .filter(Boolean)
+        .map((domain) => [domain.toLowerCase(), domain] as const)
+    ).values()
+  ].filter(
+    (domain) => !existingRules.some((rule) => directRuleCoversDomain(rule, domain))
+  );
+  const existingRuleKeys = new Set(
+    existingRules.map((rule) => rule.trim().toLowerCase())
+  );
+
+  return domainsAndAddressesToDirectRules(domains, addresses).filter(
+    (rule) => !existingRuleKeys.has(rule.trim().toLowerCase())
+  );
+}
+
 export function isIpAddress(value: string) {
   const candidate = value.trim();
   if (candidate.includes(":")) {

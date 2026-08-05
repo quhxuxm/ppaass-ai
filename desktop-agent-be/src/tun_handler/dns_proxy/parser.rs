@@ -1,11 +1,11 @@
 use super::*;
 
-pub(super) fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
+pub fn parse_dns_query(packet: &[u8]) -> Option<(String, String)> {
     let query = common::dns::parse_dns_query_packet(packet)?;
     Some((query.query, query.record_type))
 }
 
-pub(super) fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
+pub fn parse_dns_response(packet: &[u8]) -> Option<DnsResponseSummary> {
     if packet.len() < 12 {
         return None;
     }

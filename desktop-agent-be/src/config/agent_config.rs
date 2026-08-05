@@ -1,6 +1,6 @@
 //! Desktop Agent 配置模型。
 //!
-//! 这里定义 agent.toml 的运行时结构：本地监听、proxy 地址/认证私钥、
+//! 这里定义 agent.toml 的运行时结构：本地监听、认证私钥、
 //! Yamux、direct_access 和 TUN 模式。字段上的 serde default 决定了配置缺省行为。
 
 use crate::direct_access::DirectAccessConfig;
@@ -15,7 +15,10 @@ use std::path::Path;
 pub struct AgentConfig {
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
-    pub proxy_addrs: Vec<String>,
+    /// Desktop Agent UI 用于用户认证和托管凭据下发的 Proxy Registry 地址。
+    /// 后端库和 CI 集成测试工具不消费该 UI 控制面配置，因此它仍是可选项。
+    #[serde(default)]
+    pub proxy_registry_url: Option<String>,
     pub username: String,
     pub private_key_path: String,
     /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
@@ -73,6 +76,7 @@ pub struct AgentConfig {
 /// TCP 流通过 direct framed TCP 转发到代理；UDP 可通过单独的
 /// Yamux session manager 转发，也可由 agent 本地 UDP socket 直连目标。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TunConfig {
     /// 启用 TUN 模式
     #[serde(default)]
@@ -96,8 +100,8 @@ pub struct TunConfig {
     pub mtu: u16,
 
     /// TUN 模式下是否将 DNS 请求交给 proxy 端默认 DNS 处理。
-    /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy。
-    #[serde(default)]
+    /// 启用后，发往任意 UDP/TCP 53 端口的请求都会走 proxy，默认启用。
+    #[serde(default = "default_tun_proxy_dns")]
     pub proxy_dns: bool,
 
     /// TUN 模式下是否通过 proxy 转发普通 UDP。
@@ -131,18 +135,15 @@ pub struct TunConfig {
     pub dns_state_file: Option<String>,
 
     /// macOS 是否优先使用已安装的本地特权 helper 创建 TUN 和改写系统网络状态。
-    #[serde(default = "default_macos_tun_helper_enabled", alias = "helper_enabled")]
+    #[serde(default = "default_macos_tun_helper_enabled")]
     pub macos_helper_enabled: bool,
 
     /// macOS 本地特权 helper 的 Unix socket 路径。
-    #[serde(default = "default_macos_tun_helper_socket", alias = "helper_socket")]
+    #[serde(default = "default_macos_tun_helper_socket")]
     pub macos_helper_socket: String,
 
     /// macOS helper 不可用时是否回退到旧的整进程提权路径。
-    #[serde(
-        default = "default_macos_tun_helper_fallback_to_privilege",
-        alias = "helper_fallback_to_privilege"
-    )]
+    #[serde(default = "default_macos_tun_helper_fallback_to_privilege")]
     pub macos_helper_fallback_to_privilege: bool,
 }
 
@@ -154,7 +155,7 @@ impl Default for TunConfig {
             ipv4: default_tun_ipv4(),
             ipv6: None,
             mtu: default_tun_mtu(),
-            proxy_dns: false,
+            proxy_dns: default_tun_proxy_dns(),
             proxy_udp: default_tun_proxy_udp(),
             packet_capture: PacketCaptureConfig::default(),
             quic_policy: None,
@@ -211,6 +212,10 @@ fn default_tun_mtu() -> u16 {
 }
 
 fn default_tun_proxy_udp() -> bool {
+    true
+}
+
+fn default_tun_proxy_dns() -> bool {
     true
 }
 
@@ -284,149 +289,5 @@ impl TunConfig {
     /// 返回最终生效的 QUIC 策略。
     pub fn effective_quic_policy(&self) -> QuicPolicy {
         self.quic_policy.unwrap_or_default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
-username = "user1"
-private_key_path = "keys/user1.pem"
-"#;
-
-    #[test]
-    fn compression_mode_defaults_to_none() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert_eq!(config.get_compression_mode(), CompressionMode::None);
-        assert_eq!(config.transport_mode, TransportMode::Udp);
-    }
-
-    #[test]
-    fn transport_mode_accepts_auto_udp_and_tcp() {
-        let auto: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"auto\"\n"))
-                .unwrap();
-        assert_eq!(auto.transport_mode, TransportMode::Auto);
-
-        let udp: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"udp\"\n"))
-                .unwrap();
-        assert_eq!(udp.transport_mode, TransportMode::Udp);
-
-        let config: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"tcp\"\n"))
-                .unwrap();
-        assert_eq!(config.transport_mode, TransportMode::Tcp);
-    }
-
-    #[test]
-    fn removed_quic_transport_mode_is_rejected() {
-        let result = toml::from_str::<AgentConfig>(
-            &(MINIMAL_AGENT_CONFIG.to_owned() + "transport_mode = \"quic\"\n"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn udp_session_pool_defaults_to_four_and_is_bounded() {
-        let default_config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
-
-        let disabled: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 0\n"))
-                .unwrap();
-        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
-
-        let excessive: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + "udp_session_pool_size = 64\n"))
-                .unwrap();
-        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
-    }
-
-    #[test]
-    fn removed_quic_connection_pool_field_is_rejected() {
-        let result = toml::from_str::<AgentConfig>(
-            &(MINIMAL_AGENT_CONFIG.to_owned() + "quic_connection_pool_size = 4\n"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parses_compression_mode() {
-        let config: AgentConfig =
-            toml::from_str(&(MINIMAL_AGENT_CONFIG.to_owned() + r#"compression_mode = "lz4""#))
-                .unwrap();
-
-        assert_eq!(config.get_compression_mode(), CompressionMode::Lz4);
-    }
-
-    #[test]
-    fn tun_allows_quic_by_default() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
-    }
-
-    #[test]
-    fn tun_proxies_udp_by_default_for_backward_compatibility() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert!(config.tun.proxy_udp);
-    }
-
-    #[test]
-    fn tun_can_disable_udp_proxying() {
-        let config: AgentConfig = toml::from_str(
-            &(MINIMAL_AGENT_CONFIG.to_owned()
-                + r#"
-[tun]
-proxy_udp = false
-"#),
-        )
-        .unwrap();
-
-        assert!(!config.tun.proxy_udp);
-    }
-
-    #[test]
-    fn packet_capture_has_default_file() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-
-        assert_eq!(config.tun.packet_capture.file, "captures/ppaass-tun.pcap");
-    }
-
-    #[test]
-    fn parses_packet_capture_settings() {
-        let config: AgentConfig = toml::from_str(
-            &(MINIMAL_AGENT_CONFIG.to_owned()
-                + r#"
-[tun.packet_capture]
-file = "captures/debug.pcap"
-"#),
-        )
-        .unwrap();
-
-        assert_eq!(config.tun.packet_capture.file, "captures/debug.pcap");
-    }
-
-    #[test]
-    fn explicit_quic_policy_blocks_quic() {
-        let config: AgentConfig = toml::from_str(
-            &(MINIMAL_AGENT_CONFIG.to_owned()
-                + r#"
-[tun]
-quic_policy = "block"
-"#),
-        )
-        .unwrap();
-
-        assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Block);
     }
 }

@@ -8,6 +8,7 @@ encryption.
 - **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
 - **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
 - **Multi-User Support**: Each user has their own RSA key pair
+- **User Management Console**: Axum API and Vue/PrimeVue UI backed by Registry-owned persistence; Proxy Entry reads public authorization snapshots through the authenticated control API
 - **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
 - **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
 - **Secure DNS Resolution**: DNS resolution performed on proxy side
@@ -15,12 +16,14 @@ encryption.
 
 ## Architecture
 
-The application consists of four main components:
+The application consists of six main components:
 
 1. **Agent**: Runs on client machine, forwards traffic to proxy
 2. **Proxy**: Server-side component that connects to target servers
-3. **Protocol**: Shared protocol definition and crypto implementation
-4. **Common**: Shared utilities and error types
+3. **Proxy Registry**: Axum API and Vue/PrimeVue user management console
+4. **Proxy User Store**: Database-independent user CRUD contract with a SQLite adapter
+5. **Protocol**: Shared protocol definition and crypto implementation
+6. **Common**: Shared utilities and error types
 
 ## Quick Start
 
@@ -37,40 +40,83 @@ cargo build --release
 
 # Build specific component
 cargo build --release -p desktop-agent-be
-cargo build --release -p proxy
+cargo build --release -p proxy-entry
+cargo build --release -p proxy-registry
+
+# Build the Vue + PrimeVue console
+cd proxy-registry/frontend
+npm install
+npm run build
 ```
 
 ### Configuration
 
-1. Copy example configurations:
+1. Review the checked-in local configurations:
 
 ```bash
-mkdir -p config keys
-cp config/agent.toml.example config/agent.toml
-cp config/proxy.toml.example config/proxy.toml
+${EDITOR:-vi} config/agent.toml
+${EDITOR:-vi} config/proxy-entry.toml
 ```
 
-2. Start the proxy server:
+2. Start Proxy Registry with a control token, then start Proxy Entry with the
+   same token stored in the configured token file:
 
 ```bash
-cargo run --release -p proxy -- --config config/proxy.toml
+export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
+export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes"
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
+umask 077
+mkdir -p data
+printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
+cargo run --release -p proxy-registry
+
+cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 ```
 
-3. Add the user's public key to `config/users.toml`
+3. Register a user and approve the user's key request. Proxy Registry remains
+   the only owner of the authoritative user and access databases. Proxy Entry
+   replicates only the public authorization snapshot into its own local SQLite
+   database through the authenticated control API.
 
-4. Update `config/agent.toml` with your username and private key path
+4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Registry.
 
-5. Start the agent:
-
-```bash
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
-```
+5. Start the Agent from the authenticated Desktop Agent UI. The standalone
+   `desktop-agent` product binary intentionally refuses normal proxy traffic because it has no
+   authenticated profile/session.
 
 6. Configure your applications to use the proxy at `127.0.0.1:1080`
+
+### Desktop Agent Login
+
+The Tauri desktop app requires a Proxy Registry login once per application process before it
+loads the Agent workspace. Its authentication endpoint is read only by the Rust backend
+from the top-level `proxy_registry_url` field in the active `agent.toml`; it is not returned
+to or editable by the Vue webview. Loopback endpoints may use HTTP, while remote
+endpoints must use HTTPS.
+
+After authentication, the Rust backend—not the Vue webview—checks the approved key
+state and expiry, downloads the user's private key, verifies it against the public key,
+stores it under the per-user application data directory, and updates
+`username`/`private_key_path` in the active `agent.toml`. On Unix, the credential
+directory is mode `0700` and the private-key file is mode `0600`. Passwords, session
+cookies, CSRF tokens, and PEM contents are never returned to Vue or written to tracing
+logs. Logging out stops the Agent before clearing the in-memory desktop login state.
+
+```bash
+cd desktop-agent-ui
+npm install
+npm run tauri dev
+```
 
 ### Desktop TUN Helper Mode
 
 macOS TUN mode can run the existing `desktop-agent` binary in a privileged helper mode so the normal agent does not need to ask for sudo on every start. `start-agent.sh` and `start-agent.command` install the already-built `desktop-agent` automatically when `[tun] enabled = true` and `macos_helper_enabled = true`, then expose `/var/run/ppaass-ai/tun-helper.sock` to the current UID. No separate helper binary is built. On Windows, `start-agent.bat` creates a highest-privilege scheduled task the first time TUN mode is started, then uses that task for later starts.
+
+### GitHub Actions Deployment
+
+See [`docs/GITHUB_ACTIONS_DEPLOYMENT.md`](docs/GITHUB_ACTIONS_DEPLOYMENT.md) for
+the complete Secrets and Variables checklist, environment examples, and
+password-based remote deployment details.
 
 ## Configuration
 
@@ -78,9 +124,8 @@ macOS TUN mode can run the existing `desktop-agent` binary in a privileged helpe
 
 ```toml
 listen_addr = "127.0.0.1:1080"      # Local proxy address
-proxy_addrs = ["proxy.example.com:8080"] # Remote proxy addresses
-username = "user1"                    # Your username
-private_key_path = "keys/user1.pem"  # Path to your RSA private key
+username = "local-test"                    # Managed account identity written by the authenticated UI
+private_key_path = "keys/local-test.pem"  # Local-only private key; never commit it
 transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
 udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
 connect_timeout_secs = 30             # Connection timeout
@@ -99,6 +144,12 @@ quic_policy = "allow"               # application UDP/443 policy: allow direct/p
 file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
 ```
 
+When using the Desktop Agent UI, Proxy addresses are assigned by Proxy Registry after login and are
+kept out of `agent.toml`, the UI, and logs. Product traffic requires an authenticated runtime
+session; the removed `proxy_addrs` TOML field and the old public `--proxy` CLI argument are
+intentionally rejected. The separate headless harness is built only behind the
+`integration-test-harness` feature for CI.
+
 Desktop packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It covers TUN traffic plus local HTTP and SOCKS5 proxy connections, including SOCKS5 UDP, in both directions over IPv4 and IPv6. The output opens directly in Wireshark. TUN packets are recorded at the PPAASS tunnel boundary; explicit proxy streams are represented as valid raw IP packets between the real client and agent listener endpoints. Application-level encryption such as TLS remains encrypted.
 PCAP writes run on a dedicated buffered writer thread. The packet path uses a bounded non-blocking queue; if storage cannot keep up, capture copies are dropped instead of slowing proxy traffic.
 The desktop app's dedicated **Packet Capture** page shows direction, protocol, endpoints, byte counts, packet summaries, filters, and a short payload preview while retaining the PCAP as the source of truth.
@@ -107,16 +158,33 @@ Android also provides runtime packet capture for VPN/TUN and explicit HTTP/SOCKS
 
 The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
 
-### Proxy Configuration (`config/proxy.toml`)
+### Proxy Configuration (`config/proxy-entry.toml`)
 
 ```toml
 listen_addr = "0.0.0.0:8080"              # Proxy listen address
-users_path = "config/users.toml"          # Users configuration file
+entry_id = "entry-local"                   # Stable identity for idempotent batches
+advertised_address = "proxy.example.com:8080" # Public address registered in the node catalog
+registry_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
+authorization_database_path = "data/proxy-entry-authorizations.sqlite3"
 udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
 udp_session_limit = 4096                   # Authenticated native UDP sessions
+udp_session_limit_per_username = 64        # Per-user sessions for multiple devices/restarts
 udp_session_channel_size = 256             # Datagrams queued per native UDP session
 udp_session_max_flows = 256                # Outer flows per native UDP session
 ```
+
+Proxy Registry exclusively owns schema migrations, user data and access history. Proxy Entry downloads
+a revision-bound, username-cursor-paginated public-authorization snapshot over the versioned control API.
+It stages each page in local SQLite and atomically replaces its last-known-good snapshot only after every
+page succeeds. Entry fails closed until the first complete snapshot is available; afterwards a control
+outage does not interrupt users in that snapshot.
+Changes made during an outage take effect after Entry reconnects and completes a new snapshot sync.
+Access history is sent to Registry in idempotent batches.
+After TCP and UDP listeners bind successfully, Entry registers `advertised_address` in the shared
+Registry node catalog and refreshes its heartbeat every 30 seconds; startup does not wait for Registry.
+
+See [`proxy-registry/README.md`](proxy-registry/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
 
 The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
 Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
@@ -164,8 +232,9 @@ See `tests/README.md` for detailed testing documentation.
 Set log level via environment variable:
 
 ```bash
-RUST_LOG=info cargo run -p proxy
-RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent
+RUST_LOG=info cargo run -p proxy-entry
+cd desktop-agent-ui && RUST_LOG=debug npm run tauri dev
+RUST_LOG=proxy_registry=debug,tower_http=info cargo run -p proxy-registry
 ```
 
 ## Development
@@ -176,7 +245,9 @@ RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent
 ppaass-ai/
 ├── desktop-agent-be/  # Client-side desktop agent backend
 ├── desktop-agent-ui/       # Desktop agent UI
-├── proxy/          # Server-side proxy
+├── proxy-entry/          # Proxy Entry
+├── proxy-registry/      # Control plane, persistence, API and Vue console
+├── proxy-control-protocol/ # Versioned Registry-to-Entry HTTP/SSE contract
 ├── protocol/       # Shared protocol definitions
 ├── common/         # Shared utilities
 ├── tests/          # Integration and performance tests
@@ -188,8 +259,11 @@ ppaass-ai/
 ### Running Tests
 
 ```bash
-# Unit tests
-cargo test --workspace
+# All Rust test targets, including each crate's top-level tests/
+cargo test --workspace --locked
+
+# Enforce the repository-wide Rust test layout
+sh scripts/check-rust-test-layout.sh
 
 # Integration and performance tests
 ./run-tests.sh all

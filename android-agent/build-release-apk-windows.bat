@@ -181,5 +181,5 @@ echo %CD%\%SIGNED_APK%
 echo.
 echo All release APK output:
 dir /b /s "app\build\outputs\apk\release\*.apk"
-
 endlocal
+exit /b 0

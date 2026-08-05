@@ -8,7 +8,7 @@ cat << "EOF"
 EOF
 
 # Check if built
-if [ ! -f "target/release/proxy" ]; then
+if [ ! -f "target/release/proxy-entry" ]; then
     echo ""
     echo "⚠️  Binaries not found. Building project..."
     chmod +x build.sh
@@ -30,9 +30,9 @@ mkdir -p config keys
 echo "   Created: config/, keys/"
 
 # Check configuration
-if [ ! -f "config/proxy.toml" ]; then
+if [ ! -f "config/proxy-entry.toml" ]; then
     echo ""
-    echo "⚠️  Proxy configuration not found. Please ensure config/proxy.toml exists."
+    echo "⚠️  Proxy configuration not found. Please ensure config/proxy-entry.toml exists."
 else
     echo ""
     echo "✅ Configuration files found!"
@@ -44,14 +44,14 @@ cat << "EOF"
 ║                     Next Steps                               ║
 ╚══════════════════════════════════════════════════════════════╝
 
-1️⃣  Start the Proxy Server:
-   ./target/release/proxy --config config/proxy.toml
+1️⃣  Start Proxy Entry:
+   ./target/release/proxy-entry --config config/proxy-entry.toml
 
-2️⃣  Add the user's public key to config/users.toml
+2️⃣  Start Proxy Registry and register the user
 
-3️⃣  Save the matching private key to keys/myuser.pem
+3️⃣  Approve the user's key request and expiration in the admin console
 
-4️⃣  Update config/agent.toml with your settings
+4️⃣  Sign in from the Agent UI; it downloads the approved managed credential
 
 5️⃣  Start the Agent:
    ./target/release/desktop-agent --config config/agent.toml
@@ -71,7 +71,7 @@ cat << "EOF"
 ║                    Quick Commands                            ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Start Proxy:  ./target/release/proxy --config config/proxy.toml
+Start Proxy Entry:  ./target/release/proxy-entry --config config/proxy-entry.toml
 Start Agent:  ./target/release/desktop-agent --config config/agent.toml
 
 EOF

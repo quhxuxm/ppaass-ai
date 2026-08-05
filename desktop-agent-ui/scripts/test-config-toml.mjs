@@ -56,12 +56,40 @@ try {
   assert.equal(fullTcpSummary.transport_mode, "tcp");
   assert.throws(() => coerceField("transport_mode", "unknown"), /auto、udp 或 tcp/);
   assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /auto、udp 或 tcp/);
+  assert.throws(
+    () => summarizeRaw('proxy_addrs = ["proxy.example.com:443"]\n'),
+    /Proxy 地址只能由登录会话下发/
+  );
   assert.throws(() => summarizeRaw("quic_connection_pool_size = 4\n"), /已移除/);
+  assert.throws(
+    () => summarizeRaw("[tun]\nhelper_enabled = true\n"),
+    /macos_helper_enabled/
+  );
+  assert.throws(
+    () => summarizeRaw('[tun]\nhelper_socket = "/tmp/helper.sock"\n'),
+    /macos_helper_socket/
+  );
+  assert.throws(
+    () => summarizeRaw("[tun]\nhelper_fallback_to_privilege = true\n"),
+    /macos_helper_fallback_to_privilege/
+  );
   assert.equal(summarizeRaw("udp_session_pool_size = 0\n").udp_session_pool_size, 1);
   assert.equal(summarizeRaw("udp_session_pool_size = 99\n").udp_session_pool_size, 8);
   assert.equal(coerceField("udp_session_pool_size", 0), 1);
   assert.equal(coerceField("udp_session_pool_size", 99), 8);
   assert.equal(udpSummary.tun_packet_capture_file, "captures/ppaass-tun.pcap");
+  assert.equal(summarizeRaw("[tun]\nenabled = true\n").tun_proxy_dns, true);
+  assert.equal(
+    summarizeRaw("[tun]\nenabled = true\nproxy_dns = false\n").tun_proxy_dns,
+    false
+  );
+  const editedDefaultTun = applyFieldToToml(
+    "[tun]\nenabled = true\n",
+    "log_level",
+    "debug"
+  );
+  assert.equal(summarizeRaw(editedDefaultTun).tun_proxy_dns, true);
+  assert.doesNotMatch(editedDefaultTun, /proxy_dns\s*=\s*false/);
 
   const updated = applyFieldToToml(
     'transport_mode = "udp"\n',
@@ -78,3 +106,5 @@ try {
 }
 
 console.log("configToml tests passed");
+
+await import("./test-managed-private-key.mjs");

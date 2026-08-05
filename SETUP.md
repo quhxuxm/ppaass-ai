@@ -44,23 +44,42 @@ mkdir -p config keys
 
 ## Configuration
 
-### Step 1: Start the Proxy Server
+### Step 1: Start Proxy Registry
 
-1. Edit `config/proxy.toml` if needed:
+Proxy Registry owns SQLite and exposes a separate loopback control listener:
+
+```bash
+export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
+export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes"
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
+umask 077
+mkdir -p data
+printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
+cargo run --release -p proxy-registry -- \
+  --listen 127.0.0.1:8787 \
+  --control-listen 127.0.0.1:8797
+```
+
+### Step 2: Start Proxy Entry
+
+1. Edit `config/proxy-entry.toml` if needed:
 
 ```toml
 listen_addr = "0.0.0.0:8080"
-users_path = "config/users.toml"
+entry_id = "entry-local"
+advertised_address = "127.0.0.1:8080"
+registry_url = "http://127.0.0.1:8797"
+registry_control_token_path = "data/proxy-control-token"
 ```
 
-2. Start the proxy server:
+2. Start Proxy Entry:
 
 ```bash
 # On Windows
-.\target\release\proxy.exe --config config\proxy.toml
+.\target\release\proxy-entry.exe --config config\proxy-entry.toml
 
 # On Linux/macOS
-./target/release/proxy --config config/proxy.toml
+./target/release/proxy-entry --config config/proxy-entry.toml
 ```
 
 #### Alternative: Use startup scripts (same-folder deployment)
@@ -68,42 +87,29 @@ users_path = "config/users.toml"
 If you deploy the binaries and configs alongside the scripts, use:
 
 ```bash
-# Proxy on Linux
-./start-proxy.sh
+# Proxy Entry on Linux
+./start-proxy-entry.sh
 ```
 
 ```powershell
-# Proxy on Windows (dev helper)
-.\start-proxy.bat
+# Proxy Entry on Windows (dev helper)
+.\start-proxy-entry.bat
 ```
 
-### Step 2: Add a User in `users.toml`
+### Step 3: Register and Approve a User
 
-Add the user's public key to the proxy users file:
+Register a normal account, submit a key request, and approve it from the administrator console with
+an expiration time. Proxy Registry creates the managed key pair and persists it. Proxy Entry receives
+only public authorization snapshots over the authenticated control API.
 
-```toml
-[users.myuser]
-username = "myuser"
-public_key_pem = """
------BEGIN PUBLIC KEY-----
-...
------END PUBLIC KEY-----
-"""
-# Optional. If omitted, the user never expires.
-expires_at = "2026-12-31T23:59:59Z"
-```
+### Step 4: Configure the Agent
 
-### Step 3: Configure the Agent
-
-1. Save the matching private key to `keys/myuser.pem`
-
-2. Edit `config/agent.toml`:
+Edit `config/agent.toml` with the Proxy Registry endpoint, then sign in from the Agent UI. Proxy Registry
+assigns the runtime Proxy addresses; they are not stored in `agent.toml`. The Agent downloads and
+applies the approved managed credential automatically.
 
 ```toml
 listen_addr = "127.0.0.1:1080"
-proxy_addrs = ["your.proxy.server:8080"]  # Change to your proxy address
-username = "myuser"
-private_key_path = "keys/myuser.pem"
 connection_timeout_secs = 30
 
 [yamux.tcp]
@@ -115,15 +121,8 @@ sessions = 5
 max_streams_per_session = 128
 ```
 
-3. Start the agent:
-
-```bash
-# On Windows
-.\target\release\desktop-agent.exe --config config\agent.toml
-
-# On Linux/macOS
-./target/release/desktop-agent --config config/agent.toml
-```
+3. Open the Desktop Agent UI, sign in, and start the Agent there. The product
+   `desktop-agent` binary no longer accepts a Proxy address or starts normal traffic by itself.
 
 #### TUN helper startup behavior
 
@@ -140,17 +139,8 @@ On Windows, `start-agent.bat` creates a highest-privilege scheduled task the fir
 
 #### Alternative: Use startup scripts (same-folder deployment)
 
-If you deploy the binaries and configs alongside the scripts, use:
-
-```powershell
-# Agent on Windows
-.\start-agent.bat
-```
-
-```bash
-# Agent on macOS
-./start-agent.sh
-```
+Agent traffic is started from the authenticated Desktop Agent UI. Legacy standalone startup
+scripts are not an authentication substitute.
 
 ### Step 4: Configure Your Applications
 
@@ -204,7 +194,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 2. **Check user configuration:**
     - Verify the username in agent config matches the proxy
-    - Check that the user exists in the proxy `users.toml`
+    - Check that the account has an active approved profile in the Proxy Registry SQLite database
 
 ### Performance Issues
 
@@ -221,7 +211,7 @@ Use `netstat`, `ss`, or the process manager to verify the proxy is listening on 
 
 ### Multiple Users
 
-You can add multiple users by adding multiple `[users.<name>]` sections to `users.toml`.
+Create and approve additional accounts from the Proxy Registry administrator console.
 
 ## Support
 
@@ -234,17 +224,15 @@ For issues and questions:
 
 ## Quick Reference
 
-**Start Proxy:**
+**Start Proxy Entry:**
 
 ```bash
-./target/release/proxy --config config/proxy.toml
+./target/release/proxy-entry --config config/proxy-entry.toml
 ```
 
 **Start Agent:**
 
-```bash
-./target/release/desktop-agent --config config/agent.toml
-```
+Open the Desktop Agent UI, sign in, and use its Start control.
 
 **Test Connection:**
 

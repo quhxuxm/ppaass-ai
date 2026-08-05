@@ -7,8 +7,14 @@ edition.workspace = true
 name = "desktop-agent"
 path = "src/main.rs"
 
+[[bin]]
+name = "desktop-agent-integration-harness"
+path = "src/bin/integration_agent.rs"
+required-features = ["integration-test-harness"]
+
 [features]
 default = []
+integration-test-harness = []
 zstd-compression = ["protocol/zstd-compression"]
 mimalloc-allocator = ["dep:mimalloc"]
 

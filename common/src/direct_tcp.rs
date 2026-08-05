@@ -31,7 +31,7 @@ where
     connect_tcp_addresses_happy_eyeballs(addresses, configure).await
 }
 
-async fn connect_tcp_addresses_happy_eyeballs<F>(
+pub async fn connect_tcp_addresses_happy_eyeballs<F>(
     addresses: Vec<SocketAddr>,
     configure: F,
 ) -> io::Result<TcpStream>
@@ -142,7 +142,7 @@ fn reset_fallback(fallback: &mut Pin<&mut Sleep>) {
 }
 
 /// 保留 DNS 对每个地址族给出的顺序，同时让 IPv6/IPv4 候选交替出现。
-fn interleave_address_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
+pub fn interleave_address_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
     let Some(first_family) = addresses.first().map(|address| address.ip()) else {
         return Vec::new();
     };
@@ -177,44 +177,4 @@ fn interleave_address_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
     }
 
     ordered
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn address_families_are_interleaved_without_reordering_each_family() {
-        let addresses = vec![
-            "[2001:db8::1]:443".parse().unwrap(),
-            "[2001:db8::2]:443".parse().unwrap(),
-            "192.0.2.1:443".parse().unwrap(),
-            "192.0.2.2:443".parse().unwrap(),
-        ];
-
-        assert_eq!(
-            interleave_address_families(addresses),
-            vec![
-                "[2001:db8::1]:443".parse().unwrap(),
-                "192.0.2.1:443".parse().unwrap(),
-                "[2001:db8::2]:443".parse().unwrap(),
-                "192.0.2.2:443".parse().unwrap(),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn fast_failure_starts_next_candidate_without_fallback_delay() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let reachable = listener.local_addr().unwrap();
-        let refused = SocketAddr::new(reachable.ip(), reachable.port().wrapping_add(1));
-
-        let started = Instant::now();
-        let stream = connect_tcp_addresses_happy_eyeballs(vec![refused, reachable], |_, _| Ok(()))
-            .await
-            .unwrap();
-
-        assert!(started.elapsed() < DIRECT_TCP_FALLBACK_DELAY);
-        drop(stream);
-    }
 }

@@ -25,15 +25,15 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Build proxy
-Write-Host "`nBuilding proxy..." -ForegroundColor Cyan
-cargo build --release -p proxy
+# Build Proxy Entry
+Write-Host "`nBuilding Proxy Entry..." -ForegroundColor Cyan
+cargo build --release -p proxy-entry
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to build proxy" -ForegroundColor Red
+    Write-Host "Failed to build Proxy Entry" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "`nBuild completed successfully!" -ForegroundColor Green
 Write-Host "`nExecutables location:" -ForegroundColor Yellow
 Write-Host "  Desktop Agent: target\release\desktop-agent.exe" -ForegroundColor White
-Write-Host "  Proxy: target\release\proxy.exe" -ForegroundColor White
+Write-Host "  Proxy Entry: target\release\proxy-entry.exe" -ForegroundColor White

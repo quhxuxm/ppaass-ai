@@ -63,13 +63,10 @@ protected static final int QUIC_MIN_INITIAL_PACKET_BYTES = 1200;
 protected static final int QUIC_RESERVED_VERSION = 0x0a0a0a0a;
 protected SharedPreferences prefs;
 protected boolean activityResumed;
-protected EditText proxyAddrs;
 protected EditText httpProxyPort;
 protected EditText httpProxyThreads;
 protected EditText httpProxyMaxConcurrentConnects;
 protected EditText connectTimeoutSecs;
-protected EditText username;
-protected EditText privateKey;
 protected EditText runtimeThreads;
 protected Spinner compressionMode;
 protected String transportModeValue;
@@ -105,6 +102,10 @@ protected Button restoreDefaultsButton;
 protected AlertDialog appSelectorDialog;
 protected Button vpnToggle;
 protected TextView vpnStatus;
+protected TextView accountSummary;
+protected ImageView accountAvatar;
+protected Button accountManagementButton;
+protected boolean accountManagementInProgress;
 protected Button httpProxyToggle;
 protected Button httpProxyClientsButton;
 protected LinearLayout httpProxyEndpointList;
@@ -144,6 +145,8 @@ protected final List<View> screenPages = new ArrayList<>();
 protected final List<Button> configTabButtons = new ArrayList<>();
 protected final List<View> configTabPages = new ArrayList<>();
 protected int selectedScreenIndex;
+protected int captureScreenIndex = -1;
+protected String appliedAgentPermissionFingerprint = "";
 protected boolean screenSwitchAnimating;
 protected float screenSwipeStartX;
 protected float screenSwipeStartY;
@@ -153,6 +156,10 @@ protected final Handler statusHandler = new Handler(Looper.getMainLooper());
 protected final Runnable statusRefresh = new Runnable() {
         @Override
         public void run() {
+            if (!AgentAuthSession.isActive(MainActivityState.this)) {
+                onAgentSessionInvalidated();
+                return;
+            }
             updateStatusMetrics();
             statusHandler.postDelayed(this, 1000);
         }
@@ -169,6 +176,31 @@ protected final Runnable statusRefresh = new Runnable() {
     protected abstract boolean isVpnRunning();
 
     protected abstract boolean isHttpProxyRunning();
+
+    protected abstract void logoutAgentAccount();
+
+    protected abstract void openAccountManagementPage();
+
+    protected abstract void onAgentSessionInvalidated();
+
+    protected boolean hasAgentPermission(String permission) {
+        return AgentAuthSession.hasPermission(this, permission);
+    }
+
+    protected void showAgentPermissionDenied() {
+        Toast.makeText(
+                this,
+                tr("当前账户没有使用此功能的权限"),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    protected String agentPermissionFingerprint() {
+        return AgentUiPermissionPolicy.permissionFingerprint(
+                AgentAuthSession.isAdmin(this),
+                hasAgentPermission(AgentPermissions.PACKET_CAPTURE),
+                hasAgentPermission(AgentPermissions.EGRESS_EDIT),
+                hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT));
+    }
 
     protected void reloadUiPalette() {
         COLOR_BACKGROUND = UiPalette.BACKGROUND;

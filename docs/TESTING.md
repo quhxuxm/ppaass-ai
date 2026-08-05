@@ -4,6 +4,23 @@
 
 This document provides examples of using the PPAASS integration and performance testing tools.
 
+## Rust Test Layout
+
+Rust tests live in each crate's top-level `tests/` directory and run as Cargo integration-test
+targets. Production `src/` directories must not contain `#[cfg(test)]`, `#[test]`,
+`#[tokio::test]`, test modules, or test-only source files. Tests should exercise a crate through
+its public API; when low-level coverage is required, expose only the smallest safe API needed for
+that behavior.
+
+The repository guard checks both sides of this rule: it rejects test code or test-named modules
+under `src/`, and it rejects `include!`, `#[path = ...]`, or `../src` bypasses from Cargo
+integration tests.
+
+```bash
+sh scripts/check-rust-test-layout.sh
+cargo test --workspace --locked
+```
+
 ## Setup
 
 Before running tests, you need to have three components running:
@@ -18,7 +35,7 @@ We recommend using 4 terminals:
 
 ```
 Terminal 1: Mock Target Servers
-Terminal 2: Proxy Server
+Terminal 2: Proxy Entry
 Terminal 3: Agent Server
 Terminal 4: Test Runner
 ```
@@ -46,11 +63,11 @@ The mock servers provide:
   - `GET /json` - Returns JSON response
 - **TCP Echo Server (port 9091)** - Echoes all received data
 
-### Terminal 2: Start Proxy Server
+### Terminal 2: Start Proxy Entry
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p proxy -- --config config/proxy.toml
+cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml
 ```
 
 **Expected Output:**
@@ -63,13 +80,19 @@ cargo run --release -p proxy -- --config config/proxy.toml
 
 ```bash
 cd /path/to/ppaass-ai
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
+cargo run --release -p desktop-agent-be --features integration-test-harness \
+  --bin desktop-agent-integration-harness -- \
+  --config tests/fixtures/config/agent-integration.toml \
+  --managed-proxy-address 127.0.0.1:8080
 ```
+
+This binary is a CI/test-only harness. Product traffic must be started after login from the
+Desktop Agent UI; neither `agent.toml` nor the product CLI accepts a Proxy address.
 
 **Expected Output:**
 ```
 [2024-01-31T02:00:00Z INFO  desktop_agent] Starting agent server
-[2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7070
+[2024-01-31T02:00:00Z INFO  desktop_agent::server] Agent server listening on 127.0.0.1:7080
 ```
 
 ### Terminal 4: Run Integration Tests
@@ -102,7 +125,7 @@ cd /path/to/ppaass-ai
 **Expected Output:**
 ```
 === Starting Performance Tests ===
-Agent: 127.0.0.1:7070, Concurrency: 100, Duration: 60s
+Agent: 127.0.0.1:7080, Concurrency: 100, Duration: 60s
 [Running tests for 60 seconds...]
 === Performance Tests Complete ===
 Total Requests: 12543
@@ -159,7 +182,7 @@ The HTML report includes:
 
 ```bash
 # For remote testing
-AGENT_ADDR=10.0.0.1:7070 PROXY_ADDR=10.0.0.2:8080 ./run-tests.sh integration
+AGENT_ADDR=10.0.0.1:7080 PROXY_ADDR=10.0.0.2:8080 ./run-tests.sh integration
 
 # For custom ports
 AGENT_ADDR=127.0.0.1:9000 ./run-tests.sh performance 200 120
@@ -195,9 +218,9 @@ cargo build --release -p integration-tests
 
 # Use the binary
 ./target/release/integration-tests mock-target
-./target/release/integration-tests integration --agent-addr 127.0.0.1:7070
+./target/release/integration-tests integration --agent-addr 127.0.0.1:7080
 ./target/release/integration-tests performance \
-    --agent-addr 127.0.0.1:7070 \
+    --agent-addr 127.0.0.1:7080 \
     --concurrency 100 \
     --duration 60 \
     --output my-report.html
@@ -210,7 +233,7 @@ cargo build --release -p integration-tests
 **Solution:** Make sure all three components are running:
 1. Check mock target servers: `curl http://127.0.0.1:9090/health`
 2. Check proxy logs and confirm the proxy listen port is open
-3. Check agent is listening: `netstat -an | grep 7070`
+3. Check agent is listening: `netstat -an | grep 7080`
 
 ### Issue: "Authentication failed"
 
@@ -268,9 +291,9 @@ For network testing (components on different machines):
 
 You can modify the test sources to create custom scenarios:
 
-1. Edit `tests/src/integration_tests.rs` to add new test cases
-2. Edit `tests/src/performance_tests.rs` to adjust load patterns
-3. Edit `tests/src/mock_target.rs` to add new endpoints
+1. Edit `tests/src/integration_tests/` to add new test cases
+2. Edit `tests/src/performance_tests/` to adjust load patterns
+3. Edit `tests/src/mock_target/` to add new endpoints
 
 ### Continuous Integration
 
@@ -297,10 +320,10 @@ jobs:
         run: ./run-tests.sh mock-target &
         
       - name: Start proxy
-        run: cargo run --release -p proxy -- --config config/proxy.toml &
+        run: cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml &
         
-      - name: Start agent
-        run: cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml &
+      - name: Start test-only agent harness
+        run: cargo run --release -p desktop-agent-be --features integration-test-harness --bin desktop-agent-integration-harness -- --config tests/fixtures/config/agent-integration.toml --managed-proxy-address 127.0.0.1:8080 &
         
       - name: Run integration tests
         run: ./run-tests.sh integration

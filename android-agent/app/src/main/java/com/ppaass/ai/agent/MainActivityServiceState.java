@@ -25,8 +25,15 @@ import java.util.*;
 abstract class MainActivityServiceState extends MainActivityConfig {
 
 protected void toggleVpn() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (isVpnRunning()) {
             stopVpnService();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
             return;
         }
 
@@ -40,6 +47,13 @@ protected void toggleVpn() {
     }
 
 protected void startVpnService() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
+            return;
+        }
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_START);
         intent.putExtra(PpaassVpnService.EXTRA_STARTED_BY_APP, true);
@@ -59,8 +73,15 @@ protected void stopVpnService() {
     }
 
 protected void toggleHttpProxy() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (isHttpProxyRunning()) {
             stopHttpProxyService();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
             return;
         }
 
@@ -68,7 +89,25 @@ protected void toggleHttpProxy() {
         startHttpProxyService();
     }
 
+protected boolean requireManagedProxyAddresses() {
+        if (!ManagedProxyAddresses.load(this).isEmpty()) {
+            return true;
+        }
+        Toast.makeText(
+                this,
+                tr("管理员尚未分配有效 Proxy 地址"),
+                Toast.LENGTH_LONG).show();
+        return false;
+}
+
 protected void startHttpProxyService() {
+        if (!AgentAuthSession.isActive(this)) {
+            Toast.makeText(this, tr("请先登录 Agent"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!requireManagedProxyAddresses()) {
+            return;
+        }
         prefs.edit()
                 .putBoolean(PpaassHttpProxyService.PREF_ENABLED, true)
                 .apply();
@@ -95,6 +134,24 @@ protected void stopHttpProxyService() {
         startService(intent);
         updateHttpProxyToggle();
     }
+
+protected void stopAgentsForCredentialReplacement() {
+        if (PpaassVpnService.isRunningInProcess()
+                || prefs.getBoolean(PpaassVpnService.PREF_RUNNING, false)) {
+            stopVpnService();
+        }
+        if (PpaassHttpProxyService.isRunningInProcess()
+                || prefs.getBoolean(PpaassHttpProxyService.PREF_RUNNING, false)
+                || prefs.getBoolean(PpaassHttpProxyService.PREF_ENABLED, false)) {
+            stopHttpProxyService();
+        }
+        if (PpaassVpnService.isMockGeoRunningInProcess()
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_ACTIVE, false)
+                || prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_DIRTY, false)) {
+            stopMockGeoService();
+        }
+}
 
 protected void restartRunningAgentsAfterRuleUpdate(
         boolean restartVpn,

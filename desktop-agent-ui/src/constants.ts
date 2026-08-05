@@ -3,6 +3,7 @@ import type { AppIconName } from "./components/AppIcon";
 
 export const tabs: Array<{ key: TabKey; label: string; icon: AppIconName }> = [
   { key: "overview", label: "总览", icon: "layout-dashboard" },
+  { key: "admin-requests", label: "密钥申请", icon: "key" },
   { key: "forwarding", label: "转发", icon: "network" },
   { key: "egress", label: "出口", icon: "waypoints" },
   { key: "routing", label: "系统", icon: "settings" },

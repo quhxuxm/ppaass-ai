@@ -26,15 +26,15 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Build proxy
-echo -e "\nBuilding proxy..."
-cargo build --release -p proxy
+# Build Proxy Entry
+echo -e "\nBuilding Proxy Entry..."
+cargo build --release -p proxy-entry
 if [ $? -ne 0 ]; then
-    echo "Failed to build proxy"
+    echo "Failed to build Proxy Entry"
     exit 1
 fi
 
 echo -e "\nBuild completed successfully!"
 echo -e "\nExecutables location:"
 echo "  Desktop Agent: target/release/desktop-agent"
-echo "  Proxy: target/release/proxy"
+echo "  Proxy Entry: target/release/proxy-entry"

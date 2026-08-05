@@ -115,6 +115,7 @@ if [ ! -f "$KEYSTORE" ]; then
     -validity 10000 \
     -dname "CN=PPAASS Local Release, OU=Development, O=PPAASS, L=Local, ST=Local, C=CN" \
     >/dev/null
+  chmod 600 "$KEYSTORE"
 fi
 
 echo "Signing release APK..."

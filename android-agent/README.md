@@ -35,7 +35,10 @@ cargo install cargo-ndk
 ./gradlew assembleDebug
 ```
 
-构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本：
+构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本。
+不设置签名环境变量时，脚本会自动创建并复用已被 Git 忽略的
+`android-agent/local-release.keystore`，最终生成可安装的
+`app-release-signed.apk`：
 
 ```bash
 # Windows
@@ -44,6 +47,19 @@ cargo install cargo-ndk
 # macOS
 bash ./build-release-apk-macos.command
 ```
+
+本地 keystore 是开发发布证书，需要妥善备份；删除或丢失后重新生成的 APK 无法覆盖安装
+之前由它签名的版本。正式发布应把签名文件放在仓库外，并用以下环境变量覆盖本地签名配置：
+
+```bash
+export PPAASS_RELEASE_KEYSTORE=/secure/path/ppaass-release.keystore
+export PPAASS_RELEASE_KEY_ALIAS=ppaass-release
+export PPAASS_RELEASE_STORE_PASSWORD='...'
+export PPAASS_RELEASE_KEY_PASSWORD='...'
+```
+
+Windows 使用同名环境变量。正式 keystore 和密码应保存在 GitHub Actions Secret、密码管理器
+或受限的本机目录中，不得提交到仓库。普通模拟器/开发调试使用 `./gradlew assembleDebug`。
 
 Gradle 构建过程中会执行：
 
@@ -61,18 +77,54 @@ Android native 内部会分别维护 TCP 和 UDP 两条传输路径。TCP 路径
 
 ## 运行配置
 
-打开 App 后填写：
+打开 App 后必须先使用 Proxy Registry 的普通用户账号登录。Proxy Registry 地址由
+`app/src/main/assets/agent.properties` 随安装包配置，不在登录界面显示。登录成功后，
+App 会校验账号状态、密钥版本和有效期，从 Proxy Registry 下载当前用户已获管理员批准的
+私钥，并保存到 Android 应用私有的 no-backup 目录；私钥不会在界面中显示，也不能由
+用户手工更改。私钥文件固定为仅应用 UID 可读写，并记录长度与 SHA-256 摘要供每次服务
+启动和进程恢复时校验。认证响应中的 `profile.proxy_addresses` 同样由服务端托管并按
+顺序安全持久化；配置页不显示或编辑这些地址，日志也只记录地址数量。原生启动配置只读取
+这份受管列表，不读取旧版 `proxy_addrs` SharedPreferences。`expires_at` 只作为服务端状态展示，不按 Android 本机时间自动
+登出或停止代理。应用同时禁止云备份与设备迁移
+复制登录密码、托管私钥及配置。旧版本留在 SharedPreferences 中的 username 和明文私钥
+会在升级启动时清除。
 
-- proxy endpoints，支持逗号或换行分隔；默认值是 `140.82.30.214:80`
+Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
+`http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Registry 端口>`
+连接开发机。Proxy 地址不再由 Debug 或 Release 包内置，而由管理员在 Proxy Registry 分配；
+本地调试若分配了回环地址，应为相应端口配置第二条 `adb reverse`。Release 构建使用
+main 目录中配置的 HTTP 或 HTTPS Registry 地址和原生 UDP 默认模式。Agent 对 Registry 的
+HTTPS 请求不校验证书链和主机名，HTTP 请求允许连接远程地址；认证地址不会展示在登录页。
+
+登录页只使用用户名和密码登录，并提供记住用户名和密码及新用户注册入口，不提供浏览器或设备
+授权登录。记住的登录信息按产品要求存放在应用私有 SharedPreferences 中；取消“记住”会
+立即删除已保存密码，退出账号会删除托管私钥，但普通密码登录时仍保留用户选择记住的登录信息。
+登录态和托管私钥会跨 App 进程重启恢复，以便 VPN 与 HTTP/SOCKS5 服务长期运行。普通
+网络错误、HTTP 401、认证错误以及本机 `expires_at` 计时都不会清理登录态或停止
+代理。Entry 返回且用户名与当前登录一致的 `UserExpired`/`UserDisabled` 状态只会显示
+在界面和前台通知中，Agent 仍保持运行并重试；
+管理员续期后，下一次成功握手会自动清除提示并恢复代理。只有用户显式退出才会
+清理正常保存的登录凭据。管理员账号也可以登录 Agent，并由管理员固有权限使用受控功能。
+
+登录后可以配置：
+
 - UDP 代理通道，默认配置值为 `udp`；可选择原生加密 UDP、TCP/Yamux 或自动模式。自动模式按 UDP session 独立回退，一个 session 超时不会影响其他 session。VPN 或 HTTP/SOCKS5 代理运行期间控件会锁定
 - UDP 会话数，对应 `udp_session_pool_size`，默认 4，可配置 1–8；仅原生 UDP 模式显示。每个 flow 会稳定映射到其中一个有状态 UDP 会话
 - 控制连接超时，原生 UDP 会话建立与普通 TCP 连接共用，默认 30 秒
-- username，默认是 `user1`
-- RSA private key PEM，默认使用与 `config/local/users.toml` 中 `users.user1.public_key_pem` 配对的私钥
 - HTTP Proxy 监听端口和专属运行线程数。线程数只影响 Android HTTP Proxy 的 native Tokio runtime，VPN Agent 仍使用通用运行线程配置。
 - direct access mode 和 rules。规则支持精确域名、`*.example.com` 通配符、精确 IP 和 CIDR 网段；默认模式为 `proxy_all`，因此升级后不会自动旁路既有流量。
 - 需要使用 VPN 的应用。选择器会列出请求网络权限的已安装包，包括系统包。选择为空表示所有系统流量进入 VPN，PPAASS Android Agent 自身的 proxy 控制连接会通过 `VpnService.protect()` 绕开 VPN，避免连接回环。选择一个或多个应用后会切换到 allow-list 模式，只有选中的应用会进入 VPN。
 - 模拟 GEO。可以选择内置城市或自定义经纬度；VPN 运行期间会同时更新 Android GPS、网络定位和 Google 融合定位，VPN 停止后恢复真实定位。首次使用需要开启系统定位、在 Android 开发者选项中把 PPAASS VPN 选为“模拟位置信息应用”，并授予定位权限。
+
+Agent 权限每隔一段时间从 Proxy Registry 同步。没有抓包权限时不显示抓包页并强制关闭抓包；
+没有出口修改权限时不显示出口配置区，传输模式、UDP 会话池、连接超时、QUIC、压缩和
+TCP/Yamux 通道参数会在持久化与原生启动层同时回落内置默认值；没有系统运行参数权限时
+不显示对应面板，VPN runtime 线程数回落默认值。其余基础状态、显式代理和直连规则入口
+保持可用。受管 Proxy 地址列表更新时，正在运行的 VPN 与 HTTP/SOCKS5 服务会自动重载；
+服务端明确返回未分配，或成功响应缺失/包含非法地址时，会清空受管地址并停止网络服务，
+但保持用户登录。普通网络失败、5xx 或限流不会清空上次成功同步的地址。
+升级后若恢复的旧会话完全没有受管地址状态，则不会兼容旧 `proxy_addrs`，会立即停网并提示
+重新登录；明确的“未分配”状态则可跨进程恢复，继续保持登录并定期等待管理员完成分配。
 
 ## 运行时抓包
 
@@ -103,5 +155,10 @@ Android 抓包默认关闭，由 App 的“抓包”页面在运行时开启、�
 PPAASS Android Agent 声明支持 Android 系统设置里的“始终开启 VPN”。用户需要在系统设置中把 PPAASS 选为始终开启的 VPN；普通应用不能自行替用户打开该系统开关。
 
 当系统以始终开启模式拉起 Service 时，界面会显示 `Always-on VPN`，同时仍保留 App 内的 `Stop` 按钮用于断开当前 VPN 会话。代理控制连接会在 native 建连前通过 `VpnService.protect(fd)` 排除出 VPN 路径，因此在“阻止无 VPN 连接”模式下也不会依赖把 App 自身加入 disallow-list。
+
+Agent 登录态会从应用私有的托管凭据恢复。设备重启或系统回收进程后，Android 再次拉起
+Always-on Service 时可继续使用已登录用户的凭据恢复 VPN。账号过期或停用时保持服务和
+重试，续期后的已验证成功握手会自动恢复；只有用户主动退出或托管凭据无法通过完整性校验
+时才要求重新登录。
 
 TUN 地址和 MTU 是 Android App 内部配置，地址为 `10.10.10.2/24`且默认禁用 IPv6。配置 MTU 为 1500；原生加密 UDP 模式下运行时会将有效 MTU 限制为 1280，使浏览器 QUIC 数据报保持为单个外层加密 UDP 包；TCP 模式仍使用配置值。这些选项不在 UI 中展示。Android 会指向 VPN 网络路径内的一个 routed DNS 地址；Rust 会根据 `direct_access` 域名规则决定 DNS 查询直连还是映射为 `ProxyDns`。UDP/443 应用层 QUIC 命中 direct 规则时使用受保护 UDP socket 直连且不经过 PPAASS 封装；未命中时通过 proxy UDP relay，UDP 模式使用原生加密 UDP，TCP 模式使用 TCP/Yamux。只有显式阻断时才让应用回退 TCP/TLS。

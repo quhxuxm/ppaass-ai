@@ -1,0 +1,48 @@
+# PPAASS Desktop Agent 正式配置
+# 正式客户端登录后才会写入托管用户名和私钥路径
+
+listen_addr = "0.0.0.0:10080"
+proxy_registry_url = "https://140.82.30.214"
+# UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
+transport_mode = "udp"
+# 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。
+udp_session_pool_size = 4
+connect_timeout_secs = 20
+# Agent -> proxy framed 消息压缩模式：none、lz4、gzip、zstd。
+# 仅适用于 TCP 目标和 transport_mode=tcp 的 UDP relay；原生加密 UDP 数据报不压缩。
+compression_mode = "lz4"
+
+# 日志级别：trace、debug、info、warn、error
+log_level = "error"
+
+# 文件日志目录（相比控制台输出性能更好）
+log_dir = "logs"
+
+# 日志文件名（仅在设置 log_dir 时使用）
+log_file = "desktop-agent.log"
+
+# 异步运行时栈的最大大小，单位 MB（默认：4 MB）
+async_runtime_stack_size_mb = 4
+
+# Tokio 运行时工作线程数（未设置时默认使用 CPU 核心数；视频场景手动配置时建议 8）
+# runtime_threads = 8
+
+# tokio-console 默认在 6669 端口启用
+# 如有需要，可设置自定义端口
+# console_port = 6679
+
+[yamux.udp]
+# UDP relay 使用独立 raw Yamux 连接池；每个 UDP relay 通道会打开一个 Yamux 子流。
+# sessions 是最大外层连接数，实际连接数按 UDP relay 压力逐步增长。
+sessions = 5
+max_streams_per_session = 32
+open_stream_timeout_secs = 10
+keepalive_interval_secs = 30
+connection_write_timeout_secs = 300
+stream_window_size_kb = 8192
+
+[tun]
+# 正式客户端默认不自动启动 TUN；用户可从托盘开启。
+enabled = false
+# 新启用 TUN 时默认由 Proxy 解析 DNS。
+proxy_dns = true

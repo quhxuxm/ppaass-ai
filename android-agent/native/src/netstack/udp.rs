@@ -2,15 +2,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
-use futures::{SinkExt, StreamExt};
-use protocol::TransportProtocol;
+use futures::StreamExt;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::collections::HashMap;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
@@ -19,21 +18,23 @@ use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
 use super::udp_relay::UdpRelay;
-use crate::android_log;
-use crate::direct_access::{DirectAccessChecker, address_to_string};
+use super::udp_writer::UdpWriter;
+use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::yamux_session::AndroidYamuxSessionManager;
 
-pub(super) type UdpWriter = Arc<tokio::sync::Mutex<netstack_smoltcp::udp::WriteHalf>>;
-
 type UdpSessionKey = (SocketAddr, SocketAddr);
 type UdpSessionTx = tokio::sync::mpsc::Sender<Vec<u8>>;
-type UdpSessions = Arc<dashmap::DashMap<UdpSessionKey, UdpSessionTx>>;
+type UdpSessions = HashMap<UdpSessionKey, UdpSessionTx>;
 
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
+const DIRECT_UDP_SESSION_CHANNEL_SIZE: usize = 256;
+
+mod proxy;
+use proxy::{ProxyUdpRelayContext, relay_proxy_udp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UdpRoute {
+pub enum UdpRoute {
     Direct,
     Proxy,
     Block,
@@ -43,6 +44,7 @@ enum UdpRoute {
 pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
+    pub(super) force_direct: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
@@ -59,8 +61,11 @@ pub(super) fn spawn_udp_sessions(
 ) -> JoinHandle<()> {
     spawn_guarded("android udp sessions", async move {
         let (mut udp_rx, udp_tx) = udp_socket.split();
-        let udp_tx = Arc::new(tokio::sync::Mutex::new(udp_tx));
-        let sessions: UdpSessions = Arc::new(dashmap::DashMap::new());
+        let udp_tx = UdpWriter::spawn(udp_tx, shutdown.clone());
+        // The dispatcher owns the map; flow tasks send completion notices.
+        // This removes a DashMap shard lock from every proxied UDP packet.
+        let mut sessions = UdpSessions::new();
+        let (session_closed_tx, mut session_closed_rx) = tokio::sync::mpsc::unbounded_channel();
         let dns_proxy = context
             .proxy_dns
             .then(|| DnsProxy::spawn(context.clone(), udp_tx.clone(), shutdown.clone()));
@@ -71,6 +76,11 @@ pub(super) fn spawn_udp_sessions(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
+                closed = session_closed_rx.recv() => {
+                    if let Some(key) = closed {
+                        sessions.remove(&key);
+                    }
+                }
                 message = udp_rx.next() => {
                     let Some((data, source, target)) = message else { break };
                     // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
@@ -102,7 +112,7 @@ pub(super) fn spawn_udp_sessions(
                     }
 
                     let key = (source, target);
-                    if let Some(tx) = sessions.get(&key).map(|tx| tx.clone()) {
+                    if let Some(tx) = sessions.get(&key).cloned() {
                         if target.port() == 443 {
                             quic_stats.record_direct();
                         }
@@ -157,15 +167,19 @@ pub(super) fn spawn_udp_sessions(
                             }
                         }
                     }
-                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(
+                        DIRECT_UDP_SESSION_CHANNEL_SIZE,
+                    );
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
 
-                    let sessions_c = sessions.clone();
+                    let session_closed_tx = session_closed_tx.clone();
                     let session_context = UdpSessionContext {
                         tun_networks: context.tun_networks,
                         // 普通 UDP 会话内部不再处理 proxy_dns，防止二次映射到 Address::ProxyDns。
                         proxy_dns: false,
+                        // This task exists only after the ingress classifier selected Direct.
+                        force_direct: true,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_sessions: context.udp_sessions.clone(),
@@ -177,7 +191,7 @@ pub(super) fn spawn_udp_sessions(
                         if let Err(e) = handle_tun_udp(source, target, rx, session_context).await {
                             debug!("Android TUN UDP direct session ended: {e}");
                         }
-                        sessions_c.remove(&key);
+                        let _ = session_closed_tx.send(key);
                     });
                 }
             }
@@ -214,12 +228,13 @@ fn spawn_quic_udp_stats_logger(stats: Arc<QuicUdpStats>, shutdown: CancellationT
 pub(super) async fn handle_tun_udp(
     client: SocketAddr,
     target: SocketAddr,
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     context: UdpSessionContext,
 ) -> Result<()> {
     let UdpSessionContext {
         tun_networks,
         proxy_dns,
+        force_direct,
         quic_policy,
         netstack_tx,
         udp_sessions,
@@ -251,11 +266,11 @@ pub(super) async fn handle_tun_udp(
         target.to_string()
     };
 
-    let mut direct_target = None;
+    let mut direct_target = (!proxy_dns_request && force_direct).then_some(target);
     let mut direct_label = target_label.clone();
     let proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request {
+    if direct_target.is_none() && !proxy_dns_request {
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if direct_checker.has_domain_direct_rules()
@@ -297,11 +312,7 @@ pub(super) async fn handle_tun_udp(
     if route == UdpRoute::Direct
         && let Some(connect_target) = direct_target
     {
-        let target_str = address_to_string(&address);
-        debug!("Android TUN UDP direct -> {}", target_str);
-        android_log::info(format!(
-            "Android TUN UDP DIRECT {target_str} -> {connect_target}"
-        ));
+        debug!("Android TUN UDP direct -> {}", target_label);
         relay_direct_udp(
             client,
             target,
@@ -316,261 +327,22 @@ pub(super) async fn handle_tun_udp(
     }
 
     let proxy_label = proxy_target_label(&target_label, proxy_reason.as_deref());
-    if proxy_dns_request {
-        debug!("Android TUN UDP DNS -> proxy -> {}", target_label);
-    } else {
-        debug!("Android TUN UDP fallback proxy -> {}", proxy_label);
-        android_log::info(format!("Android TUN UDP PROXY {proxy_label}"));
-    }
-    let proxy_io = match udp_sessions
-        .connect_to_target(proxy_address, TransportProtocol::Udp)
-        .await
-    {
-        Ok(proxy_io) => proxy_io,
-        Err(e) => {
-            android_log::error(format!(
-                "Android TUN UDP PROXY connect failed {proxy_label}: {e}"
-            ));
-            return Err(e);
-        }
-    };
-    let (mut reader, mut writer) = tokio::io::split(proxy_io);
-    let idle_sleep = tokio::time::sleep(UDP_SESSION_IDLE);
-    tokio::pin!(idle_sleep);
-    let mut response_buf = vec![0u8; 65535];
-
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            _ = &mut idle_sleep => {
-                debug!("Android UDP proxy session idle; closing -> {}", target_label);
-                break;
-            }
-            maybe_data = rx.recv() => {
-                let Some(data) = maybe_data else {
-                    break;
-                };
-                trace!(
-                    "Android UDP proxy write -> {} bytes={}",
-                    target_label,
-                    data.len()
-                );
-                if let Err(e) = writer.write_all(&data).await {
-                    debug!("Android UDP proxy write failed: {e}");
-                    break;
-                }
-                if let Err(e) = writer.flush().await {
-                    debug!("Android UDP proxy flush failed: {e}");
-                    break;
-                }
-                idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-            }
-            read = reader.read(&mut response_buf) => {
-                match read {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        trace!(
-                            "Android UDP proxy read <- {} bytes={} writeback {} -> {}",
-                            target_label, n, target, client
-                        );
-                        let pkt = response_buf[..n].to_vec();
-                        let mut tx = netstack_tx.lock().await;
-                        if let Err(e) = tx.send((pkt, target, client)).await {
-                            debug!("Android UDP proxy response writeback failed: {e}");
-                            break;
-                        }
-                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-                    }
-                    Err(e) => {
-                        debug!("Android UDP proxy read failed: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
+    relay_proxy_udp(ProxyUdpRelayContext {
+        client,
+        target,
+        target_label,
+        proxy_label,
+        proxy_dns_request,
+        proxy_address,
+        rx,
+        netstack_tx,
+        udp_sessions,
+        shutdown,
+    })
+    .await
 }
 
-fn classify_udp_route(
-    target_port: u16,
-    quic_policy: QuicPolicy,
-    direct_access_match: bool,
-) -> UdpRoute {
-    if target_port == 443 {
-        if quic_policy.should_block_udp443() {
-            UdpRoute::Block
-        } else if direct_access_match {
-            UdpRoute::Direct
-        } else {
-            UdpRoute::Proxy
-        }
-    } else if direct_access_match {
-        UdpRoute::Direct
-    } else {
-        UdpRoute::Proxy
-    }
-}
-
-async fn relay_direct_udp(
-    client: SocketAddr,
-    original_target: SocketAddr,
-    connect_target: SocketAddr,
-    target_label: String,
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    netstack_tx: UdpWriter,
-    shutdown: CancellationToken,
-) -> Result<()> {
-    let socket = bind_direct_udp(connect_target)?;
-    socket.connect(connect_target).await?;
-    let idle_sleep = tokio::time::sleep(UDP_SESSION_IDLE);
-    tokio::pin!(idle_sleep);
-    let mut response_buf = vec![0u8; 65535];
-
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            _ = &mut idle_sleep => {
-                debug!("Android UDP direct session idle; closing -> {}", target_label);
-                break;
-            }
-            maybe_data = rx.recv() => {
-                let Some(data) = maybe_data else {
-                    break;
-                };
-                if let Err(e) = socket.send(&data).await {
-                    debug!("Android UDP direct send failed: {e}");
-                    break;
-                }
-                idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-            }
-            received = socket.recv(&mut response_buf) => {
-                match received {
-                    Ok(n) => {
-                        let pkt = response_buf[..n].to_vec();
-                        let mut tx = netstack_tx.lock().await;
-                        if let Err(e) = tx.send((pkt, original_target, client)).await {
-                            debug!("Android UDP direct response writeback failed: {e}");
-                            break;
-                        }
-                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
-                    }
-                    Err(e) => {
-                        debug!("Android UDP direct receive failed: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    debug!("Android TUN UDP direct relay ended -> {}", target_label);
-    Ok(())
-}
-
-fn bind_direct_udp(target: SocketAddr) -> std::io::Result<UdpSocket> {
-    let socket = Socket::new(
-        Domain::for_address(target),
-        Type::DGRAM,
-        Some(Protocol::UDP),
-    )?;
-    protect_direct_socket(&socket)?;
-    tune_direct_udp_socket(&socket, target);
-
-    let bind_addr = if target.is_ipv4() {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
-    } else {
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
-    };
-    socket.bind(&SockAddr::from(bind_addr))?;
-    socket.set_nonblocking(true)?;
-
-    UdpSocket::from_std(socket.into())
-}
-
-fn tune_direct_udp_socket(socket: &Socket, target: SocketAddr) {
-    if let Err(err) = socket.set_recv_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
-        debug!("Android TUN UDP direct recv buffer setup failed target={target}: {err}");
-    }
-    if let Err(err) = socket.set_send_buffer_size(crate::config::ANDROID_SOCKET_BUFFER_SIZE) {
-        debug!("Android TUN UDP direct send buffer setup failed target={target}: {err}");
-    }
-}
-
-fn protect_direct_socket(socket: &Socket) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-
-        crate::socket_protector::protect_fd(socket.as_raw_fd())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = socket;
-        Ok(())
-    }
-}
-
-async fn drain_dropped_udp(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    shutdown: CancellationToken,
-) {
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            received = timeout(Duration::from_secs(10), rx.recv()) => {
-                if !matches!(received, Ok(Some(_))) {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
-    match reason {
-        Some(reason) => format!("{reason}, original {target_label}"),
-        None => target_label.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod route_tests {
-    use super::{UdpRoute, classify_udp_route};
-    use common::QuicPolicy;
-
-    #[test]
-    fn ordinary_udp_preserves_direct_and_proxy_routing() {
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, false),
-            UdpRoute::Proxy
-        );
-        assert_eq!(
-            classify_udp_route(3478, QuicPolicy::Allow, true),
-            UdpRoute::Direct
-        );
-    }
-
-    #[test]
-    fn quic_allow_routes_udp443_by_direct_access_rules() {
-        assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, false),
-            UdpRoute::Proxy
-        );
-        assert_eq!(
-            classify_udp_route(443, QuicPolicy::Allow, true),
-            UdpRoute::Direct
-        );
-    }
-
-    #[test]
-    fn explicit_quic_block_overrides_direct_access_routing() {
-        for direct_access_match in [false, true] {
-            assert_eq!(
-                classify_udp_route(443, QuicPolicy::Block, direct_access_match),
-                UdpRoute::Block
-            );
-        }
-    }
-}
+mod routing;
+pub use routing::classify_udp_route;
+pub(super) use routing::tune_direct_udp_socket;
+use routing::{drain_dropped_udp, proxy_target_label, relay_direct_udp};

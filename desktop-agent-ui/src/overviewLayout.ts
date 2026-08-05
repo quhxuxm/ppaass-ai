@@ -9,8 +9,7 @@ export const overviewCardDefinitions: OverviewCardDefinition[] = [
   { key: "traffic", baseSpan: 7 },
   { key: "dns", baseSpan: 12 },
   { key: "tun", baseSpan: 4 },
-  { key: "policy", baseSpan: 4 },
-  { key: "egress", baseSpan: 4 }
+  { key: "policy", baseSpan: 8 }
 ];
 
 export const defaultOverviewCardOrder = overviewCardDefinitions.map((card) => card.key);

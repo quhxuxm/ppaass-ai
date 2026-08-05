@@ -1,10 +1,67 @@
 use crate::error::{ProtocolError, Result};
 use rsa::{
-    Oaep, Pkcs1v15Encrypt, Pss, RsaPrivateKey, RsaPublicKey,
+    Oaep, Pss, RsaPrivateKey, RsaPublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
     rand_core::OsRng,
     sha2::{Digest, Sha256},
+    traits::PublicKeyParts,
 };
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, OnceLock, RwLock};
+
+const PUBLIC_KEY_CACHE_CAPACITY: usize = 1024;
+type PublicKeyFingerprint = [u8; 32];
+
+#[derive(Default)]
+struct PublicKeyCache {
+    entries: HashMap<PublicKeyFingerprint, (String, Arc<RsaPublicKey>)>,
+    insertion_order: VecDeque<PublicKeyFingerprint>,
+}
+
+fn public_key_cache() -> &'static RwLock<PublicKeyCache> {
+    static CACHE: OnceLock<RwLock<PublicKeyCache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(PublicKeyCache::default()))
+}
+
+pub fn parse_public_key_pem_cached(pem: &str) -> Result<Arc<RsaPublicKey>> {
+    let fingerprint: PublicKeyFingerprint = Sha256::digest(pem.as_bytes()).into();
+    if let Some(key) = public_key_cache()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entries
+        .get(&fingerprint)
+        .and_then(|(cached_pem, key)| (cached_pem == pem).then(|| key.clone()))
+    {
+        return Ok(key);
+    }
+
+    let parsed = Arc::new(RsaKeyPair::from_public_key_pem(pem)?);
+    let mut cache = public_key_cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(key) = cache
+        .entries
+        .get(&fingerprint)
+        .and_then(|(cached_pem, key)| (cached_pem == pem).then(|| key.clone()))
+    {
+        return Ok(key);
+    }
+    if cache.entries.contains_key(&fingerprint) {
+        cache.entries.remove(&fingerprint);
+        cache.insertion_order.retain(|item| item != &fingerprint);
+    }
+    while cache.entries.len() >= PUBLIC_KEY_CACHE_CAPACITY {
+        let Some(oldest) = cache.insertion_order.pop_front() else {
+            break;
+        };
+        cache.entries.remove(&oldest);
+    }
+    cache
+        .entries
+        .insert(fingerprint, (pem.to_string(), parsed.clone()));
+    cache.insertion_order.push_back(fingerprint);
+    Ok(parsed)
+}
 
 pub struct RsaKeyPair {
     private_key: RsaPrivateKey,
@@ -52,72 +109,57 @@ impl RsaKeyPair {
             .map_err(|e| ProtocolError::InvalidKey(e.to_string()))
     }
 
-    pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let mut rng = OsRng;
-        self.public_key
-            .encrypt(&mut rng, Pkcs1v15Encrypt, data)
-            .map_err(|e| ProtocolError::Encryption(e.to_string()))
+    pub fn modulus_size(&self) -> usize {
+        self.private_key.size()
     }
 
-    pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        self.private_key
-            .decrypt(Pkcs1v15Encrypt, data)
-            .map_err(|e| ProtocolError::Decryption(e.to_string()))
-    }
-
-    /// Sign a message using RSASSA-PSS with SHA-256 and the standard 32-byte
-    /// salt length. This API is intentionally separate from the legacy raw
-    /// private-key operation used by the original TCP authentication protocol.
+    /// Sign a transcript using RSASSA-PSS with SHA-256 and a 32-byte salt.
     pub fn sign_pss_sha256(&self, message: &[u8]) -> Result<Vec<u8>> {
+        self.validate_modulus_size()?;
         let digest = Sha256::digest(message);
         let mut rng = OsRng;
         self.private_key
-            .sign_with_rng(&mut rng, Pss::new::<Sha256>(), &digest)
+            .sign_with_rng(&mut rng, Pss::new_blinded::<Sha256>(), &digest)
             .map_err(|e| ProtocolError::Encryption(e.to_string()))
     }
 
-    /// Decrypt a ciphertext using RSAES-OAEP with SHA-256 for both OAEP and
-    /// MGF1. The original PKCS#1 v1.5 `decrypt` method remains unchanged.
+    /// Decrypt a ciphertext using RSAES-OAEP with SHA-256 for OAEP and MGF1.
     pub fn decrypt_oaep_sha256(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        self.validate_modulus_size()?;
+        if ciphertext.len() != self.modulus_size() {
+            return Err(ProtocolError::Decryption(
+                "invalid OAEP ciphertext length".to_string(),
+            ));
+        }
+        let mut rng = OsRng;
         self.private_key
-            .decrypt(Oaep::new::<Sha256>(), ciphertext)
+            .decrypt_blinded(&mut rng, Oaep::new::<Sha256>(), ciphertext)
             .map_err(|e| ProtocolError::Decryption(e.to_string()))
     }
 
-    /// 使用私钥加密数据（可用公钥解密）
-    /// 这里使用原始 RSA 私钥操作：c = m^d mod n
-    pub fn encrypt_with_private_key(&self, data: &[u8]) -> Result<Vec<u8>> {
-        use rsa::BigUint;
-        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-
-        // 添加 PKCS#1 v1.5 签名填充：0x00 0x01 [0xFF 填充] 0x00 [数据]
-        let key_size = self.private_key.size();
-        if data.len() > key_size - 11 {
-            return Err(ProtocolError::Encryption(
-                "Data too large for key size".to_string(),
+    pub fn decrypt_oaep_sha256_labelled(&self, label: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        self.validate_modulus_size()?;
+        if ciphertext.len() != self.modulus_size() {
+            return Err(ProtocolError::Decryption(
+                "invalid OAEP ciphertext length".to_string(),
             ));
         }
+        let mut rng = OsRng;
+        self.private_key
+            .decrypt_blinded(
+                &mut rng,
+                Oaep::new_with_label::<Sha256, _>(label),
+                ciphertext,
+            )
+            .map_err(|e| ProtocolError::Decryption(e.to_string()))
+    }
 
-        let padding_len = key_size - data.len() - 3;
-        let mut padded = Vec::with_capacity(key_size);
-        padded.push(0x00);
-        padded.push(0x01);
-        padded.extend(std::iter::repeat_n(0xFF, padding_len));
-        padded.push(0x00);
-        padded.extend_from_slice(data);
-
-        // 原始 RSA 私钥操作：c = m^d mod n
-        let m = BigUint::from_bytes_be(&padded);
-        let d = self.private_key.d();
-        let n = self.private_key.n();
-
-        let c = m.modpow(d, n);
-
-        // 确保输出为 key_size 字节（必要时用前导零填充）
-        let c_bytes = c.to_bytes_be();
-        let mut result = vec![0u8; key_size - c_bytes.len()];
-        result.extend(c_bytes);
-
-        Ok(result)
+    fn validate_modulus_size(&self) -> Result<()> {
+        if !(256..=1_024).contains(&self.modulus_size()) {
+            return Err(ProtocolError::InvalidKey(
+                "RSA key size must be between 2048 and 8192 bits".to_string(),
+            ));
+        }
+        Ok(())
     }
 }

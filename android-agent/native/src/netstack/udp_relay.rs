@@ -1,13 +1,12 @@
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::spawn_guarded;
-use futures::SinkExt;
 use protocol::{Address, TransportProtocol, UdpRelayPacket, udp_transport::UDP_MAX_MESSAGE_SIZE};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -15,10 +14,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::ForwardContext;
-use super::udp::UdpWriter;
+use super::udp_writer::UdpWriter;
 use crate::error::Result;
 
-const UDP_FLOW_TTL: Duration = Duration::from_secs(300);
 const UDP_RELAY_CHANNEL_SIZE: usize = 4096;
 const UDP_RELAY_SHARD_COUNT: usize = 4;
 const UDP_RELAY_REQUEST_BATCH_LIMIT: usize = 32;
@@ -30,30 +28,15 @@ pub(super) struct UdpRelay {
 }
 
 #[derive(Clone, Debug)]
-struct UdpRelayRequest {
-    client: SocketAddr,
-    target: SocketAddr,
-    address: Address,
-    packet: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct UdpFlowKey {
-    client: SocketAddr,
-    target: SocketAddr,
-}
-
-struct UdpRelayState {
-    // (client,target) -> flow_id，保证 Android VPN 内同一 UDP flow 在 proxy 端复用同一个 UDP socket。
-    flow_ids: HashMap<UdpFlowKey, u64>,
-    // flow_id -> (client,target)，用于把 proxy 响应写回正确的 netstack 方向。
-    flows: HashMap<u64, UdpFlowKey>,
-    last_seen: HashMap<u64, Instant>,
-    next_flow_id: u64,
+pub struct UdpRelayRequest {
+    pub client: SocketAddr,
+    pub target: SocketAddr,
+    pub address: Address,
+    pub packet: Vec<u8>,
 }
 
 #[derive(Debug, Default)]
-struct UdpRelayStats {
+pub struct UdpRelayStats {
     sent_packets: AtomicU64,
     sent_payload_bytes: AtomicU64,
     send_batches: AtomicU64,
@@ -64,14 +47,14 @@ struct UdpRelayStats {
 }
 
 #[derive(Debug, Default)]
-struct UdpRelayStatsSnapshot {
-    sent_packets: u64,
-    sent_payload_bytes: u64,
-    send_batches: u64,
-    send_batched_packets: u64,
-    response_packets: u64,
-    response_payload_bytes: u64,
-    queue_drops: u64,
+pub struct UdpRelayStatsSnapshot {
+    pub sent_packets: u64,
+    pub sent_payload_bytes: u64,
+    pub send_batches: u64,
+    pub send_batched_packets: u64,
+    pub response_packets: u64,
+    pub response_payload_bytes: u64,
+    pub queue_drops: u64,
 }
 
 impl UdpRelayStats {
@@ -97,7 +80,7 @@ impl UdpRelayStats {
         self.queue_drops.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
+    pub fn snapshot_and_reset(&self) -> UdpRelayStatsSnapshot {
         UdpRelayStatsSnapshot {
             sent_packets: self.sent_packets.swap(0, Ordering::Relaxed),
             sent_payload_bytes: self.sent_payload_bytes.swap(0, Ordering::Relaxed),
@@ -106,69 +89,6 @@ impl UdpRelayStats {
             response_packets: self.response_packets.swap(0, Ordering::Relaxed),
             response_payload_bytes: self.response_payload_bytes.swap(0, Ordering::Relaxed),
             queue_drops: self.queue_drops.swap(0, Ordering::Relaxed),
-        }
-    }
-}
-
-impl UdpRelayState {
-    fn new() -> Self {
-        Self {
-            flow_ids: HashMap::new(),
-            flows: HashMap::new(),
-            last_seen: HashMap::new(),
-            next_flow_id: 1,
-        }
-    }
-
-    fn flow_id(&mut self, client: SocketAddr, target: SocketAddr) -> u64 {
-        let key = UdpFlowKey { client, target };
-        if let Some(id) = self.flow_ids.get(&key) {
-            self.last_seen.insert(*id, Instant::now());
-            return *id;
-        }
-
-        let id = self.next_available_flow_id();
-        self.flow_ids.insert(key, id);
-        self.flows.insert(id, key);
-        self.last_seen.insert(id, Instant::now());
-        id
-    }
-
-    fn flow(&self, flow_id: u64) -> Option<UdpFlowKey> {
-        self.flows.get(&flow_id).copied()
-    }
-
-    fn active_flows(&self) -> usize {
-        self.flows.len()
-    }
-
-    fn tracked_flow_keys(&self) -> usize {
-        self.flow_ids.len()
-    }
-
-    fn next_available_flow_id(&mut self) -> u64 {
-        loop {
-            let id = self.next_flow_id;
-            self.next_flow_id = self.next_flow_id.wrapping_add(1).max(1);
-            if !self.flows.contains_key(&id) {
-                return id;
-            }
-        }
-    }
-
-    fn cleanup_expired(&mut self) {
-        let now = Instant::now();
-        let expired: Vec<u64> = self
-            .last_seen
-            .iter()
-            .filter_map(|(id, last_seen)| ((*last_seen + UDP_FLOW_TTL) <= now).then_some(*id))
-            .collect();
-
-        for id in expired {
-            self.last_seen.remove(&id);
-            if let Some(key) = self.flows.remove(&id) {
-                self.flow_ids.remove(&key);
-            }
         }
     }
 }
@@ -267,7 +187,8 @@ async fn run_udp_relay(
                 proxy_io
             }
             Err(e) => {
-                warn!("Android TUN UDP relay connection failed: {e}");
+                warn!("Android TUN UDP relay connection failed; retrying");
+                debug!(error = %e, "Android TUN UDP relay connection failure details");
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = tokio::time::sleep(reconnect_delay) => {}
@@ -347,7 +268,7 @@ async fn run_udp_relay(
                         Ok(n) => {
                             match handle_udp_relay_response(
                                 &netstack_tx,
-                                &state,
+                                &mut state,
                                 &response_buf[..n],
                             ).await {
                                 Ok(payload_bytes) => stats.record_response(payload_bytes),
@@ -370,203 +291,8 @@ async fn run_udp_relay(
     debug!("Android TUN UDP relay exited");
 }
 
-async fn connect_udp_relay_stream(
-    context: &ForwardContext,
-) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    context
-        .udp_sessions
-        .connect_to_target(Address::UdpRelay, TransportProtocol::Udp)
-        .await
-}
-
-async fn send_udp_relay_request_batch<W>(
-    writer: &mut W,
-    state: &mut UdpRelayState,
-    first_request: UdpRelayRequest,
-    rx: &mut mpsc::Receiver<UdpRelayRequest>,
-    stats: &UdpRelayStats,
-) -> std::result::Result<(), (io::Error, UdpRelayRequest)>
-where
-    W: AsyncWrite + Unpin,
-{
-    let mut batch = Vec::with_capacity(UDP_RELAY_REQUEST_BATCH_LIMIT);
-    batch.push(first_request);
-    for _ in 1..UDP_RELAY_REQUEST_BATCH_LIMIT {
-        match rx.try_recv() {
-            Ok(request) => batch.push(request),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
-        }
-    }
-
-    // QUIC/实时 UDP 在 Android VPN 下会产生高包率。逐包 flush 会让 agent->proxy
-    // 外层连接承受大量小写入和调度唤醒；这里仍保持“一个 UDP datagram 编成一个
-    // UdpRelayPacket”的协议边界，只把当前队列里已经积压的一小批统一 flush。
-    let mut payload_bytes = 0usize;
-    for request in &batch {
-        write_udp_relay_request(writer, state, request)
-            .await
-            .map_err(|err| (err, request.clone()))?;
-        payload_bytes += request.packet.len();
-    }
-
-    writer
-        .flush()
-        .await
-        .map_err(|err| (err, batch[0].clone()))?;
-    stats.record_sent_batch(batch.len(), payload_bytes);
-    if batch.len() > 1 {
-        debug!(
-            "Android TUN UDP relay request batch flush: batch_size={}",
-            batch.len()
-        );
-    }
-    Ok(())
-}
-
-async fn write_udp_relay_request<W>(
-    writer: &mut W,
-    state: &mut UdpRelayState,
-    request: &UdpRelayRequest,
-) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    // proxy 根据 flow_id/address 建立或复用目标 UDP socket；Android 侧只负责把
-    // VPN netstack 中的 datagram 封成 UdpRelayPacket 后送入共享 relay。
-    let flow_id = state.flow_id(request.client, request.target);
-    let packet = UdpRelayPacket {
-        flow_id,
-        address: request.address.clone(),
-        data: request.packet.clone(),
-    }
-    .encode()
-    .map_err(io::Error::other)?;
-
-    writer.write_all(&packet).await
-}
-
-async fn handle_udp_relay_response(
-    netstack_tx: &UdpWriter,
-    state: &UdpRelayState,
-    response: &[u8],
-) -> io::Result<usize> {
-    // proxy 回复携带 flow_id；这里还原原始 client/target 后写回 Android VPN netstack。
-    let packet = UdpRelayPacket::decode(response).map_err(io::Error::other)?;
-    let Some(flow) = state.flow(packet.flow_id) else {
-        debug!(
-            "Android TUN UDP relay response had no matching flow id={}",
-            packet.flow_id
-        );
-        return Ok(0);
-    };
-
-    let payload_bytes = packet.data.len();
-    let mut tx = netstack_tx.lock().await;
-    tx.send((packet.data, flow.target, flow.client)).await?;
-    Ok(payload_bytes)
-}
-
-fn spawn_udp_relay_stats_logger(stats: Arc<UdpRelayStats>, shutdown: CancellationToken) {
-    spawn_guarded("android tun udp relay stats", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => break,
-                _ = interval.tick() => {
-                    let snapshot = stats.snapshot_and_reset();
-                    if snapshot.sent_packets == 0
-                        && snapshot.response_packets == 0
-                        && snapshot.queue_drops == 0
-                    {
-                        continue;
-                    }
-
-                    // Android VPN 下看不到 HTTPS/QUIC 内部 URL，这里只输出共享 UDP
-                    // relay 的低频聚合指标，用来定位卡顿是否来自 agent 队列丢包、
-                    // 高频 flush 压力或 proxy 响应不足。
-                    info!(
-                        "Android TUN UDP relay stats: sent_packets={} sent_payload_bytes={} responses={} response_payload_bytes={} batches={} batched_packets={} queue_drops={}",
-                        snapshot.sent_packets,
-                        snapshot.sent_payload_bytes,
-                        snapshot.response_packets,
-                        snapshot.response_payload_bytes,
-                        snapshot.send_batches,
-                        snapshot.send_batched_packets,
-                        snapshot.queue_drops
-                    );
-                }
-            }
-        }
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::AsyncReadExt;
-
-    #[test]
-    fn assigns_stable_flow_ids() {
-        let mut state = UdpRelayState::new();
-        let client: SocketAddr = "10.10.10.2:10000".parse().unwrap();
-        let target: SocketAddr = "8.8.8.8:443".parse().unwrap();
-
-        let first = state.flow_id(client, target);
-        let second = state.flow_id(client, target);
-
-        assert_eq!(first, second);
-        assert_eq!(state.flow(first).unwrap().client, client);
-        assert_eq!(state.flow(first).unwrap().target, target);
-    }
-
-    #[tokio::test]
-    async fn encodes_quic_target_for_udp_relay() {
-        let mut state = UdpRelayState::new();
-        let client: SocketAddr = "10.10.10.2:10000".parse().unwrap();
-        let target: SocketAddr = "8.8.8.8:443".parse().unwrap();
-        let address = Address::Ipv4 {
-            addr: [8, 8, 8, 8],
-            port: 443,
-        };
-        let request = UdpRelayRequest {
-            client,
-            target,
-            address: address.clone(),
-            packet: b"quic-client-initial".to_vec(),
-        };
-        let (mut writer, mut reader) = tokio::io::duplex(4096);
-
-        let mut rx = tokio::sync::mpsc::channel(1).1;
-        let stats = UdpRelayStats::default();
-        send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
-            .await
-            .unwrap();
-        drop(writer);
-
-        let mut encoded = Vec::new();
-        reader.read_to_end(&mut encoded).await.unwrap();
-        let packet = UdpRelayPacket::decode(&encoded).unwrap();
-
-        assert_eq!(packet.flow_id, 1);
-        match packet.address {
-            Address::Ipv4 { addr, port } => {
-                assert_eq!(addr, [8, 8, 8, 8]);
-                assert_eq!(port, 443);
-            }
-            other => panic!("unexpected relay address: {other:?}"),
-        }
-        assert_eq!(packet.data, b"quic-client-initial");
-        assert_eq!(state.flow(packet.flow_id).unwrap().client, client);
-        assert_eq!(state.flow(packet.flow_id).unwrap().target, target);
-
-        let snapshot = stats.snapshot_and_reset();
-        assert_eq!(snapshot.sent_packets, 1);
-        assert_eq!(
-            snapshot.sent_payload_bytes,
-            b"quic-client-initial".len() as u64
-        );
-    }
-}
+mod relay_io;
+pub use relay_io::send_udp_relay_request_batch;
+use relay_io::*;
+mod state;
+pub use state::{UdpFlowKey, UdpRelayState};

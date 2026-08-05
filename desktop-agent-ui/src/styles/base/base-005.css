@@ -1,0 +1,352 @@
+.rule-presets {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.policy-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-muted-surface);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.field-help {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.field > small {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dependent-field {
+  margin-bottom: 14px;
+}
+
+.mode-effect-tag {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.field input,
+.field select,
+.field textarea,
+.field .p-inputtext,
+.field .p-select,
+.field .p-inputnumber,
+.field .p-textarea,
+.toml-editor {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  outline: none;
+}
+
+.field input,
+.field select,
+.field .p-inputtext,
+.field .p-select,
+.field .p-inputnumber-input {
+  height: 40px;
+  padding: 0 11px;
+}
+
+.field .p-inputnumber,
+.field .p-selectbutton {
+  width: 100%;
+}
+
+.field textarea {
+  min-height: 112px;
+  resize: vertical;
+  padding: 10px 11px;
+}
+
+.field .p-textarea {
+  min-height: 112px;
+  resize: vertical;
+  padding: 10px 11px;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.field .p-inputtext:enabled:focus,
+.field .p-select:not(.p-disabled).p-focus,
+.toml-editor-shell:focus-within {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.field-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.yamux-settings .field-pair {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  align-items: start;
+}
+
+.tcp-transport-note p {
+  margin: 0;
+  color: #52647a;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.segmented-row {
+  gap: 9px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+
+.segmented button {
+  min-height: 32px;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.segmented button.selected {
+  background: #ffffff;
+  color: #7c3aed;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
+}
+
+.p-selectbutton {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+
+.p-selectbutton .p-togglebutton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+}
+
+.p-selectbutton .p-togglebutton.p-togglebutton-checked {
+  background: var(--app-surface);
+  color: var(--app-primary-strong);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
+}
+
+.toggle {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  cursor: pointer;
+}
+
+.toggle span {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.16s ease;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+}
+
+.toggle.checked {
+  background: var(--app-success);
+}
+
+.toggle.checked span {
+  transform: translateX(20px);
+}
+
+.rule-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.rule-create,
+.rule-inventory {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-muted-surface);
+}
+
+.rule-inventory {
+  min-height: 0;
+  overflow: visible;
+}
+
+.rule-type-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rule-type-tabs button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rule-type-tabs button:hover,
+.rule-type-tabs button.active {
+  border-color: color-mix(in srgb, var(--app-primary) 48%, var(--app-border-soft));
+  background: color-mix(in srgb, var(--app-primary) 9%, var(--app-surface));
+  color: var(--app-text-strong);
+}
+
+.rule-type-tabs button:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.rule-type-tabs svg {
+  width: 15px;
+  height: 15px;
+}
+
+.rule-type-tabs strong {
+  min-width: 21px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--app-control);
+  font-size: 10px;
+  text-align: center;
+}
+
+.rule-table {
+  height: clamp(300px, 46vh, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: var(--app-surface);
+  scrollbar-gutter: stable;
+}
+
+.rule-table-group + .rule-table-group {
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.rule-table-group-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 38px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: var(--app-muted-surface);
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.rule-table-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--app-text-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rule-table-group-title svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rule-table-group-title strong {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--app-control);
+  color: var(--app-text-muted);
+  font-size: 10px;
+  text-align: center;
+}

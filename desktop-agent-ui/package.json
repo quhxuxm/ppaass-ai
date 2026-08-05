@@ -1,12 +1,12 @@
 {
   "name": "desktop-agent-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "test": "node --experimental-strip-types scripts/test-direct-rule-domains.mjs && node scripts/test-config-toml.mjs",
+    "test": "node --experimental-strip-types scripts/test-direct-rule-domains.mjs && node scripts/test-config-toml.mjs && node scripts/test-managed-private-key.mjs && node scripts/test-device-login.mjs && node scripts/test-agent-permissions.mjs && node scripts/test-admin-key-requests.mjs && node scripts/test-packet-capture-layout.mjs && node scripts/test-windows-installer-cleanup.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri"
   },

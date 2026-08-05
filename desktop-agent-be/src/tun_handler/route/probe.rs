@@ -2,13 +2,13 @@ use super::*;
 use tokio::net::UdpSocket;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ProxyRoute {
+pub struct ProxyRoute {
     pub(crate) local_ip: IpAddr,
     pub(crate) bind_interface: Option<BindInterface>,
 }
 
 /// 根据 `proxy_addrs` 中的地址，探测 OS 选择的本地出口地址和接口，以便安装 TUN 旁路路由。
-pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
+pub async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRoute> {
     let routes = list_routes();
 
     for entry in proxy_addrs {
@@ -49,7 +49,7 @@ pub(crate) async fn detect_proxy_route(proxy_addrs: &[String]) -> Option<ProxyRo
     None
 }
 
-pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
+pub fn detect_default_route_interface(want_v6: bool) -> Option<BindInterface> {
     let routes = list_routes()?;
     let route = default_route(&routes, want_v6)?;
     route_bind_interface(route)
@@ -59,7 +59,7 @@ pub(crate) fn detect_default_route_interface(want_v6: bool) -> Option<BindInterf
 fn list_routes() -> Option<Vec<Route>> {
     let mut manager = RouteManager::new().ok()?;
     let routes = manager.list().ok()?;
-    debug!("当前系统路由表：\n{routes:?}");
+    debug!(route_count = routes.len(), "已读取当前系统路由表");
     Some(routes)
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                         let ip = sa.ip();
                         // loopback proxy 不需要旁路路由，安装反而可能干扰本机访问。
                         if ip.is_loopback() {
-                            debug!("代理地址 {entry} 解析为回环地址 {ip}；跳过 TUN 旁路路由");
+                            debug!("受管 Proxy 节点解析为回环地址；跳过 TUN 旁路路由");
                             continue;
                         }
                         if !out.contains(&ip) {
@@ -98,14 +98,80 @@ pub(crate) fn resolve_proxy_ips(proxy_addrs: &[String]) -> Vec<IpAddr> {
                         resolved = true;
                     }
                 }
-                Err(e) => debug!("解析代理地址 {entry} 失败：{e}"),
+                Err(_) => debug!("解析一个受管 Proxy 节点失败"),
             }
         }
         if !resolved {
-            warn!("无法解析代理地址 {entry}；旁路路由已跳过");
+            warn!("无法解析一个受管 Proxy 节点；旁路路由已跳过");
         }
     }
     out
+}
+
+/// TUN 路由安装要求至少获得一个非回环 proxy IP。唯一例外是所有配置项都
+/// 明确解析为回环地址，此时 proxy 本就在本机，不需要安装物理出口旁路。
+pub fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> {
+    let proxy_ips = resolve_proxy_ips(proxy_addrs);
+    if !proxy_ips.is_empty() {
+        return Ok(proxy_ips);
+    }
+    if proxy_addrs_resolve_to_loopback_only(proxy_addrs) {
+        debug!("所有代理地址均解析为回环地址；TUN 模式无需安装 proxy 物理出口旁路");
+        return Ok(proxy_ips);
+    }
+    Err(AgentError::Connection(
+        "TUN 启动前未能解析任何非回环 proxy IP，拒绝安装 split-default 以避免代理连接回环"
+            .to_string(),
+    ))
+}
+
+/// 在 TUN 接管系统 DNS 前把受管 proxy 域名固定成 socket endpoint。
+/// 后续重连只使用这些 IP，避免 DNS proxy 与 proxy 重连互相等待。
+pub fn resolve_proxy_endpoints_checked(proxy_addrs: &[String]) -> Result<Vec<String>> {
+    let mut endpoints = Vec::new();
+    for entry in proxy_addrs {
+        let candidate = if entry.contains(':') {
+            entry.clone()
+        } else {
+            format!("{entry}:443")
+        };
+        match candidate.to_socket_addrs() {
+            Ok(addresses) => {
+                for address in addresses {
+                    let endpoint = address.to_string();
+                    if !endpoints.contains(&endpoint) {
+                        endpoints.push(endpoint);
+                    }
+                }
+            }
+            Err(error) => warn!("TUN 启动前解析受管 Proxy endpoint 失败：{error}"),
+        }
+    }
+
+    if endpoints.is_empty() {
+        return Err(AgentError::Connection(
+            "TUN 启动前未能解析任何 proxy endpoint，拒绝接管系统 DNS".to_string(),
+        ));
+    }
+    Ok(endpoints)
+}
+
+fn proxy_addrs_resolve_to_loopback_only(proxy_addrs: &[String]) -> bool {
+    if proxy_addrs.is_empty() {
+        return false;
+    }
+    proxy_addrs.iter().all(|entry| {
+        let candidate = if entry.contains(':') {
+            entry.clone()
+        } else {
+            format!("{entry}:0")
+        };
+        let Ok(addresses) = candidate.to_socket_addrs() else {
+            return false;
+        };
+        let addresses = addresses.collect::<Vec<_>>();
+        !addresses.is_empty() && addresses.iter().all(|address| address.ip().is_loopback())
+    })
 }
 
 /// 记录所有已安装的路由，以便在 drop 时删除。
@@ -137,42 +203,20 @@ fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
         .max_by(|left, right| left.cmp(right))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(super) fn route_next_hop(
     routes: &[Route],
     dst: IpAddr,
     fallback_gateway: Option<IpAddr>,
     fallback_if_index: Option<u32>,
 ) -> (Option<IpAddr>, Option<u32>) {
-    #[cfg(target_os = "macos")]
-    if let Some(next_hop) = macos_route_get_next_hop(dst) {
-        return next_hop;
-    }
-
     best_route(routes, dst)
         .map(|route| (route.gateway(), route.if_index()))
         .unwrap_or((fallback_gateway, fallback_if_index))
 }
 
 #[cfg(target_os = "macos")]
-fn macos_route_get_next_hop(dst: IpAddr) -> Option<(Option<IpAddr>, Option<u32>)> {
-    let output = Command::new("/sbin/route")
-        .args(["-n", "get", &dst.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        debug!(
-            "route -n get {dst} 失败：{}",
-            command_output_message(&output)
-        );
-        return None;
-    }
-    parse_macos_route_get_next_hop(&String::from_utf8_lossy(&output.stdout))
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn parse_macos_route_get_next_hop(
-    output: &str,
-) -> Option<(Option<IpAddr>, Option<u32>)> {
+pub fn parse_macos_route_get_next_hop(output: &str) -> Option<(Option<IpAddr>, Option<u32>)> {
     let mut gateway = None;
     let mut if_index = None;
 

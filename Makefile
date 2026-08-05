@@ -8,22 +8,22 @@ build-all:
 build-agent:
 	cargo build --release -p desktop-agent-be
 
-build-proxy:
-	cargo build --release -p proxy
+build-proxy-entry:
+	cargo build --release -p proxy-entry
 
 ## Run Components
 run-agent:
 	cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
-run-proxy:
-	cargo run --release -p proxy -- --config config/proxy.toml
+run-proxy-entry:
+	cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
 
 ## Development
 dev-agent:
 	RUST_LOG=debug cargo run -p desktop-agent-be --bin desktop-agent -- --config config/agent.toml
 
-dev-proxy:
-	RUST_LOG=debug cargo run -p proxy -- --config config/proxy.toml
+dev-proxy-entry:
+	RUST_LOG=debug cargo run -p proxy-entry -- --config config/proxy-entry.toml
 
 ## Testing
 test:
@@ -59,7 +59,7 @@ clean:
 ## Setup
 setup:
 	mkdir -p config keys
-	cp config/agent.toml.example config/agent.toml || true
-	cp config/proxy.toml.example config/proxy.toml || true
+	test -f config/agent.toml
+	test -f config/proxy-entry.toml
 
-.PHONY: build-all build-agent build-proxy run-agent run-proxy dev-agent dev-proxy test fmt clippy check clean setup
+.PHONY: build-all build-agent build-proxy-entry run-agent run-proxy-entry dev-agent dev-proxy-entry test fmt clippy check clean setup

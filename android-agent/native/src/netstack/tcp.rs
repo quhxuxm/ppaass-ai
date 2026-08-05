@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -8,15 +9,16 @@ use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::ForwardContext;
 use super::network::{address_for_tun_target, reject_tun_target};
-use crate::android_log;
 use crate::error::{AndroidAgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 
+const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
@@ -61,7 +63,6 @@ async fn handle_tcp(
         target.to_string()
     };
     let mut direct_target = None;
-    let mut direct_reason = None;
     let proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && context.direct_checker.is_direct(&address) {
@@ -81,7 +82,6 @@ async fn handle_tcp(
             "Android TUN TCP cached direct domain matched: {} ({})",
             target, domain
         );
-        direct_reason = Some(format!("cached domain {domain}"));
         direct_target = Some(target);
     }
 
@@ -99,16 +99,19 @@ async fn handle_tcp(
     }
 
     if let Some(connect_target) = direct_target {
-        let target_str = match direct_reason {
-            Some(reason) => format!("{connect_target} ({reason}, original {target})"),
-            None => format!("{connect_target} (original {target})"),
-        };
+        let target_str = target_label.as_str();
         debug!("Android TUN TCP direct -> {}", target_str);
-        android_log::info(format!("Android TUN TCP DIRECT {target_str}"));
-        let mut target_stream = connect_direct_tcp(connect_target).await.map_err(|e| {
-            android_log::warn(format!("Android TUN TCP DIRECT failed {target_str}: {e}"));
-            AndroidAgentError::Connection(format!("direct connect {target_str} failed: {e}"))
-        })?;
+        let direct_connect = async {
+            connect_direct_tcp(connect_target).await.map_err(|error| {
+                debug!("Android TUN TCP direct connect failed {target_str}: {error}");
+                AndroidAgentError::Connection(format!(
+                    "direct connect {target_str} failed: {error}"
+                ))
+            })
+        };
+        let (mut target_stream, prefetched) =
+            connect_with_tun_prefetch(&mut client, direct_connect, &target_str).await?;
+        write_prefetched(&mut target_stream, &prefetched).await?;
         match relay_tcp_bidirectional(
             &mut client,
             &mut target_stream,
@@ -131,7 +134,6 @@ async fn handle_tcp(
         debug!("Android TUN TCP DNS -> proxy -> {}", target_label);
     } else {
         debug!("Android TUN TCP proxy -> {}", proxy_label);
-        android_log::info(format!("Android TUN TCP PROXY {proxy_label}"));
     }
     let (mut proxy_io, prefetched) = match connect_proxy_stream_with_tun_prefetch(
         &mut client,
@@ -143,9 +145,7 @@ async fn handle_tcp(
     {
         Ok(result) => result,
         Err(e) => {
-            android_log::error(format!(
-                "Android TUN TCP PROXY connect failed {proxy_label}: {e}"
-            ));
+            debug!("Android TUN TCP proxy connect failed {proxy_label}: {e}");
             return Err(e);
         }
     };
@@ -154,8 +154,7 @@ async fn handle_tcp(
         // Android TUN 的三次握手已经由 netstack 接住；等待 proxy 建连时如果完全不读本地流，
         // 浏览器或视频 App 的首包会被接收窗口卡住。缓存少量字节并在远端通道建立后立即写出，
         // 可以减少 HLS 小分片连接在建连阶段的抖动。
-        proxy_io.write_all(&prefetched).await?;
-        proxy_io.flush().await?;
+        write_prefetched(&mut proxy_io, &prefetched).await?;
     }
     // Android TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始
     // netstack TCP 流交给 copy_bidirectional，避免“先读后补发”影响视频分片。
@@ -183,12 +182,27 @@ async fn connect_proxy_stream_with_tun_prefetch(
     proxy_address: protocol::Address,
     label: &str,
 ) -> Result<(crate::yamux_session::AndroidYamuxTargetStream, Vec<u8>)> {
-    let mut connect = Box::pin(
+    connect_with_tun_prefetch(
+        client,
         context
             .tcp_sessions
             .connect_to_target(proxy_address, TransportProtocol::Tcp),
-    );
+        label,
+    )
+    .await
+}
+
+async fn connect_with_tun_prefetch<T, F>(
+    client: &mut netstack_smoltcp::TcpStream,
+    connect: F,
+    label: &str,
+) -> Result<(T, Vec<u8>)>
+where
+    F: Future<Output = Result<T>>,
+{
+    let mut connect = Box::pin(connect);
     let mut prefetched = Vec::with_capacity(TUN_TCP_PREFETCH_CHUNK);
+    let mut chunk = vec![0u8; TUN_TCP_PREFETCH_CHUNK];
 
     loop {
         if prefetched.len() >= TUN_TCP_PREFETCH_LIMIT {
@@ -200,27 +214,38 @@ async fn connect_proxy_stream_with_tun_prefetch(
             return Ok((proxy_io, prefetched));
         }
 
-        let remaining = TUN_TCP_PREFETCH_LIMIT - prefetched.len();
-        let mut buf = vec![0u8; remaining.min(TUN_TCP_PREFETCH_CHUNK)];
+        let read_limit = (TUN_TCP_PREFETCH_LIMIT - prefetched.len()).min(chunk.len());
         tokio::select! {
             proxy_io = &mut connect => {
                 return Ok((proxy_io?, prefetched));
             }
-            read = client.read(&mut buf) => {
+            read = client.read(&mut chunk[..read_limit]) => {
                 let read = read?;
                 if read == 0 {
                     if prefetched.is_empty() {
                         return Err(AndroidAgentError::Connection(format!(
-                            "Android TUN TCP client closed before proxy connect: {label}"
+                            "Android TUN TCP client closed before remote connect: {label}"
                         )));
                     }
                     let proxy_io = connect.await?;
                     return Ok((proxy_io, prefetched));
                 }
-                prefetched.extend_from_slice(&buf[..read]);
+                prefetched.extend_from_slice(&chunk[..read]);
             }
         }
     }
+}
+
+async fn write_prefetched<W>(remote: &mut W, prefetched: &[u8]) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if prefetched.is_empty() {
+        return Ok(());
+    }
+    remote.write_all(prefetched).await?;
+    remote.flush().await?;
+    Ok(())
 }
 
 async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
@@ -234,7 +259,14 @@ async fn connect_direct_tcp(target: SocketAddr) -> std::io::Result<TcpStream> {
     socket.set_nonblocking(true)?;
 
     let socket = TcpSocket::from_std_stream(socket.into());
-    socket.connect(target).await
+    timeout(DIRECT_TCP_CONNECT_TIMEOUT, socket.connect(target))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Android TUN TCP direct connect {target} timed out"),
+            )
+        })?
 }
 
 fn enable_direct_tcp_keepalive(socket: &Socket, target: SocketAddr) {

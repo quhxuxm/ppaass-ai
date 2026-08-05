@@ -24,6 +24,7 @@ const TUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
 pub struct AgentServer {
     // 全局只读配置；连接处理任务通过 Arc 克隆读取。
     config: Arc<AgentConfig>,
+    proxy_addrs: Arc<Vec<String>>,
     // TCP 语义的 proxy 传输管理器，供 HTTP CONNECT、SOCKS CONNECT、TUN TCP 使用。
     tcp_sessions: Arc<YamuxSessionManager>,
     // UDP 语义的 proxy 传输管理器，供 SOCKS UDP、TUN UDP、DNS proxy 使用。
@@ -34,18 +35,35 @@ pub struct AgentServer {
 }
 
 impl AgentServer {
-    #[instrument(skip(config, packet_capture))]
-    pub async fn new(config: AgentConfig, packet_capture: PacketCaptureController) -> Result<Self> {
+    #[instrument(skip(config, proxy_addrs, packet_capture))]
+    pub async fn new(
+        config: AgentConfig,
+        proxy_addrs: Vec<String>,
+        packet_capture: PacketCaptureController,
+    ) -> Result<Self> {
+        if proxy_addrs.is_empty() {
+            return Err(crate::error::AgentError::Connection(
+                "未分配受管 Proxy 地址".to_string(),
+            ));
+        }
         // 直连规则在启动时解析成运行时结构，连接处理路径只做快速匹配。
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
+        let proxy_addrs = Arc::new(proxy_addrs);
         // TCP 始终使用 direct framed TCP；UDP 根据 transport_mode 选择
         // 原生加密 UDP 会话池或 raw TCP 上的 Yamux session。
-        let tcp_sessions = Arc::new(YamuxSessionManager::new(config.clone()));
-        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(config.clone()));
+        let tcp_sessions = Arc::new(YamuxSessionManager::new(
+            config.clone(),
+            proxy_addrs.clone(),
+        ));
+        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(
+            config.clone(),
+            proxy_addrs.clone(),
+        ));
 
         Ok(Self {
             config,
+            proxy_addrs,
             tcp_sessions,
             udp_sessions,
             direct_access_checker,
@@ -72,7 +90,7 @@ impl AgentServer {
             );
             let tun_cfg = self.config.tun.clone();
             let transport_mode = self.config.transport_mode;
-            let proxy_addrs = self.config.proxy_addrs.clone();
+            let proxy_addrs = self.proxy_addrs.as_ref().clone();
             let tcp_sessions = self.tcp_sessions.clone();
             let udp_sessions = self.udp_sessions.clone();
             let direct_access_checker = self.direct_access_checker.clone();

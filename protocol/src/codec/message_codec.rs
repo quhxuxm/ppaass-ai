@@ -1,6 +1,6 @@
 use super::CipherState;
 use crate::compression::{CompressionMode, compress, decompress};
-use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType};
+use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType, PROTOCOL_VERSION};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::sync::Arc;
@@ -9,6 +9,10 @@ use tracing::error;
 
 /// 启用压缩的最小负载大小（避免小消息产生额外开销）
 const MIN_COMPRESSION_SIZE: usize = 64;
+/// Authentication runs before record protection is installed, so its
+/// cleartext envelope is intentionally much smaller than a data frame.
+const MAX_UNPROTECTED_AUTH_PAYLOAD_SIZE: usize = 4 * 1024;
+const MAX_UNPROTECTED_AUTH_FRAME_SIZE: usize = 8 * 1024;
 
 /// 使用长度分隔帧的代理协议消息编解码器。
 /// 封装 tokio-util 的 LengthDelimitedCodec 以实现可靠的消息分帧。
@@ -19,31 +23,41 @@ pub struct MessageCodec {
 }
 
 impl MessageCodec {
-    pub fn new(state: Option<Arc<CipherState>>) -> Self {
+    pub fn new(state: Arc<CipherState>) -> Self {
         let inner = LengthDelimitedCodec::builder()
             .max_frame_length(MAX_MESSAGE_SIZE)
             .length_field_type::<u32>()
             .big_endian()
             .new_codec();
-        Self {
-            inner,
-            state: state.unwrap_or_default(),
-        }
+        Self { inner, state }
     }
 
-    fn needs_crypto(_message_type: MessageType) -> bool {
-        true
+    fn is_auth(message_type: MessageType) -> bool {
+        matches!(
+            message_type,
+            MessageType::AuthRequest | MessageType::AuthResponse
+        )
     }
 
     fn io_error(context: &str, err: impl std::fmt::Display) -> io::Error {
         error!("{}: {}", context, err);
         io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", context, err))
     }
-}
 
-impl Default for MessageCodec {
-    fn default() -> Self {
-        Self::new(None)
+    fn validate_wire_metadata(message: &Message) -> io::Result<()> {
+        if message.version != PROTOCOL_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported TCP protocol version",
+            ));
+        }
+        if message.compression > CompressionMode::Gzip.to_flag() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid TCP frame compression mode",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -52,21 +66,68 @@ impl Decoder for MessageCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        // LengthDelimitedCodec otherwise trusts its global 4 MiB limit and
+        // waits for that entire allocation before returning a frame. During
+        // authentication we can reject an oversized declared length as soon as
+        // the four-byte prefix arrives.
+        if self.state.session_cipher().is_none() && src.len() >= 4 {
+            let declared_len = u32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+            if declared_len > MAX_UNPROTECTED_AUTH_FRAME_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "declared unprotected authentication frame is too large",
+                ));
+            }
+        }
         let frame = match self.inner.decode(src)? {
             Some(frame) => frame,
             None => return Ok(None),
         };
+        if self.state.session_cipher().is_none() && frame.len() > MAX_UNPROTECTED_AUTH_FRAME_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unprotected authentication wire frame is too large",
+            ));
+        }
 
         let mut message: Message =
             bitcode::deserialize(&frame).map_err(|e| Self::io_error("消息反序列化失败", e))?;
+        Self::validate_wire_metadata(&message)?;
 
-        if let Some(cipher) = self.state.cipher.get()
-            && Self::needs_crypto(message.message_type)
-        {
-            let decrypted = cipher
-                .decrypt(&message.payload)
-                .map_err(|e| Self::io_error("解密失败", e))?;
-            message.payload = decrypted;
+        if let Some(cipher) = self.state.session_cipher() {
+            if Self::is_auth(message.message_type) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "authentication frames are forbidden after session establishment",
+                ));
+            }
+            message.payload = cipher
+                .open(
+                    message.message_type,
+                    message.compression,
+                    message.sequence,
+                    &message.payload,
+                )
+                .map_err(|e| Self::io_error("TCP 帧认证失败", e))?;
+        } else {
+            if !Self::is_auth(message.message_type) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "record-protected TCP frame required after authentication",
+                ));
+            }
+            if message.sequence != 0 || message.compression != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid unprotected authentication frame metadata",
+                ));
+            }
+            if message.payload.len() > MAX_UNPROTECTED_AUTH_PAYLOAD_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unprotected authentication frame is too large",
+                ));
+            }
         }
 
         let compression_mode = CompressionMode::from_flag(message.compression);
@@ -84,8 +145,19 @@ impl Encoder<Message> for MessageCodec {
     type Error = io::Error;
 
     fn encode(&mut self, mut item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        if item.version != PROTOCOL_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cannot encode an unsupported TCP protocol version",
+            ));
+        }
+        item.sequence = 0;
+        item.compression = 0;
         let compression_mode = self.state.compression_mode();
-        if compression_mode != CompressionMode::None && item.payload.len() >= MIN_COMPRESSION_SIZE {
+        if !Self::is_auth(item.message_type)
+            && compression_mode != CompressionMode::None
+            && item.payload.len() >= MIN_COMPRESSION_SIZE
+        {
             match compress(&item.payload, compression_mode) {
                 Ok(compressed) => {
                     if compressed.len() < item.payload.len() {
@@ -97,13 +169,31 @@ impl Encoder<Message> for MessageCodec {
             }
         }
 
-        if let Some(cipher) = self.state.cipher.get()
-            && Self::needs_crypto(item.message_type)
-        {
-            let encrypted = cipher
-                .encrypt(&item.payload)
-                .map_err(|e| Self::io_error("加密失败", e))?;
-            item.payload = encrypted;
+        if let Some(cipher) = self.state.session_cipher() {
+            if Self::is_auth(item.message_type) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "authentication frames are forbidden after session establishment",
+                ));
+            }
+            let (sequence, ciphertext) = cipher
+                .seal(item.message_type, item.compression, &item.payload)
+                .map_err(|e| Self::io_error("TCP 帧加密失败", e))?;
+            item.sequence = sequence;
+            item.payload = ciphertext;
+        } else {
+            if !Self::is_auth(item.message_type) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "refusing to send an unprotected non-authentication frame",
+                ));
+            }
+            if item.payload.len() > MAX_UNPROTECTED_AUTH_PAYLOAD_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unprotected authentication frame is too large",
+                ));
+            }
         }
 
         let data = bitcode::serialize(&item).map_err(|e| Self::io_error("消息序列化失败", e))?;

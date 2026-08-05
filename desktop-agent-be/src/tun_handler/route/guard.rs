@@ -44,12 +44,22 @@ const LOCAL_NETWORK_BYPASS_SPECS: &[(Ipv4Addr, u8, LocalNetworkBypassNextHop)] =
     ),
 ];
 
-pub(crate) struct RouteGuard {
+pub struct RouteGuard {
     mgr: RouteManager,
     installed: Vec<Route>,
     lease: RouteLease,
     #[cfg(target_os = "macos")]
     pf_dns_guard: Option<MacosPfDnsGuard>,
+}
+
+pub(crate) struct RouteGuardInstall<'a> {
+    pub(crate) tun_if_index: u32,
+    pub(crate) tun_ipv4: Ipv4Addr,
+    pub(crate) dns_capture_target: Ipv4Addr,
+    pub(crate) tun_ipv6_cidr: Option<&'a str>,
+    pub(crate) route_state_file: Option<&'a str>,
+    pub(crate) proxy_ips: &'a [IpAddr],
+    pub(crate) capture_system_dns: bool,
 }
 
 impl RouteGuard {
@@ -64,14 +74,65 @@ impl RouteGuard {
         proxy_ips: &[IpAddr],
         capture_system_dns: bool,
     ) -> Result<Self> {
+        let install = RouteGuardInstall {
+            tun_if_index,
+            tun_ipv4,
+            dns_capture_target: _dns_capture_target,
+            tun_ipv6_cidr,
+            route_state_file,
+            proxy_ips,
+            capture_system_dns,
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let mut ignore_pf_token = |_token: Option<&str>| Ok(());
+            Self::install_with_pf_token_observer(install, &mut ignore_pf_token)
+        }
+        #[cfg(not(target_os = "macos"))]
+        Self::install_inner(install)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn install_with_pf_token_observer(
+        install: RouteGuardInstall<'_>,
+        pf_token_observer: &mut dyn FnMut(Option<&str>) -> Result<()>,
+    ) -> Result<Self> {
+        Self::install_inner(install, pf_token_observer)
+    }
+
+    fn install_inner(
+        install: RouteGuardInstall<'_>,
+        #[cfg(target_os = "macos")] pf_token_observer: &mut dyn FnMut(Option<&str>) -> Result<()>,
+    ) -> Result<Self> {
+        let RouteGuardInstall {
+            tun_if_index,
+            tun_ipv4,
+            dns_capture_target,
+            tun_ipv6_cidr,
+            route_state_file,
+            proxy_ips,
+            capture_system_dns,
+        } = install;
+        #[cfg(not(target_os = "macos"))]
+        let _ = dns_capture_target;
         let mut mgr = RouteManager::new()
             .map_err(|e| AgentError::Connection(format!("RouteManager 初始化失败：{e}")))?;
-        let mut lease = RouteLease::new(route_state_file);
+        let lease = RouteLease::new(route_state_file);
+        // Do this before constructing RouteGuard. If strict stale cleanup
+        // fails, a partially initialized guard must not delete the very state
+        // file needed for the next deterministic recovery attempt.
+        lease.cleanup_stale_routes(&mut mgr)?;
+        let mut guard = Self {
+            mgr,
+            installed: Vec::new(),
+            lease,
+            #[cfg(target_os = "macos")]
+            pf_dns_guard: None,
+        };
 
-        lease.cleanup_stale_routes(&mut mgr);
-        cleanup_existing_tun_split_routes(&mut mgr, tun_if_index);
+        cleanup_existing_tun_split_routes(&mut guard.mgr, tun_if_index);
 
-        let routes = match mgr.list() {
+        let routes = match guard.mgr.list() {
             Ok(routes) => routes,
             Err(e) => {
                 warn!("无法列出当前路由：{e}");
@@ -81,20 +142,18 @@ impl RouteGuard {
         let (default_v4_gw, default_v4_if) = find_default_route(&routes, false);
         let (default_v6_gw, default_v6_if) = find_default_route(&routes, true);
         info!(
-            "现有默认路由：v4 网关={:?} 接口={:?}，v6 网关={:?} 接口={:?}",
-            default_v4_gw, default_v4_if, default_v6_gw, default_v6_if
+            "已读取现有默认路由：v4 接口={:?}，v6 接口={:?}",
+            default_v4_if, default_v6_if
         );
-
-        let mut installed: Vec<Route> = Vec::new();
-        #[cfg(target_os = "macos")]
-        let mut pf_dns_guard = None;
 
         for ip in proxy_ips {
             // 给每个 proxy IP 安装最具体的主机路由，使 agent 到 proxy 绕过 TUN。
             let route = match ip {
                 IpAddr::V4(v4) => {
                     let (gateway, if_index) =
-                        route_next_hop(&routes, *ip, default_v4_gw, default_v4_if);
+                        proxy_bypass_next_hop(&routes, *ip, default_v4_gw, default_v4_if);
+                    #[cfg(target_os = "macos")]
+                    validate_macos_proxy_bypass_next_hop(*ip, tun_if_index, if_index)?;
                     let mut r = Route::new(IpAddr::V4(*v4), 32);
                     if let Some(gw) = gateway {
                         r = r.with_gateway(gw);
@@ -106,7 +165,9 @@ impl RouteGuard {
                 }
                 IpAddr::V6(v6) => {
                     let (gateway, if_index) =
-                        route_next_hop(&routes, *ip, default_v6_gw, default_v6_if);
+                        proxy_bypass_next_hop(&routes, *ip, default_v6_gw, default_v6_if);
+                    #[cfg(target_os = "macos")]
+                    validate_macos_proxy_bypass_next_hop(*ip, tun_if_index, if_index)?;
                     let mut r = Route::new(IpAddr::V6(*v6), 128);
                     if let Some(gw) = gateway {
                         r = r.with_gateway(gw);
@@ -117,13 +178,39 @@ impl RouteGuard {
                     r
                 }
             };
-            match mgr.add(&route) {
+            match guard.mgr.add(&route) {
                 Ok(()) => {
-                    info!("已安装代理旁路路由：{}", route);
-                    lease.record_installed(RouteKind::ProxyBypass, &route);
-                    installed.push(route);
+                    info!("已安装受管 Proxy 旁路路由");
+                    guard
+                        .lease
+                        .record_installed(RouteKind::ProxyBypass, &route)?;
+                    guard.installed.push(route);
                 }
-                Err(e) => warn!("为 {ip} 安装旁路路由失败：{e}"),
+                Err(_e) => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let message = _e.to_string();
+                        if route_add_error_is_already_exists(&message)
+                            && required_route_exists(
+                                &mut guard.mgr,
+                                RouteKind::ProxyBypass,
+                                &route,
+                            )?
+                        {
+                            info!("受管 Proxy 旁路路由已存在并验证正确，已接管到当前 lease");
+                            guard
+                                .lease
+                                .record_installed(RouteKind::ProxyBypass, &route)?;
+                            guard.installed.push(route);
+                            continue;
+                        }
+                        return Err(AgentError::Connection(
+                            "安装必要的受管 Proxy 旁路路由失败".to_string(),
+                        ));
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    warn!("安装受管 Proxy 旁路路由失败");
+                }
             }
         }
 
@@ -135,7 +222,7 @@ impl RouteGuard {
                     .map(|server| server.ip)
                     .collect::<Vec<_>>();
                 install_dns_capture_routes(
-                    &mut mgr,
+                    &mut guard.mgr,
                     DnsCaptureRouteContext {
                         tun_if_index,
                         dns_ips: &dns_capture_ips,
@@ -143,20 +230,21 @@ impl RouteGuard {
                         default_v4_gateway: default_v4_gw,
                         default_v6_gateway: default_v6_gw,
                     },
-                    &mut installed,
-                    &mut lease,
-                );
+                    &mut guard.installed,
+                    &mut guard.lease,
+                )?;
             } else {
-                debug!("macOS TUN DNS 捕获使用 PF route-to，不安装 DNS host route");
+                debug!("当前平台使用专用 DNS 接管机制，不安装系统 DNS host route");
             }
             #[cfg(target_os = "macos")]
             {
-                pf_dns_guard = MacosPfDnsGuard::install(
+                guard.pf_dns_guard = Some(MacosPfDnsGuard::install(
                     tun_if_index,
-                    _dns_capture_target,
+                    dns_capture_target,
                     &dns_servers,
                     &macos_default_dns_interfaces(default_v4_if, default_v6_if),
-                );
+                    pf_token_observer,
+                )?);
             }
             flush_system_dns_cache();
         }
@@ -178,330 +266,103 @@ impl RouteGuard {
         // 这类局域网流量更依赖物理接口和组播语义。先安装更具体的本地网络旁路，
         // 再安装 split-default，可让这些流量继续走原 Wi-Fi/以太网接口。
         install_local_network_bypass_routes(
-            &mut mgr,
+            &mut guard.mgr,
             default_v4_gw,
             default_v4_if,
-            &mut installed,
-            &mut lease,
-        );
+            &mut guard.installed,
+            &mut guard.lease,
+        )?;
 
         // split-default 将公网流量分成两半导入 TUN，同时让更具体的旁路路由优先。
-        install_ipv4_split_routes(&mut mgr, tun_if_index, tun_ipv4, &mut installed, &mut lease);
+        install_ipv4_split_routes(
+            &mut guard.mgr,
+            tun_if_index,
+            tun_ipv4,
+            &mut guard.installed,
+            &mut guard.lease,
+        )?;
         install_ipv6_split_routes(
-            &mut mgr,
+            &mut guard.mgr,
             tun_if_index,
             tun_ipv6_cidr,
-            &mut installed,
-            &mut lease,
-        );
+            &mut guard.installed,
+            &mut guard.lease,
+        )?;
 
-        Ok(Self {
-            mgr,
-            installed,
-            lease,
-            #[cfg(target_os = "macos")]
-            pf_dns_guard,
-        })
+        Ok(guard)
     }
-}
 
-impl Drop for RouteGuard {
-    fn drop(&mut self) {
+    pub(crate) fn cleanup(&mut self) -> Result<()> {
+        let mut cleanup_errors = Vec::new();
+
         #[cfg(target_os = "macos")]
-        drop(self.pf_dns_guard.take());
+        if let Some(pf_dns_guard) = self.pf_dns_guard.as_mut() {
+            match pf_dns_guard.cleanup() {
+                Ok(()) => {
+                    self.pf_dns_guard.take();
+                }
+                Err(err) => cleanup_errors.push(err.to_string()),
+            }
+        }
 
         info!(
             "正在恢复路由表：删除 {} 条已安装的路由",
             self.lease.state.routes.len()
         );
-        let mut cleanup_ok = true;
+        let mut route_cleanup_ok = true;
         for record in self.lease.state.routes.iter().rev() {
             if !delete_recorded_route(&mut self.mgr, record) {
-                cleanup_ok = false;
+                route_cleanup_ok = false;
             }
         }
         self.installed.clear();
-        if cleanup_ok {
-            self.lease.clear();
+        if route_cleanup_ok {
+            if let Err(err) = self.lease.clear() {
+                cleanup_errors.push(format!(
+                    "删除 TUN 路由状态文件 {} 失败：{err}",
+                    self.lease.path.display()
+                ));
+            }
         } else {
-            warn!(
-                "部分 TUN 路由未能删除，保留路由状态文件以便下次启动重试：{}",
+            cleanup_errors.push(format!(
+                "部分 TUN 路由未能删除，保留路由状态文件以便重试：{}",
                 self.lease.path.display()
-            );
+            ));
+        }
+
+        if cleanup_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AgentError::Connection(cleanup_errors.join("；")))
         }
     }
 }
 
-fn install_local_network_bypass_routes(
-    mgr: &mut RouteManager,
-    default_v4_gw: Option<IpAddr>,
-    default_v4_if: Option<u32>,
-    installed: &mut Vec<Route>,
-    lease: &mut RouteLease,
-) {
-    let routes = local_network_bypass_routes(default_v4_gw, default_v4_if);
-    if routes.is_empty() {
-        debug!("跳过局域网旁路路由：IPv4 默认网关或接口缺失");
-        return;
-    }
-
-    for route in routes {
-        match mgr.add(&route) {
-            Ok(()) => {
-                info!("已安装局域网旁路路由：{}", route);
-                lease.record_installed(RouteKind::LocalNetworkBypass, &route);
-                installed.push(route);
-            }
-            Err(e) => {
-                let message = e.to_string();
-                if route_add_error_is_already_exists(&message) {
-                    debug!("局域网旁路路由已存在：{}", route);
-                } else {
-                    warn!("安装局域网旁路路由 {} 失败：{message}", route);
-                }
-            }
+impl Drop for RouteGuard {
+    fn drop(&mut self) {
+        if let Err(err) = self.cleanup() {
+            warn!("TUN route guard 析构清理失败：{err}");
         }
     }
 }
 
-pub(super) fn local_network_bypass_routes(
-    default_v4_gw: Option<IpAddr>,
-    default_v4_if: Option<u32>,
-) -> Vec<Route> {
-    let Some(default_v4_if) = default_v4_if else {
-        return Vec::new();
-    };
-    let default_v4_gw = default_v4_gw.filter(IpAddr::is_ipv4);
-
-    LOCAL_NETWORK_BYPASS_SPECS
-        .iter()
-        .filter_map(|(destination, prefix, next_hop)| {
-            let route = Route::new(IpAddr::V4(*destination), *prefix).with_if_index(default_v4_if);
-            match next_hop {
-                LocalNetworkBypassNextHop::Gateway => {
-                    default_v4_gw.map(|gateway| route.with_gateway(gateway))
-                }
-                LocalNetworkBypassNextHop::OnLink => Some(route),
-            }
-        })
-        .collect()
-}
-
-pub(super) fn route_add_error_is_already_exists(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("file exists")
-        || message.contains("already in table")
-        || message.contains("already exists")
-}
-
-/// 安装 macOS ifscope 默认路由，作为代理旁路 / 直连套接字的下一跳兜底。
-///
-/// 没有这条路由时，使用 `IP_BOUND_IF` 绑定到物理接口的直连套接字会因
-/// scoped 路由查找命中不到任何 ifscope 默认路由而失败，所有命中
-/// `direct_access` 域名规则的目标都会无法连接。
-#[cfg(target_os = "macos")]
-fn install_macos_scoped_default_bypass(
-    default_v4_gw: Option<IpAddr>,
-    default_v4_if: Option<u32>,
-    default_v6_gw: Option<IpAddr>,
-    default_v6_if: Option<u32>,
-) {
-    if let (Some(gw), Some(if_idx)) = (default_v4_gw, default_v4_if)
-        && let Some(if_name) = interface_name_for_index(Some(if_idx))
-    {
-        install_one_macos_scoped_default(&if_name, gw, false);
-    } else {
-        debug!("跳过 macOS IPv4 scoped default bypass：默认网关或接口缺失");
-    }
-
-    if let (Some(gw), Some(if_idx)) = (default_v6_gw, default_v6_if)
-        && let Some(if_name) = interface_name_for_index(Some(if_idx))
-    {
-        install_one_macos_scoped_default(&if_name, gw, true);
-    } else {
-        debug!("跳过 macOS IPv6 scoped default bypass：默认网关或接口缺失");
-    }
-}
+mod bypass;
+mod macos;
+mod split;
 
 #[cfg(target_os = "macos")]
-pub(super) fn refresh_macos_scoped_default_bypass() {
-    let mut mgr = match RouteManager::new() {
-        Ok(mgr) => mgr,
-        Err(e) => {
-            warn!("刷新 macOS scoped default bypass 时 RouteManager 初始化失败：{e}");
-            return;
-        }
-    };
-    let routes = match mgr.list() {
-        Ok(routes) => routes,
-        Err(e) => {
-            warn!("刷新 macOS scoped default bypass 时无法列出当前路由：{e}");
-            return;
-        }
-    };
-    let (default_v4_gw, default_v4_if) = find_default_route(&routes, false);
-    let (default_v6_gw, default_v6_if) = find_default_route(&routes, true);
-    install_macos_scoped_default_bypass(default_v4_gw, default_v4_if, default_v6_gw, default_v6_if);
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(super) fn refresh_macos_scoped_default_bypass() {}
-
+use bypass::validate_macos_proxy_bypass_next_hop;
+use bypass::{install_local_network_bypass_routes, proxy_bypass_next_hop};
+pub use bypass::{
+    local_network_bypass_routes, proxy_bypass_next_hop_from_routes,
+    route_add_error_is_already_exists,
+};
 #[cfg(target_os = "macos")]
-fn install_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: bool) {
-    // 形如：route -n add -ifscope en0 -net default 192.168.31.1
-    let mut cmd = macos_scoped_default_command("add", if_name, gateway, is_ipv6);
-
-    match cmd.output() {
-        Ok(out) if out.status.success() => {
-            info!(
-                "已安装 macOS scoped default bypass：ifscope={if_name} gateway={gateway}；关闭 TUN 时保留该路由"
-            );
-        }
-        Ok(out) => {
-            let msg = command_output_message(&out);
-            // 待机恢复或 Wi-Fi 切换后，ifscope default 可能仍存在但网关已过期。
-            // add 返回已存在时主动更新下一跳，避免 IP_BOUND_IF 直连继续查到旧网关。
-            if route_add_error_is_already_exists(&msg) {
-                replace_one_macos_scoped_default(if_name, gateway, is_ipv6);
-            } else {
-                warn!(
-                    "安装 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{msg}"
-                );
-            }
-        }
-        Err(e) => warn!("运行 route add -ifscope 安装 macOS scoped default bypass 失败：{e}"),
-    }
-}
-
+use macos::install_macos_scoped_default_bypass;
 #[cfg(target_os = "macos")]
-fn replace_one_macos_scoped_default(if_name: &str, gateway: IpAddr, is_ipv6: bool) {
-    let mut change = macos_scoped_default_command("change", if_name, gateway, is_ipv6);
-    match change.output() {
-        Ok(out) if out.status.success() => {
-            info!("已刷新 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
-            return;
-        }
-        Ok(out) => {
-            debug!(
-                "route change 刷新 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{}",
-                command_output_message(&out)
-            );
-        }
-        Err(e) => debug!(
-            "运行 route change 刷新 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{e}"
-        ),
-    }
-
-    let mut delete = macos_scoped_default_delete_command(if_name, is_ipv6);
-    match delete.output() {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => debug!(
-            "route delete 清理旧 macOS scoped default bypass 失败 ifscope={if_name}：{}",
-            command_output_message(&out)
-        ),
-        Err(e) => debug!(
-            "运行 route delete 清理旧 macOS scoped default bypass 失败 ifscope={if_name}：{e}"
-        ),
-    }
-
-    let mut add = macos_scoped_default_command("add", if_name, gateway, is_ipv6);
-    match add.output() {
-        Ok(out) if out.status.success() => {
-            info!("已重建 macOS scoped default bypass：ifscope={if_name} gateway={gateway}");
-        }
-        Ok(out) => warn!(
-            "重建 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{}",
-            command_output_message(&out)
-        ),
-        Err(e) => warn!(
-            "运行 route add 重建 macOS scoped default bypass 失败 ifscope={if_name} gateway={gateway}：{e}"
-        ),
-    }
-}
-
+pub use macos::macos_scoped_default_command;
+pub(super) use macos::refresh_macos_scoped_default_bypass;
 #[cfg(target_os = "macos")]
-pub(super) fn macos_scoped_default_command(
-    action: &str,
-    if_name: &str,
-    gateway: IpAddr,
-    is_ipv6: bool,
-) -> Command {
-    let mut command = Command::new("/sbin/route");
-    command.arg("-n").arg(action);
-    if is_ipv6 {
-        command.arg("-inet6");
-    }
-    command.args(["-ifscope", if_name, "-net", "default", &gateway.to_string()]);
-    command
-}
-
-#[cfg(target_os = "macos")]
-fn macos_scoped_default_delete_command(if_name: &str, is_ipv6: bool) -> Command {
-    let mut command = Command::new("/sbin/route");
-    command.arg("-n").arg("delete");
-    if is_ipv6 {
-        command.arg("-inet6");
-    }
-    command.args(["-ifscope", if_name, "-net", "default"]);
-    command
-}
-
-fn install_ipv4_split_routes(
-    mgr: &mut RouteManager,
-    tun_if_index: u32,
-    _tun_ipv4: Ipv4Addr,
-    installed: &mut Vec<Route>,
-    lease: &mut RouteLease,
-) {
-    // 0.0.0.0/1 + 128.0.0.0/1 等价于默认路由，但优先级通常高于原 /0。
-    // TUN/utun 是三层接口，这里使用接口路由；把 TUN 自己的 IP 当 gateway
-    // 会在部分系统上导致路由不可用或回环。
-    let v4_splits = [
-        Route::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1).with_if_index(tun_if_index),
-        Route::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 0)), 1).with_if_index(tun_if_index),
-    ];
-    for route in v4_splits {
-        match mgr.add(&route) {
-            Ok(()) => {
-                info!("已安装 split-default 路由：{}", route);
-                lease.record_installed(RouteKind::Ipv4SplitDefault, &route);
-                installed.push(route);
-            }
-            Err(e) => warn!("安装 split-default 路由 {} 失败：{e}", route),
-        }
-    }
-}
-
-fn install_ipv6_split_routes(
-    mgr: &mut RouteManager,
-    tun_if_index: u32,
-    tun_ipv6_cidr: Option<&str>,
-    installed: &mut Vec<Route>,
-    lease: &mut RouteLease,
-) {
-    let Some(v6_cidr) = tun_ipv6_cidr else {
-        return;
-    };
-    // IPv6 未正确配置时跳过，不影响 IPv4 TUN 模式。
-    let Ok((_tun_ipv6, _)) = parse_cidr_v6(v6_cidr) else {
-        return;
-    };
-
-    // ::/1 + 8000::/1 是 IPv6 的 split-default。
-    let v6_splits = [
-        Route::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 1).with_if_index(tun_if_index),
-        Route::new(IpAddr::V6(Ipv6Addr::new(0x8000, 0, 0, 0, 0, 0, 0, 0)), 1)
-            .with_if_index(tun_if_index),
-    ];
-    for route in v6_splits {
-        match mgr.add(&route) {
-            Ok(()) => {
-                info!("已安装 IPv6 split-default 路由：{}", route);
-                lease.record_installed(RouteKind::Ipv6SplitDefault, &route);
-                installed.push(route);
-            }
-            Err(e) => warn!("安装 IPv6 split-default 路由 {} 失败：{e}", route),
-        }
-    }
-}
+use split::required_route_exists;
+pub use split::route_list_contains_expected;
+use split::{install_ipv4_split_routes, install_ipv6_split_routes};

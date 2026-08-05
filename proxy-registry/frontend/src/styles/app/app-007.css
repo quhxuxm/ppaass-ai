@@ -1,0 +1,133 @@
+@media (max-width: 560px) {
+  .auth-page {
+    padding: 0;
+  }
+
+  .auth-intro {
+    border-radius: 0 0 24px 24px;
+  }
+
+  .auth-panel {
+    padding-inline: 20px;
+  }
+
+  .brand.compact > span:last-child {
+    display: none;
+  }
+
+  .topbar-logout-action,
+  .topbar-logout-action.agent-handoff-logout {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+  }
+
+  .topbar-logout-action .p-button-label {
+    display: none;
+  }
+
+  .main-nav button {
+    padding-inline: 8px;
+    font-size: 0.82rem;
+  }
+
+  .agent-authorization-actions,
+  .summary-grid,
+  .permission-list,
+  .permission-picker-grid,
+  .form-row,
+  .fixed-capabilities ul {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-authorization-page {
+    align-items: start;
+    padding: 0;
+    background: white;
+  }
+
+  .agent-authorization-card {
+    min-height: 100vh;
+    padding: 24px 20px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .page-heading {
+    display: grid;
+  }
+
+  .summary-card {
+    min-height: 90px;
+  }
+
+  .permission-item {
+    min-height: 76px;
+  }
+
+  .key-request-card {
+    grid-template-columns: 1fr;
+    padding: 22px;
+  }
+
+  .key-request-card > .p-tag {
+    grid-column: 1;
+  }
+
+  .key-request-actions,
+  .password-change-actions,
+  .approval-actions,
+  .retention-control > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .approval-item {
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    padding: 15px;
+  }
+
+  .approval-dialog-user {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .approval-dialog-user > .p-tag {
+    grid-column: 2;
+    width: fit-content;
+  }
+
+  .key-request-dialog .p-dialog-footer,
+  .approval-dialog .p-dialog-footer {
+    display: grid;
+  }
+
+  .key-request-dialog .p-dialog-footer .p-button,
+  .approval-dialog .p-dialog-footer .p-button {
+    width: 100%;
+  }
+
+  .retention-copy {
+    align-items: flex-start;
+  }
+
+  .retention-control .p-inputnumber {
+    width: 100%;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

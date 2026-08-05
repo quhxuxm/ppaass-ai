@@ -26,6 +26,11 @@ abstract class MainActivityConfigScreen extends MainActivityStatusScreen {
 
 protected void buildConfigScreen(LinearLayout root) {
         buildAppearanceSection(root);
+        boolean canEditEgress = hasAgentPermission(AgentPermissions.EGRESS_EDIT);
+        boolean canEditRuntime =
+                hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT);
+        LinearLayout egressRoot = canEditEgress ? root : detachedConfigRoot();
+        LinearLayout runtimeRoot = canEditRuntime ? root : detachedConfigRoot();
 
         LinearLayout actions = configSection(root, "配置");
         TextView actionsSubtitle = mutedText("恢复内置默认值", 13f);
@@ -39,10 +44,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(48)));
 
-        LinearLayout connection = configSection(root, "连接");
-        proxyAddrs = field(connection, "代理地址", prefString("proxy_addrs", DefaultConfig.PROXY_ADDR), 2,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        addFieldHelp(connection, "TCP / UDP 共用远端出口。");
+        LinearLayout connection = configSection(egressRoot, "出口");
         transportModeControl(
                 connection,
                 prefString("transport_mode", DefaultConfig.TRANSPORT_MODE));
@@ -73,13 +75,12 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 1);
         addFieldHelp(connection, "原生 UDP 握手与 TCP 连接共用。");
-        username = field(connection, "用户名", prefString("username", DefaultConfig.USERNAME));
-        privateKey = field(
+        quicPolicy = quicPolicySpinner(connection, "QUIC 策略", prefQuicPolicy());
+        compressionMode = spinner(
                 connection,
-                "私钥 PEM",
-                DefaultConfig.normalizePrivateKeyPem(prefString("private_key_pem", DefaultConfig.PRIVATE_KEY_PEM)),
-                5,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                "压缩模式",
+                new String[]{"none", "lz4", "gzip", "zstd"},
+                prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
         LinearLayout httpProxy = configSection(root, "HTTP / SOCKS5 代理");
         httpProxyPort = numberControl(
@@ -106,8 +107,7 @@ protected void buildConfigScreen(LinearLayout root) {
                 1);
         addFieldHelp(httpProxy, "HTTP/SOCKS5 最大并发连接数。");
 
-        LinearLayout runtime = configSection(root, "运行参数");
-        quicPolicy = quicPolicySpinner(runtime, "QUIC 策略", prefQuicPolicy());
+        LinearLayout runtime = configSection(runtimeRoot, "系统运行参数");
         runtimeThreads = numberControl(
                 runtime,
                 "VPN 线程",
@@ -115,20 +115,15 @@ protected void buildConfigScreen(LinearLayout root) {
                 1,
                 1);
         addFieldHelp(runtime, "仅用于 Android VPN。");
-        compressionMode = spinner(
-                runtime,
-                "压缩模式",
-                new String[]{"none", "lz4", "gzip", "zstd"},
-                prefString("compression_mode", DefaultConfig.COMPRESSION_MODE));
 
-        LinearLayout tcpConfig = configSection(root, "TCP 数据通道");
+        LinearLayout tcpConfig = configSection(egressRoot, "TCP 数据通道");
         LinearLayout tcpRelay = configGroup(
                 tcpConfig,
                 "TCP 转发",
                 "两种模式均使用 TCP");
         addFieldHelp(tcpRelay, "TCP 目标始终使用独立 TCP 连接。");
 
-        udpYamuxConfig = configSection(root, "UDP 数据 · TCP/Yamux");
+        udpYamuxConfig = configSection(egressRoot, "UDP 数据 · TCP/Yamux");
         LinearLayout udpYamux = configGroup(
                 udpYamuxConfig,
                 "UDP Yamux",
@@ -192,6 +187,12 @@ protected void buildConfigScreen(LinearLayout root) {
 
         buildDirectAccessSection(root);
     }
+
+protected LinearLayout detachedConfigRoot() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        return root;
+}
 
 protected void buildAppearanceSection(LinearLayout root) {
         LinearLayout appearance = configSection(root, "外观");

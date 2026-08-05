@@ -1,15 +1,33 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tauri::{Emitter, Manager};
+use tracing::{info, warn};
 
 use crate::agent::{
     apply_ui_log_level, clear_packet_capture_runtime, get_agent_state_inner,
-    packet_capture_runtime_status, resolve_agent_output_path, set_packet_capture_runtime_enabled,
+    packet_capture_runtime_status, resolve_agent_output_path,
+    restart_agent_after_managed_config_update, set_packet_capture_runtime_enabled,
     start_agent_command, stop_agent_inner_command,
 };
+use crate::auth::{
+    account_management_page_url, apply_permission_snapshot, approve_agent_admin_key_request,
+    authenticate_and_download, authenticate_rotate_and_download, cleanup_old_managed_private_keys,
+    destroy_managed_private_key, destroy_persisted_agent_login,
+    fetch_agent_admin_key_request_inbox, fetch_agent_permission_snapshot,
+    load_persisted_agent_login, open_system_browser, persist_agent_login,
+    persist_unassigned_agent_login, poll_device_authorization, reject_agent_admin_key_request,
+    request_account_management_handoff, start_device_authorization, write_managed_private_key,
+    AgentServerEventKind, AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
+};
 use crate::config::{
-    install_bundled_agent_assets, load_config_from_path, load_default_config, locate_config_path,
-    make_absolute_path, primary_agent_config_path, write_config_file,
+    apply_managed_credentials_to_config, clear_managed_credentials_from_config,
+    enforce_config_path_for_account, enforce_loaded_config_for_account,
+    enforce_managed_config_path_for_account, enforce_managed_identity,
+    install_bundled_agent_assets, load_config_from_path, load_default_config,
+    loaded_config_from_raw, locate_config_path, make_absolute_path, merge_config_summary,
+    prepare_config_for_account, proxy_registry_url_from_config, remember_trusted_config_baseline,
+    validate_config_candidate_against_trusted_baseline, write_config_file,
 };
 use crate::diagnostics::run_connectivity_tests_blocking;
 #[cfg(target_os = "macos")]
@@ -20,12 +38,17 @@ use crate::macos_helper::{
 #[cfg(windows)]
 use crate::models::ServiceRequest;
 use crate::models::{
+    AgentAdminKeyRequestApproval, AgentAdminKeyRequestInbox, AgentAdminKeyRequestRejection,
+    AgentAdminKeyRequestUpdate, AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState,
+    AgentConfigSummary, AgentDeviceLoginProgress, AgentKeyRotationRequest, AgentLoginRequest,
     AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
-    PacketCaptureRuntimeStatus,
+    PacketCaptureRuntimeStatus, AGENT_PACKET_CAPTURE_PERMISSION,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
-use crate::runtime::AgentRuntime;
+use crate::runtime::{
+    AgentPermissionTrust, AgentRuntime, AgentSessionCredentials, AuthenticatedAgentSession,
+};
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
 use crate::tray::restore_main_window;
 #[cfg(any(windows, target_os = "macos"))]
@@ -35,288 +58,27 @@ use crate::tray::{
 };
 #[cfg(windows)]
 use crate::windows_service::{
-    install_and_start_windows_service, run_windows_service, send_service_request,
-    INSTALL_SERVICE_ARG, SERVICE_ARG,
+    activate_windows_service_session, install_and_start_windows_service,
+    invalidate_windows_service_session, run_windows_service, send_service_request,
+    service_config_root_from_args, windows_service_auth_status, INSTALL_SERVICE_ARG, SERVICE_ARG,
 };
 
-#[tauri::command]
-async fn load_agent_config(
-    app: tauri::AppHandle,
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    path: Option<String>,
-) -> Result<LoadedAgentConfig, String> {
-    let runtime = runtime.inner().clone();
-    let loaded = run_blocking("加载配置", move || {
-        load_agent_config_inner(&runtime, path)
-    })
-    .await?;
-    #[cfg(any(windows, target_os = "macos"))]
-    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
-    Ok(loaded)
-}
+mod admin_key_requests;
+mod bootstrap;
+mod config_commands;
+mod login_commands;
+mod permission_sync;
+mod provisioning;
+mod server_events;
+mod state;
+mod telemetry_commands;
 
-#[tauri::command]
-async fn save_agent_config(
-    app: tauri::AppHandle,
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    path: String,
-    raw: String,
-) -> Result<LoadedAgentConfig, String> {
-    let runtime = runtime.inner().clone();
-    let loaded = run_blocking("保存配置", move || {
-        save_agent_config_inner(&runtime, path, raw)
-    })
-    .await?;
-    #[cfg(any(windows, target_os = "macos"))]
-    sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
-    Ok(loaded)
-}
-
-#[tauri::command]
-async fn load_default_agent_config(
-    app: tauri::AppHandle,
-    path: Option<String>,
-) -> Result<LoadedAgentConfig, String> {
-    run_blocking("加载默认配置", move || {
-        load_default_config(&app, path.as_deref())
-    })
-    .await
-}
-
-#[tauri::command]
-async fn get_agent_state(
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-) -> Result<AgentState, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("读取 Agent 状态", move || {
-        get_agent_state_inner(&runtime)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn start_agent(
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    config_path: String,
-) -> Result<AgentState, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("启动 Agent", move || {
-        start_agent_command(&runtime, config_path)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn stop_agent(runtime: tauri::State<'_, Arc<AgentRuntime>>) -> Result<AgentState, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("停止 Agent", move || stop_agent_inner_command(&runtime)).await
-}
-
-#[tauri::command]
-async fn run_connectivity_tests(path: Option<String>) -> Result<ConnectivityReport, String> {
-    run_blocking("诊断", move || run_connectivity_tests_blocking(path)).await
-}
-
-#[tauri::command]
-async fn get_network_traffic_snapshot() -> Result<NetworkTrafficSnapshot, String> {
-    run_blocking("读取流量", get_network_traffic_snapshot_inner).await
-}
-
-#[tauri::command]
-async fn get_dns_resolution_records(
-) -> Result<Vec<desktop_agent_be::telemetry::DnsResolutionRecord>, String> {
-    run_blocking("读取 DNS 解析记录", get_dns_resolution_records_inner).await
-}
-
-#[tauri::command]
-async fn get_packet_capture(
-    config_path: Option<String>,
-    limit: Option<usize>,
-) -> Result<PacketCaptureReport, String> {
-    run_blocking("读取抓包结果", move || {
-        let config_path = match config_path.filter(|value| !value.trim().is_empty()) {
-            Some(value) => PathBuf::from(value),
-            None => locate_config_path().ok_or_else(|| "找不到 Agent 配置文件".to_string())?,
-        };
-        let config = desktop_agent_be::config::AgentConfig::load(&config_path)
-            .map_err(|error| format!("加载 Agent 配置失败：{error}"))?;
-        let capture_path = resolve_agent_output_path(&config_path, &config.tun.packet_capture.file);
-        let proxy_listen_port = config
-            .listen_addr
-            .rsplit_once(':')
-            .and_then(|(_, port)| port.trim().parse::<u16>().ok());
-        read_packet_capture(&capture_path, limit, proxy_listen_port)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn get_packet_capture_runtime_status(
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-) -> Result<PacketCaptureRuntimeStatus, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("读取抓包运行状态", move || {
-        packet_capture_runtime_status(&runtime)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn set_packet_capture_enabled(
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    enabled: bool,
-) -> Result<PacketCaptureRuntimeStatus, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("切换抓包运行状态", move || {
-        set_packet_capture_runtime_enabled(&runtime, enabled)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn clear_packet_capture(
-    runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    config_path: Option<String>,
-) -> Result<PacketCaptureRuntimeStatus, String> {
-    let runtime = runtime.inner().clone();
-    run_blocking("清空抓包文件", move || {
-        clear_packet_capture_runtime(&runtime, config_path)
-    })
-    .await
-}
-
-fn load_agent_config_inner(
-    runtime: &AgentRuntime,
-    path: Option<String>,
-) -> Result<LoadedAgentConfig, String> {
-    let config_path = match path.filter(|value| !value.trim().is_empty()) {
-        Some(value) => PathBuf::from(value),
-        None => locate_config_path().ok_or_else(|| {
-            "找不到 agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?,
-    };
-
-    let loaded = load_config_from_path(&config_path)?;
-    apply_ui_log_level(runtime, &loaded.summary.log_level);
-    remember_ui_config_path(runtime, &loaded.path)?;
-    Ok(loaded)
-}
-
-fn save_agent_config_inner(
-    runtime: &AgentRuntime,
-    path: String,
-    raw: String,
-) -> Result<LoadedAgentConfig, String> {
-    let config_path = make_absolute_path(Path::new(&path));
-    write_config_file(&config_path, &raw)?;
-
-    let loaded = if let Some(primary_path) = primary_agent_config_path(&config_path) {
-        write_config_file(&primary_path, &raw)?;
-        load_config_from_path(&primary_path)?
-    } else {
-        load_config_from_path(&config_path)?
-    };
-
-    apply_ui_log_level(runtime, &loaded.summary.log_level);
-    remember_ui_config_path(runtime, &loaded.path)?;
-    #[cfg(windows)]
-    let _ = send_service_request(&ServiceRequest::SetLogLevel {
-        log_level: loaded.summary.log_level.clone(),
-    });
-
-    Ok(loaded)
-}
-
-fn remember_ui_config_path(runtime: &AgentRuntime, path: &str) -> Result<(), String> {
-    *runtime
-        .ui_config_path
-        .lock()
-        .map_err(|_| "UI 配置路径状态锁已损坏".to_string())? = Some(PathBuf::from(path));
-    Ok(())
-}
-
-pub(crate) fn run() {
-    #[cfg(target_os = "macos")]
-    {
-        if std::env::args().any(|arg| arg == TUN_HELPER_SERVICE_ARG) {
-            if let Err(err) = run_macos_tun_helper_service_from_args() {
-                eprintln!("{err}");
-                std::process::exit(1);
-            }
-            return;
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        if std::env::args().any(|arg| arg == INSTALL_SERVICE_ARG) {
-            if let Err(err) = install_and_start_windows_service() {
-                eprintln!("{err}");
-            }
-            return;
-        }
-        if std::env::args().any(|arg| arg == SERVICE_ARG) {
-            if let Err(err) = run_windows_service() {
-                eprintln!("{err}");
-            }
-            return;
-        }
-    }
-
-    let runtime = Arc::new(AgentRuntime::new());
-    runtime.logs.install_tracing();
-    let setup_logs = runtime.logs.clone();
-    #[cfg(any(windows, target_os = "macos"))]
-    let setup_runtime = runtime.clone();
-
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            restore_main_window(app);
-        }))
-        .setup(move |app| {
-            install_bundled_agent_assets(app, &setup_logs).map_err(io::Error::other)?;
-            #[cfg(any(windows, target_os = "macos"))]
-            setup_system_tray(app, setup_runtime.clone()).map_err(io::Error::other)?;
-            #[cfg(target_os = "macos")]
-            check_macos_tun_helper_on_startup(&setup_logs);
-            Ok(())
-        })
-        .on_window_event(|window, event| {
-            #[cfg(not(any(windows, target_os = "macos")))]
-            let _ = (window, event);
-            #[cfg(any(windows, target_os = "macos"))]
-            if window.label() == "main"
-                && matches!(
-                    event,
-                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(false)
-                )
-            {
-                hide_window_to_tray_after_minimize(window.clone());
-            }
-            #[cfg(any(windows, target_os = "macos"))]
-            if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    hide_window_to_tray(window);
-                }
-            }
-        })
-        .manage(runtime)
-        .invoke_handler(tauri::generate_handler![
-            load_agent_config,
-            save_agent_config,
-            load_default_agent_config,
-            get_agent_state,
-            start_agent,
-            stop_agent,
-            run_connectivity_tests,
-            get_network_traffic_snapshot,
-            get_dns_resolution_records,
-            get_packet_capture,
-            get_packet_capture_runtime_status,
-            set_packet_capture_enabled,
-            clear_packet_capture,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running PPAASS Desktop Agent UI");
-}
+pub(crate) use admin_key_requests::*;
+pub use bootstrap::*;
+pub(crate) use config_commands::*;
+pub(crate) use login_commands::*;
+pub(crate) use permission_sync::*;
+pub(crate) use provisioning::*;
+pub use server_events::*;
+pub use state::*;
+pub(crate) use telemetry_commands::*;

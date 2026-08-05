@@ -1,0 +1,351 @@
+.capture-table {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--app-text);
+  font-size: 0.76rem;
+}
+
+.capture-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 7px 9px;
+  background: var(--capture-table-header);
+  color: var(--app-text-muted);
+  text-align: left;
+  font-weight: 700;
+  border-bottom: 1px solid var(--app-border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--app-border-soft) 72%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.capture-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.capture-sort-button span:last-child {
+  color: var(--app-text-muted);
+  font-size: 0.72rem;
+}
+
+.capture-sort-button.active {
+  color: var(--app-primary, #7c3aed);
+}
+
+.capture-sort-button:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, 0.45);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.capture-table td {
+  padding: 6px 9px;
+  color: var(--app-text);
+  vertical-align: middle;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.capture-table tbody tr {
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.capture-table tbody tr:nth-child(even) {
+  background: var(--capture-table-stripe);
+}
+
+.capture-table tbody tr:hover,
+.capture-table tbody tr:focus {
+  background: var(--capture-table-hover);
+}
+
+.capture-table tbody tr:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, 0.5);
+  outline-offset: -2px;
+}
+
+.capture-table code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color: var(--app-text-strong);
+}
+
+.capture-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.capture-summary {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capture-direction {
+  display: inline-flex;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.capture-table .p-tag {
+  padding: 2px 6px;
+  font-size: 0.68rem;
+}
+
+.capture-direction.upload {
+  background: var(--capture-upload-background);
+  color: var(--capture-upload-text);
+}
+
+.capture-direction.download {
+  background: var(--capture-download-background);
+  color: var(--capture-download-text);
+}
+
+.capture-protocol-stack {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.capture-protocol-stack > span:not(.p-tag) {
+  color: var(--app-text-muted);
+  font-size: 0.72rem;
+}
+
+.capture-empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  min-height: 128px;
+  padding: 22px 16px;
+  color: var(--app-text-muted);
+}
+
+.capture-empty .app-icon {
+  width: 36px;
+  height: 36px;
+}
+
+.capture-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.capture-packet-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+.capture-packet-dialog .p-dialog-content {
+  padding-top: 0;
+  overflow: auto;
+}
+
+.capture-dialog-subtitle {
+  margin: 0 0 14px;
+  color: var(--app-text-muted);
+  font-size: 0.84rem;
+}
+
+.capture-detail-grid > div,
+.capture-payload > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--app-muted-surface) 58%, transparent);
+}
+
+.capture-payload > div {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+}
+
+.capture-detail-grid span,
+.capture-payload span {
+  color: var(--app-text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.capture-detail-grid code {
+  overflow: hidden;
+  color: var(--app-text-strong);
+  text-overflow: ellipsis;
+}
+
+.capture-protocol-analysis {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.capture-protocol-analysis h3 {
+  margin: 0 0 2px;
+  font-size: 0.84rem;
+}
+
+.capture-protocol-analysis details {
+  overflow: hidden;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-muted-surface) 46%, transparent);
+}
+
+.capture-protocol-analysis summary {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.capture-protocol-analysis summary span {
+  overflow: hidden;
+  color: var(--app-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-protocol-analysis dl {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
+  margin: 0;
+  padding: 4px 10px 9px 30px;
+  font: 0.75rem/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.capture-protocol-analysis dt {
+  color: var(--app-text-muted);
+}
+
+.capture-protocol-analysis dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.capture-payload {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.capture-payload pre {
+  align-self: start;
+  width: 100%;
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  color: var(--app-text-strong);
+  font: 0.8rem/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media (max-width: 1050px) {
+  .capture-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .capture-console-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .capture-heading-actions {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .capture-filters {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .capture-detail-grid,
+  .capture-payload {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 440px) {
+  .capture-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Authentication gate. The Agent workspace is not mounted until this gate succeeds. */
+.auth-gate {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 36px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--app-lemon) 26%, transparent), transparent 34%),
+    radial-gradient(circle at 86% 82%, color-mix(in srgb, var(--app-violet) 18%, transparent), transparent 36%),
+    linear-gradient(135deg, color-mix(in srgb, var(--app-bg) 92%, white), var(--app-bg));
+}
+
+.auth-gate::before {
+  content: "";
+  position: fixed;
+  z-index: -2;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(color-mix(in srgb, white 34%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, white 34%, transparent) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(135deg, rgba(0, 0, 0, 0.66), transparent 70%);
+}
+
+.auth-orb {
+  position: fixed;
+  z-index: -1;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(10px);
+  opacity: 0.5;
+}
+
+.auth-orb-primary {
+  top: -140px;
+  right: 9vw;
+  background: color-mix(in srgb, var(--app-coral) 20%, transparent);
+}
+
+.auth-orb-secondary {
+  bottom: -170px;
+  left: 7vw;
+  background: color-mix(in srgb, var(--app-cyan) 18%, transparent);
+}

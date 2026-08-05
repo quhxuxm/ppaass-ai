@@ -22,9 +22,10 @@ import java.text.*;
 import java.util.*;
 
 // MainActivity 拆分层：保持单个文件短小，便于定位 Android UI 问题。
-abstract class MainActivityScreens extends MainActivityPacketCapture {
+abstract class MainActivityScreens extends MainActivityAdminApprovals {
 
 protected void buildUi() {
+        preparePacketCaptureUiForBuild();
         editableControls.clear();
         screenTabButtons.clear();
         screenPages.clear();
@@ -32,6 +33,7 @@ protected void buildUi() {
         screenSwitchAnimating = false;
         configTabButtons.clear();
         configTabPages.clear();
+        captureScreenIndex = -1;
         transportModeButtons.clear();
         udpSessionPoolConfig = null;
         udpYamuxConfig = null;
@@ -71,17 +73,35 @@ protected void buildUi() {
 
         FrameLayout pages = screenPageHost(root);
         LinearLayout statusScreen = screenPage(pages);
-        LinearLayout captureScreen = screenPage(pages);
-        LinearLayout configScreen = screenPage(pages);
         addScreenTab(screenTabs, "状态", statusScreen);
-        addScreenTab(screenTabs, "抓包", captureScreen);
-        addScreenTab(screenTabs, "配置", configScreen);
-
         buildStatusScreen(statusScreen);
-        buildPacketCaptureScreen(captureScreen);
+
+        addAdminApprovalScreenIfNeeded(screenTabs, pages);
+
+        if (hasAgentPermission(AgentPermissions.PACKET_CAPTURE)) {
+            LinearLayout captureScreen = screenPage(pages);
+            captureScreenIndex = screenPages.size() - 1;
+            addScreenTab(screenTabs, "抓包", captureScreen);
+            buildPacketCaptureScreen(captureScreen);
+        } else {
+            disablePacketCaptureForRevokedPermission();
+        }
+
+        LinearLayout configScreen = screenPage(pages);
+        addScreenTab(screenTabs, "配置", configScreen);
         buildConfigScreen(configScreen);
 
-        selectScreen(0);
+        if (screenTabButtons.size() == 1) {
+            screenTabs.setVisibility(View.GONE);
+            ViewGroup.LayoutParams pageHostParams = pages.getLayoutParams();
+            if (pageHostParams instanceof LinearLayout.LayoutParams) {
+                ((LinearLayout.LayoutParams) pageHostParams).topMargin = 0;
+                pages.setLayoutParams(pageHostParams);
+            }
+        }
+
+        appliedAgentPermissionFingerprint = agentPermissionFingerprint();
+        selectScreen(initialScreenIndex());
         updateVpnToggle();
         updateHttpProxyToggle();
         updateStatusMetrics();

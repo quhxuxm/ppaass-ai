@@ -1,0 +1,359 @@
+.topbar-config-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 6px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--app-surface) 90%, transparent);
+  box-shadow: 0 10px 26px rgba(18, 27, 45, 0.08);
+}
+
+.topbar-config-bar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 112px;
+  padding-inline: 7px 5px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.topbar-config-bar > span i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--app-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-success) 13%, transparent);
+}
+
+.topbar-config-bar.dirty {
+  border-color: color-mix(in srgb, var(--app-warning) 28%, var(--app-border-soft));
+  background: color-mix(in srgb, var(--app-warning) 6%, var(--app-surface));
+}
+
+.topbar-config-bar.dirty > span i {
+  background: var(--app-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-warning) 15%, transparent);
+}
+
+.topbar-config-bar .p-button {
+  height: 34px;
+  min-width: 82px;
+}
+
+/* The sidebar footer is now the app's compact control center. */
+.sidebar-status {
+  gap: 10px;
+  padding: 11px;
+}
+
+.sidebar-runtime {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-runtime .p-tag {
+  justify-self: start;
+}
+
+.sidebar-runtime .p-button {
+  height: 34px;
+  min-width: 76px;
+  padding-inline: 12px;
+}
+
+.sidebar-preferences {
+  display: grid;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.sidebar-preferences label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sidebar-preferences .app-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--app-text-muted);
+}
+
+.sidebar-preferences .theme-picker-dot {
+  width: 12px;
+  height: 12px;
+  margin-inline: 2px;
+}
+
+.sidebar-preferences .p-select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--app-muted-surface) 74%, transparent);
+  box-shadow: none;
+}
+
+.sidebar-preferences .p-select-label {
+  padding-block: 7px;
+  padding-inline: 9px 4px;
+  font-size: 11px;
+}
+
+.sidebar-preferences .p-select-dropdown {
+  width: 28px;
+}
+
+.sidebar-config-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.sidebar-config-actions .p-button {
+  min-width: 0;
+  padding-inline: 5px;
+  font-size: 11px;
+}
+
+.sidebar-config-actions .p-button-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.sidebar.collapsed .sidebar-status {
+  display: grid;
+  padding: 6px;
+}
+
+.sidebar.collapsed .sidebar-runtime {
+  display: block;
+}
+
+.sidebar.collapsed .sidebar-runtime .p-tag,
+.sidebar.collapsed .sidebar-runtime .p-button-label,
+.sidebar.collapsed .sidebar-meta,
+.sidebar.collapsed .sidebar-preferences,
+.sidebar.collapsed .sidebar-config-actions {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-runtime .p-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+}
+
+@media (max-width: 700px) {
+  .topbar-config-bar > span {
+    display: none;
+  }
+
+  .topbar-config-bar {
+    padding: 6px;
+  }
+}
+
+/* Final topbar: runtime stays visible; all secondary actions open from More. */
+.sidebar-toggle.p-button,
+.sidebar-toggle.p-button:hover,
+.sidebar-toggle.p-button:focus-visible {
+  position: absolute;
+  z-index: 4;
+  top: 30px;
+  right: -14px;
+  width: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+  border: 1px solid var(--app-border) !important;
+  border-radius: 999px !important;
+  background: var(--app-surface) !important;
+  box-shadow: 0 6px 16px rgba(18, 27, 45, 0.12) !important;
+  box-sizing: border-box;
+}
+
+.sidebar {
+  position: relative;
+  overflow: visible;
+}
+
+.sidebar.collapsed .sidebar-toggle.p-button {
+  top: 62px;
+  right: -14px;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+}
+
+.sidebar-toggle.p-button .p-button-icon,
+.sidebar-toggle.p-button .app-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.sidebar-toggle.p-button:hover {
+  border-color: color-mix(in srgb, var(--app-primary) 36%, var(--app-border)) !important;
+  background: color-mix(in srgb, var(--app-primary) 9%, var(--app-surface)) !important;
+}
+
+.workspace {
+  padding-inline: 26px;
+}
+
+.topbar {
+  position: relative;
+  z-index: 20;
+  margin-inline: 14px;
+  padding-inline: 0;
+  padding-block: 16px;
+  border-bottom: 0;
+  overflow: visible;
+}
+
+.topbar-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.topbar-runtime-control {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.topbar-runtime-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 86px;
+  padding-left: 7px;
+}
+
+.topbar-runtime-copy > span {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.topbar-runtime-copy > strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.topbar-runtime-copy > strong i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--app-text-muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-text-muted) 12%, transparent);
+}
+
+.topbar-runtime-copy > strong.running {
+  color: var(--app-success);
+}
+
+.topbar-runtime-copy > strong.running i {
+  background: var(--app-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-success) 15%, transparent);
+}
+
+.topbar-primary-actions .topbar-power,
+.toolbar .topbar-power.p-button {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.topbar-more {
+  position: relative;
+  height: 40px;
+}
+
+.topbar-more > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 40px;
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-muted-surface) 68%, transparent);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  list-style: none;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.topbar-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.topbar-more > summary:hover,
+.topbar-more[open] > summary {
+  border-color: color-mix(in srgb, var(--app-primary) 34%, var(--app-border-soft));
+  background: color-mix(in srgb, var(--app-primary) 8%, var(--app-surface));
+  color: var(--app-primary);
+}
+
+.topbar-more > summary .app-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.topbar-more-alert {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--app-surface);
+  border-radius: 50%;
+  background: var(--app-warning);
+  box-sizing: content-box;
+}
+
+.topbar-more-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  gap: 0;
+  width: min(390px, calc(100vw - 48px));
+  border: 1px solid color-mix(in srgb, var(--app-border-soft) 90%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--app-surface) 97%, transparent);
+  box-shadow: 0 24px 56px rgba(18, 27, 45, 0.2);
+  overflow: visible;
+  backdrop-filter: blur(18px);
+}

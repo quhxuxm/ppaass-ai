@@ -14,6 +14,7 @@ import type { AgentConfigSummary, DirectRuleGroup } from "../types";
 const props = defineProps<{
   summary: AgentConfigSummary;
   configLocked: boolean;
+  canEditRuntimeThreads: boolean;
   directModeLabel: string;
   activeForwardingLabel: string;
   tunModeLabel: string;
@@ -39,11 +40,17 @@ const emit = defineEmits<{
   "add-draft-rules": [];
   "remove-direct-rule": [index: number];
 }>();
+
+function setRuntimeThreads(value: unknown) {
+  if (props.canEditRuntimeThreads) {
+    emit("set-field", "runtime_threads", value);
+  }
+}
 </script>
 
 <template>
   <div class="content-grid">
-    <section class="card-group span-12">
+    <section v-if="canEditRuntimeThreads" class="card-group span-12">
       <div class="card-group-heading">
         <div>
           <h2>系统运行参数</h2>
@@ -62,7 +69,7 @@ const emit = defineEmits<{
               </label>
               <label class="field">
                 <span><AppIcon name="cpu" />线程</span>
-                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="emit('set-field', 'runtime_threads', $event)" />
+                <ConfigNumberInput :model-value="summary.effective_runtime_threads" :min="1" :allow-empty="false" :disabled="configLocked" :use-grouping="false" @update:model-value="setRuntimeThreads" />
               </label>
             </div>
           </template>

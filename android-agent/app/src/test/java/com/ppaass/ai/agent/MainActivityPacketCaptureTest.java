@@ -74,10 +74,16 @@ public final class MainActivityPacketCaptureTest {
 
     @Test
     public void captureOperationsRequireLiveReadyIdleUi() {
-        assertTrue(MainActivityPacketCapture.captureOperationCanStart(false, false, true));
-        assertFalse(MainActivityPacketCapture.captureOperationCanStart(true, false, true));
-        assertFalse(MainActivityPacketCapture.captureOperationCanStart(false, true, true));
-        assertFalse(MainActivityPacketCapture.captureOperationCanStart(false, false, false));
+        assertTrue(MainActivityPacketCapture.captureOperationCanStart(
+                true, false, false, true));
+        assertFalse(MainActivityPacketCapture.captureOperationCanStart(
+                false, false, false, true));
+        assertFalse(MainActivityPacketCapture.captureOperationCanStart(
+                true, true, false, true));
+        assertFalse(MainActivityPacketCapture.captureOperationCanStart(
+                true, false, true, true));
+        assertFalse(MainActivityPacketCapture.captureOperationCanStart(
+                true, false, false, false));
     }
 
     @Test

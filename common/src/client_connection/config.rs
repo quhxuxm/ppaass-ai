@@ -1,7 +1,54 @@
-use protocol::CompressionMode;
+use protocol::{CompressionMode, RsaKeyPair};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use socket2::Socket;
+use std::collections::VecDeque;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
+
+const PRIVATE_KEY_CACHE_CAPACITY: usize = 8;
+type PrivateKeyFingerprint = [u8; 32];
+type PrivateKeyCache = VecDeque<(PrivateKeyFingerprint, String, Arc<RsaKeyPair>)>;
+
+fn private_key_cache() -> &'static RwLock<PrivateKeyCache> {
+    static CACHE: OnceLock<RwLock<PrivateKeyCache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(VecDeque::with_capacity(PRIVATE_KEY_CACHE_CAPACITY)))
+}
+
+fn cached_private_key(pem: &str) -> Result<Arc<RsaKeyPair>, String> {
+    let fingerprint: PrivateKeyFingerprint = Sha256::digest(pem.as_bytes()).into();
+    if let Some(key) = private_key_cache()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find_map(|(cached_fingerprint, cached_pem, key)| {
+            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+        })
+    {
+        return Ok(key);
+    }
+
+    // PEM/ASN.1 parsing is expensive for short-lived TCP targets. Parse outside
+    // the lock so unrelated connections are not serialized on a cache miss.
+    let parsed =
+        Arc::new(RsaKeyPair::from_private_key_pem(pem).map_err(|error| error.to_string())?);
+    let mut cache = private_key_cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(key) = cache
+        .iter()
+        .find_map(|(cached_fingerprint, cached_pem, key)| {
+            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+        })
+    {
+        return Ok(key);
+    }
+    if cache.len() == PRIVATE_KEY_CACHE_CAPACITY {
+        cache.pop_front();
+    }
+    cache.push_back((fingerprint, pem.to_string(), parsed.clone()));
+    Ok(parsed)
+}
 
 /// 出站客户端连接的可选接口约束。
 ///
@@ -23,6 +70,12 @@ pub trait ClientConnectionConfig: Debug {
 
     /// 用于加密的私钥 PEM
     fn private_key_pem(&self) -> Result<String, String>;
+
+    /// Parsed private key shared by short-lived TCP targets and UDP sessions.
+    /// The bounded cache avoids repeating PEM/ASN.1 parsing for every flow.
+    fn private_key_pair(&self) -> Result<Arc<RsaKeyPair>, String> {
+        cached_private_key(&self.private_key_pem()?)
+    }
 
     /// 连接操作的超时时长
     fn timeout_duration(&self) -> Duration;

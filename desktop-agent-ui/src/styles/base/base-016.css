@@ -1,0 +1,337 @@
+.endpoint-row > i {
+  --icon-accent: #155ee8;
+  --icon-plate: rgba(21, 94, 232, 0.1);
+}
+
+.dns-empty > i,
+.rule-scope-note > i {
+  --icon-accent: #e51670;
+  --icon-plate: rgba(229, 22, 112, 0.1);
+}
+
+.overview-drag-handle > i,
+.overview-drag-ghost-heading > i {
+  --icon-accent: #155ee8;
+  --icon-plate: rgba(242, 193, 0, 0.16);
+}
+
+/* Icons already inside buttons follow the button instead of carrying their own plate. */
+.p-button .p-button-icon,
+.toolbar .p-button .p-button-icon,
+.diagnostic-run-button.p-button .p-button-icon,
+.nav-button.p-button .p-button-icon,
+.preset-list .p-button .p-button-icon,
+.rule-compose .p-button .p-button-icon,
+.p-button.p-button-icon-only .p-button-icon,
+.nav-button.p-button.active .p-button-icon,
+button > i,
+.overview-drag-handle > i {
+  display: inline-flex;
+  place-items: normal;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  border-radius: 0;
+  background: transparent !important;
+  color: currentColor !important;
+  font-size: 1em;
+  line-height: 1;
+  box-shadow: none !important;
+}
+
+/* Selected menu items use one deliberate color, not multi-accent gradients. */
+.nav-button.p-button.active,
+.nav-button.p-button.active:hover {
+  border-color: rgba(21, 94, 232, 0.22) !important;
+  background: rgba(21, 94, 232, 0.12) !important;
+  color: #155ee8 !important;
+  box-shadow:
+    inset 3px 0 0 #155ee8,
+    0 8px 18px rgba(21, 94, 232, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
+}
+
+.nav-button.p-button.active .p-button-label,
+.nav-button.p-button.active .p-button-icon {
+  color: #155ee8 !important;
+}
+
+/* Buttons and hover states stay flat single-color; no gradients on controls. */
+.p-button.p-button-primary,
+.toolbar .p-button.p-button-primary {
+  border-color: rgba(242, 193, 0, 0.88) !important;
+  background: #fff0a6 !important;
+  color: #253044 !important;
+  box-shadow:
+    0 10px 22px rgba(242, 193, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+}
+
+.p-button.p-button-primary:not(:disabled):hover,
+.toolbar .p-button.p-button-primary:not(:disabled):hover {
+  border-color: rgba(242, 193, 0, 1) !important;
+  background: #ffe47b !important;
+  color: #253044 !important;
+  box-shadow:
+    0 12px 24px rgba(242, 193, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84) !important;
+}
+
+.p-button.p-button-danger,
+.toolbar .p-button.p-button-danger {
+  border-color: rgba(229, 22, 112, 0.28) !important;
+  background: #ffd9ea !important;
+  color: #b51158 !important;
+}
+
+.p-button.p-button-danger:not(:disabled):hover,
+.toolbar .p-button.p-button-danger:not(:disabled):hover {
+  border-color: rgba(229, 22, 112, 0.38) !important;
+  background: #ffc7df !important;
+  color: #8b0f4c !important;
+}
+
+.p-button:not(.p-button-text):not(.p-button-outlined):not(.p-button-secondary):not(.p-button-danger):not(.p-button-primary),
+.diagnostic-run-button.p-button {
+  border-color: rgba(21, 94, 232, 0.3) !important;
+  background: #eaf1ff !important;
+  color: #155ee8 !important;
+  box-shadow:
+    0 8px 18px rgba(21, 94, 232, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+}
+
+.p-button:not(.p-button-text):not(.p-button-outlined):not(.p-button-secondary):not(.p-button-danger):not(.p-button-primary):not(:disabled):hover,
+.diagnostic-run-button.p-button:not(:disabled):hover {
+  border-color: rgba(21, 94, 232, 0.38) !important;
+  background: #dce8ff !important;
+  color: #063fb5 !important;
+  box-shadow:
+    0 10px 20px rgba(21, 94, 232, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
+}
+
+.p-button.p-button-secondary,
+.toolbar .p-button.p-button-secondary,
+.p-button.p-button-outlined,
+.icon-button,
+.ghost-button {
+  background: rgba(255, 255, 255, 0.86) !important;
+}
+
+.sidebar-toggle.p-button:hover,
+.nav-button.p-button:hover,
+.preset-button:hover,
+.rule-chip-remove:hover,
+.p-button.p-button-text:not(:disabled):hover,
+.p-button.p-button-outlined:not(:disabled):hover,
+.icon-button:hover:not(:disabled),
+.ghost-button:hover,
+.overview-drag-handle:hover {
+  border-color: rgba(21, 94, 232, 0.22) !important;
+  background: rgba(21, 94, 232, 0.1) !important;
+  color: #155ee8 !important;
+  box-shadow:
+    0 8px 18px rgba(21, 94, 232, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+}
+
+.nav-button.p-button.active,
+.nav-button.p-button.active:hover {
+  background: rgba(21, 94, 232, 0.12) !important;
+}
+
+@media (max-width: 980px) {
+  body {
+    min-width: 0;
+  }
+
+  .shell {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    padding: 18px 10px;
+  }
+
+  .brand > div:not(.brand-mark),
+  .nav-button .p-button-label,
+  .sidebar-status {
+    display: none;
+  }
+
+  .nav-button.p-button {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .workspace {
+    padding: 0 18px 18px;
+  }
+
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .span-5,
+  .span-4,
+  .span-6,
+  .span-7,
+  .span-12 {
+    grid-column: span 1;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    margin: 0 -18px 18px;
+    padding: 16px 18px 14px;
+  }
+
+  .field-pair,
+  .status-board,
+  .card-group-grid,
+  .method-summary,
+  .policy-grid,
+  .policy-facts,
+  .forwarding-methods,
+  .rule-scope-grid,
+  .rule-compose,
+  .rule-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rule-inventory {
+    min-height: 0;
+  }
+
+  .rule-table {
+    height: min(52vh, 460px);
+  }
+
+  .rule-table-group-heading > span,
+  .rule-table-scope {
+    display: none;
+  }
+
+  .rule-table-row {
+    grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .rule-table-action {
+    grid-column: 2;
+  }
+}
+
+/* Midnight neon palette: a true black canvas with bright, readable controls. */
+:root.app-dark,
+:root.app-dark .app-frame {
+  color-scheme: dark;
+  --app-bg: #020406;
+  --app-surface: rgba(10, 15, 21, 0.94);
+  --app-sidebar: rgba(4, 8, 12, 0.96);
+  --app-muted-surface: rgba(14, 22, 30, 0.9);
+  --app-border: rgba(92, 229, 255, 0.22);
+  --app-border-soft: rgba(122, 151, 171, 0.17);
+  --app-text: #d9e7ef;
+  --app-text-strong: #f7fcff;
+  --app-text-muted: #8397a6;
+  --app-primary: #48e8ff;
+  --app-primary-strong: #8cf3ff;
+  --app-success: #62f5a6;
+  --app-coral: #ff5c91;
+  --app-violet: #a789ff;
+  --app-cyan: #48e8ff;
+  --app-lemon: #ffe55c;
+  --app-glass-shadow: 0 22px 54px rgba(0, 0, 0, 0.46);
+  --p-primary-color: #48e8ff !important;
+  --p-primary-hover-color: #8cf3ff !important;
+  --p-primary-active-color: #27cce6 !important;
+  --p-primary-contrast-color: #021014 !important;
+  --p-primary-50: #07171b !important;
+  --p-primary-100: #09242a !important;
+  --p-primary-200: #0b3942 !important;
+  --p-primary-300: #12606e !important;
+  --p-primary-400: #21a9bd !important;
+  --p-primary-500: #48e8ff !important;
+  --p-primary-600: #27cce6 !important;
+  --p-primary-700: #1499ae !important;
+  --p-content-background: #0b1118 !important;
+  --p-content-hover-background: #121d27 !important;
+  --p-content-border-color: rgba(92, 229, 255, 0.2) !important;
+  --p-content-color: #d9e7ef !important;
+  --p-text-color: #d9e7ef !important;
+  --p-text-muted-color: #8397a6 !important;
+  --p-form-field-background: #070c11 !important;
+  --p-form-field-disabled-background: #0d1319 !important;
+  --p-form-field-filled-background: #0b1219 !important;
+  --p-form-field-border-color: rgba(122, 151, 171, 0.3) !important;
+  --p-form-field-hover-border-color: rgba(72, 232, 255, 0.58) !important;
+  --p-form-field-focus-border-color: #48e8ff !important;
+  --p-form-field-color: #eefaff !important;
+  --p-form-field-placeholder-color: #627786 !important;
+  --p-button-primary-background: #ffe55c !important;
+  --p-button-primary-hover-background: #fff08d !important;
+  --p-button-primary-active-background: #e7c92c !important;
+  --p-button-primary-border-color: #ffe55c !important;
+  --p-button-primary-color: #111300 !important;
+  --p-button-text-primary-color: #48e8ff !important;
+  --p-button-text-primary-hover-background: rgba(72, 232, 255, 0.12) !important;
+  --p-button-outlined-primary-color: #72efff !important;
+  --p-button-outlined-primary-border-color: rgba(72, 232, 255, 0.38) !important;
+  --p-button-outlined-primary-hover-background: rgba(72, 232, 255, 0.1) !important;
+}
+
+html.app-dark,
+html.app-dark body,
+html.app-dark .app-frame {
+  background:
+    radial-gradient(circle at 9% 4%, rgba(72, 232, 255, 0.13), transparent 29%),
+    radial-gradient(circle at 78% 0%, rgba(167, 137, 255, 0.11), transparent 30%),
+    radial-gradient(circle at 88% 88%, rgba(98, 245, 166, 0.08), transparent 28%),
+    linear-gradient(145deg, #010203 0%, #04070a 52%, #020405 100%);
+  color: var(--app-text);
+}
+
+html.app-dark .app-frame::before {
+  background-image:
+    linear-gradient(rgba(72, 232, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(72, 232, 255, 0.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(128deg, rgba(0, 0, 0, 0.78), transparent 68%);
+  opacity: 0.72;
+}
+
+html.app-dark .sidebar {
+  border-right-color: rgba(72, 232, 255, 0.13);
+  background:
+    linear-gradient(180deg, rgba(11, 17, 24, 0.97), rgba(3, 7, 10, 0.98)),
+    #05080c;
+  box-shadow:
+    18px 0 52px rgba(0, 0, 0, 0.46),
+    inset -1px 0 0 rgba(72, 232, 255, 0.03);
+  backdrop-filter: blur(24px) saturate(1.18);
+}
+
+html.app-dark .topbar,
+html.app-dark .topbar::before {
+  background:
+    linear-gradient(110deg, rgba(72, 232, 255, 0.055), transparent 36%),
+    linear-gradient(280deg, rgba(255, 92, 145, 0.045), transparent 38%),
+    rgba(3, 7, 10, 0.92);
+}
+
+html.app-dark .topbar {
+  border-bottom-color: rgba(72, 232, 255, 0.13);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.24);
+}
+
+html.app-dark .topbar h1,
+html.app-dark .panel-heading h2,
+html.app-dark .card-group-heading h2,
+html.app-dark .brand-title,
+html.app-dark strong {
+  color: var(--app-text-strong);
+}

@@ -1,16 +1,21 @@
+use std::fmt;
 use std::time::Duration;
 
 use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::direct_access::DirectAccessConfig;
 use crate::error::{AndroidAgentError, Result};
 
 pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+// Spread new TCP connections and replacement UDP sessions across every
+// Registry-assigned endpoint instead of pinning Android to the first one.
+static NEXT_PROXY_ADDRESS: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
@@ -48,6 +53,41 @@ pub struct AndroidAgentConfig {
 
     #[serde(default)]
     pub tun: AndroidTunConfig,
+}
+
+struct RedactedPrivateKey;
+
+impl fmt::Debug for RedactedPrivateKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+impl fmt::Debug for AndroidAgentConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AndroidAgentConfig")
+            .field("proxy_address_count", &self.proxy_addrs.len())
+            .field("username", &self.username)
+            .field("private_key_pem", &RedactedPrivateKey)
+            .field("transport_mode", &self.transport_mode)
+            .field("udp_session_pool_size", &self.udp_session_pool_size)
+            .field(
+                "async_runtime_stack_size_mb",
+                &self.async_runtime_stack_size_mb,
+            )
+            .field("runtime_threads", &self.runtime_threads)
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field(
+                "http_proxy_max_concurrent_connects",
+                &self.http_proxy_max_concurrent_connects,
+            )
+            .field("compression_mode", &self.compression_mode)
+            .field("yamux", &self.yamux)
+            .field("direct_access", &self.direct_access)
+            .field("tun", &self.tun)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,11 +152,23 @@ impl AndroidAgentConfig {
     pub fn effective_udp_session_pool_size(&self) -> usize {
         self.udp_session_pool_size.clamp(1, 8)
     }
+
+    #[doc(hidden)]
+    pub fn proxy_address_at(&self, index: usize) -> String {
+        if self.proxy_addrs.is_empty() {
+            return String::new();
+        }
+        self.proxy_addrs
+            .get(index % self.proxy_addrs.len())
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl ClientConnectionConfig for AndroidAgentConfig {
     fn remote_addr(&self) -> String {
-        self.proxy_addrs.first().cloned().unwrap_or_default()
+        let index = NEXT_PROXY_ADDRESS.fetch_add(1, Ordering::Relaxed);
+        self.proxy_address_at(index)
     }
 
     fn username(&self) -> String {
@@ -213,80 +265,4 @@ fn default_tun_mtu() -> u16 {
 
 fn default_proxy_dns() -> bool {
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tun_allows_quic_by_default() {
-        let config = AndroidTunConfig::default();
-
-        assert_eq!(config.effective_quic_policy(), QuicPolicy::Allow);
-    }
-
-    #[test]
-    fn agent_transport_defaults_to_udp() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
-        )
-        .unwrap();
-        assert_eq!(config.transport_mode, TransportMode::Udp);
-    }
-
-    #[test]
-    fn agent_transport_accepts_auto() {
-        let config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,
-        )
-        .unwrap();
-        assert_eq!(config.transport_mode, TransportMode::Auto);
-    }
-
-    #[test]
-    fn udp_session_pool_defaults_to_four_and_is_bounded() {
-        let default_config: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
-        )
-        .unwrap();
-        assert_eq!(default_config.effective_udp_session_pool_size(), 4);
-
-        let disabled: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":0}"#,
-        )
-        .unwrap();
-        assert_eq!(disabled.effective_udp_session_pool_size(), 1);
-
-        let excessive: AndroidAgentConfig = serde_json::from_str(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":64}"#,
-        )
-        .unwrap();
-        assert_eq!(excessive.effective_udp_session_pool_size(), 8);
-    }
-
-    #[test]
-    fn rejects_removed_quic_transport_mode() {
-        let result = serde_json::from_str::<AndroidAgentConfig>(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"quic"}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_removed_quic_connection_pool_field() {
-        let result = serde_json::from_str::<AndroidAgentConfig>(
-            r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"udp","quic_connection_pool_size":4}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn explicit_quic_policy_blocks_quic() {
-        let config: AndroidTunConfig = serde_json::from_str(r#"{"quic_policy":"block"}"#).unwrap();
-
-        assert_eq!(config.effective_quic_policy(), QuicPolicy::Block);
-    }
 }

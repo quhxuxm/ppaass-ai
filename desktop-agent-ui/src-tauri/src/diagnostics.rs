@@ -19,9 +19,8 @@ pub(crate) fn run_connectivity_tests_blocking(
 ) -> Result<ConnectivityReport, String> {
     let config_path = match path.filter(|value| !value.trim().is_empty()) {
         Some(value) => PathBuf::from(value),
-        None => locate_config_path().ok_or_else(|| {
-            "找不到 agent 配置文件。请确认 agent.toml 或 config/local/agent.toml 存在。".to_string()
-        })?,
+        None => locate_config_path()
+            .ok_or_else(|| "找不到 Agent 配置文件。请确认 agent.toml 存在。".to_string())?,
     };
     let raw = fs::read_to_string(&config_path).map_err(|err| format!("读取配置失败：{err}"))?;
     let summary = summarize_config(&raw)?;
@@ -123,7 +122,7 @@ pub(crate) fn run_connectivity_tests_blocking(
     })
 }
 
-fn quic_attempt_timeout(transport_mode: &str, connect_timeout_secs: u64) -> Duration {
+pub fn quic_attempt_timeout(transport_mode: &str, connect_timeout_secs: u64) -> Duration {
     if transport_mode != "auto" {
         return Duration::from_secs(3);
     }
@@ -150,21 +149,4 @@ fn tcp_connect_timeout(addr: std::net::SocketAddr, duration: Duration) -> bool {
     };
     runtime
         .block_on(async { matches!(timeout(duration, TcpStream::connect(addr)).await, Ok(Ok(_))) })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn auto_quic_probe_covers_native_udp_fallback_deadline() {
-        let timeout = quic_attempt_timeout("auto", 20);
-        assert!(timeout * 3 >= Duration::from_secs(26));
-    }
-
-    #[test]
-    fn non_auto_quic_probe_keeps_short_timeout() {
-        assert_eq!(quic_attempt_timeout("udp", 20), Duration::from_secs(3));
-        assert_eq!(quic_attempt_timeout("tcp", 20), Duration::from_secs(3));
-    }
 }

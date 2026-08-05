@@ -45,12 +45,23 @@ pub struct YamuxClientConnection {
     auth_config: Arc<YamuxSubstreamAuthConfig>,
 }
 
-#[derive(Debug)]
 struct YamuxSubstreamAuthConfig {
     username: String,
     private_key_pem: String,
     timeout: Duration,
     compression_mode: CompressionMode,
+}
+
+impl std::fmt::Debug for YamuxSubstreamAuthConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("YamuxSubstreamAuthConfig")
+            .field("username", &self.username)
+            .field("private_key_pem", &"[REDACTED]")
+            .field("timeout", &self.timeout)
+            .field("compression_mode", &self.compression_mode)
+            .finish()
+    }
 }
 
 impl ClientConnectionConfig for YamuxSubstreamAuthConfig {

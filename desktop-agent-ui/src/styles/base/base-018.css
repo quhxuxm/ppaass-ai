@@ -1,0 +1,359 @@
+html.app-dark .p-toggleswitch .p-toggleswitch-handle {
+  background: #d8e5eb;
+}
+
+html.app-dark .p-toggleswitch.p-toggleswitch-checked .p-toggleswitch-handle {
+  background: #07130d;
+}
+
+html.app-dark .rule-scope-note {
+  border-color: rgba(255, 229, 92, 0.25);
+  background: rgba(255, 229, 92, 0.075);
+  color: #eadf9c;
+}
+
+html.app-dark .rule-chip,
+html.app-dark .rule-strip span {
+  border-color: rgba(167, 137, 255, 0.3);
+  background: rgba(167, 137, 255, 0.12);
+  color: #c4adff;
+}
+
+html.app-dark .rule-chip-remove {
+  border-color: rgba(167, 137, 255, 0.3);
+  color: #d3c3ff;
+}
+
+html.app-dark .rule-chip-remove:hover {
+  background: rgba(255, 92, 145, 0.16) !important;
+  color: #ff8eb4 !important;
+}
+
+html.app-dark .rule-group-heading {
+  border-bottom-color: rgba(122, 151, 171, 0.16);
+  background: rgba(14, 23, 31, 0.86);
+}
+
+html.app-dark .empty-rules,
+html.app-dark .dns-empty {
+  border-color: rgba(122, 151, 171, 0.28);
+  background: rgba(8, 14, 19, 0.68);
+  color: #718694;
+}
+
+html.app-dark .diagnostic-row.ok {
+  border-color: rgba(98, 245, 166, 0.3);
+  background: rgba(98, 245, 166, 0.07);
+}
+
+html.app-dark .diagnostic-row.fail {
+  border-color: rgba(255, 92, 145, 0.34);
+  background: rgba(255, 92, 145, 0.08);
+}
+
+html.app-dark .diagnostic-result strong,
+html.app-dark .dns-status.ok {
+  color: #62f5a6;
+}
+
+html.app-dark .diagnostic-row.fail .diagnostic-result strong,
+html.app-dark .dns-status.warn {
+  color: #ff7eaa;
+}
+
+html.app-dark .speed-gauge,
+html.app-dark .speed-gauge:nth-child(2),
+html.app-dark .hourly-bars {
+  border-color: rgba(72, 232, 255, 0.15);
+  background:
+    linear-gradient(145deg, rgba(16, 26, 35, 0.94), rgba(7, 12, 17, 0.94)),
+    #0a1117;
+}
+
+html.app-dark .hourly-stack,
+html.app-dark .hourly-column:nth-child(3n + 2) .hourly-stack,
+html.app-dark .hourly-column:nth-child(3n + 3) .hourly-stack {
+  border-color: rgba(118, 151, 170, 0.16);
+  background:
+    linear-gradient(180deg, var(--hourly-track-color), rgba(5, 9, 13, 0.88) 48%),
+    #070b0f;
+  box-shadow: inset 0 1px 0 rgba(230, 249, 255, 0.035);
+}
+
+html.app-dark .hourly-column {
+  --hourly-bar-color: #ff5c91;
+  --hourly-track-color: rgba(255, 92, 145, 0.08);
+}
+
+html.app-dark .hourly-column:nth-child(4n + 2) {
+  --hourly-bar-color: #ffe55c;
+  --hourly-track-color: rgba(255, 229, 92, 0.075);
+}
+
+html.app-dark .hourly-column:nth-child(4n + 3) {
+  --hourly-bar-color: #62f5a6;
+  --hourly-track-color: rgba(98, 245, 166, 0.075);
+}
+
+html.app-dark .hourly-column:nth-child(4n + 4) {
+  --hourly-bar-color: #48e8ff;
+  --hourly-track-color: rgba(72, 232, 255, 0.075);
+}
+
+html.app-dark .legend-dot.idle {
+  border-color: rgba(122, 151, 171, 0.24);
+  background: #18232b;
+}
+
+html.app-dark .log-view,
+html.app-dark .toml-editor-shell,
+html.app-dark .toml-highlight {
+  border-color: rgba(72, 232, 255, 0.16);
+  background: #03070a;
+  color: #d9e7ef;
+}
+
+html.app-dark .log-view,
+html.app-dark .toml-editor-shell {
+  box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.38);
+}
+
+html.app-dark .toast {
+  border: 1px solid rgba(72, 232, 255, 0.26);
+  background: #0d171e;
+  color: #eaf8fc;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.58);
+}
+
+html.app-dark .toast.success {
+  border-color: rgba(98, 245, 166, 0.4);
+  background: #0c2118;
+  color: #8cffbe;
+}
+
+html.app-dark .toast.info {
+  border-color: rgba(72, 232, 255, 0.38);
+  background: #0a1c24;
+  color: #8cf3ff;
+}
+
+html.app-dark .toast.error {
+  border-color: rgba(255, 92, 145, 0.42);
+  background: #251019;
+  color: #ff9cbc;
+}
+
+html.app-dark ::selection {
+  background: rgba(72, 232, 255, 0.25);
+  color: #ffffff;
+}
+
+html.app-dark * {
+  scrollbar-color: rgba(72, 232, 255, 0.36) rgba(8, 13, 18, 0.72);
+}
+
+html.app-dark *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html.app-dark *::-webkit-scrollbar-track {
+  background: rgba(8, 13, 18, 0.72);
+}
+
+html.app-dark *::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(8, 13, 18, 0.72);
+  border-radius: 999px;
+  background: rgba(72, 232, 255, 0.34);
+}
+
+/* Neon icon plates: labels and navigation now share the midnight palette. */
+html.app-dark .nav-button.p-button {
+  --icon-accent: #48e8ff;
+  --icon-plate: rgba(72, 232, 255, 0.11);
+  --icon-border: rgba(72, 232, 255, 0.25);
+  --icon-glow: rgba(72, 232, 255, 0.12);
+}
+
+html.app-dark .nav-button.p-button:nth-child(4n + 2) {
+  --icon-accent: #ff7eaa;
+  --icon-plate: rgba(255, 92, 145, 0.11);
+  --icon-border: rgba(255, 92, 145, 0.24);
+  --icon-glow: rgba(255, 92, 145, 0.11);
+}
+
+html.app-dark .nav-button.p-button:nth-child(4n + 3) {
+  --icon-accent: #79ffb7;
+  --icon-plate: rgba(98, 245, 166, 0.1);
+  --icon-border: rgba(98, 245, 166, 0.23);
+  --icon-glow: rgba(98, 245, 166, 0.1);
+}
+
+html.app-dark .nav-button.p-button:nth-child(4n + 4) {
+  --icon-accent: #ffeb78;
+  --icon-plate: rgba(255, 229, 92, 0.1);
+  --icon-border: rgba(255, 229, 92, 0.23);
+  --icon-glow: rgba(255, 229, 92, 0.1);
+}
+
+html.app-dark .nav-button.p-button .p-button-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  border: 1px solid var(--icon-border) !important;
+  border-radius: 8px;
+  background: var(--icon-plate) !important;
+  color: var(--icon-accent) !important;
+  font-size: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(236, 252, 255, 0.055),
+    0 0 16px var(--icon-glow) !important;
+}
+
+html.app-dark .nav-button.p-button.active .p-button-icon {
+  --icon-accent: #9af5ff;
+  --icon-plate: rgba(72, 232, 255, 0.18);
+  --icon-border: rgba(72, 232, 255, 0.42);
+  --icon-glow: rgba(72, 232, 255, 0.2);
+}
+
+html.app-dark .metric-tile,
+html.app-dark .forwarding-method,
+html.app-dark .rule-scope-item {
+  --tile-icon-accent: #48e8ff;
+  --tile-icon-plate: rgba(72, 232, 255, 0.1);
+  --tile-icon-border: rgba(72, 232, 255, 0.24);
+  --tile-icon-glow: rgba(72, 232, 255, 0.1);
+}
+
+html.app-dark .metric-tile:nth-child(4n + 1),
+html.app-dark .forwarding-method:nth-child(4n + 1),
+html.app-dark .rule-scope-item:nth-child(4n + 1) {
+  --tile-icon-accent: #ff7eaa;
+  --tile-icon-plate: rgba(255, 92, 145, 0.1);
+  --tile-icon-border: rgba(255, 92, 145, 0.23);
+  --tile-icon-glow: rgba(255, 92, 145, 0.1);
+}
+
+html.app-dark .metric-tile:nth-child(4n + 2),
+html.app-dark .forwarding-method:nth-child(4n + 2),
+html.app-dark .rule-scope-item:nth-child(4n + 2) {
+  --tile-icon-accent: #ffeb78;
+  --tile-icon-plate: rgba(255, 229, 92, 0.1);
+  --tile-icon-border: rgba(255, 229, 92, 0.23);
+  --tile-icon-glow: rgba(255, 229, 92, 0.09);
+}
+
+html.app-dark .metric-tile:nth-child(4n + 3),
+html.app-dark .forwarding-method:nth-child(4n + 3),
+html.app-dark .rule-scope-item:nth-child(4n + 3) {
+  --tile-icon-accent: #79ffb7;
+  --tile-icon-plate: rgba(98, 245, 166, 0.1);
+  --tile-icon-border: rgba(98, 245, 166, 0.23);
+  --tile-icon-glow: rgba(98, 245, 166, 0.09);
+}
+
+html.app-dark .metric-tile:nth-child(4n + 4),
+html.app-dark .forwarding-method:nth-child(4n + 4),
+html.app-dark .rule-scope-item:nth-child(4n + 4) {
+  --tile-icon-accent: #72efff;
+  --tile-icon-plate: rgba(72, 232, 255, 0.1);
+  --tile-icon-border: rgba(72, 232, 255, 0.24);
+  --tile-icon-glow: rgba(72, 232, 255, 0.1);
+}
+
+html.app-dark .metric-tile > i,
+html.app-dark .endpoint-row > i,
+html.app-dark .dns-empty > i,
+html.app-dark .rule-scope-note > i,
+html.app-dark .field > span > i,
+html.app-dark .overview-drag-ghost-heading > i,
+html.app-dark .forwarding-method > i,
+html.app-dark .rule-scope-item > i,
+html.app-dark .method-fact i,
+html.app-dark .policy-fact i,
+html.app-dark .rule-group-heading i {
+  --icon-accent: var(--semantic-icon-accent, var(--tile-icon-accent, #72efff));
+  --icon-plate: var(--semantic-icon-plate, var(--tile-icon-plate, rgba(72, 232, 255, 0.1)));
+  --icon-border: var(--semantic-icon-border, var(--tile-icon-border, rgba(72, 232, 255, 0.24)));
+  --icon-glow: var(--semantic-icon-glow, var(--tile-icon-glow, rgba(72, 232, 255, 0.1)));
+  border: 1px solid var(--icon-border);
+  background: var(--icon-plate) !important;
+  color: var(--icon-accent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(236, 252, 255, 0.055),
+    0 0 16px var(--icon-glow) !important;
+}
+
+html.app-dark .field > span > i,
+html.app-dark .rule-scope-note > i,
+html.app-dark .rule-group-heading i {
+  display: inline-grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+html.app-dark i.pi-bolt,
+html.app-dark i.pi-chart-line,
+html.app-dark i.pi-clock,
+html.app-dark i.pi-stopwatch,
+html.app-dark i.pi-wave-pulse {
+  --semantic-icon-accent: #ffeb78;
+  --semantic-icon-plate: rgba(255, 229, 92, 0.1);
+  --semantic-icon-border: rgba(255, 229, 92, 0.24);
+  --semantic-icon-glow: rgba(255, 229, 92, 0.1);
+}
+
+html.app-dark i.pi-heart,
+html.app-dark i.pi-compass,
+html.app-dark i.pi-check-circle,
+html.app-dark i.pi-send {
+  --semantic-icon-accent: #79ffb7;
+  --semantic-icon-plate: rgba(98, 245, 166, 0.1);
+  --semantic-icon-border: rgba(98, 245, 166, 0.24);
+  --semantic-icon-glow: rgba(98, 245, 166, 0.1);
+}
+
+html.app-dark i.pi-key,
+html.app-dark i.pi-shield,
+html.app-dark i.pi-directions,
+html.app-dark i.pi-database,
+html.app-dark i.pi-asterisk {
+  --semantic-icon-accent: #c4adff;
+  --semantic-icon-plate: rgba(167, 137, 255, 0.11);
+  --semantic-icon-border: rgba(167, 137, 255, 0.25);
+  --semantic-icon-glow: rgba(167, 137, 255, 0.1);
+}
+
+html.app-dark i.pi-user,
+html.app-dark i.pi-box,
+html.app-dark i.pi-microchip,
+html.app-dark i.pi-window-maximize,
+html.app-dark i.pi-exclamation-circle,
+html.app-dark i.pi-info-circle {
+  --semantic-icon-accent: #ff7eaa;
+  --semantic-icon-plate: rgba(255, 92, 145, 0.1);
+  --semantic-icon-border: rgba(255, 92, 145, 0.24);
+  --semantic-icon-glow: rgba(255, 92, 145, 0.1);
+}
+
+html.app-dark .overview-drag-ghost {
+  border-color: rgba(72, 232, 255, 0.3);
+  background: rgba(7, 13, 18, 0.88);
+  box-shadow:
+    0 24px 58px rgba(0, 0, 0, 0.58),
+    0 0 28px rgba(72, 232, 255, 0.08);
+}
+
+html.app-dark .overview-drag-ghost-lines span {
+  border-color: rgba(123, 153, 171, 0.2);
+  background: rgba(17, 27, 36, 0.82);
+}
+
+/* Interaction highlight: balanced periwinkle stays vivid without feeling cold. */

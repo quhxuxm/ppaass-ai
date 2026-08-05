@@ -2,13 +2,7 @@ use super::*;
 #[cfg(windows)]
 use std::path::Path;
 
-#[cfg(test)]
-mod tests;
-
-pub(super) fn tun_ipv4_peer(
-    ipv4: std::net::Ipv4Addr,
-    ipv4_prefix: u8,
-) -> Option<std::net::Ipv4Addr> {
+pub fn tun_ipv4_peer(ipv4: std::net::Ipv4Addr, ipv4_prefix: u8) -> Option<std::net::Ipv4Addr> {
     // Host stacks treat the TUN adapter address itself as local, so DNS queries sent
     // to that IP can be consumed by the host instead of entering the TUN device.
     // Pick another usable address in the same TUN subnet so packets reach netstack.
@@ -39,8 +33,16 @@ pub(super) fn tun_ipv4_peer(
     None
 }
 
+/// Windows DNS Client needs an address routed through Wintun, not an on-link
+/// sibling that can trigger neighbor discovery before an IP packet reaches the
+/// layer-3 adapter. 198.18.0.0/15 is reserved for benchmarking and is outside
+/// the private-network bypass ranges installed by the agent.
+pub fn windows_dns_capture_target() -> std::net::Ipv4Addr {
+    std::net::Ipv4Addr::new(198, 18, 0, 1)
+}
+
 #[cfg(target_os = "macos")]
-pub(super) fn tun_ipv4_destination(
+pub fn tun_ipv4_destination(
     ipv4: std::net::Ipv4Addr,
     ipv4_prefix: u8,
 ) -> Option<std::net::Ipv4Addr> {
@@ -48,7 +50,7 @@ pub(super) fn tun_ipv4_destination(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn tun_ipv4_destination(
+pub fn tun_ipv4_destination(
     _ipv4: std::net::Ipv4Addr,
     _ipv4_prefix: u8,
 ) -> Option<std::net::Ipv4Addr> {
@@ -56,7 +58,7 @@ pub(super) fn tun_ipv4_destination(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
+pub fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
     // macOS utun is point-to-point. Keep the configured CIDR for routing policy
     // and virtual peer selection, but install the interface address as a host
     // route so packets are delivered through the utun control socket.
@@ -64,7 +66,7 @@ pub(super) fn tun_ipv4_interface_prefix(_configured_prefix: u8) -> u8 {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
+pub fn tun_ipv4_interface_prefix(configured_prefix: u8) -> u8 {
     configured_prefix
 }
 

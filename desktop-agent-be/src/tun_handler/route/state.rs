@@ -1,18 +1,27 @@
 use super::*;
 
+static ROUTE_STATE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) fn cleanup_stale_routes(route_state_file: Option<&str>) {
+    if let Err(err) = cleanup_stale_routes_checked(route_state_file) {
+        warn!("清理遗留 TUN 路由状态失败：{err}");
+    }
+}
+
+pub(crate) fn cleanup_stale_routes_checked(route_state_file: Option<&str>) -> Result<()> {
     let mut mgr = match RouteManager::new() {
         Ok(mgr) => mgr,
         Err(e) => {
-            warn!("RouteManager 初始化失败，无法预清理遗留 TUN 路由：{e}");
-            return;
+            return Err(AgentError::Connection(format!(
+                "RouteManager 初始化失败，无法预清理遗留 TUN 路由：{e}"
+            )));
         }
     };
-    RouteLease::new(route_state_file).cleanup_stale_routes(&mut mgr);
+    RouteLease::new(route_state_file).cleanup_stale_routes(&mut mgr)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(super) enum RouteKind {
+pub enum RouteKind {
     ProxyBypass,
     /// 局域网/链路本地/组播旁路路由，避免 TUN split-default 抢走
     /// 依赖物理网络接口语义的发现与投屏流量。
@@ -26,32 +35,31 @@ pub(super) enum RouteKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RouteRecord {
-    pub(super) kind: RouteKind,
-    pub(super) destination: IpAddr,
-    pub(super) prefix: u8,
-    pub(super) gateway: Option<IpAddr>,
+pub struct RouteRecord {
+    pub kind: RouteKind,
+    pub destination: IpAddr,
+    pub prefix: u8,
+    pub gateway: Option<IpAddr>,
     #[serde(default)]
-    pub(super) if_name: Option<String>,
-    pub(super) if_index: Option<u32>,
+    pub if_name: Option<String>,
+    pub if_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct RouteState {
-    pub(super) version: u8,
-    pub(super) pid: u32,
-    pub(super) created_unix_secs: u64,
-    pub(super) routes: Vec<RouteRecord>,
+pub struct RouteState {
+    pub version: u8,
+    pub pid: u32,
+    pub created_unix_secs: u64,
+    pub routes: Vec<RouteRecord>,
 }
 
-pub(super) struct RouteLease {
-    pub(super) path: PathBuf,
-    pub(super) state: RouteState,
-    pub(super) persist_failed: bool,
+pub struct RouteLease {
+    pub path: PathBuf,
+    pub state: RouteState,
 }
 
 impl RouteLease {
-    pub(super) fn new(route_state_file: Option<&str>) -> Self {
+    pub fn new(route_state_file: Option<&str>) -> Self {
         Self {
             path: route_state_file_path(route_state_file),
             state: RouteState {
@@ -60,33 +68,37 @@ impl RouteLease {
                 created_unix_secs: now_unix_secs(),
                 routes: Vec::new(),
             },
-            persist_failed: false,
         }
     }
 
-    pub(super) fn cleanup_stale_routes(&self, mgr: &mut RouteManager) {
+    pub(super) fn cleanup_stale_routes(&self, mgr: &mut RouteManager) -> Result<()> {
         let state = match fs::read_to_string(&self.path) {
             Ok(content) => match serde_json::from_str::<RouteState>(&content) {
                 Ok(state) => state,
                 Err(e) => {
-                    warn!(
-                        "TUN 路由状态文件 {} 解析失败，将移除该文件：{e}",
+                    return Err(AgentError::Connection(format!(
+                        "TUN 路由状态文件 {} 解析失败，拒绝丢弃无法确认的路由恢复信息：{e}",
                         self.path.display()
-                    );
-                    remove_file_if_exists(&self.path);
-                    return;
+                    )));
                 }
             },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => {
-                warn!("读取 TUN 路由状态文件 {} 失败：{e}", self.path.display());
-                return;
+                return Err(AgentError::Connection(format!(
+                    "读取 TUN 路由状态文件 {} 失败：{e}",
+                    self.path.display()
+                )));
             }
         };
 
         if state.routes.is_empty() {
-            remove_file_if_exists(&self.path);
-            return;
+            remove_file_if_exists(&self.path).map_err(|e| {
+                AgentError::Connection(format!(
+                    "删除空的 TUN 路由状态文件 {} 失败：{e}",
+                    self.path.display()
+                ))
+            })?;
+            return Ok(());
         }
 
         info!(
@@ -103,22 +115,30 @@ impl RouteLease {
         }
 
         if cleanup_ok {
-            remove_file_if_exists(&self.path);
+            remove_file_if_exists(&self.path).map_err(|e| {
+                AgentError::Connection(format!(
+                    "遗留 TUN 路由已清理，但删除状态文件 {} 失败：{e}",
+                    self.path.display()
+                ))
+            })?;
             info!("上次遗留的 TUN 路由已清理完成");
+            Ok(())
         } else {
-            warn!(
-                "上次遗留的部分 TUN 路由未能清理，保留状态文件以便下次重试：{}",
+            Err(AgentError::Connection(format!(
+                "上次遗留的部分 TUN 路由未能清理，已保留状态文件以便重试：{}",
                 self.path.display()
-            );
+            )))
         }
     }
 
-    pub(super) fn record_installed(&mut self, kind: RouteKind, route: &Route) {
+    pub fn record_installed(&mut self, kind: RouteKind, route: &Route) -> Result<()> {
         self.state.routes.push(RouteRecord::from_route(kind, route));
-        if let Err(e) = self.persist() {
-            self.persist_failed = true;
-            warn!("写入 TUN 路由状态文件 {} 失败：{e}", self.path.display());
-        }
+        self.persist().map_err(|e| {
+            AgentError::Connection(format!(
+                "持久化已安装的 TUN 路由失败，拒绝继续修改路由表：{}：{e}",
+                self.path.display()
+            ))
+        })
     }
 
     fn persist(&self) -> std::io::Result<()> {
@@ -126,26 +146,38 @@ impl RouteLease {
             fs::create_dir_all(parent)?;
         }
         let data = serde_json::to_vec_pretty(&self.state).map_err(std::io::Error::other)?;
-        let tmp_path = self
-            .path
-            .with_extension(format!("json.tmp.{}", std::process::id()));
-        fs::write(&tmp_path, data)?;
-        #[cfg(windows)]
-        if self.path.exists() {
-            fs::remove_file(&self.path)?;
+        let tmp_path = self.path.with_extension(format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            ROUTE_STATE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let persist_result = (|| {
+            let mut file = options.open(&tmp_path)?;
+            #[cfg(unix)]
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+            #[cfg(windows)]
+            if self.path.exists() {
+                fs::remove_file(&self.path)?;
+            }
+            fs::rename(&tmp_path, &self.path)?;
+            sync_parent_directory(&self.path)
+        })();
+        if persist_result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
         }
-        fs::rename(tmp_path, &self.path)
+        persist_result
     }
 
-    pub(super) fn clear(&mut self) {
-        if self.persist_failed {
-            debug!(
-                "TUN 路由状态文件此前写入失败，无需清理：{}",
-                self.path.display()
-            );
-        }
-        remove_file_if_exists(&self.path);
+    pub fn clear(&mut self) -> std::io::Result<()> {
+        remove_file_if_exists(&self.path)?;
         self.state.routes.clear();
+        Ok(())
     }
 }
 
@@ -180,7 +212,7 @@ impl RouteRecord {
         route
     }
 
-    pub(super) fn matches_route(&self, route: &Route) -> bool {
+    pub fn matches_route(&self, route: &Route) -> bool {
         route.destination() == self.destination
             && route.prefix() == self.prefix
             && gateways_match(self.gateway, route.gateway(), self.destination)
@@ -250,10 +282,26 @@ pub(super) fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
-fn remove_file_if_exists(path: &Path) {
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
     match fs::remove_file(path) {
-        Ok(()) => debug!("已删除 TUN 路由状态文件：{}", path.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => warn!("删除 TUN 路由状态文件 {} 失败：{e}", path.display()),
+        Ok(()) => {
+            sync_parent_directory(path)?;
+            debug!("已删除 TUN 路由状态文件：{}", path.display());
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
     }
+}
+
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }

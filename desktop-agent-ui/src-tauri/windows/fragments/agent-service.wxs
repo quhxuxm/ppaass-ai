@@ -2,11 +2,20 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
     <DirectoryRef Id="TARGETDIR">
+      <Directory Id="AppDataFolder">
+        <Directory Id="PpaassRoamingDataDir" Name="com.ppaass.agent" />
+      </Directory>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="PpaassLocalDataDir" Name="com.ppaass.agent" />
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
       <Component Id="PpaassAgentServiceCleanup" Guid="*">
         <RegistryKey
           Root="HKLM"
           Key="Software\PPAASS\PPAASS Desktop Agent"
-          Action="createAndRemoveOnUninstall"
         >
           <RegistryValue
             Name="InstallerOwnsAgentServiceCleanup"
@@ -21,6 +30,28 @@
           Stop="both"
           Remove="uninstall"
           Wait="yes"
+        />
+        <RemoveFile
+          Id="RemovePpaassRoamingRootConfig"
+          Directory="PpaassRoamingDataDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFile
+          Id="RemovePpaassLocalRootConfig"
+          Directory="PpaassLocalDataDir"
+          Name="agent.toml"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassRoamingDataDir"
+          Directory="PpaassRoamingDataDir"
+          On="both"
+        />
+        <RemoveFolder
+          Id="RemovePpaassLocalDataDir"
+          Directory="PpaassLocalDataDir"
+          On="both"
         />
       </Component>
     </DirectoryRef>

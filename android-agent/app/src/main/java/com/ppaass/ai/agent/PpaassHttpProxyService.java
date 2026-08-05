@@ -43,6 +43,18 @@ public class PpaassHttpProxyService extends Service {
             if (nativeHandle == 0) {
                 return;
             }
+            int authenticationStatus = NativeAgent.authenticationStatus(nativeHandle);
+            if (AgentAuthSession.applyVerifiedServerStatus(
+                    PpaassHttpProxyService.this,
+                    authenticationStatus)) {
+                Log.i(TAG, "Updated the verified Proxy account status");
+                refreshNotification();
+            }
+            if (!AgentAuthSession.isActive(PpaassHttpProxyService.this)) {
+                Log.w(TAG, "Agent login is unavailable; stopping HTTP / SOCKS5 proxy");
+                stopForInvalidAuthentication();
+                return;
+            }
             if (!NativeAgent.isRunning(nativeHandle)) {
                 Log.w(TAG, "Native HTTP / SOCKS5 proxy exited; restarting");
                 restartNativeProxy();
@@ -102,6 +114,11 @@ public class PpaassHttpProxyService extends Service {
     }
 
     private void startProxy(boolean preserveEnabledOnFailure) {
+        if (!AgentAuthSession.isActive(this)) {
+            Log.w(TAG, "Refusing to start HTTP / SOCKS5 proxy without an active Agent login");
+            stopForInvalidAuthentication();
+            return;
+        }
         if (nativeHandle != 0) {
             if (!NativeAgent.isRunning(nativeHandle)) {
                 NativeAgent.stop(nativeHandle);
@@ -171,6 +188,16 @@ public class PpaassHttpProxyService extends Service {
     private void stopProxy() {
         stopProxyNative();
         stopSelf();
+    }
+
+    private void stopForInvalidAuthentication() {
+        AgentAuthSession.clear();
+        if (!ManagedCredentials.clear(this)) {
+            Log.e(TAG, "Failed to completely remove invalid managed credentials");
+        }
+        setEnabled(false);
+        PpaassVpnService.requestMockGeoStopForAuthenticationEnd(this);
+        stopProxy();
     }
 
     private void stopProxyNative() {
@@ -281,11 +308,25 @@ public class PpaassHttpProxyService extends Service {
             builder = new Notification.Builder(this);
         }
 
+        String contentText = "HTTP 与 SOCKS5 监听 0.0.0.0:" + listenPort;
+        if (AgentAuthSession.isServerExpired(this)) {
+            contentText = "账号已过期 · 保持运行并等待管理员续期";
+        } else if (AgentAuthSession.isServerDisabled(this)) {
+            contentText = "账号已停用 · 代理保持运行";
+        }
+
         return builder
                 .setSmallIcon(R.drawable.ic_vpn)
                 .setContentTitle(UiLanguage.tr(this, "PPAASS HTTP / SOCKS5 代理"))
-                .setContentText(UiLanguage.tr(this, "HTTP 与 SOCKS5 监听 0.0.0.0:") + listenPort)
+                .setContentText(UiLanguage.tr(this, contentText))
                 .setOngoing(true)
                 .build();
+    }
+
+    private void refreshNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null && nativeHandle != 0) {
+            manager.notify(NOTIFICATION_ID, notification());
+        }
     }
 }

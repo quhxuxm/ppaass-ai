@@ -52,6 +52,16 @@ protected void updateConfigEditability(boolean editable) {
                 control.setEnabled(editable);
             }
         }
+        boolean egressEditable = editable
+                && hasAgentPermission(AgentPermissions.EGRESS_EDIT);
+        updateEditTextEditable(connectTimeoutSecs, egressEditable);
+        updateEditTextEditable(udpSessionPoolSize, egressEditable);
+        if (compressionMode != null) {
+            compressionMode.setEnabled(egressEditable);
+        }
+        updateEditTextEditable(
+                runtimeThreads,
+                editable && hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT));
     }
 
 protected void updateEditTextEditable(EditText editText, boolean editable) {
@@ -65,25 +75,68 @@ protected void updateEditTextEditable(EditText editText, boolean editable) {
     }
 
 protected void saveConfig() {
-        String quicPolicyValue = selectedQuicPolicy();
-        String udpSessionPoolSizeValue = boundedIntString(
+        boolean canEditEgress = hasAgentPermission(AgentPermissions.EGRESS_EDIT);
+        boolean canEditRuntimeThreads =
+                hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT);
+        String requestedUdpSessionPoolSize = boundedIntString(
                 udpSessionPoolSize == null
                         ? null
                         : udpSessionPoolSize.getText().toString(),
                 DefaultConfig.UDP_SESSION_POOL_SIZE,
-                DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
-                DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
-        if (udpSessionPoolSize != null) {
-            udpSessionPoolSize.setText(udpSessionPoolSizeValue);
-            udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
-        }
+                        DefaultConfig.MIN_UDP_SESSION_POOL_SIZE,
+                        DefaultConfig.MAX_UDP_SESSION_POOL_SIZE);
+        String transportModeValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                DefaultConfig.TRANSPORT_MODE,
+                selectedTransportMode());
+        String udpSessionPoolSizeValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE),
+                requestedUdpSessionPoolSize);
+        String connectTimeoutValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS),
+                connectTimeoutSecs.getText().toString());
+        String quicPolicyValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                DefaultConfig.QUIC_POLICY,
+                selectedQuicPolicy());
+        String compressionModeValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                DefaultConfig.COMPRESSION_MODE,
+                selectedCompressionMode());
+        String runtimeThreadsValue = AgentUiPermissionPolicy.guardedConfigValue(
+                canEditRuntimeThreads,
+                String.valueOf(DefaultConfig.RUNTIME_THREADS),
+                runtimeThreads.getText().toString());
+        String yamuxUdpSessionsValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpSessions,
+                DefaultConfig.UDP_YAMUX_SESSIONS);
+        String yamuxUdpMaxStreamsValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpMaxStreamsPerSession,
+                DefaultConfig.UDP_YAMUX_MAX_STREAMS_PER_SESSION);
+        String yamuxUdpOpenTimeoutValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpOpenStreamTimeoutSecs,
+                DefaultConfig.UDP_YAMUX_OPEN_STREAM_TIMEOUT_SECS);
+        String yamuxUdpKeepaliveValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpKeepaliveIntervalSecs,
+                DefaultConfig.UDP_YAMUX_KEEPALIVE_INTERVAL_SECS);
+        String yamuxUdpWriteTimeoutValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpConnectionWriteTimeoutSecs,
+                DefaultConfig.UDP_YAMUX_CONNECTION_WRITE_TIMEOUT_SECS);
+        String yamuxUdpWindowValue = guardedEgressText(
+                canEditEgress,
+                yamuxUdpStreamWindowSizeKb,
+                DefaultConfig.UDP_YAMUX_STREAM_WINDOW_SIZE_KB);
         prefs.edit()
-                .putString("proxy_addrs", proxyAddrs.getText().toString())
-                .putString("username", username.getText().toString())
-                .putString("private_key_pem", DefaultConfig.normalizePrivateKeyPem(privateKey.getText().toString()))
-                .putString("transport_mode", selectedTransportMode())
+                .putString("transport_mode", transportModeValue)
                 .putString("udp_session_pool_size", udpSessionPoolSizeValue)
-                .putString("connect_timeout_secs", connectTimeoutSecs.getText().toString())
+                .putString("connect_timeout_secs", connectTimeoutValue)
                 .putString("http_proxy_port", String.valueOf(httpProxyListenPort()))
                 .putString("http_proxy_threads", httpProxyThreads.getText().toString())
                 .putString(
@@ -93,28 +146,56 @@ protected void saveConfig() {
                 .putString("tun_ipv6", DefaultConfig.TUN_IPV6)
                 .putString("mtu", String.valueOf(DefaultConfig.TUN_MTU))
                 .putString("quic_policy", quicPolicyValue)
-                .putString("runtime_threads", runtimeThreads.getText().toString())
-                .putString("compression_mode", selectedCompressionMode())
+                .putString("runtime_threads", runtimeThreadsValue)
+                .putString("compression_mode", compressionModeValue)
                 .putString("direct_access_mode", selectedDirectAccessMode())
                 .putString("direct_access_rules", serializeDirectAccessRules())
-                .putString("yamux_udp_sessions", yamuxUdpSessions.getText().toString())
+                .putString("yamux_udp_sessions", yamuxUdpSessionsValue)
                 .putString(
                         "yamux_udp_max_streams_per_session",
-                        yamuxUdpMaxStreamsPerSession.getText().toString())
+                        yamuxUdpMaxStreamsValue)
                 .putString(
                         "yamux_udp_open_stream_timeout_secs",
-                        yamuxUdpOpenStreamTimeoutSecs.getText().toString())
+                        yamuxUdpOpenTimeoutValue)
                 .putString(
                         "yamux_udp_keepalive_interval_secs",
-                        yamuxUdpKeepaliveIntervalSecs.getText().toString())
+                        yamuxUdpKeepaliveValue)
                 .putString(
                         "yamux_udp_connection_write_timeout_secs",
-                        yamuxUdpConnectionWriteTimeoutSecs.getText().toString())
+                        yamuxUdpWriteTimeoutValue)
                 .putString(
                         "yamux_udp_stream_window_size_kb",
-                        yamuxUdpStreamWindowSizeKb.getText().toString())
+                        yamuxUdpWindowValue)
                 .apply();
+        restoreGuardedConfigControls(
+                udpSessionPoolSizeValue,
+                connectTimeoutValue,
+                compressionModeValue,
+                runtimeThreadsValue);
     }
+
+protected String guardedEgressText(
+        boolean canEditEgress,
+        EditText control,
+        int defaultValue) {
+        String fallback = String.valueOf(defaultValue);
+        return AgentUiPermissionPolicy.guardedConfigValue(
+                canEditEgress,
+                fallback,
+                control == null ? fallback : control.getText().toString());
+}
+
+protected void restoreGuardedConfigControls(
+        String udpSessionPoolSizeValue,
+        String connectTimeoutValue,
+        String compressionModeValue,
+        String runtimeThreadsValue) {
+        connectTimeoutSecs.setText(connectTimeoutValue);
+        udpSessionPoolSize.setText(udpSessionPoolSizeValue);
+        udpSessionPoolSize.setSelection(udpSessionPoolSizeValue.length());
+        setSpinnerValue(compressionMode, compressionModeValue);
+        runtimeThreads.setText(runtimeThreadsValue);
+}
 
 protected void restoreDefaultConfig() {
         if (isVpnRunning() || isHttpProxyRunning()) {
@@ -122,13 +203,10 @@ protected void restoreDefaultConfig() {
             return;
         }
 
-        proxyAddrs.setText(DefaultConfig.PROXY_ADDR);
         httpProxyPort.setText(String.valueOf(DefaultConfig.HTTP_PROXY_PORT));
         httpProxyThreads.setText(String.valueOf(DefaultConfig.HTTP_PROXY_THREADS));
         httpProxyMaxConcurrentConnects.setText(
                 String.valueOf(DefaultConfig.HTTP_PROXY_MAX_CONCURRENT_CONNECTS));
-        username.setText(DefaultConfig.USERNAME);
-        privateKey.setText(DefaultConfig.normalizePrivateKeyPem(DefaultConfig.PRIVATE_KEY_PEM));
         setTransportMode(DefaultConfig.TRANSPORT_MODE, false);
         udpSessionPoolSize.setText(String.valueOf(DefaultConfig.UDP_SESSION_POOL_SIZE));
         connectTimeoutSecs.setText(String.valueOf(DefaultConfig.CONNECT_TIMEOUT_SECS));

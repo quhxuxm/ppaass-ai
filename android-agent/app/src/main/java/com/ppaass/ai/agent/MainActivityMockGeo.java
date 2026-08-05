@@ -534,6 +534,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
     }
 
     private void startMockGeoService() {
+        if (!AgentAuthSession.isActive(this)) {
+            onAgentSessionInvalidated();
+            return;
+        }
         MockGeoConfig.Selection selection = MockGeoConfig.load(prefs);
         if (!selection.enabled()) {
             prefs.edit()
@@ -612,6 +616,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
     }
 
     protected void requestRunningMockGeoRefresh() {
+        if (!AgentAuthSession.isActive(this)) {
+            onAgentSessionInvalidated();
+            return;
+        }
         if (!prefs.getBoolean(PpaassVpnService.PREF_MOCK_GEO_REQUESTED, false)) {
             return;
         }
@@ -626,6 +634,10 @@ abstract class MainActivityMockGeo extends MainActivityAppSelector {
     }
 
     private void sendMockGeoUpdate() {
+        if (!AgentAuthSession.isActive(this)) {
+            onAgentSessionInvalidated();
+            return;
+        }
         Intent intent = new Intent(this, PpaassVpnService.class);
         intent.setAction(PpaassVpnService.ACTION_UPDATE_MOCK_GEO);
         intent.putExtra(PpaassVpnService.EXTRA_USER_VISIBLE, true);

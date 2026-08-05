@@ -74,6 +74,10 @@ protected void applyToggleButtonState(String label, int color, boolean enabled) 
     }
 
 protected void updateStatusMetrics() {
+        if (accountSummary != null) {
+            accountSummary.setText(tr(authenticatedAccountSummary()));
+        }
+        updateAccountAvatar();
         long rxBytes = currentVpnDownloadBytes();
         long txBytes = currentVpnUploadBytes();
         long nowMs = SystemClock.elapsedRealtime();
@@ -188,6 +192,52 @@ protected void loadHourlyTraffic(String key, long[] target) {
             }
         }
     }
+
+protected String authenticatedAccountSummary() {
+        String displayName = AgentAuthSession.displayName();
+        StringBuilder summary = new StringBuilder()
+                .append("已登录：")
+                .append(displayName.isEmpty()
+                        ? AgentAuthSession.username()
+                        : displayName);
+        if (AgentPermissions.ROLE_ADMIN.equals(AgentAuthSession.role())) {
+            summary.append(" · 管理员");
+        }
+        if (AgentAuthSession.isServerExpired(this)) {
+            summary.append(" · 账号已过期，等待管理员续期");
+        } else if (AgentAuthSession.isServerDisabled(this)) {
+            summary.append(" · 账号已停用");
+        }
+        summary.append(" · 密钥版本 ")
+                .append(AgentAuthSession.keyVersion());
+        long expiresAt = AgentAuthSession.expiresAt();
+        if (expiresAt > 0) {
+            summary.append(" · 有效期至 ")
+                    .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                            .format(new Date(expiresAt * 1000L)));
+        }
+        String syncMessage = AgentAuthSession.syncMessage(this);
+        if (!syncMessage.isEmpty()) {
+            summary.append('\n').append(syncMessage);
+        }
+        return summary.toString();
+}
+
+protected void updateAccountAvatar() {
+        if (accountAvatar == null) {
+            return;
+        }
+        Bitmap avatar = AgentProfileAvatar.decode(AgentAuthSession.avatarUrl());
+        if (avatar != null) {
+            accountAvatar.setPadding(0, 0, 0, 0);
+            accountAvatar.clearColorFilter();
+            accountAvatar.setImageBitmap(avatar);
+            return;
+        }
+        accountAvatar.setPadding(dp(9), dp(9), dp(9), dp(9));
+        accountAvatar.setImageResource(R.drawable.ic_vpn);
+        accountAvatar.setColorFilter(COLOR_ACCENT);
+}
 
 protected String serializeHourlyTraffic(long[] values) {
         StringBuilder builder = new StringBuilder();

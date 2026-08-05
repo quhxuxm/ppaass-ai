@@ -21,9 +21,19 @@ import java.security.*;
 import java.text.*;
 import java.util.*;
 
-public class MainActivity extends MainActivityScreens {
+public class MainActivity extends MainActivityAccountManagement {
+    private SharedPreferences agentSessionPreferences;
     private final SharedPreferences.OnSharedPreferenceChangeListener preferenceChangeListener =
             (sharedPreferences, key) -> {
+                if (AgentSessionStore.PREF_PERMISSION_REVISION.equals(key)
+                        || AgentAuthSession.PREF_SERVER_AUTHENTICATION_STATUS.equals(key)) {
+                    runOnUiThread(this::refreshAgentPermissionUi);
+                    return;
+                }
+                if (AgentAdminRequestStore.PREF_REVISION.equals(key)) {
+                    runOnUiThread(this::onAdminRequestStateChanged);
+                    return;
+                }
                 if (PpaassVpnService.PREF_RUNNING.equals(key)
                         || PpaassVpnService.PREF_SYSTEM_MANAGED.equals(key)
                         || PpaassVpnService.PREF_MOCK_GEO_REQUESTED.equals(key)
@@ -97,20 +107,59 @@ public class MainActivity extends MainActivityScreens {
         reloadUiPalette();
         configureWindow();
         prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener);
-        buildUi();
-        UiLanguage.watch(this);
+        agentSessionPreferences = getSharedPreferences(
+                ManagedCredentials.PREFERENCES_NAME,
+                MODE_PRIVATE);
+        agentSessionPreferences.registerOnSharedPreferenceChangeListener(
+                preferenceChangeListener);
+        showAgentEntry();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        if (!hasAuthenticatedAgentSession()) {
+            if (!isAgentAuthenticationInProgress()) {
+                onAgentSessionInvalidated();
+            }
+            return;
+        }
+        AgentProfileSyncManager.requestImmediateSync(this);
+        maybeRequestAdminNotificationPermission();
         cleanupStaleMockGeoState();
         restoreHttpProxyServiceIfEnabled();
         updateVpnToggle();
         updateHttpProxyToggle();
         syncMockGeoAfterResume();
         startStatusRefresh();
+    }
+
+    public void refreshAgentPermissionUi() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread(this::refreshAgentPermissionUi);
+            return;
+        }
+        if (isFinishing()
+                || isDestroyed()
+                || !hasAuthenticatedAgentSession()
+                || isAgentAuthenticationInProgress()) {
+            return;
+        }
+        statusHandler.removeCallbacks(statusRefresh);
+        String currentFingerprint = agentPermissionFingerprint();
+        if (currentFingerprint.equals(appliedAgentPermissionFingerprint)) {
+            if (activityResumed) {
+                startStatusRefresh();
+            } else {
+                updateStatusMetrics();
+            }
+            return;
+        }
+        buildUi();
+        if (activityResumed) {
+            startStatusRefresh();
+        }
     }
 
     @Override
@@ -127,6 +176,15 @@ public class MainActivity extends MainActivityScreens {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (hasAuthenticatedAgentSession()) {
+            openAdminApprovalScreenFromIntent();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         statusHandler.removeCallbacks(statusRefresh);
         if (appSelectorDialog != null) {
@@ -137,13 +195,20 @@ public class MainActivity extends MainActivityScreens {
         if (prefs != null) {
             prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener);
         }
+        if (agentSessionPreferences != null) {
+            agentSessionPreferences.unregisterOnSharedPreferenceChangeListener(
+                    preferenceChangeListener);
+            agentSessionPreferences = null;
+        }
         super.onDestroy();
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == VPN_PERMISSION_REQUEST && resultCode == RESULT_OK) {
+        if (requestCode == VPN_PERMISSION_REQUEST
+                && resultCode == RESULT_OK
+                && hasAuthenticatedAgentSession()) {
             startVpnService();
         }
     }
@@ -154,11 +219,16 @@ public class MainActivity extends MainActivityScreens {
             String[] permissions,
             int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        handleMockGeoPermissionResult(requestCode, grantResults);
+        if (requestCode == ADMIN_NOTIFICATION_PERMISSION_REQUEST) {
+            onAdminNotificationPermissionResult(grantResults);
+        } else {
+            handleMockGeoPermissionResult(requestCode, grantResults);
+        }
     }
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
+        dismissDnsFilterInputOnOutsideTouch(event);
         handleScreenSwipeEvent(event);
         return super.dispatchTouchEvent(event);
     }

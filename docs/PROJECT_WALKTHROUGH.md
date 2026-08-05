@@ -17,14 +17,14 @@ PPAASS 是一个 Rust 实现的加密代理系统。客户端侧运行 Agent，�
 ```text
 ppaass-ai/
 ├── desktop-agent-be/    # 桌面 Agent 后端：HTTP/SOCKS5/TUN、TCP direct framed、原生 UDP/TCP-Yamux
-├── proxy/               # 服务端 Proxy：TCP direct framed/Yamux 与 raw UDP session、认证、目标 relay、上游转发
+├── proxy-entry/               # Proxy Entry：TCP direct framed/Yamux 与 raw UDP session、认证、目标 relay、上游转发
 ├── protocol/            # Agent <-> Proxy 流协议与原生 UDP 数据报协议、编解码、加密、压缩
 ├── common/              # Agent/Proxy 复用的客户端握手、传输选择、Yamux、工具
 ├── desktop-agent-ui/    # Tauri 2 + Vue 3 桌面 UI，内嵌 desktop-agent-be 运行
 ├── android-agent/       # Android VpnService + Rust JNI native Agent
 ├── tests/               # mock target、mock client、集成测试、性能测试和报告
 ├── config/              # local/remote 示例配置
-├── keys/                # 示例私钥，proxy 侧 users.toml 存公钥
+├── keys/                # 本地忽略的密钥材料；生产身份不进入仓库
 └── .github/workflows/   # unit/integration/clippy/deploy workflow
 ```
 
@@ -60,13 +60,14 @@ Proxy 是服务端出口。
 
 入口在：
 
-- `proxy/src/main.rs`
-- `proxy/src/server.rs`
-- `proxy/src/connection/mod.rs`
+- `proxy-entry/src/main.rs`
+- `proxy-entry/src/server.rs`
+- `proxy-entry/src/connection/mod.rs`
 
 它做的事情：
 
-- 读取 `proxy.toml` 和 `users.toml`。
+- 读取 `proxy-entry.toml`，通过 Registry 控制 API 同步公开授权，并按用户名查询 Entry
+  自己的 SQLite last-known-good 副本；它从不打开 Registry 的权威用户库。
 - 在同一个数值端口同时监听 Agent 的入站 TCP 和 raw UDP。TCP 入站先 peek 首包判断是 direct framed PPAASS 还是 raw Yamux；UDP 入站按原生协议建立、查找和维护认证 session。
 - 对每条 direct framed 连接或 Yamux 子流执行流式 PPAASS Auth，再等待 `ConnectRequest`；原生 UDP 则先做 RSA 身份认证/会话建立，再处理被逐包认证的 `Connect/Data/Close` 数据报。
 - 根据目标类型进入 TCP relay、单目标 UDP、共享 UDP relay、Proxy DNS 或上游转发。
@@ -112,7 +113,7 @@ Mermaid 源码：[03-auth-encryption.mmd](diagrams/03-auth-encryption.mmd)
 实现细节：
 
 - 客户端握手在 `common/src/client_connection/authenticated.rs`。
-- Proxy 认证在 `proxy/src/connection/auth.rs`。
+- Proxy 认证在 `proxy-entry/src/connection/auth.rs`。
 - 加解密状态在 `protocol/src/codec/cipher_state.rs`。
 - AES-GCM 在 `protocol/src/crypto/aes_gcm_cipher.rs`。
 
@@ -190,13 +191,12 @@ Mermaid 源码：[07-proxy-state-machine.mmd](diagrams/07-proxy-state-machine.mm
 
 关键文件：
 
-- `proxy/src/server.rs`: 入站 TCP/raw UDP accept、direct framed/Yamux 识别、原生 UDP session 分发与认证超时。
-- `proxy/src/native_udp.rs`: raw UDP listener、session 生命周期、认证消息、flow relay 与回包。
-- `proxy/src/connection/auth.rs`: 每条 direct framed 连接或 Yamux 子流内的流式 Auth。
-- `proxy/src/connection/connect.rs`: Connect 分流。
-- `proxy/src/connection/relay.rs`: TCP/单目标 UDP 中继。
-- `proxy/src/connection/udp_relay.rs`: 共享 UDP relay。
-- `proxy/src/connection/upstream.rs`: forward mode 连接上游 PPAASS proxy。
+- `proxy-entry/src/server.rs`: 入站 TCP/raw UDP accept、direct framed/Yamux 识别、原生 UDP session 分发与认证超时。
+- `proxy-entry/src/native_udp.rs`: raw UDP listener、session 生命周期、认证消息、flow relay 与回包。
+- `proxy-entry/src/connection/auth.rs`: 每条 direct framed 连接或 Yamux 子流内的流式 Auth。
+- `proxy-entry/src/connection/connect.rs`: Connect 分流。
+- `proxy-entry/src/connection/relay.rs`: TCP/单目标 UDP 中继。
+- `proxy-entry/src/connection/udp_relay.rs`: 共享 UDP relay。
 - `protocol/src/udp_transport/`: raw UDP listener 使用的认证、packet codec、防重放和重组规则。
 
 ## 10. UDP 的两种代理承载
@@ -278,21 +278,13 @@ TUN 模式里的关键细节：
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。
 
-## 13. Proxy 出站与 forward mode
-
-普通模式：
+## 13. Proxy 出站
 
 ![Proxy 出站](diagrams/11-proxy-egress.svg)
 
 Mermaid 源码：[11-proxy-egress.mmd](diagrams/11-proxy-egress.mmd)
 
-forward mode：
-
-![forward mode](diagrams/12-forward-mode.svg)
-
-Mermaid 源码：[12-forward-mode.mmd](diagrams/12-forward-mode.mmd)
-
-forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Proxy 的客户端”同时存在，连接上游时复用 `common::ClientConnection` 的 Auth/Connect 逻辑。
+Proxy Entry 收到通过认证的 Connect 请求后，直接按目标地址建立出站连接；不再支持把流量级联到另一个 Proxy Entry。
 
 ## 14. 配置关系
 
@@ -303,7 +295,8 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 常见字段：
 
 - `listen_addr`: 本地 HTTP/SOCKS5 监听地址。
-- `proxy_addrs`: 远端 Proxy 地址列表，连接时随机选择。
+- 远端 Proxy 地址在用户认证后由 Proxy Registry 作为受管运行时数据分配，连接时随机选择；
+  `agent.toml` 不再接受旧的 `proxy_addrs` 字段。
 - `username`: 用户名。
 - `private_key_path`: 用户私钥。
 - `transport_mode`: 只接受 `udp`/`tcp`；`udp` 是 TCP direct framed + 原生加密 UDP，`tcp` 是 TCP direct framed + UDP TCP/Yamux。旧值 `quic` 不兼容且会被拒绝，不做别名或自动迁移。
@@ -315,17 +308,26 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 ### Proxy 配置
 
-主要文件：`proxy/src/config/proxy_config.rs`
+主要文件：`proxy-entry/src/config/proxy_config.rs`
 
 常见字段：
 
 - `listen_addr`: Proxy 监听地址。
 - Proxy 在 `listen_addr` 的同一数值端口绑定 TCP 与 raw UDP；启用原生 UDP 模式时防火墙必须同时放行 UDP。
-- `users_path`: 用户配置文件。
+- `advertised_address`: 必填的 Agent 公网连接地址；格式为 `host:port`，注册后自动合并到 Proxy 节点目录。
+- `registry_url`: 必填的 Registry HTTP 或 HTTPS 地址；Entry 不校验 HTTPS 证书链或主机名。
+- `registry_control_token_path`: 必填的控制面 Token 文件。
+- `authorization_database_path`: 必填的 Entry 本地公开授权副本 SQLite 路径；生产环境使用
+  `/var/lib/ppaass-entry/authorization.sqlite3`。
+- `entry_id`: 访问记录幂等批次使用的稳定 Entry 标识。
+- Entry 在 TCP/UDP 监听成功后每 30 秒向 Registry 注册心跳；超过 90 秒未收到心跳时，管理界面显示离线。
+- 每次注册成功及收到授权 SSE 变更后，Entry 以 revision 绑定的 username keyset cursor
+  分页获取公钥授权，每页写入本地 staging，全部完成后原子替换 last-known-good。首份快照
+  前认证默认拒绝；首份成功后 Registry 中断不会影响已有用户，中断期间的停用、撤权、
+  删除和密钥轮换在恢复同步后生效。
 - `compression_mode`: Proxy framed TCP/TCP-Yamux 响应编码使用的压缩模式；不影响原生 UDP。
 - `replay_attack_tolerance`: Auth 时间戳容忍窗口，默认 300 秒。
 - `[yamux]`: Proxy 作为 `tcp` 模式 UDP Yamux acceptor 的子流上限、窗口和超时。TCP 入站 framed 连接进入 PPAASS 流协议处理；raw UDP 入站进入独立的 session packet codec。
-- `forward_mode`: 是否转发到上游 Proxy。
 - `outbound_interface`: 出站网卡，支持空、具体网卡、`auto`。
 - `dns_upstream_addr`: Proxy 端 DNS 上游。
 - `auth_timeout_secs`、`tcp_relay_idle_timeout_secs`、`yamux_session_idle_timeout_secs`。
@@ -339,13 +341,13 @@ forward mode 里，Proxy A 作为“下游 Proxy 的服务端”和“上游 Pro
 
 主要文件：
 
-- `proxy/src/config/user_config.rs`
-- `proxy/src/user_manager.rs`
-- `config/local/users.toml`
+- `proxy-entry/src/config/user_config.rs`
+- `proxy-entry/src/user_manager.rs`
+- `proxy-registry/src/store/repository.rs`
 
 字段：
 
-- `username`: 必须与 `[users.<key>]` 的 key 一致。
+- `username`: SQLite 用户记录中的稳定认证名。
 - `public_key_pem`: Proxy 持有用户公钥。
 - `expires_at`: 可选 RFC3339 或 Unix 秒级时间戳。
 
@@ -423,11 +425,11 @@ Mermaid 源码：[15-testing-topology.mmd](diagrams/15-testing-topology.mmd)
 
 主要文件：
 
-- `tests/src/mock_target.rs`: HTTP、TCP echo、UDP echo 目标。
-- `tests/src/mock_client.rs`: HTTP client、SOCKS5 TCP/UDP client。
-- `tests/src/integration_tests.rs`: 功能链路测试。
-- `tests/src/performance_tests.rs`: 并发压测、延迟直方图、吞吐、系统指标。
-- `tests/src/report.rs`: HTML/JSON/Markdown 报告。
+- `tests/src/mock_target/`: HTTP、TCP echo、UDP echo 目标。
+- `tests/src/mock_client/`: HTTP client、SOCKS5 TCP/UDP client。
+- `tests/src/integration_tests/`: 功能链路测试。
+- `tests/src/performance_tests/`: 并发压测、延迟直方图、吞吐、系统指标。
+- `tests/src/report/`: HTML/JSON/Markdown 报告。
 - `run-tests.sh`: 启动测试工具的脚本。
 
 典型运行顺序：
@@ -439,17 +441,17 @@ cargo build --release --workspace
 ./run-tests.sh mock-target
 
 # 终端 2
-cargo run --release -p proxy -- --config config/local/proxy.toml
+cargo run --release -p proxy-entry -- --config tests/fixtures/config/proxy-entry-integration.toml
 
-# 终端 3
-cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/local/agent.toml
+# 终端 3：启动 Desktop Agent UI，登录后由认证 session 下发运行时 Proxy 地址
+cd desktop-agent-ui && npm run tauri dev
 
 # 终端 4
 ./run-tests.sh integration
 ./run-tests.sh performance 100 60
 ```
 
-注意：文档和 CI 中有的示例使用 `127.0.0.1:7070`，当前 `config/local/agent.toml` 里是 `0.0.0.0:10080`。跑测试时要让 `AGENT_ADDR` 和实际配置一致。
+集成测试夹具 `tests/fixtures/config/agent-integration.toml` 监听 `127.0.0.1:7080`；跑测试时要让 `AGENT_ADDR` 与该地址一致。
 
 ## 18. CI 与部署
 
@@ -458,12 +460,17 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 - `unit-test.yml`: Debian container，Rust 1.93，build workspace，跑 unit tests。
 - `integration-test.yml`: 启动 mock target、proxy、agent，然后跑 integration tests。
 - `rust-clippy.yml`: Clippy SARIF 分析。
-- `deploy-proxy.yml`: 手动选择 production/dev/qa，构建 Linux proxy，打包 `proxy`、`proxy.toml`、`users.toml`、`start-proxy.sh`，上传远端并重启。
+- `deploy-proxy-registry.yml`: 使用 `registry_production` Environment 部署两个 Registry 进程和 Caddy。
+- `deploy-proxy-entry.yml`: 使用 `entry_production` Environment 部署 Entry 数据面及其本地公开授权副本 SQLite；不接触 Registry 权威数据库。
 - `checkmarx-one.yml` / `codescan.yml`: 安全/代码扫描。
+
+完整的 GitHub Secrets、Variables 和 PEM 配置示例见
+[`GITHUB_ACTIONS_DEPLOYMENT.md`](GITHUB_ACTIONS_DEPLOYMENT.md)。
 
 部署脚本：
 
-- `start-proxy.sh`: Linux Proxy supervisor，支持 start/stop/status/restart，可 systemd 外独立守护。
+- `start-proxy-entry.sh`: Linux Proxy supervisor，支持 start/stop/status/restart，可 systemd 外独立守护。
+- `start-proxy-registry.sh`: 启动单个 Registry 实例，分别支持公开和控制监听地址。
 - `start-agent.bat`: Windows Agent；TUN 开启时安装/使用最高权限计划任务。
 - `start-agent.sh` / `start-agent.command`: macOS/Linux Agent；macOS TUN helper 自动安装。
 
@@ -476,15 +483,15 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/l
 3. `protocol/src/message/*.rs`：先看协议消息长什么样。
 4. `protocol/src/codec/message_codec.rs`：理解帧、压缩和 AES 的位置。
 5. `common/src/client_connection/authenticated.rs`：理解 Auth + Connect 客户端流程。
-6. `proxy/src/server.rs`、`proxy/src/connection/auth.rs`、`proxy/src/connection/connect.rs`：看 Proxy 状态机。
+6. `proxy-entry/src/server.rs`、`proxy-entry/src/connection/auth.rs`、`proxy-entry/src/connection/connect.rs`：看 Proxy 状态机。
 7. `desktop-agent-be/src/server.rs`：看本地入口如何分 HTTP/SOCKS/TUN。
 8. `desktop-agent-be/src/http_handler.rs` 和 `socks5_handler.rs`：看本地代理细节。
 9. `common/src/transport.rs`、`common/src/client_connection/udp.rs`、`protocol/src/udp_transport/*` 与 `desktop-agent-be/src/yamux_session/*`：分别看传输选择、原生 UDP client/packet protocol，以及 TCP/direct-framed 和 TCP-mode Yamux 流。
-10. `proxy/src/connection/relay.rs`、`udp_relay.rs`：看数据搬运。
+10. `proxy-entry/src/connection/relay.rs`、`udp_relay.rs`：看数据搬运。
 11. `desktop-agent-be/src/tun_handler/*`：最后再读 TUN，因为它依赖前面所有概念。
 12. `desktop-agent-ui/src-tauri/src/app.rs` 和 `agent.rs`：看 UI 如何嵌入 Agent。
 13. `android-agent/native/src/netstack.rs` 和 `yamux_session.rs`：看 Android 如何复用核心。
-14. `tests/src/integration_tests.rs`：用测试把理解闭环。
+14. `tests/src/integration_tests/`：用测试把理解闭环。
 
 ## 20. 常见容易误解的点
 

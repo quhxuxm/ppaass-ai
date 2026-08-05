@@ -2,12 +2,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 use super::{
-    UDP_MAX_DATAGRAM_SIZE, UDP_TRANSPORT_HEADER_LEN, UdpPacketHeader, UdpPacketKind, UdpSessionId,
-    UdpTransportError, UdpTransportResult,
+    UDP_MAX_DATAGRAM_SIZE, UDP_TRANSPORT_HEADER_LEN, UDP_TRANSPORT_VERSION, UdpPacketHeader,
+    UdpPacketKind, UdpSessionId, UdpTransportError, UdpTransportResult,
 };
 
 pub const UDP_AUTH_NONCE_LEN: usize = 32;
 pub const UDP_MASTER_KEY_LEN: usize = 32;
+pub const UDP_MAX_RSA_FIELD_LEN: usize = 1_024;
+pub const UDP_OAEP_LABEL: &str = "ppaass/native-udp/auth-response/v3";
 
 /// Cleartext first flight. It carries only identity/challenge context and a
 /// signature made with the user's private key; it never carries session key material.
@@ -22,14 +24,35 @@ pub struct UdpAuthInit {
 /// Cleartext envelope for the response. `encrypted_session_secret` must be the
 /// bitcode encoding of [`UdpSessionSecret`] encrypted by the upper layer with
 /// RSAES-OAEP-SHA256 and the authenticated user's RSA public key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UdpAuthOk {
     pub encrypted_session_secret: Vec<u8>,
+}
+
+impl UdpAuthOk {
+    fn validate_shape(&self) -> UdpTransportResult<()> {
+        if self.encrypted_session_secret.is_empty()
+            || self.encrypted_session_secret.len() > UDP_MAX_RSA_FIELD_LEN
+        {
+            return Err(UdpTransportError::AuthenticationFailed);
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for UdpAuthOk {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UdpAuthOk")
+            .field("encrypted_session_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Secret response contents. This value itself must never be sent in cleartext.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UdpSessionSecret {
+    pub version: u8,
     /// Binds this encrypted response to the exact AuthInit header.
     pub session_id: UdpSessionId,
     /// Binds this encrypted response to the exact client challenge.
@@ -42,6 +65,7 @@ impl std::fmt::Debug for UdpSessionSecret {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("UdpSessionSecret")
+            .field("version", &self.version)
             .field("session_id", &self.session_id)
             .field("client_nonce", &self.client_nonce)
             .field("master_key", &"[REDACTED]")
@@ -58,7 +82,10 @@ impl UdpSessionSecret {
         session_id: &UdpSessionId,
         client_nonce: &[u8; UDP_AUTH_NONCE_LEN],
     ) -> UdpTransportResult<()> {
-        if self.session_id == *session_id && self.client_nonce == *client_nonce {
+        if self.version == UDP_TRANSPORT_VERSION
+            && self.session_id == *session_id
+            && self.client_nonce == *client_nonce
+        {
             Ok(())
         } else {
             Err(UdpTransportError::AuthenticationFailed)
@@ -77,7 +104,7 @@ pub fn udp_auth_proof_digest(
     let username_bytes = username.as_bytes();
     let username_len = u32::try_from(username_bytes.len()).unwrap_or(u32::MAX);
     let mut hasher = Sha256::new();
-    hasher.update(b"ppaass/native-udp/auth-proof/v1\0");
+    hasher.update(b"ppaass/native-udp/auth-proof/v3\0");
     hasher.update(session_id);
     hasher.update(username_len.to_be_bytes());
     hasher.update(username_bytes);
@@ -102,11 +129,14 @@ pub fn decode_auth_init(datagram: &[u8]) -> UdpTransportResult<(UdpPacketHeader,
 /// Encode an AuthOk as a complete cleartext UDP datagram. Only its RSA-encrypted
 /// secret blob is exposed on the wire.
 pub fn encode_auth_ok(session_id: UdpSessionId, auth: &UdpAuthOk) -> UdpTransportResult<Vec<u8>> {
+    auth.validate_shape()?;
     encode_auth_packet(UdpPacketKind::AuthOk, session_id, auth)
 }
 
 pub fn decode_auth_ok(datagram: &[u8]) -> UdpTransportResult<(UdpPacketHeader, UdpAuthOk)> {
-    decode_auth_packet(UdpPacketKind::AuthOk, datagram)
+    let (header, auth): (_, UdpAuthOk) = decode_auth_packet(UdpPacketKind::AuthOk, datagram)?;
+    auth.validate_shape()?;
+    Ok((header, auth))
 }
 
 /// Serialize the secret before the upper layer RSA-encrypts it.

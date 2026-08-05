@@ -14,20 +14,23 @@ use tracing::instrument;
 const DESKTOP_PROXY_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug)]
-pub(super) struct AgentClientConfig<'a> {
+pub struct AgentClientConfig<'a> {
     config: &'a AgentConfig,
+    proxy_addrs: &'a [String],
     bind_ip: Option<IpAddr>,
     bind_interface: Option<BindInterface>,
 }
 
 impl<'a> AgentClientConfig<'a> {
-    pub(super) fn new(
+    pub fn new(
         config: &'a AgentConfig,
+        proxy_addrs: &'a [String],
         bind_ip: Option<IpAddr>,
         bind_interface: Option<BindInterface>,
     ) -> Self {
         Self {
             config,
+            proxy_addrs,
             bind_ip,
             bind_interface,
         }
@@ -38,8 +41,7 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     fn remote_addr(&self) -> String {
         use rand::prelude::*;
         let mut rng = rand::rng();
-        self.config
-            .proxy_addrs
+        self.proxy_addrs
             .choose(&mut rng)
             .cloned()
             .unwrap_or_default()
@@ -74,28 +76,30 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
     }
 }
 
-#[instrument(skip(config))]
+#[instrument(skip(config, proxy_addrs))]
 pub(super) async fn new_yamux_connection(
     config: &AgentConfig,
+    proxy_addrs: &[String],
     bind_ip: Option<IpAddr>,
     bind_interface: Option<BindInterface>,
     transport: TransportProtocol,
 ) -> Result<YamuxClientConnection> {
-    let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
+    let config_adapter = AgentClientConfig::new(config, proxy_addrs, bind_ip, bind_interface);
     let yamux_settings = config.yamux.udp_settings();
     YamuxClientConnection::connect_for(&config_adapter, transport, yamux_settings)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
 }
 
-#[instrument(skip(config))]
+#[instrument(skip(config, proxy_addrs))]
 pub(super) async fn new_direct_tcp_target_stream(
     config: &AgentConfig,
+    proxy_addrs: &[String],
     bind_ip: Option<IpAddr>,
     bind_interface: Option<BindInterface>,
     address: Address,
 ) -> Result<(common::ClientStream, String)> {
-    let config_adapter = AgentClientConfig::new(config, bind_ip, bind_interface);
+    let config_adapter = AgentClientConfig::new(config, proxy_addrs, bind_ip, bind_interface);
     let connection = AuthenticatedConnection::connect(&config_adapter)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))?;
@@ -103,26 +107,4 @@ pub(super) async fn new_direct_tcp_target_stream(
         .connect_to_target(address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use common::ClientConnectionConfig;
-
-    const MINIMAL_AGENT_CONFIG: &str = r#"
-listen_addr = "0.0.0.0:10080"
-proxy_addrs = ["127.0.0.1:8080"]
-username = "user1"
-private_key_path = "keys/user1.pem"
-compression_mode = "gzip"
-"#;
-
-    #[test]
-    fn connection_config_adapter_forwards_compression_mode() {
-        let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
-        let adapter = AgentClientConfig::new(&config, None, None);
-
-        assert_eq!(adapter.compression_mode(), CompressionMode::Gzip);
-    }
 }

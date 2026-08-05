@@ -1,13 +1,19 @@
 import type { AppIconName } from "./components/AppIcon";
 
-export type TabKey = "overview" | "forwarding" | "egress" | "routing" | "capture" | "diagnostics" | "logs" | "toml";
+export type TabKey =
+  | "overview"
+  | "admin-requests"
+  | "forwarding"
+  | "egress"
+  | "routing"
+  | "capture"
+  | "diagnostics"
+  | "logs"
+  | "toml";
 export type AgentTransportMode = "auto" | "udp" | "tcp";
 
 export type AgentConfigSummary = {
   listen_addr: string;
-  proxy_addrs: string[];
-  username: string;
-  private_key_path: string;
   transport_mode: AgentTransportMode;
   udp_session_pool_size: number;
   connect_timeout_secs: number;
@@ -40,6 +46,78 @@ export type LoadedAgentConfig = {
   raw: string;
   summary: AgentConfigSummary;
 };
+
+export type AgentAuthAccount = {
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  role: "user" | "admin";
+  permissions: string[];
+  key_version: number;
+  expires_at: number | null;
+};
+
+export type AgentAuthState = {
+  authenticated: boolean;
+  account: AgentAuthAccount | null;
+  account_status: "active" | "expired" | "disabled" | null;
+  permission_sync_error: string | null;
+  config: LoadedAgentConfig | null;
+};
+
+export type AgentAdminKeyRequest = {
+  request_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  email: string | null;
+  request_message: string | null;
+  kind: "initial" | "rotate";
+  requested_at: number;
+  proxy_address_ids: string[];
+};
+
+export type AgentAdminProxyAddress = {
+  proxy_address_id: string;
+  label: string;
+  address: string;
+  enabled: boolean;
+};
+
+export type AgentAdminKeyRequestInbox = {
+  requests: AgentAdminKeyRequest[];
+  proxy_addresses: AgentAdminProxyAddress[];
+};
+
+export type AgentAdminKeyRequestUpdate = {
+  inbox: AgentAdminKeyRequestInbox;
+  error: string | null;
+};
+
+export type AgentAdminKeyRequestApproval = {
+  requestId: string;
+  expiresAt: number;
+  proxyAddressIds: string[];
+  reason: string;
+};
+
+export type AgentAdminKeyRequestRejection = {
+  requestId: string;
+  reason: string;
+};
+
+export type AgentLoginRequest = {
+  username: string;
+  password: string;
+  rememberCredentials: boolean;
+};
+
+export type AgentAuthPhase =
+  | "checking"
+  | "anonymous"
+  | "authenticating"
+  | "authenticated"
+  | "logging-out";
 
 export type AgentState = {
   running: boolean;
@@ -179,7 +257,7 @@ export type DirectRuleGroup = {
   items: Array<{ rule: string; index: number }>;
 };
 
-export type OverviewCardKey = "status" | "proxy" | "egress" | "speed" | "traffic" | "dns" | "tun" | "policy";
+export type OverviewCardKey = "status" | "proxy" | "speed" | "traffic" | "dns" | "tun" | "policy";
 
 export type OverviewCardDefinition = {
   key: OverviewCardKey;

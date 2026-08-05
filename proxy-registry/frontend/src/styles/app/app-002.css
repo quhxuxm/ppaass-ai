@@ -1,0 +1,360 @@
+.agent-authorization-account,
+.agent-device-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid #eaecf0;
+  border-radius: 14px;
+  background: #fcfcfd;
+}
+
+.agent-authorization-account > span,
+.agent-device-summary > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-authorization-account small,
+.agent-device-summary small {
+  overflow: hidden;
+  color: #667085;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-authorization-account strong,
+.agent-device-summary strong {
+  overflow: hidden;
+  color: #344054;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-authorization-code-form {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-authorization-code-form label {
+  color: #344054;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.agent-authorization-code-form .p-inputtext {
+  min-height: 50px;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.agent-device-summary {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.agent-device-summary .summary-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.agent-authorization-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px;
+  color: #93370d;
+  border: 1px solid #fedf89;
+  border-radius: 13px;
+  background: #fffaeb;
+}
+
+.agent-authorization-warning > i {
+  margin-top: 2px;
+}
+
+.agent-authorization-warning > span {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-authorization-warning strong {
+  font-size: 0.84rem;
+}
+
+.agent-authorization-warning small {
+  color: #b54708;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.agent-authorization-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 12px;
+}
+
+.agent-authorization-actions .p-button {
+  min-height: 48px;
+}
+
+.agent-authorization-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -10px 0 0;
+  padding: 11px 13px;
+  color: #b42318;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  border-radius: 10px;
+  background: #fef3f2;
+}
+
+.agent-authorization-outcome {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 22px 0 4px;
+  text-align: center;
+}
+
+.agent-authorization-outcome .outcome-icon {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  color: #067647;
+  font-size: 1.7rem;
+  border-radius: 50%;
+  background: #dcfae6;
+}
+
+.agent-authorization-outcome.denied .outcome-icon {
+  color: #b42318;
+  background: #fee4e2;
+}
+
+.agent-authorization-outcome .p-button {
+  margin-top: 6px;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 0 0, rgba(21, 94, 239, 0.06), transparent 26rem),
+    #f4f6fa;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(20px, 3vw, 42px);
+  padding: 0 max(28px, calc((100vw - 1320px) / 2));
+  border-bottom: 1px solid rgba(224, 228, 235, 0.9);
+  background: rgba(255, 255, 255, 0.91);
+  backdrop-filter: blur(18px);
+}
+
+.brand.compact .brand-mark {
+  width: 39px;
+  height: 39px;
+  border-radius: 12px;
+}
+
+.brand.compact > span:last-child {
+  display: grid;
+}
+
+.brand.compact strong {
+  font-size: 0.9rem;
+}
+
+.brand.compact small {
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
+.main-nav {
+  display: flex;
+  align-self: center;
+  justify-self: start;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.main-nav button {
+  min-width: 116px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 15px;
+  color: #667085;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.main-nav button::after {
+  display: none;
+}
+
+.main-nav button.active {
+  color: #155eef;
+  font-weight: 650;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+}
+
+.account-menu {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.account-menu .p-avatar {
+  color: #155eef;
+  font-weight: 700;
+  background: #eaf1ff;
+}
+
+.account-menu-copy {
+  min-width: 0;
+  display: grid;
+  line-height: 1.25;
+}
+
+.account-menu-copy strong {
+  max-width: 160px;
+  overflow: hidden;
+  color: #344054;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-copy small {
+  color: #98a2b3;
+  font-size: 0.68rem;
+}
+
+.topbar-logout-action .p-button-label {
+  display: none;
+}
+
+.topbar-logout-action.agent-handoff-logout {
+  display: none;
+}
+
+.workspace {
+  width: min(1320px, calc(100% - 56px));
+  margin: 0 auto;
+  padding: 46px 0 72px;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.page-heading h1 {
+  margin: 0;
+  color: #101828;
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  letter-spacing: -0.045em;
+}
+
+.page-heading > div > p:last-child {
+  margin: 12px 0 0;
+  color: #667085;
+}
+
+.admin-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.content-loading {
+  min-height: 280px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  color: #667085;
+}
+
+.content-loading .p-progressspinner {
+  width: 42px;
+  height: 42px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 34px;
+}
+
+.summary-card {
+  min-height: 106px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #e3e8ef;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 22px rgba(16, 24, 40, 0.035);
+}
+
+.summary-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 13px;
+}
+
+.summary-icon.blue {
+  color: #155eef;
+  background: #eaf1ff;
+}
+
+.summary-icon.green {
+  color: #039855;
+  background: #ecfdf3;
+}
+
+.summary-icon.purple {
+  color: #6941c6;
+  background: #f4f3ff;
+}
