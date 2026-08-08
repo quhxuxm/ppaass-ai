@@ -110,6 +110,86 @@ pub(crate) enum Commands {
         #[arg(short, long, default_value = "tcp-performance-report.html")]
         output: String,
     },
+    /// 自动爬升并发，寻找 client -> agent -> proxy -> target 全链路最高可持续吞吐
+    MaxThroughput {
+        /// 代理服务器地址（用于记录测试拓扑）
+        #[arg(short, long, default_value = "127.0.0.1:8080")]
+        proxy_addr: String,
+
+        /// Agent SOCKS5 监听地址
+        #[arg(short, long, default_value = "127.0.0.1:7080")]
+        agent_addr: String,
+
+        /// TCP echo 目标主机
+        #[arg(long, default_value = "127.0.0.1")]
+        target_host: String,
+
+        /// TCP echo 目标端口
+        #[arg(long, default_value = "9091")]
+        target_port: u16,
+
+        /// UDP echo 目标主机
+        #[arg(long, default_value = "127.0.0.1")]
+        udp_target_host: String,
+
+        /// UDP echo 目标端口
+        #[arg(long, default_value = "9092")]
+        udp_target_port: u16,
+
+        /// 起始并发连接数
+        #[arg(long, default_value = "1")]
+        start_concurrency: usize,
+
+        /// 最大并发连接数
+        #[arg(long, default_value = "128")]
+        max_concurrency: usize,
+
+        /// 每个并发级别的测试时间（秒）
+        #[arg(long, default_value = "10")]
+        stage_duration: u64,
+
+        /// 正式测试前的预热时间（秒，0 表示不预热）
+        #[arg(long, default_value = "2")]
+        warmup_duration: u64,
+
+        /// 并发级别之间的冷却时间（秒）
+        #[arg(long, default_value = "1")]
+        settle_duration: u64,
+
+        /// 每次往返校验的 payload 字节数
+        #[arg(long, default_value = "65536")]
+        payload_size: usize,
+
+        /// 每个 UDP payload 的字节数
+        #[arg(long, default_value = "1200")]
+        udp_payload_size: usize,
+
+        /// TUN 测试必须命中的网卡名；不指定时自动接受 tun*/utun*
+        #[arg(long)]
+        tun_interface: Option<String>,
+
+        /// 可参与峰值评选的最大失败率（百分比）
+        #[arg(long, default_value = "1.0")]
+        max_failure_rate: f64,
+
+        /// 输出报告文件路径
+        #[arg(short, long, default_value = "max-throughput-report.html")]
+        output: String,
+    },
+    /// 合并分段最高吞吐 JSON，并重新生成统一的中文报告
+    MergeMaxThroughput {
+        /// 第一段最高吞吐 JSON 报告
+        #[arg(long)]
+        base: String,
+
+        /// 后续分段 JSON 报告，可重复指定
+        #[arg(long, required = true)]
+        continuation: Vec<String>,
+
+        /// 合并后的 HTML 报告路径
+        #[arg(short, long, default_value = "max-throughput-report.html")]
+        output: String,
+    },
     /// 运行 HTTP Range 分片大文件下载测试
     LargeDownload {
         /// 代理服务器地址

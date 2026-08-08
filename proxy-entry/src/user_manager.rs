@@ -19,7 +19,10 @@ pub struct UserManager {
 }
 
 const MAX_TCP_AUTH_REPLAY_ENTRIES: usize = 65_536;
-pub const MAX_TCP_AUTH_REPLAY_ENTRIES_PER_USER: usize = 1_024;
+// One direct TCP target performs one authenticated handshake. Keep enough
+// per-user history for short high-concurrency bursts while retaining 75% of
+// the global cache for other users.
+pub const MAX_TCP_AUTH_REPLAY_ENTRIES_PER_USER: usize = MAX_TCP_AUTH_REPLAY_ENTRIES / 4;
 
 #[derive(Default)]
 struct TcpAuthReplayCache {

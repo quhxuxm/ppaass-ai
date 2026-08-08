@@ -210,7 +210,7 @@ impl MockHttpClient {
     }
 }
 
-pub(super) async fn read_connect_response(stream: &mut TcpStream) -> Result<()> {
+pub(crate) async fn read_connect_response(stream: &mut TcpStream) -> Result<()> {
     let mut response_head = Vec::with_capacity(128);
     let read = async {
         let mut byte = [0u8; 1];

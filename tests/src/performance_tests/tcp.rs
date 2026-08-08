@@ -1,4 +1,24 @@
 use super::*;
+use crate::mock_client::read_connect_response;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TcpPerformanceMode {
+    Direct,
+    Tun,
+    HttpConnect,
+    Socks5,
+}
+
+impl TcpPerformanceMode {
+    pub fn name_zh(self) -> &'static str {
+        match self {
+            Self::Direct => "上一级 TCP 直连出口",
+            Self::Tun => "Agent TUN TCP",
+            Self::HttpConnect => "Agent HTTP CONNECT",
+            Self::Socks5 => "Agent SOCKS5 TCP",
+        }
+    }
+}
 
 pub async fn run_tcp_performance_tests(
     agent_addr: &str,
@@ -8,10 +28,37 @@ pub async fn run_tcp_performance_tests(
     duration_secs: u64,
     payload_size: usize,
 ) -> Result<TcpPerformanceTestResults> {
+    run_tcp_mode_performance_tests(
+        TcpPerformanceMode::Socks5,
+        agent_addr,
+        target_host,
+        target_port,
+        concurrency,
+        duration_secs,
+        payload_size,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_tcp_mode_performance_tests(
+    mode: TcpPerformanceMode,
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+    concurrency: usize,
+    duration_secs: u64,
+    payload_size: usize,
+) -> Result<TcpPerformanceTestResults> {
     let target_host = target_host.trim();
     anyhow::ensure!(!target_host.is_empty(), "TCP target host must not be empty");
+    anyhow::ensure!(concurrency > 0, "TCP concurrency must be greater than zero");
+    anyhow::ensure!(
+        duration_secs > 0,
+        "TCP test duration must be greater than zero"
+    );
 
-    info!("=== 开始 TCP 专项性能测试 ===");
+    info!("=== 开始 {} 性能测试 ===", mode.name_zh());
     info!(
         "Agent：{}，目标：{}:{}，并发连接：{}，payload={} bytes，持续时间：{} 秒",
         agent_addr, target_host, target_port, concurrency, payload_size, duration_secs
@@ -25,7 +72,8 @@ pub async fn run_tcp_performance_tests(
     let tcp_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
     let success = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicUsize::new(0));
-    let total_bytes = Arc::new(AtomicU64::new(0));
+    let upload_bytes = Arc::new(AtomicU64::new(0));
+    let download_bytes = Arc::new(AtomicU64::new(0));
 
     let mut system = System::new_all();
     system.refresh_all();
@@ -36,6 +84,7 @@ pub async fn run_tcp_performance_tests(
     for worker_id in 0..concurrency {
         handles.push(tokio::spawn(tcp_worker(
             worker_id,
+            mode,
             agent_addr.to_string(),
             target_host.to_string(),
             target_port,
@@ -44,7 +93,8 @@ pub async fn run_tcp_performance_tests(
             tcp_histogram.clone(),
             success.clone(),
             failed.clone(),
-            total_bytes.clone(),
+            upload_bytes.clone(),
+            download_bytes.clone(),
         )));
     }
 
@@ -67,7 +117,9 @@ pub async fn run_tcp_performance_tests(
     let tcp_hist = tcp_histogram.lock().await;
     let tcp_succ = success.load(Ordering::Relaxed);
     let tcp_fail = failed.load(Ordering::Relaxed);
-    let total_transferred = total_bytes.load(Ordering::Relaxed);
+    let uploaded = upload_bytes.load(Ordering::Relaxed);
+    let downloaded = download_bytes.load(Ordering::Relaxed);
+    let total_transferred = uploaded + downloaded;
     let peak_mem_val = peak_memory.load(Ordering::Relaxed);
 
     let tcp_metrics = calculate_tcp_metrics(&tcp_hist, tcp_succ, tcp_fail, total_transferred);
@@ -78,8 +130,10 @@ pub async fn run_tcp_performance_tests(
         0.0
     };
     let chunks_per_second = total_chunks as f64 / actual_duration.as_secs_f64();
-    let throughput_mbps =
-        (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+    let seconds = actual_duration.as_secs_f64();
+    let upload_throughput_mbps = (uploaded as f64 * 8.0) / (seconds * 1_000_000.0);
+    let download_throughput_mbps = (downloaded as f64 * 8.0) / (seconds * 1_000_000.0);
+    let throughput_mbps = upload_throughput_mbps + download_throughput_mbps;
 
     system.refresh_all();
     let cpu_usage = system.global_cpu_usage();
@@ -98,6 +152,10 @@ pub async fn run_tcp_performance_tests(
         failed_chunks: tcp_fail,
         failure_rate_percent,
         chunks_per_second,
+        upload_bytes: uploaded,
+        download_bytes: downloaded,
+        upload_throughput_mbps,
+        download_throughput_mbps,
         throughput_mbps,
         tcp_metrics,
         system_metrics: SystemMetrics {
@@ -107,18 +165,22 @@ pub async fn run_tcp_performance_tests(
         },
     };
 
-    info!("=== TCP 专项性能测试完成 ===");
+    info!("=== {} 性能测试完成 ===", mode.name_zh());
     info!("总 TCP chunks：{}", total_chunks);
     info!("成功：{}，失败：{}", tcp_succ, tcp_fail);
     info!("失败率：{:.2}%", failure_rate_percent);
     info!("Chunks/sec：{:.2}", chunks_per_second);
-    info!("吞吐量：{:.2} Mbps", throughput_mbps);
+    info!(
+        "上行：{:.2} Mbps，下行：{:.2} Mbps，合计：{:.2} Mbps",
+        upload_throughput_mbps, download_throughput_mbps, throughput_mbps
+    );
 
     Ok(results)
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn tcp_worker(
     worker_id: usize,
+    mode: TcpPerformanceMode,
     agent_addr: String,
     target_host: String,
     target_port: u16,
@@ -127,18 +189,22 @@ pub(super) async fn tcp_worker(
     histogram: Arc<Mutex<Histogram<u64>>>,
     success: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
-    total_bytes: Arc<AtomicU64>,
+    upload_bytes: Arc<AtomicU64>,
+    download_bytes: Arc<AtomicU64>,
 ) {
     let mut consecutive_failures = 0usize;
     let mut latencies_us = Vec::with_capacity(256);
     let mut sequence = 0u64;
 
     while Instant::now() < end_time {
-        let mut stream = match create_socks_tcp_stream(&agent_addr, &target_host, target_port).await
+        let mut stream = match create_tcp_stream(mode, &agent_addr, &target_host, target_port).await
         {
             Ok(stream) => stream,
             Err(e) => {
-                warn!("TCP worker {worker_id} 建立 SOCKS5 CONNECT 失败：{e}");
+                warn!(
+                    "TCP worker {worker_id} 建立 {} 连接失败：{e}",
+                    mode.name_zh()
+                );
                 failed.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
@@ -157,6 +223,7 @@ pub(super) async fn tcp_worker(
                 consecutive_failures += 1;
                 break;
             }
+            upload_bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
 
             if let Err(e) = stream.flush().await {
                 warn!("TCP worker {worker_id} flush 失败：{e}");
@@ -169,9 +236,9 @@ pub(super) async fn tcp_worker(
                 .await
             {
                 Ok(Ok(_)) if response == payload => {
+                    download_bytes.fetch_add(response.len() as u64, Ordering::Relaxed);
                     latencies_us.push(start.elapsed().as_micros() as u64);
                     success.fetch_add(1, Ordering::Relaxed);
-                    total_bytes.fetch_add((payload.len() * 2) as u64, Ordering::Relaxed);
                     consecutive_failures = 0;
 
                     if latencies_us.len() >= 256 {
@@ -182,6 +249,7 @@ pub(super) async fn tcp_worker(
                     }
                 }
                 Ok(Ok(_)) => {
+                    download_bytes.fetch_add(response.len() as u64, Ordering::Relaxed);
                     warn!(
                         "TCP worker {worker_id} 回显不匹配：sent={} received={}",
                         payload.len(),
@@ -217,6 +285,48 @@ pub(super) async fn tcp_worker(
             let _ = hist.record(latency);
         }
     }
+}
+
+async fn create_tcp_stream(
+    mode: TcpPerformanceMode,
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream> {
+    match mode {
+        TcpPerformanceMode::Direct | TcpPerformanceMode::Tun => {
+            let target = format!("{target_host}:{target_port}");
+            common::connect_tcp_happy_eyeballs(&target, |_, _| Ok(()))
+                .await
+                .with_context(|| format!("Failed to connect directly to {target}"))
+        }
+        TcpPerformanceMode::HttpConnect => {
+            create_http_connect_stream(agent_addr, target_host, target_port).await
+        }
+        TcpPerformanceMode::Socks5 => {
+            create_socks_tcp_stream(agent_addr, target_host, target_port).await
+        }
+    }
+}
+
+async fn create_http_connect_stream(
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream> {
+    let mut stream = connect_to_agent_with_retry(
+        agent_addr,
+        "Failed to connect to agent for HTTP CONNECT performance test",
+    )
+    .await?;
+    let authority = format!("{target_host}:{target_port}");
+    let request = format!(
+        "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: keep-alive\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+    stream.flush().await?;
+    read_connect_response(&mut stream).await?;
+    Ok(stream)
 }
 
 pub(super) async fn create_socks_tcp_stream(

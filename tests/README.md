@@ -51,6 +51,9 @@ cargo run --release -p desktop-agent-be --bin desktop-agent -- --config config/a
 
 # Run with custom settings (200 concurrent, 120 seconds)
 ./run-tests.sh performance 200 120
+
+# Find the highest sustainable end-to-end relay speed
+./run-tests.sh max-throughput 128 10 65536
 ```
 
 ### 5. Run All Tests
@@ -141,6 +144,36 @@ Performance tests measure:
 - CPU usage
 - Memory usage
 - Peak memory
+
+### 各接口最高网速与出口损失
+
+`max-throughput` 分别测试 TCP 直连出口、UDP 直连出口、Agent TUN、HTTP Proxy、
+SOCKS Proxy 和 UDP Relay。Agent 接口测试使用完整链路：
+
+```text
+client -> agent -> proxy -> target -> proxy -> agent -> client
+```
+
+并发从 `--start-concurrency` 倍增至 `--max-concurrency`，并保证测试指定的最大值。
+只有失败率不高于 `--max-failure-rate` 的阶段可以参与峰值评选。
+
+```bash
+cargo run --release -p integration-tests -- max-throughput \
+    --agent-addr 127.0.0.1:7080 \
+    --proxy-addr 127.0.0.1:8080 \
+    --target-host 127.0.0.1 \
+    --target-port 9091 \
+    --udp-target-host 127.0.0.1 \
+    --udp-target-port 9092 \
+    --max-concurrency 128 \
+    --stage-duration 10 \
+    --output max-throughput-report.html
+```
+
+报告分别记录上行、下行和合计 Mbps。TUN、HTTP、SOCKS 分别与 TCP 直连出口比较，
+UDP Relay 与 UDP 直连出口比较，并给出每个方向的损失 Mbps 和损失率。TUN 测试会先
+验证目标路由确实经过 `tun*`/`utun*`；也可以用 `--tun-interface` 指定必须命中的网卡，
+从而避免把绕过 TUN 的直连流量误记成 TUN 成绩。
 
 ## Performance Reports
 

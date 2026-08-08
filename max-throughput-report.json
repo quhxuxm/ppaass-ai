@@ -1,0 +1,1234 @@
+{
+  "test_duration_secs": 853,
+  "agent_addr": "127.0.0.1:11080",
+  "tcp_target": "127.0.0.1:9091",
+  "udp_target": "127.0.0.1:9092",
+  "tcp_payload_size": 65536,
+  "udp_payload_size": 1200,
+  "stage_duration_secs": 10,
+  "max_failure_rate_percent": 1.0,
+  "tested_concurrency_levels": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048
+  ],
+  "interfaces": [
+    {
+      "interface": "upstream_tcp",
+      "interface_name": "上一级 TCP 直连出口",
+      "status": "completed",
+      "error": null,
+      "route_interface": null,
+      "best_concurrency": 64,
+      "peak_confirmed": true,
+      "peak": {
+        "upload_mbps": 30616.52065216919,
+        "download_mbps": 30616.52065216919,
+        "aggregate_mbps": 61233.04130433838
+      },
+      "upstream_interface": null,
+      "loss_from_upstream": null,
+      "stages": [
+        {
+          "concurrency": 1,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 179822,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 17787.33441528028,
+          "throughput": {
+            "upload_mbps": 9325.685985918468,
+            "download_mbps": 9325.685985918468,
+            "aggregate_mbps": 18651.371971836936
+          },
+          "p95_rtt_ms": 0.053,
+          "upload_bytes": 11784814592,
+          "download_bytes": 11784814592,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 291962,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 28877.328833437583,
+          "throughput": {
+            "upload_mbps": 15140.036979425324,
+            "download_mbps": 15140.036979425324,
+            "aggregate_mbps": 30280.073958850648
+          },
+          "p95_rtt_ms": 0.065,
+          "upload_bytes": 19134021632,
+          "download_bytes": 19134021632,
+          "sustainable": true
+        },
+        {
+          "concurrency": 4,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 411591,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 40681.65082172191,
+          "throughput": {
+            "upload_mbps": 21328.901346018934,
+            "download_mbps": 21328.901346018934,
+            "aggregate_mbps": 42657.80269203787
+          },
+          "p95_rtt_ms": 0.07,
+          "upload_bytes": 26974027776,
+          "download_bytes": 26974027776,
+          "sustainable": true
+        },
+        {
+          "concurrency": 8,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 478267,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 46921.79787833205,
+          "throughput": {
+            "upload_mbps": 24600.535566034956,
+            "download_mbps": 24600.535566034956,
+            "aggregate_mbps": 49201.07113206991
+          },
+          "p95_rtt_ms": 0.087,
+          "upload_bytes": 31343706112,
+          "download_bytes": 31343706112,
+          "sustainable": true
+        },
+        {
+          "concurrency": 16,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 510444,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 49916.843604521295,
+          "throughput": {
+            "upload_mbps": 26170.802099727254,
+            "download_mbps": 26170.802099727254,
+            "aggregate_mbps": 52341.60419945451
+          },
+          "p95_rtt_ms": 0.127,
+          "upload_bytes": 33452457984,
+          "download_bytes": 33452457984,
+          "sustainable": true
+        },
+        {
+          "concurrency": 32,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 566978,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 55457.76483851036,
+          "throughput": {
+            "upload_mbps": 29075.84061165292,
+            "download_mbps": 29075.84061165292,
+            "aggregate_mbps": 58151.68122330584
+          },
+          "p95_rtt_ms": 0.311,
+          "upload_bytes": 37157470208,
+          "download_bytes": 37157470208,
+          "sustainable": true
+        },
+        {
+          "concurrency": 64,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 597549,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 58396.378807390574,
+          "throughput": {
+            "upload_mbps": 30616.52065216919,
+            "download_mbps": 30616.52065216919,
+            "aggregate_mbps": 61233.04130433838
+          },
+          "p95_rtt_ms": 1.086,
+          "upload_bytes": 39160971264,
+          "download_bytes": 39160971264,
+          "sustainable": true
+        },
+        {
+          "concurrency": 128,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 567091,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 55427.44563190881,
+          "throughput": {
+            "upload_mbps": 29059.94461546221,
+            "download_mbps": 29059.94461546221,
+            "aggregate_mbps": 58119.88923092441
+          },
+          "p95_rtt_ms": 2.589,
+          "upload_bytes": 37164875776,
+          "download_bytes": 37164875776,
+          "sustainable": true
+        },
+        {
+          "concurrency": 256,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 490543,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 48155.56466904891,
+          "throughput": {
+            "upload_mbps": 25247.384689206316,
+            "download_mbps": 25247.384689206316,
+            "aggregate_mbps": 50494.76937841263
+          },
+          "p95_rtt_ms": 6.107,
+          "upload_bytes": 32148226048,
+          "download_bytes": 32148226048,
+          "sustainable": true
+        },
+        {
+          "concurrency": 512,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 468610,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 46150.13296632702,
+          "throughput": {
+            "upload_mbps": 24195.96091264966,
+            "download_mbps": 24195.96091264966,
+            "aggregate_mbps": 48391.92182529932
+          },
+          "p95_rtt_ms": 11.679,
+          "upload_bytes": 30710824960,
+          "download_bytes": 30710824960,
+          "sustainable": true
+        },
+        {
+          "concurrency": 1024,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 400595,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 39453.30328153931,
+          "throughput": {
+            "upload_mbps": 20684.893470871684,
+            "download_mbps": 20684.893470871684,
+            "aggregate_mbps": 41369.78694174337
+          },
+          "p95_rtt_ms": 26.975,
+          "upload_bytes": 26253393920,
+          "download_bytes": 26253393920,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2048,
+          "duration_secs": 12,
+          "payload_size": 65536,
+          "successful_chunks": 299982,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 23504.695325023426,
+          "throughput": {
+            "upload_mbps": 12323.229702565885,
+            "download_mbps": 12323.229702565885,
+            "aggregate_mbps": 24646.459405131765
+          },
+          "p95_rtt_ms": 154.751,
+          "upload_bytes": 19659620352,
+          "download_bytes": 19659620352,
+          "sustainable": true
+        }
+      ]
+    },
+    {
+      "interface": "upstream_udp",
+      "interface_name": "上一级 UDP 直连出口",
+      "status": "completed",
+      "error": null,
+      "route_interface": null,
+      "best_concurrency": 8,
+      "peak_confirmed": true,
+      "peak": {
+        "upload_mbps": 943.080011117493,
+        "download_mbps": 943.080011117493,
+        "aggregate_mbps": 1886.160022234986
+      },
+      "upstream_interface": null,
+      "loss_from_upstream": null,
+      "stages": [
+        {
+          "concurrency": 1,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 356760,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 35300.20039241823,
+          "throughput": {
+            "upload_mbps": 338.881923767215,
+            "download_mbps": 338.881923767215,
+            "aggregate_mbps": 677.76384753443
+          },
+          "p95_rtt_ms": 0.032,
+          "upload_bytes": 428112000,
+          "download_bytes": 428112000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 649150,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 64102.736855867886,
+          "throughput": {
+            "upload_mbps": 615.3862738163317,
+            "download_mbps": 615.3862738163317,
+            "aggregate_mbps": 1230.7725476326634
+          },
+          "p95_rtt_ms": 0.041,
+          "upload_bytes": 778980000,
+          "download_bytes": 778980000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 4,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 914685,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 90313.40584488735,
+          "throughput": {
+            "upload_mbps": 867.0086961109187,
+            "download_mbps": 867.0086961109187,
+            "aggregate_mbps": 1734.017392221837
+          },
+          "p95_rtt_ms": 0.064,
+          "upload_bytes": 1097622000,
+          "download_bytes": 1097622000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 8,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 994879,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 98237.5011580722,
+          "throughput": {
+            "upload_mbps": 943.080011117493,
+            "download_mbps": 943.080011117493,
+            "aggregate_mbps": 1886.160022234986
+          },
+          "p95_rtt_ms": 0.125,
+          "upload_bytes": 1193854800,
+          "download_bytes": 1193854800,
+          "sustainable": true
+        },
+        {
+          "concurrency": 16,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 891085,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 87692.60496648414,
+          "throughput": {
+            "upload_mbps": 841.8490076782477,
+            "download_mbps": 841.8490076782477,
+            "aggregate_mbps": 1683.6980153564955
+          },
+          "p95_rtt_ms": 0.293,
+          "upload_bytes": 1069302000,
+          "download_bytes": 1069302000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 32,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 855243,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 84141.91081339124,
+          "throughput": {
+            "upload_mbps": 807.7623438085558,
+            "download_mbps": 807.7623438085558,
+            "aggregate_mbps": 1615.5246876171116
+          },
+          "p95_rtt_ms": 0.527,
+          "upload_bytes": 1026291600,
+          "download_bytes": 1026291600,
+          "sustainable": true
+        },
+        {
+          "concurrency": 64,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 828431,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 81320.19335940288,
+          "throughput": {
+            "upload_mbps": 780.6738562502676,
+            "download_mbps": 780.6738562502676,
+            "aggregate_mbps": 1561.3477125005352
+          },
+          "p95_rtt_ms": 0.97,
+          "upload_bytes": 994117200,
+          "download_bytes": 994117200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 128,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 814070,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 79806.12928479735,
+          "throughput": {
+            "upload_mbps": 766.1388411340545,
+            "download_mbps": 766.1388411340545,
+            "aggregate_mbps": 1532.277682268109
+          },
+          "p95_rtt_ms": 1.836,
+          "upload_bytes": 976884000,
+          "download_bytes": 976884000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 256,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 810832,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 79533.78445002751,
+          "throughput": {
+            "upload_mbps": 763.5243307202642,
+            "download_mbps": 763.5243307202642,
+            "aggregate_mbps": 1527.0486614405283
+          },
+          "p95_rtt_ms": 3.577,
+          "upload_bytes": 972998400,
+          "download_bytes": 972998400,
+          "sustainable": true
+        },
+        {
+          "concurrency": 512,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 907596,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 89284.87684983101,
+          "throughput": {
+            "upload_mbps": 857.1348177583778,
+            "download_mbps": 857.1348177583778,
+            "aggregate_mbps": 1714.2696355167557
+          },
+          "p95_rtt_ms": 6.215,
+          "upload_bytes": 1089115200,
+          "download_bytes": 1089115200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 1024,
+          "duration_secs": 12,
+          "payload_size": 1200,
+          "successful_chunks": 875845,
+          "failed_chunks": 1542,
+          "failure_rate_percent": 0.17574912780791146,
+          "chunks_per_second": 69025.05774955232,
+          "throughput": {
+            "upload_mbps": 662.6405543957022,
+            "download_mbps": 661.4759694008502,
+            "aggregate_mbps": 1324.1165237965524
+          },
+          "p95_rtt_ms": 7.851,
+          "upload_bytes": 1052864400,
+          "download_bytes": 1051014000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2048,
+          "duration_secs": 12,
+          "payload_size": 1200,
+          "successful_chunks": 859996,
+          "failed_chunks": 5636,
+          "failure_rate_percent": 0.6510849876159847,
+          "chunks_per_second": 68020.66765340147,
+          "throughput": {
+            "upload_mbps": 652.9984094726541,
+            "download_mbps": 648.7468348592065,
+            "aggregate_mbps": 1301.7452443318607
+          },
+          "p95_rtt_ms": 8.007,
+          "upload_bytes": 1038758400,
+          "download_bytes": 1031995200,
+          "sustainable": true
+        }
+      ]
+    },
+    {
+      "interface": "tun",
+      "interface_name": "Agent TUN 模式",
+      "status": "failed",
+      "error": "目标实际走 lo0，没有经过 TUN；拒绝记录伪 TUN 成绩",
+      "route_interface": null,
+      "best_concurrency": null,
+      "peak_confirmed": false,
+      "peak": {
+        "upload_mbps": 0.0,
+        "download_mbps": 0.0,
+        "aggregate_mbps": 0.0
+      },
+      "upstream_interface": "upstream_tcp",
+      "loss_from_upstream": null,
+      "stages": []
+    },
+    {
+      "interface": "http_proxy",
+      "interface_name": "Agent HTTP Proxy",
+      "status": "completed",
+      "error": null,
+      "route_interface": null,
+      "best_concurrency": 16,
+      "peak_confirmed": true,
+      "peak": {
+        "upload_mbps": 2127.5932265251854,
+        "download_mbps": 2127.5932265251854,
+        "aggregate_mbps": 4255.186453050371
+      },
+      "upstream_interface": "upstream_tcp",
+      "loss_from_upstream": {
+        "upload_mbps": 28488.927425644004,
+        "upload_percent": 93.05083274910127,
+        "download_mbps": 28488.927425644004,
+        "download_percent": 93.05083274910127,
+        "aggregate_mbps": 56977.85485128801,
+        "aggregate_percent": 93.05083274910127
+      },
+      "stages": [
+        {
+          "concurrency": 1,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 15193,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1503.0456881667428,
+          "throughput": {
+            "upload_mbps": 788.0288177575652,
+            "download_mbps": 788.0288177575652,
+            "aggregate_mbps": 1576.0576355151304
+          },
+          "p95_rtt_ms": 0.709,
+          "upload_bytes": 995688448,
+          "download_bytes": 995688448,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 22045,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 2174.5067745116708,
+          "throughput": {
+            "upload_mbps": 1140.0678077951748,
+            "download_mbps": 1140.0678077951748,
+            "aggregate_mbps": 2280.1356155903495
+          },
+          "p95_rtt_ms": 1.064,
+          "upload_bytes": 1444741120,
+          "download_bytes": 1444741120,
+          "sustainable": true
+        },
+        {
+          "concurrency": 4,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 28422,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 2797.831762324778,
+          "throughput": {
+            "upload_mbps": 1466.869619005733,
+            "download_mbps": 1466.869619005733,
+            "aggregate_mbps": 2933.739238011466
+          },
+          "p95_rtt_ms": 1.885,
+          "upload_bytes": 1862664192,
+          "download_bytes": 1862664192,
+          "sustainable": true
+        },
+        {
+          "concurrency": 8,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 35946,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3530.306282624977,
+          "throughput": {
+            "upload_mbps": 1850.897220304884,
+            "download_mbps": 1850.897220304884,
+            "aggregate_mbps": 3701.794440609768
+          },
+          "p95_rtt_ms": 3.009,
+          "upload_bytes": 2355757056,
+          "download_bytes": 2355757056,
+          "sustainable": true
+        },
+        {
+          "concurrency": 16,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 41316,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4058.062031793948,
+          "throughput": {
+            "upload_mbps": 2127.5932265251854,
+            "download_mbps": 2127.5932265251854,
+            "aggregate_mbps": 4255.186453050371
+          },
+          "p95_rtt_ms": 5.663,
+          "upload_bytes": 2707685376,
+          "download_bytes": 2707685376,
+          "sustainable": true
+        },
+        {
+          "concurrency": 32,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 39746,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3908.498576250576,
+          "throughput": {
+            "upload_mbps": 2049.178901545262,
+            "download_mbps": 2049.178901545262,
+            "aggregate_mbps": 4098.357803090524
+          },
+          "p95_rtt_ms": 14.415,
+          "upload_bytes": 2604793856,
+          "download_bytes": 2604793856,
+          "sustainable": true
+        },
+        {
+          "concurrency": 64,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 40793,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4000.3300183517104,
+          "throughput": {
+            "upload_mbps": 2097.3250246615817,
+            "download_mbps": 2097.3250246615817,
+            "aggregate_mbps": 4194.650049323163
+          },
+          "p95_rtt_ms": 24.783,
+          "upload_bytes": 2673410048,
+          "download_bytes": 2673410048,
+          "sustainable": true
+        },
+        {
+          "concurrency": 128,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 40976,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4018.8455633988046,
+          "throughput": {
+            "upload_mbps": 2107.0325027432327,
+            "download_mbps": 2107.0325027432327,
+            "aggregate_mbps": 4214.065005486465
+          },
+          "p95_rtt_ms": 50.271,
+          "upload_bytes": 2685403136,
+          "download_bytes": 2685403136,
+          "sustainable": true
+        },
+        {
+          "concurrency": 256,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 40389,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3960.452171711035,
+          "throughput": {
+            "upload_mbps": 2076.4175482020355,
+            "download_mbps": 2076.4175482020355,
+            "aggregate_mbps": 4152.835096404071
+          },
+          "p95_rtt_ms": 103.167,
+          "upload_bytes": 2646933504,
+          "download_bytes": 2646933504,
+          "sustainable": true
+        },
+        {
+          "concurrency": 512,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 23596,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 2297.21919448383,
+          "throughput": {
+            "upload_mbps": 1204.4044570375384,
+            "download_mbps": 1204.4044570375384,
+            "aggregate_mbps": 2408.8089140750767
+          },
+          "p95_rtt_ms": 346.623,
+          "upload_bytes": 1546387456,
+          "download_bytes": 1546387456,
+          "sustainable": true
+        },
+        {
+          "concurrency": 1024,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 19431,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1883.2352774532037,
+          "throughput": {
+            "upload_mbps": 987.3576571453852,
+            "download_mbps": 987.3576571453852,
+            "aggregate_mbps": 1974.7153142907705
+          },
+          "p95_rtt_ms": 850.943,
+          "upload_bytes": 1273430016,
+          "download_bytes": 1273430016,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2048,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 13795,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1260.5687763003648,
+          "throughput": {
+            "upload_mbps": 660.9010825889657,
+            "download_mbps": 660.9010825889657,
+            "aggregate_mbps": 1321.802165177931
+          },
+          "p95_rtt_ms": 2152.447,
+          "upload_bytes": 904069120,
+          "download_bytes": 904069120,
+          "sustainable": true
+        }
+      ]
+    },
+    {
+      "interface": "socks_proxy",
+      "interface_name": "Agent SOCKS Proxy",
+      "status": "completed",
+      "error": null,
+      "route_interface": null,
+      "best_concurrency": 16,
+      "peak_confirmed": true,
+      "peak": {
+        "upload_mbps": 2193.5657318781778,
+        "download_mbps": 2193.5657318781778,
+        "aggregate_mbps": 4387.1314637563555
+      },
+      "upstream_interface": "upstream_tcp",
+      "loss_from_upstream": {
+        "upload_mbps": 28422.954920291013,
+        "upload_percent": 92.83535266205122,
+        "download_mbps": 28422.954920291013,
+        "download_percent": 92.83535266205122,
+        "aggregate_mbps": 56845.909840582026,
+        "aggregate_percent": 92.83535266205122
+      },
+      "stages": [
+        {
+          "concurrency": 1,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 15654,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1549.6445443331331,
+          "throughput": {
+            "upload_mbps": 812.4600388593295,
+            "download_mbps": 812.4600388593295,
+            "aggregate_mbps": 1624.920077718659
+          },
+          "p95_rtt_ms": 0.683,
+          "upload_bytes": 1025900544,
+          "download_bytes": 1025900544,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 22994,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 2272.2038968082,
+          "throughput": {
+            "upload_mbps": 1191.2892366497776,
+            "download_mbps": 1191.2892366497776,
+            "aggregate_mbps": 2382.5784732995553
+          },
+          "p95_rtt_ms": 1.009,
+          "upload_bytes": 1506934784,
+          "download_bytes": 1506934784,
+          "sustainable": true
+        },
+        {
+          "concurrency": 4,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 28378,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 2795.695107850173,
+          "throughput": {
+            "upload_mbps": 1465.7493967045516,
+            "download_mbps": 1465.7493967045516,
+            "aggregate_mbps": 2931.498793409103
+          },
+          "p95_rtt_ms": 1.945,
+          "upload_bytes": 1859780608,
+          "download_bytes": 1859780608,
+          "sustainable": true
+        },
+        {
+          "concurrency": 8,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 37565,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3692.834033478692,
+          "throughput": {
+            "upload_mbps": 1936.108569744476,
+            "download_mbps": 1936.108569744476,
+            "aggregate_mbps": 3872.217139488952
+          },
+          "p95_rtt_ms": 2.871,
+          "upload_bytes": 2461859840,
+          "download_bytes": 2461859840,
+          "sustainable": true
+        },
+        {
+          "concurrency": 16,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 42623,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4183.894599682193,
+          "throughput": {
+            "upload_mbps": 2193.5657318781778,
+            "download_mbps": 2193.5657318781778,
+            "aggregate_mbps": 4387.1314637563555
+          },
+          "p95_rtt_ms": 6.499,
+          "upload_bytes": 2793340928,
+          "download_bytes": 2793340928,
+          "sustainable": true
+        },
+        {
+          "concurrency": 32,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 41662,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4088.15835178419,
+          "throughput": {
+            "upload_mbps": 2143.372365940229,
+            "download_mbps": 2143.372365940229,
+            "aggregate_mbps": 4286.744731880458
+          },
+          "p95_rtt_ms": 12.767,
+          "upload_bytes": 2730360832,
+          "download_bytes": 2730360832,
+          "sustainable": true
+        },
+        {
+          "concurrency": 64,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 40941,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 4011.489851876253,
+          "throughput": {
+            "upload_mbps": 2103.175991460497,
+            "download_mbps": 2103.175991460497,
+            "aggregate_mbps": 4206.351982920994
+          },
+          "p95_rtt_ms": 24.127,
+          "upload_bytes": 2683109376,
+          "download_bytes": 2683109376,
+          "sustainable": true
+        },
+        {
+          "concurrency": 128,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 40514,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3977.113355746809,
+          "throughput": {
+            "upload_mbps": 2085.152807057783,
+            "download_mbps": 2085.152807057783,
+            "aggregate_mbps": 4170.305614115566
+          },
+          "p95_rtt_ms": 51.263,
+          "upload_bytes": 2655125504,
+          "download_bytes": 2655125504,
+          "sustainable": true
+        },
+        {
+          "concurrency": 256,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 38938,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 3820.4295888085258,
+          "throughput": {
+            "upload_mbps": 2003.005388257244,
+            "download_mbps": 2003.005388257244,
+            "aggregate_mbps": 4006.010776514489
+          },
+          "p95_rtt_ms": 114.303,
+          "upload_bytes": 2551840768,
+          "download_bytes": 2551840768,
+          "sustainable": true
+        },
+        {
+          "concurrency": 512,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 18375,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1778.4074119665647,
+          "throughput": {
+            "upload_mbps": 932.3976652051264,
+            "download_mbps": 932.3976652051264,
+            "aggregate_mbps": 1864.7953304102523
+          },
+          "p95_rtt_ms": 433.151,
+          "upload_bytes": 1204224000,
+          "download_bytes": 1204224000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 1024,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 17905,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1728.4483025197087,
+          "throughput": {
+            "upload_mbps": 906.2047036314532,
+            "download_mbps": 906.2047036314532,
+            "aggregate_mbps": 1812.409407262906
+          },
+          "p95_rtt_ms": 951.295,
+          "upload_bytes": 1173422080,
+          "download_bytes": 1173422080,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2048,
+          "duration_secs": 10,
+          "payload_size": 65536,
+          "successful_chunks": 14690,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 1341.815120074588,
+          "throughput": {
+            "upload_mbps": 703.4975656736657,
+            "download_mbps": 703.4975656736657,
+            "aggregate_mbps": 1406.9951313473314
+          },
+          "p95_rtt_ms": 1961.983,
+          "upload_bytes": 962723840,
+          "download_bytes": 962723840,
+          "sustainable": true
+        }
+      ]
+    },
+    {
+      "interface": "udp_relay",
+      "interface_name": "Agent UDP Relay",
+      "status": "completed",
+      "error": null,
+      "route_interface": null,
+      "best_concurrency": 512,
+      "peak_confirmed": true,
+      "peak": {
+        "upload_mbps": 506.5714575779889,
+        "download_mbps": 501.9918688758616,
+        "aggregate_mbps": 1008.5633264538506
+      },
+      "upstream_interface": "upstream_udp",
+      "loss_from_upstream": {
+        "upload_mbps": 436.5085535395041,
+        "upload_percent": 46.285421002855074,
+        "download_mbps": 441.0881422416314,
+        "download_percent": 46.77102017239964,
+        "aggregate_mbps": 877.5966957811354,
+        "aggregate_percent": 46.52822058762736
+      },
+      "stages": [
+        {
+          "concurrency": 1,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 106333,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 10525.296772231106,
+          "throughput": {
+            "upload_mbps": 101.8848727551971,
+            "download_mbps": 101.0428490134186,
+            "aggregate_mbps": 202.9277217686157
+          },
+          "p95_rtt_ms": 0.106,
+          "upload_bytes": 128662930,
+          "download_bytes": 127599600,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 185025,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 18278.74410634386,
+          "throughput": {
+            "upload_mbps": 176.9382429494086,
+            "download_mbps": 175.47594342090107,
+            "aggregate_mbps": 352.41418637030966
+          },
+          "p95_rtt_ms": 0.133,
+          "upload_bytes": 223880250,
+          "download_bytes": 222030000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 4,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 219135,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 21602.68116348678,
+          "throughput": {
+            "upload_mbps": 209.11395366255203,
+            "download_mbps": 207.3857391694731,
+            "aggregate_mbps": 416.4996928320252
+          },
+          "p95_rtt_ms": 0.257,
+          "upload_bytes": 265153350,
+          "download_bytes": 262962000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 8,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 272071,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 26787.559603534843,
+          "throughput": {
+            "upload_mbps": 259.3035769622173,
+            "download_mbps": 257.1605721939345,
+            "aggregate_mbps": 516.4641491561517
+          },
+          "p95_rtt_ms": 0.398,
+          "upload_bytes": 329205910,
+          "download_bytes": 326485200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 16,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 372849,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 36511.26642680899,
+          "throughput": {
+            "upload_mbps": 353.429059011511,
+            "download_mbps": 350.5081576973663,
+            "aggregate_mbps": 703.9372167088773
+          },
+          "p95_rtt_ms": 0.593,
+          "upload_bytes": 451147290,
+          "download_bytes": 447418800,
+          "sustainable": true
+        },
+        {
+          "concurrency": 32,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 394381,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 38639.58133631665,
+          "throughput": {
+            "upload_mbps": 374.0311473355452,
+            "download_mbps": 370.9399808286399,
+            "aggregate_mbps": 744.9711281641851
+          },
+          "p95_rtt_ms": 1.245,
+          "upload_bytes": 477201010,
+          "download_bytes": 473257200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 64,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 410000,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 40126.21766752218,
+          "throughput": {
+            "upload_mbps": 388.42178702161465,
+            "download_mbps": 385.2116896082129,
+            "aggregate_mbps": 773.6334766298276
+          },
+          "p95_rtt_ms": 2.471,
+          "upload_bytes": 496100000,
+          "download_bytes": 492000000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 128,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 417286,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 40858.372506744054,
+          "throughput": {
+            "upload_mbps": 395.5090458652825,
+            "download_mbps": 392.2403760647429,
+            "aggregate_mbps": 787.7494219300254
+          },
+          "p95_rtt_ms": 4.871,
+          "upload_bytes": 504916060,
+          "download_bytes": 500743200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 256,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 417547,
+          "failed_chunks": 0,
+          "failure_rate_percent": 0.0,
+          "chunks_per_second": 40896.55330814161,
+          "throughput": {
+            "upload_mbps": 395.8786360228108,
+            "download_mbps": 392.6069117581594,
+            "aggregate_mbps": 788.4855477809701
+          },
+          "p95_rtt_ms": 9.511,
+          "upload_bytes": 505231870,
+          "download_bytes": 501056400,
+          "sustainable": true
+        },
+        {
+          "concurrency": 512,
+          "duration_secs": 10,
+          "payload_size": 1200,
+          "successful_chunks": 531306,
+          "failed_chunks": 416,
+          "failure_rate_percent": 0.07823637163781073,
+          "chunks_per_second": 52331.76214648646,
+          "throughput": {
+            "upload_mbps": 506.5714575779889,
+            "download_mbps": 501.9918688758616,
+            "aggregate_mbps": 1008.5633264538506
+          },
+          "p95_rtt_ms": 11.807,
+          "upload_bytes": 643383620,
+          "download_bytes": 637567200,
+          "sustainable": true
+        },
+        {
+          "concurrency": 1024,
+          "duration_secs": 12,
+          "payload_size": 1200,
+          "successful_chunks": 381940,
+          "failed_chunks": 1872,
+          "failure_rate_percent": 0.4877387887820078,
+          "chunks_per_second": 30879.398338803872,
+          "throughput": {
+            "upload_mbps": 298.9125759196215,
+            "download_mbps": 294.99636033948497,
+            "aggregate_mbps": 593.9089362591064
+          },
+          "p95_rtt_ms": 24.783,
+          "upload_bytes": 464412520,
+          "download_bytes": 458328000,
+          "sustainable": true
+        },
+        {
+          "concurrency": 2048,
+          "duration_secs": 12,
+          "payload_size": 1200,
+          "successful_chunks": 189788,
+          "failed_chunks": 4665,
+          "failure_rate_percent": 2.399037299501679,
+          "chunks_per_second": 15109.875932445297,
+          "throughput": {
+            "upload_mbps": 146.26359902607047,
+            "download_mbps": 141.57488998000807,
+            "aggregate_mbps": 287.83848900607853
+          },
+          "p95_rtt_ms": 52.799,
+          "upload_bytes": 235288130,
+          "download_bytes": 227745600,
+          "sustainable": false
+        }
+      ]
+    }
+  ]
+}

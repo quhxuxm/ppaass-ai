@@ -62,6 +62,10 @@ pub struct UdpPerformanceTestResults {
     pub failed_datagrams: usize,
     pub packet_loss_percent: f64,
     pub datagrams_per_second: f64,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub upload_throughput_mbps: f64,
+    pub download_throughput_mbps: f64,
     pub throughput_mbps: f64,
     pub udp_metrics: UdpDatagramMetrics,
     pub system_metrics: SystemMetrics,
@@ -94,6 +98,10 @@ pub struct TcpPerformanceTestResults {
     pub failed_chunks: usize,
     pub failure_rate_percent: f64,
     pub chunks_per_second: f64,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub upload_throughput_mbps: f64,
+    pub download_throughput_mbps: f64,
     pub throughput_mbps: f64,
     pub tcp_metrics: TcpTransferMetrics,
     pub system_metrics: SystemMetrics,
@@ -182,14 +190,24 @@ pub struct LargeDownloadChunkMetrics {
 
 mod http;
 mod large_download;
+mod max_throughput;
 mod metrics;
 mod quic;
 mod quic_packet;
 mod tcp;
+mod throughput_merge;
+mod throughput_sweep;
+mod tun_route;
 mod udp;
 
 pub use http::run_performance_tests;
 pub use large_download::run_large_download_tests;
+pub use max_throughput::{
+    DirectionalLoss, DirectionalThroughput, InterfaceTestStatus, InterfaceThroughputResult,
+    MaxThroughputConfig, MaxThroughputTestResults, ThroughputInterface, ThroughputStageResult,
+    build_concurrency_levels, calculate_directional_loss, run_max_throughput_tests,
+    select_peak_stage,
+};
 use metrics::{calculate_large_download_metrics, calculate_quic_metrics};
 pub use metrics::{calculate_metrics, calculate_tcp_metrics, calculate_udp_metrics};
 pub use quic::{run_quic_performance_tests, run_quic_probe_tests};
@@ -197,6 +215,8 @@ use quic_packet::socks_udp_target;
 pub use quic_packet::{
     format_quic_version, parse_quic_version_negotiation_response, quic_version_negotiation_probe,
 };
-pub use tcp::run_tcp_performance_tests;
-pub use udp::run_udp_performance_tests;
+pub use tcp::{TcpPerformanceMode, run_tcp_mode_performance_tests, run_tcp_performance_tests};
+pub use throughput_merge::merge_max_throughput_results;
+pub use tun_route::parse_route_interface;
+pub use udp::{UdpPerformanceMode, run_udp_mode_performance_tests, run_udp_performance_tests};
 use udp::{create_socks_udp_datagram, udp_payload};

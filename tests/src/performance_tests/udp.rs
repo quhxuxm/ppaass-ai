@@ -1,5 +1,20 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UdpPerformanceMode {
+    Direct,
+    Socks5Relay,
+}
+
+impl UdpPerformanceMode {
+    pub fn name_zh(self) -> &'static str {
+        match self {
+            Self::Direct => "上一级 UDP 直连出口",
+            Self::Socks5Relay => "Agent UDP Relay",
+        }
+    }
+}
+
 pub async fn run_udp_performance_tests(
     agent_addr: &str,
     target_host: &str,
@@ -8,7 +23,29 @@ pub async fn run_udp_performance_tests(
     duration_secs: u64,
     payload_size: usize,
 ) -> Result<UdpPerformanceTestResults> {
-    info!("=== 开始 UDP 专项性能测试 ===");
+    run_udp_mode_performance_tests(
+        UdpPerformanceMode::Socks5Relay,
+        agent_addr,
+        target_host,
+        target_port,
+        concurrency,
+        duration_secs,
+        payload_size,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_udp_mode_performance_tests(
+    mode: UdpPerformanceMode,
+    agent_addr: &str,
+    target_host: &str,
+    target_port: u16,
+    concurrency: usize,
+    duration_secs: u64,
+    payload_size: usize,
+) -> Result<UdpPerformanceTestResults> {
+    info!("=== 开始 {} 性能测试 ===", mode.name_zh());
     info!(
         "Agent：{}，目标：{}:{}，并发 flow：{}，payload={} bytes，持续时间：{} 秒",
         agent_addr, target_host, target_port, concurrency, payload_size, duration_secs
@@ -25,7 +62,8 @@ pub async fn run_udp_performance_tests(
     let udp_histogram = Arc::new(Mutex::new(Histogram::<u64>::new(3).unwrap()));
     let success = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicUsize::new(0));
-    let total_bytes = Arc::new(AtomicU64::new(0));
+    let upload_bytes = Arc::new(AtomicU64::new(0));
+    let download_bytes = Arc::new(AtomicU64::new(0));
 
     let mut system = System::new_all();
     system.refresh_all();
@@ -38,11 +76,13 @@ pub async fn run_udp_performance_tests(
         let hist = udp_histogram.clone();
         let success = success.clone();
         let failed = failed.clone();
-        let bytes = total_bytes.clone();
+        let uploaded = upload_bytes.clone();
+        let downloaded = download_bytes.clone();
 
         handles.push(tokio::spawn(async move {
             udp_worker(
                 worker_id,
+                mode,
                 agent_addr,
                 target_addr,
                 payload_size,
@@ -50,7 +90,8 @@ pub async fn run_udp_performance_tests(
                 hist,
                 success,
                 failed,
-                bytes,
+                uploaded,
+                downloaded,
             )
             .await;
         }));
@@ -76,7 +117,9 @@ pub async fn run_udp_performance_tests(
     let udp_hist = udp_histogram.lock().await;
     let udp_succ = success.load(Ordering::Relaxed);
     let udp_fail = failed.load(Ordering::Relaxed);
-    let total_transferred = total_bytes.load(Ordering::Relaxed);
+    let uploaded = upload_bytes.load(Ordering::Relaxed);
+    let downloaded = download_bytes.load(Ordering::Relaxed);
+    let total_transferred = uploaded + downloaded;
     let peak_mem_val = peak_memory.load(Ordering::Relaxed);
 
     let udp_metrics = calculate_udp_metrics(&udp_hist, udp_succ, udp_fail, total_transferred);
@@ -87,8 +130,10 @@ pub async fn run_udp_performance_tests(
         0.0
     };
     let datagrams_per_second = total_datagrams as f64 / actual_duration.as_secs_f64();
-    let throughput_mbps =
-        (total_transferred as f64 * 8.0) / (actual_duration.as_secs_f64() * 1_000_000.0);
+    let seconds = actual_duration.as_secs_f64();
+    let upload_throughput_mbps = (uploaded as f64 * 8.0) / (seconds * 1_000_000.0);
+    let download_throughput_mbps = (downloaded as f64 * 8.0) / (seconds * 1_000_000.0);
+    let throughput_mbps = upload_throughput_mbps + download_throughput_mbps;
 
     system.refresh_all();
     let cpu_usage = system.global_cpu_usage();
@@ -106,6 +151,10 @@ pub async fn run_udp_performance_tests(
         failed_datagrams: udp_fail,
         packet_loss_percent,
         datagrams_per_second,
+        upload_bytes: uploaded,
+        download_bytes: downloaded,
+        upload_throughput_mbps,
+        download_throughput_mbps,
         throughput_mbps,
         udp_metrics,
         system_metrics: SystemMetrics {
@@ -115,18 +164,22 @@ pub async fn run_udp_performance_tests(
         },
     };
 
-    info!("=== UDP 专项性能测试完成 ===");
+    info!("=== {} 性能测试完成 ===", mode.name_zh());
     info!("总 UDP datagrams：{}", total_datagrams);
     info!("成功：{}，失败：{}", udp_succ, udp_fail);
     info!("丢包/失败率：{:.2}%", packet_loss_percent);
     info!("Datagrams/sec：{:.2}", datagrams_per_second);
-    info!("吞吐量：{:.2} Mbps", throughput_mbps);
+    info!(
+        "上行：{:.2} Mbps，下行：{:.2} Mbps，合计：{:.2} Mbps",
+        upload_throughput_mbps, download_throughput_mbps, throughput_mbps
+    );
 
     Ok(results)
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn udp_worker(
     worker_id: usize,
+    mode: UdpPerformanceMode,
     agent_addr: String,
     target_addr: SocketAddr,
     payload_size: usize,
@@ -134,17 +187,21 @@ pub(super) async fn udp_worker(
     histogram: Arc<Mutex<Histogram<u64>>>,
     success: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
-    total_bytes: Arc<AtomicU64>,
+    upload_bytes: Arc<AtomicU64>,
+    download_bytes: Arc<AtomicU64>,
 ) {
     let mut consecutive_failures = 0usize;
     let mut latencies_us = Vec::with_capacity(256);
     let mut sequence = 0u64;
 
     while Instant::now() < end_time {
-        let datagram = match create_socks_udp_datagram(&agent_addr).await {
+        let datagram = match create_udp_channel(mode, &agent_addr).await {
             Ok(datagram) => datagram,
             Err(e) => {
-                warn!("UDP worker {worker_id} 建立 SOCKS5 UDP associate 失败：{e}");
+                warn!(
+                    "UDP worker {worker_id} 建立 {} 通道失败：{e}",
+                    mode.name_zh()
+                );
                 failed.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
@@ -156,19 +213,24 @@ pub(super) async fn udp_worker(
             sequence = sequence.wrapping_add(1);
             let start = Instant::now();
 
-            if let Err(e) = datagram.send_to(&payload, target_addr).await {
-                warn!("UDP worker {worker_id} 发送失败：{e}");
-                failed.fetch_add(1, Ordering::Relaxed);
-                consecutive_failures += 1;
-                break;
+            match datagram.send_to(&payload, target_addr).await {
+                Ok(n) => {
+                    upload_bytes.fetch_add(n as u64, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    warn!("UDP worker {worker_id} 发送失败：{e}");
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    consecutive_failures += 1;
+                    break;
+                }
             }
 
             let mut buf = vec![0u8; payload_size.max(4096)];
             match tokio::time::timeout(Duration::from_secs(3), datagram.recv_from(&mut buf)).await {
-                Ok(Ok((n, _src))) if buf[..n] == payload => {
+                Ok(Ok(n)) if buf[..n] == payload => {
+                    download_bytes.fetch_add(n as u64, Ordering::Relaxed);
                     latencies_us.push(start.elapsed().as_micros() as u64);
                     success.fetch_add(1, Ordering::Relaxed);
-                    total_bytes.fetch_add((payload.len() + n) as u64, Ordering::Relaxed);
                     consecutive_failures = 0;
 
                     if latencies_us.len() >= 256 {
@@ -178,7 +240,8 @@ pub(super) async fn udp_worker(
                         }
                     }
                 }
-                Ok(Ok((n, _src))) => {
+                Ok(Ok(n)) => {
+                    download_bytes.fetch_add(n as u64, Ordering::Relaxed);
                     warn!(
                         "UDP worker {worker_id} 回显不匹配：sent={} received={n}",
                         payload.len()
@@ -210,6 +273,40 @@ pub(super) async fn udp_worker(
         for latency in latencies_us {
             let _ = hist.record(latency);
         }
+    }
+}
+
+enum UdpChannel {
+    Direct(UdpSocket),
+    Socks5(async_socks5::SocksDatagram<TcpStream>),
+}
+
+impl UdpChannel {
+    async fn send_to(&self, payload: &[u8], target: SocketAddr) -> Result<usize> {
+        match self {
+            Self::Direct(socket) => Ok(socket.send_to(payload, target).await?),
+            Self::Socks5(datagram) => Ok(datagram.send_to(payload, target).await?),
+        }
+    }
+
+    async fn recv_from(&self, payload: &mut [u8]) -> Result<usize> {
+        match self {
+            Self::Direct(socket) => Ok(socket.recv_from(payload).await?.0),
+            Self::Socks5(datagram) => Ok(datagram.recv_from(payload).await?.0),
+        }
+    }
+}
+
+async fn create_udp_channel(mode: UdpPerformanceMode, agent_addr: &str) -> Result<UdpChannel> {
+    match mode {
+        UdpPerformanceMode::Direct => Ok(UdpChannel::Direct(
+            UdpSocket::bind("0.0.0.0:0")
+                .await
+                .context("Failed to bind direct UDP performance socket")?,
+        )),
+        UdpPerformanceMode::Socks5Relay => Ok(UdpChannel::Socks5(
+            create_socks_udp_datagram(agent_addr).await?,
+        )),
     }
 }
 

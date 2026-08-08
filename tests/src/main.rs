@@ -112,6 +112,74 @@ async fn main() -> Result<()> {
             report::generate_tcp_reports(&results, &output)?;
             tracing::info!("TCP 性能报告已生成：{}", output);
         }
+        Commands::MaxThroughput {
+            proxy_addr,
+            agent_addr,
+            target_host,
+            target_port,
+            udp_target_host,
+            udp_target_port,
+            start_concurrency,
+            max_concurrency,
+            stage_duration,
+            warmup_duration,
+            settle_duration,
+            payload_size,
+            udp_payload_size,
+            tun_interface,
+            max_failure_rate,
+            output,
+        } => {
+            tracing::info!("正在运行端到端最高吞吐测试");
+            tracing::info!("代理：{}，Agent：{}", proxy_addr, agent_addr);
+            tracing::info!(
+                "TCP 目标：{}:{}，UDP 目标：{}:{}，并发={}..{}，每级={} 秒",
+                target_host,
+                target_port,
+                udp_target_host,
+                udp_target_port,
+                start_concurrency,
+                max_concurrency,
+                stage_duration
+            );
+
+            let results = performance_tests::run_max_throughput_tests(
+                performance_tests::MaxThroughputConfig {
+                    agent_addr,
+                    tcp_target_host: target_host,
+                    tcp_target_port: target_port,
+                    udp_target_host,
+                    udp_target_port,
+                    start_concurrency,
+                    max_concurrency,
+                    stage_duration_secs: stage_duration,
+                    warmup_duration_secs: warmup_duration,
+                    settle_duration_secs: settle_duration,
+                    tcp_payload_size: payload_size,
+                    udp_payload_size,
+                    max_failure_rate_percent: max_failure_rate,
+                    tun_interface,
+                },
+            )
+            .await?;
+
+            report::generate_max_throughput_reports(&results, &output)?;
+            tracing::info!("最高吞吐报告已生成：{}", output);
+        }
+        Commands::MergeMaxThroughput {
+            base,
+            continuation,
+            output,
+        } => {
+            let mut results: performance_tests::MaxThroughputTestResults =
+                serde_json::from_str(&std::fs::read_to_string(&base)?)?;
+            for path in continuation {
+                let next = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                performance_tests::merge_max_throughput_results(&mut results, next)?;
+            }
+            report::generate_max_throughput_reports(&results, &output)?;
+            tracing::info!("分段最高吞吐报告已合并：{}", output);
+        }
         Commands::LargeDownload {
             proxy_addr,
             agent_addr,
