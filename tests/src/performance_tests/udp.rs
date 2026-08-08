@@ -9,8 +9,8 @@ pub enum UdpPerformanceMode {
 impl UdpPerformanceMode {
     pub fn name_zh(self) -> &'static str {
         match self {
-            Self::Direct => "上一级 UDP 直连出口",
-            Self::Socks5Relay => "Agent UDP Relay",
+            Self::Direct => "UDP 直连基线",
+            Self::Socks5Relay => "SOCKS5 UDP Relay 端到端",
         }
     }
 }

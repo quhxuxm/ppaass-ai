@@ -12,10 +12,10 @@ pub enum TcpPerformanceMode {
 impl TcpPerformanceMode {
     pub fn name_zh(self) -> &'static str {
         match self {
-            Self::Direct => "上一级 TCP 直连出口",
-            Self::Tun => "Agent TUN TCP",
-            Self::HttpConnect => "Agent HTTP CONNECT",
-            Self::Socks5 => "Agent SOCKS5 TCP",
+            Self::Direct => "TCP 直连基线",
+            Self::Tun => "TUN TCP 端到端",
+            Self::HttpConnect => "HTTP CONNECT 端到端",
+            Self::Socks5 => "SOCKS5 TCP 端到端",
         }
     }
 }

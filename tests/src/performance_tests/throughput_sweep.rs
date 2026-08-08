@@ -146,6 +146,7 @@ fn finish_interface(
         peak: peak_throughput,
         upstream_interface: interface.upstream(),
         loss_from_upstream: None,
+        same_concurrency_comparison: None,
         stages,
     }
 }
@@ -175,6 +176,8 @@ fn stage_from_tcp(
             result.failure_rate_percent,
             max_failure_rate_percent,
         ),
+        upstream_throughput: None,
+        loss_from_upstream: None,
     }
 }
 
@@ -203,6 +206,8 @@ fn stage_from_udp(
             result.packet_loss_percent,
             max_failure_rate_percent,
         ),
+        upstream_throughput: None,
+        loss_from_upstream: None,
     }
 }
 

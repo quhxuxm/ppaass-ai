@@ -1,7 +1,7 @@
 use super::CipherState;
 use crate::compression::{CompressionMode, compress, decompress};
 use crate::message::{MAX_MESSAGE_SIZE, Message, MessageType, PROTOCOL_VERSION};
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use std::io;
 use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
@@ -13,6 +13,7 @@ const MIN_COMPRESSION_SIZE: usize = 64;
 /// cleartext envelope is intentionally much smaller than a data frame.
 const MAX_UNPROTECTED_AUTH_PAYLOAD_SIZE: usize = 4 * 1024;
 const MAX_UNPROTECTED_AUTH_FRAME_SIZE: usize = 8 * 1024;
+const WIRE_HEADER_LEN: usize = 11;
 
 /// 使用长度分隔帧的代理协议消息编解码器。
 /// 封装 tokio-util 的 LengthDelimitedCodec 以实现可靠的消息分帧。
@@ -59,6 +60,59 @@ impl MessageCodec {
         }
         Ok(())
     }
+
+    fn decode_wire_message(mut frame: BytesMut) -> io::Result<Message> {
+        if frame.len() < WIRE_HEADER_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TCP frame is shorter than its record header",
+            ));
+        }
+        let message_type = match frame[1] {
+            1 => MessageType::AuthRequest,
+            2 => MessageType::AuthResponse,
+            3 => MessageType::ConnectRequest,
+            4 => MessageType::ConnectResponse,
+            5 => MessageType::Data,
+            6 => MessageType::Error,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid TCP frame message type",
+                ));
+            }
+        };
+        let mut sequence = [0_u8; 8];
+        sequence.copy_from_slice(&frame[3..WIRE_HEADER_LEN]);
+        let payload = frame.split_off(WIRE_HEADER_LEN).to_vec();
+        Ok(Message {
+            version: frame[0],
+            message_type,
+            compression: frame[2],
+            sequence: u64::from_be_bytes(sequence),
+            payload,
+        })
+    }
+
+    fn encode_wire_message(item: Message, dst: &mut BytesMut) -> io::Result<()> {
+        let frame_len = WIRE_HEADER_LEN
+            .checked_add(item.payload.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "TCP frame is too large"))?;
+        if frame_len > MAX_MESSAGE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TCP frame is too large",
+            ));
+        }
+        dst.reserve(4 + frame_len);
+        dst.put_u32(frame_len as u32);
+        dst.put_u8(item.version);
+        dst.put_u8(item.message_type as u8);
+        dst.put_u8(item.compression);
+        dst.put_u64(item.sequence);
+        dst.extend_from_slice(&item.payload);
+        Ok(())
+    }
 }
 
 impl Decoder for MessageCodec {
@@ -90,8 +144,7 @@ impl Decoder for MessageCodec {
             ));
         }
 
-        let mut message: Message =
-            bitcode::deserialize(&frame).map_err(|e| Self::io_error("消息反序列化失败", e))?;
+        let mut message = Self::decode_wire_message(frame)?;
         Self::validate_wire_metadata(&message)?;
 
         if let Some(cipher) = self.state.session_cipher() {
@@ -101,12 +154,12 @@ impl Decoder for MessageCodec {
                     "authentication frames are forbidden after session establishment",
                 ));
             }
-            message.payload = cipher
-                .open(
+            cipher
+                .open_in_place(
                     message.message_type,
                     message.compression,
                     message.sequence,
-                    &message.payload,
+                    &mut message.payload,
                 )
                 .map_err(|e| Self::io_error("TCP 帧认证失败", e))?;
         } else {
@@ -176,11 +229,10 @@ impl Encoder<Message> for MessageCodec {
                     "authentication frames are forbidden after session establishment",
                 ));
             }
-            let (sequence, ciphertext) = cipher
-                .seal(item.message_type, item.compression, &item.payload)
+            let sequence = cipher
+                .seal_in_place(item.message_type, item.compression, &mut item.payload)
                 .map_err(|e| Self::io_error("TCP 帧加密失败", e))?;
             item.sequence = sequence;
-            item.payload = ciphertext;
         } else {
             if !Self::is_auth(item.message_type) {
                 return Err(io::Error::new(
@@ -196,7 +248,6 @@ impl Encoder<Message> for MessageCodec {
             }
         }
 
-        let data = bitcode::serialize(&item).map_err(|e| Self::io_error("消息序列化失败", e))?;
-        self.inner.encode(Bytes::from(data), dst)
+        Self::encode_wire_message(item, dst)
     }
 }

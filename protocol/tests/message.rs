@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use protocol::message::PROTOCOL_VERSION;
 use protocol::tcp_transport::{AuthFailureCode, TCP_HANDSHAKE_VERSION};
-use protocol::{Address, AuthResponse, CipherState, Message, MessageCodec, MessageType};
+use protocol::{Address, AuthResponse, CipherState, MessageCodec, MessageType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::codec::Decoder;
@@ -77,14 +77,8 @@ fn oversized_preauth_length_prefix_is_rejected_immediately() {
 
 #[test]
 fn previous_tcp_protocol_envelope_has_no_fallback() {
-    let legacy = Message {
-        version: PROTOCOL_VERSION - 1,
-        message_type: MessageType::AuthRequest,
-        compression: 0,
-        sequence: 0,
-        payload: Vec::new(),
-    };
-    let encoded = bitcode::serialize(&legacy).unwrap();
+    let mut encoded = vec![PROTOCOL_VERSION - 1, MessageType::AuthRequest as u8, 0];
+    encoded.extend_from_slice(&0_u64.to_be_bytes());
     let mut input = BytesMut::new();
     input.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
     input.extend_from_slice(&encoded);

@@ -68,6 +68,7 @@ fn merge_preserves_failed_high_stages_and_confirms_peak() -> Result<()> {
             ),
         ],
     );
+    base.interfaces[0].stages = vec![stage(512, 900.0, 900.0, true)];
     base.interfaces[1].stages = vec![stage(256, 400.0, 390.0, true)];
     let mut continuation = partial_results(
         vec![512, 1024, 2048],
@@ -90,6 +91,8 @@ fn merge_preserves_failed_high_stages_and_confirms_peak() -> Result<()> {
     assert_eq!(relay.stages.len(), 4);
     assert!(!relay.stages.last().unwrap().sustainable);
     assert!(relay.loss_from_upstream.is_some());
+    assert!(relay.same_concurrency_comparison.is_some());
+    assert!(relay.stages[1].upstream_throughput.is_some());
     Ok(())
 }
 
@@ -135,12 +138,25 @@ fn generates_chinese_directional_reports() -> Result<()> {
     let markdown = std::fs::read_to_string(directory.path().join("max-throughput-report.md"))?;
     let html = std::fs::read_to_string(&html_path)?;
     let json = std::fs::read_to_string(directory.path().join("max-throughput-report.json"))?;
-    assert!(markdown.contains("上行损失"));
-    assert!(markdown.contains("下行损失"));
+    assert!(markdown.contains("上行变化"));
+    assert!(markdown.contains("下行变化"));
+    assert!(markdown.contains("同并发接口速度变化总览"));
+    assert!(markdown.contains("测试对象与统计边界"));
+    assert!(markdown.contains("不是 Proxy → 目标的出口速度"));
+    assert!(markdown.contains("不是单独的 Agent 入口速度"));
+    assert!(markdown.contains("直连基线速度"));
+    assert!(markdown.contains("保留率"));
     assert!(markdown.contains("未完成原因"));
     assert!(html.contains("各接口最高网速测试报告"));
     assert!(html.contains("450.00 Mbps"));
+    assert!(html.contains("同并发速度变化曲线"));
+    assert!(html.contains("字节统计位置"));
+    assert!(html.contains("<svg"));
     assert!(json.contains("upload_mbps"));
+    assert!(json.contains("same_concurrency_comparison"));
+    assert!(json.contains("upstream_throughput"));
+    assert!(json.contains("measurement_definition"));
+    assert!(json.contains("segment_limitation"));
     Ok(())
 }
 
@@ -160,6 +176,7 @@ fn completed_interface(
         peak,
         upstream_interface: interface.upstream(),
         loss_from_upstream: loss,
+        same_concurrency_comparison: None,
         stages: vec![stage(4, peak.upload_mbps, peak.download_mbps, true)],
     }
 }
@@ -194,6 +211,7 @@ fn failed_tun() -> InterfaceThroughputResult {
         peak: DirectionalThroughput::default(),
         upstream_interface: Some(ThroughputInterface::UpstreamTcp),
         loss_from_upstream: None,
+        same_concurrency_comparison: None,
         stages: Vec::new(),
     }
 }
@@ -225,5 +243,7 @@ fn stage(
         upload_bytes: 64 * 1024 * 1024,
         download_bytes: 64 * 1024 * 1024,
         sustainable,
+        upstream_throughput: None,
+        loss_from_upstream: None,
     }
 }

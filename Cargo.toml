@@ -43,6 +43,7 @@ toml = "1.1.2"
 time = { version = "0.3.49", features = ["parsing"] }
 rsa = { version = "0.9.10", features = ["sha2"] }
 aes-gcm = "0.10.3"
+ring = "0.17.14"
 rand = "0.10.1"
 sha2 = "0.11.0"
 hkdf = "0.13.0"

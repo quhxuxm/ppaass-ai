@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use integration_test_support::performance_tests::ThroughputInterface;
 
 #[derive(Parser)]
 #[command(name = "integration-tests")]
@@ -168,6 +169,10 @@ pub(crate) enum Commands {
         #[arg(long)]
         tun_interface: Option<String>,
 
+        /// 仅运行指定接口；可重复传入，省略时运行全部接口
+        #[arg(long, value_enum)]
+        interface: Vec<ThroughputInterface>,
+
         /// 可参与峰值评选的最大失败率（百分比）
         #[arg(long, default_value = "1.0")]
         max_failure_rate: f64,
@@ -187,6 +192,16 @@ pub(crate) enum Commands {
         continuation: Vec<String>,
 
         /// 合并后的 HTML 报告路径
+        #[arg(short, long, default_value = "max-throughput-report.html")]
+        output: String,
+    },
+    /// 从已有 JSON 重新生成最高吞吐中文报告，不重跑测试
+    RenderMaxThroughput {
+        /// 已有的最高吞吐 JSON 报告
+        #[arg(short, long, default_value = "max-throughput-report.json")]
+        input: String,
+
+        /// 重新生成的 HTML 报告路径
         #[arg(short, long, default_value = "max-throughput-report.html")]
         output: String,
     },

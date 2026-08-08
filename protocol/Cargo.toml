@@ -19,6 +19,7 @@ anyhow.workspace = true
 tracing.workspace = true
 rsa.workspace = true
 aes-gcm.workspace = true
+ring.workspace = true
 rand.workspace = true
 sha2.workspace = true
 hkdf.workspace = true

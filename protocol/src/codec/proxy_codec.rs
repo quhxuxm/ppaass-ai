@@ -1,4 +1,4 @@
-use super::{CipherState, MessageCodec};
+use super::{CipherState, MessageCodec, data_packet_codec};
 use crate::message::{Message, MessageType, ProxyRequest, ProxyResponse};
 use bytes::BytesMut;
 use std::io;
@@ -24,6 +24,11 @@ impl Decoder for ProxyCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src)? {
             Some(message) => {
+                if message.message_type == MessageType::Data {
+                    return data_packet_codec::decode(message.payload)
+                        .map(ProxyRequest::Data)
+                        .map(Some);
+                }
                 let request: ProxyRequest =
                     bitcode::deserialize(&message.payload).map_err(|e| {
                         io::Error::new(
@@ -53,19 +58,24 @@ impl Encoder<ProxyResponse> for ProxyCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: ProxyResponse, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let message_type = match &item {
-            ProxyResponse::Auth(_) => MessageType::AuthResponse,
-            ProxyResponse::Connect(_) => MessageType::ConnectResponse,
-            ProxyResponse::Data(_) => MessageType::Data,
-            ProxyResponse::Error { .. } => MessageType::Data, // Fallback, though Error unused in logic
+        let (message_type, payload) = match item {
+            ProxyResponse::Data(packet) => (MessageType::Data, data_packet_codec::encode(packet)?),
+            ProxyResponse::Error { message } => (MessageType::Error, message.into_bytes()),
+            item => {
+                let message_type = match &item {
+                    ProxyResponse::Auth(_) => MessageType::AuthResponse,
+                    ProxyResponse::Connect(_) => MessageType::ConnectResponse,
+                    ProxyResponse::Data(_) | ProxyResponse::Error { .. } => unreachable!(),
+                };
+                let payload = bitcode::serialize(&item).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Failed to serialize proxy response: {}", e),
+                    )
+                })?;
+                (message_type, payload)
+            }
         };
-
-        let payload = bitcode::serialize(&item).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to serialize proxy response: {}", e),
-            )
-        })?;
 
         let message = Message::new(message_type, payload);
         self.inner.encode(message, dst)

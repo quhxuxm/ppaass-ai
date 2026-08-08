@@ -77,9 +77,6 @@ pub fn merge_max_throughput_results(
         }
     }
 
-    for result in &mut base.interfaces {
-        result.loss_from_upstream = None;
-    }
     apply_upstream_losses(&mut base.interfaces);
     Ok(())
 }

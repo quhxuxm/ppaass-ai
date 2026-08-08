@@ -1,5 +1,6 @@
 mod agent_codec;
 mod cipher_state;
+mod data_packet_codec;
 mod message_codec;
 mod proxy_codec;
 

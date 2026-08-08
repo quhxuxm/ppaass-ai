@@ -2587,6 +2587,7 @@ dependencies = [
  "hkdf",
  "lz4_flex",
  "rand 0.10.1",
+ "ring",
  "rsa",
  "serde",
  "serde_json",

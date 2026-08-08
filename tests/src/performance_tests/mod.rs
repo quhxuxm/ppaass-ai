@@ -202,11 +202,12 @@ mod udp;
 
 pub use http::run_performance_tests;
 pub use large_download::run_large_download_tests;
+pub(crate) use max_throughput::apply_upstream_losses;
 pub use max_throughput::{
     DirectionalLoss, DirectionalThroughput, InterfaceTestStatus, InterfaceThroughputResult,
-    MaxThroughputConfig, MaxThroughputTestResults, ThroughputInterface, ThroughputStageResult,
-    build_concurrency_levels, calculate_directional_loss, run_max_throughput_tests,
-    select_peak_stage,
+    MaxThroughputConfig, MaxThroughputTestResults, SameConcurrencyComparison, ThroughputInterface,
+    ThroughputStageResult, build_concurrency_levels, calculate_directional_loss,
+    run_max_throughput_tests, select_peak_stage,
 };
 use metrics::{calculate_large_download_metrics, calculate_quic_metrics};
 pub use metrics::{calculate_metrics, calculate_tcp_metrics, calculate_udp_metrics};

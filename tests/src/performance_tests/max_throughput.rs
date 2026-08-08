@@ -2,7 +2,7 @@ use super::*;
 use crate::performance_tests::throughput_sweep::{run_tcp_sweep, run_udp_sweep};
 use crate::performance_tests::tun_route::verify_tun_route;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum ThroughputInterface {
     UpstreamTcp,
@@ -16,12 +16,12 @@ pub enum ThroughputInterface {
 impl ThroughputInterface {
     pub fn name_zh(self) -> &'static str {
         match self {
-            Self::UpstreamTcp => "上一级 TCP 直连出口",
-            Self::UpstreamUdp => "上一级 UDP 直连出口",
-            Self::Tun => "Agent TUN 模式",
-            Self::HttpProxy => "Agent HTTP Proxy",
-            Self::SocksProxy => "Agent SOCKS Proxy",
-            Self::UdpRelay => "Agent UDP Relay",
+            Self::UpstreamTcp => "TCP 直连基线",
+            Self::UpstreamUdp => "UDP 直连基线",
+            Self::Tun => "TUN 端到端",
+            Self::HttpProxy => "HTTP CONNECT 端到端",
+            Self::SocksProxy => "SOCKS5 TCP 端到端",
+            Self::UdpRelay => "SOCKS5 UDP Relay 端到端",
         }
     }
 
@@ -58,6 +58,14 @@ pub struct DirectionalLoss {
     pub aggregate_percent: f64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SameConcurrencyComparison {
+    pub concurrency: usize,
+    pub upstream: DirectionalThroughput,
+    pub current: DirectionalThroughput,
+    pub loss: DirectionalLoss,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThroughputStageResult {
     pub concurrency: usize,
@@ -72,6 +80,10 @@ pub struct ThroughputStageResult {
     pub upload_bytes: u64,
     pub download_bytes: u64,
     pub sustainable: bool,
+    #[serde(default)]
+    pub upstream_throughput: Option<DirectionalThroughput>,
+    #[serde(default)]
+    pub loss_from_upstream: Option<DirectionalLoss>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +98,8 @@ pub struct InterfaceThroughputResult {
     pub peak: DirectionalThroughput,
     pub upstream_interface: Option<ThroughputInterface>,
     pub loss_from_upstream: Option<DirectionalLoss>,
+    #[serde(default)]
+    pub same_concurrency_comparison: Option<SameConcurrencyComparison>,
     pub stages: Vec<ThroughputStageResult>,
 }
 
@@ -105,6 +119,7 @@ pub struct MaxThroughputConfig {
     pub udp_payload_size: usize,
     pub max_failure_rate_percent: f64,
     pub tun_interface: Option<String>,
+    pub selected_interfaces: Vec<ThroughputInterface>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,74 +201,86 @@ pub async fn run_max_throughput_tests(
     info!("=== 开始各接口最高吞吐与出口损失测试 ===");
 
     let mut interfaces = Vec::with_capacity(6);
-    interfaces.push(
-        run_tcp_sweep(
-            ThroughputInterface::UpstreamTcp,
-            TcpPerformanceMode::Direct,
-            &config,
-            &levels,
-            None,
-        )
-        .await,
-    );
-    interfaces.push(
-        run_udp_sweep(
-            ThroughputInterface::UpstreamUdp,
-            UdpPerformanceMode::Direct,
-            &config,
-            &levels,
-        )
-        .await,
-    );
-
-    let tun_route = verify_tun_route(
-        &config.tcp_target_host,
-        config.tcp_target_port,
-        config.tun_interface.as_deref(),
-    )
-    .await;
-    interfaces.push(match tun_route {
-        Ok(route) => {
+    if selected(&config, ThroughputInterface::UpstreamTcp) {
+        interfaces.push(
             run_tcp_sweep(
-                ThroughputInterface::Tun,
-                TcpPerformanceMode::Tun,
+                ThroughputInterface::UpstreamTcp,
+                TcpPerformanceMode::Direct,
                 &config,
                 &levels,
-                Some(route),
+                None,
             )
-            .await
-        }
-        Err(error) => failed_interface(ThroughputInterface::Tun, error.to_string()),
-    });
-    interfaces.push(
-        run_tcp_sweep(
-            ThroughputInterface::HttpProxy,
-            TcpPerformanceMode::HttpConnect,
-            &config,
-            &levels,
-            None,
+            .await,
+        );
+    }
+    if selected(&config, ThroughputInterface::UpstreamUdp) {
+        interfaces.push(
+            run_udp_sweep(
+                ThroughputInterface::UpstreamUdp,
+                UdpPerformanceMode::Direct,
+                &config,
+                &levels,
+            )
+            .await,
+        );
+    }
+
+    if selected(&config, ThroughputInterface::Tun) {
+        let tun_route = verify_tun_route(
+            &config.tcp_target_host,
+            config.tcp_target_port,
+            config.tun_interface.as_deref(),
         )
-        .await,
-    );
-    interfaces.push(
-        run_tcp_sweep(
-            ThroughputInterface::SocksProxy,
-            TcpPerformanceMode::Socks5,
-            &config,
-            &levels,
-            None,
-        )
-        .await,
-    );
-    interfaces.push(
-        run_udp_sweep(
-            ThroughputInterface::UdpRelay,
-            UdpPerformanceMode::Socks5Relay,
-            &config,
-            &levels,
-        )
-        .await,
-    );
+        .await;
+        interfaces.push(match tun_route {
+            Ok(route) => {
+                run_tcp_sweep(
+                    ThroughputInterface::Tun,
+                    TcpPerformanceMode::Tun,
+                    &config,
+                    &levels,
+                    Some(route),
+                )
+                .await
+            }
+            Err(error) => failed_interface(ThroughputInterface::Tun, error.to_string()),
+        });
+    }
+    if selected(&config, ThroughputInterface::HttpProxy) {
+        interfaces.push(
+            run_tcp_sweep(
+                ThroughputInterface::HttpProxy,
+                TcpPerformanceMode::HttpConnect,
+                &config,
+                &levels,
+                None,
+            )
+            .await,
+        );
+    }
+    if selected(&config, ThroughputInterface::SocksProxy) {
+        interfaces.push(
+            run_tcp_sweep(
+                ThroughputInterface::SocksProxy,
+                TcpPerformanceMode::Socks5,
+                &config,
+                &levels,
+                None,
+            )
+            .await,
+        );
+    }
+    if selected(&config, ThroughputInterface::UdpRelay) {
+        interfaces.push(
+            run_udp_sweep(
+                ThroughputInterface::UdpRelay,
+                UdpPerformanceMode::Socks5Relay,
+                &config,
+                &levels,
+            )
+            .await,
+        );
+    }
     apply_upstream_losses(&mut interfaces);
 
     Ok(MaxThroughputTestResults {
@@ -268,6 +295,10 @@ pub async fn run_max_throughput_tests(
         tested_concurrency_levels: levels,
         interfaces,
     })
+}
+
+fn selected(config: &MaxThroughputConfig, interface: ThroughputInterface) -> bool {
+    config.selected_interfaces.is_empty() || config.selected_interfaces.contains(&interface)
 }
 
 fn validate_config(config: &MaxThroughputConfig) -> Result<()> {
@@ -299,34 +330,63 @@ pub(super) fn failed_interface(
         peak: DirectionalThroughput::default(),
         upstream_interface: interface.upstream(),
         loss_from_upstream: None,
+        same_concurrency_comparison: None,
         stages: Vec::new(),
     }
 }
 
-pub(super) fn apply_upstream_losses(results: &mut [InterfaceThroughputResult]) {
-    let tcp = completed_peak(results, ThroughputInterface::UpstreamTcp);
-    let udp = completed_peak(results, ThroughputInterface::UpstreamUdp);
+pub(crate) fn apply_upstream_losses(results: &mut [InterfaceThroughputResult]) {
+    let tcp = completed_interface(results, ThroughputInterface::UpstreamTcp).cloned();
+    let udp = completed_interface(results, ThroughputInterface::UpstreamUdp).cloned();
     for result in results {
+        result.loss_from_upstream = None;
+        result.same_concurrency_comparison = None;
+        for stage in &mut result.stages {
+            stage.upstream_throughput = None;
+            stage.loss_from_upstream = None;
+        }
         let upstream = match result.upstream_interface {
-            Some(ThroughputInterface::UpstreamTcp) => tcp,
-            Some(ThroughputInterface::UpstreamUdp) => udp,
+            Some(ThroughputInterface::UpstreamTcp) => tcp.as_ref(),
+            Some(ThroughputInterface::UpstreamUdp) => udp.as_ref(),
             _ => None,
         };
         if result.status == InterfaceTestStatus::Completed
             && let Some(upstream) = upstream
         {
-            result.loss_from_upstream = Some(calculate_directional_loss(upstream, result.peak));
+            result.loss_from_upstream =
+                Some(calculate_directional_loss(upstream.peak, result.peak));
+            result.same_concurrency_comparison = result.best_concurrency.and_then(|concurrency| {
+                upstream
+                    .stages
+                    .iter()
+                    .find(|stage| stage.concurrency == concurrency)
+                    .map(|stage| SameConcurrencyComparison {
+                        concurrency,
+                        upstream: stage.throughput,
+                        current: result.peak,
+                        loss: calculate_directional_loss(stage.throughput, result.peak),
+                    })
+            });
+            for stage in &mut result.stages {
+                stage.upstream_throughput = upstream
+                    .stages
+                    .iter()
+                    .find(|candidate| candidate.concurrency == stage.concurrency)
+                    .map(|candidate| candidate.throughput);
+                stage.loss_from_upstream = stage
+                    .upstream_throughput
+                    .map(|throughput| calculate_directional_loss(throughput, stage.throughput));
+            }
         }
     }
 }
 
-fn completed_peak(
+fn completed_interface(
     results: &[InterfaceThroughputResult],
     interface: ThroughputInterface,
-) -> Option<DirectionalThroughput> {
+) -> Option<&InterfaceThroughputResult> {
     results
         .iter()
         .find(|result| result.interface == interface)
         .filter(|result| result.status == InterfaceTestStatus::Completed)
-        .map(|result| result.peak)
 }

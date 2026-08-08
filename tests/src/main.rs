@@ -127,6 +127,7 @@ async fn main() -> Result<()> {
             payload_size,
             udp_payload_size,
             tun_interface,
+            interface,
             max_failure_rate,
             output,
         } => {
@@ -159,6 +160,7 @@ async fn main() -> Result<()> {
                     udp_payload_size,
                     max_failure_rate_percent: max_failure_rate,
                     tun_interface,
+                    selected_interfaces: interface,
                 },
             )
             .await?;
@@ -179,6 +181,12 @@ async fn main() -> Result<()> {
             }
             report::generate_max_throughput_reports(&results, &output)?;
             tracing::info!("分段最高吞吐报告已合并：{}", output);
+        }
+        Commands::RenderMaxThroughput { input, output } => {
+            let results: performance_tests::MaxThroughputTestResults =
+                serde_json::from_str(&std::fs::read_to_string(&input)?)?;
+            report::generate_max_throughput_reports(&results, &output)?;
+            tracing::info!("最高吞吐报告已重新生成：{}", output);
         }
         Commands::LargeDownload {
             proxy_addr,

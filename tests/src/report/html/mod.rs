@@ -3,6 +3,7 @@ use super::*;
 mod general;
 mod large_download;
 mod max_throughput;
+mod max_throughput_charts;
 mod quic;
 mod tcp;
 mod udp;
