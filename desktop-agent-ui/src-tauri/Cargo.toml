@@ -15,6 +15,7 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 common = { path = "../../common" }
 desktop-agent-be = { path = "../../desktop-agent-be" }
+mimalloc = "0.1.52"
 protocol = { path = "../../protocol" }
 reqwest = { version = "0.12", default-features = false, features = ["cookies", "json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }

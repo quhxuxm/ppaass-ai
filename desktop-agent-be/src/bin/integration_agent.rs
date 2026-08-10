@@ -3,7 +3,13 @@
 use anyhow::Result;
 use clap::Parser;
 use desktop_agent_be::config::AgentConfig;
+#[cfg(feature = "mimalloc-allocator")]
+use mimalloc::MiMalloc;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(feature = "mimalloc-allocator")]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser)]
 struct Args {

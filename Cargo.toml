@@ -11,6 +11,18 @@ members = [
 ]
 resolver = "2"
 
+# Favor runtime throughput for distributable binaries. These settings make
+# release builds slower, but allow LLVM to optimize across crate boundaries
+# and consider the complete program as a single optimization unit.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# Keep performance measurements representative of production binaries.
+[profile.bench]
+inherits = "release"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
@@ -59,7 +71,9 @@ mimalloc = "0.1.52"
 futures = "0.3.32"
 hex = "0.4.3"
 pretty-hex = "0.4.2"
-hickory-proto = { version = "0.26.1", default-features = false, features = ["std"] }
+hickory-proto = { version = "0.26.1", default-features = false, features = [
+    "std",
+] }
 ratatui = "0.30.2"
 crossterm = "0.29"
 hdrhistogram = "7.5.4"
@@ -71,7 +85,10 @@ netstack-smoltcp = "0.2.2"
 route_manager = "0.2.11"
 socket2 = { version = "0.6.4", features = ["all"] }
 if-addrs = "0.15"
-nix = { version = "0.31.3", default-features = false, features = ["socket", "uio"] }
+nix = { version = "0.31.3", default-features = false, features = [
+    "socket",
+    "uio",
+] }
 libc = "0.2.186"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
@@ -82,10 +99,16 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 tempfile = "3.27.0"
 axum = "0.8"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "timeout", "trace"] }
 argon2 = "0.5"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 url = "2.5"
 zeroize = "1.8"

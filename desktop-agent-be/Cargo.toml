@@ -13,7 +13,7 @@ path = "src/bin/integration_agent.rs"
 required-features = ["integration-test-harness"]
 
 [features]
-default = []
+default = ["mimalloc-allocator"]
 integration-test-harness = []
 zstd-compression = ["protocol/zstd-compression"]
 mimalloc-allocator = ["dep:mimalloc"]

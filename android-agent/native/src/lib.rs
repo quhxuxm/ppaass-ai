@@ -18,6 +18,11 @@ mod tcp_relay;
 mod traffic_stats;
 pub mod yamux_session;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 pub use authentication::{
     AUTHENTICATION_UNCONFIRMED, AUTHENTICATION_USER_DISABLED, AUTHENTICATION_USER_EXPIRED,
     AUTHENTICATION_VERIFIED_ACTIVE, VerifiedAuthenticationState,
