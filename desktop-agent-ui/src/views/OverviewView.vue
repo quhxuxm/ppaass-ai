@@ -56,8 +56,6 @@ const {
   dnsStatusLabel,
   applyLatestDnsRecords,
   onDnsListScroll,
-  onDnsListMouseEnter,
-  onDnsListMouseLeave,
   onDnsListFocusOut,
   dnsAnswerLabel,
   dnsAnswers,
@@ -276,8 +274,6 @@ const {
                 ref="dnsRecordListElement"
                 class="dns-record-list"
                 @scroll.passive="onDnsListScroll"
-                @mouseenter="onDnsListMouseEnter"
-                @mouseleave="onDnsListMouseLeave"
                 @focusin="dnsListFocused = true"
                 @focusout="onDnsListFocusOut"
               >

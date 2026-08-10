@@ -59,7 +59,6 @@ export function useOverviewView(
   const displayedDnsRecords = ref<DnsResolutionRecord[]>([]);
   const latestDnsRecords = ref<DnsResolutionRecord[]>([]);
   const pendingDnsRecordCount = ref(0);
-  const dnsListHovered = ref(false);
   const dnsListFocused = ref(false);
   const dnsFilterQuery = ref("");
   
@@ -247,7 +246,6 @@ export function useOverviewView(
   
   function shouldFreezeDnsRecords() {
     return (
-      dnsListHovered.value ||
       dnsListFocused.value ||
       selectedDnsDomains.value.length > 0 ||
       (dnsRecordListElement.value?.scrollTop ?? 0) > 4
@@ -266,15 +264,6 @@ export function useOverviewView(
   }
   
   function onDnsListScroll() {
-    maybeApplyLatestDnsRecords();
-  }
-  
-  function onDnsListMouseEnter() {
-    dnsListHovered.value = true;
-  }
-  
-  function onDnsListMouseLeave() {
-    dnsListHovered.value = false;
     maybeApplyLatestDnsRecords();
   }
   
@@ -322,8 +311,6 @@ export function useOverviewView(
     dnsStatusLabel,
     applyLatestDnsRecords,
     onDnsListScroll,
-    onDnsListMouseEnter,
-    onDnsListMouseLeave,
     onDnsListFocusOut,
     dnsAnswerLabel,
     dnsAnswers,
