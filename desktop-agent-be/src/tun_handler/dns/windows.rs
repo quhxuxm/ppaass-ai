@@ -27,7 +27,7 @@ pub(crate) struct DnsGuard {
 impl DnsGuard {
     pub(crate) fn install(
         proxy_dns: bool,
-        _bind_interface: Option<&BindInterface>,
+        bind_interface: Option<&BindInterface>,
         tun_interface_index: u32,
         tun_dns: Ipv4Addr,
         dns_state_file: Option<&str>,
@@ -39,9 +39,20 @@ impl DnsGuard {
             return None;
         }
 
-        let interface_index = tun_interface_index;
+        // Windows DNS Client chooses servers from the physical interface used
+        // by the application route. Configuring only the Wintun adapter leaves
+        // the physical adapter's DNS active, so private/corporate DNS targets
+        // can follow the local-network bypass without ever entering the TUN.
+        // Point the detected physical proxy egress at the synthetic DNS target;
+        // split-default then carries that target into Wintun.
+        let interface_index = bind_interface
+            .and_then(|interface| interface.index)
+            .filter(|index| *index != 0 && *index != tun_interface_index)
+            .unwrap_or(tun_interface_index);
         if interface_index == 0 {
-            warn!("TUN proxy_dns 已启用，但 TUN 接口 index 无效；跳过系统 DNS 临时切换");
+            warn!(
+                "TUN proxy_dns 已启用，但物理出口和 TUN 接口 index 均无效；跳过系统 DNS 临时切换"
+            );
             return None;
         }
 
