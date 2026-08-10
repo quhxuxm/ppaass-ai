@@ -129,8 +129,8 @@ pub struct TunConfig {
     #[serde(default)]
     pub route_state_file: Option<String>,
 
-    /// TUN DNS 状态文件名或路径。
-    /// 相对路径会放在当前运行目录下；不设置时使用 tun-dns.json。
+    /// 旧版本 TUN DNS 状态文件名或路径，仅用于检测并告警遗留文件。
+    /// 新版本不会创建或应用该文件，也不会修改系统 DNS。
     #[serde(default)]
     pub dns_state_file: Option<String>,
 

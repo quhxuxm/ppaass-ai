@@ -69,14 +69,19 @@ pub fn dns_capture_route_targets_default_gateway(
 }
 
 pub fn should_install_dns_capture_host_routes() -> bool {
-    // macOS uses PF route-to and Windows points the TUN adapter at a virtual
-    // peer DNS address. Installing a host route for every pre-existing Windows
-    // DNS server is both redundant and unsafe: home routers commonly serve as
-    // DNS and default gateway, so a gateway/32 route would hijack all access to
-    // the gateway, not just port 53.
-    !cfg!(any(target_os = "macos", windows))
+    // macOS 可以用 PF 按端口捕获 DNS；Windows 不改网卡 DNS，因此必须用
+    // 更具体的 host route 覆盖局域网旁路，让原 DNS 请求进入 TUN。
+    !cfg!(target_os = "macos")
 }
 
+#[cfg(windows)]
+pub fn should_capture_default_gateway_dns_route() -> bool {
+    // 家用路由器经常同时是 DNS 和默认网关。Windows 没有 PF 这类端口级
+    // route-to；要在不修改系统 DNS 的前提下捕获请求，只能让该地址进入 TUN。
+    true
+}
+
+#[cfg(not(windows))]
 pub fn should_capture_default_gateway_dns_route() -> bool {
     false
 }

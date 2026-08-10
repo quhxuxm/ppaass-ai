@@ -125,7 +125,7 @@ pub fn resolve_proxy_ips_checked(proxy_addrs: &[String]) -> Result<Vec<IpAddr>> 
     ))
 }
 
-/// 在 TUN 接管系统 DNS 前把受管 proxy 域名固定成 socket endpoint。
+/// 在 TUN 安装 DNS 捕获规则前把受管 proxy 域名固定成 socket endpoint。
 /// 后续重连只使用这些 IP，避免 DNS proxy 与 proxy 重连互相等待。
 pub fn resolve_proxy_endpoints_checked(proxy_addrs: &[String]) -> Result<Vec<String>> {
     let mut endpoints = Vec::new();
@@ -150,7 +150,7 @@ pub fn resolve_proxy_endpoints_checked(proxy_addrs: &[String]) -> Result<Vec<Str
 
     if endpoints.is_empty() {
         return Err(AgentError::Connection(
-            "TUN 启动前未能解析任何 proxy endpoint，拒绝接管系统 DNS".to_string(),
+            "TUN 启动前未能解析任何 proxy endpoint，拒绝安装 DNS 捕获规则".to_string(),
         ));
     }
     Ok(endpoints)

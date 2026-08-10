@@ -268,6 +268,9 @@ TUN 模式里的关键细节：
 - 必须先固定 agent 到 proxy 的控制连接出口，再安装默认路由劫持，否则控制连接会回流进 TUN。
 - 桌面 TUN 使用 `netstack-smoltcp` 把 IP 包还原为 TCP/UDP。
 - DNS proxy 不修改系统 DNS，而是捕获发往 53 端口的请求，通过 `Address::ProxyDns` 让 Proxy 端解析。
+- **不修改系统 DNS 是桌面 TUN 的硬约束**：Windows 与 macOS 的启动、运行、停止、清理、迁移和异常恢复流程都不得改写物理网卡、macOS 网络服务或 Agent 创建的 TUN/Wintun 网卡 DNS，也不得调用 `Set-DnsClientServerAddress`、`networksetup -setdnsservers` 或同类系统写 API。
+- Windows 保留操作系统当前选择的 DNS 地址，通过指向 Wintun 的 `/32`（IPv4）或 `/128`（IPv6）捕获路由让查询进入应用内 `DnsProxy`；macOS 使用 PF `route-to` 规则，仅捕获发往原 DNS 服务器的 UDP/TCP 53 流量。两端都不替换系统配置里的 DNS 服务器地址。
+- 旧版本可能在异常退出后留下 `tun-dns.json`。新版本只告警并保留该文件供人工核对，不得自动应用其中的值，以免覆盖用户在异常退出后手工调整的 DNS；新版本也不得创建新的 DNS 配置 lease。
 - DNS 响应里的域名/IP 映射会进入 `DirectDomainCache`，帮助后续 IP 连接按域名规则直连。
 - TUN TCP 不再读取首包嗅探 TLS SNI/HTTP Host；域名规则只依赖显式域名目标或 DNS proxy 记录的域名/IP 缓存。
 - `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；`udp` 模式通过原生加密 UDP session 承载，`tcp` 模式通过 TCP/Yamux 承载。关闭后除代理 DNS 与独立处理的 UDP/443 应用层 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。

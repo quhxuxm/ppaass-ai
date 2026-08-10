@@ -37,12 +37,10 @@ use crate::yamux_session::YamuxSessionManager;
 use common::{
     TransportMode, install_known_smoltcp_panic_hook, panic_payload_message, spawn_guarded,
 };
-#[cfg(windows)]
-use device::windows_dns_capture_target;
 use device::{CreatedTunDevice, create_tun_device};
 use direct_domain_cache::DirectDomainCache;
 use direct_egress::TunDirectEgress;
-use dns::DnsGuard;
+use dns::warn_legacy_dns_state;
 use futures::FutureExt;
 use netstack::{spawn_netstack_supervisor, wait_tun_task};
 use netstack_smoltcp::StackBuilder;
@@ -140,6 +138,7 @@ pub(crate) async fn run_tun_mode(
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
+    warn_legacy_dns_state(config.dns_state_file.as_deref());
 
     // 在劫持默认路由前配置 proxy 连接绕行，否则 agent 到 proxy 也会进 TUN。
     // 这个顺序非常关键：先固定控制连接出口，再安装 TUN/split-default 路由。
@@ -147,8 +146,8 @@ pub(crate) async fn run_tun_mode(
     // 初始化错误或任务 abort 都会自动恢复共享 HTTP/SOCKS manager 的普通路由。
     let proxy_session_bind_guard =
         ProxySessionBindGuard::new(tcp_sessions.clone(), udp_sessions.clone());
-    // macOS/Windows 接管系统 DNS 后，运行期再解析 proxy 域名会形成循环依赖：
-    // proxy 重连等待 DNS，而 DNS proxy 又等待 proxy 会话。必须在此时固定 IP endpoint。
+    // DNS 捕获规则安装后，运行期再解析 proxy 域名会形成循环依赖：proxy
+    // 重连等待 DNS，而 DNS proxy 又等待 proxy 会话。必须先固定 IP endpoint。
     let resolved_proxy_addrs = route::resolve_proxy_endpoints_checked(&proxy_addrs)?;
     let (proxy_bind_interface, pinned_proxy_addrs) = configure_proxy_routing(
         &config,
@@ -225,34 +224,11 @@ pub(crate) async fn run_tun_mode(
         packet_capture,
         shutdown.clone(),
     )?;
-    #[cfg(windows)]
-    let dns_guard = if helper_managed_network {
-        None
-    } else {
-        install_windows_dns_guard(
-            proxy_dns,
-            proxy_bind_interface.as_ref(),
-            tun_if_index,
-            ipv4,
-            ipv4_prefix,
-            config.dns_state_file.as_deref(),
-        )
-    };
-    #[cfg(not(windows))]
-    if !helper_managed_network {
-        cleanup_stale_dns(config.dns_state_file.as_deref());
-    }
-
     shutdown.cancelled().await;
     info!("收到 TUN 模式关闭请求");
 
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
     proxy_session_bind_guard.clear();
-    // Windows DNS Client 会按接口发送查询，仅安装 DNS 服务器的 /32 TUN
-    // 路由无法可靠捕获这类流量。先恢复接口 DNS，再撤销 TUN 路由，避免
-    // 退出窗口内系统查询仍指向已经不可达的虚拟 DNS 地址。
-    #[cfg(windows)]
-    drop(dns_guard);
     drop(route_guard);
     #[cfg(target_os = "macos")]
     drop(system_guard);
@@ -263,43 +239,4 @@ pub(crate) async fn run_tun_mode(
 
     info!("TUN 模式转发器已停止");
     Ok(())
-}
-
-#[cfg(windows)]
-fn install_windows_dns_guard(
-    proxy_dns: bool,
-    proxy_bind_interface: Option<&common::BindInterface>,
-    tun_if_index: u32,
-    tun_ipv4: std::net::Ipv4Addr,
-    tun_ipv4_prefix: u8,
-    dns_state_file: Option<&str>,
-) -> Option<DnsGuard> {
-    let tun_dns = windows_dns_capture_target();
-
-    if proxy_dns {
-        info!(
-            "Windows TUN proxy_dns 使用专用捕获地址：{tun_dns} (TUN={tun_ipv4}/{tun_ipv4_prefix})"
-        );
-    }
-    DnsGuard::install(
-        proxy_dns,
-        proxy_bind_interface,
-        tun_if_index,
-        tun_dns,
-        dns_state_file,
-    )
-}
-
-#[cfg(not(windows))]
-fn cleanup_stale_dns(dns_state_file: Option<&str>) {
-    // Windows 正常生命周期由 install_windows_dns_guard 持有 guard；本函数用于
-    // proxy_dns 关闭、无可用虚拟 peer，以及其他平台清理异常退出遗留的状态。
-    debug!("检查并恢复旧版本或异常退出遗留的 DNS 状态");
-    let _ = DnsGuard::install(
-        false,
-        None,
-        0,
-        std::net::Ipv4Addr::UNSPECIFIED,
-        dns_state_file,
-    );
 }

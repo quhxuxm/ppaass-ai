@@ -318,9 +318,9 @@ fn tun_proxy_endpoints_are_resolved_to_ip_literals_before_dns_capture() {
 
 #[cfg(windows)]
 #[test]
-fn windows_does_not_capture_dns_servers_with_host_routes() {
-    assert!(!should_install_dns_capture_host_routes());
-    assert!(!should_capture_default_gateway_dns_route());
+fn windows_captures_dns_servers_without_changing_adapter_dns() {
+    assert!(should_install_dns_capture_host_routes());
+    assert!(should_capture_default_gateway_dns_route());
 }
 
 #[cfg(not(windows))]
