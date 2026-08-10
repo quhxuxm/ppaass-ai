@@ -7,6 +7,8 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+#[cfg(windows)]
+const DIRECT_UDP_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
     let DirectUdpRelayContext {
@@ -53,8 +55,17 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
             maybe_data = rx.recv() => {
                 let Some(data) = maybe_data else { break };
                 let data_len = data.len();
-                if let Err(e) = socket.send(&data).await {
+                if let Err(e) = send_direct_udp(&socket, &data).await {
                     debug!("UDP 直连发送错误：{e}");
+                    #[cfg(windows)]
+                    let _ = direct_egress
+                        .refresh_after_direct_failure(
+                            connect_target.ip(),
+                            tcp_sessions.as_ref(),
+                            udp_sessions.as_ref(),
+                            tun_networks,
+                        )
+                        .await;
                     break;
                 }
                 let data_len = data_len as u64;
@@ -90,6 +101,23 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         inbound_bytes,
     );
     Ok(())
+}
+
+#[cfg(windows)]
+async fn send_direct_udp(socket: &UdpSocket, data: &[u8]) -> std::io::Result<usize> {
+    timeout(DIRECT_UDP_SEND_TIMEOUT, socket.send(data))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Windows 直连 UDP 上行发送超过 3 秒",
+            )
+        })?
+}
+
+#[cfg(not(windows))]
+async fn send_direct_udp(socket: &UdpSocket, data: &[u8]) -> std::io::Result<usize> {
+    socket.send(data).await
 }
 
 async fn connect_direct_udp_with_refresh(

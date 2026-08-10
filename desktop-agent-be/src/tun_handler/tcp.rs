@@ -16,15 +16,23 @@ use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::future::Future;
 use std::net::SocketAddr;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 use tracing::debug;
+#[cfg(windows)]
+use windows_sys::Win32::Networking::WinSock::{IPPROTO_TCP, SOCKET, SOCKET_ERROR, setsockopt};
 
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_TCP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+#[cfg(windows)]
+const DIRECT_TCP_MAX_RETRANSMIT_SECS: u32 = 30;
+#[cfg(windows)]
+const TCP_MAXRT: i32 = 5;
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
@@ -351,4 +359,28 @@ fn tune_direct_tcp_socket(socket: &Socket, target: SocketAddr) {
     if let Err(error) = socket.set_send_buffer_size(DIRECT_TCP_SOCKET_BUFFER_SIZE) {
         debug!("TUN TCP 直连发送缓冲设置失败 target={target}: {error}");
     }
+    set_windows_direct_tcp_max_retransmit(socket, target);
 }
+
+#[cfg(windows)]
+fn set_windows_direct_tcp_max_retransmit(socket: &Socket, target: SocketAddr) {
+    let seconds = DIRECT_TCP_MAX_RETRANSMIT_SECS;
+    let result = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as SOCKET,
+            IPPROTO_TCP,
+            TCP_MAXRT,
+            (&seconds as *const u32).cast(),
+            std::mem::size_of_val(&seconds) as i32,
+        )
+    };
+    if result == SOCKET_ERROR {
+        debug!(
+            "TUN TCP 直连 TCP_MAXRT 设置失败 target={target}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn set_windows_direct_tcp_max_retransmit(_socket: &Socket, _target: SocketAddr) {}
