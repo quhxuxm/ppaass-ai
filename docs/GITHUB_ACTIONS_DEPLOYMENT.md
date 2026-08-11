@@ -17,6 +17,10 @@ Rust、前端 UT 或部署契约测试。
 | Registry | `registry_production` | `REGISTRY_PRODUCTION_*` |
 | Entry | `entry_production` | `ENTRY_PRODUCTION_*` |
 
+手动运行 Entry 工作流时还可以设置 `instance_count`。它是 `1..=100` 的整数，留空时
+默认为 `1`。实例按顺序使用端口 `80, 81, 82...`，因此无论部署多少个实例，第一个实例
+始终同时监听 TCP/80 和 UDP/80。
+
 工作流通过以下表达式动态读取远程部署凭据：
 
 - `secrets[format('{0}_REMOTE_HOST', inputs.environment)]`
@@ -83,7 +87,7 @@ GitHub Environment：`entry_production`
 | Variable | 示例 | 约束与用途 |
 | --- | --- | --- |
 | `ENTRY_PRODUCTION_ID` | `entry-production-01` | Entry 的稳定唯一标识；不同 Entry 不能重复 |
-| `ENTRY_PRODUCTION_ADVERTISED_ADDRESS` | `entry.example.com:443` | Agent 应连接的公网 `host:port`；Entry 会把它注册并合并到 Proxy 地址目录 |
+| `ENTRY_PRODUCTION_ADVERTISED_ADDRESS` | `entry.example.com:80` | Agent 应连接的公网 `host:port`；工作流取主机部分，并按实例改写为端口 `80, 81, 82...` 后注册。保留端口是为了兼容现有配置，建议填写 `80` |
 | `ENTRY_PRODUCTION_REGISTRY_URL` | `https://registry.example.com:443` | Registry 的完整 HTTP/HTTPS 基础 URL，不得包含认证信息、路径、查询参数或 fragment |
 
 ### 可选的 Variable
@@ -94,9 +98,10 @@ GitHub Environment：`entry_production`
 
 ### Entry 本地授权副本数据库
 
-正式部署模板将 `authorization_database_path` 固定为
-`/var/lib/ppaass-entry/authorization.sqlite3`。安装脚本不会从 GitHub 注入这个路径，
-因此不需要新增 GitHub Secret 或 Variable。
+正式部署模板将第一个实例的 `authorization_database_path` 固定为
+`/var/lib/ppaass-entry/authorization.sqlite3`，后续实例依次使用
+`authorization-2.sqlite3`、`authorization-3.sqlite3` 等独立文件。安装脚本不会从
+GitHub 注入这些路径，因此不需要新增 GitHub Secret 或 Variable。
 
 Registry 数据库是授权数据的权威来源；Entry 数据库只保存从 Registry 完整同步的公开
 授权副本。该副本位于 `/var/lib/ppaass-entry`，不在
@@ -104,10 +109,28 @@ Registry 数据库是授权数据的权威来源；Entry 数据库只保存从 R
 删除它。目录归 `ppaass-proxy-entry` 服务账号所有，systemd 服务使用 `UMask=0077`，新建
 的数据库及其 SQLite 辅助文件默认仅该账号可访问。
 
+### Entry 多实例和端口冲突
+
+同一节点上的实例由 systemd 模板单元 `ppaass-proxy-entry@.service` 管理。基础
+`ENTRY_PRODUCTION_ID` 由第一个实例沿用；后续实例分别注册为 `<ID>-2`、`<ID>-3` 等，
+并拥有独立配置、日志目录和授权副本数据库。重新部署时可以增减 `instance_count`；缩容
+会停止并禁用超出新数量的 systemd 实例。
+
+安装脚本在修改现有服务前使用 `ss` 同时预检所有目标 TCP/UDP 端口。已经属于当前
+Proxy Entry systemd 服务的监听不会被误判；如果端口由其他进程占用，部署会显示端口、
+PID 和监听信息后失败，原有 Proxy Entry 实例保持运行。预检之后如果发生抢占端口的竞态，
+systemd 启动和持续健康检查仍会令部署失败，并输出每个实例的状态和最近日志。
+
+如果主机启用了 UFW，部署会维护专用的 `PPAASS Proxy Entry` application profile；如果
+启用了 firewalld，则维护专用的 `ppaass-proxy-entry` service。两者都会为全部实例端口
+同时放行 TCP 和 UDP，并在扩缩容时更新专用规则。如果主机没有启用这两种防火墙，脚本
+会打印需要放行的端口；云安全组、云防火墙或节点外部 ACL 仍需在云平台侧同步放行 TCP
+和 UDP，工作流无法越过 SSH 主机自动修改云平台规则。
+
 ## 同机并行部署与稳定主密钥
 
 Entry 和 Registry 可以配置相同的远程服务器地址，同时启动两个独立工作流。Entry
-安装脚本不连接或等待 Registry；Entry 成功监听 TCP/UDP 后，由后台 Tokio 任务立即注册，
+安装脚本不连接或等待 Registry；Entry 实例成功监听 TCP/UDP 后，由后台 Tokio 任务立即注册，
 失败时独立重试，不影响数据面进程启动。Registry 安装脚本仍会验证自身公开 API 和控制
 API 的外部地址。
 
