@@ -68,7 +68,7 @@ final class ProxyEntrySelectionDialog {
         ListView list = new ListView(host);
         list.setAdapter(adapter);
         list.setDivider(new ColorDrawable(Color.TRANSPARENT));
-        list.setDividerHeight(host.dp(12));
+        list.setDividerHeight(host.dp(ProxyEntryAdapter.ROW_DIVIDER_DP));
         list.setSelector(android.R.color.transparent);
         list.setPadding(0, host.dp(4), 0, host.dp(4));
         list.setClipToPadding(false);
@@ -88,7 +88,7 @@ final class ProxyEntrySelectionDialog {
             int count) {
         LinearLayout content = new LinearLayout(host);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(host.dp(24), host.dp(22), host.dp(24), host.dp(10));
+        content.setPadding(host.dp(20), host.dp(22), host.dp(20), host.dp(10));
         content.addView(dialogHeading(host), host.matchWrap());
         TextView subtitle = host.mutedText(
                 "选择后点击确认切换；测速不会改变当前节点",
@@ -97,7 +97,11 @@ final class ProxyEntrySelectionDialog {
         subtitleParams.setMargins(0, host.dp(6), 0, host.dp(16));
         content.addView(subtitle, subtitleParams);
         int visibleRows = Math.min(count, 4);
-        int listHeight = Math.min(host.dp(500), host.dp(146) * visibleRows + host.dp(8));
+        int rowExtent = ProxyEntryAdapter.ROW_HEIGHT_DP
+                + ProxyEntryAdapter.ROW_DIVIDER_DP;
+        int listHeight = Math.min(
+                host.dp(500),
+                host.dp(rowExtent) * visibleRows + host.dp(8));
         content.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 listHeight));

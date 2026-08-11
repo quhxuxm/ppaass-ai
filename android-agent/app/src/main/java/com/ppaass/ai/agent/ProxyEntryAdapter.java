@@ -3,6 +3,7 @@ package com.ppaass.ai.agent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 
 final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
+    static final int ROW_HEIGHT_DP = 146;
+    static final int ROW_DIVIDER_DP = 12;
+
     private final MainActivityConfigScreen host;
     private final String currentId;
     private final Map<String, String> speedResults = new HashMap<>();
@@ -70,10 +74,10 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         LinearLayout row = new LinearLayout(host);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(host.dp(16), host.dp(12), host.dp(14), host.dp(12));
+        row.setPadding(host.dp(12), host.dp(12), host.dp(12), host.dp(12));
         row.setLayoutParams(new AbsListView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                host.dp(134)));
+                host.dp(ROW_HEIGHT_DP)));
 
         FrameLayout badge = new FrameLayout(host);
         ImageView icon = new ImageView(host);
@@ -83,19 +87,19 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         badge.addView(icon, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-        row.addView(badge, new LinearLayout.LayoutParams(host.dp(52), host.dp(52)));
+        row.addView(badge, new LinearLayout.LayoutParams(host.dp(46), host.dp(46)));
 
         TextColumn column = createTextColumn();
         LinearLayout.LayoutParams columnParams = new LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 1f);
-        columnParams.setMargins(host.dp(16), 0, host.dp(10), 0);
+        columnParams.setMargins(host.dp(12), 0, host.dp(8), 0);
         row.addView(column.root, columnParams);
 
         ActionColumn actions = createActionColumn();
         row.addView(actions.root, new LinearLayout.LayoutParams(
-                host.dp(74),
+                host.dp(64),
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         RowHolder holder = new RowHolder(row, badge, column, actions);
@@ -108,8 +112,12 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         root.setOrientation(LinearLayout.VERTICAL);
         TextView name = label("", 16f, host.COLOR_TEXT);
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
         root.addView(name);
         TextView description = label("", 13f, host.COLOR_MUTED);
+        description.setMaxLines(2);
+        description.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams descriptionParams = host.matchWrap();
         descriptionParams.setMargins(0, host.dp(2), 0, host.dp(3));
         root.addView(description, descriptionParams);
@@ -120,6 +128,7 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         View statusDot = new View(host);
         statusLine.addView(statusDot, new LinearLayout.LayoutParams(host.dp(7), host.dp(7)));
         TextView status = label("", 12f, host.COLOR_MUTED);
+        status.setSingleLine(true);
         LinearLayout.LayoutParams statusParams = wrapContent();
         statusParams.setMargins(host.dp(6), 0, 0, 0);
         statusLine.addView(status, statusParams);
@@ -130,6 +139,8 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         root.addView(statusLine);
 
         TextView speedResult = label("测速结果", 12f, host.COLOR_ACTION_INFO);
+        speedResult.setSingleLine(true);
+        speedResult.setEllipsize(TextUtils.TruncateAt.END);
         speedResult.setVisibility(View.INVISIBLE);
         LinearLayout.LayoutParams resultParams = host.matchWrap();
         resultParams.setMargins(0, host.dp(3), 0, 0);
@@ -142,9 +153,11 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
         TextView mark = label("", 17f, Color.WHITE);
+        mark.setSingleLine(true);
         mark.setGravity(Gravity.CENTER);
         root.addView(mark, new LinearLayout.LayoutParams(host.dp(32), host.dp(32)));
         TextView speed = label("测速", 12f, host.COLOR_ACTION_INFO);
+        speed.setSingleLine(true);
         speed.setGravity(Gravity.CENTER);
         speed.setPadding(host.dp(8), host.dp(5), host.dp(8), host.dp(5));
         speed.setBackground(host.interactiveRounded(
@@ -161,6 +174,7 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
 
     private TextView stateTag() {
         TextView tag = label("待切换", 10f, host.COLOR_ACTION_INFO);
+        tag.setSingleLine(true);
         tag.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         tag.setPadding(host.dp(7), host.dp(2), host.dp(7), host.dp(2));
         tag.setVisibility(View.INVISIBLE);
@@ -281,7 +295,7 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         label.setText(value);
         label.setTextSize(size);
         label.setTextColor(color);
-        label.setMaxLines(2);
+        label.setIncludeFontPadding(false);
         return label;
     }
 
