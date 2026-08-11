@@ -190,13 +190,23 @@ pub(crate) fn assigned_proxy_addresses(
                 .iter()
                 .any(|permission| permission == PROXY_ENTRY_SELECT_PERMISSION)
         });
-    if can_select
-        && let Some(selected) = managed
-            .selected_proxy_address
-            .as_ref()
-            .filter(|address| address.enabled)
-    {
-        return Ok(vec![selected.address.clone()]);
+    if can_select {
+        let mut selected = managed
+            .selected_proxy_addresses
+            .iter()
+            .filter(|address| {
+                address.enabled
+                    && managed.assigned_proxy_addresses.iter().any(|assigned| {
+                        assigned.proxy_address_id == address.proxy_address_id && assigned.enabled
+                    })
+            })
+            .map(|address| address.address.clone())
+            .collect::<Vec<_>>();
+        selected.sort_unstable();
+        selected.dedup();
+        if !selected.is_empty() {
+            return Ok(selected);
+        }
     }
     let mut addresses = managed
         .assigned_proxy_addresses

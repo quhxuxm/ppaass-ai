@@ -1,14 +1,14 @@
 use super::super::*;
 
 impl SqliteUserRepository {
-    pub(super) async fn select_proxy_address(
+    pub(super) async fn select_proxy_addresses(
         &self,
         account_id: &str,
-        proxy_address_id: &str,
+        proxy_address_ids: &[String],
         required_permission: &str,
     ) -> Result<ManagedUser> {
         let account_id = normalize_account_id(account_id)?;
-        let proxy_address_id = normalize_proxy_address_id(proxy_address_id)?;
+        let proxy_address_ids = normalize_proxy_address_ids(proxy_address_ids)?;
         let permission = normalize_permissions(&[required_permission.to_string()])?
             .into_iter()
             .next()
@@ -35,24 +35,47 @@ impl SqliteUserRepository {
                 account.account_id,
             ));
         }
-        let address = fetch_proxy_address(&mut transaction, &proxy_address_id)
-            .await?
-            .ok_or_else(|| UserRepositoryError::ProxyAddressNotFound(proxy_address_id.clone()))?;
-        if !address.enabled {
-            return Err(UserRepositoryError::ProxyAddressDisabled(proxy_address_id));
+        for proxy_address_id in &proxy_address_ids {
+            let assigned: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM account_proxy_addresses \
+                 WHERE account_id = ? AND proxy_address_id = ?)",
+            )
+            .bind(&account.account_id)
+            .bind(proxy_address_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if !assigned {
+                return Err(UserRepositoryError::ProxyEntryNotAssigned(
+                    proxy_address_id.clone(),
+                ));
+            }
+            let address = fetch_proxy_address(&mut transaction, proxy_address_id)
+                .await?
+                .ok_or_else(|| {
+                    UserRepositoryError::ProxyAddressNotFound(proxy_address_id.clone())
+                })?;
+            if !address.enabled {
+                return Err(UserRepositoryError::ProxyAddressDisabled(
+                    proxy_address_id.clone(),
+                ));
+            }
         }
         let timestamp = now();
-        sqlx::query(
-            "INSERT INTO account_proxy_entry_selections \
-             (account_id, proxy_address_id, selected_at) VALUES (?, ?, ?) \
-             ON CONFLICT(account_id) DO UPDATE SET \
-             proxy_address_id = excluded.proxy_address_id, selected_at = excluded.selected_at",
-        )
-        .bind(&account.account_id)
-        .bind(&address.proxy_address_id)
-        .bind(timestamp)
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("DELETE FROM account_proxy_entry_selections WHERE account_id = ?")
+            .bind(&account.account_id)
+            .execute(&mut *transaction)
+            .await?;
+        for proxy_address_id in &proxy_address_ids {
+            sqlx::query(
+                "INSERT INTO account_proxy_entry_selections \
+                 (account_id, proxy_address_id, selected_at) VALUES (?, ?, ?)",
+            )
+            .bind(&account.account_id)
+            .bind(proxy_address_id)
+            .bind(timestamp)
+            .execute(&mut *transaction)
+            .await?;
+        }
         sqlx::query("UPDATE web_accounts SET updated_at = ? WHERE account_id = ?")
             .bind(timestamp)
             .bind(&account.account_id)
@@ -67,7 +90,11 @@ impl SqliteUserRepository {
         .await?;
         let managed = fetch_managed_for_account(&mut transaction, account).await?;
         transaction.commit().await?;
-        info!(account_id, proxy_address_id, "用户已选择 Proxy Entry");
+        info!(
+            account_id,
+            count = proxy_address_ids.len(),
+            "用户已选择 Proxy Entry"
+        );
         Ok(managed)
     }
 }

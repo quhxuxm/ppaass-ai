@@ -87,16 +87,16 @@ impl AccountRepository for SqliteUserRepository {
         SqliteUserRepository::update_managed_user(self, account_id, update).await
     }
 
-    async fn select_proxy_address(
+    async fn select_proxy_addresses(
         &self,
         account_id: &str,
-        proxy_address_id: &str,
+        proxy_address_ids: &[String],
         required_permission: &str,
     ) -> Result<ManagedUser> {
-        SqliteUserRepository::select_proxy_address(
+        SqliteUserRepository::select_proxy_addresses(
             self,
             account_id,
-            proxy_address_id,
+            proxy_address_ids,
             required_permission,
         )
         .await

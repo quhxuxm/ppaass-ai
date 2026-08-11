@@ -55,10 +55,7 @@ pub(crate) async fn get_agent_profile(
     let key_state = key_state(&managed, current_timestamp());
     let profile = if let Some(profile) = managed.profile.clone() {
         let addresses = assigned_proxy_addresses(&managed, &account)?;
-        Some(
-            agent_profile_response_for_account(&state, &account, &managed, profile, addresses)
-                .await?,
-        )
+        Some(agent_profile_response_for_account(&account, &managed, profile, addresses).await?)
     } else {
         None
     };
@@ -122,8 +119,7 @@ async fn agent_credential_response(
         .await?
         .ok_or_else(ApiError::unauthorized)?;
     let profile =
-        agent_profile_response_for_account(state, &account, &managed, profile, proxy_addresses)
-            .await?;
+        agent_profile_response_for_account(&account, &managed, profile, proxy_addresses).await?;
     Ok(AgentCredentialResponse {
         account,
         profile,
@@ -144,7 +140,7 @@ pub(crate) fn agent_profile_response(
         permissions: profile.permissions,
         proxy_addresses,
         proxy_entries: None,
-        selected_proxy_entry_id: None,
+        selected_proxy_entry_ids: None,
         enabled: profile.enabled,
         key_version: profile.key_version,
         expires_at: profile.expires_at,
@@ -152,7 +148,6 @@ pub(crate) fn agent_profile_response(
 }
 
 pub(crate) async fn agent_profile_response_for_account(
-    state: &AppState,
     account: &WebAccount,
     managed: &ManagedUser,
     profile: UserRecord,
@@ -167,20 +162,36 @@ pub(crate) async fn agent_profile_response_for_account(
     if !can_select {
         return Ok(response);
     }
-    let entries = state
-        .proxy_addresses
-        .list_proxy_addresses()
-        .await?
-        .into_iter()
+    let assigned = managed
+        .assigned_proxy_addresses
+        .iter()
         .filter(|address| address.enabled)
-        .map(agent_proxy_entry_response)
-        .collect();
-    response.proxy_entries = Some(entries);
-    response.selected_proxy_entry_id = managed
-        .selected_proxy_address
-        .as_ref()
-        .filter(|address| address.enabled)
-        .map(|address| address.proxy_address_id.clone());
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut selected = managed
+        .selected_proxy_addresses
+        .iter()
+        .filter(|address| {
+            address.enabled
+                && assigned.iter().any(|assigned| {
+                    assigned.proxy_address_id == address.proxy_address_id && assigned.enabled
+                })
+        })
+        .map(|address| address.proxy_address_id.clone())
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        selected = assigned
+            .iter()
+            .map(|address| address.proxy_address_id.clone())
+            .collect();
+    }
+    response.proxy_entries = Some(
+        assigned
+            .into_iter()
+            .map(agent_proxy_entry_response)
+            .collect(),
+    );
+    response.selected_proxy_entry_ids = Some(selected);
     Ok(response)
 }
 
@@ -212,31 +223,31 @@ fn agent_proxy_entry_response(address: ProxyAddress) -> AgentProxyEntryResponse 
 pub(crate) async fn select_agent_proxy_entry(
     State(state): State<AppState>,
     headers: HeaderMap,
-    payload: Result<Json<SelectAgentProxyEntryRequest>, JsonRejection>,
+    payload: Result<Json<SelectAgentProxyEntriesRequest>, JsonRejection>,
 ) -> Result<Json<AgentProfileSyncResponse>, ApiError> {
     validate_native_agent_request(&headers)?;
     let account = authenticate_agent_token(&state, &headers).await?;
     let Json(request) = payload.map_err(ApiError::from_json_rejection)?;
     let managed = state
         .accounts
-        .select_proxy_address(
+        .select_proxy_addresses(
             &account.account_id,
-            &request.proxy_entry_id,
+            &request.proxy_entry_ids,
             PROXY_ENTRY_SELECT_PERMISSION,
         )
         .await?;
     let profile = managed.profile.clone().ok_or_else(ApiError::unauthorized)?;
     let addresses = assigned_proxy_addresses(&managed, &account)?;
     let profile =
-        agent_profile_response_for_account(&state, &account, &managed, profile, addresses).await?;
+        agent_profile_response_for_account(&account, &managed, profile, addresses).await?;
     let issued = state
         .agent_tokens
         .issue(&account.account_id)
         .map_err(|_| ApiError::internal())?;
     info!(
         account_id = account.account_id,
-        proxy_entry_id = request.proxy_entry_id,
-        "Agent 已更改自选 Proxy Entry"
+        proxy_entry_count = request.proxy_entry_ids.len(),
+        "Agent 已更改自选 Proxy Entry 集合"
     );
     Ok(Json(AgentProfileSyncResponse {
         account,

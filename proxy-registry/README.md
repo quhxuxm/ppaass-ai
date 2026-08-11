@@ -204,12 +204,14 @@ Authorization: Bearer <agent_access_token>
 密码登录、设备 token 领取和 `GET /api/v1/agent/me` 的成功响应都会在
 `profile.proxy_addresses` 返回 1 到 32 个已启用的规范地址。该字段按地址稳定排序并
 去重；Agent 只在原生后端使用，不在界面、日志或 `agent.toml` 中展示或持久化。
-拥有 `agent.proxy_entry.select` 权限的账号还会收到可选 Entry 的图标键、名称、描述、
-在线状态和当前选择，但地址仅供 Agent 运行层使用。用户通过
-`PUT /api/v1/agent/proxy-entry` 修改本人选择；没有该权限时服务端不返回 Entry 目录，
+拥有 `agent.proxy_entry.select` 权限的账号还会收到管理员分配范围内 Entry 的图标键、名称、
+描述、在线状态和当前多选集合，但地址仅供 Agent 运行层使用。用户通过
+`PUT /api/v1/agent/proxy-entry` 提交 `{"proxy_entry_ids":["pxy_a","pxy_b"]}` 修改本人选择；
+至少须选择一个，且任何未分配或已停用的 ID 都会被拒绝。没有该权限时服务端不返回 Entry 目录，
 Agent 也不显示选择入口，并继续使用管理员分配的地址。撤销权限会立即恢复管理员分配，
 不会继续应用用户此前的选择。
-Android Agent 会把当前 Entry 置顶，并在用户点击“确认切换”后才提交选择。每个 Entry
+Android Agent 和桌面 Agent 会把当前 Entry 置顶，并在用户点击“确认切换”后
+才提交多选集合。每个 Entry
 可以独立测速：Agent 使用本人密钥直接认证该 Entry，由 Entry 在有界、加密的测试流中
 下发随机数据，结果显示 Agent 到 Entry 的连接延迟和下载吞吐；测速不访问第三方目标，
 也不会切换当前 Entry 或在界面暴露地址。

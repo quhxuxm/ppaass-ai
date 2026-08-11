@@ -16,7 +16,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 final class ProxyEntrySelectionDialog {
     private ProxyEntrySelectionDialog() {
@@ -30,8 +32,8 @@ final class ProxyEntrySelectionDialog {
         }
         List<ManagedProxyEntries.Entry> entries = selectedFirst(
                 selection.entries,
-                selection.selectedId);
-        ProxyEntryAdapter adapter = new ProxyEntryAdapter(host, entries, selection.selectedId);
+                selection.selectedIds);
+        ProxyEntryAdapter adapter = new ProxyEntryAdapter(host, entries, selection.selectedIds);
         ListView list = buildList(host, entries.size(), adapter);
         AlertDialog dialog = new AlertDialog.Builder(host)
                 .setView(buildContent(host, list, entries.size()))
@@ -44,10 +46,10 @@ final class ProxyEntrySelectionDialog {
             if (entry == null) {
                 return;
             }
-            adapter.setPendingId(entry.id);
+            adapter.togglePendingId(entry.id);
             Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
             if (confirm != null) {
-                confirm.setEnabled(!entry.id.equals(selection.selectedId));
+                confirm.setEnabled(adapter.hasChanges());
             }
         });
         dialog.setOnShowListener(ignored -> configureDialog(
@@ -55,7 +57,6 @@ final class ProxyEntrySelectionDialog {
                 dialog,
                 list,
                 adapter,
-                selection.selectedId,
                 summary,
                 action));
         dialog.show();
@@ -91,7 +92,7 @@ final class ProxyEntrySelectionDialog {
         content.setPadding(host.dp(20), host.dp(22), host.dp(20), host.dp(10));
         content.addView(dialogHeading(host), host.matchWrap());
         TextView subtitle = host.mutedText(
-                "选择后点击确认切换；测速不会改变当前节点",
+                "可同时选择多个节点，至少保留一个；测速不会改变选择",
                 13f);
         LinearLayout.LayoutParams subtitleParams = host.matchWrap();
         subtitleParams.setMargins(0, host.dp(6), 0, host.dp(16));
@@ -140,7 +141,6 @@ final class ProxyEntrySelectionDialog {
             AlertDialog dialog,
             ListView list,
             ProxyEntryAdapter adapter,
-            String selectedId,
             TextView summary,
             TextView action) {
         Window window = dialog.getWindow();
@@ -163,7 +163,6 @@ final class ProxyEntrySelectionDialog {
                 dialog,
                 list,
                 adapter,
-                selectedId,
                 summary,
                 action,
                 confirm,
@@ -176,20 +175,19 @@ final class ProxyEntrySelectionDialog {
             AlertDialog dialog,
             ListView list,
             ProxyEntryAdapter adapter,
-            String selectedId,
             TextView summary,
             TextView action,
             Button confirm,
             Button cancel) {
-        ManagedProxyEntries.Entry entry = adapter.pendingEntry();
-        if (entry == null || entry.id.equals(selectedId)) {
+        List<ManagedProxyEntries.Entry> entries = adapter.pendingEntries();
+        if (entries.isEmpty() || !adapter.hasChanges()) {
             return;
         }
         confirm.setEnabled(false);
         confirm.setText("正在切换…");
         cancel.setEnabled(false);
         list.setEnabled(false);
-        ProxyEntrySelectionUi.select(host, entry, summary, action, success -> {
+        ProxyEntrySelectionUi.select(host, entries, summary, action, success -> {
             if (success) {
                 dialog.dismiss();
                 return;
@@ -203,16 +201,16 @@ final class ProxyEntrySelectionDialog {
 
     private static List<ManagedProxyEntries.Entry> selectedFirst(
             List<ManagedProxyEntries.Entry> entries,
-            String selectedId) {
+            List<String> selectedIds) {
         List<ManagedProxyEntries.Entry> ordered = new ArrayList<>(entries.size());
+        Set<String> selected = new HashSet<>(selectedIds);
         for (ManagedProxyEntries.Entry entry : entries) {
-            if (entry.id.equals(selectedId)) {
+            if (selected.contains(entry.id)) {
                 ordered.add(entry);
-                break;
             }
         }
         for (ManagedProxyEntries.Entry entry : entries) {
-            if (!entry.id.equals(selectedId)) {
+            if (!selected.contains(entry.id)) {
                 ordered.add(entry);
             }
         }

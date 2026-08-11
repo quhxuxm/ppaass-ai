@@ -49,8 +49,9 @@ final class AgentSessionStore {
                         ManagedProxyEntries.PREF_ENTRIES,
                         ManagedProxyEntries.serialize(result.proxyEntries))
                 .putString(
-                        ManagedProxyEntries.PREF_SELECTED_ID,
-                        result.selectedProxyEntryId)
+                        ManagedProxyEntries.PREF_SELECTED_IDS,
+                        ManagedProxyEntries.serializeSelectedIds(
+                                result.selectedProxyEntryIds))
                 .putString(
                         PREF_PROXY_ASSIGNMENT_STATE,
                         PROXY_ASSIGNMENT_ASSIGNED)
@@ -112,8 +113,9 @@ final class AgentSessionStore {
                         ManagedProxyEntries.PREF_ENTRIES,
                         ManagedProxyEntries.serialize(result.proxyEntries))
                 .putString(
-                        ManagedProxyEntries.PREF_SELECTED_ID,
-                        result.selectedProxyEntryId)
+                        ManagedProxyEntries.PREF_SELECTED_IDS,
+                        ManagedProxyEntries.serializeSelectedIds(
+                                result.selectedProxyEntryIds))
                 .putString(
                         PREF_PROXY_ASSIGNMENT_STATE,
                         PROXY_ASSIGNMENT_ASSIGNED)
@@ -171,7 +173,8 @@ final class AgentSessionStore {
         return preferences.edit()
                 .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
                 .remove(ManagedProxyEntries.PREF_ENTRIES)
-                .remove(ManagedProxyEntries.PREF_SELECTED_ID)
+                .remove(ManagedProxyEntries.PREF_SELECTED_IDS)
+                .remove(ManagedProxyEntries.LEGACY_PREF_SELECTED_ID)
                 .putString(
                         PREF_PROXY_ASSIGNMENT_STATE,
                         PROXY_ASSIGNMENT_MISSING)
@@ -226,7 +229,8 @@ final class AgentSessionStore {
                 .remove(PREF_PERMISSIONS)
                 .remove(ManagedProxyAddresses.PREF_PROXY_ADDRESSES)
                 .remove(ManagedProxyEntries.PREF_ENTRIES)
-                .remove(ManagedProxyEntries.PREF_SELECTED_ID)
+                .remove(ManagedProxyEntries.PREF_SELECTED_IDS)
+                .remove(ManagedProxyEntries.LEGACY_PREF_SELECTED_ID)
                 .remove(PREF_PROXY_ASSIGNMENT_STATE)
                 .remove(PREF_ACCESS_TOKEN)
                 .remove(PREF_ACCESS_TOKEN_EXPIRES_AT)

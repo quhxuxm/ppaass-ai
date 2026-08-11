@@ -2,6 +2,7 @@ package com.ppaass.ai.agent;
 
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.util.Locale;
 
 final class ProxyEntrySpeedTest {
@@ -35,7 +36,8 @@ final class ProxyEntrySpeedTest {
             Listener listener) {
         new Thread(() -> {
             try {
-                JSONObject config = AgentConfigJson.buildSpeedTest(host, entry.address);
+                ManagedProxyEntries.Entry current = refreshEntry(host, entry.id);
+                JSONObject config = AgentConfigJson.buildSpeedTest(host, current.address);
                 JSONObject response = new JSONObject(NativeAgent.speedTest(config.toString()));
                 String error = response.optString("error", "").trim();
                 if (!error.isEmpty()) {
@@ -56,5 +58,25 @@ final class ProxyEntrySpeedTest {
                                 : message));
             }
         }, "proxy-entry-speed-test").start();
+    }
+
+    private static ManagedProxyEntries.Entry refreshEntry(
+            MainActivityConfigScreen host,
+            String entryId) throws Exception {
+        AgentSessionStore.StoredSession session = AgentSessionStore.load(host);
+        AgentAuthClient.ProfileSyncResult result = new AgentAuthClient(
+                host,
+                AgentAuthConfig.proxyRegistryUrl(host)).syncProfile(
+                session.accessToken,
+                AgentAuthSession.username());
+        if (!AgentAuthSession.applySynchronizedProfile(host, result)) {
+            throw new IOException("无法保存最新的 Proxy Entry 配置");
+        }
+        for (ManagedProxyEntries.Entry candidate : result.proxyEntries) {
+            if (candidate.id.equals(entryId)) {
+                return candidate;
+            }
+        }
+        throw new IOException("该 Proxy Entry 已被管理员取消分配或停用");
     }
 }

@@ -236,7 +236,7 @@ pub struct AgentDeviceProfile {
     #[serde(default)]
     pub proxy_entries: Option<Vec<AgentProxyEntry>>,
     #[serde(default)]
-    pub selected_proxy_entry_id: Option<String>,
+    pub selected_proxy_entry_ids: Option<Vec<String>>,
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
     pub key_version: i64,

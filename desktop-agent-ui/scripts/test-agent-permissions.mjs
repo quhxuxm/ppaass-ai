@@ -154,7 +154,8 @@ try {
   );
   assert.match(proxySelection, /"speed_test_agent_proxy_entry"/);
   assert.match(proxySelection, /"select_agent_proxy_entry_command"/);
-  assert.match(proxySelection, /pendingId\.value/);
+  assert.match(proxySelection, /pendingIds\.value/);
+  assert.match(proxySelection, /proxyEntryIds: pendingIds\.value/);
   assert.match(proxySelection, /visible\.value = false/);
 
   const proxyStyles = await readFile(

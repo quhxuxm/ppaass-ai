@@ -1,7 +1,9 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use desktop_agent_ui::auth::{apply_permission_snapshot, fetch_agent_permission_snapshot};
+use desktop_agent_ui::auth::{
+    apply_permission_snapshot, fetch_agent_permission_snapshot, select_agent_proxy_entry_snapshot,
+};
 use desktop_agent_ui::models::{AgentAuthAccount, AgentAuthAccountStatus};
 
 async fn respond_once(status: &str, body: String) -> (String, tokio::task::JoinHandle<String>) {
@@ -48,7 +50,7 @@ async fn permission_sync_uses_bearer_auth_and_accepts_a_rolling_token() {
                 "entry_id": "entry_shanghai",
                 "online": true
             }],
-            "selected_proxy_entry_id": "pxy_shanghai",
+            "selected_proxy_entry_ids": ["pxy_shanghai"],
             "enabled": true,
             "key_version": 7,
             "expires_at": 4_000_000_000_i64
@@ -90,14 +92,56 @@ async fn permission_sync_uses_bearer_auth_and_accepts_a_rolling_token() {
     let selection = snapshot.proxy_entry_selection();
     assert_eq!(selection.entries.len(), 1);
     assert_eq!(
-        selection.selected_proxy_entry_id.as_deref(),
-        Some("pxy_shanghai")
+        selection.selected_proxy_entry_ids,
+        ["pxy_shanghai"]
     );
     assert!(!serde_json::to_string(&selection)
         .unwrap()
         .contains("proxy.example.com"));
     assert_eq!(status, AgentAuthAccountStatus::Active);
     assert!(error.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proxy_entry_selection_sends_and_accepts_multiple_ids() {
+    let body = serde_json::json!({
+        "account": {"role": "user", "status": "active", "linked_username": "alice"},
+        "profile": {
+            "username": "alice",
+            "permissions": ["agent.proxy_entry.select"],
+            "proxy_addresses": ["a.example:80", "b.example:81"],
+            "proxy_entries": [
+                {"proxy_entry_id": "pxy_a", "label": "A", "address": "a.example:80",
+                 "description": "A node", "icon_key": "a", "online": true},
+                {"proxy_entry_id": "pxy_b", "label": "B", "address": "b.example:81",
+                 "description": "B node", "icon_key": "b", "online": true}
+            ],
+            "selected_proxy_entry_ids": ["pxy_a", "pxy_b"],
+            "enabled": true,
+            "key_version": 7,
+            "expires_at": 4_000_000_000_i64
+        },
+        "key_state": "active",
+        "agent_access_token": "B".repeat(43),
+        "agent_access_token_expires_at": 4_000_000_000_i64,
+        "refresh_after_seconds": 300
+    })
+    .to_string();
+    let (base_url, server) = respond_once("200 OK", body).await;
+    let ids = vec!["pxy_a".to_string(), "pxy_b".to_string()];
+    let snapshot = select_agent_proxy_entry_snapshot(
+        &base_url,
+        &"A".repeat(43),
+        "alice",
+        &ids,
+    )
+    .await
+    .unwrap();
+    let request = server.await.unwrap();
+    assert!(request.starts_with("PUT /api/v1/agent/proxy-entry HTTP/1.1"));
+    assert!(request.contains(r#""proxy_entry_ids":["pxy_a","pxy_b"]"#));
+    assert_eq!(snapshot.selected_proxy_entry_ids, ids);
+    assert_eq!(snapshot.proxy_addresses.len(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]

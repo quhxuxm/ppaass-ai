@@ -76,7 +76,7 @@ export type AgentProxyEntry = {
 
 export type AgentProxyEntrySelection = {
   entries: AgentProxyEntry[];
-  selected_proxy_entry_id: string | null;
+  selected_proxy_entry_ids: string[];
 };
 
 export type AgentProxyEntrySpeedResult = {

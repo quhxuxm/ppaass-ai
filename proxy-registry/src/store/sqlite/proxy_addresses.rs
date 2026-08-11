@@ -90,6 +90,17 @@ pub(super) async fn replace_account_proxy_addresses(
         .execute(&mut **transaction)
         .await?;
     }
+    sqlx::query(
+        "DELETE FROM account_proxy_entry_selections \
+         WHERE account_id = ? AND NOT EXISTS (\
+             SELECT 1 FROM account_proxy_addresses a \
+             WHERE a.account_id = account_proxy_entry_selections.account_id \
+               AND a.proxy_address_id = account_proxy_entry_selections.proxy_address_id\
+         )",
+    )
+    .bind(account_id)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

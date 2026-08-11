@@ -278,6 +278,12 @@ impl From<UserRepositoryError> for ApiError {
             UserRepositoryError::ProxyEntrySelectionForbidden(_) => {
                 Self::forbidden("当前账号没有自选 Proxy Entry 的权限")
             }
+            UserRepositoryError::ProxyEntryNotAssigned(_) => Self {
+                status: StatusCode::FORBIDDEN,
+                code: "proxy_entry_not_assigned",
+                message: "所选 Proxy Entry 未由管理员分配给当前账号".to_string(),
+                retry_after_seconds: None,
+            },
             UserRepositoryError::AgentDeviceAuthorizationConflict => Self::internal(),
             error => {
                 error!(error = %error, "用户管理 API 数据库操作失败");

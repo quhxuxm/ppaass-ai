@@ -23,7 +23,7 @@ pub struct AgentProxyEntry {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AgentProxyEntrySelection {
     pub entries: Vec<AgentProxyEntry>,
-    pub selected_proxy_entry_id: Option<String>,
+    pub selected_proxy_entry_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

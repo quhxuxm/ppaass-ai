@@ -31,7 +31,7 @@ pub(crate) async fn get_agent_proxy_entries(
 pub(crate) async fn select_agent_proxy_entry_command(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
-    proxy_entry_id: String,
+    proxy_entry_ids: Vec<String>,
 ) -> Result<AgentProxyEntrySelection, String> {
     let session = require_proxy_entry_session(runtime.inner())?;
     let token = session
@@ -43,7 +43,7 @@ pub(crate) async fn select_agent_proxy_entry_command(
         &session.proxy_registry_url,
         &expected_token,
         &session.account.username,
-        &proxy_entry_id,
+        &proxy_entry_ids,
     )
     .await?;
     ensure_selectable_snapshot(&snapshot)?;

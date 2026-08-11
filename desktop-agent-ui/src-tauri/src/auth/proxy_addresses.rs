@@ -29,7 +29,7 @@ pub fn validate_managed_proxy_addresses(
 
 pub fn validate_agent_proxy_entries(
     entries: &[AgentProxyEntry],
-    selected_id: Option<&str>,
+    selected_ids: &[String],
 ) -> Result<(), String> {
     if entries.len() > 128 {
         return Err("认证服务返回的 Proxy Entry 数量过多".to_string());
@@ -52,8 +52,14 @@ pub fn validate_agent_proxy_entries(
             return Err("认证服务返回了重复的 Proxy Entry".to_string());
         }
     }
-    if selected_id.is_some_and(|selected| !ids.contains(selected)) {
-        return Err("认证服务返回的当前 Proxy Entry 不在可用列表中".to_string());
+    let mut unique_selected = HashSet::new();
+    for selected in selected_ids {
+        if !ids.contains(selected.as_str()) || !unique_selected.insert(selected) {
+            return Err("认证服务返回的 Proxy Entry 选择集无效".to_string());
+        }
+    }
+    if !entries.is_empty() && selected_ids.is_empty() {
+        return Err("认证服务未返回已选择的 Proxy Entry".to_string());
     }
     Ok(())
 }

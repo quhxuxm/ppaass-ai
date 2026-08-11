@@ -15,46 +15,60 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
     static final int ROW_HEIGHT_DP = 146;
     static final int ROW_DIVIDER_DP = 12;
 
     private final MainActivityConfigScreen host;
-    private final String currentId;
+    private final Set<String> currentIds;
     private final Map<String, String> speedResults = new HashMap<>();
-    private String pendingId;
+    private final LinkedHashSet<String> pendingIds;
     private String testingId;
 
     ProxyEntryAdapter(
             MainActivityConfigScreen host,
             List<ManagedProxyEntries.Entry> entries,
-            String currentId) {
+            List<String> currentIds) {
         super(host, 0, entries);
         this.host = host;
-        this.currentId = currentId;
-        this.pendingId = currentId;
+        this.currentIds = new HashSet<>(currentIds);
+        this.pendingIds = new LinkedHashSet<>(currentIds);
     }
 
-    void setPendingId(String id) {
-        if (id.equals(pendingId)) {
-            return;
+    void togglePendingId(String id) {
+        if (pendingIds.contains(id)) {
+            if (pendingIds.size() == 1) {
+                Toast.makeText(host, "至少需要选择一个 Proxy Entry", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            pendingIds.remove(id);
+        } else {
+            pendingIds.add(id);
         }
-        pendingId = id;
         notifyDataSetChanged();
     }
 
-    ManagedProxyEntries.Entry pendingEntry() {
+    boolean hasChanges() {
+        return !pendingIds.isEmpty() && !pendingIds.equals(currentIds);
+    }
+
+    List<ManagedProxyEntries.Entry> pendingEntries() {
+        ArrayList<ManagedProxyEntries.Entry> entries = new ArrayList<>();
         for (int index = 0; index < getCount(); index++) {
             ManagedProxyEntries.Entry entry = getItem(index);
-            if (entry != null && entry.id.equals(pendingId)) {
-                return entry;
+            if (entry != null && pendingIds.contains(entry.id)) {
+                entries.add(entry);
             }
         }
-        return null;
+        return entries;
     }
 
     @Override
@@ -182,28 +196,30 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
     }
 
     private void bind(RowHolder holder, ManagedProxyEntries.Entry entry) {
-        boolean current = entry.id.equals(currentId);
-        boolean pending = entry.id.equals(pendingId) && !current;
-        int fill = current
-                ? host.COLOR_ACCENT_SOFT
-                : pending ? host.COLOR_ACTION_INFO_SOFT : host.COLOR_CONTROL;
-        int stroke = current
-                ? host.COLOR_ACCENT
-                : pending ? host.COLOR_ACTION_INFO : host.COLOR_BORDER;
+        boolean current = currentIds.contains(entry.id);
+        boolean pending = pendingIds.contains(entry.id);
+        boolean changed = current != pending;
+        int fill = changed
+                ? host.COLOR_ACTION_INFO_SOFT
+                : current ? host.COLOR_ACCENT_SOFT : host.COLOR_CONTROL;
+        int stroke = changed
+                ? host.COLOR_ACTION_INFO
+                : current ? host.COLOR_ACCENT : host.COLOR_BORDER;
         holder.row.setBackground(host.interactiveRounded(fill, stroke, host.COLOR_ACCENT));
         holder.badge.setBackground(iconBackground(entry));
         holder.text.name.setText(entry.name);
         holder.text.description.setText(entry.description);
-        bindStatus(holder.text, entry, current, pending);
+        bindStatus(holder.text, entry, current, pending, changed);
         bindSpeedResult(holder.text.speedResult, entry);
-        bindActions(holder.actions, entry, current, pending);
+        bindActions(holder.actions, entry, current, pending, changed);
     }
 
     private void bindStatus(
             TextColumn text,
             ManagedProxyEntries.Entry entry,
             boolean current,
-            boolean pending) {
+            boolean pending,
+            boolean changed) {
         int statusColor = entry.online ? host.COLOR_STATUS_RUNNING : host.COLOR_MUTED;
         GradientDrawable dot = new GradientDrawable();
         dot.setShape(GradientDrawable.OVAL);
@@ -212,11 +228,11 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
         text.status.setText(entry.online ? "在线" : "状态未知");
         text.status.setTextColor(statusColor);
         if (current || pending) {
-            int color = current ? host.COLOR_ACCENT : host.COLOR_ACTION_INFO;
-            text.stateTag.setText(current ? "当前" : "待切换");
+            int color = changed ? host.COLOR_ACTION_INFO : host.COLOR_ACCENT;
+            text.stateTag.setText(changed ? (pending ? "待启用" : "待停用") : "当前");
             text.stateTag.setTextColor(color);
             text.stateTag.setBackground(host.roundedFill(
-                    current ? host.COLOR_ACCENT_SOFT : host.COLOR_ACTION_INFO_SOFT));
+                    changed ? host.COLOR_ACTION_INFO_SOFT : host.COLOR_ACCENT_SOFT));
             text.stateTag.setVisibility(View.VISIBLE);
         } else {
             text.stateTag.setVisibility(View.INVISIBLE);
@@ -241,12 +257,13 @@ final class ProxyEntryAdapter extends ArrayAdapter<ManagedProxyEntries.Entry> {
             ActionColumn actions,
             ManagedProxyEntries.Entry entry,
             boolean current,
-            boolean pending) {
-        actions.mark.setText(current ? "✓" : pending ? "→" : "");
-        if (current || pending) {
+            boolean pending,
+            boolean changed) {
+        actions.mark.setText(pending ? "✓" : changed ? "−" : "");
+        if (pending || changed) {
             GradientDrawable background = new GradientDrawable();
             background.setShape(GradientDrawable.OVAL);
-            background.setColor(current ? host.COLOR_ACCENT : host.COLOR_ACTION_INFO);
+            background.setColor(changed ? host.COLOR_ACTION_INFO : host.COLOR_ACCENT);
             actions.mark.setBackground(background);
         } else {
             actions.mark.setBackground(null);

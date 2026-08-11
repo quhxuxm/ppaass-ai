@@ -15,7 +15,9 @@ import java.util.Set;
 
 final class ManagedProxyEntries {
     static final String PREF_ENTRIES = "managed_selectable_proxy_entries";
-    static final String PREF_SELECTED_ID = "managed_selected_proxy_entry_id";
+    static final String PREF_SELECTED_IDS = "managed_selected_proxy_entry_ids";
+    static final String LEGACY_PREF_SELECTED_ID =
+            "managed_selected_proxy_entry_id";
     private static final int MAX_ENTRIES = 10_000;
 
     private ManagedProxyEntries() {
@@ -23,15 +25,15 @@ final class ManagedProxyEntries {
 
     static Selection require(
             List<AgentAuthDtos.ProxyEntry> values,
-            String selectedId,
+            List<String> selectedIds,
             boolean allowed) throws AgentAuthClient.AuthException {
         if (!allowed) {
-            if (values != null || selectedId != null) {
+            if (values != null || selectedIds != null) {
                 throw invalidResponse();
             }
             return Selection.empty();
         }
-        if (values == null || values.size() > MAX_ENTRIES) {
+        if (values == null || selectedIds == null || values.size() > MAX_ENTRIES) {
             throw invalidResponse();
         }
         ArrayList<Entry> entries = new ArrayList<>(values.size());
@@ -57,10 +59,19 @@ final class ManagedProxyEntries {
                     address,
                     Boolean.TRUE.equals(value.online)));
         }
-        if (selectedId != null && !ids.contains(selectedId)) {
+        ArrayList<String> normalizedSelectedIds = new ArrayList<>(selectedIds.size());
+        Set<String> uniqueSelectedIds = new HashSet<>();
+        for (String selectedId : selectedIds) {
+            selectedId = requiredText(selectedId, 128);
+            if (!ids.contains(selectedId) || !uniqueSelectedIds.add(selectedId)) {
+                throw invalidResponse();
+            }
+            normalizedSelectedIds.add(selectedId);
+        }
+        if (!entries.isEmpty() && normalizedSelectedIds.isEmpty()) {
             throw invalidResponse();
         }
-        return new Selection(entries, selectedId == null ? "" : selectedId);
+        return new Selection(entries, normalizedSelectedIds);
     }
 
     static String serialize(List<Entry> entries) {
@@ -85,7 +96,7 @@ final class ManagedProxyEntries {
         SharedPreferences preferences = preferences(context);
         try {
             String encoded = preferences.getString(PREF_ENTRIES, "");
-            String selectedId = preferences.getString(PREF_SELECTED_ID, "");
+            String encodedSelectedIds = preferences.getString(PREF_SELECTED_IDS, null);
             if (encoded == null || encoded.isEmpty()) {
                 return Selection.empty();
             }
@@ -101,10 +112,33 @@ final class ManagedProxyEntries {
                         value.getString("address"),
                         value.optBoolean("online", false)));
             }
-            return new Selection(entries, selectedId == null ? "" : selectedId);
+            List<String> selectedIds = encodedSelectedIds == null
+                    ? legacySelectedIds(preferences)
+                    : parseSelectedIds(encodedSelectedIds);
+            return new Selection(entries, selectedIds);
         } catch (ClassCastException | JSONException error) {
             return Selection.empty();
         }
+    }
+
+    static String serializeSelectedIds(List<String> selectedIds) {
+        return new JSONArray(selectedIds).toString();
+    }
+
+    private static List<String> parseSelectedIds(String encoded) throws JSONException {
+        JSONArray values = new JSONArray(encoded);
+        ArrayList<String> selectedIds = new ArrayList<>(values.length());
+        for (int index = 0; index < values.length(); index++) {
+            selectedIds.add(values.getString(index));
+        }
+        return selectedIds;
+    }
+
+    private static List<String> legacySelectedIds(SharedPreferences preferences) {
+        String selectedId = preferences.getString(LEGACY_PREF_SELECTED_ID, "");
+        return selectedId == null || selectedId.isEmpty()
+                ? Collections.emptyList()
+                : Collections.singletonList(selectedId);
     }
 
     private static String requiredText(String value, int maximum)
@@ -129,15 +163,16 @@ final class ManagedProxyEntries {
 
     static final class Selection {
         final List<Entry> entries;
-        final String selectedId;
+        final List<String> selectedIds;
 
-        Selection(List<Entry> entries, String selectedId) {
+        Selection(List<Entry> entries, List<String> selectedIds) {
             this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
-            this.selectedId = selectedId;
+            this.selectedIds = Collections.unmodifiableList(
+                    new ArrayList<>(selectedIds));
         }
 
         static Selection empty() {
-            return new Selection(Collections.emptyList(), "");
+            return new Selection(Collections.emptyList(), Collections.emptyList());
         }
     }
 

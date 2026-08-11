@@ -12,7 +12,7 @@ struct AgentPermissionSyncResponse {
 
 #[derive(Serialize)]
 struct SelectAgentProxyEntryPayload<'a> {
-    proxy_entry_id: &'a str,
+    proxy_entry_ids: &'a [String],
 }
 
 pub struct AgentPermissionSnapshot {
@@ -22,7 +22,7 @@ pub struct AgentPermissionSnapshot {
     pub permissions: Option<Vec<String>>,
     pub proxy_addresses: Vec<String>,
     pub proxy_entries: Vec<AgentProxyEntry>,
-    pub selected_proxy_entry_id: Option<String>,
+    pub selected_proxy_entry_ids: Vec<String>,
     pub profile_enabled: Option<bool>,
     pub key_version: Option<i64>,
     pub expires_at: Option<i64>,
@@ -34,7 +34,7 @@ impl AgentPermissionSnapshot {
     pub fn proxy_entry_selection(&self) -> AgentProxyEntrySelection {
         AgentProxyEntrySelection {
             entries: self.proxy_entries.clone(),
-            selected_proxy_entry_id: self.selected_proxy_entry_id.clone(),
+            selected_proxy_entry_ids: self.selected_proxy_entry_ids.clone(),
         }
     }
 }
@@ -112,9 +112,14 @@ pub async fn select_agent_proxy_entry_snapshot(
     proxy_registry_url: &str,
     access_token: &str,
     expected_username: &str,
-    proxy_entry_id: &str,
+    proxy_entry_ids: &[String],
 ) -> Result<AgentPermissionSnapshot, String> {
-    if proxy_entry_id.trim().is_empty() || proxy_entry_id.len() > 128 {
+    if proxy_entry_ids.is_empty()
+        || proxy_entry_ids.len() > 32
+        || proxy_entry_ids
+            .iter()
+            .any(|id| id.trim().is_empty() || id.len() > 128)
+    {
         return Err("请选择有效的 Proxy Entry".to_string());
     }
     let base_url = normalize_proxy_registry_url(proxy_registry_url)?;
@@ -122,7 +127,7 @@ pub async fn select_agent_proxy_entry_snapshot(
     let response = client
         .put(endpoint(&base_url, "api/v1/agent/proxy-entry")?)
         .bearer_auth(access_token)
-        .json(&SelectAgentProxyEntryPayload { proxy_entry_id })
+        .json(&SelectAgentProxyEntryPayload { proxy_entry_ids })
         .send()
         .await
         .map_err(map_request_error)?;
@@ -170,7 +175,7 @@ fn validate_permission_sync_response(
         }
         validate_agent_proxy_entries(
             profile.proxy_entries.as_deref().unwrap_or_default(),
-            profile.selected_proxy_entry_id.as_deref(),
+            profile.selected_proxy_entry_ids.as_deref().unwrap_or_default(),
         )?;
     } else if response.key_state == "active" {
         return Err("权限同步缺少 active 用户配置".to_string());
@@ -205,9 +210,10 @@ fn validate_permission_sync_response(
             .as_ref()
             .and_then(|profile| profile.proxy_entries.clone())
             .unwrap_or_default(),
-        selected_proxy_entry_id: profile
+        selected_proxy_entry_ids: profile
             .as_ref()
-            .and_then(|profile| profile.selected_proxy_entry_id.clone()),
+            .and_then(|profile| profile.selected_proxy_entry_ids.clone())
+            .unwrap_or_default(),
         profile_enabled: profile.as_ref().map(|profile| profile.enabled),
         key_version: profile.as_ref().map(|profile| profile.key_version),
         expires_at: profile.as_ref().and_then(|profile| profile.expires_at),

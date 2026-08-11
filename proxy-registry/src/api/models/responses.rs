@@ -75,7 +75,7 @@ pub(crate) struct AgentDeviceProfileResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) proxy_entries: Option<Vec<AgentProxyEntryResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) selected_proxy_entry_id: Option<String>,
+    pub(crate) selected_proxy_entry_ids: Option<Vec<String>>,
     pub(crate) enabled: bool,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,

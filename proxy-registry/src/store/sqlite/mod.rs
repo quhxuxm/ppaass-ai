@@ -42,7 +42,7 @@ use tracing::{info, instrument, warn};
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 // Persisted metadata key retained across the Proxy Registry rename.
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 14;
+const SQLITE_SCHEMA_VERSION: i64 = 15;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;

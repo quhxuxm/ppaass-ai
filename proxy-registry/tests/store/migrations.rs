@@ -327,7 +327,7 @@ async fn rejects_future_schema_version_without_downgrading() {
         .connect_with(options)
         .await
         .unwrap();
-    sqlx::query("PRAGMA user_version = 15")
+    sqlx::query("PRAGMA user_version = 16")
         .execute(&pool)
         .await
         .unwrap();
@@ -346,5 +346,5 @@ async fn rejects_future_schema_version_without_downgrading() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(version, 15);
+    assert_eq!(version, 16);
 }

@@ -277,8 +277,7 @@ pub(crate) async fn poll_agent_device_authorization(
         .await?
         .ok_or_else(agent_device_authorization_invalidated)?;
     let profile =
-        agent_profile_response_for_account(&state, &account, &managed, profile, proxy_addresses)
-            .await?;
+        agent_profile_response_for_account(&account, &managed, profile, proxy_addresses).await?;
     let response_body = AgentDeviceTokenResponse {
         account,
         profile,

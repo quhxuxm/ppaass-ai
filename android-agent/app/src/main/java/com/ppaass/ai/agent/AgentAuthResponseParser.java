@@ -33,7 +33,7 @@ final class AgentAuthResponseParser {
                 ManagedProxyAddresses.require(profile.proxy_addresses);
         ManagedProxyEntries.Selection proxyEntries = ManagedProxyEntries.require(
                 profile.proxy_entries,
-                profile.selected_proxy_entry_id,
+                profile.selected_proxy_entry_ids,
                 AgentPermissions.allows(
                         role,
                         permissions,
@@ -56,7 +56,7 @@ final class AgentAuthResponseParser {
                 permissions,
                 proxyAddresses,
                 proxyEntries.entries,
-                proxyEntries.selectedId,
+                proxyEntries.selectedIds,
                 keyVersion,
                 expiresAt,
                 privateKeyPem,
@@ -98,7 +98,7 @@ final class AgentAuthResponseParser {
                     ManagedProxyAddresses.require(profile.proxy_addresses);
             proxyEntries = ManagedProxyEntries.require(
                     profile.proxy_entries,
-                    profile.selected_proxy_entry_id,
+                    profile.selected_proxy_entry_ids,
                     AgentPermissions.allows(
                             role,
                             permissions,
@@ -120,7 +120,7 @@ final class AgentAuthResponseParser {
                 permissions,
                 proxyAddresses,
                 proxyEntries.entries,
-                proxyEntries.selectedId,
+                proxyEntries.selectedIds,
                 profileEnabled,
                 keyVersion,
                 expiresAt,

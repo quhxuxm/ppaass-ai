@@ -81,7 +81,7 @@ pub struct ManagedUser {
     pub assigned_proxy_addresses: Vec<ProxyAddress>,
     /// 用户在获得自选 Entry 权限后持久化的偏好。权限被收回时该值
     /// 保留但不生效，Agent 会立即回退到管理员分配的地址。
-    pub selected_proxy_address: Option<ProxyAddress>,
+    pub selected_proxy_addresses: Vec<ProxyAddress>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

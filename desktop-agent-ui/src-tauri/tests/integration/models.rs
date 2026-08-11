@@ -155,7 +155,7 @@ fn proxy_entry_selection_never_serializes_connection_addresses() {
             entry_id: Some("entry_shanghai".to_string()),
             online: Some(true),
         }],
-        selected_proxy_entry_id: Some("pxy_shanghai".to_string()),
+        selected_proxy_entry_ids: vec!["pxy_shanghai".to_string()],
     };
 
     let serialized = serde_json::to_string(&selection).unwrap();

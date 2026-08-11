@@ -22,7 +22,7 @@ async fn missing_assignment_uses_the_stable_agent_error_code() {
         has_private_key: false,
         providers: Vec::new(),
         assigned_proxy_addresses: Vec::new(),
-        selected_proxy_address: None,
+        selected_proxy_addresses: Vec::new(),
     };
     let response = resolve_assigned_proxy_addresses(&managed, &account)
         .unwrap_err()

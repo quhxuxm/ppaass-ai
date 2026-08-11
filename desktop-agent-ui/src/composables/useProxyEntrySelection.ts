@@ -12,27 +12,22 @@ export function useProxyEntrySelection() {
   const switching = ref(false);
   const error = ref("");
   const selection = ref<AgentProxyEntrySelection>(emptySelection());
-  const pendingId = ref<string | null>(null);
+  const pendingIds = ref<string[]>([]);
   const testingId = ref<string | null>(null);
   const speedResults = ref<Record<string, string>>({});
 
-  const currentEntry = computed(() =>
-    selection.value.entries.find(
-      (entry) => entry.proxy_entry_id === selection.value.selected_proxy_entry_id
-    ) ?? null
-  );
   const orderedEntries = computed(() => {
-    const currentId = selection.value.selected_proxy_entry_id;
+    const currentIds = new Set(selection.value.selected_proxy_entry_ids);
     return [...selection.value.entries].sort((left, right) => {
-      if (left.proxy_entry_id === currentId) return -1;
-      if (right.proxy_entry_id === currentId) return 1;
+      if (currentIds.has(left.proxy_entry_id) && !currentIds.has(right.proxy_entry_id)) return -1;
+      if (currentIds.has(right.proxy_entry_id) && !currentIds.has(left.proxy_entry_id)) return 1;
       return left.label.localeCompare(right.label, "zh-CN");
     });
   });
   const canConfirm = computed(
     () =>
-      Boolean(pendingId.value) &&
-      pendingId.value !== selection.value.selected_proxy_entry_id &&
+      pendingIds.value.length > 0 &&
+      !sameIds(pendingIds.value, selection.value.selected_proxy_entry_ids) &&
       !switching.value
   );
 
@@ -46,7 +41,7 @@ export function useProxyEntrySelection() {
       selection.value = await invoke<AgentProxyEntrySelection>(
         "get_agent_proxy_entries"
       );
-      pendingId.value = selection.value.selected_proxy_entry_id;
+      pendingIds.value = [...selection.value.selected_proxy_entry_ids];
       error.value = "";
       return true;
     } catch (reason) {
@@ -66,25 +61,35 @@ export function useProxyEntrySelection() {
   function close() {
     if (!switching.value) {
       visible.value = false;
-      pendingId.value = selection.value.selected_proxy_entry_id;
+      pendingIds.value = [...selection.value.selected_proxy_entry_ids];
       error.value = "";
     }
   }
 
   function choose(entry: AgentProxyEntry) {
-    if (!switching.value) pendingId.value = entry.proxy_entry_id;
+    if (switching.value) return;
+    if (pendingIds.value.includes(entry.proxy_entry_id)) {
+      if (pendingIds.value.length === 1) {
+        error.value = "至少需要选择一个 Proxy Entry";
+        return;
+      }
+      pendingIds.value = pendingIds.value.filter((id) => id !== entry.proxy_entry_id);
+    } else {
+      pendingIds.value = [...pendingIds.value, entry.proxy_entry_id];
+    }
+    error.value = "";
   }
 
   async function confirm() {
-    if (!canConfirm.value || !pendingId.value) return false;
+    if (!canConfirm.value) return false;
     switching.value = true;
     error.value = "";
     try {
       selection.value = await invoke<AgentProxyEntrySelection>(
         "select_agent_proxy_entry_command",
-        { proxyEntryId: pendingId.value }
+        { proxyEntryIds: pendingIds.value }
       );
-      pendingId.value = selection.value.selected_proxy_entry_id;
+      pendingIds.value = [...selection.value.selected_proxy_entry_ids];
       visible.value = false;
       return true;
     } catch (reason) {
@@ -128,12 +133,11 @@ export function useProxyEntrySelection() {
     choose,
     close,
     confirm,
-    currentEntry,
     error,
     loading,
     open,
     orderedEntries,
-    pendingId,
+    pendingIds,
     runSpeedTest,
     selection,
     speedResults,
@@ -144,7 +148,11 @@ export function useProxyEntrySelection() {
 }
 
 function emptySelection(): AgentProxyEntrySelection {
-  return { entries: [], selected_proxy_entry_id: null };
+  return { entries: [], selected_proxy_entry_ids: [] };
+}
+
+function sameIds(left: string[], right: string[]) {
+  return left.length === right.length && left.every((id) => right.includes(id));
 }
 
 function speedSummary(result: AgentProxyEntrySpeedResult) {

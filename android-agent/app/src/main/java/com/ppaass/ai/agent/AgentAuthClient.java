@@ -253,7 +253,7 @@ final class AgentAuthClient {
         final Set<String> permissions;
         final List<String> proxyAddresses;
         final List<ManagedProxyEntries.Entry> proxyEntries;
-        final String selectedProxyEntryId;
+        final List<String> selectedProxyEntryIds;
         final long keyVersion;
         final long expiresAt;
         final String privateKeyPem;
@@ -269,7 +269,7 @@ final class AgentAuthClient {
                 Set<String> permissions,
                 List<String> proxyAddresses,
                 List<ManagedProxyEntries.Entry> proxyEntries,
-                String selectedProxyEntryId,
+                List<String> selectedProxyEntryIds,
                 long keyVersion,
                 long expiresAt,
                 String privateKeyPem,
@@ -283,7 +283,7 @@ final class AgentAuthClient {
             this.permissions = permissions;
             this.proxyAddresses = proxyAddresses;
             this.proxyEntries = proxyEntries;
-            this.selectedProxyEntryId = selectedProxyEntryId;
+            this.selectedProxyEntryIds = selectedProxyEntryIds;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
             this.privateKeyPem = privateKeyPem;
@@ -302,7 +302,7 @@ final class AgentAuthClient {
         final Set<String> permissions;
         final List<String> proxyAddresses;
         final List<ManagedProxyEntries.Entry> proxyEntries;
-        final String selectedProxyEntryId;
+        final List<String> selectedProxyEntryIds;
         final boolean profileEnabled;
         final long keyVersion;
         final long expiresAt;
@@ -320,7 +320,7 @@ final class AgentAuthClient {
                 Set<String> permissions,
                 List<String> proxyAddresses,
                 List<ManagedProxyEntries.Entry> proxyEntries,
-                String selectedProxyEntryId,
+                List<String> selectedProxyEntryIds,
                 boolean profileEnabled,
                 long keyVersion,
                 long expiresAt,
@@ -336,7 +336,7 @@ final class AgentAuthClient {
             this.permissions = permissions;
             this.proxyAddresses = proxyAddresses;
             this.proxyEntries = proxyEntries;
-            this.selectedProxyEntryId = selectedProxyEntryId;
+            this.selectedProxyEntryIds = selectedProxyEntryIds;
             this.profileEnabled = profileEnabled;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;

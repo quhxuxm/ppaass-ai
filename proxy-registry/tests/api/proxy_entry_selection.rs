@@ -41,10 +41,10 @@ async fn selection_requires_permission_and_revocation_restores_admin_assignment(
     .await;
 
     let login = agent_login(&app).await;
-    let denied = select_entry(
+    let denied = select_entries(
         &app,
         login["agent_access_token"].as_str().unwrap(),
-        &created_id,
+        &[created_id.clone()],
     )
     .await;
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
@@ -55,22 +55,81 @@ async fn selection_requires_permission_and_revocation_restores_admin_assignment(
     let login = agent_login(&app).await;
     assert_eq!(
         login["profile"]["proxy_entries"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        login["profile"]["selected_proxy_entry_ids"],
+        json!([TEST_PROXY_ADDRESS_ID])
+    );
+    let token = login["agent_access_token"].as_str().unwrap();
+    let unassigned = select_entries(&app, token, &[created_id.clone()]).await;
+    assert_eq!(unassigned.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        json_body(unassigned).await["error"]["code"],
+        "proxy_entry_not_assigned"
+    );
+
+    let response = update_user(
+        &app,
+        &admin_cookie,
+        &admin_csrf,
+        json!([SELECT_PERMISSION]),
+        Some(json!([TEST_PROXY_ADDRESS_ID, created_id])),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let login = agent_login(&app).await;
+    assert_eq!(
+        login["profile"]["proxy_entries"].as_array().unwrap().len(),
         2
     );
-    assert!(login["profile"]["selected_proxy_entry_id"].is_null());
     let token = login["agent_access_token"].as_str().unwrap();
-    let selected = select_entry(&app, token, &created_id).await;
+    let selected = select_entries(
+        &app,
+        token,
+        &[TEST_PROXY_ADDRESS_ID.to_string(), created_id.clone()],
+    )
+    .await;
     assert_eq!(selected.status(), StatusCode::OK);
     let selected = json_body(selected).await;
-    assert_eq!(selected["profile"]["selected_proxy_entry_id"], created_id);
     assert_eq!(
-        selected["profile"]["proxy_addresses"],
-        json!(["select.example:9443"])
+        selected["profile"]["selected_proxy_entry_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        selected["profile"]["proxy_addresses"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let response = update_user(
+        &app,
+        &admin_cookie,
+        &admin_csrf,
+        json!([SELECT_PERMISSION]),
+        Some(json!([TEST_PROXY_ADDRESS_ID])),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let token = selected["agent_access_token"].as_str().unwrap();
+    let synced = agent_me(&app, token).await;
+    assert_eq!(
+        synced["profile"]["selected_proxy_entry_ids"],
+        json!([TEST_PROXY_ADDRESS_ID])
+    );
+    assert_eq!(
+        synced["profile"]["proxy_addresses"],
+        json!(["127.0.0.1:8080"])
     );
 
     let response = update_permissions(&app, &admin_cookie, &admin_csrf, json!([])).await;
     assert_eq!(response.status(), StatusCode::OK);
-    let token = selected["agent_access_token"].as_str().unwrap();
+    let token = synced["agent_access_token"].as_str().unwrap();
     let synced = app
         .oneshot(
             Request::builder()
@@ -113,7 +172,7 @@ async fn agent_login(app: &Router) -> Value {
     json_body(response).await
 }
 
-async fn select_entry(app: &Router, token: &str, proxy_entry_id: &str) -> Response {
+async fn select_entries(app: &Router, token: &str, proxy_entry_ids: &[String]) -> Response {
     app.clone()
         .oneshot(
             Request::builder()
@@ -122,7 +181,7 @@ async fn select_entry(app: &Router, token: &str, proxy_entry_id: &str) -> Respon
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"proxy_entry_id": proxy_entry_id}).to_string(),
+                    json!({"proxy_entry_ids": proxy_entry_ids}).to_string(),
                 ))
                 .unwrap(),
         )
@@ -136,6 +195,23 @@ async fn update_permissions(
     csrf: &str,
     permissions: Value,
 ) -> Response {
+    update_user(app, cookie, csrf, permissions, None).await
+}
+
+async fn update_user(
+    app: &Router,
+    cookie: &str,
+    csrf: &str,
+    permissions: Value,
+    proxy_address_ids: Option<Value>,
+) -> Response {
+    let mut body = json!({
+        "permissions": permissions,
+        "audit_reason": "测试 Entry 自选权限"
+    });
+    if let Some(proxy_address_ids) = proxy_address_ids {
+        body["proxy_address_ids"] = proxy_address_ids;
+    }
     app.clone()
         .oneshot(
             Request::builder()
@@ -144,15 +220,25 @@ async fn update_permissions(
                 .header(header::COOKIE, cookie)
                 .header("x-csrf-token", csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "permissions": permissions,
-                        "audit_reason": "测试 Entry 自选权限"
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(body.to_string()))
                 .unwrap(),
         )
         .await
         .unwrap()
+}
+
+async fn agent_me(app: &Router, token: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agent/me")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    json_body(response).await
 }

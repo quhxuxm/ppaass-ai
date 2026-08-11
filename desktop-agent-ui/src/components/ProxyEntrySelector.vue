@@ -17,7 +17,7 @@ const {
   loading,
   open,
   orderedEntries,
-  pendingId,
+  pendingIds,
   runSpeedTest,
   selection,
   speedResults,
@@ -31,8 +31,11 @@ async function confirmSelection() {
 }
 
 function stateLabel(entry: AgentProxyEntry) {
-  if (entry.proxy_entry_id === selection.value.selected_proxy_entry_id) return "当前";
-  if (entry.proxy_entry_id === pendingId.value) return "待切换";
+  const current = selection.value.selected_proxy_entry_ids.includes(entry.proxy_entry_id);
+  const pending = pendingIds.value.includes(entry.proxy_entry_id);
+  if (current && pending) return "当前";
+  if (!current && pending) return "待启用";
+  if (current && !pending) return "待停用";
   return "";
 }
 
@@ -86,7 +89,7 @@ function entryIconName(entry: AgentProxyEntry) {
         <span><AppIcon name="network" /></span>
         <div>
           <h2>选择 Proxy Entry</h2>
-          <p>当前节点已置顶；选择后点击确认才会切换</p>
+          <p>已选节点置顶；可同时选择多个，至少保留一个</p>
         </div>
       </div>
     </template>
@@ -99,19 +102,19 @@ function entryIconName(entry: AgentProxyEntry) {
       <AppIcon name="server" />
       <strong>暂无可用 Proxy Entry</strong>
     </div>
-    <div v-else class="proxy-entry-list" role="radiogroup" aria-label="可用 Proxy Entry">
+    <div v-else class="proxy-entry-list" role="group" aria-label="可用 Proxy Entry">
       <div
         v-for="entry in orderedEntries"
         :key="entry.proxy_entry_id"
         class="proxy-entry-option"
         :class="{
-          current: entry.proxy_entry_id === selection.selected_proxy_entry_id,
+          current: selection.selected_proxy_entry_ids.includes(entry.proxy_entry_id),
           pending:
-            entry.proxy_entry_id === pendingId &&
-            entry.proxy_entry_id !== selection.selected_proxy_entry_id
+            pendingIds.includes(entry.proxy_entry_id) !==
+            selection.selected_proxy_entry_ids.includes(entry.proxy_entry_id)
         }"
-        role="radio"
-        :aria-checked="entry.proxy_entry_id === pendingId"
+        role="checkbox"
+        :aria-checked="pendingIds.includes(entry.proxy_entry_id)"
         tabindex="0"
         @click="choose(entry)"
         @keydown.enter.prevent="choose(entry)"

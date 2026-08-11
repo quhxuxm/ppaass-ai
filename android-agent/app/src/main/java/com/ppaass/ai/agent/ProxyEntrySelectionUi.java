@@ -6,6 +6,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 final class ProxyEntrySelectionUi {
     interface SelectionCallback {
@@ -34,17 +36,15 @@ final class ProxyEntrySelectionUi {
 
     private static String summary(MainActivityConfigScreen host) {
         ManagedProxyEntries.Selection selection = ManagedProxyEntries.load(host);
-        for (ManagedProxyEntries.Entry entry : selection.entries) {
-            if (entry.id.equals(selection.selectedId)) {
-                return "当前：" + entry.name;
-            }
+        if (!selection.selectedIds.isEmpty()) {
+            return "当前同时使用 " + selection.selectedIds.size() + " 个 Proxy Entry";
         }
         return "当前使用管理员分配的 Proxy Entry";
     }
 
     static void select(
             MainActivityConfigScreen host,
-            ManagedProxyEntries.Entry entry,
+            List<ManagedProxyEntries.Entry> entries,
             TextView summary,
             TextView action,
             SelectionCallback callback) {
@@ -53,20 +53,24 @@ final class ProxyEntrySelectionUi {
         new Thread(() -> {
             try {
                 AgentSessionStore.StoredSession session = AgentSessionStore.load(host);
+                ArrayList<String> selectedIds = new ArrayList<>(entries.size());
+                for (ManagedProxyEntries.Entry entry : entries) {
+                    selectedIds.add(entry.id);
+                }
                 AgentAuthClient.ProfileSyncResult result = new AgentProxyEntryClient(
                         host,
                         AgentAuthConfig.proxyRegistryUrl(host)).select(
                         session.accessToken,
                         AgentAuthSession.username(),
-                        entry.id);
+                        selectedIds);
                 if (!AgentAuthSession.applySynchronizedProfile(host, result)) {
                     throw new IOException("无法保存 Proxy Entry 选择");
                 }
                 host.runOnUiThread(() -> {
-                    summary.setText("当前：" + entry.name);
+                    summary.setText("当前同时使用 " + entries.size() + " 个 Proxy Entry");
                     action.setEnabled(true);
                     action.setText("选择 Proxy Entry");
-                    Toast.makeText(host, "已切换到 " + entry.name, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(host, "已启用选中的 Proxy Entry", Toast.LENGTH_SHORT).show();
                     callback.onFinished(true);
                 });
             } catch (Exception error) {

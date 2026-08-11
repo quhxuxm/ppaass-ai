@@ -64,7 +64,7 @@ final class AgentAuthDtos {
         public List<String> permissions;
         public List<String> proxy_addresses;
         public List<ProxyEntry> proxy_entries;
-        public String selected_proxy_entry_id;
+        public List<String> selected_proxy_entry_ids;
         public Boolean enabled;
         public Long key_version;
         public Long expires_at;
@@ -87,10 +87,10 @@ final class AgentAuthDtos {
     }
 
     static final class SelectProxyEntryRequest {
-        public final String proxy_entry_id;
+        public final List<String> proxy_entry_ids;
 
-        SelectProxyEntryRequest(String proxyEntryId) {
-            this.proxy_entry_id = proxyEntryId;
+        SelectProxyEntryRequest(List<String> proxyEntryIds) {
+            this.proxy_entry_ids = proxyEntryIds;
         }
     }
 
