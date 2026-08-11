@@ -165,7 +165,10 @@ try {
   assert.match(proxyStyles, /height: min\(680px, calc\(100dvh - 64px\)\)/);
   assert.match(proxyStyles, /overflow-y: auto/);
   assert.match(proxyStyles, /scrollbar-gutter: stable/);
+  assert.match(proxyStyles, /grid-auto-rows: 124px/);
+  assert.match(proxyStyles, /height: 124px/);
   assert.match(proxyStyles, /min-height: 116px/);
+  assert.doesNotMatch(proxyStyles, /grid-column:\s*1\s*\/\s*-1/);
 
   const authComposable = await readFile(
     new URL("../src/composables/useAgentAuth.ts", import.meta.url),

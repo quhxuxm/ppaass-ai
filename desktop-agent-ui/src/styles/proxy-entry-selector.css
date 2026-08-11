@@ -83,6 +83,7 @@
   display: grid;
   flex: 1 1 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 124px;
   align-content: start;
   gap: 14px;
   min-height: 0;
@@ -94,6 +95,7 @@
 
 .proxy-entry-option {
   position: relative;
+  height: 124px;
   min-height: 116px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -115,7 +117,6 @@
 }
 
 .proxy-entry-option.current {
-  grid-column: 1 / -1;
   border-color: color-mix(in srgb, var(--app-success) 72%, var(--app-border));
   background: color-mix(in srgb, var(--app-success) 9%, var(--app-surface));
   box-shadow: inset 3px 0 0 var(--app-success);
@@ -188,7 +189,7 @@
   visibility: visible;
 }
 
-.proxy-entry-option.current .proxy-entry-meta-line em {
+.proxy-entry-option.current:not(.pending) .proxy-entry-meta-line em {
   background: color-mix(in srgb, var(--app-success) 14%, transparent);
   color: var(--app-success);
 }
@@ -237,6 +238,7 @@
 @media (max-width: 720px) {
   .proxy-entry-list {
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: 124px;
   }
 
   .proxy-entry-option {
