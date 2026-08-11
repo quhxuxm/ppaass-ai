@@ -61,6 +61,7 @@ pub(super) fn row_to_account(row: SqliteRow) -> Result<WebAccount> {
             "账号 {account_id} 的 auth_version 值无效：{auth_version}"
         )));
     }
+    let avatar_url = decode_avatar_url(&row, &account_id)?;
     Ok(WebAccount {
         account_id,
         login_name: row.try_get("login_name")?,
@@ -69,12 +70,29 @@ pub(super) fn row_to_account(row: SqliteRow) -> Result<WebAccount> {
         linked_username: row.try_get("linked_username")?,
         display_name: row.try_get("display_name")?,
         email: row.try_get("email")?,
-        avatar_url: row.try_get("avatar_url")?,
+        avatar_url,
         auth_version,
         last_login_at: row.try_get("last_login_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+fn decode_avatar_url(row: &SqliteRow, account_id: &str) -> Result<Option<String>> {
+    let Some(bytes) = row.try_get::<Option<Vec<u8>>, _>("avatar_url")? else {
+        return Ok(None);
+    };
+    match String::from_utf8(bytes) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            warn!(
+                account_id,
+                valid_bytes = error.utf8_error().valid_up_to(),
+                "账号头像包含无效 UTF-8，已忽略损坏的头像数据"
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub(super) fn row_to_encrypted_private_key(row: SqliteRow) -> Result<EncryptedPrivateKey> {

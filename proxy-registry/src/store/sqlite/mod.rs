@@ -119,10 +119,12 @@ impl SqliteFilePermissions {
 const USER_SELECT: &str = "username, public_key_pem, permissions, enabled, origin, \
                            key_version, expires_at, created_at, updated_at";
 const ACCOUNT_SELECT: &str = "account_id, login_name, role, status, linked_username, \
-                              display_name, email, avatar_url, auth_version, last_login_at, \
+                              display_name, email, CAST(avatar_url AS BLOB) AS avatar_url, \
+                              auth_version, last_login_at, \
                               created_at, updated_at";
 const QUALIFIED_ACCOUNT_SELECT: &str = "a.account_id, a.login_name, a.role, a.status, \
-                                        a.linked_username, a.display_name, a.email, a.avatar_url, \
+                                        a.linked_username, a.display_name, a.email, \
+                                        CAST(a.avatar_url AS BLOB) AS avatar_url, \
                                         a.auth_version, a.last_login_at, a.created_at, a.updated_at";
 const KEY_REQUEST_SELECT: &str = "request_id, account_id, kind, status, expected_key_version, \
                                   reviewer_account_id, reviewer_login_name, rejection_reason, \
