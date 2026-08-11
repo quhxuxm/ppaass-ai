@@ -63,11 +63,34 @@ final class AgentAuthDtos {
         public String username;
         public List<String> permissions;
         public List<String> proxy_addresses;
+        public List<ProxyEntry> proxy_entries;
+        public String selected_proxy_entry_id;
         public Boolean enabled;
         public Long key_version;
         public Long expires_at;
 
         public Profile() {
+        }
+    }
+
+    static final class ProxyEntry {
+        public String proxy_entry_id;
+        public String label;
+        public String address;
+        public String description;
+        public String icon_key;
+        public String entry_id;
+        public Boolean online;
+
+        public ProxyEntry() {
+        }
+    }
+
+    static final class SelectProxyEntryRequest {
+        public final String proxy_entry_id;
+
+        SelectProxyEntryRequest(String proxyEntryId) {
+            this.proxy_entry_id = proxyEntryId;
         }
     }
 

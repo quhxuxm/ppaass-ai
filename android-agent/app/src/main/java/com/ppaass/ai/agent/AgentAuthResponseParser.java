@@ -31,6 +31,13 @@ final class AgentAuthResponseParser {
         Set<String> permissions = permissions(profile.permissions);
         List<String> proxyAddresses =
                 ManagedProxyAddresses.require(profile.proxy_addresses);
+        ManagedProxyEntries.Selection proxyEntries = ManagedProxyEntries.require(
+                profile.proxy_entries,
+                profile.selected_proxy_entry_id,
+                AgentPermissions.allows(
+                        role,
+                        permissions,
+                        AgentPermissions.PROXY_ENTRY_SELECT));
         long keyVersion = requireLong(profile.key_version);
         long expiresAt = optionalEpoch(profile.expires_at);
         if (keyVersion < 1 || expiresAt == 0 || expiresAt < -1) {
@@ -48,6 +55,8 @@ final class AgentAuthResponseParser {
                 role,
                 permissions,
                 proxyAddresses,
+                proxyEntries.entries,
+                proxyEntries.selectedId,
                 keyVersion,
                 expiresAt,
                 privateKeyPem,
@@ -72,6 +81,7 @@ final class AgentAuthResponseParser {
         String username = expectedUsername;
         Set<String> permissions = Collections.emptySet();
         List<String> proxyAddresses = Collections.emptyList();
+        ManagedProxyEntries.Selection proxyEntries = ManagedProxyEntries.Selection.empty();
         boolean profileEnabled = false;
         long keyVersion = -1;
         long expiresAt = -1;
@@ -86,6 +96,13 @@ final class AgentAuthResponseParser {
             permissions = permissions(profile.permissions);
             proxyAddresses =
                     ManagedProxyAddresses.require(profile.proxy_addresses);
+            proxyEntries = ManagedProxyEntries.require(
+                    profile.proxy_entries,
+                    profile.selected_proxy_entry_id,
+                    AgentPermissions.allows(
+                            role,
+                            permissions,
+                            AgentPermissions.PROXY_ENTRY_SELECT));
             profileEnabled = requireBoolean(profile.enabled);
             keyVersion = requireLong(profile.key_version);
             expiresAt = optionalEpoch(profile.expires_at);
@@ -102,6 +119,8 @@ final class AgentAuthResponseParser {
                 account.status,
                 permissions,
                 proxyAddresses,
+                proxyEntries.entries,
+                proxyEntries.selectedId,
                 profileEnabled,
                 keyVersion,
                 expiresAt,

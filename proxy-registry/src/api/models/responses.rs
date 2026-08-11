@@ -72,9 +72,26 @@ pub(crate) struct AgentDeviceProfileResponse {
     pub(crate) username: String,
     pub(crate) permissions: Vec<String>,
     pub(crate) proxy_addresses: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) proxy_entries: Option<Vec<AgentProxyEntryResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_proxy_entry_id: Option<String>,
     pub(crate) enabled: bool,
     pub(crate) key_version: i64,
     pub(crate) expires_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct AgentProxyEntryResponse {
+    pub(crate) proxy_entry_id: String,
+    pub(crate) label: String,
+    pub(crate) address: String,
+    pub(crate) description: String,
+    pub(crate) icon_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) online: Option<bool>,
 }
 
 #[derive(Serialize)]

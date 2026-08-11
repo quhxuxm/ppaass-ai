@@ -5,7 +5,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use protocol::{
     Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
-    TransportProtocol,
+    SPEED_TEST_STREAM_ID, SpeedTestRequest, TransportProtocol,
     tcp_transport::{
         TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
         TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
@@ -254,5 +254,65 @@ where
             },
             request_id,
         ))
+    }
+
+    /// 在认证连接上请求 Proxy Entry 直接下发一段不可压缩测试数据。
+    ///
+    /// 该路径不连接第三方目标，测量的是 Agent 与当前 Entry 之间的真实加密 TCP 吞吐。
+    pub async fn download_speed_test(mut self, download_bytes: u32) -> Result<u64, std::io::Error> {
+        let request = SpeedTestRequest { download_bytes };
+        request
+            .validate_shape()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        self.writer
+            .send(ProxyRequest::SpeedTest(request))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+        let receive = async {
+            let mut received = 0_u64;
+            loop {
+                let response = self.reader.next().await.ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Proxy Entry 在测速完成前关闭了连接",
+                    )
+                })??;
+                match response {
+                    ProxyResponse::Data(packet) if packet.stream_id == SPEED_TEST_STREAM_ID => {
+                        received = received
+                            .checked_add(packet.data.len() as u64)
+                            .ok_or_else(|| std::io::Error::other("测速字节数溢出"))?;
+                        if received > u64::from(download_bytes) {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Proxy Entry 返回了过量测速数据",
+                            ));
+                        }
+                        if packet.is_end {
+                            if received != u64::from(download_bytes) {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::UnexpectedEof,
+                                    "Proxy Entry 返回的测速数据不完整",
+                                ));
+                            }
+                            return Ok(received);
+                        }
+                    }
+                    ProxyResponse::Error { message } => {
+                        return Err(std::io::Error::other(message));
+                    }
+                    _ => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Proxy Entry 返回了无效测速响应",
+                        ));
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(self.timeout.max(Duration::from_secs(20)), receive)
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "测速超时"))?
     }
 }

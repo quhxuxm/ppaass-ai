@@ -13,8 +13,10 @@ pub use compression::{CompressionMode, compress, decompress};
 pub use crypto::RsaKeyPair;
 pub use error::{ProtocolError, Result};
 pub use message::{
-    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse, DataPacket, Message,
-    MessageType, ProxyRequest, ProxyResponse, TransportProtocol, UdpRelayPacket,
+    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse,
+    DEFAULT_SPEED_TEST_DOWNLOAD_BYTES, DataPacket, MAX_SPEED_TEST_DOWNLOAD_BYTES,
+    MIN_SPEED_TEST_DOWNLOAD_BYTES, Message, MessageType, ProxyRequest, ProxyResponse,
+    SPEED_TEST_STREAM_ID, SpeedTestRequest, TransportProtocol, UdpRelayPacket,
 };
 pub use tcp_transport::{
     AuthFailureCode, TcpDirectionalKeyMaterial, TcpFrameDirection, TcpSessionCipher,

@@ -129,6 +129,7 @@ X-CSRF-Token: <csrf_token>
 | `POST` | `/api/v1/auth/logout` | 退出登录 |
 | `POST` | `/api/v1/agent/login` | 原生 Agent 密码认证，一次返回角色、权限、密钥和持续同步凭据 |
 | `GET` | `/api/v1/agent/me` | Agent 收到 SSE 事件后使用 Bearer 凭据刷新账号状态和权限 |
+| `PUT` | `/api/v1/agent/proxy-entry` | 有自选权限的 Agent 用户修改本人使用的 Proxy Entry |
 | `GET` | `/api/v1/agent/events` | Agent 使用 Bearer 凭据建立 SSE 实时通知流 |
 | `POST` | `/api/v1/agent/device-authorizations` | Agent 创建浏览器设备登录 challenge |
 | `POST` | `/api/v1/agent/device-authorizations/token` | Agent 限频轮询并一次性领取账户配置和密钥 |
@@ -203,6 +204,15 @@ Authorization: Bearer <agent_access_token>
 密码登录、设备 token 领取和 `GET /api/v1/agent/me` 的成功响应都会在
 `profile.proxy_addresses` 返回 1 到 32 个已启用的规范地址。该字段按地址稳定排序并
 去重；Agent 只在原生后端使用，不在界面、日志或 `agent.toml` 中展示或持久化。
+拥有 `agent.proxy_entry.select` 权限的账号还会收到可选 Entry 的图标键、名称、描述、
+在线状态和当前选择，但地址仅供 Agent 运行层使用。用户通过
+`PUT /api/v1/agent/proxy-entry` 修改本人选择；没有该权限时服务端不返回 Entry 目录，
+Agent 也不显示选择入口，并继续使用管理员分配的地址。撤销权限会立即恢复管理员分配，
+不会继续应用用户此前的选择。
+Android Agent 会把当前 Entry 置顶，并在用户点击“确认切换”后才提交选择。每个 Entry
+可以独立测速：Agent 使用本人密钥直接认证该 Entry，由 Entry 在有界、加密的测试流中
+下发随机数据，结果显示 Agent 到 Entry 的连接延迟和下载吞吐；测速不访问第三方目标，
+也不会切换当前 Entry 或在界面暴露地址。
 `GET /api/v1/me` 也返回同一字段，供原生 Agent 轮换密钥后继续使用；Web 用户中心故意
 忽略它。已迁移账号尚未分配地址时，Agent 凭据端点返回 HTTP 409：
 
@@ -329,13 +339,14 @@ TCP 承载的共享 UDP relay 只在真正创建新 flow 前复核授权，Exist
 - `agent.packet_capture`
 - `agent.egress.edit`
 - `agent.runtime_threads.edit`
+- `agent.proxy_entry.select`
 
 本地注册账号或管理员自身的密钥申请获批后，以及管理员直接创建 Web 普通用户时，Proxy
-配置都会强制拥有前四项基础能力（TCP、UDP、领取和轮换密钥）。后三项是管理员可给
+配置都会强制拥有前四项基础能力（TCP、UDP、领取和轮换密钥）。后四项是管理员可给
 普通用户分配的 Agent 管理权限，默认不授予；管理员创建或编辑用户时可独立勾选，并会
 保留数据库中的其他自定义权限。管理员后续通过 PATCH 更新权限时，不能移除基础能力。
 
-Agent 管理员角色天然拥有全部三项 Agent 管理权限，不要求把它们重复写入管理员 profile。
+Agent 管理员角色天然拥有全部四项 Agent 管理权限，不要求把它们重复写入管理员 profile。
 普通用户的权限在界面和原生命令层同时执行：
 
 - `agent.packet_capture` 控制抓包页面以及读取、启停和清空命令；没有权限时整个抓包
@@ -344,6 +355,8 @@ Agent 管理员角色天然拥有全部三项 Agent 管理权限，不要求把�
   默认值，不使用本机持久化的出口配置。
 - `agent.runtime_threads.edit` 控制系统运行参数面板；没有权限时面板不显示，Agent
   使用内置系统运行参数，不使用本机持久化的相关配置。
+- `agent.proxy_entry.select` 控制 Proxy Entry 目录与本人选择接口；没有权限时目录和
+  选择入口均不返回或显示，Agent 只使用管理员分配的 Proxy Entry。
 
 数据库升级到 schema v7 时会移除已经停用的 `agent.config.view` 权限；查看配置不再是
 管理员可分配的 Agent 权限。

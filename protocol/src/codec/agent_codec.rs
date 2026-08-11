@@ -73,6 +73,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
                 let message_type = match &item {
                     ProxyRequest::Auth(_) => MessageType::AuthRequest,
                     ProxyRequest::Connect(_) => MessageType::ConnectRequest,
+                    ProxyRequest::SpeedTest(_) => MessageType::SpeedTestRequest,
                     ProxyRequest::Data(_) => unreachable!(),
                 };
                 let payload = bitcode::serialize(&item).map_err(|e| {

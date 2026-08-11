@@ -33,8 +33,22 @@ async fn permission_sync_uses_bearer_auth_and_accepts_a_rolling_token() {
         },
         "profile": {
             "username": "alice",
-            "permissions": ["agent.packet_capture", "agent.egress.edit"],
+            "permissions": [
+                "agent.packet_capture",
+                "agent.egress.edit",
+                "agent.proxy_entry.select"
+            ],
             "proxy_addresses": ["proxy.example.com:443"],
+            "proxy_entries": [{
+                "proxy_entry_id": "pxy_shanghai",
+                "label": "上海 · 尊享节点",
+                "address": "proxy.example.com:443",
+                "description": "低延迟线路",
+                "icon_key": "building",
+                "entry_id": "entry_shanghai",
+                "online": true
+            }],
+            "selected_proxy_entry_id": "pxy_shanghai",
             "enabled": true,
             "key_version": 7,
             "expires_at": 4_000_000_000_i64
@@ -67,8 +81,21 @@ async fn permission_sync_uses_bearer_auth_and_accepts_a_rolling_token() {
     let (updated, status, error) = apply_permission_snapshot(&current, &snapshot);
     assert_eq!(
         updated.permissions,
-        ["agent.packet_capture", "agent.egress.edit"]
+        [
+            "agent.packet_capture",
+            "agent.egress.edit",
+            "agent.proxy_entry.select"
+        ]
     );
+    let selection = snapshot.proxy_entry_selection();
+    assert_eq!(selection.entries.len(), 1);
+    assert_eq!(
+        selection.selected_proxy_entry_id.as_deref(),
+        Some("pxy_shanghai")
+    );
+    assert!(!serde_json::to_string(&selection)
+        .unwrap()
+        .contains("proxy.example.com"));
     assert_eq!(status, AgentAuthAccountStatus::Active);
     assert!(error.is_none());
 }

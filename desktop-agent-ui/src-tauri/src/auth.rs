@@ -24,7 +24,9 @@ use url::Url;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use zeroize::Zeroizing;
 
-use crate::models::{AgentAuthAccount, AgentAuthAccountStatus};
+use crate::models::{
+    AgentAuthAccount, AgentAuthAccountStatus, AgentProxyEntry, AgentProxyEntrySelection,
+};
 
 const CREDENTIALS_DIR: &str = "credentials";
 pub const PERSISTED_AGENT_LOGIN_FILE: &str = "agent-login.json";
@@ -231,6 +233,10 @@ pub struct AgentDeviceProfile {
     pub username: String,
     pub permissions: Vec<String>,
     pub proxy_addresses: Option<Vec<String>>,
+    #[serde(default)]
+    pub proxy_entries: Option<Vec<AgentProxyEntry>>,
+    #[serde(default)]
+    pub selected_proxy_entry_id: Option<String>,
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
     pub key_version: i64,

@@ -151,6 +151,9 @@ pub enum UserRepositoryError {
     #[error("账号没有分配可用的 Proxy 地址：{0}")]
     ProxyAddressNotAssigned(String),
 
+    #[error("账号没有自选 Proxy Entry 的权限：{0}")]
+    ProxyEntrySelectionForbidden(String),
+
     #[error("授权快照修订号冲突：期望 {expected}，实际 {actual}")]
     AuthorizationSnapshotRevisionConflict { expected: u64, actual: u64 },
 

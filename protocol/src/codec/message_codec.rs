@@ -75,6 +75,7 @@ impl MessageCodec {
             4 => MessageType::ConnectResponse,
             5 => MessageType::Data,
             6 => MessageType::Error,
+            7 => MessageType::SpeedTestRequest,
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,

@@ -20,5 +20,6 @@ mod profile;
 mod proxy_address_assignment_errors;
 mod proxy_addresses;
 mod proxy_entries;
+mod proxy_entry_selection;
 mod test_keys;
 mod web_session_handoff;

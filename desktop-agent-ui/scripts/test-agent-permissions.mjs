@@ -30,7 +30,8 @@ try {
   assert.deepEqual(Object.values(AGENT_PERMISSION_CODES), [
     "agent.packet_capture",
     "agent.egress.edit",
-    "agent.runtime_threads.edit"
+    "agent.runtime_threads.edit",
+    "agent.proxy_entry.select"
   ]);
 
   const ordinaryUser = { role: "user", permissions: [] };
@@ -38,7 +39,8 @@ try {
     canCapturePackets: false,
     canViewRawConfig: false,
     canEditEgress: false,
-    canEditRuntimeThreads: false
+    canEditRuntimeThreads: false,
+    canSelectProxyEntry: false
   });
   assert.equal(
     hasAgentPermission(
@@ -51,7 +53,7 @@ try {
     Object.values(
       resolveAgentCapabilities({ role: "admin", permissions: [] })
     ),
-    [true, true, true, true]
+    [true, true, true, true, true]
   );
 
   const { summarizeRaw } = await server.ssrLoadModule(
@@ -127,6 +129,42 @@ try {
     workspace,
     /:can-edit-runtime-threads="capabilities\.canEditRuntimeThreads"/
   );
+  assert.match(workspace, /<ProxyEntrySelector/);
+  assert.match(
+    workspace,
+    /v-if="capabilities\.canSelectProxyEntry && accountStatus === 'active'"/
+  );
+
+  const proxySelector = await readFile(
+    new URL("../src/components/ProxyEntrySelector.vue", import.meta.url),
+    "utf8"
+  );
+  assert.match(proxySelector, /entry\.icon_key/);
+  assert.match(proxySelector, /entry\.label/);
+  assert.match(proxySelector, /entry\.description/);
+  assert.doesNotMatch(proxySelector, /entry\.address|IP 地址|连接地址/);
+  assert.match(proxySelector, /@click\.stop="runSpeedTest\(entry\)"/);
+
+  const proxySelection = await readFile(
+    new URL(
+      "../src/composables/useProxyEntrySelection.ts",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(proxySelection, /"speed_test_agent_proxy_entry"/);
+  assert.match(proxySelection, /"select_agent_proxy_entry_command"/);
+  assert.match(proxySelection, /pendingId\.value/);
+  assert.match(proxySelection, /visible\.value = false/);
+
+  const proxyStyles = await readFile(
+    new URL("../src/styles/proxy-entry-selector.css", import.meta.url),
+    "utf8"
+  );
+  assert.match(proxyStyles, /height: min\(680px, calc\(100dvh - 64px\)\)/);
+  assert.match(proxyStyles, /overflow-y: auto/);
+  assert.match(proxyStyles, /scrollbar-gutter: stable/);
+  assert.match(proxyStyles, /min-height: 116px/);
 
   const authComposable = await readFile(
     new URL("../src/composables/useAgentAuth.ts", import.meta.url),

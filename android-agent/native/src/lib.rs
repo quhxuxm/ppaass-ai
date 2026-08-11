@@ -14,6 +14,7 @@ pub mod netstack;
 pub mod packet_capture;
 mod socket_protector;
 mod socks5_proxy;
+mod speed_test;
 mod tcp_relay;
 mod traffic_stats;
 pub mod yamux_session;

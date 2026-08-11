@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use crate::models::AgentProxyEntry;
+
 pub fn validate_managed_proxy_addresses(
     addresses: &[String],
     allow_empty: bool,
@@ -23,6 +25,41 @@ pub fn validate_managed_proxy_addresses(
         }
     }
     Ok(())
+}
+
+pub fn validate_agent_proxy_entries(
+    entries: &[AgentProxyEntry],
+    selected_id: Option<&str>,
+) -> Result<(), String> {
+    if entries.len() > 128 {
+        return Err("认证服务返回的 Proxy Entry 数量过多".to_string());
+    }
+    let mut ids = HashSet::new();
+    for entry in entries {
+        if !valid_entry_text(&entry.proxy_entry_id, 128)
+            || !valid_entry_text(&entry.label, 256)
+            || !valid_entry_text(&entry.description, 512)
+            || !valid_entry_text(&entry.icon_key, 256)
+            || entry
+                .entry_id
+                .as_deref()
+                .is_some_and(|value| !valid_entry_text(value, 256))
+        {
+            return Err("认证服务返回了无效的 Proxy Entry 信息".to_string());
+        }
+        validate_managed_proxy_addresses(std::slice::from_ref(&entry.address), false)?;
+        if !ids.insert(entry.proxy_entry_id.as_str()) {
+            return Err("认证服务返回了重复的 Proxy Entry".to_string());
+        }
+    }
+    if selected_id.is_some_and(|selected| !ids.contains(selected)) {
+        return Err("认证服务返回的当前 Proxy Entry 不在可用列表中".to_string());
+    }
+    Ok(())
+}
+
+fn valid_entry_text(value: &str, max_len: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= max_len && !value.chars().any(char::is_control)
 }
 
 fn validate_address_shape(address: &str) -> Result<(), String> {

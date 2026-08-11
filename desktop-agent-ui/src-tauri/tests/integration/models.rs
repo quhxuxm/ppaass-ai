@@ -1,7 +1,7 @@
 use desktop_agent_ui::models::{
     AgentAdminKeyRequestApproval, AgentAdminKeyRequestRejection, AgentAuthAccount,
     AgentAuthAccountStatus, AgentAuthState, AgentDeviceLoginProgress, AgentKeyRotationRequest,
-    AgentLoginRequest, AGENT_PACKET_CAPTURE_PERMISSION,
+    AgentLoginRequest, AgentProxyEntry, AgentProxyEntrySelection, AGENT_PACKET_CAPTURE_PERMISSION,
 };
 
 #[test]
@@ -141,4 +141,26 @@ fn device_login_progress_never_serializes_device_or_private_credentials() {
     ] {
         assert!(!serialized.contains(secret_field));
     }
+}
+
+#[test]
+fn proxy_entry_selection_never_serializes_connection_addresses() {
+    let selection = AgentProxyEntrySelection {
+        entries: vec![AgentProxyEntry {
+            proxy_entry_id: "pxy_shanghai".to_string(),
+            label: "上海 · 尊享节点".to_string(),
+            address: "127.0.0.1:18881".to_string(),
+            description: "低延迟线路".to_string(),
+            icon_key: "building".to_string(),
+            entry_id: Some("entry_shanghai".to_string()),
+            online: Some(true),
+        }],
+        selected_proxy_entry_id: Some("pxy_shanghai".to_string()),
+    };
+
+    let serialized = serde_json::to_string(&selection).unwrap();
+    assert!(serialized.contains("上海 · 尊享节点"));
+    assert!(serialized.contains("building"));
+    assert!(!serialized.contains("127.0.0.1"));
+    assert!(!serialized.contains("address"));
 }

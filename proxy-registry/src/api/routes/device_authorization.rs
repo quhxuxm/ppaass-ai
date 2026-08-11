@@ -271,16 +271,17 @@ pub(crate) async fn poll_agent_device_authorization(
             warn!(account_id = account.account_id, %error, "签发 Agent access token 失败");
             ApiError::internal()
         })?;
+    let managed = state
+        .accounts
+        .get_managed_user(&account.account_id)
+        .await?
+        .ok_or_else(agent_device_authorization_invalidated)?;
+    let profile =
+        agent_profile_response_for_account(&state, &account, &managed, profile, proxy_addresses)
+            .await?;
     let response_body = AgentDeviceTokenResponse {
         account,
-        profile: AgentDeviceProfileResponse {
-            username: profile.username,
-            permissions: profile.permissions,
-            proxy_addresses,
-            enabled: profile.enabled,
-            key_version: profile.key_version,
-            expires_at: profile.expires_at,
-        },
+        profile,
         public_key_pem: private_key.public_key_pem,
         private_key_pem: private_key.private_key_pem,
         csrf_token: session.csrf_token.clone(),

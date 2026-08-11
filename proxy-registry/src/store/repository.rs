@@ -142,6 +142,15 @@ pub trait AccountRepository: Send + Sync {
         update: ManagedUserUpdate,
     ) -> Result<ManagedUser>;
 
+    /// 持久化用户自选的 Proxy Entry。存储层在同一事务中复核权限，
+    /// 防止管理员收回权限与 Agent 选择请求并发时越权。
+    async fn select_proxy_address(
+        &self,
+        account_id: &str,
+        proxy_address_id: &str,
+        required_permission: &str,
+    ) -> Result<ManagedUser>;
+
     async fn update_last_login(&self, account_id: &str, logged_in_at: i64) -> Result<()>;
 
     /// 读取加密后的私钥信封；明文解密由 Web 服务负责。

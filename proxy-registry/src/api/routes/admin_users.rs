@@ -207,6 +207,7 @@ pub(crate) async fn admin_update_user(
             has_private_key: false,
             providers: Vec::new(),
             assigned_proxy_addresses: Vec::new(),
+            selected_proxy_address: None,
         }
     };
     info!(

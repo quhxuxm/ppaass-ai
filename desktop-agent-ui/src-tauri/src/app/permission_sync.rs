@@ -1,7 +1,7 @@
 use super::*;
 
 mod managed_config;
-use managed_config::*;
+pub(crate) use managed_config::*;
 
 pub(crate) async fn sync_agent_permissions_once(
     app: &tauri::AppHandle,

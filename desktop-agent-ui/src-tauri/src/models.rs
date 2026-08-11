@@ -6,6 +6,33 @@ pub use admin_key_requests::*;
 pub const AGENT_PACKET_CAPTURE_PERMISSION: &str = "agent.packet_capture";
 pub const AGENT_EGRESS_EDIT_PERMISSION: &str = "agent.egress.edit";
 pub const AGENT_RUNTIME_THREADS_EDIT_PERMISSION: &str = "agent.runtime_threads.edit";
+pub const AGENT_PROXY_ENTRY_SELECT_PERMISSION: &str = "agent.proxy_entry.select";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentProxyEntry {
+    pub proxy_entry_id: String,
+    pub label: String,
+    #[serde(skip_serializing)]
+    pub address: String,
+    pub description: String,
+    pub icon_key: String,
+    pub entry_id: Option<String>,
+    pub online: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentProxyEntrySelection {
+    pub entries: Vec<AgentProxyEntry>,
+    pub selected_proxy_entry_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentProxyEntrySpeedResult {
+    pub latency_ms: u64,
+    pub download_bytes: u64,
+    pub download_millis: u64,
+    pub bytes_per_second: u64,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

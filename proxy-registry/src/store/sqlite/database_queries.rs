@@ -233,11 +233,14 @@ pub(super) async fn fetch_managed_for_account(
     .collect::<Result<Vec<_>>>()?;
     let assigned_proxy_addresses =
         fetch_assigned_proxy_addresses(connection, &account.account_id).await?;
+    let selected_proxy_address =
+        fetch_selected_proxy_address(connection, &account.account_id).await?;
     Ok(ManagedUser {
         account: Some(account),
         profile,
         has_private_key,
         providers,
         assigned_proxy_addresses,
+        selected_proxy_address,
     })
 }

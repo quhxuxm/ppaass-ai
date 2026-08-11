@@ -1,7 +1,10 @@
 use bytes::BytesMut;
 use protocol::message::PROTOCOL_VERSION;
 use protocol::tcp_transport::{AuthFailureCode, TCP_HANDSHAKE_VERSION};
-use protocol::{Address, AuthResponse, CipherState, MessageCodec, MessageType};
+use protocol::{
+    Address, AuthResponse, CipherState, MAX_SPEED_TEST_DOWNLOAD_BYTES,
+    MIN_SPEED_TEST_DOWNLOAD_BYTES, MessageCodec, MessageType, SpeedTestRequest,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::codec::Decoder;
@@ -85,4 +88,22 @@ fn previous_tcp_protocol_envelope_has_no_fallback() {
     let mut codec = MessageCodec::new(Arc::new(CipherState::new()));
 
     assert!(codec.decode(&mut input).is_err());
+}
+
+#[test]
+fn speed_test_request_has_bounded_download_size() {
+    assert!(
+        SpeedTestRequest {
+            download_bytes: MIN_SPEED_TEST_DOWNLOAD_BYTES
+        }
+        .validate_shape()
+        .is_ok()
+    );
+    assert!(
+        SpeedTestRequest {
+            download_bytes: MAX_SPEED_TEST_DOWNLOAD_BYTES + 1
+        }
+        .validate_shape()
+        .is_err()
+    );
 }

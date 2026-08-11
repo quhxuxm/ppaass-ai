@@ -275,6 +275,9 @@ impl From<UserRepositoryError> for ApiError {
                 "proxy_address_not_assigned",
                 "账号尚未分配可用的 Proxy 地址，请联系管理员",
             ),
+            UserRepositoryError::ProxyEntrySelectionForbidden(_) => {
+                Self::forbidden("当前账号没有自选 Proxy Entry 的权限")
+            }
             UserRepositoryError::AgentDeviceAuthorizationConflict => Self::internal(),
             error => {
                 error!(error = %error, "用户管理 API 数据库操作失败");

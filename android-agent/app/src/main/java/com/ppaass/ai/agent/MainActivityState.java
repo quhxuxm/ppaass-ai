@@ -197,6 +197,7 @@ protected final Runnable statusRefresh = new Runnable() {
     protected String agentPermissionFingerprint() {
         return AgentUiPermissionPolicy.permissionFingerprint(
                 AgentAuthSession.isAdmin(this),
+                hasAgentPermission(AgentPermissions.PROXY_ENTRY_SELECT),
                 hasAgentPermission(AgentPermissions.PACKET_CAPTURE),
                 hasAgentPermission(AgentPermissions.EGRESS_EDIT),
                 hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT));

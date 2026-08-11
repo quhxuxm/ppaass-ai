@@ -10,17 +10,33 @@ struct AgentPermissionSyncResponse {
     refresh_after_seconds: u64,
 }
 
+#[derive(Serialize)]
+struct SelectAgentProxyEntryPayload<'a> {
+    proxy_entry_id: &'a str,
+}
+
 pub struct AgentPermissionSnapshot {
     pub role: String,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub permissions: Option<Vec<String>>,
     pub proxy_addresses: Vec<String>,
+    pub proxy_entries: Vec<AgentProxyEntry>,
+    pub selected_proxy_entry_id: Option<String>,
     pub profile_enabled: Option<bool>,
     pub key_version: Option<i64>,
     pub expires_at: Option<i64>,
     pub account_status: AgentAuthAccountStatus,
     pub token: AgentAccessToken,
+}
+
+impl AgentPermissionSnapshot {
+    pub fn proxy_entry_selection(&self) -> AgentProxyEntrySelection {
+        AgentProxyEntrySelection {
+            entries: self.proxy_entries.clone(),
+            selected_proxy_entry_id: self.selected_proxy_entry_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -92,6 +108,44 @@ pub async fn fetch_agent_permission_snapshot(
     })
 }
 
+pub async fn select_agent_proxy_entry_snapshot(
+    proxy_registry_url: &str,
+    access_token: &str,
+    expected_username: &str,
+    proxy_entry_id: &str,
+) -> Result<AgentPermissionSnapshot, String> {
+    if proxy_entry_id.trim().is_empty() || proxy_entry_id.len() > 128 {
+        return Err("请选择有效的 Proxy Entry".to_string());
+    }
+    let base_url = normalize_proxy_registry_url(proxy_registry_url)?;
+    let client = build_proxy_registry_client()?;
+    let response = client
+        .put(endpoint(&base_url, "api/v1/agent/proxy-entry")?)
+        .bearer_auth(access_token)
+        .json(&SelectAgentProxyEntryPayload { proxy_entry_id })
+        .send()
+        .await
+        .map_err(map_request_error)?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        return Err("节点切换凭据已失效，请重新登录".to_string());
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = read_bounded_response(response, MAX_NORMAL_RESPONSE_BYTES)
+            .await
+            .ok()
+            .and_then(|(_, bytes)| serde_json::from_slice::<ErrorEnvelope>(&bytes).ok())
+            .map(|envelope| envelope.error._message);
+        return Err(detail.unwrap_or_else(|| {
+            format!("Proxy Registry 拒绝切换节点（HTTP {}）", status.as_u16())
+        }));
+    }
+    let response =
+        decode_json_response::<AgentPermissionSyncResponse>(response, MAX_NORMAL_RESPONSE_BYTES)
+            .await?;
+    validate_permission_sync_response(response, expected_username)
+}
+
 fn validate_permission_sync_response(
     response: AgentPermissionSyncResponse,
     expected_username: &str,
@@ -114,6 +168,10 @@ fn validate_permission_sync_response(
         if validate_managed_proxy_addresses(proxy_addresses, false).is_err() {
             return Err("管理员未分配 Proxy 地址".to_string());
         }
+        validate_agent_proxy_entries(
+            profile.proxy_entries.as_deref().unwrap_or_default(),
+            profile.selected_proxy_entry_id.as_deref(),
+        )?;
     } else if response.key_state == "active" {
         return Err("权限同步缺少 active 用户配置".to_string());
     }
@@ -143,6 +201,13 @@ fn validate_permission_sync_response(
             .as_ref()
             .and_then(|profile| profile.proxy_addresses.clone())
             .unwrap_or_default(),
+        proxy_entries: profile
+            .as_ref()
+            .and_then(|profile| profile.proxy_entries.clone())
+            .unwrap_or_default(),
+        selected_proxy_entry_id: profile
+            .as_ref()
+            .and_then(|profile| profile.selected_proxy_entry_id.clone()),
         profile_enabled: profile.as_ref().map(|profile| profile.enabled),
         key_version: profile.as_ref().map(|profile| profile.key_version),
         expires_at: profile.as_ref().and_then(|profile| profile.expires_at),

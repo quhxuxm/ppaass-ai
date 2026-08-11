@@ -12,6 +12,7 @@ mod egress;
 mod relay;
 mod response_sink;
 mod responses;
+mod speed_test;
 mod target;
 mod udp_relay;
 mod udp_relay_flow;

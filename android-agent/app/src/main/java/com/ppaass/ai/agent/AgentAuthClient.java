@@ -8,8 +8,8 @@ import java.util.Set;
 
 final class AgentAuthClient {
     private static final String TAG = "PpaassAgentAuth";
-    private static final int MAX_NORMAL_RESPONSE_BYTES = 2 * 1024 * 1024;
-    private static final int MAX_CREDENTIAL_RESPONSE_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_NORMAL_RESPONSE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_CREDENTIAL_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final int MAX_DEVICE_AUTHORIZATION_SECONDS = 60 * 60;
     private static final int MAX_DEVICE_POLL_DELAY_SECONDS = 5 * 60;
 
@@ -197,18 +197,8 @@ final class AgentAuthClient {
             int currentIntervalSeconds,
             int retryAfterSeconds,
             boolean slowDown) {
-        int current = Math.max(
-                1,
-                Math.min(currentIntervalSeconds, MAX_DEVICE_POLL_DELAY_SECONDS));
-        int required = slowDown
-                ? Math.min(current + 5, MAX_DEVICE_POLL_DELAY_SECONDS)
-                : current;
-        if (retryAfterSeconds > 0) {
-            required = Math.max(
-                    required,
-                    Math.min(retryAfterSeconds, MAX_DEVICE_POLL_DELAY_SECONDS));
-        }
-        return required;
+        return AgentDevicePollPolicy.delaySeconds(
+                currentIntervalSeconds, retryAfterSeconds, slowDown);
     }
 
     static int devicePollRateLimitDelaySeconds(
@@ -216,22 +206,8 @@ final class AgentAuthClient {
             String code,
             int currentIntervalSeconds,
             int retryAfterSeconds) {
-        if (status != 429) {
-            return 0;
-        }
-        if ("slow_down".equals(code)) {
-            return devicePollDelaySeconds(
-                    currentIntervalSeconds,
-                    retryAfterSeconds,
-                    true);
-        }
-        if ("rate_limited".equals(code)) {
-            return devicePollDelaySeconds(
-                    currentIntervalSeconds,
-                    retryAfterSeconds,
-                    false);
-        }
-        return 0;
+        return AgentDevicePollPolicy.rateLimitDelaySeconds(
+                status, code, currentIntervalSeconds, retryAfterSeconds);
     }
 
     private static String errorCode(byte[] body) {
@@ -276,6 +252,8 @@ final class AgentAuthClient {
         final String role;
         final Set<String> permissions;
         final List<String> proxyAddresses;
+        final List<ManagedProxyEntries.Entry> proxyEntries;
+        final String selectedProxyEntryId;
         final long keyVersion;
         final long expiresAt;
         final String privateKeyPem;
@@ -290,6 +268,8 @@ final class AgentAuthClient {
                 String role,
                 Set<String> permissions,
                 List<String> proxyAddresses,
+                List<ManagedProxyEntries.Entry> proxyEntries,
+                String selectedProxyEntryId,
                 long keyVersion,
                 long expiresAt,
                 String privateKeyPem,
@@ -302,6 +282,8 @@ final class AgentAuthClient {
             this.role = role;
             this.permissions = permissions;
             this.proxyAddresses = proxyAddresses;
+            this.proxyEntries = proxyEntries;
+            this.selectedProxyEntryId = selectedProxyEntryId;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;
             this.privateKeyPem = privateKeyPem;
@@ -319,6 +301,8 @@ final class AgentAuthClient {
         final String accountStatus;
         final Set<String> permissions;
         final List<String> proxyAddresses;
+        final List<ManagedProxyEntries.Entry> proxyEntries;
+        final String selectedProxyEntryId;
         final boolean profileEnabled;
         final long keyVersion;
         final long expiresAt;
@@ -335,6 +319,8 @@ final class AgentAuthClient {
                 String accountStatus,
                 Set<String> permissions,
                 List<String> proxyAddresses,
+                List<ManagedProxyEntries.Entry> proxyEntries,
+                String selectedProxyEntryId,
                 boolean profileEnabled,
                 long keyVersion,
                 long expiresAt,
@@ -349,6 +335,8 @@ final class AgentAuthClient {
             this.accountStatus = accountStatus;
             this.permissions = permissions;
             this.proxyAddresses = proxyAddresses;
+            this.proxyEntries = proxyEntries;
+            this.selectedProxyEntryId = selectedProxyEntryId;
             this.profileEnabled = profileEnabled;
             this.keyVersion = keyVersion;
             this.expiresAt = expiresAt;

@@ -40,12 +40,12 @@ public final class AgentUiPermissionPolicyTest {
     @Test
     public void roleParticipatesInPermissionFingerprint() {
         assertEquals(
-                "U111",
+                "U1111",
                 AgentUiPermissionPolicy.permissionFingerprint(
-                        false, true, true, true));
+                        false, true, true, true, true));
         assertEquals(
-                "A111",
+                "A1111",
                 AgentUiPermissionPolicy.permissionFingerprint(
-                        true, true, true, true));
+                        true, true, true, true, true));
     }
 }

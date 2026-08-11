@@ -114,6 +114,9 @@ pub fn run() {
             refresh_agent_admin_key_requests,
             approve_agent_admin_key_request_command,
             reject_agent_admin_key_request_command,
+            get_agent_proxy_entries,
+            select_agent_proxy_entry_command,
+            speed_test_agent_proxy_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PPAASS Desktop Agent UI");

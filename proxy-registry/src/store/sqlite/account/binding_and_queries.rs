@@ -204,6 +204,7 @@ impl SqliteUserRepository {
                 has_private_key,
                 providers: Vec::new(),
                 assigned_proxy_addresses: Vec::new(),
+                selected_proxy_address: None,
             });
         }
         Ok(users)
@@ -254,6 +255,7 @@ impl SqliteUserRepository {
                 has_private_key,
                 providers: Vec::new(),
                 assigned_proxy_addresses: Vec::new(),
+                selected_proxy_address: None,
             }))
         }
     }

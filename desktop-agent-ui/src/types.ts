@@ -65,6 +65,27 @@ export type AgentAuthState = {
   config: LoadedAgentConfig | null;
 };
 
+export type AgentProxyEntry = {
+  proxy_entry_id: string;
+  label: string;
+  description: string;
+  icon_key: string;
+  entry_id: string | null;
+  online: boolean | null;
+};
+
+export type AgentProxyEntrySelection = {
+  entries: AgentProxyEntry[];
+  selected_proxy_entry_id: string | null;
+};
+
+export type AgentProxyEntrySpeedResult = {
+  latency_ms: number;
+  download_bytes: number;
+  download_millis: number;
+  bytes_per_second: number;
+};
+
 export type AgentAdminKeyRequest = {
   request_id: string;
   username: string;

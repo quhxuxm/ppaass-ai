@@ -7,6 +7,7 @@ mod password;
 mod request_approval;
 mod request_rejection;
 mod request_submission;
+mod selection;
 mod updates;
 
 #[async_trait]
@@ -84,6 +85,21 @@ impl AccountRepository for SqliteUserRepository {
         update: ManagedUserUpdate,
     ) -> Result<ManagedUser> {
         SqliteUserRepository::update_managed_user(self, account_id, update).await
+    }
+
+    async fn select_proxy_address(
+        &self,
+        account_id: &str,
+        proxy_address_id: &str,
+        required_permission: &str,
+    ) -> Result<ManagedUser> {
+        SqliteUserRepository::select_proxy_address(
+            self,
+            account_id,
+            proxy_address_id,
+            required_permission,
+        )
+        .await
     }
 
     async fn update_last_login(&self, account_id: &str, logged_in_at: i64) -> Result<()> {

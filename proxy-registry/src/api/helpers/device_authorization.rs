@@ -183,6 +183,21 @@ pub(crate) fn assigned_proxy_addresses(
     managed: &ManagedUser,
     account: &WebAccount,
 ) -> Result<Vec<String>, ApiError> {
+    let can_select = account.role == AccountRole::Admin
+        || managed.profile.as_ref().is_some_and(|profile| {
+            profile
+                .permissions
+                .iter()
+                .any(|permission| permission == PROXY_ENTRY_SELECT_PERMISSION)
+        });
+    if can_select
+        && let Some(selected) = managed
+            .selected_proxy_address
+            .as_ref()
+            .filter(|address| address.enabled)
+    {
+        return Ok(vec![selected.address.clone()]);
+    }
     let mut addresses = managed
         .assigned_proxy_addresses
         .iter()

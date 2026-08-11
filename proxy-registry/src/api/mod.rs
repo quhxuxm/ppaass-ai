@@ -49,7 +49,7 @@ use crate::{
 const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024;
 const REQUEST_TIMEOUT_SECONDS: u64 = 30;
 const MAX_AGENT_PRIVATE_KEY_BYTES: usize = 16 * 1024;
-const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
+const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_ACCESS_RECORD_LIMIT: u32 = 100;
 const MAX_AUDIT_SEARCH_CHARACTERS: usize = 120;
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -64,6 +64,7 @@ const AGENT_DEVICE_CODE_HASH_DOMAIN: &[u8] = b"ppaass-agent-device-code-v1\0";
 const AGENT_USER_CODE_HASH_DOMAIN: &[u8] = b"ppaass-agent-user-code-v1\0";
 const PROXY_CONNECT_TCP_PERMISSION: &str = "proxy.connect.tcp";
 const PROXY_CONNECT_UDP_PERMISSION: &str = "proxy.connect.udp";
+const PROXY_ENTRY_SELECT_PERMISSION: &str = "agent.proxy_entry.select";
 const REQUIRED_WEB_USER_PERMISSIONS: [&str; 4] = [
     PROXY_CONNECT_TCP_PERMISSION,
     PROXY_CONNECT_UDP_PERMISSION,
@@ -146,6 +147,7 @@ pub fn build_router_with_timeout(
         )
         .route("/agent/login", post(agent_login))
         .route("/agent/me", get(get_agent_profile))
+        .route("/agent/proxy-entry", put(select_agent_proxy_entry))
         .route("/agent/events", get(get_agent_events))
         .route(
             "/agent/web-session-handoffs",
