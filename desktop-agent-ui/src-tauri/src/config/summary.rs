@@ -157,7 +157,11 @@ pub(crate) fn normalize_quic_policy(value: &str) -> String {
 }
 
 fn default_tun_quic_policy() -> &'static str {
-    if cfg!(windows) { "block" } else { "allow" }
+    if cfg!(windows) {
+        "block"
+    } else {
+        "allow"
+    }
 }
 
 pub(crate) fn normalize_transport_mode(value: &str) -> Result<String, String> {
