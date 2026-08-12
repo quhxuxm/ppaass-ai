@@ -164,7 +164,7 @@ fn default_control_request_timeout_secs() -> u64 {
 }
 
 fn default_tcp_relay_idle_timeout_secs() -> u64 {
-    60
+    0
 }
 
 fn default_tcp_relay_half_close_idle_timeout_secs() -> u64 {

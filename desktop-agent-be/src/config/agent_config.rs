@@ -301,6 +301,14 @@ impl AgentConfig {
 impl TunConfig {
     /// 返回最终生效的 QUIC 策略。
     pub fn effective_quic_policy(&self) -> QuicPolicy {
-        self.quic_policy.unwrap_or_default()
+        self.quic_policy.unwrap_or_else(default_tun_quic_policy)
+    }
+}
+
+fn default_tun_quic_policy() -> QuicPolicy {
+    if cfg!(windows) {
+        QuicPolicy::Block
+    } else {
+        QuicPolicy::Allow
     }
 }
