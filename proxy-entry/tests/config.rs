@@ -32,7 +32,7 @@ fn user_with_expiry(expires_at: Option<&str>) -> UserConfig {
 }
 
 #[test]
-fn relay_defaults_preserve_open_connections_and_bound_cleanup() {
+fn relay_defaults_preserve_silent_streams_and_bound_half_close_cleanup() {
     let config = parse_config("").unwrap();
 
     assert_eq!(config.tcp_relay_idle_timeout_secs, 0);

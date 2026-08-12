@@ -79,7 +79,7 @@ pub struct ProxyConfig {
     pub connect_timeout_secs: u64,
 
     /// TCP relay 空闲超时时间（秒）；建立 CONNECT 后若双向都无数据活动将被关闭。
-    /// 0 表示不限制。
+    /// SSE、HTTP/2 和 AI 流式响应可能合法地长时间静默，因此默认不限制。
     #[serde(default = "default_tcp_relay_idle_timeout_secs")]
     pub tcp_relay_idle_timeout_secs: u64,
 
