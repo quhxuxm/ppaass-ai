@@ -32,10 +32,10 @@ fn user_with_expiry(expires_at: Option<&str>) -> UserConfig {
 }
 
 #[test]
-fn relay_and_control_defaults_are_bounded() {
-    let config = parse_config("tcp_relay_idle_timeout_secs = 60").unwrap();
+fn relay_defaults_preserve_silent_long_lived_tcp_streams() {
+    let config = parse_config("").unwrap();
 
-    assert_eq!(config.tcp_relay_idle_timeout_secs, 60);
+    assert_eq!(config.tcp_relay_idle_timeout_secs, 0);
     assert_eq!(config.tcp_relay_half_close_idle_timeout_secs, 30);
     assert_eq!(config.yamux_session_idle_timeout_secs, 300);
     assert_eq!(config.udp_relay_channel_size, 64);
