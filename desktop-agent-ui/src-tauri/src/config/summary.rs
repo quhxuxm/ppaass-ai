@@ -26,10 +26,7 @@ pub fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
     }
     let transport_mode =
         normalize_transport_mode(str_at(&value, &["transport_mode"]).unwrap_or("udp"))?;
-    let tun_quic_policy_value = match str_at(&value, &["tun", "quic_policy"]) {
-        Some(value) => value,
-        None => default_tun_quic_policy(),
-    };
+    let tun_quic_policy_value = str_at(&value, &["tun", "quic_policy"]).unwrap_or("allow");
     let tun_quic_policy = normalize_quic_policy(tun_quic_policy_value);
     let runtime_threads = int_at(&value, &["runtime_threads"])
         .filter(|value| *value > 0)
@@ -152,15 +149,7 @@ pub(crate) fn string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 pub(crate) fn normalize_quic_policy(value: &str) -> String {
     match value {
         "allow" | "block" => value.to_string(),
-        _ => default_tun_quic_policy().to_string(),
-    }
-}
-
-fn default_tun_quic_policy() -> &'static str {
-    if cfg!(windows) {
-        "block"
-    } else {
-        "allow"
+        _ => "allow".to_string(),
     }
 }
 

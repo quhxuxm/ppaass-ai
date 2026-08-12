@@ -276,7 +276,7 @@ TUN 模式里的关键细节：
 - `[tun].proxy_udp` 默认开启，未命中直连规则的普通 UDP 沿用共享 UDP relay；`udp` 模式通过原生加密 UDP session 承载，`tcp` 模式通过 TCP/Yamux 承载。关闭后除代理 DNS 与独立处理的 UDP/443 应用层 QUIC 外，其余 UDP 由 Agent 绑定物理出口直接发往目标。
 - UDP/443 命中直连规则时由 Agent 的绑定/保护 UDP socket 直接到目标，完全不经过 PPAASS 原生 UDP 封装；未命中时使用共享 UDP relay，并按 `transport_mode` 选择原生加密 UDP 或 TCP/Yamux。
 - `proxy_dns` 与 `proxy_udp` 独立；开启代理 DNS 时，有效 DNS 请求仍交给 Proxy 端解析。
-- `quic_policy` 只控制应用层 UDP/443 QUIC：Windows 默认阻断并促使应用回退 TCP/TLS；其他平台默认允许命中 `direct_access` 的流量直连，未命中时按所选 UDP transport 代理。
+- `quic_policy` 只控制应用层 UDP/443 QUIC：默认允许命中 `direct_access` 的流量直连，未命中时按所选 UDP transport 代理；只有显式配置 `block` 才促使应用回退 TCP/TLS。
 - `[tun.packet_capture]` 只配置 PCAP 输出路径；抓包由桌面 UI 在运行时控制且默认关闭，开启、关闭和清空都不重启 Agent。它把 TUN 包桥两侧的原始 IP 包，以及 HTTP/SOCKS5 本地代理连接（含 SOCKS5 UDP）在 Client/Agent socket 边界传输的数据写入同一份 DLT_RAW PCAP；显式代理字节会使用真实 Client 与 Agent 监听端点封装成合法 IP/TCP 或 IP/UDP 包。PPAASS 传输层加密前后的数据可见，但 Client 自身的 TLS/QUIC 加密不会被解除。写盘由独立线程批量完成，网络热路径只尝试写入有界队列；磁盘跟不上时丢弃抓包副本而不阻塞代理流量。
 - macOS 可使用同一个 `desktop-agent` 二进制的 helper service 模式处理 TUN/路由权限。
 - Windows 启动脚本会安装最高权限计划任务来避免每次 UAC。

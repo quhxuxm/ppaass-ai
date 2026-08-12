@@ -104,15 +104,10 @@ fn parses_compression_mode() {
 }
 
 #[test]
-fn tun_uses_platform_quic_default() {
+fn tun_allows_quic_by_default() {
     let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
 
-    let expected = if cfg!(windows) {
-        QuicPolicy::Block
-    } else {
-        QuicPolicy::Allow
-    };
-    assert_eq!(config.tun.effective_quic_policy(), expected);
+    assert_eq!(config.tun.effective_quic_policy(), QuicPolicy::Allow);
 }
 
 #[test]

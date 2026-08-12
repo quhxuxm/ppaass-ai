@@ -23,7 +23,7 @@ pub mod proxy_routing;
 pub mod route;
 pub mod tasks;
 mod tcp;
-pub use tcp::proxy_fallback_address;
+pub use tcp::proxy_target_address;
 mod udp;
 pub mod udp_relay;
 mod udp_writer;

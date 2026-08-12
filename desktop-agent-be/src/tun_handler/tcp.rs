@@ -38,7 +38,7 @@ const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 mod proxy_connect;
 
 use proxy_connect::connect_proxy_stream_with_tun_prefetch;
-pub use proxy_connect::proxy_fallback_address;
+pub use proxy_connect::proxy_target_address;
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -70,8 +70,7 @@ pub(super) async fn handle_tun_tcp(
     };
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
     let mut direct_target = None;
-    let proxy_address = address.clone();
-    let mut fallback_address = None;
+    let mut proxy_address = address.clone();
     let mut proxy_reason = None;
     if !proxy_dns_request && direct_checker.is_direct(&address) {
         direct_target = Some(target);
@@ -99,11 +98,8 @@ pub(super) async fn handle_tun_tcp(
         && !proxy_dns_request
         && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
-        debug!(
-            "TUN TCP 缓存域名可用于 IPv6 代理失败回退：{} ({})",
-            target, domain
-        );
-        fallback_address = proxy_fallback_address(target, Some(&domain));
+        debug!("TUN TCP 使用缓存域名作为代理目标：{} ({})", target, domain);
+        proxy_address = proxy_target_address(proxy_address, Some(&domain));
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
@@ -158,7 +154,6 @@ pub(super) async fn handle_tun_tcp(
         &mut client,
         tcp_sessions.as_ref(),
         proxy_address,
-        fallback_address,
         &proxy_label,
     )
     .await?;

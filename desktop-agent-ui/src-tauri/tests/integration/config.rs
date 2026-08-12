@@ -148,7 +148,7 @@ fn summarize_config_rejects_removed_proxy_addresses_field() {
 }
 
 #[test]
-fn summarize_config_uses_platform_tun_quic_default() {
+fn summarize_config_allows_tun_quic_by_default() {
     let summary = summarize_config(
         r#"
 listen_addr = "0.0.0.0:10080"
@@ -158,10 +158,7 @@ private_key_path = "keys/user1.pem"
     )
     .unwrap();
 
-    assert_eq!(
-        summary.tun_quic_policy,
-        if cfg!(windows) { "block" } else { "allow" }
-    );
+    assert_eq!(summary.tun_quic_policy, "allow");
 }
 
 #[test]
