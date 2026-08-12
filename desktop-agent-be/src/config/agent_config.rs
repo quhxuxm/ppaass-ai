@@ -92,7 +92,9 @@ pub struct TunConfig {
     pub ipv4: String,
 
     /// 分配给 TUN 设备的可选 IPv6 地址，CIDR 格式。
-    #[serde(default)]
+    ///
+    /// Windows 缺省启用 IPv6，避免双栈应用通过系统 IPv6 默认路由绕过仅 IPv4 的 TUN。
+    #[serde(default = "default_tun_ipv6")]
     pub ipv6: Option<String>,
 
     /// TUN 设备的 MTU。
@@ -153,7 +155,7 @@ impl Default for TunConfig {
             enabled: false,
             name: default_tun_name(),
             ipv4: default_tun_ipv4(),
-            ipv6: None,
+            ipv6: default_tun_ipv6(),
             mtu: default_tun_mtu(),
             proxy_dns: default_tun_proxy_dns(),
             proxy_udp: default_tun_proxy_udp(),
@@ -205,6 +207,17 @@ fn default_tun_name() -> String {
 
 fn default_tun_ipv4() -> String {
     "10.10.10.1/24".to_string()
+}
+
+fn default_tun_ipv6() -> Option<String> {
+    #[cfg(windows)]
+    {
+        Some("fd00:10:10:10::1/64".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 fn default_tun_mtu() -> u16 {
