@@ -304,7 +304,6 @@ public class PpaassVpnService extends VpnService {
                     builder,
                     config.getJSONObject("direct_access"),
                     !ipv6.isEmpty());
-            builder.addDnsServer("8.8.8.8");
 
             applyAppSelection(builder);
 

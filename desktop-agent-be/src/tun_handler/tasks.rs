@@ -8,6 +8,7 @@ use super::TunForwardContext;
 mod packet_bridge;
 
 use super::dns_proxy::DnsProxy;
+use super::dns_proxy::parse_dns_query;
 use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
 use super::udp::UdpSessionContext;
@@ -121,11 +122,23 @@ pub(super) fn spawn_udp_sessions(
                     // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
                     let is_dns_proxy_query =
                         context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        if let Some(dns_proxy) = &dns_proxy {
-                            dns_proxy.send(source_addr, target_addr, data);
+                        let direct_domain = parse_dns_query(&data)
+                            .is_some_and(|(domain, _)| context.direct_checker.is_direct_domain(&domain));
+                        if direct_domain {
+                            force_dns_direct = true;
+                        } else {
+                            if let Some(dns_proxy) = &dns_proxy {
+                                dns_proxy.send(source_addr, target_addr, data);
+                            }
+                            continue;
                         }
-                        continue;
+                    }
+                    if !force_dns_direct && !context.proxy_dns
+                        && target_addr.port() == 53 && is_dns_query_packet(&data)
+                    {
+                        force_dns_direct = true;
                     }
 
                     // 未通过 DNS 解析校验的 UDP/53 继续按普通 UDP 处理，不能再启用
@@ -167,7 +180,8 @@ pub(super) fn spawn_udp_sessions(
 
                     // 先独立计算 direct_access 结论。proxy_udp=false 只强制普通 UDP
                     // 直连，不能把本应经 proxy 的浏览器 QUIC 一并改成直连。
-                    let mut direct_access_match = context.direct_checker.is_direct(&address);
+                    let mut direct_access_match =
+                        force_dns_direct || context.direct_checker.is_direct(&address);
                     let proxy_address = address.clone();
                     if !direct_access_match
                         && should_consult_udp_domain_cache(context.proxy_udp, target_addr.port())

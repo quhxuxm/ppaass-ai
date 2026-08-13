@@ -65,7 +65,11 @@ async fn handle_tcp(
     let mut direct_target = None;
     let proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request && context.direct_checker.is_direct(&address) {
+    // proxy_dns=false 时 DNS 查询由 agent 直连上游 DNS 服务器。
+    if !proxy_dns_request
+        && (context.direct_checker.is_direct(&address)
+            || (!context.proxy_dns && target.port() == 53))
+    {
         direct_target = Some(target);
     }
 

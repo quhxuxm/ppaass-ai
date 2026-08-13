@@ -69,10 +69,13 @@ pub(super) async fn handle_tun_tcp(
         target.to_string()
     };
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
+    //    proxy_dns=false 时 DNS 查询由 agent 直连上游 DNS 服务器。
     let mut direct_target = None;
     let mut proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request && direct_checker.is_direct(&address) {
+    if !proxy_dns_request
+        && (direct_checker.is_direct(&address) || (!proxy_dns && target.port() == 53))
+    {
         direct_target = Some(target);
     }
 

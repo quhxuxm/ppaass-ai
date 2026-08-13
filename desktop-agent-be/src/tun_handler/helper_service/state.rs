@@ -222,7 +222,6 @@ pub(super) fn restore_route_guard(
             tun_ipv6_cidr: recovery.request.ipv6.as_deref(),
             route_state_file: metadata.route_state_file.as_deref(),
             proxy_ips: &recovery.proxy_ips,
-            capture_system_dns: recovery.request.proxy_dns,
         },
         pf_token_observer,
     )

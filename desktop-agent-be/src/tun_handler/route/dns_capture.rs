@@ -23,7 +23,7 @@ pub(super) fn install_dns_capture_routes(
     } = context;
 
     if dns_ips.is_empty() {
-        debug!("TUN proxy_dns 未发现可捕获的系统 DNS 服务器地址");
+        debug!("TUN 未发现可捕获的系统 DNS 服务器地址");
         return Ok(());
     }
 

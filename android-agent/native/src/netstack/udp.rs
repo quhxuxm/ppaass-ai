@@ -14,6 +14,7 @@ use tracing::debug;
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
 use super::dns_proxy::DnsProxy;
+use super::dns_proxy::parse_dns_query;
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
@@ -87,11 +88,23 @@ pub(super) fn spawn_udp_sessions(
                     // 非 DNS 的 UDP/53 必须继续按普通 UDP 转发，避免被 DNS ID 改写和缓存逻辑误处理。
                     let is_dns_proxy_query =
                         context.proxy_dns && target.port() == 53 && is_dns_query_packet(&data);
+                    let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        if let Some(dns_proxy) = &dns_proxy {
-                            dns_proxy.send(source, target, data);
+                        let direct_domain = parse_dns_query(&data)
+                            .is_some_and(|(domain, _)| context.direct_checker.is_direct_domain(&domain));
+                        if direct_domain {
+                            force_dns_direct = true;
+                        } else {
+                            if let Some(dns_proxy) = &dns_proxy {
+                                dns_proxy.send(source, target, data);
+                            }
+                            continue;
                         }
-                        continue;
+                    }
+                    if !force_dns_direct && !context.proxy_dns
+                        && target.port() == 53 && is_dns_query_packet(&data)
+                    {
+                        force_dns_direct = true;
                     }
 
                     // 上面已经消化了真实 DNS 查询；没有通过 DNS 校验的 UDP/53
@@ -122,7 +135,8 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
 
-                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut direct_match =
+                        force_dns_direct || context.direct_checker.is_direct(&address);
                     let proxy_address = address.clone();
                     if !direct_match {
                         // UDP/QUIC 代理目标保持原始 IP；只有域名规则可能改判直连时，

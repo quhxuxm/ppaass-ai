@@ -218,6 +218,5 @@ pub(super) fn install_route_guard(
         config.ipv6.as_deref(),
         config.route_state_file.as_deref(),
         &proxy_ips,
-        config.proxy_dns,
     )
 }

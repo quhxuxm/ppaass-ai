@@ -59,7 +59,6 @@ pub(crate) struct RouteGuardInstall<'a> {
     pub(crate) tun_ipv6_cidr: Option<&'a str>,
     pub(crate) route_state_file: Option<&'a str>,
     pub(crate) proxy_ips: &'a [IpAddr],
-    pub(crate) capture_system_dns: bool,
 }
 
 impl RouteGuard {
@@ -72,7 +71,6 @@ impl RouteGuard {
         tun_ipv6_cidr: Option<&str>,
         route_state_file: Option<&str>,
         proxy_ips: &[IpAddr],
-        capture_system_dns: bool,
     ) -> Result<Self> {
         let install = RouteGuardInstall {
             tun_if_index,
@@ -81,7 +79,6 @@ impl RouteGuard {
             tun_ipv6_cidr,
             route_state_file,
             proxy_ips,
-            capture_system_dns,
         };
         #[cfg(target_os = "macos")]
         {
@@ -111,7 +108,6 @@ impl RouteGuard {
             tun_ipv6_cidr,
             route_state_file,
             proxy_ips,
-            capture_system_dns,
         } = install;
         #[cfg(not(target_os = "macos"))]
         let _ = dns_capture_target;
@@ -214,40 +210,38 @@ impl RouteGuard {
             }
         }
 
-        if capture_system_dns {
-            let dns_servers = system_dns_servers();
-            if should_install_dns_capture_host_routes() {
-                let dns_capture_ips = dns_servers
-                    .iter()
-                    .map(|server| server.ip)
-                    .collect::<Vec<_>>();
-                install_dns_capture_routes(
-                    &mut guard.mgr,
-                    DnsCaptureRouteContext {
-                        tun_if_index,
-                        dns_ips: &dns_capture_ips,
-                        proxy_ips,
-                        default_v4_gateway: default_v4_gw,
-                        default_v6_gateway: default_v6_gw,
-                    },
-                    &mut guard.installed,
-                    &mut guard.lease,
-                )?;
-            } else {
-                debug!("当前平台使用专用 DNS 接管机制，不安装系统 DNS host route");
-            }
-            #[cfg(target_os = "macos")]
-            {
-                guard.pf_dns_guard = Some(MacosPfDnsGuard::install(
+        let dns_servers = system_dns_servers();
+        if should_install_dns_capture_host_routes() {
+            let dns_capture_ips = dns_servers
+                .iter()
+                .map(|server| server.ip)
+                .collect::<Vec<_>>();
+            install_dns_capture_routes(
+                &mut guard.mgr,
+                DnsCaptureRouteContext {
                     tun_if_index,
-                    dns_capture_target,
-                    &dns_servers,
-                    &macos_default_dns_interfaces(default_v4_if, default_v6_if),
-                    pf_token_observer,
-                )?);
-            }
-            flush_system_dns_cache();
+                    dns_ips: &dns_capture_ips,
+                    proxy_ips,
+                    default_v4_gateway: default_v4_gw,
+                    default_v6_gateway: default_v6_gw,
+                },
+                &mut guard.installed,
+                &mut guard.lease,
+            )?;
+        } else {
+            debug!("当前平台使用专用 DNS 接管机制，不安装系统 DNS host route");
         }
+        #[cfg(target_os = "macos")]
+        {
+            guard.pf_dns_guard = Some(MacosPfDnsGuard::install(
+                tun_if_index,
+                dns_capture_target,
+                &dns_servers,
+                &macos_default_dns_interfaces(default_v4_if, default_v6_if),
+                pf_token_observer,
+            )?);
+        }
+        flush_system_dns_cache();
 
         // macOS：在劫持默认路由前安装 ifscope 默认路由。
         // 没有这条路由时，`IP_BOUND_IF` 把直连套接字绑到物理接口后，
