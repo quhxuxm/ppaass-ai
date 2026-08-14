@@ -83,11 +83,12 @@ impl ProxyServer {
         })
     }
 
+    /// 运行 proxy 主服务，监听 TCP/Yamux 和原生 UDP 入站。
     #[instrument(skip(self))]
     pub async fn run(self) -> Result<()> {
         // TCP 与原生 UDP 共用同一个端口号。TCP listener 保持原有 framed
         // TCP/Yamux 入站，UDP socket 只接受通过 PPAASS 认证和 AEAD 的数据报。
-        let listener = bind_tcp_listener_with_backlog(
+        let tcp_listener = bind_tcp_listener_with_backlog(
             self.config.listen_addr.as_str(),
             DEFAULT_TCP_LISTEN_BACKLOG,
         )?;
@@ -110,7 +111,7 @@ impl ProxyServer {
             // 同时等待新连接和 Ctrl-C。收到关闭信号后退出 accept loop，
             // 已经 spawn 出去的连接任务会按各自的 IO/idle 规则结束。
             tokio::select! {
-                result = listener.accept() => {
+                result = tcp_listener.accept() => {
                     match result {
                         Ok((stream, addr)) => {
                             debug!("接受来自 {} 的连接", addr);

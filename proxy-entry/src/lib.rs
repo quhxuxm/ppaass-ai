@@ -48,7 +48,11 @@ pub fn run(config: ProxyConfig) -> Result<()> {
             let server = ProxyServer::new(config.clone()).await?;
             match AssertUnwindSafe(server.run()).catch_unwind().await {
                 Ok(Ok(())) => break,
-                Ok(Err(err)) => return Err(err.into()),
+                Ok(Err(err)) => {
+                    error!("proxy 主服务运行失败，准备重启监听循环：{err}");
+                    warn!("500ms 后重启 proxy 主服务");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
                 Err(payload) => {
                     error!(
                         "proxy 主服务 panic，准备重启监听循环：{}",
