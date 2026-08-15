@@ -7,6 +7,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+const DIRECT_DNS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const DIRECT_UDP_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -22,6 +23,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         tcp_sessions,
         udp_sessions,
         tun_networks,
+        close_after_response,
         shutdown,
     } = context;
 
@@ -37,7 +39,12 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
     .await?;
     let mut outbound_bytes = 0u64;
     let mut inbound_bytes = 0u64;
-    let idle = tokio::time::sleep(UDP_SESSION_IDLE);
+    let idle_timeout = if close_after_response {
+        DIRECT_DNS_RESPONSE_TIMEOUT
+    } else {
+        UDP_SESSION_IDLE
+    };
+    let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);
     let mut buf = vec![0u8; 65535];
 
@@ -47,7 +54,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
             _ = &mut idle => {
                 debug!(
                     "TUN UDP 直连会话空闲超过 {} 秒，关闭 -> {}",
-                    UDP_SESSION_IDLE.as_secs(),
+                    idle_timeout.as_secs(),
                     target_label
                 );
                 break;
@@ -71,7 +78,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
                 let data_len = data_len as u64;
                 outbound_bytes += data_len;
                 telemetry::record_traffic(data_len, 0);
-                idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
             }
             received = socket.recv(&mut buf) => {
                 match received {
@@ -84,7 +91,10 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
                         let received_bytes = n as u64;
                         inbound_bytes += received_bytes;
                         telemetry::record_traffic(0, received_bytes);
-                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                        if close_after_response {
+                            break;
+                        }
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                     }
                     Err(e) => {
                         debug!("UDP 直连接收错误：{e}");

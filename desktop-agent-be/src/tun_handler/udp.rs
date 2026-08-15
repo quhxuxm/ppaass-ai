@@ -35,6 +35,7 @@ pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
     pub(super) force_direct: bool,
+    pub(super) close_after_response: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) tcp_sessions: Arc<YamuxSessionManager>,
@@ -56,6 +57,7 @@ struct DirectUdpRelayContext {
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     tun_networks: TunNetworks,
+    close_after_response: bool,
     shutdown: CancellationToken,
 }
 
@@ -70,6 +72,7 @@ pub(super) async fn handle_tun_udp(
         tun_networks,
         proxy_dns,
         force_direct,
+        close_after_response,
         quic_policy,
         netstack_tx,
         tcp_sessions,
@@ -159,6 +162,7 @@ pub(super) async fn handle_tun_udp(
             tcp_sessions,
             udp_sessions,
             tun_networks,
+            close_after_response,
             shutdown,
         })
         .await?;

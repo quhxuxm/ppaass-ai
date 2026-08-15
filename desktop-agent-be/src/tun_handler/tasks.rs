@@ -128,8 +128,9 @@ pub(super) fn spawn_udp_sessions(
                         context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
                     let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        let direct_domain = parse_dns_query(&data)
-                            .is_some_and(|(domain, _)| context.direct_checker.is_direct_domain(&domain));
+                        let direct_domain = parse_dns_query(&data).is_some_and(|(domain, _)| {
+                            context.direct_checker.is_direct_domain(&domain)
+                        });
                         if direct_domain {
                             force_dns_direct = true;
                         } else {
@@ -139,8 +140,10 @@ pub(super) fn spawn_udp_sessions(
                             continue;
                         }
                     }
-                    if !force_dns_direct && !context.proxy_dns
-                        && target_addr.port() == 53 && is_dns_query_packet(&data)
+                    if !force_dns_direct
+                        && !context.proxy_dns
+                        && target_addr.port() == 53
+                        && is_dns_query_packet(&data)
                     {
                         force_dns_direct = true;
                     }
@@ -256,6 +259,9 @@ pub(super) fn spawn_udp_sessions(
                         // This task is created only after classify_udp_route returned Direct.
                         // Preserve that decision instead of repeating rule/cache lookups.
                         force_direct: true,
+                        // DNS 是单次 request/response；收到首个回复后关闭本地 UDP
+                        // socket，避免大量独立 DNS 源端口在 60 秒空闲期内耗尽 FD。
+                        close_after_response: force_dns_direct,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),
