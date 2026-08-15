@@ -300,6 +300,9 @@ public class PpaassVpnService extends VpnService {
                     builder,
                     config.getJSONObject("direct_access"),
                     !ipv6.isEmpty());
+            // 为 Android resolver 提供一个进入 VPN 的 DNS 上游。请求会被 TUN 的
+            // proxy_dns 路径截获并通过 Proxy 解析，不会直连 8.8.8.8。
+            builder.addDnsServer("8.8.8.8");
 
             applyAppSelection(builder);
 
