@@ -264,10 +264,16 @@ async fn stop_netstack_generation(
     }
 }
 
-async fn abort_generation_task<T>(name: &'static str, handle: JoinHandle<T>)
+async fn abort_generation_task<T>(name: &'static str, mut handle: JoinHandle<T>)
 where
     T: Send + 'static,
 {
+    if tokio::time::timeout(Duration::from_secs(1), &mut handle)
+        .await
+        .is_ok()
+    {
+        return;
+    }
     handle.abort();
     match handle.await {
         Ok(_) => {}

@@ -45,6 +45,7 @@ pub(super) fn spawn_tcp_listener(
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     spawn_guarded("desktop tcp listener", async move {
+        let mut flow_tasks: Vec<JoinHandle<()>> = Vec::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
@@ -53,7 +54,8 @@ pub(super) fn spawn_tcp_listener(
                     let Some((stream, source_addr, target_addr)) = accepted else { break };
                     debug!("TUN TCP {} -> {}", source_addr, target_addr);
                     let context = context.clone();
-                    spawn_guarded("desktop tun tcp flow", async move {
+                    flow_tasks.retain(|task| !task.is_finished());
+                    flow_tasks.push(spawn_guarded("desktop tun tcp flow", async move {
                         if let Err(e) =
                             handle_tun_tcp(
                                 stream,
@@ -64,10 +66,11 @@ pub(super) fn spawn_tcp_listener(
                         {
                             debug!("TUN TCP 流结束：{e}");
                         }
-                    });
+                    }));
                 }
             }
         }
+        stop_flow_tasks(flow_tasks).await;
         debug!("tcp_task 退出");
     })
 }
@@ -85,6 +88,7 @@ pub(super) fn spawn_udp_sessions(
         // Only this dispatcher mutates the map. Flow tasks report completion
         // through a channel, avoiding a DashMap shard lock on every UDP packet.
         let mut sessions = UdpSessions::new();
+        let mut flow_tasks: Vec<JoinHandle<()>> = Vec::new();
         let (session_closed_tx, mut session_closed_rx) = tokio::sync::mpsc::unbounded_channel();
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
@@ -261,7 +265,8 @@ pub(super) fn spawn_udp_sessions(
                         direct_egress: context.direct_egress.clone(),
                         shutdown: shutdown.clone(),
                     };
-                    spawn_guarded("desktop tun udp flow", async move {
+                    flow_tasks.retain(|task| !task.is_finished());
+                    flow_tasks.push(spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
                         if let Err(e) =
                             handle_tun_udp(
@@ -274,12 +279,22 @@ pub(super) fn spawn_udp_sessions(
                             debug!("TUN UDP 会话结束：{e}");
                         }
                         let _ = session_closed_tx.send(key);
-                    });
+                    }));
                 }
             }
         }
+        stop_flow_tasks(flow_tasks).await;
         debug!("udp_task 退出");
     })
+}
+
+async fn stop_flow_tasks(flow_tasks: Vec<JoinHandle<()>>) {
+    for task in &flow_tasks {
+        task.abort();
+    }
+    for task in flow_tasks {
+        let _ = task.await;
+    }
 }
 
 pub fn classify_udp_route(

@@ -19,7 +19,9 @@ export const directRulePresets: Array<{ label: string; icon: AppIconName; rules:
   { label: "中国", icon: "map-pin", rules: ["*.cn"] },
   { label: "Microsoft", icon: "cloud", rules: ["*.microsoft.com", "*.bing.com"] },
   { label: "Teams", icon: "cloud", rules: ["teams.microsoft.com", "*.teams.microsoft.com", "*.lync.com"] },
-  { label: "Skype", icon: "cloud", rules: ["skype.com", "*.skype.com"] }
+  { label: "Skype", icon: "cloud", rules: ["skype.com", "*.skype.com"] },
+  { label: "Outlook", icon: "cloud", rules: ["outlook.com", "*.outlook.com", "outlook.office.com", "*.outlook.office.com"] },
+  { label: "Office", icon: "cloud", rules: ["office.com", "*.office.com", "office365.com", "*.office365.com"] }
 ];
 
 export const compressionOptions = ["none", "lz4", "gzip", "zstd"];

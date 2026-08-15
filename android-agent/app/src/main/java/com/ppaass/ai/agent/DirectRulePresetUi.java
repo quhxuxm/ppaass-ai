@@ -28,6 +28,13 @@ final class DirectRulePresetUi {
                 "googlevideo.com", "*.googlevideo.com", "ytimg.com", "*.ytimg.com",
                 "ggpht.com", "*.ggpht.com", "*.gstatic.com"
         }));
+        addRow(activity, root, activity.dp(8),
+                new Preset("Outlook", new String[]{
+                        "outlook.com", "*.outlook.com", "outlook.office.com", "*.outlook.office.com"
+                }),
+                new Preset("Office", new String[]{
+                        "office.com", "*.office.com", "office365.com", "*.office365.com"
+                }));
     }
 
     private static void addRow(
