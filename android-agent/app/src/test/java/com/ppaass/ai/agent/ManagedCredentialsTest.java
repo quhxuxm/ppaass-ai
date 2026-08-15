@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.Assume;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
@@ -37,6 +38,7 @@ public class ManagedCredentialsTest {
     public void managedKeyIntegrityRejectsContentChanges() throws Exception {
         byte[] original = "private-key-material".getBytes(StandardCharsets.UTF_8);
         File credential = temporaryFolder.newFile("managed-test.pem");
+        assumePosixPermissions(credential);
         Files.write(credential.toPath(), original);
         Files.setPosixFilePermissions(
                 credential.toPath(),
@@ -63,6 +65,7 @@ public class ManagedCredentialsTest {
     public void managedKeyIntegrityRejectsUnsafePermissions() throws Exception {
         byte[] content = "private-key-material".getBytes(StandardCharsets.UTF_8);
         File credential = temporaryFolder.newFile("managed-permissions.pem");
+        assumePosixPermissions(credential);
         Files.write(credential.toPath(), content);
         Files.setPosixFilePermissions(
                 credential.toPath(),
@@ -77,5 +80,10 @@ public class ManagedCredentialsTest {
                         credential,
                         content.length,
                         ManagedCredentials.sha256Hex(content)));
+    }
+
+    private static void assumePosixPermissions(File file) throws IOException {
+        Assume.assumeTrue(
+                Files.getFileStore(file.toPath()).supportsFileAttributeView("posix"));
     }
 }

@@ -7,10 +7,9 @@
 !macroend
 
 !macro PPAASS_INSTALL_AGENT_SERVICE
-  ; A first-time install has no managed user directory until login, so the app
-  ; still performs its normal on-demand installation in that case. An upgrade
-  ; already has this directory and must leave a current, running service behind.
-  nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$configRoot = Join-Path $$env:LOCALAPPDATA $\'com.ppaass.agent$\'; $$agent = Join-Path $\'$INSTDIR$\' $\'desktop-agent-ui.exe$\'; if ((Test-Path -LiteralPath $$configRoot -PathType Container) -and (Test-Path -LiteralPath $$agent -PathType Leaf)) { & $$agent --ppaass-install-service --ppaass-service-config-root $$configRoot; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE } }"'
+  ; Prefer the live roaming configuration. Earlier releases used LocalAppData
+  ; for credentials, so retain it only as a compatibility fallback.
+  nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$roots = @((Join-Path $$env:APPDATA $\'com.ppaass.agent$\'), (Join-Path $$env:LOCALAPPDATA $\'com.ppaass.agent$\')); $$configRoot = $$roots | Where-Object { Test-Path -LiteralPath (Join-Path $$_ $\'agent.toml$\') -PathType Leaf } | Select-Object -First 1; $$agent = Join-Path $\'$INSTDIR$\' $\'desktop-agent-ui.exe$\'; if ($$null -ne $$configRoot -and (Test-Path -LiteralPath $$agent -PathType Leaf)) { & $$agent --ppaass-install-service --ppaass-service-config-root $$configRoot; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE } }"'
 !macroend
 
 ; Remove only application-owned configuration files. Keep credentials, captures,
@@ -28,7 +27,6 @@
 
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro PPAASS_REMOVE_AGENT_SERVICE
-  !insertmacro PPAASS_REMOVE_AGENT_CONFIG
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL

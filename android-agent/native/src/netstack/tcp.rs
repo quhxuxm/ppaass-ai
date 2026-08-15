@@ -2,9 +2,9 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use common::spawn_guarded;
+use common::{spawn_guarded, tls_client_hello_server_name};
 use futures::StreamExt;
-use protocol::TransportProtocol;
+use protocol::{Address, TransportProtocol};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -21,6 +21,8 @@ use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
+const TLS_SNI_PREFETCH_TIMEOUT: Duration = Duration::from_millis(250);
+const TLS_SNI_PREFETCH_LIMIT: usize = 16 * 1024;
 
 pub(super) fn spawn_tcp_listener(
     mut tcp_listener: netstack_smoltcp::TcpListener,
@@ -63,7 +65,7 @@ async fn handle_tcp(
         target.to_string()
     };
     let mut direct_target = None;
-    let proxy_address = address.clone();
+    let mut proxy_address = address.clone();
     let mut proxy_reason = None;
     // proxy_dns=false 时 DNS 查询由 agent 直连上游 DNS 服务器。
     if !proxy_dns_request
@@ -96,9 +98,10 @@ async fn handle_tcp(
             .matching_domain_for_ip(target.ip(), |_| true)
     {
         debug!(
-            "Android TUN TCP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
+            "Android TUN TCP uses cached domain as proxy target: {} ({})",
             target, domain
         );
+        proxy_address = proxy_target_address(proxy_address, Some(&domain));
         proxy_reason = Some(format!("cached domain {domain}"));
     }
 
@@ -154,14 +157,11 @@ async fn handle_tcp(
         }
     };
     if !prefetched.is_empty() {
-        // 这里只做原样补写，不解析 TLS SNI/HTTP Host，也不参与直连规则。
         // Android TUN 的三次握手已经由 netstack 接住；等待 proxy 建连时如果完全不读本地流，
-        // 浏览器或视频 App 的首包会被接收窗口卡住。缓存少量字节并在远端通道建立后立即写出，
-        // 可以减少 HLS 小分片连接在建连阶段的抖动。
+        // 浏览器或视频 App 的首包会被接收窗口卡住。缓存内容可能包含用于恢复代理目标域名
+        // 的 ClientHello，建立远端连接后必须完整、原样补写。
         write_prefetched(&mut proxy_io, &prefetched).await?;
     }
-    // Android TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始
-    // netstack TCP 流交给 copy_bidirectional，避免“先读后补发”影响视频分片。
     match relay_tcp_bidirectional(&mut client, &mut proxy_io, TcpRelayOptions::tun("proxy")).await {
         Ok(stats) => debug!(
             "Android TUN TCP proxy relay ended up={} down={}",
@@ -183,17 +183,61 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
 async fn connect_proxy_stream_with_tun_prefetch(
     client: &mut netstack_smoltcp::TcpStream,
     context: &ForwardContext,
-    proxy_address: protocol::Address,
+    proxy_address: Address,
     label: &str,
 ) -> Result<(crate::yamux_session::AndroidYamuxTargetStream, Vec<u8>)> {
-    connect_with_tun_prefetch(
+    let sni_prefetch = prefetch_tls_sni_for_ip(client, &proxy_address).await?;
+    let proxy_address = proxy_target_address(
+        proxy_address,
+        tls_client_hello_server_name(&sni_prefetch).as_deref(),
+    );
+    let (stream, mut prefetched) = connect_with_tun_prefetch(
         client,
         context
             .tcp_sessions
             .connect_to_target(proxy_address, TransportProtocol::Tcp),
         label,
     )
-    .await
+    .await?;
+    if !sni_prefetch.is_empty() {
+        let mut combined = sni_prefetch;
+        combined.append(&mut prefetched);
+        return Ok((stream, combined));
+    }
+    Ok((stream, prefetched))
+}
+
+pub fn proxy_target_address(original: Address, domain: Option<&str>) -> Address {
+    match domain.map(str::trim).filter(|host| !host.is_empty()) {
+        Some(host) => Address::Domain {
+            host: host.to_string(),
+            port: original.port(),
+        },
+        None => original,
+    }
+}
+
+pub fn should_prefetch_tls_sni(address: &Address) -> bool {
+    address.port() == 443 && matches!(address, Address::Ipv4 { .. } | Address::Ipv6 { .. })
+}
+
+async fn prefetch_tls_sni_for_ip(
+    client: &mut netstack_smoltcp::TcpStream,
+    address: &Address,
+) -> Result<Vec<u8>> {
+    if !should_prefetch_tls_sni(address) {
+        return Ok(Vec::new());
+    }
+
+    let mut packet = vec![0_u8; TLS_SNI_PREFETCH_LIMIT];
+    match timeout(TLS_SNI_PREFETCH_TIMEOUT, client.read(&mut packet)).await {
+        Ok(Ok(0)) | Err(_) => Ok(Vec::new()),
+        Ok(Ok(read)) => {
+            packet.truncate(read);
+            Ok(packet)
+        }
+        Ok(Err(error)) => Err(error.into()),
+    }
 }
 
 async fn connect_with_tun_prefetch<T, F>(

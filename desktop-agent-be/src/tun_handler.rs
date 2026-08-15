@@ -23,7 +23,7 @@ pub mod proxy_routing;
 pub mod route;
 pub mod tasks;
 mod tcp;
-pub use tcp::proxy_target_address;
+pub use tcp::{proxy_target_address, tls_client_hello_server_name};
 mod udp;
 pub mod udp_relay;
 mod udp_writer;

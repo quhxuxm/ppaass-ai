@@ -6,6 +6,7 @@ pub mod quic;
 pub mod task_guard;
 pub mod tcp_keepalive;
 pub mod tcp_listener;
+pub mod tls_client_hello;
 pub mod transport;
 pub mod tun_control;
 pub mod yamux_settings;
@@ -26,6 +27,7 @@ pub use tcp_keepalive::{
     PROXY_TCP_USER_TIMEOUT, configure_proxy_tcp_socket, configure_proxy_tcp_stream,
 };
 pub use tcp_listener::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog};
+pub use tls_client_hello::tls_client_hello_server_name;
 pub use transport::TransportMode;
 pub use yamux_settings::{YamuxConfig, YamuxServerConfig, YamuxSettings, YamuxTransportConfig};
 

@@ -22,7 +22,7 @@ function macroBody(name) {
   assert.ok(match, `${name} must exist`);
   return match[1];
 }
-assert.match(macroBody("NSIS_HOOK_PREINSTALL"), /PPAASS_REMOVE_AGENT_CONFIG/);
+assert.doesNotMatch(macroBody("NSIS_HOOK_PREINSTALL"), /PPAASS_REMOVE_AGENT_CONFIG/);
 assert.match(macroBody("NSIS_HOOK_POSTINSTALL"), /PPAASS_INSTALL_AGENT_SERVICE/);
 assert.match(macroBody("NSIS_HOOK_PREUNINSTALL"), /PPAASS_REMOVE_AGENT_CONFIG/);
 assert.doesNotMatch(hooks, /RMDir\s+\/r/i);
@@ -30,7 +30,9 @@ const installService = macroBody("PPAASS_INSTALL_AGENT_SERVICE");
 assert.match(installService, /desktop-agent-ui\.exe/);
 assert.match(installService, /--ppaass-install-service/);
 assert.match(installService, /--ppaass-service-config-root/);
-assert.match(installService, /Test-Path -LiteralPath \$\$configRoot -PathType Container/);
+assert.match(installService, /Join-Path \$\$env:APPDATA/);
+assert.match(installService, /Join-Path \$\$env:LOCALAPPDATA/);
+assert.match(installService, /Join-Path \$\$_ \$\\'agent\.toml\$\\'/);
 
 for (const directory of ["AppDataFolder", "LocalAppDataFolder"]) {
   assert.match(wix, new RegExp(`<Directory Id="${directory}">`));

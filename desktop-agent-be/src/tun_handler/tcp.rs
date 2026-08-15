@@ -38,7 +38,7 @@ const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 mod proxy_connect;
 
 use proxy_connect::connect_proxy_stream_with_tun_prefetch;
-pub use proxy_connect::proxy_target_address;
+pub use proxy_connect::{proxy_target_address, tls_client_hello_server_name};
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
