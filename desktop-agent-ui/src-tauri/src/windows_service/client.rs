@@ -157,7 +157,7 @@ pub(crate) fn install_and_start_windows_service(config_root: PathBuf) -> Result<
             "binPath=",
             &bin_path,
             "start=",
-            "auto",
+            "demand",
             "DisplayName=",
             SERVICE_DISPLAY_NAME,
         ])?;
@@ -169,7 +169,7 @@ pub(crate) fn install_and_start_windows_service(config_root: PathBuf) -> Result<
             "binPath=",
             &bin_path,
             "start=",
-            "auto",
+            "demand",
         ])?;
     }
 
