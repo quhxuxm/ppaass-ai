@@ -206,6 +206,9 @@ fn bind_direct_udp(
     bind_interface: &BindInterface,
     dedicated_dns_port: bool,
 ) -> std::io::Result<UdpSocket> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = dedicated_dns_port;
+
     let socket = Socket::new(
         Domain::for_address(target),
         Type::DGRAM,

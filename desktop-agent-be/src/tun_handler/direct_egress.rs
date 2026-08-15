@@ -39,6 +39,26 @@ struct TunDirectRefreshTimes {
     ipv6: Option<Instant>,
 }
 
+/// 选择 TUN 内直连 socket 的初始物理出口。
+///
+/// Windows 在 split-default 路由已安装后查询默认路由，会稳定得到 Wintun
+/// 接口；因此必须优先使用 TUN 启动前为 proxy 捕获的物理接口，否则直连
+/// socket 会被 `IP_UNICAST_IF` 再次送回 TUN。
+pub fn select_initial_direct_bind_interface(
+    captured_physical: Option<common::BindInterface>,
+    detected_default: Option<common::BindInterface>,
+) -> Option<common::BindInterface> {
+    #[cfg(windows)]
+    {
+        captured_physical.or(detected_default)
+    }
+
+    #[cfg(not(windows))]
+    {
+        detected_default.or(captured_physical)
+    }
+}
+
 impl TunDirectEgress {
     pub(super) fn new(
         proxy_addrs: Vec<String>,
@@ -46,12 +66,14 @@ impl TunDirectEgress {
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
         let fallback = bind_interface.filter(bind_interface_is_usable);
-        let ipv4 = detect_default_route_interface(false)
-            .filter(bind_interface_is_usable)
-            .or_else(|| fallback.clone());
-        let ipv6 = detect_default_route_interface(true)
-            .filter(bind_interface_is_usable)
-            .or_else(|| fallback.clone());
+        let ipv4 = select_initial_direct_bind_interface(
+            fallback.clone(),
+            detect_default_route_interface(false).filter(bind_interface_is_usable),
+        );
+        let ipv6 = select_initial_direct_bind_interface(
+            fallback.clone(),
+            detect_default_route_interface(true).filter(bind_interface_is_usable),
+        );
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
             bind_interfaces: RwLock::new(TunDirectBindInterfaces { ipv4, ipv6 }),

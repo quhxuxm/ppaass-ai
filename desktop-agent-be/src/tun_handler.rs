@@ -8,7 +8,7 @@
 
 pub mod device;
 pub mod direct_domain_cache;
-mod direct_egress;
+pub mod direct_egress;
 pub mod dns;
 pub mod dns_proxy;
 #[cfg(target_os = "macos")]
