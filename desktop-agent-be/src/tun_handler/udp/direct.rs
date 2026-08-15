@@ -3,11 +3,16 @@ use crate::error::AgentError;
 use common::{BindInterface, bind_socket_to_interface};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 const DIRECT_DNS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "macos")]
+static NEXT_DIRECT_DNS_PORT: AtomicU16 =
+    AtomicU16::new(crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST);
 #[cfg(windows)]
 const DIRECT_UDP_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -35,6 +40,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         tcp_sessions.as_ref(),
         udp_sessions.as_ref(),
         tun_networks,
+        close_after_response,
     )
     .await?;
     let mut outbound_bytes = 0u64;
@@ -137,6 +143,7 @@ async fn connect_direct_udp_with_refresh(
     tcp_sessions: &YamuxSessionManager,
     udp_sessions: &YamuxSessionManager,
     tun_networks: TunNetworks,
+    close_after_response: bool,
 ) -> Result<UdpSocket> {
     let initial_bind_interface = match direct_egress.bind_interface(target.ip()) {
         Some(bind_interface) => Some(bind_interface),
@@ -157,7 +164,7 @@ async fn connect_direct_udp_with_refresh(
         ))
     })?;
 
-    match connect_direct_udp(target, &initial_bind_interface).await {
+    match connect_direct_udp(target, &initial_bind_interface, close_after_response).await {
         Ok(socket) => Ok(socket),
         Err(first_err) => {
             debug!(
@@ -173,7 +180,7 @@ async fn connect_direct_udp_with_refresh(
                          刷新后仍无法确定物理出口接口"
                     ))
                 })?;
-            connect_direct_udp(target, &refreshed_bind_interface)
+            connect_direct_udp(target, &refreshed_bind_interface, close_after_response)
                 .await
                 .map_err(|retry_err| {
                     AgentError::Connection(format!(
@@ -187,8 +194,9 @@ async fn connect_direct_udp_with_refresh(
 async fn connect_direct_udp(
     target: SocketAddr,
     bind_interface: &BindInterface,
+    dedicated_dns_port: bool,
 ) -> std::io::Result<UdpSocket> {
-    let socket = bind_direct_udp(target, bind_interface)?;
+    let socket = bind_direct_udp(target, bind_interface, dedicated_dns_port)?;
     socket.connect(target).await?;
     Ok(socket)
 }
@@ -196,6 +204,7 @@ async fn connect_direct_udp(
 fn bind_direct_udp(
     target: SocketAddr,
     bind_interface: &BindInterface,
+    dedicated_dns_port: bool,
 ) -> std::io::Result<UdpSocket> {
     let socket = Socket::new(
         Domain::for_address(target),
@@ -205,12 +214,34 @@ fn bind_direct_udp(
     bind_socket_to_interface(&socket, Some(bind_interface), target)?;
     tune_direct_udp_socket(&socket, target);
 
-    let bind_addr = if target.is_ipv4() {
+    let bind_ip = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
     } else {
         SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
     };
-    socket.bind(&SockAddr::from(bind_addr))?;
+    #[cfg(target_os = "macos")]
+    if dedicated_dns_port && target.is_ipv4() {
+        for _ in crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+            ..=crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_LAST
+        {
+            let port = NEXT_DIRECT_DNS_PORT.fetch_add(1, Ordering::Relaxed);
+            let port = crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+                + (port - crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST)
+                    % (crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_LAST
+                        - crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+                        + 1);
+            let bind_addr = SocketAddr::new(bind_ip.ip(), port);
+            if socket.bind(&SockAddr::from(bind_addr)).is_ok() {
+                socket.set_nonblocking(true)?;
+                return UdpSocket::from_std(socket.into());
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "没有可用的直连 DNS 专用端口",
+        ));
+    }
+    socket.bind(&SockAddr::from(bind_ip))?;
     socket.set_nonblocking(true)?;
 
     UdpSocket::from_std(socket.into())

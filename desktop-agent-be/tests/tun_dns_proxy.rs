@@ -47,6 +47,19 @@ fn parses_dns_query_name_and_type() {
 }
 
 #[test]
+fn parses_https_dns_query_from_chatgpt() {
+    let packet = vec![
+        0x51, 0x8b, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'c', b'h',
+        b'a', b't', b'g', b'p', b't', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x41, 0x00, 0x01,
+    ];
+
+    assert_eq!(
+        parse_dns_query(&packet),
+        Some(("chatgpt.com".to_string(), "HTTPS".to_string()))
+    );
+}
+
+#[test]
 fn rejects_dns_response_as_query() {
     let packet = vec![
         0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',

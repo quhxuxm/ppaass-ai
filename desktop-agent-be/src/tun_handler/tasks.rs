@@ -124,8 +124,9 @@ pub(super) fn spawn_udp_sessions(
                     // 只有端口和 DNS 协议结构都匹配时才进入 DnsProxy。
                     // 部分应用会把非 DNS UDP 流量发到 53 端口，单靠端口判断会误把它们
                     // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
-                    let is_dns_proxy_query =
-                        context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_query =
+                        target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_proxy_query = context.proxy_dns && is_dns_query;
                     let mut force_dns_direct = false;
                     if is_dns_proxy_query {
                         let direct_domain = parse_dns_query(&data).is_some_and(|(domain, _)| {
@@ -260,8 +261,9 @@ pub(super) fn spawn_udp_sessions(
                         // Preserve that decision instead of repeating rule/cache lookups.
                         force_direct: true,
                         // DNS 是单次 request/response；收到首个回复后关闭本地 UDP
-                        // socket，避免大量独立 DNS 源端口在 60 秒空闲期内耗尽 FD。
-                        close_after_response: force_dns_direct,
+                        // socket。无论这次 DNS 是按域名规则直连，还是因系统路由
+                        // 回退到直连，均不能在 60 秒空闲期内累积 FD。
+                        close_after_response: is_dns_query,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),
