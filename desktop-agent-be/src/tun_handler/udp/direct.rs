@@ -6,10 +6,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::net::UdpSocket;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
 const DIRECT_DNS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_DIRECT_DNS_SOCKETS: usize = 32;
+static DIRECT_DNS_SOCKET_PERMITS: Semaphore =
+    Semaphore::const_new(MAX_CONCURRENT_DIRECT_DNS_SOCKETS);
 #[cfg(target_os = "macos")]
 static NEXT_DIRECT_DNS_PORT: AtomicU16 =
     AtomicU16::new(crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST);
@@ -31,6 +35,20 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         close_after_response,
         shutdown,
     } = context;
+
+    // macOS commonly gives GUI apps a low soft FD limit. DNS clients also tend
+    // to use a fresh source port for every query, so a burst can otherwise open
+    // hundreds of sockets before the response timeout gets a chance to reap
+    // them. Bound only the short-lived DNS path; regular UDP sessions keep their
+    // existing behavior.
+    let _dns_socket_permit =
+        if close_after_response {
+            Some(DIRECT_DNS_SOCKET_PERMITS.acquire().await.map_err(|_| {
+                AgentError::Connection("direct DNS socket limiter closed".to_string())
+            })?)
+        } else {
+            None
+        };
 
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
     let socket = connect_direct_udp_with_refresh(

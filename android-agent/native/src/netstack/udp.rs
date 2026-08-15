@@ -21,7 +21,7 @@ use super::network::{
 use super::udp_relay::UdpRelay;
 use super::udp_writer::UdpWriter;
 use crate::direct_access::DirectAccessChecker;
-use crate::error::Result;
+use crate::error::{AndroidAgentError, Result};
 use crate::yamux_session::AndroidYamuxSessionManager;
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
@@ -46,6 +46,7 @@ pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
     pub(super) force_direct: bool,
+    pub(super) close_after_response: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
@@ -86,8 +87,8 @@ pub(super) fn spawn_udp_sessions(
                     let Some((data, source, target)) = message else { break };
                     // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
                     // 非 DNS 的 UDP/53 必须继续按普通 UDP 转发，避免被 DNS ID 改写和缓存逻辑误处理。
-                    let is_dns_proxy_query =
-                        context.proxy_dns && target.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_query = target.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_proxy_query = context.proxy_dns && is_dns_query;
                     let mut force_dns_direct = false;
                     if is_dns_proxy_query {
                         let direct_domain = parse_dns_query(&data)
@@ -194,6 +195,9 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: false,
                         // This task exists only after the ingress classifier selected Direct.
                         force_direct: true,
+                        // DNS uses a fresh client source port frequently. Close these
+                        // one-shot sockets promptly and cap them in the relay.
+                        close_after_response: is_dns_query,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_sessions: context.udp_sessions.clone(),
@@ -249,6 +253,7 @@ pub(super) async fn handle_tun_udp(
         tun_networks,
         proxy_dns,
         force_direct,
+        close_after_response,
         quic_policy,
         netstack_tx,
         udp_sessions,
@@ -334,6 +339,7 @@ pub(super) async fn handle_tun_udp(
             direct_label,
             rx,
             netstack_tx,
+            close_after_response,
             shutdown,
         )
         .await?;

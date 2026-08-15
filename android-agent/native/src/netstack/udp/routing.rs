@@ -1,4 +1,10 @@
 use super::*;
+use tokio::sync::Semaphore;
+
+const DIRECT_DNS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_DIRECT_DNS_SOCKETS: usize = 32;
+static DIRECT_DNS_SOCKET_PERMITS: Semaphore =
+    Semaphore::const_new(MAX_CONCURRENT_DIRECT_DNS_SOCKETS);
 
 pub fn classify_udp_route(
     target_port: u16,
@@ -27,11 +33,24 @@ pub(super) async fn relay_direct_udp(
     target_label: String,
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     netstack_tx: UdpWriter,
+    close_after_response: bool,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    let _dns_socket_permit = if close_after_response {
+        Some(DIRECT_DNS_SOCKET_PERMITS.acquire().await.map_err(|_| {
+            AndroidAgentError::Connection("direct DNS socket limiter closed".to_string())
+        })?)
+    } else {
+        None
+    };
     let socket = bind_direct_udp(connect_target)?;
     socket.connect(connect_target).await?;
-    let idle_sleep = tokio::time::sleep(UDP_SESSION_IDLE);
+    let idle_timeout = if close_after_response {
+        DIRECT_DNS_RESPONSE_TIMEOUT
+    } else {
+        UDP_SESSION_IDLE
+    };
+    let idle_sleep = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle_sleep);
     let mut response_buf = vec![0u8; 65535];
 
@@ -50,7 +69,7 @@ pub(super) async fn relay_direct_udp(
                     debug!("Android UDP direct send failed: {e}");
                     break;
                 }
-                idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                idle_sleep.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
             }
             received = socket.recv(&mut response_buf) => {
                 match received {
@@ -60,7 +79,10 @@ pub(super) async fn relay_direct_udp(
                             debug!("Android UDP direct response writeback failed: {e}");
                             break;
                         }
-                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                        if close_after_response {
+                            break;
+                        }
+                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                     }
                     Err(e) => {
                         debug!("Android UDP direct receive failed: {e}");
