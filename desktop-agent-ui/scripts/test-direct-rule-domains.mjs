@@ -15,6 +15,15 @@ assert.ok(teamsPreset, "Teams direct-rule preset exists");
 assert.ok(teamsPreset.rules.includes("teams.cloud.microsoft"));
 assert.ok(teamsPreset.rules.includes("*.teams.cloud.microsoft"));
 assert.ok(teamsPreset.rules.includes("login.microsoftonline.com"));
+assert.ok(teamsPreset.rules.includes("device.login.microsoftonline.com"));
+assert.ok(teamsPreset.rules.includes("*.microsoftonline.com"));
+assert.ok(teamsPreset.rules.includes("*.msftauth.net"));
+assert.ok(teamsPreset.rules.includes("*.phonefactor.net"));
+assert.ok(teamsPreset.rules.includes("login.live.com"));
+assert.ok(teamsPreset.rules.includes("*.cloud.microsoft"));
+assert.ok(teamsPreset.rules.includes("20.190.128.0/18"));
+assert.ok(teamsPreset.rules.includes("52.112.0.0/14"));
+assert.ok(teamsPreset.rules.includes("2603:1063::/38"));
 
 assert.equal(domainToDirectRule("api.example.com"), "*.example.com");
 assert.equal(domainToDirectRule("a.service.example.com."), "*.service.example.com");
