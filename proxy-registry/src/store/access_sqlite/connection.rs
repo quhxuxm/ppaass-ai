@@ -1,5 +1,7 @@
 use super::*;
 
+const SQLITE_PRAGMA_SECURE_DELETE:&str="secure_delete";
+const SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT:&str="journal_size_limit";
 impl SqliteAccessLogRepository {
     /// Rejects configurations that would collapse the trust boundary back into one file.
     ///
@@ -50,8 +52,8 @@ impl SqliteAccessLogRepository {
             .busy_timeout(Duration::from_secs(5))
             // Retention deletes must scrub deleted payloads instead of leaving host history in
             // SQLite freelist pages. A zero WAL size limit truncates reset WAL files.
-            .pragma("secure_delete", "ON")
-            .pragma("journal_size_limit", "0");
+            .pragma(SQLITE_PRAGMA_SECURE_DELETE, "ON")
+            .pragma(SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT, "0");
         // Multiple Proxy Registry processes keep this WAL database open. SQLx's
         // default 10-minute idle timeout and 30-minute maximum lifetime briefly close and
         // replace pooled connections. On Unix that can let SQLite unlink/recreate `-wal` and
