@@ -18,7 +18,18 @@ export const directRulePresets: Array<{ label: string; icon: AppIconName; rules:
   { label: "私网", icon: "building", rules: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
   { label: "中国", icon: "map-pin", rules: ["*.cn"] },
   { label: "Microsoft", icon: "cloud", rules: ["*.microsoft.com", "*.bing.com"] },
-  { label: "Teams", icon: "cloud", rules: ["teams.microsoft.com", "*.teams.microsoft.com", "*.lync.com"] },
+  {
+    label: "Teams",
+    icon: "cloud",
+    rules: [
+      "teams.microsoft.com",
+      "*.teams.microsoft.com",
+      "teams.cloud.microsoft",
+      "*.teams.cloud.microsoft",
+      "*.lync.com",
+      "login.microsoftonline.com"
+    ]
+  },
   { label: "Skype", icon: "cloud", rules: ["skype.com", "*.skype.com"] },
   { label: "Outlook", icon: "cloud", rules: ["outlook.com", "*.outlook.com", "outlook.office.com", "*.outlook.office.com"] },
   { label: "Office", icon: "cloud", rules: ["office.com", "*.office.com", "office365.com", "*.office365.com"] }

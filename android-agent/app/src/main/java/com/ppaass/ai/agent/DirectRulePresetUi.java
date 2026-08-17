@@ -5,6 +5,12 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 
 final class DirectRulePresetUi {
+    private static final String[] TEAMS_RULES = {
+            "teams.microsoft.com", "*.teams.microsoft.com",
+            "teams.cloud.microsoft", "*.teams.cloud.microsoft",
+            "*.lync.com", "login.microsoftonline.com"
+    };
+
     private DirectRulePresetUi() {
     }
 
@@ -20,7 +26,7 @@ final class DirectRulePresetUi {
                 new Preset("中国", new String[]{"*.cn"}),
                 new Preset("Microsoft", new String[]{"*.microsoft.com", "*.bing.com"}));
         addRow(activity, root, activity.dp(8),
-                new Preset("Teams", new String[]{"teams.microsoft.com", "*.teams.microsoft.com", "*.lync.com"}),
+                new Preset("Teams", teamsRules()),
                 new Preset("Skype", new String[]{"skype.com", "*.skype.com"}));
         addRow(activity, root, activity.dp(8), new Preset("YouTube", new String[]{
                 "youtube.com", "*.youtube.com", "youtu.be", "*.youtu.be",
@@ -65,6 +71,10 @@ final class DirectRulePresetUi {
             params.setMargins(activity.dp(8), 0, 0, 0);
         }
         row.addView(button, params);
+    }
+
+    static String[] teamsRules() {
+        return TEAMS_RULES.clone();
     }
 
     private record Preset(String label, String[] rules) {

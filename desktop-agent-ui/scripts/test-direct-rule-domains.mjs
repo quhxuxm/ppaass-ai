@@ -8,6 +8,13 @@ import {
   isIpAddress,
   selectedDomainsToNewDirectRules
 } from "../src/directRuleDomains.ts";
+import { directRulePresets } from "../src/constants.ts";
+
+const teamsPreset = directRulePresets.find((preset) => preset.label === "Teams");
+assert.ok(teamsPreset, "Teams direct-rule preset exists");
+assert.ok(teamsPreset.rules.includes("teams.cloud.microsoft"));
+assert.ok(teamsPreset.rules.includes("*.teams.cloud.microsoft"));
+assert.ok(teamsPreset.rules.includes("login.microsoftonline.com"));
 
 assert.equal(domainToDirectRule("api.example.com"), "*.example.com");
 assert.equal(domainToDirectRule("a.service.example.com."), "*.service.example.com");
