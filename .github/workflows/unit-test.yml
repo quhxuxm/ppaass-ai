@@ -8,20 +8,25 @@ on:
 
 jobs:
   unit-test:
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git build-essential gcc pkg-config libssl-dev
 
       - name: Enforce source line limit
         run: |
           ./scripts/check-source-line-limits.sh
           bash scripts/test-proxy-deployment-layout.sh
-
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y curl build-essential gcc pkg-config libssl-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,13 +45,21 @@ jobs:
 
   proxy-registry-frontend:
     name: Proxy Registry frontend
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
     defaults:
       run:
+        shell: bash
         working-directory: proxy-registry/frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -120,12 +133,22 @@ jobs:
 
   android-build:
     name: Android agent
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
     env:
       ANDROID_NDK_VERSION: "28.2.13676358"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git unzip zip build-essential gcc pkg-config libssl-dev
 
       - name: Setup Java
         uses: actions/setup-java@v4

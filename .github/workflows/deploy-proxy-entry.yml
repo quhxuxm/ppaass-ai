@@ -23,7 +23,12 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
     environment: ${{ inputs.environment }}
     steps:
       - name: Checkout
@@ -34,7 +39,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential gcc pkg-config libssl-dev
+          apt-get install -y ca-certificates curl git build-essential gcc pkg-config libssl-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

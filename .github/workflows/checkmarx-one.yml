@@ -32,13 +32,22 @@ jobs:
       actions: read # only required for a private repository by github/codeql-action/upload-sarif
 
     # The type of runner that the job will run on
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       # This step checks out a copy of your repository.
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git unzip
       # This step creates the Checkmarx One scan
       - name: Checkmarx One scan
         uses: checkmarx/ast-github-action@8e887bb93dacc44e0f5b64ee2b06d5815f89d4fc

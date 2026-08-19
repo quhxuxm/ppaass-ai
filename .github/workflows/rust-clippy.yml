@@ -21,7 +21,12 @@ on:
 jobs:
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
-    runs-on: ubuntu:22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
       security-events: write
@@ -29,6 +34,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git build-essential gcc pkg-config libssl-dev
 
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af #@v1
