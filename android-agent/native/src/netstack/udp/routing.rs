@@ -26,6 +26,7 @@ pub fn classify_udp_route(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn relay_direct_udp(
     client: SocketAddr,
     original_target: SocketAddr,
