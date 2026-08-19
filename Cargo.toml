@@ -39,7 +39,7 @@ bitcode = { version = "0.6.9", features = ["serde"] }
 config = "0.15.25"
 # clap 4.6.x pulls proc-macro2 1.0.106+, which conflicts with tun-rs 2.8.x's
 # Windows c2rust-bitfields proc-macro pins. Keep the newest compatible release.
-clap = { version = "=4.5.55", features = ["derive"] }
+clap = { version = "=4.6.6", features = ["derive"] }
 tracing = { version = "0.1.44", features = ["attributes"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2.5"
