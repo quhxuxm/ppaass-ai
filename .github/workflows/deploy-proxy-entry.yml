@@ -34,7 +34,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.93.0"
+          toolchain: "1.97.1"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
