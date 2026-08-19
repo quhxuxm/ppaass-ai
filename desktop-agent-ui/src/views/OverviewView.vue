@@ -82,7 +82,7 @@ const {
           'drop-target': dragOverOverviewCard === card.key
         }
       ]"
-      :style="{ gridColumn: 'span ' + card.span }"
+      :style="{ '--overview-card-span': card.span }"
       :data-overview-card="card.key"
       @mousedown="onOverviewMouseDown($event, card.key)"
     >
