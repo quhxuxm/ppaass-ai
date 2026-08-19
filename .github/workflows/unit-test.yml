@@ -8,9 +8,7 @@ on:
 
 jobs:
   unit-test:
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+    runs-on: ubuntu:22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,9 +40,7 @@ jobs:
 
   proxy-registry-frontend:
     name: Proxy Registry frontend
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+    runs-on: ubuntu:22.04
     defaults:
       run:
         working-directory: proxy-registry/frontend
@@ -124,9 +120,7 @@ jobs:
 
   android-build:
     name: Android agent
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+    runs-on: ubuntu:22.04
     env:
       ANDROID_NDK_VERSION: "28.2.13676358"
     steps:

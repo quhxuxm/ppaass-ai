@@ -18,9 +18,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm-slim
+    runs-on: ubuntu:22.04
     environment: ${{ inputs.environment }}
     steps:
       - name: Checkout
