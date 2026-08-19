@@ -33,8 +33,8 @@ license = "MIT"
 tokio = { version = "1.53.1", features = ["full", "tracing"] }
 tokio-yamux = "0.3.20"
 tokio-util = { version = "0.7.19", features = ["codec", "io"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde = { version = "1.0.229", features = ["derive", "std", "rc"] }
+serde_json = { version = "1.0.151", features = ["std"] }
 bitcode = { version = "0.6.9", features = ["serde"] }
 config = "0.15.25"
 # clap 4.6.x pulls proc-macro2 1.0.106+, which conflicts with tun-rs 2.8.x's

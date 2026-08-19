@@ -1,5 +1,5 @@
 use aes_gcm::{
-    Aes256Gcm, Nonce,
+    Aes256Gcm,
     aead::{Aead, KeyInit, Payload},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -100,7 +100,7 @@ impl AgentAccessTokenService {
         rand::rng().fill(&mut nonce);
         let ciphertext = cipher
             .encrypt(
-                Nonce::from_slice(&nonce),
+                &nonce.try_into().unwrap(),
                 Payload {
                     msg: &plaintext,
                     aad: TOKEN_AAD,
@@ -136,7 +136,7 @@ impl AgentAccessTokenService {
         let plaintext = self
             .cipher()?
             .decrypt(
-                Nonce::from_slice(nonce),
+                &nonce.try_into().unwrap(),
                 Payload {
                     msg: ciphertext,
                     aad: TOKEN_AAD,

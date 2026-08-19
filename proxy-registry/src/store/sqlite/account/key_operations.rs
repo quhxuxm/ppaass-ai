@@ -97,11 +97,11 @@ impl SqliteUserRepository {
             UserRepositoryError::InvalidSchema("用户 key_version 已溢出".to_string())
         })?;
         let timestamp = now();
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "UPDATE users SET public_key_pem = ?, key_version = ?, updated_at = ? \
              WHERE username = ? AND key_version = ? RETURNING {USER_SELECT}"
-        );
-        let user = sqlx::query(&query)
+        ));
+        let user = sqlx::query(query)
             .bind(public_key_pem)
             .bind(new_version)
             .bind(timestamp)

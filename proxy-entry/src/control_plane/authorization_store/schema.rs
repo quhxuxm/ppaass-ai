@@ -27,8 +27,14 @@ pub(super) async fn initialize_schema(pool: &SqlitePool, path: &Path) -> Result<
          CHECK((revision IS NULL AND registry_url IS NULL AND entry_id IS NULL) OR \
                (revision IS NOT NULL AND revision >= 0 AND registry_url IS NOT NULL \
                 AND entry_id IS NOT NULL)))",
-        &authorization_table_sql("authorization_snapshot_users"),
-        &authorization_table_sql("authorization_snapshot_staging"),
+        "CREATE TABLE authorization_snapshot_users (username TEXT PRIMARY KEY NOT NULL, \
+         public_key_pem TEXT NOT NULL, permissions_json TEXT NOT NULL, \
+         enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), \
+         key_version INTEGER NOT NULL CHECK(key_version >= 1), expires_at INTEGER)",
+        "CREATE TABLE authorization_snapshot_staging (username TEXT PRIMARY KEY NOT NULL, \
+         public_key_pem TEXT NOT NULL, permissions_json TEXT NOT NULL, \
+         enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), \
+         key_version INTEGER NOT NULL CHECK(key_version >= 1), expires_at INTEGER)",
         "INSERT INTO authorization_schema_version (singleton, version) VALUES (1, 1)",
         "INSERT INTO authorization_snapshot_metadata \
          (singleton, revision, registry_url, entry_id) VALUES (1, NULL, NULL, NULL)",
@@ -105,18 +111,10 @@ async fn validate_table_shape(pool: &SqlitePool, path: &Path, table: &str) -> Re
         "SELECT username, public_key_pem, permissions_json, enabled, key_version, expires_at \
          FROM {table} LIMIT 0"
     );
-    sqlx::query(&statement)
+    sqlx::query(sqlx::AssertSqlSafe(statement))
         .execute(pool)
         .await
         .map_err(|error| database_config_error(path, "校验 staging schema", error))?;
     Ok(())
 }
 
-fn authorization_table_sql(table: &str) -> String {
-    format!(
-        "CREATE TABLE {table} (username TEXT PRIMARY KEY NOT NULL, \
-         public_key_pem TEXT NOT NULL, permissions_json TEXT NOT NULL, \
-         enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)), \
-         key_version INTEGER NOT NULL CHECK(key_version >= 1), expires_at INTEGER)"
-    )
-}

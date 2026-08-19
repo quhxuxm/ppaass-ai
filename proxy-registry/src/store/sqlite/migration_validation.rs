@@ -260,8 +260,8 @@ pub(super) async fn table_columns(
     table: &str,
 ) -> Result<Vec<String>> {
     // table 只来自本文件中的常量，不接受外部输入。
-    let query = format!("PRAGMA table_info({table})");
-    sqlx::query(&query)
+    let query = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+    sqlx::query(query)
         .fetch_all(&mut **transaction)
         .await?
         .into_iter()

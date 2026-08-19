@@ -101,8 +101,7 @@ pub(super) async fn fetch_account_by_id(
     connection: &mut SqliteConnection,
     account_id: &str,
 ) -> Result<Option<WebAccount>> {
-    let query = format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE account_id = ?");
-    sqlx::query(&query)
+    sqlx::query(sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE account_id = ?")))
         .bind(account_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -114,8 +113,8 @@ pub(super) async fn fetch_account_by_login(
     connection: &mut SqliteConnection,
     login_name: &str,
 ) -> Result<Option<WebAccount>> {
-    let query = format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE login_name = ?");
-    sqlx::query(&query)
+    let query = sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE login_name = ?"));
+    sqlx::query(query)
         .bind(login_name)
         .fetch_optional(&mut *connection)
         .await?
@@ -127,8 +126,8 @@ pub(super) async fn fetch_account_by_linked_username(
     connection: &mut SqliteConnection,
     username: &str,
 ) -> Result<Option<WebAccount>> {
-    let query = format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?");
-    sqlx::query(&query)
+    let query = sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?"));
+    sqlx::query(query)
         .bind(username)
         .fetch_optional(&mut *connection)
         .await?
@@ -141,8 +140,8 @@ pub(super) async fn fetch_key_request_by_id(
     request_id: &str,
 ) -> Result<Option<KeyGenerationRequest>> {
     let query =
-        format!("SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests WHERE request_id = ?");
-    sqlx::query(&query)
+        sqlx::AssertSqlSafe(format!("SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests WHERE request_id = ?"));
+    sqlx::query(query)
         .bind(request_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -154,11 +153,11 @@ pub(super) async fn fetch_pending_key_request_for_account(
     connection: &mut SqliteConnection,
     account_id: &str,
 ) -> Result<Option<KeyGenerationRequest>> {
-    let query = format!(
+    let query =sqlx::AssertSqlSafe(format!(
         "SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests \
          WHERE account_id = ? AND status = 'pending' LIMIT 1"
-    );
-    sqlx::query(&query)
+    ));
+    sqlx::query(query)
         .bind(account_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -170,11 +169,11 @@ pub(super) async fn fetch_agent_device_authorization_by_user_code(
     connection: &mut SqliteConnection,
     user_code_hash: &str,
 ) -> Result<Option<AgentDeviceAuthorization>> {
-    let query = format!(
+    let query = sqlx::AssertSqlSafe(format!(
         "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
          WHERE user_code_hash = ?"
-    );
-    sqlx::query(&query)
+    ));
+    sqlx::query(query)
         .bind(user_code_hash)
         .fetch_optional(&mut *connection)
         .await?
@@ -186,8 +185,8 @@ pub(super) async fn fetch_profile(
     connection: &mut SqliteConnection,
     username: &str,
 ) -> Result<Option<UserRecord>> {
-    let query = format!("SELECT {USER_SELECT} FROM users WHERE username = ?");
-    sqlx::query(&query)
+    let query = sqlx::AssertSqlSafe(format!("SELECT {USER_SELECT} FROM users WHERE username = ?"));
+    sqlx::query(query)
         .bind(username)
         .fetch_optional(&mut *connection)
         .await?

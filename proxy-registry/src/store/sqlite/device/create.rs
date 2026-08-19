@@ -81,11 +81,11 @@ impl SqliteUserRepository {
                 ValidationError::InvalidAccountField("当前时间不能为负数".to_string()).into(),
             );
         }
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
              WHERE user_code_hash = ?"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .bind(user_code_hash)
             .fetch_optional(&self.pool)
             .await?

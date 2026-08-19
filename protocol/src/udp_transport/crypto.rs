@@ -1,30 +1,25 @@
-use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
-    aead::{Aead, AeadInPlace, KeyInit, Payload},
-};
-use hkdf::Hkdf;
-use sha2::{Digest, Sha256};
-
 use super::{
-    ReplayWindow, UDP_AEAD_TAG_LEN, UDP_MAX_DATAGRAM_SIZE, UDP_MAX_FRAGMENT_PLAINTEXT,
-    UDP_MAX_FRAGMENTS, UDP_MAX_MESSAGE_SIZE, UDP_TRANSPORT_HEADER_LEN, UdpPacketHeader,
+    ReplayWindow, UDP_AEAD_TAG_LEN, UDP_MAX_DATAGRAM_SIZE,
+    UDP_MAX_FRAGMENTS, UDP_MAX_FRAGMENT_PLAINTEXT, UDP_MAX_MESSAGE_SIZE, UDP_TRANSPORT_HEADER_LEN, UdpPacketHeader,
     UdpPacketKind, UdpSessionId, UdpTransportError, UdpTransportResult,
 };
-
+use aes_gcm::{
+    Aes256Gcm,
+    aead::{Aead, AeadInOut, KeyInit, Payload},
+};
+use aes_gcm::aead::inout::InOutBuf;
+use hkdf::Hkdf;
+use sha2::{Digest, Sha256};
 const KEY_LEN: usize = 32;
 const NONCE_PREFIX_LEN: usize = 4;
 const NONCE_LEN: usize = 12;
-
 mod codec;
-
 pub use codec::UdpSessionCodec;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UdpSessionRole {
     Agent,
     Proxy,
 }
-
 /// Both wire directions derived from a session secret. Direction labels are
 /// fixed protocol inputs, not selected by callers.
 #[derive(Clone)]
@@ -34,7 +29,6 @@ pub struct UdpDirectionalKeyMaterial {
     pub client_to_server_nonce_prefix: [u8; NONCE_PREFIX_LEN],
     pub server_to_client_nonce_prefix: [u8; NONCE_PREFIX_LEN],
 }
-
 impl std::fmt::Debug for UdpDirectionalKeyMaterial {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -52,7 +46,6 @@ impl std::fmt::Debug for UdpDirectionalKeyMaterial {
             .finish()
     }
 }
-
 impl UdpDirectionalKeyMaterial {
     pub fn derive(
         master_key: &[u8; KEY_LEN],
@@ -67,7 +60,6 @@ impl UdpDirectionalKeyMaterial {
         salt_hasher.update(server_nonce);
         let salt = salt_hasher.finalize();
         let hkdf = Hkdf::<Sha256>::new(Some(&salt), master_key);
-
         let mut material = Self {
             client_to_server_key: [0; KEY_LEN],
             server_to_client_key: [0; KEY_LEN],
@@ -94,7 +86,6 @@ impl UdpDirectionalKeyMaterial {
             b"ppaass/native-udp/v3/server-to-client/nonce-prefix",
             &mut material.server_to_client_nonce_prefix,
         )?;
-
         if material.client_to_server_key == material.server_to_client_key
             || material.client_to_server_nonce_prefix == material.server_to_client_nonce_prefix
         {
@@ -103,23 +94,19 @@ impl UdpDirectionalKeyMaterial {
         Ok(material)
     }
 }
-
 fn expand_label(hkdf: &Hkdf<Sha256>, label: &[u8], output: &mut [u8]) -> UdpTransportResult<()> {
     hkdf.expand(label, output)
         .map_err(|_| UdpTransportError::KeyDerivation)
 }
-
 struct DirectionState {
     cipher: Aes256Gcm,
     nonce_prefix: [u8; NONCE_PREFIX_LEN],
 }
-
 #[derive(Debug, Clone)]
 pub struct DecryptedUdpFragment {
     pub header: UdpPacketHeader,
     pub payload: Vec<u8>,
 }
-
 /// Directional AEAD and replay state for one authenticated session.
 pub struct UdpSessionCrypto {
     role: UdpSessionRole,
@@ -130,7 +117,6 @@ pub struct UdpSessionCrypto {
     send_sequence_exhausted: bool,
     replay: ReplayWindow,
 }
-
 impl std::fmt::Debug for UdpSessionCrypto {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -143,7 +129,6 @@ impl std::fmt::Debug for UdpSessionCrypto {
             .finish_non_exhaustive()
     }
 }
-
 impl UdpSessionCrypto {
     pub fn new(
         role: UdpSessionRole,
@@ -160,18 +145,17 @@ impl UdpSessionCrypto {
         )?;
         Ok(Self::from_key_material(role, session_id, keys))
     }
-
     pub fn from_key_material(
         role: UdpSessionRole,
         session_id: UdpSessionId,
         keys: UdpDirectionalKeyMaterial,
     ) -> Self {
         let client_to_server = DirectionState {
-            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&keys.client_to_server_key)),
+            cipher: Aes256Gcm::new(&keys.client_to_server_key.try_into().unwrap()),
             nonce_prefix: keys.client_to_server_nonce_prefix,
         };
         let server_to_client = DirectionState {
-            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&keys.server_to_client_key)),
+            cipher: Aes256Gcm::new(&keys.server_to_client_key.try_into().unwrap()),
             nonce_prefix: keys.server_to_client_nonce_prefix,
         };
         let (send, receive) = match role {
@@ -188,19 +172,15 @@ impl UdpSessionCrypto {
             replay: ReplayWindow::new(),
         }
     }
-
     pub fn role(&self) -> UdpSessionRole {
         self.role
     }
-
     pub fn session_id(&self) -> UdpSessionId {
         self.session_id
     }
-
     pub fn replay_window(&self) -> &ReplayWindow {
         &self.replay
     }
-
     /// Encrypt and independently authenticate every fragment of one message.
     pub fn seal_message(
         &mut self,
@@ -221,7 +201,6 @@ impl UdpSessionCrypto {
             .next_send_sequence
             .checked_add(fragment_count as u64 - 1)
             .ok_or(UdpTransportError::SequenceExhausted)?;
-
         let mut datagrams = Vec::with_capacity(fragment_count);
         for fragment_index in 0..fragment_count {
             let start = fragment_index * UDP_MAX_FRAGMENT_PLAINTEXT;
@@ -253,16 +232,15 @@ impl UdpSessionCrypto {
             let tag = self
                 .send
                 .cipher
-                .encrypt_in_place_detached(
-                    Nonce::from_slice(&nonce),
+                .encrypt_inout_detached(
+                    &nonce.try_into().unwrap(),
                     &aad,
-                    &mut datagram[payload_start..],
+                    InOutBuf::from(&mut datagram[payload_start..]),
                 )
                 .map_err(|_| UdpTransportError::EncryptionFailed)?;
             datagram.extend_from_slice(&tag);
             datagrams.push(datagram);
         }
-
         if last_sequence == u64::MAX {
             self.send_sequence_exhausted = true;
         } else {
@@ -270,7 +248,6 @@ impl UdpSessionCrypto {
         }
         Ok(datagrams)
     }
-
     /// Parse, replay-check, authenticate, then commit a single fragment.
     pub fn open_datagram(&mut self, datagram: &[u8]) -> UdpTransportResult<DecryptedUdpFragment> {
         if datagram.len() > UDP_MAX_DATAGRAM_SIZE {
@@ -279,7 +256,6 @@ impl UdpSessionCrypto {
         if datagram.len() < UDP_TRANSPORT_HEADER_LEN + UDP_AEAD_TAG_LEN {
             return Err(UdpTransportError::DatagramTooShort(datagram.len()));
         }
-
         let header = UdpPacketHeader::decode(datagram)?;
         if header.kind != UdpPacketKind::Encrypted {
             return Err(UdpTransportError::UnexpectedPacketKind {
@@ -293,7 +269,6 @@ impl UdpSessionCrypto {
         if !self.replay.may_accept(header.seq) {
             return Err(UdpTransportError::ReplayRejected);
         }
-
         let aad = &datagram[..UDP_TRANSPORT_HEADER_LEN];
         let ciphertext = &datagram[UDP_TRANSPORT_HEADER_LEN..];
         let nonce = make_nonce(self.receive.nonce_prefix, header.seq);
@@ -301,7 +276,7 @@ impl UdpSessionCrypto {
             .receive
             .cipher
             .decrypt(
-                Nonce::from_slice(&nonce),
+                &nonce.try_into().unwrap(),
                 Payload {
                     msg: ciphertext,
                     aad,
@@ -327,7 +302,6 @@ impl UdpSessionCrypto {
         })
     }
 }
-
 fn make_nonce(prefix: [u8; NONCE_PREFIX_LEN], seq: u64) -> [u8; NONCE_LEN] {
     let mut nonce = [0_u8; NONCE_LEN];
     nonce[..NONCE_PREFIX_LEN].copy_from_slice(&prefix);

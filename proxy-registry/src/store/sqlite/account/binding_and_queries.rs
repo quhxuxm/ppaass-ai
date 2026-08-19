@@ -131,12 +131,12 @@ impl SqliteUserRepository {
     ) -> Result<Option<WebAccount>> {
         let provider = normalize_provider(provider)?;
         let subject = normalize_provider_subject(subject)?;
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {QUALIFIED_ACCOUNT_SELECT} FROM web_accounts a \
              INNER JOIN external_identities i ON i.account_id = a.account_id \
              WHERE i.provider = ? AND i.subject = ?"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .bind(provider)
             .bind(subject)
             .fetch_optional(&self.pool)
@@ -147,10 +147,10 @@ impl SqliteUserRepository {
 
     pub(super) async fn get_login_record(&self, login_name: &str) -> Result<Option<LoginRecord>> {
         let login_name = normalize_username(login_name)?;
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {ACCOUNT_SELECT}, password_hash FROM web_accounts WHERE login_name = ?"
-        );
-        let row = sqlx::query(&query)
+        ));
+        let row = sqlx::query(query)
             .bind(login_name)
             .fetch_optional(&self.pool)
             .await?;
@@ -167,8 +167,8 @@ impl SqliteUserRepository {
     pub(super) async fn list_managed_users(&self) -> Result<Vec<ManagedUser>> {
         let mut connection = self.pool.acquire().await?;
         let account_query =
-            format!("SELECT {ACCOUNT_SELECT} FROM web_accounts ORDER BY login_name COLLATE BINARY");
-        let accounts = sqlx::query(&account_query)
+           sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts ORDER BY login_name COLLATE BINARY"));
+        let accounts = sqlx::query(account_query)
             .fetch_all(&mut *connection)
             .await?
             .into_iter()
@@ -179,13 +179,13 @@ impl SqliteUserRepository {
             users.push(fetch_managed_for_account(&mut connection, account).await?);
         }
 
-        let legacy_query = format!(
+        let legacy_query  = sqlx::AssertSqlSafe(format!(
             "SELECT {USER_SELECT} FROM users u \
              WHERE NOT EXISTS (\
                  SELECT 1 FROM web_accounts a WHERE a.linked_username = u.username\
              ) ORDER BY u.username COLLATE BINARY"
-        );
-        let profiles = sqlx::query(&legacy_query)
+        ));
+        let profiles = sqlx::query(legacy_query)
             .fetch_all(&mut *connection)
             .await?
             .into_iter()
@@ -230,9 +230,8 @@ impl SqliteUserRepository {
         let Some(profile) = fetch_profile(&mut connection, &username).await? else {
             return Ok(None);
         };
-        let account_query =
-            format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?");
-        let account = sqlx::query(&account_query)
+        let account_query = sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?"));
+        let account = sqlx::query(account_query)
             .bind(&username)
             .fetch_optional(&mut *connection)
             .await?

@@ -34,7 +34,7 @@ arc-swap.workspace = true
 parking_lot.workspace = true
 mimalloc = { workspace = true, optional = true }
 rand.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
+reqwest = { workspace = true, features = ["stream", "query"] }
 sqlx.workspace = true
 serde_json.workspace = true
 libc.workspace = true

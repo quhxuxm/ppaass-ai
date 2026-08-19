@@ -23,12 +23,12 @@ impl SqliteUserRepository {
         }
 
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "UPDATE web_accounts SET password_hash = ?, auth_version = ?, updated_at = ? \
              WHERE account_id = ? AND auth_version = ? RETURNING {ACCOUNT_SELECT}"
-        );
+        ));
         let updated_at = now();
-        let account = sqlx::query(&query)
+        let account = sqlx::query(query)
             .bind(password_hash)
             .bind(next_auth_version)
             .bind(updated_at)

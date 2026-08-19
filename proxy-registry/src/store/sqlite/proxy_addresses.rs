@@ -22,9 +22,8 @@ pub(super) async fn fetch_proxy_address(
     connection: &mut SqliteConnection,
     proxy_address_id: &str,
 ) -> Result<Option<ProxyAddress>> {
-    let query =
-        format!("SELECT {PROXY_ADDRESS_SELECT} FROM proxy_addresses WHERE proxy_address_id = ?");
-    sqlx::query(&query)
+    let query = sqlx::AssertSqlSafe(format!("SELECT {PROXY_ADDRESS_SELECT} FROM proxy_addresses WHERE proxy_address_id = ?"));
+    sqlx::query(query)
         .bind(proxy_address_id)
         .fetch_optional(&mut *connection)
         .await?
@@ -36,7 +35,7 @@ pub(super) async fn fetch_assigned_proxy_addresses(
     connection: &mut SqliteConnection,
     account_id: &str,
 ) -> Result<Vec<ProxyAddress>> {
-    let query = format!(
+    let query = sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM proxy_addresses p \
          INNER JOIN account_proxy_addresses a \
              ON a.proxy_address_id = p.proxy_address_id \
@@ -47,8 +46,8 @@ pub(super) async fn fetch_assigned_proxy_addresses(
             .map(|column| format!("p.{column}"))
             .collect::<Vec<_>>()
             .join(", ")
-    );
-    sqlx::query(&query)
+    ));
+    sqlx::query(query)
         .bind(account_id)
         .fetch_all(&mut *connection)
         .await?
@@ -106,11 +105,11 @@ pub(super) async fn replace_account_proxy_addresses(
 
 impl SqliteUserRepository {
     async fn list_proxy_addresses(&self) -> Result<Vec<ProxyAddress>> {
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {PROXY_ADDRESS_SELECT} FROM proxy_addresses \
              ORDER BY label COLLATE BINARY, address COLLATE BINARY"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .fetch_all(&self.pool)
             .await?
             .into_iter()

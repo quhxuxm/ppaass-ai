@@ -1,5 +1,5 @@
 use aes_gcm::{
-    Aes256Gcm, Nonce,
+    Aes256Gcm,
     aead::{Aead, KeyInit, Payload},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -91,7 +91,7 @@ impl PrivateKeyCipher {
         let aad = associated_data(username, key_version);
         let ciphertext = cipher
             .encrypt(
-                Nonce::from_slice(&nonce_bytes),
+                &nonce_bytes.try_into().unwrap(),
                 Payload {
                     msg: private_key_pem.as_bytes(),
                     aad: &aad,
@@ -122,7 +122,7 @@ impl PrivateKeyCipher {
         let mut plaintext = Zeroizing::new(
             cipher
                 .decrypt(
-                    Nonce::from_slice(nonce_bytes),
+                    &nonce_bytes.try_into().unwrap(),
                     Payload {
                         msg: ciphertext,
                         aad: &aad,
