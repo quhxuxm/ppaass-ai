@@ -12,7 +12,7 @@ pub use authenticated::{
     AuthenticatedConnection, AuthenticationFailure, VerifiedProxyAuthStatus, auth_failure_code,
     subscribe_verified_proxy_auth_statuses,
 };
-pub use config::{BindInterface, ClientConnectionConfig};
+pub use config::{BindInterface, ClientConnectionConfig, ProxyEndpointAffinity};
 pub use socket_bind::bind_socket_to_interface;
 pub use stream::ClientStream;
 pub use udp::{UdpClientConnection, UdpClientStream};

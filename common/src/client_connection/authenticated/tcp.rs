@@ -29,22 +29,35 @@ pub(in crate::client_connection) async fn connect_tcp_stream<C>(
 where
     C: ClientConnectionConfig,
 {
-    let remote_addr = config.remote_addr();
+    let remote_addrs = config.remote_addrs();
     let timeout = config.timeout_duration();
 
     debug!("正在连接远端 Proxy");
 
-    // TCP 连接 — 可选绑定到指定本地地址，以绕过可能存在的 TUN 默认路由。
-    let stream = if let Some(bind) = config.bind_addr() {
-        connect_bound(config, &remote_addr, bind, config.bind_interface(), timeout).await?
-    } else {
-        connect_unbound(config, &remote_addr, timeout).await?
-    };
-    if let Err(err) = stream.set_nodelay(true) {
-        warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+    let mut last_error = None;
+    for remote_addr in remote_addrs {
+        // TCP 连接 — 可选绑定到指定本地地址，以绕过可能存在的 TUN 默认路由。
+        let connected = if let Some(bind) = config.bind_addr() {
+            connect_bound(config, &remote_addr, bind, config.bind_interface(), timeout).await
+        } else {
+            connect_unbound(config, &remote_addr, timeout).await
+        };
+        match connected {
+            Ok(stream) => {
+                config.record_remote_success(&remote_addr);
+                if let Err(err) = stream.set_nodelay(true) {
+                    warn!("设置代理连接 TCP_NODELAY 失败，将继续使用默认 TCP 行为: {err}");
+                }
+                return Ok(stream);
+            }
+            Err(error) => {
+                warn!("连接优先 Proxy 端点失败，尝试下一个候选：{error}");
+                last_error = Some(error);
+            }
+        }
     }
 
-    Ok(stream)
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("未配置远端 Proxy 端点")))
 }
 
 /// 连接到 `remote_addr`，同时将套接字绑定到 `bind`。

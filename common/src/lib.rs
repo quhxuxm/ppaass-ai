@@ -13,10 +13,11 @@ pub mod yamux_settings;
 
 pub use client_connection::{
     AuthenticatedConnection, AuthenticationFailure, BindInterface, ClientConnectionConfig,
-    ClientStream, UdpClientConnection, UdpClientStream, VerifiedProxyAuthStatus,
-    YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection, YamuxClientStream,
-    auth_failure_code, bind_socket_to_interface, subscribe_verified_proxy_auth_statuses,
+    ClientStream, ProxyEndpointAffinity, UdpClientConnection, UdpClientStream,
+    VerifiedProxyAuthStatus, YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection, YamuxClientStream, auth_failure_code, bind_socket_to_interface,
+    subscribe_verified_proxy_auth_statuses,
 };
 pub use direct_tcp::connect_tcp_happy_eyeballs;
 pub use error::{CommonError, Result};

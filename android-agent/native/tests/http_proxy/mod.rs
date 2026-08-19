@@ -59,24 +59,7 @@ async fn socks5_proxy_connects_to_direct_tcp_target() {
     drop(port_probe);
 
     let shutdown = CancellationToken::new();
-    let config = AndroidAgentConfig {
-        proxy_addrs: vec!["127.0.0.1:9".to_string()],
-        username: "test".to_string(),
-        private_key_pem: "test".to_string(),
-        transport_mode: common::TransportMode::Udp,
-        udp_session_pool_size: 4,
-        async_runtime_stack_size_mb: 4,
-        runtime_threads: 1,
-        connect_timeout_secs: 1,
-        http_proxy_max_concurrent_connects: 16,
-        compression_mode: "none".to_string(),
-        yamux: YamuxConfig::default(),
-        direct_access: DirectAccessConfig {
-            mode: DirectAccessMode::DirectAll,
-            rules: Vec::new(),
-        },
-        tun: AndroidTunConfig::default(),
-    };
+    let config = test_config();
 
     let proxy_shutdown = shutdown.clone();
     let proxy_task =
@@ -323,6 +306,7 @@ async fn http_and_socks5_share_one_port_concurrently() {
 fn test_config() -> AndroidAgentConfig {
     AndroidAgentConfig {
         proxy_addrs: vec!["127.0.0.1:9".to_string()],
+        proxy_affinity: Default::default(),
         username: "test".to_string(),
         private_key_pem: "test".to_string(),
         transport_mode: common::TransportMode::Udp,

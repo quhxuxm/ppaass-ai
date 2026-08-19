@@ -48,6 +48,7 @@ impl YamuxSessionManager {
                     &proxy_addrs,
                     self.proxy_bind_ip(),
                     self.proxy_bind_interface(),
+                    self.proxy_affinity.clone(),
                     address,
                 )
                 .await?;
@@ -124,11 +125,12 @@ impl YamuxSessionManager {
                     .is_none_or(|handle| handle.connection.is_closed())
                 {
                     let proxy_addrs = self.proxy_addrs();
-                    let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new(
+                    let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new_with_affinity(
                         &self.config,
                         &proxy_addrs,
                         self.proxy_bind_ip(),
                         self.proxy_bind_interface(),
+                        self.proxy_affinity.clone(),
                     );
                     let connection = UdpClientConnection::connect(&adapter)
                         .await

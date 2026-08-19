@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use socket2::Socket;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
+use tracing::info;
 
 const PRIVATE_KEY_CACHE_CAPACITY: usize = 8;
 type PrivateKeyFingerprint = [u8; 32];
@@ -60,10 +62,92 @@ pub struct BindInterface {
     pub index: Option<u32>,
 }
 
+/// Keeps all application flows on one proxy endpoint until that endpoint fails.
+/// Stable egress is required by identity providers that reevaluate source IPs
+/// when refreshing access tokens.
+#[derive(Debug)]
+pub struct ProxyEndpointAffinity {
+    active_index: AtomicUsize,
+}
+
+impl ProxyEndpointAffinity {
+    const UNINITIALIZED: usize = usize::MAX;
+
+    pub fn with_initial_index(index: usize) -> Self {
+        Self {
+            active_index: AtomicUsize::new(index),
+        }
+    }
+
+    pub fn ordered_candidates(&self, endpoints: &[String]) -> Vec<String> {
+        if endpoints.is_empty() {
+            return Vec::new();
+        }
+        let start = self.active_index(endpoints.len());
+        (0..endpoints.len())
+            .map(|offset| endpoints[(start + offset) % endpoints.len()].clone())
+            .collect()
+    }
+
+    fn active_index(&self, endpoint_count: usize) -> usize {
+        let current = self.active_index.load(Ordering::Acquire);
+        if current != Self::UNINITIALIZED {
+            return current % endpoint_count;
+        }
+        let selected = rand::random::<u64>() as usize % endpoint_count;
+        match self.active_index.compare_exchange(
+            Self::UNINITIALIZED,
+            selected,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                info!(
+                    proxy_index = selected,
+                    proxy_count = endpoint_count,
+                    "Agent 运行期已随机固定主 Proxy"
+                );
+                selected
+            }
+            Err(existing) => existing % endpoint_count,
+        }
+    }
+
+    pub fn record_success(&self, endpoints: &[String], endpoint: &str) {
+        if let Some(index) = endpoints.iter().position(|candidate| candidate == endpoint) {
+            let previous = self.active_index.swap(index, Ordering::AcqRel);
+            if previous != Self::UNINITIALIZED && previous % endpoints.len() != index {
+                info!(
+                    previous_proxy_index = previous % endpoints.len(),
+                    proxy_index = index,
+                    proxy_count = endpoints.len(),
+                    "主 Proxy 连接失败后已切换备用节点"
+                );
+            }
+        }
+    }
+}
+
+impl Default for ProxyEndpointAffinity {
+    fn default() -> Self {
+        Self {
+            active_index: AtomicUsize::new(Self::UNINITIALIZED),
+        }
+    }
+}
+
 /// 客户端连接配置
 pub trait ClientConnectionConfig: Debug {
-    /// 获取一个随机选择的远端地址进行连接
+    /// 获取当前优先的远端地址。
     fn remote_addr(&self) -> String;
+
+    /// Returns failover candidates with the affinity endpoint first.
+    fn remote_addrs(&self) -> Vec<String> {
+        vec![self.remote_addr()]
+    }
+
+    /// Records the endpoint that established the transport connection.
+    fn record_remote_success(&self, _remote_addr: &str) {}
 
     /// 认证用户名
     fn username(&self) -> String;

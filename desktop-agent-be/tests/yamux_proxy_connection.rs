@@ -18,3 +18,20 @@ fn connection_config_adapter_forwards_compression_mode() {
 
     assert_eq!(adapter.compression_mode(), CompressionMode::Gzip);
 }
+
+#[test]
+fn connection_config_adapter_keeps_proxy_affinity() {
+    let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+    let proxy_addrs = vec!["proxy-a:443".to_string(), "proxy-b:443".to_string()];
+    let adapter = AgentClientConfig::new(&config, &proxy_addrs, None, None);
+
+    let initial = adapter.remote_addr();
+    assert_eq!(adapter.remote_addr(), initial);
+    let failover = if initial == "proxy-a:443" {
+        "proxy-b:443"
+    } else {
+        "proxy-a:443"
+    };
+    adapter.record_remote_success(failover);
+    assert_eq!(adapter.remote_addr(), failover);
+}

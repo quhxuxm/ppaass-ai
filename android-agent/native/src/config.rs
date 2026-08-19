@@ -1,24 +1,25 @@
 use std::fmt;
 use std::time::Duration;
 
-use common::{ClientConnectionConfig, QuicPolicy, TransportMode, YamuxConfig};
+use common::{
+    ClientConnectionConfig, ProxyEndpointAffinity, QuicPolicy, TransportMode, YamuxConfig,
+};
 use protocol::CompressionMode;
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::direct_access::DirectAccessConfig;
 use crate::error::{AndroidAgentError, Result};
 
 pub const ANDROID_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
-// Spread new TCP connections and replacement UDP sessions across every
-// Registry-assigned endpoint instead of pinning Android to the first one.
-static NEXT_PROXY_ADDRESS: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AndroidAgentConfig {
     pub proxy_addrs: Vec<String>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub proxy_affinity: Arc<ProxyEndpointAffinity>,
     pub username: String,
     pub private_key_pem: String,
 
@@ -152,23 +153,24 @@ impl AndroidAgentConfig {
     pub fn effective_udp_session_pool_size(&self) -> usize {
         self.udp_session_pool_size.clamp(1, 8)
     }
-
-    #[doc(hidden)]
-    pub fn proxy_address_at(&self, index: usize) -> String {
-        if self.proxy_addrs.is_empty() {
-            return String::new();
-        }
-        self.proxy_addrs
-            .get(index % self.proxy_addrs.len())
-            .cloned()
-            .unwrap_or_default()
-    }
 }
 
 impl ClientConnectionConfig for AndroidAgentConfig {
     fn remote_addr(&self) -> String {
-        let index = NEXT_PROXY_ADDRESS.fetch_add(1, Ordering::Relaxed);
-        self.proxy_address_at(index)
+        self.proxy_affinity
+            .ordered_candidates(&self.proxy_addrs)
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    fn remote_addrs(&self) -> Vec<String> {
+        self.proxy_affinity.ordered_candidates(&self.proxy_addrs)
+    }
+
+    fn record_remote_success(&self, remote_addr: &str) {
+        self.proxy_affinity
+            .record_success(&self.proxy_addrs, remote_addr);
     }
 
     fn username(&self) -> String {

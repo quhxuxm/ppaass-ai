@@ -9,8 +9,9 @@ use super::target_stream::YamuxTargetStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use common::{
-    BindInterface, UdpClientConnection, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection,
+    BindInterface, ProxyEndpointAffinity, UdpClientConnection,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection,
 };
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
@@ -44,6 +45,7 @@ pub struct YamuxSessionManager {
     // TUN 模式安装默认路由前解析并固定 proxy IP，避免系统 DNS 被接管后，
     // proxy 重连反过来依赖尚未建立的 DNS proxy 通道。
     proxy_addrs_override: Arc<std::sync::RwLock<Option<Arc<Vec<String>>>>>,
+    proxy_affinity: Arc<ProxyEndpointAffinity>,
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
@@ -64,18 +66,44 @@ pub struct YamuxSessionManager {
 
 impl YamuxSessionManager {
     pub fn new(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_with_affinity(
+            config,
+            proxy_addrs,
+            Arc::new(ProxyEndpointAffinity::default()),
+        )
+    }
+
+    pub fn new_udp(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_udp_with_affinity(
+            config,
+            proxy_addrs,
+            Arc::new(ProxyEndpointAffinity::default()),
+        )
+    }
+
+    pub fn new_with_affinity(
+        config: Arc<AgentConfig>,
+        proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
+    ) -> Self {
         Self::new_for_transport(
             config,
             proxy_addrs,
+            proxy_affinity,
             TransportProtocol::Tcp,
             "tcp_direct_connections",
         )
     }
 
-    pub fn new_udp(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+    pub fn new_udp_with_affinity(
+        config: Arc<AgentConfig>,
+        proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
+    ) -> Self {
         Self::new_for_transport(
             config,
             proxy_addrs,
+            proxy_affinity,
             TransportProtocol::Udp,
             "udp_yamux_sessions",
         )
@@ -84,6 +112,7 @@ impl YamuxSessionManager {
     fn new_for_transport(
         config: Arc<AgentConfig>,
         proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
         yamux_transport: TransportProtocol,
         manager_name: &'static str,
     ) -> Self {
@@ -98,6 +127,7 @@ impl YamuxSessionManager {
             config,
             proxy_addrs,
             proxy_addrs_override: Arc::new(std::sync::RwLock::new(None)),
+            proxy_affinity,
             manager_name,
             yamux_transport,
             proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),

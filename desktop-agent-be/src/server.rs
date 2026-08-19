@@ -11,7 +11,10 @@ use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use crate::tun_handler::{PacketCaptureController, TunModeResources, run_tun_mode};
 use crate::yamux_session::YamuxSessionManager;
-use common::{DEFAULT_TCP_LISTEN_BACKLOG, bind_tcp_listener_with_backlog, spawn_guarded};
+use common::{
+    DEFAULT_TCP_LISTEN_BACKLOG, ProxyEndpointAffinity, bind_tcp_listener_with_backlog,
+    spawn_guarded,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -50,15 +53,18 @@ impl AgentServer {
         let direct_access_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
         let config = Arc::new(config);
         let proxy_addrs = Arc::new(proxy_addrs);
+        let proxy_affinity = Arc::new(ProxyEndpointAffinity::default());
         // TCP 始终使用 direct framed TCP；UDP 根据 transport_mode 选择
         // 原生加密 UDP 会话池或 raw TCP 上的 Yamux session。
-        let tcp_sessions = Arc::new(YamuxSessionManager::new(
+        let tcp_sessions = Arc::new(YamuxSessionManager::new_with_affinity(
             config.clone(),
             proxy_addrs.clone(),
+            proxy_affinity.clone(),
         ));
-        let udp_sessions = Arc::new(YamuxSessionManager::new_udp(
+        let udp_sessions = Arc::new(YamuxSessionManager::new_udp_with_affinity(
             config.clone(),
             proxy_addrs.clone(),
+            proxy_affinity,
         ));
 
         Ok(Self {
