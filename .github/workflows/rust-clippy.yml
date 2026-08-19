@@ -22,6 +22,8 @@ jobs:
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
     runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
     permissions:
       contents: read
       security-events: write

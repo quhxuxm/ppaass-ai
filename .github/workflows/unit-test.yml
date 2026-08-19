@@ -43,6 +43,8 @@ jobs:
   proxy-registry-frontend:
     name: Proxy Registry frontend
     runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
     defaults:
       run:
         working-directory: proxy-registry/frontend
@@ -123,6 +125,8 @@ jobs:
   android-build:
     name: Android agent
     runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
     env:
       ANDROID_NDK_VERSION: "28.2.13676358"
     steps:
