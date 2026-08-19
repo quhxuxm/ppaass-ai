@@ -1,13 +1,13 @@
 use super::{
-    ReplayWindow, UDP_AEAD_TAG_LEN, UDP_MAX_DATAGRAM_SIZE,
-    UDP_MAX_FRAGMENTS, UDP_MAX_FRAGMENT_PLAINTEXT, UDP_MAX_MESSAGE_SIZE, UDP_TRANSPORT_HEADER_LEN, UdpPacketHeader,
+    ReplayWindow, UDP_AEAD_TAG_LEN, UDP_MAX_DATAGRAM_SIZE, UDP_MAX_FRAGMENT_PLAINTEXT,
+    UDP_MAX_FRAGMENTS, UDP_MAX_MESSAGE_SIZE, UDP_TRANSPORT_HEADER_LEN, UdpPacketHeader,
     UdpPacketKind, UdpSessionId, UdpTransportError, UdpTransportResult,
 };
+use aes_gcm::aead::inout::InOutBuf;
 use aes_gcm::{
     Aes256Gcm,
     aead::{Aead, AeadInOut, KeyInit, Payload},
 };
-use aes_gcm::aead::inout::InOutBuf;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 const KEY_LEN: usize = 32;
@@ -151,11 +151,11 @@ impl UdpSessionCrypto {
         keys: UdpDirectionalKeyMaterial,
     ) -> Self {
         let client_to_server = DirectionState {
-            cipher: Aes256Gcm::new(&keys.client_to_server_key.try_into().unwrap()),
+            cipher: Aes256Gcm::new(&keys.client_to_server_key.into()),
             nonce_prefix: keys.client_to_server_nonce_prefix,
         };
         let server_to_client = DirectionState {
-            cipher: Aes256Gcm::new(&keys.server_to_client_key.try_into().unwrap()),
+            cipher: Aes256Gcm::new(&keys.server_to_client_key.into()),
             nonce_prefix: keys.server_to_client_nonce_prefix,
         };
         let (send, receive) = match role {
@@ -233,7 +233,7 @@ impl UdpSessionCrypto {
                 .send
                 .cipher
                 .encrypt_inout_detached(
-                    &nonce.try_into().unwrap(),
+                    &nonce.into(),
                     &aad,
                     InOutBuf::from(&mut datagram[payload_start..]),
                 )
@@ -276,7 +276,7 @@ impl UdpSessionCrypto {
             .receive
             .cipher
             .decrypt(
-                &nonce.try_into().unwrap(),
+                &nonce.into(),
                 Payload {
                     msg: ciphertext,
                     aad,

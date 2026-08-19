@@ -91,7 +91,7 @@ impl PrivateKeyCipher {
         let aad = associated_data(username, key_version);
         let ciphertext = cipher
             .encrypt(
-                &nonce_bytes.try_into().unwrap(),
+                &nonce_bytes.into(),
                 Payload {
                     msg: private_key_pem.as_bytes(),
                     aad: &aad,

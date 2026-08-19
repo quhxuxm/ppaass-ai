@@ -100,7 +100,7 @@ impl AgentAccessTokenService {
         rand::rng().fill(&mut nonce);
         let ciphertext = cipher
             .encrypt(
-                &nonce.try_into().unwrap(),
+                &nonce.into(),
                 Payload {
                     msg: &plaintext,
                     aad: TOKEN_AAD,

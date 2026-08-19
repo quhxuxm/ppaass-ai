@@ -117,7 +117,7 @@ async fn handle_tcp(
             })
         };
         let (mut target_stream, prefetched) =
-            connect_with_tun_prefetch(&mut client, direct_connect, &target_str).await?;
+            connect_with_tun_prefetch(&mut client, direct_connect, target_str).await?;
         write_prefetched(&mut target_stream, &prefetched).await?;
         match relay_tcp_bidirectional(
             &mut client,

@@ -44,7 +44,7 @@ async fn selection_requires_permission_and_revocation_restores_admin_assignment(
     let denied = select_entries(
         &app,
         login["agent_access_token"].as_str().unwrap(),
-        &[created_id.clone()],
+        std::slice::from_ref(&created_id),
     )
     .await;
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
@@ -62,7 +62,7 @@ async fn selection_requires_permission_and_revocation_restores_admin_assignment(
         json!([TEST_PROXY_ADDRESS_ID])
     );
     let token = login["agent_access_token"].as_str().unwrap();
-    let unassigned = select_entries(&app, token, &[created_id.clone()]).await;
+    let unassigned = select_entries(&app, token, std::slice::from_ref(&created_id)).await;
     assert_eq!(unassigned.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         json_body(unassigned).await["error"]["code"],
