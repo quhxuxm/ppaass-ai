@@ -47,7 +47,6 @@ enabled = false
 # 新启用 TUN 时默认由 Proxy 解析 DNS。
 proxy_dns = true
 
-
 [direct_access]
 mode = "rules"
 
@@ -208,4 +207,20 @@ rules = [
     "17.248.201.68",
     "17.248.201.73",
     "17.188.178.61",
+    "vscode-sync.trafficmanager.net",
+    "*.eastus2.cloudapp.azure.com",
+    "*.icloud.com.cn",
+    "*.fe.apple-dns.cn",
+    "*.in.applicationinsights.azure.com",
+    "*.vscode-cdn.net",
+    "4.153.25.230",
+    "150.171.109.113",
+    "20.189.172.76",
+    "112.19.142.248",
+    "112.19.142.108",
+    "112.19.142.112",
+    "112.19.142.120",
+    "112.19.142.236",
+    "112.19.142.240",
+    "40.71.11.167",
 ]
