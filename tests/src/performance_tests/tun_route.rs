@@ -67,6 +67,8 @@ fn route_output(_target: IpAddr) -> Result<String> {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn command_output(program: &str, args: &[&str]) -> Result<String> {
+    use std::process::Command;
+
     let output = Command::new(program)
         .args(args)
         .output()
