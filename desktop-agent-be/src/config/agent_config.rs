@@ -67,6 +67,10 @@ pub struct AgentConfig {
     /// 将该接口上捕获的所有 IP 流量转发到代理。
     #[serde(default)]
     pub tun: TunConfig,
+
+    /// Agent 监听 TCP 的 backlog 队列长度。默认 1024，过小可能导致连接被拒绝。
+    #[serde(default = "default_backlog")]
+    pub backlog: Option<i32>,
 }
 
 /// TUN 模式配置。
@@ -218,6 +222,10 @@ fn default_tun_ipv6() -> Option<String> {
     {
         None
     }
+}
+
+fn default_backlog() -> Option<i32> {
+    Some(4096)
 }
 
 fn default_tun_mtu() -> u16 {

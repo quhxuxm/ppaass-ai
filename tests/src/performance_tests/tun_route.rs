@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::net::IpAddr;
-use std::process::Command;
 
 pub async fn verify_tun_route(
     target_host: &str,

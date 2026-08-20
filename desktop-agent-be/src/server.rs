@@ -83,7 +83,7 @@ impl AgentServer {
         // 这样手动配置浏览器代理和系统 TUN 两种模式不会互相挤掉。
         let listener = bind_tcp_listener_with_backlog(
             self.config.listen_addr.as_str(),
-            DEFAULT_TCP_LISTEN_BACKLOG,
+            self.config.backlog.unwrap_or(DEFAULT_TCP_LISTEN_BACKLOG),
         )?;
         info!("Agent 服务器正在监听 {}", self.config.listen_addr);
 
