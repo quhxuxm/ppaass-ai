@@ -84,11 +84,11 @@ async fn run_udp_relay(
 
         loop {
             if let Some(request) = retry_request.take() {
-                if let Err((e, request)) =
+                if let Err(batch_error) =
                     send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
                 {
-                    debug!("TUN UDP 共享连接写入失败：{e}");
-                    retry_request = Some(request);
+                    debug!("TUN UDP 共享连接写入失败：{}", batch_error.error);
+                    retry_request = Some(batch_error.request);
                     break;
                 }
                 idle.as_mut()
@@ -122,11 +122,11 @@ async fn run_udp_relay(
                         let _ = writer.shutdown().await;
                         return;
                     };
-                    if let Err((e, request)) =
+                    if let Err(batch_error) =
                         send_udp_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
                     {
-                        debug!("TUN UDP 共享连接写入失败：{e}");
-                        retry_request = Some(request);
+                        debug!("TUN UDP 共享连接写入失败：{}", batch_error.error);
+                        retry_request = Some(batch_error.request);
                         break;
                     }
                     idle.as_mut().reset(tokio::time::Instant::now() + UDP_RELAY_CONNECTION_IDLE);
@@ -173,13 +173,18 @@ async fn connect_udp_relay_stream(
     Ok(connected.into_async_io())
 }
 
+pub struct UdpRelayBatchError {
+    pub error: io::Error,
+    pub request: UdpRelayRequest,
+}
+
 pub async fn send_udp_request_batch<W>(
     writer: &mut W,
     state: &mut UdpRelayState,
     first_request: UdpRelayRequest,
     rx: &mut mpsc::Receiver<UdpRelayRequest>,
     stats: &UdpRelayStats,
-) -> Result<(), (io::Error, UdpRelayRequest)>
+) -> Result<(), Box<UdpRelayBatchError>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -200,14 +205,21 @@ where
     for request in &batch {
         write_udp_request(writer, state, request)
             .await
-            .map_err(|err| (err, request.clone()))?;
+            .map_err(|err| {
+                Box::new(UdpRelayBatchError {
+                    error: err,
+                    request: request.clone(),
+                })
+            })?;
         payload_bytes += request.packet.len();
     }
 
-    writer
-        .flush()
-        .await
-        .map_err(|err| (err, batch[0].clone()))?;
+    writer.flush().await.map_err(|err| {
+        Box::new(UdpRelayBatchError {
+            error: err,
+            request: batch[0].clone(),
+        })
+    })?;
     stats.record_sent_batch(batch.len(), payload_bytes);
     telemetry::record_traffic(payload_bytes as u64, 0);
     if batch.len() > 1 {

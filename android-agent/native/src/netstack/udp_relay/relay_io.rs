@@ -15,7 +15,7 @@ pub async fn send_udp_relay_request_batch<W>(
     first_request: UdpRelayRequest,
     rx: &mut mpsc::Receiver<UdpRelayRequest>,
     stats: &UdpRelayStats,
-) -> std::result::Result<(), (io::Error, UdpRelayRequest)>
+) -> std::result::Result<(), Box<(io::Error, UdpRelayRequest)>>
 where
     W: AsyncWrite + Unpin,
 {
