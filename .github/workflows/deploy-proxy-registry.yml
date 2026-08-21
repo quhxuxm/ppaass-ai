@@ -39,7 +39,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.0"
 
       - name: Setup Node
         uses: actions/setup-node@v4
