@@ -23,7 +23,11 @@ pub(super) async fn try_send_cached_dns_response(
         answers: Vec::new(),
         min_ttl: None,
     });
-    direct_domain_cache.record_resolution(&query, &response_summary.answers);
+    direct_domain_cache.record_resolution_with_ttl(
+        &query,
+        &response_summary.answers,
+        response_summary.min_ttl,
+    );
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),
         resolver: "agent-cache".to_string(),
@@ -126,7 +130,11 @@ pub(super) async fn handle_dns_response(
         &response_summary,
         response,
     );
-    direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
+    direct_domain_cache.record_resolution_with_ttl(
+        &request.query,
+        &response_summary.answers,
+        response_summary.min_ttl,
+    );
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),
         resolver: "agent".to_string(),

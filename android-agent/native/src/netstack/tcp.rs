@@ -78,25 +78,28 @@ async fn handle_tcp(
     if direct_target.is_none()
         && !proxy_dns_request
         && context.direct_checker.has_domain_direct_rules()
-        && let Some(domain) = context
+        && let Some(domain_match) = context
             .direct_domain_cache
             .matching_domain_for_ip(target.ip(), |domain| {
                 context.direct_checker.is_direct_domain(domain)
             })
     {
         debug!(
-            "Android TUN TCP cached direct domain matched: {} ({})",
-            target, domain
+            "Android TUN TCP cached direct domain matched: {} ({}){}",
+            target,
+            domain_match.domain(),
+            if domain_match.is_stale() { " [stale]" } else { "" }
         );
         direct_target = Some(target);
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = context
+        && let Some(domain_match) = context
             .direct_domain_cache
             .matching_domain_for_ip(target.ip(), |_| true)
     {
+        let domain = domain_match.into_domain();
         debug!(
             "Android TUN TCP uses cached domain as proxy target: {} ({})",
             target, domain

@@ -86,21 +86,24 @@ pub(super) async fn handle_tun_tcp(
     if direct_target.is_none()
         && !proxy_dns_request
         && direct_checker.has_domain_direct_rules()
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
             direct_checker.is_direct_domain(domain)
         })
     {
         debug!(
-            "TUN TCP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
-            target, domain
+            "TUN TCP 缓存域名规则命中：{} ({}){}，先使用原始 IP 直连",
+            target,
+            domain_match.domain(),
+            if domain_match.is_stale() { " [stale]" } else { "" }
         );
         direct_target = Some(target);
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
+        let domain = domain_match.into_domain();
         debug!("TUN TCP 使用缓存域名作为代理目标：{} ({})", target, domain);
         proxy_address = proxy_target_address(proxy_address, Some(&domain));
         proxy_reason = Some(format!("缓存域名 {domain}"));

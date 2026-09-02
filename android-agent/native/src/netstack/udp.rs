@@ -293,24 +293,27 @@ pub(super) async fn handle_tun_udp(
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if direct_checker.has_domain_direct_rules()
-            && let Some(domain) = direct_domain_cache
+            && let Some(domain_match) = direct_domain_cache
                 .matching_domain_for_ip(target.ip(), |domain| {
                     direct_checker.is_direct_domain(domain)
                 })
         {
             debug!(
-                "Android TUN UDP cached direct domain matched: {} ({})",
-                target, domain
+                "Android TUN UDP cached direct domain matched: {} ({}){}",
+                target,
+                domain_match.domain(),
+                if domain_match.is_stale() { " [stale]" } else { "" }
             );
-            direct_label = format!("{} ({})", target_label, domain);
+            direct_label = format!("{} ({})", target_label, domain_match.domain());
             direct_target = Some(target);
         }
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
+        let domain = domain_match.into_domain();
         debug!(
             "Android TUN UDP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
             target, domain

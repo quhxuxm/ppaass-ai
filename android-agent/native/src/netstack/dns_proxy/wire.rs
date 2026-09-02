@@ -84,7 +84,11 @@ pub(super) async fn handle_dns_response(
         &response_summary,
         response,
     );
-    direct_domain_cache.record_resolution(&request.query, &response_summary.answers);
+    direct_domain_cache.record_resolution_with_ttl(
+        &request.query,
+        &response_summary.answers,
+        response_summary.min_ttl,
+    );
     traffic_stats::record_dns_resolution(DnsResolutionRecord {
         timestamp_ms: traffic_stats::current_time_millis(),
         resolver: "agent".to_string(),
