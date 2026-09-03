@@ -1,5 +1,5 @@
 use arc_swap::ArcSwapOption;
-use if_addrs::{get_if_addrs, IfAddr, Ifv4Addr, Ifv6Addr, Interface};
+use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, Interface, get_if_addrs};
 use parking_lot::Mutex;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
