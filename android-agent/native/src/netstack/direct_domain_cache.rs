@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub const MAX_CACHE_IPS: usize = 4096;
@@ -42,7 +42,8 @@ impl DomainMatch {
 pub struct DirectDomainCache {
     ttl: Duration,
     ip_to_domains: DashMap<IpAddr, DomainCacheEntry>,
-    last_cleanup: Mutex<Instant>,
+    cleanup_epoch: Instant,
+    last_cleanup_millis: AtomicU64,
 }
 
 impl DirectDomainCache {
@@ -50,7 +51,8 @@ impl DirectDomainCache {
         Self {
             ttl,
             ip_to_domains: DashMap::new(),
-            last_cleanup: Mutex::new(Instant::now()),
+            cleanup_epoch: Instant::now(),
+            last_cleanup_millis: AtomicU64::new(0),
         }
     }
 
@@ -150,14 +152,28 @@ impl DirectDomainCache {
     }
 
     fn cleanup_if_due(&self, now: Instant) {
-        let Ok(mut last_cleanup) = self.last_cleanup.try_lock() else {
-            return;
-        };
-        if now.duration_since(*last_cleanup) < CLEANUP_INTERVAL {
+        let elapsed_millis = now
+            .duration_since(self.cleanup_epoch)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let last_cleanup_millis = self.last_cleanup_millis.load(Ordering::Relaxed);
+        if elapsed_millis.saturating_sub(last_cleanup_millis) < CLEANUP_INTERVAL.as_millis() as u64
+        {
             return;
         }
-        *last_cleanup = now;
-        drop(last_cleanup);
+        if self
+            .last_cleanup_millis
+            .compare_exchange(
+                last_cleanup_millis,
+                elapsed_millis,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            return;
+        }
 
         self.remove_expired(now);
         if self.ip_to_domains.len() > MAX_CACHE_IPS {

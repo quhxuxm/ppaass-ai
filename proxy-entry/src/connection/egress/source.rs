@@ -1,5 +1,5 @@
 use arc_swap::ArcSwapOption;
-use if_addrs::{IfAddr, Ifv4Addr, Ifv6Addr, Interface, get_if_addrs};
+use if_addrs::{get_if_addrs, IfAddr, Ifv4Addr, Ifv6Addr, Interface};
 use parking_lot::Mutex;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -55,8 +55,21 @@ pub(super) fn cached_if_addrs() -> io::Result<Arc<Vec<Interface>>> {
         return Ok(cache.interfaces.clone());
     }
 
+    if let Some(_refresh) = IF_ADDRS_REFRESH.try_lock() {
+        if let Some(cache) = IF_ADDRS_CACHE.load_full().filter(|cache| cache.is_fresh()) {
+            return Ok(cache.interfaces.clone());
+        }
+        return refresh_if_addrs_locked();
+    }
+
+    // The prior immutable snapshot remains valid while another connection refreshes it.
+    if let Some(cache) = IF_ADDRS_CACHE.load_full() {
+        return Ok(cache.interfaces.clone());
+    }
+
+    // The first caller needs a snapshot, so wait only when no prior result exists.
     let _refresh = IF_ADDRS_REFRESH.lock();
-    if let Some(cache) = IF_ADDRS_CACHE.load_full().filter(|cache| cache.is_fresh()) {
+    if let Some(cache) = IF_ADDRS_CACHE.load_full() {
         return Ok(cache.interfaces.clone());
     }
     refresh_if_addrs_locked()
