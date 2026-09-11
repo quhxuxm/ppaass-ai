@@ -63,12 +63,12 @@ impl AccessLogRepository for SqliteAccessLogRepository {
             ))
             .into());
         }
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {ACCESS_RECORD_SELECT} FROM user_access_records \
              WHERE username = ? AND accessed_at >= ? \
              ORDER BY accessed_at DESC, record_id DESC LIMIT ?"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .bind(username)
             .bind(since)
             .bind(i64::from(limit))

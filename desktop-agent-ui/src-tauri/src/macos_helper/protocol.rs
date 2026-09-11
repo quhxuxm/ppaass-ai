@@ -1,4 +1,45 @@
 use super::*;
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{BufReader, Read};
+
+const HELPER_HASH_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Verifies that the installed privileged helper is the same executable as the
+/// current desktop application. Protocol compatibility alone is insufficient:
+/// the helper also owns PF and route behavior used by the TUN data path.
+pub fn macos_tun_helper_binary_matches(source: &Path, installed: &Path) -> Result<bool, String> {
+    let source_size = file_size(source)?;
+    let installed_size = file_size(installed)?;
+    if source_size != installed_size {
+        return Ok(false);
+    }
+    Ok(sha256_file(source)? == sha256_file(installed)?)
+}
+
+fn file_size(path: &Path) -> Result<u64, String> {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .map_err(|err| format!("读取 helper 二进制元数据失败：{}：{err}", path.display()))
+}
+
+fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
+    let file = File::open(path)
+        .map_err(|err| format!("打开 helper 二进制失败：{}：{err}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; HELPER_HASH_BUFFER_SIZE];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|err| format!("读取 helper 二进制失败：{}：{err}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(digest.finalize().into())
+}
 
 pub(crate) fn macos_tun_helper_status(
     config: &desktop_agent_be::config::AgentConfig,

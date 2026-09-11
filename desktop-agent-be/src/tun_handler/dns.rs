@@ -1,41 +1,43 @@
 #[cfg(not(any(target_os = "macos", windows)))]
-use common::BindInterface;
-#[cfg(not(any(target_os = "macos", windows)))]
 use std::fs;
 use std::net::IpAddr;
-#[cfg(not(any(target_os = "macos", windows)))]
-use std::net::Ipv4Addr;
-#[cfg(not(any(target_os = "macos", windows)))]
-use tracing::debug;
+use std::path::PathBuf;
+use tracing::warn;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
-mod state;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(target_os = "macos")]
-pub(super) use macos::DnsGuard;
-#[cfg(windows)]
-pub(super) use windows::DnsGuard;
-
-#[cfg(not(any(target_os = "macos", windows)))]
-pub(super) struct DnsGuard;
-
-#[cfg(not(any(target_os = "macos", windows)))]
-impl DnsGuard {
-    pub(super) fn install(
-        proxy_dns: bool,
-        _bind_interface: Option<&BindInterface>,
-        _tun_interface_index: u32,
-        _tun_dns: Ipv4Addr,
-        _dns_state_file: Option<&str>,
-    ) -> Option<Self> {
-        if proxy_dns {
-            debug!("当前平台未实现系统 DNS 临时切换；DNS 请求需由系统路由进入 TUN");
-        }
-        None
+/// 旧版本可能留下系统 DNS 修改记录，但新版本严格禁止自动写系统 DNS。
+/// 保留状态文件并提示人工核对，避免盲目覆盖用户在异常退出后的手工改动。
+pub(super) fn warn_legacy_dns_state(dns_state_file: Option<&str>) {
+    let path = dns_state_file_path(dns_state_file);
+    if path.is_file() {
+        warn!(
+            "检测到旧版本 DNS 状态文件 {}；为遵守不修改系统 DNS 的约束，Agent 不会自动应用其中的配置，请人工核对系统 DNS 后删除该文件",
+            path.display()
+        );
     }
+}
+
+fn dns_state_file_path(configured_file: Option<&str>) -> PathBuf {
+    if let Some(path) = std::env::var_os("PPAASS_TUN_DNS_STATE") {
+        return PathBuf::from(path);
+    }
+
+    let configured_file = configured_file
+        .map(str::trim)
+        .filter(|file| !file.is_empty())
+        .unwrap_or("tun-dns.json");
+    let path = PathBuf::from(configured_file);
+    if path.is_absolute() {
+        return path;
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(path)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

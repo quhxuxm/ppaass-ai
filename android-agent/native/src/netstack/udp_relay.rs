@@ -211,12 +211,12 @@ async fn run_udp_relay(
 
         loop {
             if let Some(request) = retry_request.take() {
-                if let Err((e, request)) =
+                if let Err(batch_eror) =
                     send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats)
                         .await
                 {
-                    debug!("Android TUN UDP relay write failed: {e}");
-                    retry_request = Some(request);
+                    debug!("Android TUN UDP relay write failed: {}", batch_eror.0);
+                    retry_request = Some(batch_eror.1);
                     break;
                 }
                 idle_sleep
@@ -248,11 +248,11 @@ async fn run_udp_relay(
                         let _ = writer.shutdown().await;
                         return;
                     };
-                    if let Err((e, request)) =
+                    if let Err(batch_eror) =
                         send_udp_relay_request_batch(&mut writer, &mut state, request, &mut rx, &stats).await
                     {
-                        debug!("Android TUN UDP relay write failed: {e}");
-                        retry_request = Some(request);
+                        debug!("Android TUN UDP relay write failed: {}", batch_eror.0);
+                        retry_request = Some(batch_eror.1);
                         break;
                     }
                     idle_sleep.as_mut().reset(

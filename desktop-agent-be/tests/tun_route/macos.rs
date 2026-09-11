@@ -136,6 +136,7 @@ fn macos_pf_dns_rules_use_default_interface_when_scutil_omits_scope() {
     );
 
     assert!(rules.contains("pass out quick on en0"));
+    assert!(rules.contains("proto { udp tcp }"));
     assert!(rules.contains("route-to (utun9 10.10.10.2)"));
     assert!(rules.contains("to 192.168.31.1 port = 53"));
 }

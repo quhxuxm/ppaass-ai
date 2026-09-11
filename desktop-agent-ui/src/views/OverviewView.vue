@@ -56,8 +56,6 @@ const {
   dnsStatusLabel,
   applyLatestDnsRecords,
   onDnsListScroll,
-  onDnsListMouseEnter,
-  onDnsListMouseLeave,
   onDnsListFocusOut,
   dnsAnswerLabel,
   dnsAnswers,
@@ -84,7 +82,7 @@ const {
           'drop-target': dragOverOverviewCard === card.key
         }
       ]"
-      :style="{ gridColumn: 'span ' + card.span }"
+      :style="{ '--overview-card-span': card.span }"
       :data-overview-card="card.key"
       @mousedown="onOverviewMouseDown($event, card.key)"
     >
@@ -276,8 +274,6 @@ const {
                 ref="dnsRecordListElement"
                 class="dns-record-list"
                 @scroll.passive="onDnsListScroll"
-                @mouseenter="onDnsListMouseEnter"
-                @mouseleave="onDnsListMouseLeave"
                 @focusin="dnsListFocused = true"
                 @focusout="onDnsListFocusOut"
               >

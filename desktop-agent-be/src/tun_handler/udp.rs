@@ -35,6 +35,8 @@ pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
     pub(super) force_direct: bool,
+    pub(super) close_after_response: bool,
+    pub(super) direct_dns_query: Option<DirectDnsQuery>,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) tcp_sessions: Arc<YamuxSessionManager>,
@@ -43,6 +45,12 @@ pub(super) struct UdpSessionContext {
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) direct_egress: Arc<super::TunDirectEgress>,
     pub(super) shutdown: CancellationToken,
+}
+
+#[derive(Clone)]
+pub(super) struct DirectDnsQuery {
+    pub(super) id: u16,
+    pub(super) query: String,
 }
 
 struct DirectUdpRelayContext {
@@ -56,6 +64,9 @@ struct DirectUdpRelayContext {
     tcp_sessions: Arc<YamuxSessionManager>,
     udp_sessions: Arc<YamuxSessionManager>,
     tun_networks: TunNetworks,
+    close_after_response: bool,
+    direct_dns_query: Option<DirectDnsQuery>,
+    direct_domain_cache: Arc<DirectDomainCache>,
     shutdown: CancellationToken,
 }
 
@@ -70,6 +81,8 @@ pub(super) async fn handle_tun_udp(
         tun_networks,
         proxy_dns,
         force_direct,
+        close_after_response,
+        direct_dns_query,
         quic_policy,
         netstack_tx,
         tcp_sessions,
@@ -111,24 +124,27 @@ pub(super) async fn handle_tun_udp(
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if direct_checker.has_domain_direct_rules()
-            && let Some(domain) = direct_domain_cache
+            && let Some(domain_match) = direct_domain_cache
                 .matching_domain_for_ip(target.ip(), |domain| {
                     direct_checker.is_direct_domain(domain)
                 })
         {
             debug!(
-                "TUN UDP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
-                target, domain
+                "TUN UDP 缓存域名规则命中：{} ({}){}，先使用原始 IP 直连",
+                target,
+                domain_match.domain(),
+                if domain_match.is_stale() { " [stale]" } else { "" }
             );
-            direct_label = format!("{} ({})", target_label, domain);
+            direct_label = format!("{} ({})", target_label, domain_match.domain());
             direct_target = Some(target);
         }
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
+        let domain = domain_match.into_domain();
         debug!(
             "TUN UDP 缓存域名用于代理标签：{} ({})，代理目标保留原始 IP",
             target, domain
@@ -159,6 +175,9 @@ pub(super) async fn handle_tun_udp(
             tcp_sessions,
             udp_sessions,
             tun_networks,
+            close_after_response,
+            direct_dns_query,
+            direct_domain_cache,
             shutdown,
         })
         .await?;

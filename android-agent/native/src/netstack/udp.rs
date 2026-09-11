@@ -14,13 +14,14 @@ use tracing::debug;
 use super::ForwardContext;
 use super::direct_domain_cache::DirectDomainCache;
 use super::dns_proxy::DnsProxy;
+use super::dns_proxy::parse_dns_query;
 use super::network::{
     TunNetworks, address_for_tun_target, is_tun_local_udp_target, reject_tun_target,
 };
 use super::udp_relay::UdpRelay;
 use super::udp_writer::UdpWriter;
 use crate::direct_access::DirectAccessChecker;
-use crate::error::Result;
+use crate::error::{AndroidAgentError, Result};
 use crate::yamux_session::AndroidYamuxSessionManager;
 
 type UdpSessionKey = (SocketAddr, SocketAddr);
@@ -45,6 +46,7 @@ pub(super) struct UdpSessionContext {
     pub(super) tun_networks: TunNetworks,
     pub(super) proxy_dns: bool,
     pub(super) force_direct: bool,
+    pub(super) close_after_response: bool,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) udp_sessions: Arc<AndroidYamuxSessionManager>,
@@ -85,13 +87,25 @@ pub(super) fn spawn_udp_sessions(
                     let Some((data, source, target)) = message else { break };
                     // 只有端口 53 且 payload 能解析成标准 DNS 查询时才进入 DnsProxy。
                     // 非 DNS 的 UDP/53 必须继续按普通 UDP 转发，避免被 DNS ID 改写和缓存逻辑误处理。
-                    let is_dns_proxy_query =
-                        context.proxy_dns && target.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_query = target.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_proxy_query = context.proxy_dns && is_dns_query;
+                    let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        if let Some(dns_proxy) = &dns_proxy {
-                            dns_proxy.send(source, target, data);
+                        let direct_domain = parse_dns_query(&data)
+                            .is_some_and(|(domain, _)| context.direct_checker.is_direct_domain(&domain));
+                        if direct_domain {
+                            force_dns_direct = true;
+                        } else {
+                            if let Some(dns_proxy) = &dns_proxy {
+                                dns_proxy.send(source, target, data);
+                            }
+                            continue;
                         }
-                        continue;
+                    }
+                    if !force_dns_direct && !context.proxy_dns
+                        && target.port() == 53 && is_dns_query_packet(&data)
+                    {
+                        force_dns_direct = true;
                     }
 
                     // 上面已经消化了真实 DNS 查询；没有通过 DNS 校验的 UDP/53
@@ -122,7 +136,8 @@ pub(super) fn spawn_udp_sessions(
                         continue;
                     }
 
-                    let mut direct_match = context.direct_checker.is_direct(&address);
+                    let mut direct_match =
+                        force_dns_direct || context.direct_checker.is_direct(&address);
                     let proxy_address = address.clone();
                     if !direct_match {
                         // UDP/QUIC 代理目标保持原始 IP；只有域名规则可能改判直连时，
@@ -180,6 +195,9 @@ pub(super) fn spawn_udp_sessions(
                         proxy_dns: false,
                         // This task exists only after the ingress classifier selected Direct.
                         force_direct: true,
+                        // DNS uses a fresh client source port frequently. Close these
+                        // one-shot sockets promptly and cap them in the relay.
+                        close_after_response: is_dns_query,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         udp_sessions: context.udp_sessions.clone(),
@@ -235,6 +253,7 @@ pub(super) async fn handle_tun_udp(
         tun_networks,
         proxy_dns,
         force_direct,
+        close_after_response,
         quic_policy,
         netstack_tx,
         udp_sessions,
@@ -274,24 +293,32 @@ pub(super) async fn handle_tun_udp(
         if direct_checker.is_direct(&address) {
             direct_target = Some(target);
         } else if direct_checker.has_domain_direct_rules()
-            && let Some(domain) = direct_domain_cache
+            && let Some(domain_match) = direct_domain_cache
                 .matching_domain_for_ip(target.ip(), |domain| {
                     direct_checker.is_direct_domain(domain)
                 })
         {
             debug!(
-                "Android TUN UDP cached direct domain matched: {} ({})",
-                target, domain
+                "Android TUN UDP cached direct domain matched: {} ({}){}",
+                target,
+                domain_match.domain(),
+                if domain_match.is_stale() {
+                    " [stale]"
+                } else {
+                    ""
+                }
             );
-            direct_label = format!("{} ({})", target_label, domain);
+            direct_label = format!("{} ({})", target_label, domain_match.domain());
             direct_target = Some(target);
         }
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) =
+            direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
+        let domain = domain_match.into_domain();
         debug!(
             "Android TUN UDP cached proxy domain matched for label only: {} ({})，proxy target keeps original IP",
             target, domain
@@ -320,6 +347,7 @@ pub(super) async fn handle_tun_udp(
             direct_label,
             rx,
             netstack_tx,
+            close_after_response,
             shutdown,
         )
         .await?;

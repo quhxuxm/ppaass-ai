@@ -68,6 +68,12 @@ pub(crate) struct AgentDeviceTokenRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct SelectAgentProxyEntriesRequest {
+    pub(crate) proxy_entry_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AgentWebSessionHandoffQuery {
     pub(crate) code: String,
 }

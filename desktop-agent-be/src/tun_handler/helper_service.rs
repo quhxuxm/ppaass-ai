@@ -1,5 +1,5 @@
 use super::device::{tun_ipv4_destination, tun_ipv4_interface_prefix, tun_ipv4_peer};
-use super::dns::DnsGuard;
+use super::dns::warn_legacy_dns_state;
 use super::network;
 use super::route::{
     RouteGuard, RouteGuardInstall, cleanup_macos_pf_dns_capture_with_token,
@@ -210,8 +210,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 fn cleanup_stale(route_state_file: Option<&str>, dns_state_file: Option<&str>) -> Result<()> {
     cleanup_stale_routes_checked(route_state_file)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    debug!("TUN helper 不会修改系统 DNS；仅检查并恢复旧版本遗留的 DNS 状态");
-    let _ = DnsGuard::install(false, None, 0, Ipv4Addr::UNSPECIFIED, dns_state_file);
+    warn_legacy_dns_state(dns_state_file);
     Ok(())
 }
 

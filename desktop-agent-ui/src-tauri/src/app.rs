@@ -17,8 +17,9 @@ use crate::auth::{
     fetch_agent_admin_key_request_inbox, fetch_agent_permission_snapshot,
     load_persisted_agent_login, open_system_browser, persist_agent_login,
     persist_unassigned_agent_login, poll_device_authorization, reject_agent_admin_key_request,
-    request_account_management_handoff, start_device_authorization, write_managed_private_key,
-    AgentServerEventKind, AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
+    request_account_management_handoff, select_agent_proxy_entry_snapshot,
+    start_device_authorization, write_managed_private_key, AgentServerEventKind,
+    AgentServerEventStream, DeviceAuthorizationPoll, DownloadedCredential,
 };
 use crate::config::{
     apply_managed_credentials_to_config, clear_managed_credentials_from_config,
@@ -41,8 +42,9 @@ use crate::models::{
     AgentAdminKeyRequestApproval, AgentAdminKeyRequestInbox, AgentAdminKeyRequestRejection,
     AgentAdminKeyRequestUpdate, AgentAuthAccount, AgentAuthAccountStatus, AgentAuthState,
     AgentConfigSummary, AgentDeviceLoginProgress, AgentKeyRotationRequest, AgentLoginRequest,
-    AgentState, ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot,
-    PacketCaptureRuntimeStatus, AGENT_PACKET_CAPTURE_PERMISSION,
+    AgentProxyEntry, AgentProxyEntrySelection, AgentProxyEntrySpeedResult, AgentState,
+    ConnectivityReport, LoadedAgentConfig, NetworkTrafficSnapshot, PacketCaptureRuntimeStatus,
+    AGENT_PACKET_CAPTURE_PERMISSION, AGENT_PROXY_ENTRY_SELECT_PERMISSION,
 };
 use crate::packet_capture::{read_packet_capture, PacketCaptureReport};
 use crate::process_util::run_blocking;
@@ -69,6 +71,7 @@ mod config_commands;
 mod login_commands;
 mod permission_sync;
 mod provisioning;
+mod proxy_entries;
 mod server_events;
 mod state;
 mod telemetry_commands;
@@ -79,6 +82,7 @@ pub(crate) use config_commands::*;
 pub(crate) use login_commands::*;
 pub(crate) use permission_sync::*;
 pub(crate) use provisioning::*;
+pub(crate) use proxy_entries::*;
 pub use server_events::*;
 pub use state::*;
 pub(crate) use telemetry_commands::*;

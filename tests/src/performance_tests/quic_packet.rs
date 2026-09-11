@@ -65,8 +65,10 @@ pub fn parse_quic_version_negotiation_response(buf: &[u8]) -> Option<Vec<u32>> {
 
     Some(
         versions
-            .chunks_exact(4)
-            .map(|chunk| u32::from_be_bytes(chunk.try_into().expect("chunk size is fixed")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_be_bytes(*chunk))
             .collect(),
     )
 }

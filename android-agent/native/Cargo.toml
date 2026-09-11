@@ -32,3 +32,4 @@ parking_lot.workspace = true
 
 jni.workspace = true
 libc.workspace = true
+mimalloc.workspace = true

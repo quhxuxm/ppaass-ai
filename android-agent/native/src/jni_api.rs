@@ -19,6 +19,7 @@ use crate::http_proxy_clients::{
 use crate::netstack::run_android_agent;
 use crate::packet_capture;
 use crate::socket_protector;
+use crate::speed_test;
 use crate::traffic_stats;
 
 struct AgentHandle {
@@ -66,6 +67,21 @@ fn normalize_pem(value: &str) -> String {
         .join("\n")
         .trim()
         .to_string()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_ppaass_ai_agent_NativeAgent_speedTest<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    config_json: JString<'local>,
+) -> jstring {
+    crate::android_log::install_tracing();
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        let config_json = config_json.try_to_string(env)?;
+        let result = speed_test::run_json(&config_json);
+        Ok(env.new_string(result)?.into_raw())
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
 #[unsafe(no_mangle)]

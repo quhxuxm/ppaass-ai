@@ -119,6 +119,12 @@ final class AgentConfigJson {
                         DefaultConfig.HTTP_PROXY_THREADS));
     }
 
+    static JSONObject buildSpeedTest(Context context, String proxyAddress) throws JSONException {
+        return build(context).put(
+                "proxy_addrs",
+                new JSONArray().put(proxyAddress));
+    }
+
     private static JSONObject buildUdpYamuxTransportJson(
             SharedPreferences prefs,
             boolean canEditEgress) throws JSONException {

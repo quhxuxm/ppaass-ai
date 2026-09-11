@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 const MACOS_PF_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MACOS_PF_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub(crate) const DIRECT_DNS_PORT_FIRST: u16 = 54_000;
+pub(crate) const DIRECT_DNS_PORT_LAST: u16 = 54_999;
 
 pub(super) struct MacosPfDnsGuard {
     token: Option<String>,
@@ -153,6 +155,9 @@ pub fn macos_pf_dns_rules(
         };
         for interface_name in macos_dns_capture_interfaces(server, tun_if_name, default_interfaces)
         {
+            rules.push_str(&format!(
+                "pass out quick on {interface_name} inet proto udp from any port {DIRECT_DNS_PORT_FIRST}:{DIRECT_DNS_PORT_LAST} to {dns_ip} port = 53 keep state\n"
+            ));
             rules.push_str(&format!(
                 "pass out quick on {interface_name} route-to ({tun_if_name} {dns_capture_target}) inet proto {{ udp tcp }} from any to {dns_ip} port = 53 keep state\n"
             ));

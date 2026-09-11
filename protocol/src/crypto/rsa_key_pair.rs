@@ -1,4 +1,5 @@
 use crate::error::{ProtocolError, Result};
+use arc_swap::ArcSwap;
 use rsa::{
     Oaep, Pss, RsaPrivateKey, RsaPublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
@@ -7,27 +8,26 @@ use rsa::{
     traits::PublicKeyParts,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 const PUBLIC_KEY_CACHE_CAPACITY: usize = 1024;
 type PublicKeyFingerprint = [u8; 32];
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct PublicKeyCache {
     entries: HashMap<PublicKeyFingerprint, (String, Arc<RsaPublicKey>)>,
     insertion_order: VecDeque<PublicKeyFingerprint>,
 }
 
-fn public_key_cache() -> &'static RwLock<PublicKeyCache> {
-    static CACHE: OnceLock<RwLock<PublicKeyCache>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(PublicKeyCache::default()))
+fn public_key_cache() -> &'static ArcSwap<PublicKeyCache> {
+    static CACHE: OnceLock<ArcSwap<PublicKeyCache>> = OnceLock::new();
+    CACHE.get_or_init(|| ArcSwap::from_pointee(PublicKeyCache::default()))
 }
 
 pub fn parse_public_key_pem_cached(pem: &str) -> Result<Arc<RsaPublicKey>> {
     let fingerprint: PublicKeyFingerprint = Sha256::digest(pem.as_bytes()).into();
     if let Some(key) = public_key_cache()
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .load()
         .entries
         .get(&fingerprint)
         .and_then(|(cached_pem, key)| (cached_pem == pem).then(|| key.clone()))
@@ -36,31 +36,34 @@ pub fn parse_public_key_pem_cached(pem: &str) -> Result<Arc<RsaPublicKey>> {
     }
 
     let parsed = Arc::new(RsaKeyPair::from_public_key_pem(pem)?);
-    let mut cache = public_key_cache()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(key) = cache
-        .entries
-        .get(&fingerprint)
-        .and_then(|(cached_pem, key)| (cached_pem == pem).then(|| key.clone()))
-    {
-        return Ok(key);
+    loop {
+        let current = public_key_cache().load_full();
+        if let Some(key) = current
+            .entries
+            .get(&fingerprint)
+            .and_then(|(cached_pem, key)| (cached_pem == pem).then(|| key.clone()))
+        {
+            return Ok(key);
+        }
+        let mut next = (*current).clone();
+        if next.entries.contains_key(&fingerprint) {
+            next.entries.remove(&fingerprint);
+            next.insertion_order.retain(|item| item != &fingerprint);
+        }
+        while next.entries.len() >= PUBLIC_KEY_CACHE_CAPACITY {
+            let Some(oldest) = next.insertion_order.pop_front() else {
+                break;
+            };
+            next.entries.remove(&oldest);
+        }
+        next.entries
+            .insert(fingerprint, (pem.to_string(), parsed.clone()));
+        next.insertion_order.push_back(fingerprint);
+        let previous = public_key_cache().compare_and_swap(&current, Arc::new(next));
+        if Arc::ptr_eq(&*previous, &current) {
+            return Ok(parsed);
+        }
     }
-    if cache.entries.contains_key(&fingerprint) {
-        cache.entries.remove(&fingerprint);
-        cache.insertion_order.retain(|item| item != &fingerprint);
-    }
-    while cache.entries.len() >= PUBLIC_KEY_CACHE_CAPACITY {
-        let Some(oldest) = cache.insertion_order.pop_front() else {
-            break;
-        };
-        cache.entries.remove(&oldest);
-    }
-    cache
-        .entries
-        .insert(fingerprint, (pem.to_string(), parsed.clone()));
-    cache.insertion_order.push_back(fingerprint);
-    Ok(parsed)
 }
 
 pub struct RsaKeyPair {

@@ -37,6 +37,8 @@ AGENT_ADDR="${AGENT_ADDR:-127.0.0.1:7080}"
 PROXY_ADDR="${PROXY_ADDR:-127.0.0.1:8080}"
 TCP_TARGET_HOST="${TCP_TARGET_HOST:-127.0.0.1}"
 TCP_TARGET_PORT="${TCP_TARGET_PORT:-9091}"
+UDP_TARGET_HOST="${UDP_TARGET_HOST:-127.0.0.1}"
+UDP_TARGET_PORT="${UDP_TARGET_PORT:-9092}"
 
 case "$MODE" in
     mock-target)
@@ -126,13 +128,21 @@ case "$MODE" in
 
     tcp-performance)
         PAYLOAD_SIZE="${4:-65536}"
+        UDP_PAYLOAD_SIZE="${UDP_PAYLOAD_SIZE:-1200}"
         echo -e "${YELLOW}Running TCP performance tests...${NC}"
         echo "Agent: $AGENT_ADDR"
         echo "Proxy: $PROXY_ADDR"
-        echo "Target: ${TCP_TARGET_HOST}:${TCP_TARGET_PORT}"
+        echo "TCP target: ${TCP_TARGET_HOST}:${TCP_TARGET_PORT}"
+        echo "UDP target: ${UDP_TARGET_HOST}:${UDP_TARGET_PORT}"
         echo "Concurrency: $CONCURRENCY"
         echo "Duration: ${DURATION}s"
-        echo "Payload size: ${PAYLOAD_SIZE} bytes"
+        echo "TCP payload: ${PAYLOAD_SIZE} bytes"
+        echo "UDP payload: ${UDP_PAYLOAD_SIZE} bytes"
+
+        TUN_ARGS=()
+        if [ -n "${TUN_INTERFACE:-}" ]; then
+            TUN_ARGS=(--tun-interface "$TUN_INTERFACE")
+        fi
         echo ""
         echo "Make sure the following are running:"
         echo "  1. Agent server on $AGENT_ADDR"
@@ -147,12 +157,54 @@ case "$MODE" in
             --proxy-addr "$PROXY_ADDR" \
             --target-host "$TCP_TARGET_HOST" \
             --target-port "$TCP_TARGET_PORT" \
+            --udp-target-host "$UDP_TARGET_HOST" \
+            --udp-target-port "$UDP_TARGET_PORT" \
             --concurrency "$CONCURRENCY" \
             --duration "$DURATION" \
             --payload-size "$PAYLOAD_SIZE" \
             --output "$OUTPUT_FILE"
 
         echo -e "${GREEN}✓ TCP performance test complete${NC}"
+        echo "Reports generated:"
+        echo "  - ${OUTPUT_FILE}"
+        echo "  - ${OUTPUT_FILE%.html}.json"
+        echo "  - ${OUTPUT_FILE%.html}.md"
+        ;;
+
+    max-throughput)
+        MAX_CONCURRENCY="${2:-128}"
+        STAGE_DURATION="${3:-10}"
+        PAYLOAD_SIZE="${4:-65536}"
+        START_CONCURRENCY="${START_CONCURRENCY:-1}"
+        WARMUP_DURATION="${WARMUP_DURATION:-2}"
+        SETTLE_DURATION="${SETTLE_DURATION:-1}"
+        MAX_FAILURE_RATE="${MAX_FAILURE_RATE:-1.0}"
+        echo -e "${YELLOW}Running end-to-end maximum throughput test...${NC}"
+        echo "Agent: $AGENT_ADDR"
+        echo "Proxy: $PROXY_ADDR"
+        echo "Target: ${TCP_TARGET_HOST}:${TCP_TARGET_PORT}"
+        echo "Concurrency sweep: ${START_CONCURRENCY}..${MAX_CONCURRENCY}"
+        echo "Stage duration: ${STAGE_DURATION}s"
+        echo "Payload size: ${PAYLOAD_SIZE} bytes"
+
+        OUTPUT_FILE="max-throughput-report-$(date +%Y%m%d-%H%M%S).html"
+        cargo run --release -p integration-tests -- max-throughput \
+            --agent-addr "$AGENT_ADDR" \
+            --proxy-addr "$PROXY_ADDR" \
+            --target-host "$TCP_TARGET_HOST" \
+            --target-port "$TCP_TARGET_PORT" \
+            --start-concurrency "$START_CONCURRENCY" \
+            --max-concurrency "$MAX_CONCURRENCY" \
+            --stage-duration "$STAGE_DURATION" \
+            --warmup-duration "$WARMUP_DURATION" \
+            --settle-duration "$SETTLE_DURATION" \
+            --payload-size "$PAYLOAD_SIZE" \
+            --udp-payload-size "$UDP_PAYLOAD_SIZE" \
+            --max-failure-rate "$MAX_FAILURE_RATE" \
+            "${TUN_ARGS[@]}" \
+            --output "$OUTPUT_FILE"
+
+        echo -e "${GREEN}✓ Maximum throughput test complete${NC}"
         echo "Reports generated:"
         echo "  - ${OUTPUT_FILE}"
         echo "  - ${OUTPUT_FILE%.html}.json"
@@ -277,6 +329,7 @@ case "$MODE" in
         echo "  performance [c] [d]  Run performance tests with [c]=concurrency, [d]=duration"
         echo "  udp-performance [c] [d] [p] Run UDP performance tests with payload [p] bytes"
         echo "  tcp-performance [c] [d] [p] Run TCP relay performance tests with payload [p] bytes"
+        echo "  max-throughput [max] [d] [p] Find peak relay speed up to [max] concurrency"
         echo "  quic-probe [attempts] [target] [timeout_ms] Run QUIC UDP/443 connectivity probe"
         echo "  quic-performance [c] [d] [target] [timeout_ms] Run QUIC UDP/443 performance tests"
         echo "  all [c] [d]          Run all tests"
@@ -287,6 +340,11 @@ case "$MODE" in
         echo "  PROXY_ADDR           Proxy server address (default: 127.0.0.1:8080)"
         echo "  TCP_TARGET_HOST      TCP echo target host (default: 127.0.0.1)"
         echo "  TCP_TARGET_PORT      TCP echo target port (default: 9091)"
+        echo "  UDP_TARGET_HOST      UDP echo target host (default: 127.0.0.1)"
+        echo "  UDP_TARGET_PORT      UDP echo target port (default: 9092)"
+        echo "  UDP_PAYLOAD_SIZE     UDP payload bytes (default: 1200)"
+        echo "  TUN_INTERFACE        Required TUN interface for the TUN result"
+        echo "  MAX_FAILURE_RATE     Sustainable-stage failure limit (default: 1.0%)"
         echo ""
         echo "Examples:"
         echo "  $0 mock-target"
@@ -294,6 +352,7 @@ case "$MODE" in
         echo "  $0 performance 200 120"
         echo "  $0 udp-performance 200 120 1200"
         echo "  $0 tcp-performance 200 120 65536"
+        echo "  $0 max-throughput 128 10 65536"
         echo "  $0 quic-probe 20 cloudflare.com 3000"
         echo "  $0 quic-performance 20 30 cloudflare.com 3000"
         echo "  $0 all 100 60"

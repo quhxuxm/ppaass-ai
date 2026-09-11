@@ -1,5 +1,7 @@
+use arc_swap::ArcSwap;
 use std::net::IpAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use tracing::{info, warn};
@@ -20,23 +22,52 @@ pub(super) struct TunDirectEgress {
     // 用 proxy 地址探测当前物理出口，防止 TUN 默认路由生效后误选到 TUN。
     proxy_addrs: Arc<Vec<String>>,
     // IPv4/IPv6 可能使用不同物理出口，必须按目标地址族选择绑定。
-    bind_interfaces: RwLock<TunDirectBindInterfaces>,
+    bind_interfaces: ArcSwap<TunDirectBindInterfaces>,
     #[cfg(target_os = "macos")]
     helper_socket: Option<String>,
     refresh_lock: tokio::sync::Mutex<()>,
-    last_refresh: RwLock<TunDirectRefreshTimes>,
+    refresh_epoch: Instant,
+    last_refresh: TunDirectRefreshTimes,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct TunDirectBindInterfaces {
     ipv4: Option<common::BindInterface>,
     ipv6: Option<common::BindInterface>,
 }
 
-#[derive(Default)]
 struct TunDirectRefreshTimes {
-    ipv4: Option<Instant>,
-    ipv6: Option<Instant>,
+    ipv4_millis: AtomicU64,
+    ipv6_millis: AtomicU64,
+}
+
+impl Default for TunDirectRefreshTimes {
+    fn default() -> Self {
+        Self {
+            ipv4_millis: AtomicU64::new(0),
+            ipv6_millis: AtomicU64::new(0),
+        }
+    }
+}
+
+/// 选择 TUN 内直连 socket 的初始物理出口。
+///
+/// Windows 在 split-default 路由已安装后查询默认路由，会稳定得到 Wintun
+/// 接口；因此必须优先使用 TUN 启动前为 proxy 捕获的物理接口，否则直连
+/// socket 会被 `IP_UNICAST_IF` 再次送回 TUN。
+pub fn select_initial_direct_bind_interface(
+    captured_physical: Option<common::BindInterface>,
+    detected_default: Option<common::BindInterface>,
+) -> Option<common::BindInterface> {
+    #[cfg(windows)]
+    {
+        captured_physical.or(detected_default)
+    }
+
+    #[cfg(not(windows))]
+    {
+        detected_default.or(captured_physical)
+    }
 }
 
 impl TunDirectEgress {
@@ -46,28 +77,31 @@ impl TunDirectEgress {
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
         let fallback = bind_interface.filter(bind_interface_is_usable);
-        let ipv4 = detect_default_route_interface(false)
-            .filter(bind_interface_is_usable)
-            .or_else(|| fallback.clone());
-        let ipv6 = detect_default_route_interface(true)
-            .filter(bind_interface_is_usable)
-            .or_else(|| fallback.clone());
+        let ipv4 = select_initial_direct_bind_interface(
+            fallback.clone(),
+            detect_default_route_interface(false).filter(bind_interface_is_usable),
+        );
+        let ipv6 = select_initial_direct_bind_interface(
+            fallback.clone(),
+            detect_default_route_interface(true).filter(bind_interface_is_usable),
+        );
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
-            bind_interfaces: RwLock::new(TunDirectBindInterfaces { ipv4, ipv6 }),
+            bind_interfaces: ArcSwap::from_pointee(TunDirectBindInterfaces { ipv4, ipv6 }),
             #[cfg(target_os = "macos")]
             helper_socket,
             refresh_lock: tokio::sync::Mutex::new(()),
-            last_refresh: RwLock::new(TunDirectRefreshTimes::default()),
+            refresh_epoch: Instant::now(),
+            last_refresh: TunDirectRefreshTimes::default(),
         }
     }
 
     pub(super) fn bind_interface(&self, target_ip: IpAddr) -> Option<common::BindInterface> {
-        let guard = self.bind_interfaces.read().ok()?;
+        let interfaces = self.bind_interfaces.load();
         if target_ip.is_ipv6() {
-            guard.ipv6.clone()
+            interfaces.ipv6.clone()
         } else {
-            guard.ipv4.clone()
+            interfaces.ipv4.clone()
         }
     }
 
@@ -137,10 +171,8 @@ impl TunDirectEgress {
         // proxy 出口刷新与 direct 目标的地址族选择分开：
         // 即使当前 direct 目标是 IPv4、proxy 走 IPv6（或反之），
         // 后续 proxy session 也应该立即拿到新出口。
-        tcp_sessions.set_proxy_bind_ip(Some(route.local_ip));
-        tcp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
-        udp_sessions.set_proxy_bind_ip(Some(route.local_ip));
-        udp_sessions.set_proxy_bind_interface(Some(bind_interface.clone()));
+        tcp_sessions.set_proxy_bind_route(Some(route.local_ip), Some(bind_interface.clone()));
+        udp_sessions.set_proxy_bind_route(Some(route.local_ip), Some(bind_interface.clone()));
 
         if route.local_ip.is_ipv6() != target_ip.is_ipv6() {
             info!(
@@ -197,36 +229,52 @@ impl TunDirectEgress {
         target_ip: IpAddr,
         bind_interface: Option<common::BindInterface>,
     ) {
-        if let Ok(mut guard) = self.bind_interfaces.write() {
+        self.bind_interfaces.rcu(|current| {
+            let mut updated = (**current).clone();
             if target_ip.is_ipv6() {
-                guard.ipv6 = bind_interface;
+                updated.ipv6 = bind_interface.clone();
             } else {
-                guard.ipv4 = bind_interface;
+                updated.ipv4 = bind_interface.clone();
             }
-        }
+            Arc::new(updated)
+        });
     }
 
     fn refresh_recently(&self, target_ip: IpAddr) -> bool {
-        self.last_refresh_time(target_ip)
-            .is_some_and(|last_refresh| last_refresh.elapsed() < DIRECT_EGRESS_REFRESH_COOLDOWN)
+        let last_refresh_millis = self.last_refresh_millis(target_ip);
+        last_refresh_millis != 0
+            && self
+                .elapsed_refresh_millis()
+                .saturating_sub(last_refresh_millis)
+                < DIRECT_EGRESS_REFRESH_COOLDOWN.as_millis() as u64
     }
 
-    fn last_refresh_time(&self, target_ip: IpAddr) -> Option<Instant> {
-        let guard = self.last_refresh.read().ok()?;
+    fn last_refresh_millis(&self, target_ip: IpAddr) -> u64 {
         if target_ip.is_ipv6() {
-            guard.ipv6
+            self.last_refresh.ipv6_millis.load(Ordering::Acquire)
         } else {
-            guard.ipv4
+            self.last_refresh.ipv4_millis.load(Ordering::Acquire)
         }
     }
 
     fn mark_refreshed(&self, target_ip: IpAddr) {
-        if let Ok(mut guard) = self.last_refresh.write() {
-            if target_ip.is_ipv6() {
-                guard.ipv6 = Some(Instant::now());
-            } else {
-                guard.ipv4 = Some(Instant::now());
-            }
+        let refreshed_at = self.elapsed_refresh_millis().max(1);
+        if target_ip.is_ipv6() {
+            self.last_refresh
+                .ipv6_millis
+                .store(refreshed_at, Ordering::Release);
+        } else {
+            self.last_refresh
+                .ipv4_millis
+                .store(refreshed_at, Ordering::Release);
         }
+    }
+
+    fn elapsed_refresh_millis(&self) -> u64 {
+        self.refresh_epoch
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
     }
 }

@@ -24,9 +24,11 @@ pub(super) async fn try_send_cached_dns_response(
         answers: Vec::new(),
         min_ttl: None,
     });
-    context
-        .direct_domain_cache
-        .record_resolution(&question.query, &summary.answers);
+    context.direct_domain_cache.record_resolution_with_ttl(
+        &question.query,
+        &summary.answers,
+        summary.min_ttl,
+    );
     traffic_stats::record_dns_resolution(DnsResolutionRecord {
         timestamp_ms: traffic_stats::current_time_millis(),
         resolver: "agent-cache".to_string(),
@@ -110,9 +112,11 @@ pub(super) async fn try_send_direct_dns_response(
         min_ttl: None,
     });
     response_cache.insert(&question.query, &question.record_type, &summary, &response);
-    context
-        .direct_domain_cache
-        .record_resolution(&question.query, &summary.answers);
+    context.direct_domain_cache.record_resolution_with_ttl(
+        &question.query,
+        &summary.answers,
+        summary.min_ttl,
+    );
     record_direct_dns_result(
         request,
         &question,

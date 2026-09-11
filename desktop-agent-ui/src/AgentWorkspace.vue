@@ -5,6 +5,7 @@ import AdminKeyRequestsView from "./views/AdminKeyRequestsView.vue";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppIcon from "./components/AppIcon";
 import AppTopbar from "./components/AppTopbar.vue";
+import ProxyEntrySelector from "./components/ProxyEntrySelector.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useDesktopAgent } from "./composables/useDesktopAgent";
 import DiagnosticsView from "./views/DiagnosticsView.vue";
@@ -204,7 +205,14 @@ function setLanguage(language: AppLocale) {
           @stop="stopAgent"
           @update:color-theme="setColorTheme"
           @update:language="setLanguage"
-        />
+        >
+          <template #primary-actions>
+            <ProxyEntrySelector
+              v-if="capabilities.canSelectProxyEntry && accountStatus === 'active'"
+              @switched="refreshAgentState"
+            />
+          </template>
+        </AppTopbar>
 
         <section v-if="state.loading" class="loading">
           <ProgressSpinner />

@@ -175,6 +175,10 @@ button > i,
     grid-template-columns: 1fr;
   }
 
+  .overview-card {
+    grid-column: 1 / -1;
+  }
+
   .span-5,
   .span-4,
   .span-6,

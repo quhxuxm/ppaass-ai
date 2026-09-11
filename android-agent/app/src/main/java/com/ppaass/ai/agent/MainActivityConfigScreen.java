@@ -26,6 +26,9 @@ abstract class MainActivityConfigScreen extends MainActivityStatusScreen {
 
 protected void buildConfigScreen(LinearLayout root) {
         buildAppearanceSection(root);
+        if (hasAgentPermission(AgentPermissions.PROXY_ENTRY_SELECT)) {
+            ProxyEntrySelectionUi.attach(this, root);
+        }
         boolean canEditEgress = hasAgentPermission(AgentPermissions.EGRESS_EDIT);
         boolean canEditRuntime =
                 hasAgentPermission(AgentPermissions.RUNTIME_THREADS_EDIT);

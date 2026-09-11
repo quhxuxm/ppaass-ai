@@ -1,4 +1,4 @@
-use common::ClientConnectionConfig;
+use common::{ClientConnectionConfig, ProxyEndpointAffinity};
 use protocol::RsaKeyPair;
 use std::fmt;
 use std::sync::Arc;
@@ -42,4 +42,27 @@ fn parsed_private_key_is_reused_for_identical_pem() {
     let second = config.private_key_pair().unwrap();
 
     assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn proxy_affinity_keeps_successful_endpoint_first() {
+    let affinity = ProxyEndpointAffinity::with_initial_index(0);
+    let endpoints = vec![
+        "proxy-a:443".to_string(),
+        "proxy-b:443".to_string(),
+        "proxy-c:443".to_string(),
+    ];
+
+    assert_eq!(affinity.ordered_candidates(&endpoints), endpoints);
+
+    affinity.record_success(&endpoints, "proxy-b:443");
+
+    assert_eq!(
+        affinity.ordered_candidates(&endpoints),
+        vec![
+            "proxy-b:443".to_string(),
+            "proxy-c:443".to_string(),
+            "proxy-a:443".to_string(),
+        ]
+    );
 }

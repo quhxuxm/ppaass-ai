@@ -133,12 +133,12 @@ impl SqliteUserRepository {
         account_id: &str,
     ) -> Result<Option<KeyGenerationRequest>> {
         let account_id = normalize_account_id(account_id)?;
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests \
              WHERE account_id = ? ORDER BY requested_at DESC, request_id COLLATE BINARY DESC \
              LIMIT 1"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .bind(account_id)
             .fetch_optional(&self.pool)
             .await?
@@ -149,11 +149,11 @@ impl SqliteUserRepository {
     pub(super) async fn list_pending_key_generation_requests(
         &self,
     ) -> Result<Vec<KeyGenerationRequest>> {
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {KEY_REQUEST_SELECT} FROM key_generation_requests \
              WHERE status = 'pending' ORDER BY requested_at, request_id COLLATE BINARY"
-        );
-        sqlx::query(&query)
+        ));
+        sqlx::query(query)
             .fetch_all(&self.pool)
             .await?
             .into_iter()

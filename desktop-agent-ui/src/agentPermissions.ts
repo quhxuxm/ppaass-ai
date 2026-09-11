@@ -3,7 +3,8 @@ import type { AgentAuthAccount } from "./types";
 export const AGENT_PERMISSION_CODES = {
   packetCapture: "agent.packet_capture",
   egressEdit: "agent.egress.edit",
-  runtimeThreadsEdit: "agent.runtime_threads.edit"
+  runtimeThreadsEdit: "agent.runtime_threads.edit",
+  proxyEntrySelect: "agent.proxy_entry.select"
 } as const;
 
 export type AgentPermissionCode =
@@ -14,6 +15,7 @@ export type AgentCapabilities = {
   canViewRawConfig: boolean;
   canEditEgress: boolean;
   canEditRuntimeThreads: boolean;
+  canSelectProxyEntry: boolean;
 };
 
 export function hasAgentPermission(
@@ -44,6 +46,10 @@ export function resolveAgentCapabilities(
     canEditRuntimeThreads: hasAgentPermission(
       account,
       AGENT_PERMISSION_CODES.runtimeThreadsEdit
+    ),
+    canSelectProxyEntry: hasAgentPermission(
+      account,
+      AGENT_PERMISSION_CODES.proxyEntrySelect
     )
   };
 }

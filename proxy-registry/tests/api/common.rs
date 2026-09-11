@@ -22,7 +22,7 @@ pub(super) use tower::ServiceExt;
 
 pub(super) const AGENT_DEVICE_AUTHORIZATION_TTL_SECONDS: i64 = 10 * 60;
 pub(super) const AGENT_DEVICE_POLL_INTERVAL_SECONDS: u32 = 5;
-pub(super) const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 32 * 1024;
+pub(super) const MAX_AGENT_TOKEN_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const SECONDS_PER_DAY: i64 = 86_400;
 pub(super) const MASTER_SECRET: &str = "test-only-private-key-secret-with-32-plus-bytes";
 pub(super) const FUTURE_EXPIRATION: i64 = 4_102_444_800;

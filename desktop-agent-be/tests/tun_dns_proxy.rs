@@ -1,3 +1,5 @@
+use desktop_agent_be::direct_access::{DirectAccessChecker, DirectAccessConfig, DirectAccessMode};
+use desktop_agent_be::tun_handler::direct_domain_cache::DirectDomainCache;
 use desktop_agent_be::tun_handler::dns_proxy::*;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -47,6 +49,19 @@ fn parses_dns_query_name_and_type() {
 }
 
 #[test]
+fn parses_https_dns_query_from_chatgpt() {
+    let packet = vec![
+        0x51, 0x8b, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'c', b'h',
+        b'a', b't', b'g', b'p', b't', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x41, 0x00, 0x01,
+    ];
+
+    assert_eq!(
+        parse_dns_query(&packet),
+        Some(("chatgpt.com".to_string(), "HTTPS".to_string()))
+    );
+}
+
+#[test]
 fn rejects_dns_response_as_query() {
     let packet = vec![
         0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
@@ -80,6 +95,43 @@ fn parses_dns_response_answers() {
     assert_eq!(parsed.status, "NOERROR");
     assert_eq!(parsed.answers, vec!["93.184.216.34"]);
     assert_eq!(parsed.min_ttl, Some(60));
+}
+
+#[test]
+fn direct_dns_response_keeps_teams_ip_on_the_domain_rule_path() {
+    let response = vec![
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x05, b't', b'e',
+        b'a', b'm', b's', 0x09, b'm', b'i', b'c', b'r', b'o', b's', b'o', b'f', b't', 0x03, b'c',
+        b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x3c, 0x00, 0x04, 0xcb, 0x00, 0x71, 0x0a,
+    ];
+    let cache = DirectDomainCache::new(Duration::from_secs(60));
+    let checker = DirectAccessChecker::new(&DirectAccessConfig {
+        mode: DirectAccessMode::Rules,
+        rules: vec!["teams.microsoft.com".to_string()],
+    });
+
+    let summary = record_direct_dns_response(&cache, 0x1234, "teams.microsoft.com", &response)
+        .expect("matching direct DNS response should be cached");
+
+    assert_eq!(summary.answers, vec!["203.0.113.10"]);
+    assert!(
+        cache
+            .matching_domain_for_ip("203.0.113.10".parse().unwrap(), |domain| {
+                checker.is_direct_domain(domain)
+            })
+            .is_some()
+    );
+
+    let unmatched = record_direct_dns_response(&cache, 0xbeef, "ignored.example", &response);
+    assert!(unmatched.is_none());
+    assert!(
+        cache
+            .matching_domain_for_ip("203.0.113.10".parse().unwrap(), |domain| {
+                domain == "ignored.example"
+            })
+            .is_none()
+    );
 }
 
 #[test]

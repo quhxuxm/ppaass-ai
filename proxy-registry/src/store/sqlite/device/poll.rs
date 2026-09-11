@@ -13,11 +13,11 @@ impl SqliteUserRepository {
                 ValidationError::InvalidAccountField("设备授权轮询参数无效".to_string()).into(),
             );
         }
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
              WHERE device_code_hash = ?"
-        );
-        let record = sqlx::query(&query)
+        ));
+        let record = sqlx::query(query)
             .bind(&device_code_hash)
             .fetch_optional(&self.pool)
             .await?
@@ -60,11 +60,11 @@ impl SqliteUserRepository {
         }
         let encoded_permissions = encode_permissions(&permissions);
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let query = format!(
+        let query = sqlx::AssertSqlSafe(format!(
             "SELECT {DEVICE_AUTHORIZATION_SELECT} FROM agent_device_authorizations \
              WHERE device_code_hash = ?"
-        );
-        let record = sqlx::query(&query)
+        ));
+        let record = sqlx::query(query)
             .bind(&device_code_hash)
             .fetch_optional(&mut *transaction)
             .await?

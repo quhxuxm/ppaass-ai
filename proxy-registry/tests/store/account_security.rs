@@ -186,6 +186,33 @@ async fn bootstrap_root_admin_is_not_suppressed_by_an_existing_admin() {
 }
 
 #[tokio::test]
+async fn invalid_utf8_avatar_does_not_block_root_account_reads() {
+    let (_directory, store) = test_store().await;
+    store
+        .bootstrap_admin_if_absent(NewAdminAccount {
+            account_id: "admin-root".to_string(),
+            login_name: "admin".to_string(),
+            password_hash: Some("$argon2id$test".to_string()),
+            display_name: None,
+            email: None,
+            avatar_url: None,
+        })
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE web_accounts SET avatar_url = CAST(X'89504E470D0A1A0AFF' AS TEXT) \
+         WHERE login_name = 'admin'",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    let root = store.get_account_by_login("admin").await.unwrap().unwrap();
+    assert_eq!(root.account_id, "admin-root");
+    assert_eq!(root.avatar_url, None);
+}
+
+#[tokio::test]
 async fn managed_account_must_be_disabled_before_deletion() {
     let (_directory, store) = test_store().await;
     create_admin(&store, "delete-admin").await;

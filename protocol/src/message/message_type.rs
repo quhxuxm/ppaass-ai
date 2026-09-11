@@ -8,4 +8,6 @@ pub enum MessageType {
     ConnectRequest = 3,
     ConnectResponse = 4,
     Data = 5,
+    Error = 6,
+    SpeedTestRequest = 7,
 }

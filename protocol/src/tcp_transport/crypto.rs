@@ -1,10 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
-    aead::{Aead, KeyInit, Payload},
-};
 use hkdf::Hkdf;
+use ring::aead::{self, Aad, LessSafeKey, Nonce, UnboundKey};
 use sha2::{Digest, Sha256};
 
 use crate::message::{MessageType, PROTOCOL_VERSION};
@@ -118,8 +115,26 @@ fn expand(hkdf: &Hkdf<Sha256>, label: &[u8], output: &mut [u8]) -> Result<()> {
 
 struct DirectionState {
     direction: TcpFrameDirection,
-    cipher: Aes256Gcm,
+    cipher: LessSafeKey,
     nonce_prefix: [u8; NONCE_PREFIX_LEN],
+}
+
+impl DirectionState {
+    fn new(
+        direction: TcpFrameDirection,
+        key: &[u8; KEY_LEN],
+        nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    ) -> Self {
+        let key = match UnboundKey::new(&aead::AES_256_GCM, key) {
+            Ok(key) => key,
+            Err(_) => unreachable!("AES-256-GCM accepts every 32-byte key"),
+        };
+        Self {
+            direction,
+            cipher: LessSafeKey::new(key),
+            nonce_prefix,
+        }
+    }
 }
 
 struct SequenceState {
@@ -250,16 +265,16 @@ impl TcpSessionCipher {
         next_send_sequence: u64,
         next_receive_sequence: u64,
     ) -> Self {
-        let client_to_server = DirectionState {
-            direction: TcpFrameDirection::ClientToServer,
-            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&material.client_to_server_key)),
-            nonce_prefix: material.client_to_server_nonce_prefix,
-        };
-        let server_to_client = DirectionState {
-            direction: TcpFrameDirection::ServerToClient,
-            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&material.server_to_client_key)),
-            nonce_prefix: material.server_to_client_nonce_prefix,
-        };
+        let client_to_server = DirectionState::new(
+            TcpFrameDirection::ClientToServer,
+            &material.client_to_server_key,
+            material.client_to_server_nonce_prefix,
+        );
+        let server_to_client = DirectionState::new(
+            TcpFrameDirection::ServerToClient,
+            &material.server_to_client_key,
+            material.server_to_client_nonce_prefix,
+        );
         let (send, receive) = match role {
             TcpSessionRole::Agent => (client_to_server, server_to_client),
             TcpSessionRole::Proxy => (server_to_client, client_to_server),
@@ -279,6 +294,18 @@ impl TcpSessionCipher {
         compression: u8,
         plaintext: &[u8],
     ) -> Result<(u64, Vec<u8>)> {
+        let mut ciphertext = Vec::with_capacity(plaintext.len() + aead::MAX_TAG_LEN);
+        ciphertext.extend_from_slice(plaintext);
+        let sequence = self.seal_in_place(message_type, compression, &mut ciphertext)?;
+        Ok((sequence, ciphertext))
+    }
+
+    pub(crate) fn seal_in_place(
+        &self,
+        message_type: MessageType,
+        compression: u8,
+        plaintext: &mut Vec<u8>,
+    ) -> Result<u64> {
         // Reserve before encryption so concurrent writers never reuse an AEAD
         // nonce. Encryption errors are fatal to the framed connection, so a
         // reserved sequence does not need to be rolled back.
@@ -287,18 +314,16 @@ impl TcpSessionCipher {
             .reserve(|| ProtocolError::Encryption("TCP send sequence exhausted".to_string()))?;
         let nonce = make_nonce(self.send.nonce_prefix, current);
         let aad = frame_aad(self.send.direction, message_type, compression, current);
-        let ciphertext = self
-            .send
+        plaintext.reserve(aead::MAX_TAG_LEN);
+        self.send
             .cipher
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: plaintext,
-                    aad: &aad,
-                },
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad),
+                plaintext,
             )
             .map_err(|_| ProtocolError::Encryption("TCP frame encryption failed".to_string()))?;
-        Ok((current, ciphertext))
+        Ok(current)
     }
 
     pub fn open(
@@ -308,6 +333,18 @@ impl TcpSessionCipher {
         wire_sequence: u64,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
+        let mut plaintext = ciphertext.to_vec();
+        self.open_in_place(message_type, compression, wire_sequence, &mut plaintext)?;
+        Ok(plaintext)
+    }
+
+    pub(crate) fn open_in_place(
+        &self,
+        message_type: MessageType,
+        compression: u8,
+        wire_sequence: u64,
+        ciphertext: &mut Vec<u8>,
+    ) -> Result<()> {
         self.receive_sequence.expected(wire_sequence)?;
         let nonce = make_nonce(self.receive.nonce_prefix, wire_sequence);
         let aad = frame_aad(
@@ -316,22 +353,22 @@ impl TcpSessionCipher {
             compression,
             wire_sequence,
         );
-        let plaintext = self
+        let plaintext_len = self
             .receive
             .cipher
-            .decrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: &aad,
-                },
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad),
+                ciphertext,
             )
             .map_err(|_| {
                 ProtocolError::AuthenticationFailed("TCP frame authentication failed".to_string())
-            })?;
+            })?
+            .len();
+        ciphertext.truncate(plaintext_len);
         // Invalid ciphertext must not consume the expected receive sequence.
         self.receive_sequence.commit(wire_sequence)?;
-        Ok(plaintext)
+        Ok(())
     }
 }
 

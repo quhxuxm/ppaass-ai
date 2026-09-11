@@ -1,5 +1,5 @@
 use android_agent::{AndroidAgentConfig, AndroidTunConfig};
-use common::{QuicPolicy, TransportMode};
+use common::{ClientConnectionConfig, QuicPolicy, TransportMode};
 
 #[test]
 fn tun_allows_quic_by_default() {
@@ -32,15 +32,28 @@ fn agent_debug_redacts_private_key() {
 }
 
 #[test]
-fn proxy_addresses_are_selected_round_robin() {
+fn proxy_address_stays_sticky_until_failover_succeeds() {
     let config: AndroidAgentConfig = serde_json::from_str(
         r#"{"proxy_addrs":["proxy-a:8080","proxy-b:8080"],"username":"u","private_key_pem":"key"}"#,
     )
     .unwrap();
 
-    assert_eq!(config.proxy_address_at(0), "proxy-a:8080");
-    assert_eq!(config.proxy_address_at(1), "proxy-b:8080");
-    assert_eq!(config.proxy_address_at(2), "proxy-a:8080");
+    let initial = config.remote_addr();
+    assert_eq!(config.remote_addr(), initial);
+    assert_eq!(config.remote_addrs().first(), Some(&initial));
+
+    let failover = if initial == "proxy-a:8080" {
+        "proxy-b:8080"
+    } else {
+        "proxy-a:8080"
+    };
+    config.record_remote_success(failover);
+
+    assert_eq!(config.remote_addr(), failover);
+    assert_eq!(
+        config.remote_addrs().first().map(String::as_str),
+        Some(failover)
+    );
 }
 
 #[test]

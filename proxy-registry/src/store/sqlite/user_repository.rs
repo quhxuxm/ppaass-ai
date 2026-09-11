@@ -1,7 +1,5 @@
 use super::*;
-
 const MAX_AUTHORIZATION_SNAPSHOT_PAGE_SIZE: u16 = 256;
-
 impl SqliteUserRepository {
     /// 使用完整的新用户模型创建 Proxy profile。
     pub async fn create_user_record(&self, user: NewUser) -> Result<UserRecord> {
@@ -15,16 +13,16 @@ impl SqliteUserRepository {
              VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?) \
              ON CONFLICT(username) DO NOTHING",
         )
-        .bind(&user.username)
-        .bind(&user.public_key_pem)
-        .bind(encode_permissions(&user.permissions))
-        .bind(user.enabled)
-        .bind(user.origin.as_str())
-        .bind(user.expires_at)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *transaction)
-        .await?;
+            .bind(&user.username)
+            .bind(&user.public_key_pem)
+            .bind(encode_permissions(&user.permissions))
+            .bind(user.enabled)
+            .bind(user.origin.as_str())
+            .bind(user.expires_at)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await?;
         if result.rows_affected() == 0 {
             return Err(UserRepositoryError::Conflict(user.username));
         }
@@ -43,29 +41,26 @@ impl SqliteUserRepository {
             updated_at: now,
         })
     }
-
     #[instrument(skip(self), fields(username))]
     async fn get_user(&self, username: &str) -> Result<Option<UserRecord>> {
         let username = normalize_username(username)?;
-        let query = format!("SELECT {USER_SELECT} FROM users WHERE username = ?");
-        let row = sqlx::query(&query)
+        let query = sqlx::AssertSqlSafe(format!("SELECT {USER_SELECT} FROM users WHERE username = ?"));
+        let row = sqlx::query(query)
             .bind(username)
             .fetch_optional(&self.pool)
             .await?;
         row.map(row_to_user).transpose()
     }
-
     #[instrument(skip(self))]
     async fn list_users(&self) -> Result<Vec<UserRecord>> {
-        let query = format!("SELECT {USER_SELECT} FROM users ORDER BY username COLLATE BINARY");
-        sqlx::query(&query)
+        let query = sqlx::AssertSqlSafe(format!("SELECT {USER_SELECT} FROM users ORDER BY username COLLATE BINARY"));
+        sqlx::query(query)
             .fetch_all(&self.pool)
             .await?
             .into_iter()
             .map(row_to_user)
             .collect()
     }
-
     #[instrument(skip(self))]
     async fn read_authorization_snapshot_page(
         &self,
@@ -95,7 +90,6 @@ impl SqliteUserRepository {
                 actual: revision,
             });
         }
-
         let fetch_limit = i64::from(query.limit) + 1;
         let sql = if query.after_username.is_some() {
             format!(
@@ -105,14 +99,15 @@ impl SqliteUserRepository {
         } else {
             format!("SELECT {USER_SELECT} FROM users ORDER BY username LIMIT ?")
         };
+        let sql = sqlx::AssertSqlSafe(sql);
         let rows = if let Some(after_username) = query.after_username {
-            sqlx::query(&sql)
+            sqlx::query(sql)
                 .bind(after_username)
                 .bind(fetch_limit)
                 .fetch_all(&mut *transaction)
                 .await?
         } else {
-            sqlx::query(&sql)
+            sqlx::query(sql)
                 .bind(fetch_limit)
                 .fetch_all(&mut *transaction)
                 .await?
@@ -137,7 +132,6 @@ impl SqliteUserRepository {
             next_cursor,
         })
     }
-
     #[instrument(skip(self, public_key_pem), fields(username))]
     async fn create_user(
         &self,
@@ -149,7 +143,6 @@ impl SqliteUserRepository {
         user.expires_at = expires_at;
         self.create_user_record(user).await
     }
-
     #[instrument(skip(self, update), fields(username))]
     async fn update_user(&self, username: &str, update: UserUpdate) -> Result<UserRecord> {
         let username = normalize_username(username)?;
@@ -179,7 +172,7 @@ impl SqliteUserRepository {
             return Err(ValidationError::InvalidAccountField(
                 "修改代理连接状态或权限时必须提供操作管理员".to_string(),
             )
-            .into());
+                .into());
         }
         let audit_reason = if update.enabled.is_some() || permissions.is_some() {
             Some(normalize_audit_reason(
@@ -188,7 +181,6 @@ impl SqliteUserRepository {
         } else {
             None
         };
-
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(actor) = changed_by.as_ref() {
             let administrator = fetch_account_by_id(&mut transaction, &actor.account_id)
@@ -199,8 +191,8 @@ impl SqliteUserRepository {
                 })?;
             ensure_active_admin(&administrator)?;
         }
-        let query = format!("SELECT {USER_SELECT} FROM users WHERE username = ?");
-        let mut user = sqlx::query(&query)
+        let sql = sqlx::AssertSqlSafe(format!("SELECT {USER_SELECT} FROM users WHERE username = ?"));
+        let mut user = sqlx::query(sql)
             .bind(&username)
             .fetch_optional(&mut *transaction)
             .await?
@@ -209,7 +201,6 @@ impl SqliteUserRepository {
             .ok_or_else(|| UserRepositoryError::NotFound(username.clone()))?;
         let previous_enabled = user.enabled;
         let previous_permissions = user.permissions.clone();
-
         let key_changed = public_key_pem
             .as_ref()
             .is_some_and(|key| key != &user.public_key_pem);
@@ -234,21 +225,19 @@ impl SqliteUserRepository {
             })?;
         }
         user.updated_at = now();
-
         sqlx::query(
             "UPDATE users SET public_key_pem = ?, permissions = ?, enabled = ?, \
              key_version = ?, expires_at = ?, updated_at = ? WHERE username = ?",
         )
-        .bind(&user.public_key_pem)
-        .bind(encode_permissions(&user.permissions))
-        .bind(user.enabled)
-        .bind(user.key_version)
-        .bind(user.expires_at)
-        .bind(user.updated_at)
-        .bind(&user.username)
-        .execute(&mut *transaction)
-        .await?;
-
+            .bind(&user.public_key_pem)
+            .bind(encode_permissions(&user.permissions))
+            .bind(user.enabled)
+            .bind(user.key_version)
+            .bind(user.expires_at)
+            .bind(user.updated_at)
+            .bind(&user.username)
+            .execute(&mut *transaction)
+            .await?;
         if key_changed {
             // 独立更新公钥后，原托管私钥不再可信；只有 rotate_keypair 能原子保留二者。
             sqlx::query("DELETE FROM user_private_keys WHERE username = ?")
@@ -278,7 +267,7 @@ impl SqliteUserRepository {
                         created_at: user.updated_at,
                     },
                 )
-                .await?;
+                    .await?;
             }
             if previous_permissions != user.permissions {
                 insert_audit_event(
@@ -303,7 +292,7 @@ impl SqliteUserRepository {
                         created_at: user.updated_at,
                     },
                 )
-                .await?;
+                    .await?;
             }
         }
         insert_agent_event(
@@ -312,7 +301,7 @@ impl SqliteUserRepository {
             None,
             user.updated_at,
         )
-        .await?;
+            .await?;
         transaction.commit().await?;
         info!(
             username = user.username,
@@ -320,20 +309,18 @@ impl SqliteUserRepository {
         );
         Ok(user)
     }
-
     #[instrument(skip(self), fields(username))]
     async fn delete_user(&self, username: &str) -> Result<()> {
         let username = normalize_username(username)?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let account_query =
-            format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?");
-        let linked_account = sqlx::query(&account_query)
+         sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?"));
+        let linked_account = sqlx::query(account_query)
             .bind(&username)
             .fetch_optional(&mut *transaction)
             .await?
             .map(row_to_account)
             .transpose()?;
-
         if let Some(account) = &linked_account {
             guard_root_admin(account, None, None)?;
             if account.status != AccountStatus::Disabled {
@@ -359,24 +346,20 @@ impl SqliteUserRepository {
         Ok(())
     }
 }
-
 #[async_trait]
 impl UserRepository for SqliteUserRepository {
     async fn get_user(&self, username: &str) -> Result<Option<UserRecord>> {
         SqliteUserRepository::get_user(self, username).await
     }
-
     async fn list_users(&self) -> Result<Vec<UserRecord>> {
         SqliteUserRepository::list_users(self).await
     }
-
     async fn read_authorization_snapshot_page(
         &self,
         query: UserAuthorizationSnapshotQuery,
     ) -> Result<UserAuthorizationSnapshotPage> {
         SqliteUserRepository::read_authorization_snapshot_page(self, query).await
     }
-
     async fn create_user(
         &self,
         username: &str,
@@ -385,11 +368,9 @@ impl UserRepository for SqliteUserRepository {
     ) -> Result<UserRecord> {
         SqliteUserRepository::create_user(self, username, public_key_pem, expires_at).await
     }
-
     async fn update_user(&self, username: &str, update: UserUpdate) -> Result<UserRecord> {
         SqliteUserRepository::update_user(self, username, update).await
     }
-
     async fn delete_user(&self, username: &str) -> Result<()> {
         SqliteUserRepository::delete_user(self, username).await
     }

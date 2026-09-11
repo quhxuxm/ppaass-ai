@@ -21,18 +21,19 @@ where
     let down_total = Arc::new(AtomicU64::new(0));
     let agent_eof = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let target_eof = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (activity_tx, mut activity_rx) = watch::channel(());
+    let activity = Arc::new(RelayActivity::new());
+    let mut observed_activity = activity.observed_epoch();
     let mut agent_copy_io = RelayCopyIo::new(
         agent_io,
         "agent->target",
-        activity_tx.clone(),
+        activity.clone(),
         up_total.clone(),
         agent_eof.clone(),
     );
     let mut target_copy_io = RelayCopyIo::new(
         target_stream,
         "target->agent",
-        activity_tx,
+        activity.clone(),
         down_total.clone(),
         target_eof.clone(),
     );
@@ -46,6 +47,8 @@ where
     tokio::pin!(relay);
 
     loop {
+        let activity_changed = activity.changed_since(&mut observed_activity);
+        tokio::pin!(activity_changed);
         let half_closed = agent_eof.load(Ordering::Acquire) || target_eof.load(Ordering::Acquire);
         if let Some(timeout) = timeouts.current(half_closed) {
             let idle = tokio::time::sleep(timeout);
@@ -63,22 +66,12 @@ where
                         down_total.load(Ordering::Acquire),
                     ));
                 }
-                changed = activity_rx.changed() => {
-                    if changed.is_err() {
-                        // 两个方向都结束时 relay_directions 会先返回；这里保守地继续轮询，
-                        // 避免 watch 发送端被提前 drop 时误判为空闲。
-                        continue;
-                    }
-                }
+                _ = &mut activity_changed => continue,
             }
         } else {
             tokio::select! {
                 result = &mut relay => return result,
-                changed = activity_rx.changed() => {
-                    if changed.is_err() {
-                        continue;
-                    }
-                }
+                _ = &mut activity_changed => continue,
             }
         }
     }

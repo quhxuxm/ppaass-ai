@@ -230,54 +230,8 @@ protected void addDirectRuleUsageRow(LinearLayout root, String title, String det
         root.addView(row, matchWrap());
     }
 
-protected void addDirectRulePresets(LinearLayout root) {
-        LinearLayout.LayoutParams headingParams = matchWrap();
-        headingParams.setMargins(0, dp(16), 0, dp(6));
-        root.addView(controlLabel("快捷预设"), headingParams);
-
-        LinearLayout firstRow = horizontalRow();
-        addPresetButton(firstRow, "本机", new String[]{"localhost", "127.0.0.0/8", "::1"});
-        addPresetButton(firstRow, "私网", new String[]{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"});
-        root.addView(firstRow, matchWrap());
-
-        LinearLayout secondRow = horizontalRow();
-        LinearLayout.LayoutParams secondRowParams = matchWrap();
-        secondRowParams.setMargins(0, dp(8), 0, 0);
-        addPresetButton(secondRow, "中国", new String[]{"*.cn"});
-        addPresetButton(secondRow, "Microsoft", new String[]{"*.microsoft.com", "*.bing.com"});
-        root.addView(secondRow, secondRowParams);
-
-        LinearLayout thirdRow = horizontalRow();
-        LinearLayout.LayoutParams thirdRowParams = matchWrap();
-        thirdRowParams.setMargins(0, dp(8), 0, 0);
-        addPresetButton(thirdRow, "YouTube", new String[]{
-                "youtube.com",
-                "*.youtube.com",
-                "youtu.be",
-                "*.youtu.be",
-                "youtubei.googleapis.com",
-                "youtube.googleapis.com",
-                "suggestqueries.google.com",
-                "googlevideo.com",
-                "*.googlevideo.com",
-                "ytimg.com",
-                "*.ytimg.com",
-                "ggpht.com",
-                "*.ggpht.com",
-                "*.gstatic.com"
-        });
-        root.addView(thirdRow, thirdRowParams);
-    }
-
-protected void addPresetButton(LinearLayout row, String label, String[] rules) {
-        Button button = secondaryButton(label);
-        button.setOnClickListener(view -> addDirectRules(rules));
-        trackEditable(button);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        if (row.getChildCount() > 0) {
-            params.setMargins(dp(8), 0, 0, 0);
-        }
-        row.addView(button, params);
+    protected void addDirectRulePresets(LinearLayout root) {
+        DirectRulePresetUi.addTo(this, root);
     }
 
 protected void addDirectRuleManager(LinearLayout root) {

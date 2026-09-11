@@ -78,6 +78,8 @@ function submit() {
             id="agent-login-username"
             v-model="form.username"
             autocomplete="username"
+            autocapitalize="none"
+            :spellcheck="false"
             autofocus
             placeholder="输入 Proxy Registry 用户名"
             :disabled="loading"

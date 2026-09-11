@@ -48,6 +48,11 @@ export const basePermissionCodes = new Set(
 
 export const agentPermissionOptions: PermissionOption[] = [
   {
+    code: 'agent.proxy_entry.select',
+    label: '自选 Proxy Entry',
+    description: '允许在 Agent 中查看可用 Entry 并更改当前连接；未授权时只使用管理员分配项',
+  },
+  {
     code: 'agent.packet_capture',
     label: '抓包',
     description: '允许使用抓包页面；无权限时 Agent 不显示抓包功能',

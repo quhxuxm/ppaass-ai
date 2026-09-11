@@ -1,4 +1,6 @@
-use proxy_entry::connection::{RelayCopyIo, TcpRelayTimeouts, relay_tcp_with_half_close};
+use proxy_entry::connection::{
+    RelayActivity, RelayCopyIo, TcpRelayTimeouts, relay_tcp_with_half_close,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -113,19 +115,19 @@ async fn relay_does_not_apply_half_close_timeout_before_eof() {
 
 #[tokio::test]
 async fn relay_activity_does_not_reset_on_flush_without_bytes() {
-    let (activity_tx, mut activity_rx) = tokio::sync::watch::channel(());
-    activity_rx.borrow_and_update();
+    let activity = Arc::new(RelayActivity::new());
+    let observed_activity = activity.observed_epoch();
     let read_bytes = Arc::new(AtomicU64::new(0));
     let mut sink = tokio::io::sink();
     let mut relay_io = RelayCopyIo::new(
         &mut sink,
         "flush-only",
-        activity_tx,
+        activity.clone(),
         read_bytes.clone(),
         Arc::new(AtomicBool::new(false)),
     );
 
     relay_io.flush().await.unwrap();
-    assert!(!activity_rx.has_changed().unwrap());
+    assert_eq!(activity.observed_epoch(), observed_activity);
     assert_eq!(read_bytes.load(Ordering::Acquire), 0);
 }

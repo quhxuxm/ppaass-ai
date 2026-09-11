@@ -57,7 +57,7 @@ pub(super) async fn fail_closed_unassigned_proxy_address(
     emit_auth_state(app, runtime);
 }
 
-pub(super) fn apply_account_defaults_after_sync(
+pub(crate) fn apply_account_defaults_after_sync(
     app: &tauri::AppHandle,
     runtime: &AgentRuntime,
     account: &AgentAuthAccount,

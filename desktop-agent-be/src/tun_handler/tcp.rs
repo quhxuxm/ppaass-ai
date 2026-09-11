@@ -12,21 +12,33 @@ use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
 use crate::telemetry;
 use crate::yamux_session::YamuxSessionManager;
 use common::{BindInterface, bind_socket_to_interface};
-use protocol::TransportProtocol;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::future::Future;
 use std::net::SocketAddr;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 use tracing::debug;
+#[cfg(windows)]
+use windows_sys::Win32::Networking::WinSock::{IPPROTO_TCP, SOCKET, SOCKET_ERROR, setsockopt};
 
 /// macOS 待机恢复后 scoped route 可能短暂失效，避免直连卡到系统 TCP 超时。
 const DIRECT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_TCP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+#[cfg(windows)]
+const DIRECT_TCP_MAX_RETRANSMIT_SECS: u32 = 30;
+#[cfg(windows)]
+const TCP_MAXRT: i32 = 5;
 const TUN_TCP_PREFETCH_LIMIT: usize = 64 * 1024;
 const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
+
+mod proxy_connect;
+
+use proxy_connect::connect_proxy_stream_with_tun_prefetch;
+pub use proxy_connect::{proxy_target_address, tls_client_hello_server_name};
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -57,10 +69,13 @@ pub(super) async fn handle_tun_tcp(
         target.to_string()
     };
     // 1. IP/CIDR 命中：完全不需要嗅探，直接连原始目标。
+    //    proxy_dns=false 时 DNS 查询由 agent 直连上游 DNS 服务器。
     let mut direct_target = None;
-    let proxy_address = address.clone();
+    let mut proxy_address = address.clone();
     let mut proxy_reason = None;
-    if !proxy_dns_request && direct_checker.is_direct(&address) {
+    if !proxy_dns_request
+        && (direct_checker.is_direct(&address) || (!proxy_dns && target.port() == 53))
+    {
         direct_target = Some(target);
     }
 
@@ -71,25 +86,26 @@ pub(super) async fn handle_tun_tcp(
     if direct_target.is_none()
         && !proxy_dns_request
         && direct_checker.has_domain_direct_rules()
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |domain| {
             direct_checker.is_direct_domain(domain)
         })
     {
         debug!(
-            "TUN TCP 缓存域名规则命中：{} ({})，先使用原始 IP 直连",
-            target, domain
+            "TUN TCP 缓存域名规则命中：{} ({}){}，先使用原始 IP 直连",
+            target,
+            domain_match.domain(),
+            if domain_match.is_stale() { " [stale]" } else { "" }
         );
         direct_target = Some(target);
     }
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
-        debug!(
-            "TUN TCP 缓存域名用于代理标签：{} ({})，代理目标保留原始 IP",
-            target, domain
-        );
+        let domain = domain_match.into_domain();
+        debug!("TUN TCP 使用缓存域名作为代理目标：{} ({})", target, domain);
+        proxy_address = proxy_target_address(proxy_address, Some(&domain));
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
@@ -181,20 +197,6 @@ fn proxy_target_label(target_label: &str, reason: Option<&str>) -> String {
         Some(reason) => format!("{reason}，原始目标 {target_label}"),
         None => target_label.to_string(),
     }
-}
-
-async fn connect_proxy_stream_with_tun_prefetch(
-    client: &mut netstack_smoltcp::TcpStream,
-    tcp_sessions: &YamuxSessionManager,
-    proxy_address: protocol::Address,
-    label: &str,
-) -> Result<(crate::yamux_session::YamuxTargetStream, Vec<u8>)> {
-    connect_with_tun_prefetch(
-        client,
-        tcp_sessions.connect_to_target(proxy_address, TransportProtocol::Tcp),
-        label,
-    )
-    .await
 }
 
 async fn connect_with_tun_prefetch<T, F>(
@@ -351,4 +353,28 @@ fn tune_direct_tcp_socket(socket: &Socket, target: SocketAddr) {
     if let Err(error) = socket.set_send_buffer_size(DIRECT_TCP_SOCKET_BUFFER_SIZE) {
         debug!("TUN TCP 直连发送缓冲设置失败 target={target}: {error}");
     }
+    set_windows_direct_tcp_max_retransmit(socket, target);
 }
+
+#[cfg(windows)]
+fn set_windows_direct_tcp_max_retransmit(socket: &Socket, target: SocketAddr) {
+    let seconds = DIRECT_TCP_MAX_RETRANSMIT_SECS;
+    let result = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as SOCKET,
+            IPPROTO_TCP,
+            TCP_MAXRT,
+            (&seconds as *const u32).cast(),
+            std::mem::size_of_val(&seconds) as i32,
+        )
+    };
+    if result == SOCKET_ERROR {
+        debug!(
+            "TUN TCP 直连 TCP_MAXRT 设置失败 target={target}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn set_windows_direct_tcp_max_retransmit(_socket: &Socket, _target: SocketAddr) {}

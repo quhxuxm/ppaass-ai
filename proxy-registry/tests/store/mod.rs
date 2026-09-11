@@ -15,7 +15,7 @@ use std::{
 use tempfile::TempDir;
 
 pub(super) const TEST_PROXY_ADDRESS_ID: &str = "pxy_test";
-pub(super) const SQLITE_SCHEMA_VERSION: i64 = 13;
+pub(super) const SQLITE_SCHEMA_VERSION: i64 = 15;
 pub(super) const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
 pub(super) const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 pub(super) const COMPROMISED_BUNDLED_DEMO_PUBLIC_KEYS: [&str; 1] = [r#"-----BEGIN PUBLIC KEY-----
@@ -39,7 +39,8 @@ pub(super) async fn table_columns(
     transaction: &mut Transaction<'_, Sqlite>,
     table: &str,
 ) -> std::result::Result<Vec<String>, sqlx::Error> {
-    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+    let query  = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+    let rows = sqlx::query(query)
         .fetch_all(&mut **transaction)
         .await?;
     rows.into_iter()
@@ -243,5 +244,6 @@ mod permissions_migration;
 mod proxy_address_migration;
 mod proxy_addresses;
 mod proxy_entries;
+mod proxy_selection_migration;
 mod read_only;
 mod users;

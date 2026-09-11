@@ -46,15 +46,15 @@ pub(crate) fn windows_service_matches_installation(config_root: &Path) -> Result
     };
     Ok(normalized_path_for_compare(config_root)
         == normalized_path_for_compare(Path::new(&service_config_root))
-        && sc_service_is_auto_start(&output))
+        && sc_service_is_demand_start(&output))
 }
 
-pub fn sc_service_is_auto_start(output: &str) -> bool {
+pub fn sc_service_is_demand_start(output: &str) -> bool {
     output.lines().any(|line| {
         line.split_once(':').is_some_and(|(name, value)| {
             name.trim().eq_ignore_ascii_case("START_TYPE")
-                && (value.trim_start().starts_with('2')
-                    || value.to_ascii_uppercase().contains("AUTO_START"))
+                && (value.trim_start().starts_with('3')
+                    || value.to_ascii_uppercase().contains("DEMAND_START"))
         })
     })
 }

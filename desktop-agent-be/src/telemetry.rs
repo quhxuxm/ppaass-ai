@@ -1,10 +1,11 @@
 //! 遥测模块：tracing 初始化（标准输出或文件）以及供协议处理器使用的
 //! 流量统计辅助函数 `emit_traffic`。
 
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -14,7 +15,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static TOTAL_OUTBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
 static TOTAL_INBOUND_BYTES: AtomicU64 = AtomicU64::new(0);
-static DNS_RECORDS: OnceLock<Mutex<VecDeque<DnsResolutionRecord>>> = OnceLock::new();
+static DNS_RECORDS: OnceLock<ArcSwap<Vec<DnsResolutionRecord>>> = OnceLock::new();
 const DNS_RECORD_CAPACITY: usize = 80;
 
 #[derive(Debug, Clone, Copy)]
@@ -130,25 +131,30 @@ pub fn traffic_snapshot() -> TrafficSnapshot {
 }
 
 pub fn emit_dns_resolution(record: DnsResolutionRecord) {
-    let records =
-        DNS_RECORDS.get_or_init(|| Mutex::new(VecDeque::with_capacity(DNS_RECORD_CAPACITY)));
-    let Ok(mut records) = records.lock() else {
-        return;
-    };
-
-    while records.len() >= DNS_RECORD_CAPACITY {
-        records.pop_front();
+    let records = dns_records();
+    loop {
+        let current = records.load_full();
+        let drop_count = current
+            .len()
+            .saturating_add(1)
+            .saturating_sub(DNS_RECORD_CAPACITY);
+        let mut next = Vec::with_capacity(current.len().saturating_add(1) - drop_count);
+        next.extend(current.iter().skip(drop_count).cloned());
+        next.push(record.clone());
+        let previous = records.compare_and_swap(&current, Arc::new(next));
+        if Arc::ptr_eq(&*previous, &current) {
+            return;
+        }
     }
-    records.push_back(record);
 }
 
 #[allow(dead_code)]
 pub fn dns_resolution_records() -> Vec<DnsResolutionRecord> {
-    DNS_RECORDS
-        .get_or_init(|| Mutex::new(VecDeque::with_capacity(DNS_RECORD_CAPACITY)))
-        .lock()
-        .map(|records| records.iter().cloned().collect())
-        .unwrap_or_default()
+    dns_records().load_full().as_ref().clone()
+}
+
+fn dns_records() -> &'static ArcSwap<Vec<DnsResolutionRecord>> {
+    DNS_RECORDS.get_or_init(|| ArcSwap::from_pointee(Vec::with_capacity(DNS_RECORD_CAPACITY)))
 }
 
 pub fn current_time_millis() -> u128 {

@@ -12,6 +12,7 @@ mod egress;
 mod relay;
 mod response_sink;
 mod responses;
+mod speed_test;
 mod target;
 mod udp_relay;
 mod udp_relay_flow;
@@ -23,7 +24,7 @@ pub use egress::{
     EgressState, ExplicitDnsResolver, default_route, parse_response, parse_upstream,
     should_refresh_routes, split_domain_target,
 };
-pub use relay::{RelayCopyIo, TcpRelayTimeouts, relay_tcp_with_half_close};
+pub use relay::{RelayActivity, RelayCopyIo, TcpRelayTimeouts, relay_tcp_with_half_close};
 pub use response_sink::BytesToProxyResponseSink;
 pub(crate) use target::target_addr_for_address;
 pub use udp_relay::send_udp_relay_response_batch_with_timeout;

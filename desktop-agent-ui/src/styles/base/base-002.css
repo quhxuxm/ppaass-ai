@@ -122,6 +122,7 @@ body.overview-dragging * {
 }
 
 .overview-card {
+  grid-column: span var(--overview-card-span);
   cursor: grab;
   transition:
     border-color 0.16s ease,

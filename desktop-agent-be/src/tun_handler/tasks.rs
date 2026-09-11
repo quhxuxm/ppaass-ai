@@ -8,10 +8,11 @@ use super::TunForwardContext;
 mod packet_bridge;
 
 use super::dns_proxy::DnsProxy;
+use super::dns_proxy::parse_dns_query;
 use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
-use super::udp::UdpSessionContext;
 use super::udp::handle_tun_udp;
+use super::udp::{DirectDnsQuery, UdpSessionContext};
 use super::udp_relay::UdpRelay;
 use super::udp_writer::UdpWriter;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
@@ -44,6 +45,7 @@ pub(super) fn spawn_tcp_listener(
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     spawn_guarded("desktop tcp listener", async move {
+        let mut flow_tasks: Vec<JoinHandle<()>> = Vec::new();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
@@ -52,7 +54,8 @@ pub(super) fn spawn_tcp_listener(
                     let Some((stream, source_addr, target_addr)) = accepted else { break };
                     debug!("TUN TCP {} -> {}", source_addr, target_addr);
                     let context = context.clone();
-                    spawn_guarded("desktop tun tcp flow", async move {
+                    flow_tasks.retain(|task| !task.is_finished());
+                    flow_tasks.push(spawn_guarded("desktop tun tcp flow", async move {
                         if let Err(e) =
                             handle_tun_tcp(
                                 stream,
@@ -63,10 +66,11 @@ pub(super) fn spawn_tcp_listener(
                         {
                             debug!("TUN TCP 流结束：{e}");
                         }
-                    });
+                    }));
                 }
             }
         }
+        stop_flow_tasks(flow_tasks).await;
         debug!("tcp_task 退出");
     })
 }
@@ -84,6 +88,7 @@ pub(super) fn spawn_udp_sessions(
         // Only this dispatcher mutates the map. Flow tasks report completion
         // through a channel, avoiding a DashMap shard lock on every UDP packet.
         let mut sessions = UdpSessions::new();
+        let mut flow_tasks: Vec<JoinHandle<()>> = Vec::new();
         let (session_closed_tx, mut session_closed_rx) = tokio::sync::mpsc::unbounded_channel();
         // DNS 请求单独走 DnsProxy：它会维护 DNS ID 映射并记录域名解析缓存。
         let dns_proxy = context.proxy_dns.then(|| {
@@ -119,13 +124,32 @@ pub(super) fn spawn_udp_sessions(
                     // 只有端口和 DNS 协议结构都匹配时才进入 DnsProxy。
                     // 部分应用会把非 DNS UDP 流量发到 53 端口，单靠端口判断会误把它们
                     // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
-                    let is_dns_proxy_query =
-                        context.proxy_dns && target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let is_dns_query =
+                        target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let parsed_dns_query = is_dns_query
+                        .then(|| parse_dns_query(&data))
+                        .flatten();
+                    let is_dns_proxy_query = context.proxy_dns && is_dns_query;
+                    let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        if let Some(dns_proxy) = &dns_proxy {
-                            dns_proxy.send(source_addr, target_addr, data);
+                        let direct_domain = parsed_dns_query.as_ref().is_some_and(|(domain, _)| {
+                            context.direct_checker.is_direct_domain(&domain)
+                        });
+                        if direct_domain {
+                            force_dns_direct = true;
+                        } else {
+                            if let Some(dns_proxy) = &dns_proxy {
+                                dns_proxy.send(source_addr, target_addr, data);
+                            }
+                            continue;
                         }
-                        continue;
+                    }
+                    if !force_dns_direct
+                        && !context.proxy_dns
+                        && target_addr.port() == 53
+                        && is_dns_query_packet(&data)
+                    {
+                        force_dns_direct = true;
                     }
 
                     // 未通过 DNS 解析校验的 UDP/53 继续按普通 UDP 处理，不能再启用
@@ -167,7 +191,8 @@ pub(super) fn spawn_udp_sessions(
 
                     // 先独立计算 direct_access 结论。proxy_udp=false 只强制普通 UDP
                     // 直连，不能把本应经 proxy 的浏览器 QUIC 一并改成直连。
-                    let mut direct_access_match = context.direct_checker.is_direct(&address);
+                    let mut direct_access_match =
+                        force_dns_direct || context.direct_checker.is_direct(&address);
                     let proxy_address = address.clone();
                     if !direct_access_match
                         && should_consult_udp_domain_cache(context.proxy_udp, target_addr.port())
@@ -222,13 +247,15 @@ pub(super) fn spawn_udp_sessions(
                     if target_addr.port() == 443 {
                         quic_stats.record_direct();
                     }
+                    let direct_dns_query = parsed_dns_query.and_then(|(query, _)| {
+                        super::dns_proxy::dns_id(&data).map(|id| DirectDnsQuery { id, query })
+                    });
                     // 新会话先入表，再发送首包，避免首包在任务启动前丢失。
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(
                         DIRECT_UDP_SESSION_CHANNEL_SIZE,
                     );
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
-
                     let session_closed_tx = session_closed_tx.clone();
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
@@ -238,6 +265,11 @@ pub(super) fn spawn_udp_sessions(
                         // This task is created only after classify_udp_route returned Direct.
                         // Preserve that decision instead of repeating rule/cache lookups.
                         force_direct: true,
+                        // DNS 是单次 request/response；收到首个回复后关闭本地 UDP
+                        // socket。无论这次 DNS 是按域名规则直连，还是因系统路由
+                        // 回退到直连，均不能在 60 秒空闲期内累积 FD。
+                        close_after_response: is_dns_query,
+                        direct_dns_query,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),
@@ -247,7 +279,8 @@ pub(super) fn spawn_udp_sessions(
                         direct_egress: context.direct_egress.clone(),
                         shutdown: shutdown.clone(),
                     };
-                    spawn_guarded("desktop tun udp flow", async move {
+                    flow_tasks.retain(|task| !task.is_finished());
+                    flow_tasks.push(spawn_guarded("desktop tun udp flow", async move {
                         // 会话任务结束后清理 map，下一包会重新建立会话。
                         if let Err(e) =
                             handle_tun_udp(
@@ -260,12 +293,22 @@ pub(super) fn spawn_udp_sessions(
                             debug!("TUN UDP 会话结束：{e}");
                         }
                         let _ = session_closed_tx.send(key);
-                    });
+                    }));
                 }
             }
         }
+        stop_flow_tasks(flow_tasks).await;
         debug!("udp_task 退出");
     })
+}
+
+async fn stop_flow_tasks(flow_tasks: Vec<JoinHandle<()>>) {
+    for task in &flow_tasks {
+        task.abort();
+    }
+    for task in flow_tasks {
+        let _ = task.await;
+    }
 }
 
 pub fn classify_udp_route(

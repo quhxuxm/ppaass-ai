@@ -25,8 +25,10 @@ use super::config::ClientConnectionConfig;
 use super::stream::ClientStream;
 
 pub const YAMUX_OPEN_STREAM_TIMEOUT_MESSAGE: &str = "Yamux open stream timeout";
+// This timeout is also used by the independent framed TCP path, so its
+// user-visible text must not imply that traffic was routed through Yamux.
 pub const YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE: &str =
-    "Yamux target connect response timeout";
+    "Proxy target connect response timeout";
 pub const YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE: &str =
     "Yamux session stream capacity exhausted";
 const MAX_CONCURRENT_OPEN_STREAMS_PER_SESSION: usize = 16;

@@ -132,22 +132,8 @@ fn handle_exit_menu_event(app: &tauri::AppHandle, runtime: Arc<AgentRuntime>) {
     }
 
     let app = app.clone();
-    #[cfg(windows)]
-    {
-        let _ = runtime;
-        emit_to_main(
-            &app,
-            "agent-tray-info",
-            "正在退出界面，Agent 服务将继续运行",
-        );
-        app.exit(0);
-        return;
-    }
-
-    #[cfg(target_os = "macos")]
     emit_to_main(&app, "agent-tray-info", "正在停止 Agent 并退出");
 
-    #[cfg(target_os = "macos")]
     tauri::async_runtime::spawn_blocking(move || match stop_agent_inner_command(&runtime) {
         Ok(state) if state.running => {
             TRAY_EXIT_IN_PROGRESS.store(false, Ordering::SeqCst);

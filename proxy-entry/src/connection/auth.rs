@@ -267,7 +267,7 @@ impl ServerConnection {
     }
 
     pub async fn handle_connect_request(&mut self, username: &str) -> Result<()> {
-        // Yamux 子 stream 认证成功后应立即发送 Connect。这里保留一个短超时，
+        // Yamux 子 stream 认证成功后应立即发送 Connect 或测速请求。这里保留一个短超时，
         // 防止异常客户端完成认证后悬挂子 stream。
         let connect_request_timeout = Duration::from_secs(self.proxy_config.auth_timeout_secs);
         loop {
@@ -293,6 +293,14 @@ impl ServerConnection {
                         connect_request.transport
                     );
                     self.handle_connect(connect_request).await?;
+                    return Ok(());
+                }
+                Some(ProxyRequest::SpeedTest(speed_test)) => {
+                    debug!(
+                        download_bytes = speed_test.download_bytes,
+                        "收到 Agent 到 Proxy Entry 的测速请求"
+                    );
+                    self.handle_speed_test(speed_test).await?;
                     return Ok(());
                 }
                 Some(ProxyRequest::Auth(auth_request)) => {

@@ -1,6 +1,8 @@
 use crate::performance_tests::{
-    LargeDownloadTestResults, PerformanceTestResults, QuicProbeTestResults,
-    TcpPerformanceTestResults, UdpPerformanceTestResults,
+    DirectionalLoss, DirectionalThroughput, InterfaceTestStatus, InterfaceThroughputResult,
+    LargeDownloadTestResults, MaxThroughputTestResults, PerformanceTestResults,
+    QuicProbeTestResults, TcpPerformanceTestResults, ThroughputInterface, ThroughputStageResult,
+    UdpPerformanceTestResults, apply_upstream_losses,
 };
 use anyhow::Result;
 use std::fs::File;
@@ -63,6 +65,29 @@ pub fn generate_tcp_reports(results: &TcpPerformanceTestResults, output_path: &s
     generate_tcp_html_report(results, output_path)?;
     info!("TCP HTML 报告已生成：{}", output_path);
 
+    Ok(())
+}
+
+/// 生成端到端最高吞吐报告（JSON、Markdown 和 HTML）
+pub fn generate_max_throughput_reports(
+    results: &MaxThroughputTestResults,
+    output_path: &str,
+) -> Result<()> {
+    let mut results = results.clone();
+    for result in &mut results.interfaces {
+        result.interface_name = result.interface.name_zh().to_string();
+    }
+    apply_upstream_losses(&mut results.interfaces);
+    let json_path = output_path.replace(".html", ".json");
+    generate_max_throughput_json_report(&results, &json_path)?;
+    info!("最高吞吐 JSON 报告已生成：{}", json_path);
+
+    let md_path = output_path.replace(".html", ".md");
+    generate_max_throughput_markdown_report(&results, &md_path)?;
+    info!("最高吞吐 Markdown 报告已生成：{}", md_path);
+
+    generate_max_throughput_html_report(&results, output_path)?;
+    info!("最高吞吐 HTML 报告已生成：{}", output_path);
     Ok(())
 }
 

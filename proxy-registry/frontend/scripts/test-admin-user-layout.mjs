@@ -31,6 +31,10 @@ const editorStyles = readFileSync(
   new URL('../src/styles/user-editor.css', import.meta.url),
   'utf8',
 )
+const checklistStyles = readFileSync(
+  new URL('../src/components/ProxyAddressChecklist.css', import.meta.url),
+  'utf8',
+)
 const sessionTypes = readFileSync(
   new URL('../src/api/types.ts', import.meta.url),
   'utf8',
@@ -126,6 +130,14 @@ assert.match(
 assert.doesNotMatch(
   editorStyles,
   /\.proxy-toggle-card\s*\{[^}]*min-height:\s*40px;/s,
+)
+assert.match(
+  checklistStyles,
+  /\.proxy-checklist__table\s*\{[^}]*scrollbar-gutter:\s*stable;/s,
+)
+assert.match(
+  checklistStyles,
+  /\.proxy-checklist--compact \.proxy-checklist__table\s*\{[^}]*max-height:\s*224px;/s,
 )
 assert.doesNotMatch(
   app,

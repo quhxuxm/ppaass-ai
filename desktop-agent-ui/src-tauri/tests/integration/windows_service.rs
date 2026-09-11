@@ -173,11 +173,11 @@ fn service_command_extracts_pinned_config_root() {
         Path::new(r"C:\Users\Alice\AppData\Local\com.ppaass.agent-copy"),
         Path::new(r"C:\Users\Alice\AppData\Local\com.ppaass.agent")
     ));
-    assert!(sc_service_is_auto_start(
-        "START_TYPE         : 2   AUTO_START"
-    ));
-    assert!(!sc_service_is_auto_start(
+    assert!(sc_service_is_demand_start(
         "START_TYPE         : 3   DEMAND_START"
+    ));
+    assert!(!sc_service_is_demand_start(
+        "START_TYPE         : 2   AUTO_START"
     ));
 }
 

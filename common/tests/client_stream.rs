@@ -1,5 +1,5 @@
 use common::ClientStream;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use protocol::{
     AgentCodec, CipherState, DataPacket, ProxyCodec, ProxyRequest,
     tcp_transport::{TcpSessionCipher, TcpSessionRole},
@@ -99,4 +99,20 @@ async fn shutdown_flushes_buffered_data_and_sends_one_end_packet() {
 
     client.shutdown().await.unwrap();
     assert!(proxy.next().now_or_never().is_none());
+}
+
+#[tokio::test]
+async fn proxy_error_frames_roundtrip_outside_the_data_packet_format() {
+    let (mut client, mut proxy) = stream_pair();
+    proxy
+        .send(protocol::ProxyResponse::Error {
+            message: "target refused".to_string(),
+        })
+        .await
+        .unwrap();
+
+    match client.reader.next().await.unwrap().unwrap() {
+        protocol::ProxyResponse::Error { message } => assert_eq!(message, "target refused"),
+        response => panic!("expected proxy error, got {response:?}"),
+    }
 }

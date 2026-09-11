@@ -68,7 +68,7 @@ impl AccessLogRepository for SqliteUserRepository {
              WHERE username = ? AND accessed_at >= ? \
              ORDER BY accessed_at DESC, record_id DESC LIMIT ?"
         );
-        sqlx::query(&query)
+        sqlx::query(sqlx::AssertSqlSafe(query))
             .bind(username)
             .bind(since)
             .bind(i64::from(limit))

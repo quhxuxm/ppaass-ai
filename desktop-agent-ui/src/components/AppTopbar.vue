@@ -66,6 +66,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="toolbar topbar-primary-actions">
+      <slot name="primary-actions" />
       <div class="topbar-runtime-control">
         <div class="topbar-runtime-copy">
           <span>代理服务</span>

@@ -12,6 +12,7 @@ use super::client::RemoteControlPlane;
 
 const MAX_SSE_BUFFER_BYTES: usize = 64 * 1024;
 
+/// 订阅 Registry 授权事件流并持续消费事件。
 pub(super) fn spawn_authorization_event_listener(control: Weak<RemoteControlPlane>) {
     tokio::spawn(async move {
         let mut retry_delay = Duration::from_secs(1);

@@ -26,11 +26,8 @@ pub fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
     }
     let transport_mode =
         normalize_transport_mode(str_at(&value, &["transport_mode"]).unwrap_or("udp"))?;
-    let tun_quic_policy = normalize_quic_policy(
-        string_at(&value, &["tun", "quic_policy"])
-            .as_deref()
-            .unwrap_or("allow"),
-    );
+    let tun_quic_policy_value = str_at(&value, &["tun", "quic_policy"]).unwrap_or("allow");
+    let tun_quic_policy = normalize_quic_policy(tun_quic_policy_value);
     let runtime_threads = int_at(&value, &["runtime_threads"])
         .filter(|value| *value > 0)
         .map(|value| value as usize);

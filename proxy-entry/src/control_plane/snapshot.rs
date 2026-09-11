@@ -1,5 +1,3 @@
-use std::{sync::atomic::Ordering, time::Duration};
-
 use super::client::{RemoteControlPlane, control_status_error};
 use crate::error::{ProxyError, Result};
 use proxy_control_protocol::{
@@ -7,17 +5,15 @@ use proxy_control_protocol::{
     MAX_AUTHORIZATION_SNAPSHOT_ENTRIES, MAX_AUTHORIZATION_SNAPSHOT_LIMIT,
 };
 use reqwest::{StatusCode, header};
-
+use std::{sync::atomic::Ordering, time::Duration};
 const SNAPSHOT_LIMIT: u16 = MAX_AUTHORIZATION_SNAPSHOT_LIMIT;
 const MAX_SNAPSHOT_PAGES: usize =
     MAX_AUTHORIZATION_SNAPSHOT_ENTRIES.div_ceil(MAX_AUTHORIZATION_SNAPSHOT_LIMIT as usize);
 const REVISION_CONFLICT_RETRIES: usize = 3;
-
 enum SyncRoundError {
     RevisionConflict,
     Failed(ProxyError),
 }
-
 impl RemoteControlPlane {
     pub async fn refresh_authorizations(&self) -> Result<u64> {
         let _refresh_guard = self.authorization_refresh.lock().await;
@@ -47,7 +43,6 @@ impl RemoteControlPlane {
         Err(last_error
             .unwrap_or_else(|| ProxyError::ControlPlane("Registry 授权快照同步失败".to_string())))
     }
-
     async fn synchronize_snapshot_round(&self) -> std::result::Result<u64, SyncRoundError> {
         let mut cursor = None;
         let mut revision = None;
@@ -93,7 +88,6 @@ impl RemoteControlPlane {
             "Registry 授权快照分页未正常结束".to_string(),
         )))
     }
-
     async fn fetch_snapshot_page(
         &self,
         after_username: Option<String>,
@@ -137,7 +131,6 @@ impl RemoteControlPlane {
             })
     }
 }
-
 fn validate_page(response: &AuthorizationSnapshotResponse, after: Option<&str>) -> Result<()> {
     if response.authorizations.len() > SNAPSHOT_LIMIT as usize {
         return Err(ProxyError::ControlPlane(format!(

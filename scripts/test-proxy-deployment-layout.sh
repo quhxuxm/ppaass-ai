@@ -50,6 +50,13 @@ reject_text config/proxy-entry.toml 'registry_control_url'
 require_text config/proxy-entry.toml 'registry_control_token_path = '
 require_text tests/fixtures/config/proxy-entry-integration.toml 'registry_url = "http://127.0.0.1:8797"'
 require_text .github/workflows/deploy-proxy-entry.yml 'cp config/proxy-entry.toml "$bundle/proxy-entry.toml"'
+require_text .github/workflows/deploy-proxy-entry.yml 'instance_count:'
+require_text .github/workflows/deploy-proxy-entry.yml 'default: 1'
+require_text .github/workflows/deploy-proxy-entry.yml 'type: number'
+require_text .github/workflows/deploy-proxy-entry.yml 'printf '\''INSTANCE_COUNT=%q\n'\'' "$INSTANCE_COUNT"'
+require_text .github/workflows/deploy-proxy-entry.yml 'install -m 0755 deploy/proxy-entry/instance-layout.sh'
+require_text .github/workflows/deploy-proxy-entry.yml 'install -m 0755 deploy/proxy-entry/configure-firewall.sh'
+require_text .github/workflows/deploy-proxy-entry.yml 'install -m 0755 deploy/proxy-entry/check-ports.sh'
 require_text .github/workflows/deploy-proxy-entry.yml "printf 'REGISTRY_URL=%q"
 require_text .github/workflows/deploy-proxy-entry.yml "printf 'ADVERTISED_ADDRESS=%q"
 require_text .github/workflows/deploy-proxy-entry.yml "_ADVERTISED_ADDRESS', inputs.environment)"
@@ -66,7 +73,7 @@ require_text deploy/proxy-entry/install.sh ': "${REGISTRY_URL:?}"'
 require_text deploy/proxy-entry/install.sh ': "${ADVERTISED_ADDRESS:?}"'
 require_text deploy/proxy-entry/install.sh '"$bundle/validate-registry-url.sh" "$REGISTRY_URL"'
 require_text deploy/proxy-entry/install.sh 'registry_url = \"$REGISTRY_URL\"'
-require_text deploy/proxy-entry/install.sh 'advertised_address = \"$ADVERTISED_ADDRESS\"'
+require_text deploy/proxy-entry/install.sh 'advertised_address = \"$instance_address\"'
 reject_text deploy/proxy-entry/install.sh '$CONTROL_URL'
 reject_text deploy/proxy-entry/install.sh 'registry_control_url'
 reject_text deploy/proxy-entry/install.sh 'caddy'
@@ -121,8 +128,20 @@ external_insecure_checks="$(grep -Fc '    300 insecure' deploy/proxy-registry/in
 require_text deploy/proxy-registry/install.sh 'REGISTRY_PRODUCTION_KEY_ENCRYPTION_SECRET in the registry_production GitHub Environment'
 reject_text deploy/proxy-entry/install.sh 'Waiting for the Registry control plane before starting Entry.'
 reject_text deploy/proxy-entry/install.sh 'wait_for_http_health'
-require_text deploy/proxy-entry/install.sh 'journalctl -u "$entry_service"'
+require_text deploy/proxy-entry/install.sh 'journalctl -u "$service"'
 require_text deploy/proxy-entry/install.sh 'prune_old_releases'
+require_text deploy/proxy-entry/install.sh 'ppaass-proxy-entry@.service'
+require_text deploy/proxy-entry/install.sh 'ppaass-proxy-entry@$instance.service'
+require_text deploy/proxy-entry/install.sh 'configure_entry_firewall "$INSTANCE_COUNT"'
+require_text deploy/proxy-entry/install.sh 'authorization-$instance.sqlite3'
+require_text deploy/proxy-entry/configure-firewall.sh '$port_spec/tcp|$port_spec/udp'
+require_text deploy/proxy-entry/configure-firewall.sh 'protocol="tcp"'
+require_text deploy/proxy-entry/configure-firewall.sh 'protocol="udp"'
+require_text deploy/proxy-entry/configure-firewall.sh 'ufw allow "PPAASS Proxy Entry"'
+require_text deploy/proxy-entry/configure-firewall.sh 'firewall-cmd --permanent --add-service=ppaass-proxy-entry'
+require_text deploy/proxy-entry/check-ports.sh 'ss -H -ltnp "sport = :$port"'
+require_text deploy/proxy-entry/check-ports.sh 'ss -H -lunp "sport = :$port"'
+require_text deploy/proxy-entry/install.sh 'Deployment stopped before changing the running Proxy Entry services.'
 require_text deploy/proxy-registry/install.sh 'prune_old_releases'
 
 awk '
@@ -223,6 +242,60 @@ for registry_url in \
 do
     if bash deploy/proxy-entry/validate-registry-url.sh "$registry_url" >/dev/null 2>&1; then
         echo "Invalid Registry URL was accepted: $registry_url" >&2
+        exit 1
+    fi
+done
+
+# shellcheck disable=SC1091
+. deploy/proxy-entry/instance-layout.sh
+# shellcheck disable=SC1091
+. deploy/proxy-entry/configure-firewall.sh
+# shellcheck disable=SC1091
+. deploy/proxy-entry/check-ports.sh
+validate_instance_count 1
+validate_instance_count 100
+if validate_instance_count 0 >/dev/null 2>&1 || \
+   validate_instance_count 101 >/dev/null 2>&1 || \
+   validate_instance_count text >/dev/null 2>&1; then
+    echo "Invalid Proxy Entry instance count was accepted" >&2
+    exit 1
+fi
+[ "$(proxy_instance_port 1)" = 80 ]
+[ "$(proxy_instance_port 3)" = 82 ]
+[ "$(proxy_entry_id entry-production 1)" = entry-production ]
+[ "$(proxy_entry_id entry-production 3)" = entry-production-3 ]
+validate_advertised_address 'entry.example.com:443'
+validate_advertised_address '[2001:db8::1]:443'
+[ "$(proxy_advertised_address 'entry.example.com:443' 1)" = 'entry.example.com:80' ]
+[ "$(proxy_advertised_address '[2001:db8::1]:443' 2)" = '[2001:db8::1]:81' ]
+[ "$(entry_port_list 3)" = '80,81,82' ]
+[ "$(entry_ufw_port_spec 1)" = '80' ]
+[ "$(entry_ufw_port_spec 3)" = '80:82' ]
+[ "$(entry_firewalld_port_spec 3)" = '80-82' ]
+fake_listener_pid=4321
+ss() {
+    case "$*" in
+        *'sport = :80'*)
+            printf 'LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("proxy-entry",pid=%s,fd=3))\n' \
+                "$fake_listener_pid"
+            ;;
+    esac
+}
+check_entry_ports_available 1 "$fake_listener_pid"
+if check_entry_ports_available 1 9999 >/dev/null 2>&1; then
+    echo "A conflicting non-Entry listener was accepted" >&2
+    exit 1
+fi
+unset -f ss
+for advertised_address in \
+    'entry.example.com' \
+    'https://entry.example.com:80' \
+    'entry.example.com:0' \
+    'entry.example.com:65536' \
+    '2001:db8::1:80'
+do
+    if validate_advertised_address "$advertised_address" >/dev/null 2>&1; then
+        echo "Invalid advertised address was accepted: $advertised_address" >&2
         exit 1
     fi
 done

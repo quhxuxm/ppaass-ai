@@ -14,5 +14,6 @@ mod socks5;
 mod tcp;
 
 pub use http::MockHttpClient;
+pub(crate) use http::read_connect_response;
 pub use socks5::MockSocks5Client;
 pub use tcp::{MockTcpClient, connect_to_agent_with_retry};

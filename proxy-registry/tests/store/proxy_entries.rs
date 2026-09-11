@@ -131,3 +131,86 @@ async fn registration_rejects_an_address_owned_by_another_entry() {
         UserRepositoryError::ProxyEntryAddressConflict(_)
     ));
 }
+
+#[tokio::test]
+async fn selections_are_multi_value_assigned_only_and_pruned_with_assignment() {
+    let (_directory, store) = test_store().await;
+    store
+        .create_proxy_address(NewProxyAddress {
+            proxy_address_id: "pxy_backup".to_string(),
+            label: "Backup".to_string(),
+            address: "backup.example:443".to_string(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    store
+        .create_proxy_address(NewProxyAddress {
+            proxy_address_id: "pxy_unassigned".to_string(),
+            label: "Unassigned".to_string(),
+            address: "unassigned.example:443".to_string(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    store
+        .create_managed_user(managed_user(
+            "acc-selector",
+            "selector",
+            "selector",
+            AccountRole::Admin,
+            None,
+        ))
+        .await
+        .unwrap();
+    store
+        .update_managed_user(
+            "acc-selector",
+            ManagedUserUpdate {
+                proxy_address_ids: Some(vec![
+                    TEST_PROXY_ADDRESS_ID.to_string(),
+                    "pxy_backup".to_string(),
+                ]),
+                ..ManagedUserUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let selected = store
+        .select_proxy_addresses(
+            "acc-selector",
+            &[TEST_PROXY_ADDRESS_ID.to_string(), "pxy_backup".to_string()],
+            "agent.proxy_entry.select",
+        )
+        .await
+        .unwrap();
+    assert_eq!(selected.selected_proxy_addresses.len(), 2);
+    assert!(matches!(
+        store
+            .select_proxy_addresses(
+                "acc-selector",
+                &["pxy_unassigned".to_string()],
+                "agent.proxy_entry.select",
+            )
+            .await
+            .unwrap_err(),
+        UserRepositoryError::ProxyEntryNotAssigned(id) if id == "pxy_unassigned"
+    ));
+
+    let updated = store
+        .update_managed_user(
+            "acc-selector",
+            ManagedUserUpdate {
+                proxy_address_ids: Some(vec![TEST_PROXY_ADDRESS_ID.to_string()]),
+                ..ManagedUserUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.selected_proxy_addresses.len(), 1);
+    assert_eq!(
+        updated.selected_proxy_addresses[0].proxy_address_id,
+        TEST_PROXY_ADDRESS_ID
+    );
+}

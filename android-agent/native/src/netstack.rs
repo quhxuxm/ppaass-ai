@@ -13,6 +13,8 @@ pub use direct_domain_cache::{DirectDomainCache, MAX_CACHE_IPS, MAX_DOMAINS_PER_
 #[doc(hidden)]
 pub use dns_proxy::{DnsResponseCache, dns_id, parse_dns_query, parse_dns_response};
 #[doc(hidden)]
+pub use tcp::{proxy_target_address, should_prefetch_tls_sni};
+#[doc(hidden)]
 pub use udp::{UdpRoute, classify_udp_route};
 #[doc(hidden)]
 pub use udp_relay::{UdpRelayRequest, UdpRelayState, UdpRelayStats, send_udp_relay_request_batch};

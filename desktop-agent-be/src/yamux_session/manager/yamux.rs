@@ -107,20 +107,26 @@ impl YamuxSessionManager {
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..to_create {
             let config = self.config.clone();
-            let proxy_addrs = self.proxy_addrs();
+            let route = self.current_proxy_route();
             let semaphore = semaphore.clone();
-            let bind_ip = self.proxy_bind_ip();
-            let bind_interface = self.proxy_bind_interface();
+            let proxy_affinity = self.proxy_affinity.clone();
             let transport = self.yamux_transport;
             let session_id = self.yamux_next_session_id.fetch_add(1, Ordering::AcqRel);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.ok();
-                new_yamux_connection(&config, &proxy_addrs, bind_ip, bind_interface, transport)
-                    .await
-                    .map(|connection| YamuxSessionHandle {
-                        id: session_id,
-                        connection,
-                    })
+                new_yamux_connection(
+                    &config,
+                    &route.addrs,
+                    route.bind_ip,
+                    route.bind_interface,
+                    proxy_affinity,
+                    transport,
+                )
+                .await
+                .map(|connection| YamuxSessionHandle {
+                    id: session_id,
+                    connection,
+                })
             });
         }
 

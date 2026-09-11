@@ -154,7 +154,7 @@ const {
         fluid
       />
       <small id="additional-permissions-help">
-        可选。使用逗号、空格或换行分隔 permission code；基础能力和上方三项 Agent 权限会自动排除。
+        可选。使用逗号、空格或换行分隔 permission code；基础能力和上方 Agent 权限会自动排除。
       </small>
     </div>
     <div class="form-field">

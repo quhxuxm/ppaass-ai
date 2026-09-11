@@ -8,9 +8,11 @@ use super::proxy_connection::new_yamux_connection;
 use super::target_stream::YamuxTargetStream;
 use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
+use arc_swap::ArcSwap;
 use common::{
-    BindInterface, UdpClientConnection, YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE,
-    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE, YamuxClientConnection,
+    BindInterface, ProxyEndpointAffinity, UdpClientConnection,
+    YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+    YamuxClientConnection,
 };
 use protocol::{Address, TransportProtocol};
 use std::net::IpAddr;
@@ -38,16 +40,30 @@ struct UdpSessionHandle {
     connection: UdpClientConnection,
 }
 
+#[derive(Clone, Default)]
+struct ProxyRouteOverrides {
+    addrs: Option<Arc<Vec<String>>>,
+    bind_ip: Option<IpAddr>,
+    bind_interface: Option<BindInterface>,
+}
+
+/// Immutable route values consumed together by one outgoing proxy connection.
+#[derive(Clone)]
+pub(crate) struct ProxyRoute {
+    pub(crate) addrs: Arc<Vec<String>>,
+    pub(crate) bind_ip: Option<IpAddr>,
+    pub(crate) bind_interface: Option<BindInterface>,
+}
+
 pub struct YamuxSessionManager {
     config: Arc<AgentConfig>,
     proxy_addrs: Arc<Vec<String>>,
     // TUN 模式安装默认路由前解析并固定 proxy IP，避免系统 DNS 被接管后，
     // proxy 重连反过来依赖尚未建立的 DNS proxy 通道。
-    proxy_addrs_override: Arc<std::sync::RwLock<Option<Arc<Vec<String>>>>>,
+    proxy_route: ArcSwap<ProxyRouteOverrides>,
+    proxy_affinity: Arc<ProxyEndpointAffinity>,
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
-    proxy_bind_ip: Arc<std::sync::RwLock<Option<IpAddr>>>,
-    proxy_bind_interface: Arc<std::sync::RwLock<Option<BindInterface>>>,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
     // 每个 slot 拥有独立原生 UDP socket/会话密钥/序号空间。slot 级锁使首次
     // 并发建连可以平行进行，不会被一把全局锁串行化。
@@ -64,18 +80,44 @@ pub struct YamuxSessionManager {
 
 impl YamuxSessionManager {
     pub fn new(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_with_affinity(
+            config,
+            proxy_addrs,
+            Arc::new(ProxyEndpointAffinity::default()),
+        )
+    }
+
+    pub fn new_udp(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+        Self::new_udp_with_affinity(
+            config,
+            proxy_addrs,
+            Arc::new(ProxyEndpointAffinity::default()),
+        )
+    }
+
+    pub fn new_with_affinity(
+        config: Arc<AgentConfig>,
+        proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
+    ) -> Self {
         Self::new_for_transport(
             config,
             proxy_addrs,
+            proxy_affinity,
             TransportProtocol::Tcp,
             "tcp_direct_connections",
         )
     }
 
-    pub fn new_udp(config: Arc<AgentConfig>, proxy_addrs: Arc<Vec<String>>) -> Self {
+    pub fn new_udp_with_affinity(
+        config: Arc<AgentConfig>,
+        proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
+    ) -> Self {
         Self::new_for_transport(
             config,
             proxy_addrs,
+            proxy_affinity,
             TransportProtocol::Udp,
             "udp_yamux_sessions",
         )
@@ -84,6 +126,7 @@ impl YamuxSessionManager {
     fn new_for_transport(
         config: Arc<AgentConfig>,
         proxy_addrs: Arc<Vec<String>>,
+        proxy_affinity: Arc<ProxyEndpointAffinity>,
         yamux_transport: TransportProtocol,
         manager_name: &'static str,
     ) -> Self {
@@ -97,11 +140,10 @@ impl YamuxSessionManager {
         Self {
             config,
             proxy_addrs,
-            proxy_addrs_override: Arc::new(std::sync::RwLock::new(None)),
+            proxy_route: ArcSwap::from_pointee(ProxyRouteOverrides::default()),
+            proxy_affinity,
             manager_name,
             yamux_transport,
-            proxy_bind_ip: Arc::new(std::sync::RwLock::new(None)),
-            proxy_bind_interface: Arc::new(std::sync::RwLock::new(None)),
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
             udp_sessions: (0..udp_pool_size).map(|_| Mutex::new(None)).collect(),
             yamux_refill_lock: Arc::new(Mutex::new(())),
@@ -116,39 +158,81 @@ impl YamuxSessionManager {
     }
 
     pub fn set_proxy_bind_ip(&self, ip: Option<IpAddr>) {
-        if let Ok(mut guard) = self.proxy_bind_ip.write() {
-            *guard = ip;
-        }
+        self.proxy_route.rcu(|current| {
+            Arc::new(ProxyRouteOverrides {
+                bind_ip: ip,
+                ..(**current).clone()
+            })
+        });
     }
 
     pub fn set_proxy_addrs_override(&self, addrs: Option<Arc<Vec<String>>>) {
-        if let Ok(mut guard) = self.proxy_addrs_override.write() {
-            *guard = addrs;
-        }
+        self.proxy_route.rcu(|current| {
+            Arc::new(ProxyRouteOverrides {
+                addrs: addrs.clone(),
+                ..(**current).clone()
+            })
+        });
     }
 
     pub fn proxy_addrs(&self) -> Arc<Vec<String>> {
-        self.proxy_addrs_override
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .unwrap_or_else(|| self.proxy_addrs.clone())
+        self.current_proxy_route().addrs
     }
 
     pub fn set_proxy_bind_interface(&self, interface: Option<BindInterface>) {
-        if let Ok(mut guard) = self.proxy_bind_interface.write() {
-            *guard = interface;
-        }
+        self.proxy_route.rcu(|current| {
+            Arc::new(ProxyRouteOverrides {
+                bind_interface: interface.clone(),
+                ..(**current).clone()
+            })
+        });
     }
 
     pub fn proxy_bind_ip(&self) -> Option<IpAddr> {
-        let guard = self.proxy_bind_ip.read().ok()?;
-        *guard
+        self.current_proxy_route().bind_ip
     }
 
     pub fn proxy_bind_interface(&self) -> Option<BindInterface> {
-        let guard = self.proxy_bind_interface.read().ok()?;
-        guard.clone()
+        self.current_proxy_route().bind_interface
+    }
+
+    pub fn set_proxy_route(
+        &self,
+        addrs: Option<Arc<Vec<String>>>,
+        bind_ip: Option<IpAddr>,
+        bind_interface: Option<BindInterface>,
+    ) {
+        self.proxy_route.store(Arc::new(ProxyRouteOverrides {
+            addrs,
+            bind_ip,
+            bind_interface,
+        }));
+    }
+
+    pub fn set_proxy_bind_route(
+        &self,
+        bind_ip: Option<IpAddr>,
+        bind_interface: Option<BindInterface>,
+    ) {
+        self.proxy_route.rcu(|current| {
+            Arc::new(ProxyRouteOverrides {
+                bind_ip,
+                bind_interface: bind_interface.clone(),
+                ..(**current).clone()
+            })
+        });
+    }
+
+    pub(crate) fn current_proxy_route(&self) -> ProxyRoute {
+        let route = self.proxy_route.load();
+        ProxyRoute {
+            addrs: route
+                .addrs
+                .clone()
+                .unwrap_or_else(|| self.proxy_addrs.clone()),
+            bind_ip: route.bind_ip,
+            bind_interface: route.bind_interface.clone(),
+        }
     }
 
     pub fn next_udp_session_slot(&self) -> usize {

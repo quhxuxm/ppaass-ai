@@ -21,10 +21,12 @@ final class AgentUiPermissionPolicy {
 
     static String permissionFingerprint(
             boolean administrator,
+            boolean proxyEntrySelect,
             boolean packetCapture,
             boolean egressEdit,
             boolean runtimeThreadsEdit) {
         return (administrator ? "A" : "U")
+                + (proxyEntrySelect ? "1" : "0")
                 + (packetCapture ? "1" : "0")
                 + (egressEdit ? "1" : "0")
                 + (runtimeThreadsEdit ? "1" : "0");

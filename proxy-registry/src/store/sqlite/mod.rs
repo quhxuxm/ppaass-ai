@@ -42,7 +42,7 @@ use tracing::{info, instrument, warn};
 const ACCESS_LOG_RETENTION_DAYS_KEY: &str = "access_log_retention_days";
 // Persisted metadata key retained across the Proxy Registry rename.
 const KEY_ENCRYPTION_VERIFIER_KEY: &str = "proxy_web_key_encryption_verifier_v1";
-const SQLITE_SCHEMA_VERSION: i64 = 13;
+const SQLITE_SCHEMA_VERSION: i64 = 15;
 const MAX_ACCOUNT_ID_BYTES: usize = 128;
 const MAX_PROVIDER_BYTES: usize = 64;
 const MAX_PROVIDER_SUBJECT_BYTES: usize = 512;
@@ -119,10 +119,12 @@ impl SqliteFilePermissions {
 const USER_SELECT: &str = "username, public_key_pem, permissions, enabled, origin, \
                            key_version, expires_at, created_at, updated_at";
 const ACCOUNT_SELECT: &str = "account_id, login_name, role, status, linked_username, \
-                              display_name, email, avatar_url, auth_version, last_login_at, \
+                              display_name, email, CAST(avatar_url AS BLOB) AS avatar_url, \
+                              auth_version, last_login_at, \
                               created_at, updated_at";
 const QUALIFIED_ACCOUNT_SELECT: &str = "a.account_id, a.login_name, a.role, a.status, \
-                                        a.linked_username, a.display_name, a.email, a.avatar_url, \
+                                        a.linked_username, a.display_name, a.email, \
+                                        CAST(a.avatar_url AS BLOB) AS avatar_url, \
                                         a.auth_version, a.last_login_at, a.created_at, a.updated_at";
 const KEY_REQUEST_SELECT: &str = "request_id, account_id, kind, status, expected_key_version, \
                                   reviewer_account_id, reviewer_login_name, rejection_reason, \
@@ -167,11 +169,13 @@ mod migration_key_requests;
 mod migration_permissions;
 mod migration_proxy_addresses;
 mod migration_proxy_entries;
+mod migration_proxy_selection;
 mod migration_users;
 mod migration_validation;
 mod normalization;
 mod proxy_addresses;
 mod proxy_entries;
+mod proxy_selection;
 mod rows;
 mod user_repository;
 
@@ -189,8 +193,10 @@ use migration_key_requests::*;
 use migration_permissions::*;
 use migration_proxy_addresses::*;
 use migration_proxy_entries::*;
+use migration_proxy_selection::*;
 use migration_users::*;
 use migration_validation::*;
 use normalization::*;
 use proxy_addresses::*;
+use proxy_selection::*;
 use rows::*;

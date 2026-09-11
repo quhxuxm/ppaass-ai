@@ -1,53 +1,68 @@
+use arc_swap::ArcSwap;
 use protocol::{CompressionMode, RsaKeyPair};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use socket2::Socket;
 use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
+use tracing::info;
 
 const PRIVATE_KEY_CACHE_CAPACITY: usize = 8;
 type PrivateKeyFingerprint = [u8; 32];
-type PrivateKeyCache = VecDeque<(PrivateKeyFingerprint, String, Arc<RsaKeyPair>)>;
+#[derive(Clone)]
+struct PrivateKeyCache(VecDeque<(PrivateKeyFingerprint, String, Arc<RsaKeyPair>)>);
 
-fn private_key_cache() -> &'static RwLock<PrivateKeyCache> {
-    static CACHE: OnceLock<RwLock<PrivateKeyCache>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(VecDeque::with_capacity(PRIVATE_KEY_CACHE_CAPACITY)))
+fn private_key_cache() -> &'static ArcSwap<PrivateKeyCache> {
+    static CACHE: OnceLock<ArcSwap<PrivateKeyCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        ArcSwap::from_pointee(PrivateKeyCache(VecDeque::with_capacity(
+            PRIVATE_KEY_CACHE_CAPACITY,
+        )))
+    })
 }
 
 fn cached_private_key(pem: &str) -> Result<Arc<RsaKeyPair>, String> {
     let fingerprint: PrivateKeyFingerprint = Sha256::digest(pem.as_bytes()).into();
-    if let Some(key) = private_key_cache()
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
-        .find_map(|(cached_fingerprint, cached_pem, key)| {
-            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
-        })
+    if let Some(key) =
+        private_key_cache()
+            .load()
+            .0
+            .iter()
+            .find_map(|(cached_fingerprint, cached_pem, key)| {
+                (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+            })
     {
         return Ok(key);
     }
 
-    // PEM/ASN.1 parsing is expensive for short-lived TCP targets. Parse outside
-    // the lock so unrelated connections are not serialized on a cache miss.
+    // PEM/ASN.1 parsing is expensive for short-lived TCP targets. Parse before
+    // publishing, so readers keep using an immutable lock-free snapshot.
     let parsed =
         Arc::new(RsaKeyPair::from_private_key_pem(pem).map_err(|error| error.to_string())?);
-    let mut cache = private_key_cache()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(key) = cache
-        .iter()
-        .find_map(|(cached_fingerprint, cached_pem, key)| {
-            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
-        })
-    {
-        return Ok(key);
+    loop {
+        let current = private_key_cache().load_full();
+        if let Some(key) = current
+            .0
+            .iter()
+            .find_map(|(cached_fingerprint, cached_pem, key)| {
+                (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+            })
+        {
+            return Ok(key);
+        }
+        let mut next = (*current).clone();
+        if next.0.len() == PRIVATE_KEY_CACHE_CAPACITY {
+            next.0.pop_front();
+        }
+        next.0
+            .push_back((fingerprint, pem.to_string(), parsed.clone()));
+        let previous = private_key_cache().compare_and_swap(&current, Arc::new(next));
+        if Arc::ptr_eq(&*previous, &current) {
+            return Ok(parsed);
+        }
     }
-    if cache.len() == PRIVATE_KEY_CACHE_CAPACITY {
-        cache.pop_front();
-    }
-    cache.push_back((fingerprint, pem.to_string(), parsed.clone()));
-    Ok(parsed)
 }
 
 /// 出站客户端连接的可选接口约束。
@@ -60,10 +75,92 @@ pub struct BindInterface {
     pub index: Option<u32>,
 }
 
+/// Keeps all application flows on one proxy endpoint until that endpoint fails.
+/// Stable egress is required by identity providers that reevaluate source IPs
+/// when refreshing access tokens.
+#[derive(Debug)]
+pub struct ProxyEndpointAffinity {
+    active_index: AtomicUsize,
+}
+
+impl ProxyEndpointAffinity {
+    const UNINITIALIZED: usize = usize::MAX;
+
+    pub fn with_initial_index(index: usize) -> Self {
+        Self {
+            active_index: AtomicUsize::new(index),
+        }
+    }
+
+    pub fn ordered_candidates(&self, endpoints: &[String]) -> Vec<String> {
+        if endpoints.is_empty() {
+            return Vec::new();
+        }
+        let start = self.active_index(endpoints.len());
+        (0..endpoints.len())
+            .map(|offset| endpoints[(start + offset) % endpoints.len()].clone())
+            .collect()
+    }
+
+    fn active_index(&self, endpoint_count: usize) -> usize {
+        let current = self.active_index.load(Ordering::Acquire);
+        if current != Self::UNINITIALIZED {
+            return current % endpoint_count;
+        }
+        let selected = rand::random::<u64>() as usize % endpoint_count;
+        match self.active_index.compare_exchange(
+            Self::UNINITIALIZED,
+            selected,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                info!(
+                    proxy_index = selected,
+                    proxy_count = endpoint_count,
+                    "Agent 运行期已随机固定主 Proxy"
+                );
+                selected
+            }
+            Err(existing) => existing % endpoint_count,
+        }
+    }
+
+    pub fn record_success(&self, endpoints: &[String], endpoint: &str) {
+        if let Some(index) = endpoints.iter().position(|candidate| candidate == endpoint) {
+            let previous = self.active_index.swap(index, Ordering::AcqRel);
+            if previous != Self::UNINITIALIZED && previous % endpoints.len() != index {
+                info!(
+                    previous_proxy_index = previous % endpoints.len(),
+                    proxy_index = index,
+                    proxy_count = endpoints.len(),
+                    "主 Proxy 连接失败后已切换备用节点"
+                );
+            }
+        }
+    }
+}
+
+impl Default for ProxyEndpointAffinity {
+    fn default() -> Self {
+        Self {
+            active_index: AtomicUsize::new(Self::UNINITIALIZED),
+        }
+    }
+}
+
 /// 客户端连接配置
 pub trait ClientConnectionConfig: Debug {
-    /// 获取一个随机选择的远端地址进行连接
+    /// 获取当前优先的远端地址。
     fn remote_addr(&self) -> String;
+
+    /// Returns failover candidates with the affinity endpoint first.
+    fn remote_addrs(&self) -> Vec<String> {
+        vec![self.remote_addr()]
+    }
+
+    /// Records the endpoint that established the transport connection.
+    fn record_remote_success(&self, _remote_addr: &str) {}
 
     /// 认证用户名
     fn username(&self) -> String;

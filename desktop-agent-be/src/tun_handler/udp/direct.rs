@@ -1,12 +1,25 @@
 use super::*;
 use crate::error::AgentError;
+use crate::tun_handler::dns_proxy::record_direct_dns_response;
 use common::{BindInterface, bind_socket_to_interface};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU16, Ordering};
 use tokio::net::UdpSocket;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 const DIRECT_UDP_SOCKET_BUFFER_SIZE: usize = 1024 * 1024;
+const DIRECT_DNS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_DIRECT_DNS_SOCKETS: usize = 32;
+static DIRECT_DNS_SOCKET_PERMITS: Semaphore =
+    Semaphore::const_new(MAX_CONCURRENT_DIRECT_DNS_SOCKETS);
+#[cfg(target_os = "macos")]
+static NEXT_DIRECT_DNS_PORT: AtomicU16 =
+    AtomicU16::new(crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST);
+#[cfg(windows)]
+const DIRECT_UDP_SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<()> {
     let DirectUdpRelayContext {
@@ -20,8 +33,25 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         tcp_sessions,
         udp_sessions,
         tun_networks,
+        close_after_response,
+        direct_dns_query,
+        direct_domain_cache,
         shutdown,
     } = context;
+
+    // macOS commonly gives GUI apps a low soft FD limit. DNS clients also tend
+    // to use a fresh source port for every query, so a burst can otherwise open
+    // hundreds of sockets before the response timeout gets a chance to reap
+    // them. Bound only the short-lived DNS path; regular UDP sessions keep their
+    // existing behavior.
+    let _dns_socket_permit =
+        if close_after_response {
+            Some(DIRECT_DNS_SOCKET_PERMITS.acquire().await.map_err(|_| {
+                AgentError::Connection("direct DNS socket limiter closed".to_string())
+            })?)
+        } else {
+            None
+        };
 
     // 直连 UDP 绑定临时本地端口并 connect 到目标，便于 recv 只接收该目标回复。
     let socket = connect_direct_udp_with_refresh(
@@ -31,11 +61,17 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         tcp_sessions.as_ref(),
         udp_sessions.as_ref(),
         tun_networks,
+        close_after_response,
     )
     .await?;
     let mut outbound_bytes = 0u64;
     let mut inbound_bytes = 0u64;
-    let idle = tokio::time::sleep(UDP_SESSION_IDLE);
+    let idle_timeout = if close_after_response {
+        DIRECT_DNS_RESPONSE_TIMEOUT
+    } else {
+        UDP_SESSION_IDLE
+    };
+    let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);
     let mut buf = vec![0u8; 65535];
 
@@ -45,7 +81,7 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
             _ = &mut idle => {
                 debug!(
                     "TUN UDP 直连会话空闲超过 {} 秒，关闭 -> {}",
-                    UDP_SESSION_IDLE.as_secs(),
+                    idle_timeout.as_secs(),
                     target_label
                 );
                 break;
@@ -53,19 +89,43 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
             maybe_data = rx.recv() => {
                 let Some(data) = maybe_data else { break };
                 let data_len = data.len();
-                if let Err(e) = socket.send(&data).await {
+                if let Err(e) = send_direct_udp(&socket, &data).await {
                     debug!("UDP 直连发送错误：{e}");
+                    #[cfg(windows)]
+                    let _ = direct_egress
+                        .refresh_after_direct_failure(
+                            connect_target.ip(),
+                            tcp_sessions.as_ref(),
+                            udp_sessions.as_ref(),
+                            tun_networks,
+                        )
+                        .await;
                     break;
                 }
                 let data_len = data_len as u64;
                 outbound_bytes += data_len;
                 telemetry::record_traffic(data_len, 0);
-                idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
             }
             received = socket.recv(&mut buf) => {
                 match received {
                     Ok(n) => {
                         let pkt = buf[..n].to_vec();
+                        if let Some(request) = direct_dns_query.as_ref()
+                            && let Some(summary) = record_direct_dns_response(
+                                direct_domain_cache.as_ref(),
+                                request.id,
+                                &request.query,
+                                &pkt,
+                            )
+                        {
+                            debug!(
+                                query = %request.query,
+                                status = %summary.status,
+                                answers = ?summary.answers,
+                                "已缓存直连 DNS 应答，后续 IP 流将沿用域名规则"
+                            );
+                        }
                         if let Err(e) = netstack_tx.send((pkt, original_target, client)).await {
                             debug!("UDP 直连回复错误：{e}");
                             break;
@@ -73,7 +133,10 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
                         let received_bytes = n as u64;
                         inbound_bytes += received_bytes;
                         telemetry::record_traffic(0, received_bytes);
-                        idle.as_mut().reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
+                        if close_after_response {
+                            break;
+                        }
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                     }
                     Err(e) => {
                         debug!("UDP 直连接收错误：{e}");
@@ -92,6 +155,23 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
     Ok(())
 }
 
+#[cfg(windows)]
+async fn send_direct_udp(socket: &UdpSocket, data: &[u8]) -> std::io::Result<usize> {
+    timeout(DIRECT_UDP_SEND_TIMEOUT, socket.send(data))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Windows 直连 UDP 上行发送超过 3 秒",
+            )
+        })?
+}
+
+#[cfg(not(windows))]
+async fn send_direct_udp(socket: &UdpSocket, data: &[u8]) -> std::io::Result<usize> {
+    socket.send(data).await
+}
+
 async fn connect_direct_udp_with_refresh(
     target: SocketAddr,
     target_label: &str,
@@ -99,6 +179,7 @@ async fn connect_direct_udp_with_refresh(
     tcp_sessions: &YamuxSessionManager,
     udp_sessions: &YamuxSessionManager,
     tun_networks: TunNetworks,
+    close_after_response: bool,
 ) -> Result<UdpSocket> {
     let initial_bind_interface = match direct_egress.bind_interface(target.ip()) {
         Some(bind_interface) => Some(bind_interface),
@@ -119,7 +200,7 @@ async fn connect_direct_udp_with_refresh(
         ))
     })?;
 
-    match connect_direct_udp(target, &initial_bind_interface).await {
+    match connect_direct_udp(target, &initial_bind_interface, close_after_response).await {
         Ok(socket) => Ok(socket),
         Err(first_err) => {
             debug!(
@@ -135,7 +216,7 @@ async fn connect_direct_udp_with_refresh(
                          刷新后仍无法确定物理出口接口"
                     ))
                 })?;
-            connect_direct_udp(target, &refreshed_bind_interface)
+            connect_direct_udp(target, &refreshed_bind_interface, close_after_response)
                 .await
                 .map_err(|retry_err| {
                     AgentError::Connection(format!(
@@ -149,8 +230,9 @@ async fn connect_direct_udp_with_refresh(
 async fn connect_direct_udp(
     target: SocketAddr,
     bind_interface: &BindInterface,
+    dedicated_dns_port: bool,
 ) -> std::io::Result<UdpSocket> {
-    let socket = bind_direct_udp(target, bind_interface)?;
+    let socket = bind_direct_udp(target, bind_interface, dedicated_dns_port)?;
     socket.connect(target).await?;
     Ok(socket)
 }
@@ -158,7 +240,11 @@ async fn connect_direct_udp(
 fn bind_direct_udp(
     target: SocketAddr,
     bind_interface: &BindInterface,
+    dedicated_dns_port: bool,
 ) -> std::io::Result<UdpSocket> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = dedicated_dns_port;
+
     let socket = Socket::new(
         Domain::for_address(target),
         Type::DGRAM,
@@ -167,12 +253,34 @@ fn bind_direct_udp(
     bind_socket_to_interface(&socket, Some(bind_interface), target)?;
     tune_direct_udp_socket(&socket, target);
 
-    let bind_addr = if target.is_ipv4() {
+    let bind_ip = if target.is_ipv4() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
     } else {
         SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
     };
-    socket.bind(&SockAddr::from(bind_addr))?;
+    #[cfg(target_os = "macos")]
+    if dedicated_dns_port && target.is_ipv4() {
+        for _ in crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+            ..=crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_LAST
+        {
+            let port = NEXT_DIRECT_DNS_PORT.fetch_add(1, Ordering::Relaxed);
+            let port = crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+                + (port - crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST)
+                    % (crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_LAST
+                        - crate::tun_handler::route::macos_dns::DIRECT_DNS_PORT_FIRST
+                        + 1);
+            let bind_addr = SocketAddr::new(bind_ip.ip(), port);
+            if socket.bind(&SockAddr::from(bind_addr)).is_ok() {
+                socket.set_nonblocking(true)?;
+                return UdpSocket::from_std(socket.into());
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "没有可用的直连 DNS 专用端口",
+        ));
+    }
+    socket.bind(&SockAddr::from(bind_ip))?;
     socket.set_nonblocking(true)?;
 
     UdpSocket::from_std(socket.into())

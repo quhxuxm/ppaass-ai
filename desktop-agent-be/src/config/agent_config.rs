@@ -67,6 +67,10 @@ pub struct AgentConfig {
     /// 将该接口上捕获的所有 IP 流量转发到代理。
     #[serde(default)]
     pub tun: TunConfig,
+
+    /// Agent 监听 TCP 的 backlog 队列长度。默认 1024，过小可能导致连接被拒绝。
+    #[serde(default = "default_backlog")]
+    pub backlog: Option<i32>,
 }
 
 /// TUN 模式配置。
@@ -92,7 +96,9 @@ pub struct TunConfig {
     pub ipv4: String,
 
     /// 分配给 TUN 设备的可选 IPv6 地址，CIDR 格式。
-    #[serde(default)]
+    ///
+    /// Windows 缺省启用 IPv6，避免双栈应用通过系统 IPv6 默认路由绕过仅 IPv4 的 TUN。
+    #[serde(default = "default_tun_ipv6")]
     pub ipv6: Option<String>,
 
     /// TUN 设备的 MTU。
@@ -129,8 +135,8 @@ pub struct TunConfig {
     #[serde(default)]
     pub route_state_file: Option<String>,
 
-    /// TUN DNS 状态文件名或路径。
-    /// 相对路径会放在当前运行目录下；不设置时使用 tun-dns.json。
+    /// 旧版本 TUN DNS 状态文件名或路径，仅用于检测并告警遗留文件。
+    /// 新版本不会创建或应用该文件，也不会修改系统 DNS。
     #[serde(default)]
     pub dns_state_file: Option<String>,
 
@@ -153,7 +159,7 @@ impl Default for TunConfig {
             enabled: false,
             name: default_tun_name(),
             ipv4: default_tun_ipv4(),
-            ipv6: None,
+            ipv6: default_tun_ipv6(),
             mtu: default_tun_mtu(),
             proxy_dns: default_tun_proxy_dns(),
             proxy_udp: default_tun_proxy_udp(),
@@ -205,6 +211,21 @@ fn default_tun_name() -> String {
 
 fn default_tun_ipv4() -> String {
     "10.10.10.1/24".to_string()
+}
+
+fn default_tun_ipv6() -> Option<String> {
+    #[cfg(windows)]
+    {
+        Some("fd00:10:10:10::1/64".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+fn default_backlog() -> Option<i32> {
+    Some(4096)
 }
 
 fn default_tun_mtu() -> u16 {
@@ -288,6 +309,6 @@ impl AgentConfig {
 impl TunConfig {
     /// 返回最终生效的 QUIC 策略。
     pub fn effective_quic_policy(&self) -> QuicPolicy {
-        self.quic_policy.unwrap_or_default()
+        self.quic_policy.unwrap_or(QuicPolicy::Allow)
     }
 }

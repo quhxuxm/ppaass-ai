@@ -132,6 +132,22 @@ enabled = true
     assert!(config.tun.proxy_dns);
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_tun_captures_ipv6_by_default() {
+    let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+    assert_eq!(config.tun.ipv6.as_deref(), Some("fd00:10:10:10::1/64"));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn non_windows_tun_keeps_ipv6_opt_in() {
+    let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+    assert_eq!(config.tun.ipv6, None);
+}
+
 #[test]
 fn tun_preserves_explicitly_disabled_dns_proxy() {
     let config: AgentConfig = toml::from_str(

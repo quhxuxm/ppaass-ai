@@ -19,6 +19,8 @@ final class NativeAgent {
 
     static native boolean validateKeyPair(String privateKeyPem, String publicKeyPem);
 
+    static native String speedTest(String configJson);
+
     static native boolean isRunning(long handle);
 
     static native int authenticationStatus(long handle);
