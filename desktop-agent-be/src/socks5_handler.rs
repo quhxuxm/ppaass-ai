@@ -9,7 +9,6 @@ use crate::error::{AgentError, Result};
 use crate::telemetry;
 use crate::tun_handler::{CapturedTcpStream, PacketCaptureController};
 use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
-use dashmap::DashMap;
 use fast_socks5::server::{
     NoAuthentication, Socks5ServerProtocol, SocksServerError,
     states::{CommandRead, Opened},
@@ -24,7 +23,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc::{Sender, channel};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 mod tcp;

@@ -1,9 +1,10 @@
+use super::RelayActivity;
 use super::*;
 
 pub struct RelayCopyIo<'a, S> {
     inner: &'a mut S,
     label: &'static str,
-    activity_tx: watch::Sender<()>,
+    activity: Arc<RelayActivity>,
     read_bytes: Arc<AtomicU64>,
     read_eof: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -12,22 +13,21 @@ impl<'a, S> RelayCopyIo<'a, S> {
     pub fn new(
         inner: &'a mut S,
         label: &'static str,
-        activity_tx: watch::Sender<()>,
+        activity: Arc<RelayActivity>,
         read_bytes: Arc<AtomicU64>,
         read_eof: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             inner,
             label,
-            activity_tx,
+            activity,
             read_bytes,
             read_eof,
         }
     }
 
     fn mark_activity(&self) {
-        // watch 只用作轻量“有活动”信号，不承载数据；发送失败说明 watchdog 已经退出。
-        let _ = self.activity_tx.send(());
+        self.activity.mark();
     }
 }
 

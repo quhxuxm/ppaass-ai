@@ -173,6 +173,7 @@ async fn connect_udp_relay_stream(
     Ok(connected.into_async_io())
 }
 
+#[derive(Debug)]
 pub struct UdpRelayBatchError {
     pub error: io::Error,
     pub request: UdpRelayRequest,

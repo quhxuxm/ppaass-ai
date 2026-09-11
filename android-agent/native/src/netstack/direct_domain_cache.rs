@@ -1,5 +1,7 @@
-use dashmap::DashMap;
+use arc_swap::ArcSwap;
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -41,7 +43,9 @@ impl DomainMatch {
 
 pub struct DirectDomainCache {
     ttl: Duration,
-    ip_to_domains: DashMap<IpAddr, DomainCacheEntry>,
+    // Packet-route lookups use an immutable snapshot. DNS updates publish a
+    // replacement map, keeping the TUN data path free of DashMap shard locks.
+    ip_to_domains: ArcSwap<HashMap<IpAddr, DomainCacheEntry>>,
     cleanup_epoch: Instant,
     last_cleanup_millis: AtomicU64,
 }
@@ -50,7 +54,7 @@ impl DirectDomainCache {
     pub fn new(ttl: Duration) -> Self {
         Self {
             ttl,
-            ip_to_domains: DashMap::new(),
+            ip_to_domains: ArcSwap::from_pointee(HashMap::new()),
             cleanup_epoch: Instant::now(),
             last_cleanup_millis: AtomicU64::new(0),
         }
@@ -72,52 +76,60 @@ impl DirectDomainCache {
         }
 
         let now = Instant::now();
-        self.cleanup_if_due(now);
+        let cleanup_due = self.claim_cleanup_if_due(now);
         let effective_ttl = dns_ttl
             .map(|secs| Duration::from_secs(u64::from(secs)).min(Duration::from_secs(3600)))
             .unwrap_or(self.ttl);
         let expires_at = now + effective_ttl;
-        let mut recorded = false;
-        for answer in answers {
-            if let Ok(ip) = answer.parse::<IpAddr>() {
-                if let Some(mut entry) = self.ip_to_domains.get_mut(&ip) {
-                    if entry.expires_at <= now {
-                        entry.domains.clear();
-                    }
-                    if !entry.domains.iter().any(|existing| existing == &domain) {
-                        if entry.domains.len() >= MAX_DOMAINS_PER_IP {
-                            entry.domains.remove(0);
-                        }
-                        entry.domains.push(domain.clone());
-                    }
-                    entry.expires_at = expires_at;
-                } else {
-                    self.ip_to_domains.insert(
-                        ip,
-                        DomainCacheEntry {
-                            domains: vec![domain.clone()],
-                            expires_at,
-                        },
-                    );
-                }
-                recorded = true;
-            }
+        let ips: Vec<_> = answers
+            .iter()
+            .filter_map(|answer| answer.parse::<IpAddr>().ok())
+            .collect();
+        if ips.is_empty() {
+            return;
         }
-        if recorded && self.ip_to_domains.len() > MAX_CACHE_IPS {
-            self.enforce_capacity();
+
+        loop {
+            let current = self.ip_to_domains.load_full();
+            let mut updated = (*current).clone();
+            if cleanup_due {
+                updated.retain(|_, entry| now <= entry.expires_at + STALE_GRACE);
+            }
+            for ip in &ips {
+                let entry = updated.entry(*ip).or_insert_with(|| DomainCacheEntry {
+                    domains: Vec::new(),
+                    expires_at,
+                });
+                if entry.expires_at <= now {
+                    entry.domains.clear();
+                }
+                if !entry.domains.iter().any(|existing| existing == &domain) {
+                    if entry.domains.len() >= MAX_DOMAINS_PER_IP {
+                        entry.domains.remove(0);
+                    }
+                    entry.domains.push(domain.clone());
+                }
+                entry.expires_at = expires_at;
+            }
+            trim_to_capacity(&mut updated);
+            let previous = self
+                .ip_to_domains
+                .compare_and_swap(&current, Arc::new(updated));
+            if Arc::ptr_eq(&*previous, &current) {
+                return;
+            }
         }
     }
 
     #[doc(hidden)]
     pub fn domains_for_ip(&self, ip: IpAddr) -> Vec<String> {
-        let entry = match self.ip_to_domains.get(&ip) {
+        let snapshot = self.ip_to_domains.load();
+        let entry = match snapshot.get(&ip) {
             Some(entry) => entry,
             None => return Vec::new(),
         };
         let now = Instant::now();
         if now > entry.expires_at + STALE_GRACE {
-            drop(entry);
-            self.ip_to_domains.remove(&ip);
             return Vec::new();
         }
         entry.domains.clone()
@@ -127,11 +139,10 @@ impl DirectDomainCache {
     where
         F: FnMut(&str) -> bool,
     {
-        let entry = self.ip_to_domains.get(&ip)?;
+        let snapshot = self.ip_to_domains.load();
+        let entry = snapshot.get(&ip)?;
         let now = Instant::now();
         if now > entry.expires_at + STALE_GRACE {
-            drop(entry);
-            self.ip_to_domains.remove(&ip);
             return None;
         }
         let stale = now > entry.expires_at;
@@ -148,10 +159,10 @@ impl DirectDomainCache {
     }
 
     pub fn cached_ip_count(&self) -> usize {
-        self.ip_to_domains.len()
+        self.ip_to_domains.load().len()
     }
 
-    fn cleanup_if_due(&self, now: Instant) {
+    fn claim_cleanup_if_due(&self, now: Instant) -> bool {
         let elapsed_millis = now
             .duration_since(self.cleanup_epoch)
             .as_millis()
@@ -160,54 +171,31 @@ impl DirectDomainCache {
         let last_cleanup_millis = self.last_cleanup_millis.load(Ordering::Relaxed);
         if elapsed_millis.saturating_sub(last_cleanup_millis) < CLEANUP_INTERVAL.as_millis() as u64
         {
-            return;
+            return false;
         }
-        if self
-            .last_cleanup_millis
+        self.last_cleanup_millis
             .compare_exchange(
                 last_cleanup_millis,
                 elapsed_millis,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             )
-            .is_err()
-        {
-            return;
-        }
-
-        self.remove_expired(now);
-        if self.ip_to_domains.len() > MAX_CACHE_IPS {
-            self.enforce_capacity();
-        }
+            .is_ok()
     }
+}
 
-    fn remove_expired(&self, now: Instant) {
-        let expired: Vec<IpAddr> = self
-            .ip_to_domains
-            .iter()
-            .filter_map(|entry| (now > entry.expires_at + STALE_GRACE).then_some(*entry.key()))
-            .collect();
-        for ip in expired {
-            self.ip_to_domains.remove(&ip);
-        }
+fn trim_to_capacity(entries: &mut HashMap<IpAddr, DomainCacheEntry>) {
+    let overflow = entries.len().saturating_sub(MAX_CACHE_IPS);
+    if overflow == 0 {
+        return;
     }
-
-    fn enforce_capacity(&self) {
-        let len = self.ip_to_domains.len();
-        if len <= MAX_CACHE_IPS {
-            return;
-        }
-
-        let mut entries: Vec<(IpAddr, Instant)> = self
-            .ip_to_domains
-            .iter()
-            .map(|entry| (*entry.key(), entry.expires_at))
-            .collect();
-        entries.sort_by_key(|(_, expires_at)| *expires_at);
-
-        for (ip, _) in entries.into_iter().take(len - MAX_CACHE_IPS) {
-            self.ip_to_domains.remove(&ip);
-        }
+    let mut by_expiry: Vec<_> = entries
+        .iter()
+        .map(|(ip, entry)| (*ip, entry.expires_at))
+        .collect();
+    by_expiry.sort_by_key(|(_, expires_at)| *expires_at);
+    for (ip, _) in by_expiry.into_iter().take(overflow) {
+        entries.remove(&ip);
     }
 }
 

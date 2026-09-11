@@ -6,6 +6,10 @@
 use super::udp_relay::SocksUdpRelay;
 use super::*;
 
+mod direct;
+
+use direct::{DirectUdpFlowKey, spawn_direct_udp_flow};
+
 pub(super) async fn handle_udp_associate(
     protocol: Socks5ServerProtocol<CapturedTcpStream, CommandRead>,
     _target_addr: TargetAddr,
@@ -110,8 +114,10 @@ async fn process_udp_traffic(
     packet_capture: PacketCaptureController,
 ) -> Result<()> {
     let mut buf = [0u8; 65535];
-    type StreamMap = DashMap<Address, Sender<Vec<u8>>>;
-    let streams: Arc<StreamMap> = Arc::new(DashMap::new());
+    // Only this task owns the flow map. A worker returns its key through
+    // `closed_rx`, so neither lookup nor cleanup needs a DashMap shard lock.
+    let mut streams = HashMap::<DirectUdpFlowKey, tokio::sync::mpsc::Sender<Vec<u8>>>::new();
+    let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
     let udp_relay = SocksUdpRelay::spawn(
         udp_sessions.clone(),
         udp_socket.clone(),
@@ -120,11 +126,13 @@ async fn process_udp_traffic(
     );
 
     loop {
-        // SOCKS5 UDP 是无连接的，这里按目标地址建立/复用会话任务。
-        let (n, client_addr) = udp_socket
-            .recv_from(&mut buf)
-            .await
-            .map_err(|e| AgentError::Socks5(e.to_string()))?;
+        tokio::select! {
+            Some(key) = closed_rx.recv() => {
+                streams.remove(&key);
+            }
+            received = udp_socket.recv_from(&mut buf) => {
+                // SOCKS5 UDP 是无连接的，这里按 client + target 建立/复用会话任务。
+                let (n, client_addr) = received.map_err(|error| AgentError::Socks5(error.to_string()))?;
         let packet_data = &buf[..n];
         packet_capture.record_udp_payload(client_addr, capture_server_addr, packet_data);
         // 解析 SOCKS5 UDP 头部
@@ -152,102 +160,20 @@ async fn process_udp_traffic(
             continue;
         }
 
-        // 只有直连路径才按目标地址创建/查询 UDP stream。
-        if !streams.contains_key(&dest_addr) {
-            info!("新的直连 UDP 会话，目标: {:?}", dest_addr);
-
-            // === 直连 UDP 路径 ===
-            let target_str = address_to_string(&dest_addr);
-            info!("UDP 会话使用直连连接到 {}", target_str);
-
-            let (tx, mut rx) = channel::<Vec<u8>>(32);
-            streams.insert(dest_addr.clone(), tx);
-            let udp_client = udp_socket.clone();
-            let dest_addr_clone = dest_addr.clone();
-            let streams_clone = streams.clone();
-            let packet_capture = packet_capture.clone();
-
-            tokio::spawn(async move {
-                // 绑定本地 UDP 套接字并直连目标
-                let target_socket = match UdpSocket::bind("0.0.0.0:0").await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("绑定直连 UDP 套接字失败: {}", e);
-                        streams_clone.remove(&dest_addr_clone);
-                        return;
-                    }
-                };
-                if let Err(e) = target_socket.connect(&target_str).await {
-                    error!("直连 UDP 套接字连接到 {} 失败: {}", target_str, e);
-                    streams_clone.remove(&dest_addr_clone);
-                    return;
-                }
-
-                // 客户端到目标方向：channel 收到 payload 后发给直连 UDP socket。
-                let write_task = async {
-                    while let Some(data) = rx.recv().await {
-                        trace!(
-                            "直连 UDP 发送到目标: {:?}\n{}",
-                            dest_addr_clone,
-                            pretty_hex::pretty_hex(&data)
-                        );
-                        if let Err(e) = target_socket.send(&data).await {
-                            debug!("直连 UDP 发送错误: {}", e);
-                            break;
-                        }
-                    }
-                };
-
-                // 目标到客户端方向：目标回复重新封装 SOCKS5 UDP 头后发回客户端。
-                let read_task = async {
-                    let mut read_buf = [0u8; 65535];
-                    loop {
-                        match target_socket.recv(&mut read_buf).await {
-                            Ok(len) => {
-                                let data = &read_buf[..len];
-                                trace!(
-                                    "直连 UDP 从目标接收: {:?}\n{}",
-                                    dest_addr_clone,
-                                    pretty_hex::pretty_hex(&data)
-                                );
-                                match create_udp_packet(&dest_addr_clone, data) {
-                                    Ok(packet) => {
-                                        match udp_client.send_to(&packet, client_addr).await {
-                                            Ok(_) => packet_capture.record_udp_payload(
-                                                capture_server_addr,
-                                                client_addr,
-                                                &packet,
-                                            ),
-                                            Err(e) => {
-                                                error!("发送 UDP 数据包到客户端失败: {}", e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("创建 UDP 数据包失败: {}", e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                debug!("直连 UDP 接收错误: {}", e);
-                                break;
-                            }
-                        }
-                    }
-                };
-
-                tokio::select! {
-                    _ = write_task => {}
-                    _ = read_task => {}
-                }
-                streams_clone.remove(&dest_addr_clone);
-                info!("直连 UDP 会话结束: {:?}", dest_addr_clone);
-            });
+        let key = DirectUdpFlowKey::new(client_addr, dest_addr);
+        let sender = streams.entry(key.clone()).or_insert_with(|| {
+            spawn_direct_udp_flow(
+                key,
+                udp_socket.clone(),
+                capture_server_addr,
+                packet_capture.clone(),
+                closed_tx.clone(),
+            )
+        });
+        if sender.try_send(payload).is_err() {
+            debug!("直连 SOCKS5 UDP 会话队列不可用，丢弃一个数据包");
         }
-        // 当前 datagram 投递给目标会话；若会话刚创建，首包也会走这里。
-        let sender = streams.get(&dest_addr).map(|s| s.clone());
-        if let Some(sender) = sender {
-            let _ = sender.send(payload).await;
+            }
         }
     }
 }

@@ -1,4 +1,6 @@
-use desktop_agent_be::tun_handler::direct_domain_cache::DirectDomainCache;
+use desktop_agent_be::tun_handler::direct_domain_cache::{
+    DirectDomainCache, MAX_CACHE_IPS, MAX_DOMAINS_PER_IP,
+};
 use std::time::Duration;
 
 #[test]
@@ -67,4 +69,32 @@ fn finds_matching_domain_for_ip() {
             })
             .is_none()
     );
+}
+
+#[test]
+fn bounds_snapshot_cache_size_and_domains_per_ip() {
+    let cache = DirectDomainCache::new(Duration::from_secs(60));
+    for index in 0..=MAX_DOMAINS_PER_IP {
+        cache.record_resolution(
+            &format!("d{index}.example.com"),
+            &["142.250.1.1".to_string()],
+        );
+    }
+    assert_eq!(
+        cache.domains_for_ip("142.250.1.1".parse().unwrap()).len(),
+        MAX_DOMAINS_PER_IP
+    );
+
+    for index in 0..=MAX_CACHE_IPS {
+        cache.record_resolution(
+            &format!("ip{index}.example.com"),
+            &[format!(
+                "10.{}.{}.{}",
+                (index >> 16) & 255,
+                (index >> 8) & 255,
+                index & 255
+            )],
+        );
+    }
+    assert!(cache.cached_ip_count() <= MAX_CACHE_IPS);
 }

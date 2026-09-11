@@ -1,55 +1,68 @@
+use arc_swap::ArcSwap;
 use protocol::{CompressionMode, RsaKeyPair};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use socket2::Socket;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::{fmt::Debug, io, net::SocketAddr, time::Duration};
 use tracing::info;
 
 const PRIVATE_KEY_CACHE_CAPACITY: usize = 8;
 type PrivateKeyFingerprint = [u8; 32];
-type PrivateKeyCache = VecDeque<(PrivateKeyFingerprint, String, Arc<RsaKeyPair>)>;
+#[derive(Clone)]
+struct PrivateKeyCache(VecDeque<(PrivateKeyFingerprint, String, Arc<RsaKeyPair>)>);
 
-fn private_key_cache() -> &'static RwLock<PrivateKeyCache> {
-    static CACHE: OnceLock<RwLock<PrivateKeyCache>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(VecDeque::with_capacity(PRIVATE_KEY_CACHE_CAPACITY)))
+fn private_key_cache() -> &'static ArcSwap<PrivateKeyCache> {
+    static CACHE: OnceLock<ArcSwap<PrivateKeyCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        ArcSwap::from_pointee(PrivateKeyCache(VecDeque::with_capacity(
+            PRIVATE_KEY_CACHE_CAPACITY,
+        )))
+    })
 }
 
 fn cached_private_key(pem: &str) -> Result<Arc<RsaKeyPair>, String> {
     let fingerprint: PrivateKeyFingerprint = Sha256::digest(pem.as_bytes()).into();
-    if let Some(key) = private_key_cache()
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
-        .find_map(|(cached_fingerprint, cached_pem, key)| {
-            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
-        })
+    if let Some(key) =
+        private_key_cache()
+            .load()
+            .0
+            .iter()
+            .find_map(|(cached_fingerprint, cached_pem, key)| {
+                (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+            })
     {
         return Ok(key);
     }
 
-    // PEM/ASN.1 parsing is expensive for short-lived TCP targets. Parse outside
-    // the lock so unrelated connections are not serialized on a cache miss.
+    // PEM/ASN.1 parsing is expensive for short-lived TCP targets. Parse before
+    // publishing, so readers keep using an immutable lock-free snapshot.
     let parsed =
         Arc::new(RsaKeyPair::from_private_key_pem(pem).map_err(|error| error.to_string())?);
-    let mut cache = private_key_cache()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(key) = cache
-        .iter()
-        .find_map(|(cached_fingerprint, cached_pem, key)| {
-            (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
-        })
-    {
-        return Ok(key);
+    loop {
+        let current = private_key_cache().load_full();
+        if let Some(key) = current
+            .0
+            .iter()
+            .find_map(|(cached_fingerprint, cached_pem, key)| {
+                (cached_fingerprint == &fingerprint && cached_pem == pem).then(|| key.clone())
+            })
+        {
+            return Ok(key);
+        }
+        let mut next = (*current).clone();
+        if next.0.len() == PRIVATE_KEY_CACHE_CAPACITY {
+            next.0.pop_front();
+        }
+        next.0
+            .push_back((fingerprint, pem.to_string(), parsed.clone()));
+        let previous = private_key_cache().compare_and_swap(&current, Arc::new(next));
+        if Arc::ptr_eq(&*previous, &current) {
+            return Ok(parsed);
+        }
     }
-    if cache.len() == PRIVATE_KEY_CACHE_CAPACITY {
-        cache.pop_front();
-    }
-    cache.push_back((fingerprint, pem.to_string(), parsed.clone()));
-    Ok(parsed)
 }
 
 /// 出站客户端连接的可选接口约束。
