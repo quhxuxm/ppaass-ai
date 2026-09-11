@@ -50,6 +50,7 @@ pub struct YamuxClientConnection {
 struct YamuxSubstreamAuthConfig {
     username: String,
     private_key_pem: String,
+    proxy_encryption_public_key_pem: String,
     timeout: Duration,
     compression_mode: CompressionMode,
 }
@@ -60,6 +61,7 @@ impl std::fmt::Debug for YamuxSubstreamAuthConfig {
             .debug_struct("YamuxSubstreamAuthConfig")
             .field("username", &self.username)
             .field("private_key_pem", &"[REDACTED]")
+            .field("proxy_encryption_public_key_pem", &"[REDACTED]")
             .field("timeout", &self.timeout)
             .field("compression_mode", &self.compression_mode)
             .finish()
@@ -77,6 +79,10 @@ impl ClientConnectionConfig for YamuxSubstreamAuthConfig {
 
     fn private_key_pem(&self) -> Result<String, String> {
         Ok(self.private_key_pem.clone())
+    }
+
+    fn proxy_encryption_public_key_pem(&self) -> Result<String, String> {
+        Ok(self.proxy_encryption_public_key_pem.clone())
     }
 
     fn timeout_duration(&self) -> Duration {
@@ -122,6 +128,9 @@ impl YamuxClientConnection {
             username: config.username(),
             private_key_pem: config
                 .private_key_pem()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            proxy_encryption_public_key_pem: config
+                .proxy_encryption_public_key_pem()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
             timeout: config.timeout_duration(),
             compression_mode: config.compression_mode(),
@@ -294,10 +303,13 @@ impl YamuxClientConnection {
 
         let (client_stream, request_id) = tokio::time::timeout(self.connect_response_timeout, async {
             debug!("通过 Yamux 子流执行 PPAASS 认证并连接目标：address={address:?}, transport={transport:?}");
-            let auth_conn =
-                AuthenticatedConnection::authenticate_stream(stream, self.auth_config.as_ref())
-                    .await?;
-            auth_conn.connect_to_target(address, transport).await
+            AuthenticatedConnection::establish_target(
+                stream,
+                self.auth_config.as_ref(),
+                address,
+                transport,
+            )
+            .await
         })
         .await
         .map_err(|_| {

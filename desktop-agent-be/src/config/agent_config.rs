@@ -21,6 +21,9 @@ pub struct AgentConfig {
     pub proxy_registry_url: Option<String>,
     pub username: String,
     pub private_key_path: String,
+    /// 由受信任部署渠道提供的 Proxy 数据面 RSA 加密公钥。
+    #[serde(default)]
+    pub proxy_encryption_public_key_path: String,
     /// Agent 到 proxy 的 UDP 外层传输。默认使用 PPAASS 原生加密 UDP；
     /// TCP 业务数据不受此字段影响，始终使用 direct framed TCP。
     #[serde(default)]

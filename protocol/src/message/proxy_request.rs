@@ -1,10 +1,8 @@
-use super::{AuthRequest, ConnectRequest, DataPacket, SpeedTestRequest};
+use super::{AuthConnectRequest, DataPacket};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProxyRequest {
-    Auth(AuthRequest),
-    Connect(ConnectRequest),
-    SpeedTest(SpeedTestRequest),
+    AuthConnect(AuthConnectRequest),
     Data(DataPacket),
 }

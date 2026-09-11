@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 
 use async_trait::async_trait;
+use protocol::RsaKeyPair;
 use proxy_entry::config::{ProxyConfig, UserConfig};
 use proxy_entry::error::Result;
 use proxy_entry::user_manager::AuthorizationProvider;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Default)]
 pub struct TestAuthorizationProvider {
@@ -40,7 +42,7 @@ impl AuthorizationProvider for TestAuthorizationProvider {
 }
 
 pub fn proxy_config(extra: &str) -> ProxyConfig {
-    toml::from_str(&format!(
+    let mut config: ProxyConfig = toml::from_str(&format!(
         r#"
 listen_addr = "127.0.0.1:0"
 entry_id = "entry-test"
@@ -51,5 +53,20 @@ authorization_database_path = "authorization.sqlite3"
 {extra}
 "#
     ))
-    .unwrap()
+    .unwrap();
+    config.auth_connect_private_key_path = test_auth_connect_key_path().to_string();
+    config
+}
+
+fn test_auth_connect_key_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let key = RsaKeyPair::generate(2048).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "ppaass-proxy-entry-test-auth-connect-{}.pem",
+            std::process::id()
+        ));
+        std::fs::write(&path, key.private_key_to_pem().unwrap()).unwrap();
+        path.to_string_lossy().into_owned()
+    })
 }

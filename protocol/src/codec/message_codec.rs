@@ -36,7 +36,7 @@ impl MessageCodec {
     fn is_auth(message_type: MessageType) -> bool {
         matches!(
             message_type,
-            MessageType::AuthRequest | MessageType::AuthResponse
+            MessageType::AuthConnectRequest | MessageType::AuthConnectResponse
         )
     }
 
@@ -69,9 +69,8 @@ impl MessageCodec {
             ));
         }
         let message_type = match frame[1] {
-            1 => MessageType::AuthRequest,
-            2 => MessageType::AuthResponse,
-            3 => MessageType::ConnectRequest,
+            1 => MessageType::AuthConnectRequest,
+            2 => MessageType::AuthConnectResponse,
             4 => MessageType::ConnectResponse,
             5 => MessageType::Data,
             6 => MessageType::Error,

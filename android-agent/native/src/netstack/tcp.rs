@@ -88,7 +88,11 @@ async fn handle_tcp(
             "Android TUN TCP cached direct domain matched: {} ({}){}",
             target,
             domain_match.domain(),
-            if domain_match.is_stale() { " [stale]" } else { "" }
+            if domain_match.is_stale() {
+                " [stale]"
+            } else {
+                ""
+            }
         );
         direct_target = Some(target);
     }

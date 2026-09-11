@@ -1,7 +1,7 @@
 use super::*;
 
-const SQLITE_PRAGMA_SECURE_DELETE:&str="secure_delete";
-const SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT:&str="journal_size_limit";
+const SQLITE_PRAGMA_SECURE_DELETE: &str = "secure_delete";
+const SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT: &str = "journal_size_limit";
 impl SqliteAccessLogRepository {
     /// Rejects configurations that would collapse the trust boundary back into one file.
     ///

@@ -15,7 +15,8 @@ use tokio_util::sync::CancellationToken;
 const MINIMAL_AGENT_CONFIG: &str = r#"{
         "proxy_addrs": ["127.0.0.1:8080"],
         "username": "user1",
-        "private_key_pem": "key"
+        "private_key_pem": "key",
+        "proxy_encryption_public_key_pem": "key"
     }"#;
 
 #[test]
@@ -143,6 +144,7 @@ fn auto_fallback_state_is_isolated_per_udp_session_slot() {
                 "proxy_addrs": ["127.0.0.1:8080"],
                 "username": "user1",
                 "private_key_pem": "key",
+                "proxy_encryption_public_key_pem": "key",
                 "transport_mode": "auto"
             }"#,
     )

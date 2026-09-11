@@ -23,6 +23,11 @@ pub struct ProxyConfig {
     /// Entry 本地持久化的最后成功授权快照；不能放在版本 release 目录中。
     pub authorization_database_path: String,
 
+    /// RSA private key used only to unwrap AuthConnect per-request secrets.
+    /// Its public half is pinned in deployed Agents; it is not an account key.
+    #[serde(default)]
+    pub auth_connect_private_key_path: String,
+
     /// 单个控制面 HTTP 请求的超时时间。
     #[serde(default = "default_control_request_timeout_secs")]
     pub control_request_timeout_secs: u64,

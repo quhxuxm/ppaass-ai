@@ -168,13 +168,14 @@ async fn measure_proxy_entry(
     let client = AgentClientConfig::new(&config, &addresses, None, None);
 
     let connect_started = Instant::now();
-    let connection = AuthenticatedConnection::connect(&client)
-        .await
-        .map_err(|error| format!("连接 Proxy Entry 失败：{error}"))?;
+    let connection =
+        AuthenticatedConnection::connect_for_speed_test(&client, DEFAULT_SPEED_TEST_DOWNLOAD_BYTES)
+            .await
+            .map_err(|error| format!("连接 Proxy Entry 失败：{error}"))?;
     let latency_ms = elapsed_millis(connect_started);
     let download_started = Instant::now();
     let download_bytes = connection
-        .download_speed_test(DEFAULT_SPEED_TEST_DOWNLOAD_BYTES)
+        .download_speed_test(u64::from(DEFAULT_SPEED_TEST_DOWNLOAD_BYTES))
         .await
         .map_err(|error| format!("Proxy Entry 测速失败：{error}"))?;
     let download_micros = download_started.elapsed().as_micros().max(1);

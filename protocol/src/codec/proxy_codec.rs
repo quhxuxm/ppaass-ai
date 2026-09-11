@@ -37,9 +37,7 @@ impl Decoder for ProxyCodec {
                         )
                     })?;
                 let expected_type = match &request {
-                    ProxyRequest::Auth(_) => MessageType::AuthRequest,
-                    ProxyRequest::Connect(_) => MessageType::ConnectRequest,
-                    ProxyRequest::SpeedTest(_) => MessageType::SpeedTestRequest,
+                    ProxyRequest::AuthConnect(_) => MessageType::AuthConnectRequest,
                     ProxyRequest::Data(_) => MessageType::Data,
                 };
                 if message.message_type != expected_type {
@@ -64,7 +62,7 @@ impl Encoder<ProxyResponse> for ProxyCodec {
             ProxyResponse::Error { message } => (MessageType::Error, message.into_bytes()),
             item => {
                 let message_type = match &item {
-                    ProxyResponse::Auth(_) => MessageType::AuthResponse,
+                    ProxyResponse::AuthConnect(_) => MessageType::AuthConnectResponse,
                     ProxyResponse::Connect(_) => MessageType::ConnectResponse,
                     ProxyResponse::Data(_) | ProxyResponse::Error { .. } => unreachable!(),
                 };

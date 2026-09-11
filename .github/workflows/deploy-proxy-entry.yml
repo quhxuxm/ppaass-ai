@@ -65,6 +65,7 @@ jobs:
           REGISTRY_URL: ${{ vars[format('{0}_REGISTRY_URL', inputs.environment)] }}
           RUNTIME_ROOT: ${{ vars[format('{0}_RUNTIME_ROOT', inputs.environment)] }}
           CONTROL_TOKEN: ${{ secrets[format('{0}_CONTROL_TOKEN', inputs.environment)] }}
+          AUTH_CONNECT_PRIVATE_KEY: ${{ secrets[format('{0}_AUTH_CONNECT_PRIVATE_KEY', inputs.environment)] }}
           INSTANCE_COUNT: ${{ inputs.instance_count }}
         run: |
           set -euo pipefail
@@ -73,6 +74,7 @@ jobs:
           : "${ADVERTISED_ADDRESS:?${{ inputs.environment }}_ADVERTISED_ADDRESS is required}"
           : "${REGISTRY_URL:?${{ inputs.environment }}_REGISTRY_URL is required}"
           : "${CONTROL_TOKEN:?${{ inputs.environment }}_CONTROL_TOKEN is required}"
+          : "${AUTH_CONNECT_PRIVATE_KEY:?${{ inputs.environment }}_AUTH_CONNECT_PRIVATE_KEY is required}"
           validate_instance_count "$INSTANCE_COUNT"
           validate_entry_id_for_instances "$ENTRY_ID" "$INSTANCE_COUNT"
           validate_advertised_address "$ADVERTISED_ADDRESS"
@@ -94,6 +96,8 @@ jobs:
             "$bundle/check-ports.sh"
           cp config/proxy-entry.toml "$bundle/proxy-entry.toml"
           printf '%s' "$CONTROL_TOKEN" >"$bundle/control-token"
+          printf '%s' "$AUTH_CONNECT_PRIVATE_KEY" >"$bundle/auth-connect-private-key.pem"
+          chmod 0600 "$bundle/auth-connect-private-key.pem"
           {
             printf 'RELEASE_SHA=%q\n' "$GITHUB_SHA"
             printf 'ENTRY_ID=%q\n' "$ENTRY_ID"

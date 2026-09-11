@@ -13,15 +13,16 @@ pub use compression::{CompressionMode, compress, decompress};
 pub use crypto::RsaKeyPair;
 pub use error::{ProtocolError, Result};
 pub use message::{
-    Address, AuthRequest, AuthResponse, ConnectRequest, ConnectResponse,
-    DEFAULT_SPEED_TEST_DOWNLOAD_BYTES, DataPacket, MAX_SPEED_TEST_DOWNLOAD_BYTES,
+    Address, AuthConnectIntent, AuthConnectRequest, AuthConnectResponse, ConnectRequest,
+    ConnectResponse, DEFAULT_SPEED_TEST_DOWNLOAD_BYTES, DataPacket, MAX_SPEED_TEST_DOWNLOAD_BYTES,
     MIN_SPEED_TEST_DOWNLOAD_BYTES, Message, MessageType, ProxyRequest, ProxyResponse,
     SPEED_TEST_STREAM_ID, SpeedTestRequest, TransportProtocol, UdpRelayPacket,
 };
 pub use tcp_transport::{
     AuthFailureCode, TcpDirectionalKeyMaterial, TcpFrameDirection, TcpSessionCipher,
-    TcpSessionRole, TcpSessionSecret, decode_tcp_session_secret, encode_tcp_session_secret,
-    tcp_auth_request_transcript, tcp_auth_transcript_hash,
+    TcpSessionRole, open_auth_connect_intent, seal_auth_connect_intent,
+    tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
+    tcp_auth_connect_transcript_hash,
 };
 pub use udp_transport::{
     FragmentReassembler, ReassemblyConfig, ReplayWindow, UdpAuthInit, UdpAuthOk,

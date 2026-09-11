@@ -12,6 +12,7 @@ import java.util.Properties;
 final class AgentAuthConfig {
     private static final String ASSET_NAME = "agent.properties";
     private static final String PROXY_REGISTRY_URL_KEY = "proxy_registry_url";
+    private static final String PROXY_ENCRYPTION_PUBLIC_KEY_PEM = "proxy_encryption_public_key_pem";
 
     private AgentAuthConfig() {
     }
@@ -31,6 +32,18 @@ final class AgentAuthConfig {
 
     static String registrationUrl(Context context) throws IOException {
         return proxyRegistryUrl(context) + "/";
+    }
+
+    static String proxyEncryptionPublicKeyPem(Context context) throws IOException {
+        Properties properties = new Properties();
+        try (InputStream input = context.getAssets().open(ASSET_NAME)) {
+            properties.load(input);
+        }
+        String value = properties.getProperty(PROXY_ENCRYPTION_PUBLIC_KEY_PEM);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IOException("缺少受信任的 Proxy AuthConnect 公钥配置");
+        }
+        return value.trim().replace("\\n", "\n");
     }
 
     static String resolveServiceRelativeUrl(String baseUrl, String relativeUrl) {

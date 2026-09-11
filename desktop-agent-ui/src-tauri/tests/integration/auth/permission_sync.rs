@@ -91,10 +91,7 @@ async fn permission_sync_uses_bearer_auth_and_accepts_a_rolling_token() {
     );
     let selection = snapshot.proxy_entry_selection();
     assert_eq!(selection.entries.len(), 1);
-    assert_eq!(
-        selection.selected_proxy_entry_ids,
-        ["pxy_shanghai"]
-    );
+    assert_eq!(selection.selected_proxy_entry_ids, ["pxy_shanghai"]);
     assert!(!serde_json::to_string(&selection)
         .unwrap()
         .contains("proxy.example.com"));
@@ -129,14 +126,9 @@ async fn proxy_entry_selection_sends_and_accepts_multiple_ids() {
     .to_string();
     let (base_url, server) = respond_once("200 OK", body).await;
     let ids = vec!["pxy_a".to_string(), "pxy_b".to_string()];
-    let snapshot = select_agent_proxy_entry_snapshot(
-        &base_url,
-        &"A".repeat(43),
-        "alice",
-        &ids,
-    )
-    .await
-    .unwrap();
+    let snapshot = select_agent_proxy_entry_snapshot(&base_url, &"A".repeat(43), "alice", &ids)
+        .await
+        .unwrap();
     let request = server.await.unwrap();
     assert!(request.starts_with("PUT /api/v1/agent/proxy-entry HTTP/1.1"));
     assert!(request.contains(r#""proxy_entry_ids":["pxy_a","pxy_b"]"#));

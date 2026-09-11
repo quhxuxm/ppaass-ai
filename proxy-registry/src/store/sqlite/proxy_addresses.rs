@@ -22,7 +22,9 @@ pub(super) async fn fetch_proxy_address(
     connection: &mut SqliteConnection,
     proxy_address_id: &str,
 ) -> Result<Option<ProxyAddress>> {
-    let query = sqlx::AssertSqlSafe(format!("SELECT {PROXY_ADDRESS_SELECT} FROM proxy_addresses WHERE proxy_address_id = ?"));
+    let query = sqlx::AssertSqlSafe(format!(
+        "SELECT {PROXY_ADDRESS_SELECT} FROM proxy_addresses WHERE proxy_address_id = ?"
+    ));
     sqlx::query(query)
         .bind(proxy_address_id)
         .fetch_optional(&mut *connection)

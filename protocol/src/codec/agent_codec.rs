@@ -45,7 +45,7 @@ impl Decoder for AgentCodec {
                         )
                     })?;
                 let expected_type = match &response {
-                    ProxyResponse::Auth(_) => MessageType::AuthResponse,
+                    ProxyResponse::AuthConnect(_) => MessageType::AuthConnectResponse,
                     ProxyResponse::Connect(_) => MessageType::ConnectResponse,
                     ProxyResponse::Data(_) => MessageType::Data,
                     ProxyResponse::Error { .. } => MessageType::Error,
@@ -71,9 +71,7 @@ impl Encoder<ProxyRequest> for AgentCodec {
             ProxyRequest::Data(packet) => (MessageType::Data, data_packet_codec::encode(packet)?),
             item => {
                 let message_type = match &item {
-                    ProxyRequest::Auth(_) => MessageType::AuthRequest,
-                    ProxyRequest::Connect(_) => MessageType::ConnectRequest,
-                    ProxyRequest::SpeedTest(_) => MessageType::SpeedTestRequest,
+                    ProxyRequest::AuthConnect(_) => MessageType::AuthConnectRequest,
                     ProxyRequest::Data(_) => unreachable!(),
                 };
                 let payload = bitcode::serialize(&item).map_err(|e| {

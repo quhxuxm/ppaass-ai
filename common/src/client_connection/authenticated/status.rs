@@ -171,7 +171,7 @@ pub fn subscribe_verified_proxy_auth_statuses() -> broadcast::Receiver<VerifiedP
 }
 
 /// Extract a verified authentication failure code from the `io::Error`
-/// returned directly by [`AuthenticatedConnection::authenticate_stream`].
+/// returned directly by an AuthConnect establishment method.
 pub fn auth_failure_code(error: &std::io::Error) -> Option<AuthFailureCode> {
     error
         .get_ref()

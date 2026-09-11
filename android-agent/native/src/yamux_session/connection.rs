@@ -165,13 +165,13 @@ impl AndroidYamuxSessionManager {
             let _permit = self.direct_tcp_connects.acquire().await.map_err(|_| {
                 AndroidAgentError::Connection("Android TCP connect limiter closed".into())
             })?;
-            let connection = AuthenticatedConnection::connect(self.config.as_ref())
-                .await
-                .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
-            let (stream, _stream_id) = connection
-                .connect_to_target(address, TransportProtocol::Tcp)
-                .await
-                .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
+            let (stream, _stream_id) = AuthenticatedConnection::connect_target(
+                self.config.as_ref(),
+                address,
+                TransportProtocol::Tcp,
+            )
+            .await
+            .map_err(|err| AndroidAgentError::Connection(err.to_string()))?;
             Ok(AndroidYamuxTargetStream::Direct(stream))
         };
 

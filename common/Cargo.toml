@@ -18,6 +18,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 futures.workspace = true
 bytes.workspace = true
+bitcode.workspace = true
 protocol = { path = "../protocol" }
 hex.workspace = true
 hickory-proto.workspace = true

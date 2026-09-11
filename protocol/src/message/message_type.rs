@@ -3,9 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum MessageType {
-    AuthRequest = 1,
-    AuthResponse = 2,
-    ConnectRequest = 3,
+    AuthConnectRequest = 1,
+    AuthConnectResponse = 2,
     ConnectResponse = 4,
     Data = 5,
     Error = 6,

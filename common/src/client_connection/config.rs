@@ -168,6 +168,11 @@ pub trait ClientConnectionConfig: Debug {
     /// 用于加密的私钥 PEM
     fn private_key_pem(&self) -> Result<String, String>;
 
+    /// Pinned Proxy RSA encryption public key PEM used by TCP AuthConnect.
+    /// This key is independent from the Agent identity key and is provisioned
+    /// by the trusted deployment channel rather than the data connection.
+    fn proxy_encryption_public_key_pem(&self) -> Result<String, String>;
+
     /// Parsed private key shared by short-lived TCP targets and UDP sessions.
     /// The bounded cache avoids repeating PEM/ASN.1 parsing for every flow.
     fn private_key_pair(&self) -> Result<Arc<RsaKeyPair>, String> {

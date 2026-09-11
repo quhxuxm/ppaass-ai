@@ -82,6 +82,14 @@ impl<'a> ClientConnectionConfig for AgentClientConfig<'a> {
         read_to_string(&self.config.private_key_path).map_err(|e| e.to_string())
     }
 
+    fn proxy_encryption_public_key_pem(&self) -> std::result::Result<String, String> {
+        let path = self.config.proxy_encryption_public_key_path.trim();
+        if path.is_empty() {
+            return Err("proxy_encryption_public_key_path is not configured".to_string());
+        }
+        read_to_string(path).map_err(|e| e.to_string())
+    }
+
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(self.config.connect_timeout_secs)
     }
@@ -141,11 +149,7 @@ pub(super) async fn new_direct_tcp_target_stream(
         bind_interface,
         proxy_affinity,
     );
-    let connection = AuthenticatedConnection::connect(&config_adapter)
-        .await
-        .map_err(|e| AgentError::Connection(e.to_string()))?;
-    connection
-        .connect_to_target(address, TransportProtocol::Tcp)
+    AuthenticatedConnection::connect_target(&config_adapter, address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
 }

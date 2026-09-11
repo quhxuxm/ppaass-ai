@@ -175,7 +175,10 @@ fn validate_permission_sync_response(
         }
         validate_agent_proxy_entries(
             profile.proxy_entries.as_deref().unwrap_or_default(),
-            profile.selected_proxy_entry_ids.as_deref().unwrap_or_default(),
+            profile
+                .selected_proxy_entry_ids
+                .as_deref()
+                .unwrap_or_default(),
         )?;
     } else if response.key_state == "active" {
         return Err("权限同步缺少 active 用户配置".to_string());
