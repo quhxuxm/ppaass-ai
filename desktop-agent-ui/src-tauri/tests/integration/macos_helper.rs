@@ -88,6 +88,20 @@ fn helper_version_handshake_uses_explicit_protocol_version() {
 }
 
 #[test]
+fn helper_binary_match_requires_identical_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("desktop-agent-ui");
+    let installed = directory.path().join("ppaass-desktop-agent");
+    fs::write(&source, b"same helper binary").unwrap();
+    fs::write(&installed, b"same helper binary").unwrap();
+
+    assert!(macos_tun_helper_binary_matches(&source, &installed).unwrap());
+
+    fs::write(&installed, b"diff helper binary").unwrap();
+    assert!(!macos_tun_helper_binary_matches(&source, &installed).unwrap());
+}
+
+#[test]
 fn cleanup_request_fails_closed_when_old_helper_rejects_it() {
     let directory = tempfile::tempdir().unwrap();
     let (mut client, server_stream) = UnixStream::pair().unwrap();

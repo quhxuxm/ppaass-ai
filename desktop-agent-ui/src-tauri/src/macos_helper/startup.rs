@@ -64,17 +64,32 @@ pub(crate) fn ensure_macos_tun_helper_from_source(
     logs: &UiLogBuffer,
 ) -> Result<(), String> {
     let socket_path = macos_tun_helper_socket(config);
-    match macos_tun_helper_status(config) {
+    let helper_status = match macos_tun_helper_status(config) {
+        MacosTunHelperStatus::Current => {
+            let installed = Path::new(TUN_HELPER_INSTALL_PATH);
+            if macos_tun_helper_binary_matches(source, installed)? {
+                MacosTunHelperStatus::Current
+            } else {
+                logs.push(format!(
+                    "TUN helper 协议兼容，但二进制与当前 App 不一致：{}，正在请求管理员授权更新",
+                    installed.display()
+                ));
+                MacosTunHelperStatus::Outdated
+            }
+        }
+        status => status,
+    };
+    match helper_status {
         MacosTunHelperStatus::Current => {
             logs.push(format!(
-                "TUN helper 协议版本已是当前版本：{}",
+                "TUN helper 协议和二进制均为当前版本：{}",
                 TUN_HELPER_PROTOCOL_VERSION
             ));
             return Ok(());
         }
         MacosTunHelperStatus::Missing => logs.push("TUN helper 未安装，正在请求管理员授权安装"),
         MacosTunHelperStatus::Outdated => logs.push(format!(
-            "TUN helper 协议版本不匹配，正在请求管理员授权更新到版本 {}",
+            "TUN helper 协议版本或二进制不匹配，正在请求管理员授权更新到版本 {}",
             TUN_HELPER_PROTOCOL_VERSION
         )),
         MacosTunHelperStatus::NeedsRestart => {
