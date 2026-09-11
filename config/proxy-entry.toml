@@ -12,7 +12,6 @@ registry_control_token_path = "/var/lib/ppaass-entry/secrets/registry-control-to
 authorization_database_path = "/var/lib/ppaass-entry/authorization.sqlite3"
 # AuthConnect 仅用此密钥解封 Agent 每次生成的临时 AES-256-GCM 密钥；
 # 请将私钥设为仅 proxy-entry 服务账号可读，并把对应公钥固定部署到 Agent。
-auth_connect_private_key_path = "/var/lib/ppaass-entry/secrets/auth-connect-private-key.pem"
 
 # 日志级别：trace、debug、info、warn、error
 # 远端生产配置保留 warn，便于看到连接失败/带宽软上限等异常，又避免 debug/info 带来的额外 I/O。

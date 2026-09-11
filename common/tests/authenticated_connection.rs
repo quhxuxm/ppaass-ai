@@ -3,9 +3,8 @@ use common::client_connection::authenticated::{AuthenticatedConnection, auth_fai
 use futures::{SinkExt, StreamExt};
 use protocol::crypto::{RsaKeyPair, verify_pss_sha256};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_OAEP_LABEL, TCP_MASTER_SECRET_LEN, TcpSessionCipher, TcpSessionRole,
-    open_auth_connect_intent, tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
-    tcp_auth_connect_transcript_hash,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_MASTER_SECRET_LEN, TcpSessionCipher,
+    TcpSessionRole, tcp_auth_connect_request_transcript, tcp_auth_connect_transcript_hash,
 };
 use protocol::{
     Address, AuthConnectIntent, AuthConnectResponse, AuthFailureCode, CipherState, CompressionMode,
@@ -19,7 +18,6 @@ use tokio_util::codec::Framed;
 struct TestConfig {
     username: String,
     private_key_pem: String,
-    proxy_public_key_pem: String,
 }
 
 impl fmt::Debug for TestConfig {
@@ -38,9 +36,6 @@ impl ClientConnectionConfig for TestConfig {
     fn private_key_pem(&self) -> Result<String, String> {
         Ok(self.private_key_pem.clone())
     }
-    fn proxy_encryption_public_key_pem(&self) -> Result<String, String> {
-        Ok(self.proxy_public_key_pem.clone())
-    }
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(5)
     }
@@ -50,13 +45,11 @@ impl ClientConnectionConfig for TestConfig {
 }
 
 #[tokio::test]
-async fn auth_connect_encrypts_the_intent_and_needs_no_connect_request() {
+async fn auth_connect_returns_a_session_secret_to_the_authenticated_user() {
     let identity = RsaKeyPair::generate(2048).unwrap();
-    let proxy_key = RsaKeyPair::generate(2048).unwrap();
     let config = TestConfig {
         username: "alice".to_string(),
         private_key_pem: identity.private_key_to_pem().unwrap(),
-        proxy_public_key_pem: proxy_key.public_key_to_pem().unwrap(),
     };
     let expected = Address::Domain {
         host: "example.com".to_string(),
@@ -71,43 +64,20 @@ async fn auth_connect_encrypts_the_intent_and_needs_no_connect_request() {
         let ProxyRequest::AuthConnect(request) = reader.next().await.unwrap().unwrap() else {
             panic!("expected AuthConnect")
         };
-        let aad = tcp_auth_connect_intent_aad(
-            request.version,
-            &request.username,
-            request.timestamp,
-            &request.client_nonce,
-            &request.encrypted_request_secret,
-            &request.intent_nonce,
-        )
-        .unwrap();
-        let transcript =
-            tcp_auth_connect_request_transcript(&aad, &request.encrypted_intent).unwrap();
+        let transcript = tcp_auth_connect_request_transcript(
+            request.version, &request.username, request.timestamp, &request.client_nonce,
+        ).unwrap();
         let public =
             RsaKeyPair::from_public_key_pem(&identity.public_key_to_pem().unwrap()).unwrap();
         verify_pss_sha256(&public, &transcript, &request.signature).unwrap();
-        let secret: [u8; TCP_MASTER_SECRET_LEN] = proxy_key
-            .decrypt_oaep_sha256_labelled(
-                TCP_AUTH_CONNECT_OAEP_LABEL,
-                &request.encrypted_request_secret,
-            )
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let encoded = open_auth_connect_intent(
-            &secret,
-            &request.intent_nonce,
-            &aad,
-            &request.encrypted_intent,
-        )
-        .unwrap();
-        let AuthConnectIntent::Connect(intent) = bitcode::deserialize(&encoded).unwrap() else {
-            panic!("expected connect intent")
-        };
-        assert_eq!(intent.address, server_expected);
+        let secret = [9; TCP_MASTER_SECRET_LEN];
         let server_nonce = [5; 32];
         let session_id = [6; 16];
         writer
             .send(ProxyResponse::AuthConnect(AuthConnectResponse::success(
+                protocol::crypto::encrypt_oaep_sha256_labelled(
+                    &public, TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &secret,
+                ).unwrap(),
                 server_nonce,
                 session_id,
             )))
@@ -123,6 +93,9 @@ async fn auth_connect_encrypts_the_intent_and_needs_no_connect_request() {
         )
         .unwrap();
         state.set_session_cipher(Arc::new(cipher)).unwrap();
+        let ProxyRequest::AuthConnectIntent(AuthConnectIntent::Connect(intent)) =
+            reader.next().await.unwrap().unwrap() else { panic!("expected protected intent") };
+        assert_eq!(intent.address, server_expected);
         writer
             .send(ProxyResponse::Connect(ConnectResponse {
                 request_id: intent.request_id,
@@ -145,11 +118,9 @@ async fn auth_connect_encrypts_the_intent_and_needs_no_connect_request() {
 #[tokio::test]
 async fn terminal_auth_connect_failure_is_reported_to_callers() {
     let identity = RsaKeyPair::generate(2048).unwrap();
-    let proxy_key = RsaKeyPair::generate(2048).unwrap();
     let config = TestConfig {
         username: "alice".to_string(),
         private_key_pem: identity.private_key_to_pem().unwrap(),
-        proxy_public_key_pem: proxy_key.public_key_to_pem().unwrap(),
     };
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
     let server = async move {

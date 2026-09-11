@@ -3,8 +3,6 @@
 
 listen_addr = "0.0.0.0:10080"
 proxy_registry_url = "https://140.82.30.214"
-# 由受信任安装包/部署渠道下发的 Proxy AuthConnect RSA 公钥；不可从数据连接动态获取。
-proxy_encryption_public_key_path = "data/proxy-entry-public.pem"
 # UDP 代理通道：auto 按 session 在加密 UDP 超时后回退 TCP/Yamux；udp 强制加密 UDP；tcp 强制 TCP/Yamux。
 transport_mode = "udp"
 # 仅 UDP relay 使用的已认证 UDP 会话池大小；TCP 业务不进入该会话池。

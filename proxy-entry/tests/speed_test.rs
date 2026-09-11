@@ -14,7 +14,6 @@ use support::TestAuthorizationProvider;
 struct TestConfig {
     username: String,
     private_key_pem: String,
-    proxy_public_key_pem: String,
 }
 
 impl ClientConnectionConfig for TestConfig {
@@ -26,9 +25,6 @@ impl ClientConnectionConfig for TestConfig {
     }
     fn private_key_pem(&self) -> Result<String, String> {
         Ok(self.private_key_pem.clone())
-    }
-    fn proxy_encryption_public_key_pem(&self) -> Result<String, String> {
-        Ok(self.proxy_public_key_pem.clone())
     }
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(5)
@@ -49,7 +45,6 @@ async fn speed_test_requires_tcp_connect_permission() {
 
 async fn run_speed_test(allowed: bool) -> std::io::Result<u64> {
     let identity = RsaKeyPair::generate(2048).unwrap();
-    let proxy_key = Arc::new(RsaKeyPair::generate(2048).unwrap());
     let username = "speed-user".to_string();
     let user = UserConfig {
         username: username.clone(),
@@ -70,7 +65,6 @@ async fn run_speed_test(allowed: bool) -> std::io::Result<u64> {
         server_io,
         CompressionMode::None,
         proxy_config.clone(),
-        proxy_key.clone(),
         users.clone(),
         Arc::new(EgressState::new(None, None).unwrap()),
         AccessRecorder::default(),
@@ -82,12 +76,11 @@ async fn run_speed_test(allowed: bool) -> std::io::Result<u64> {
             .authenticate(proxy_config.as_ref(), user)
             .await
             .unwrap();
-        server.handle_initial_intent().await.unwrap();
+        server.handle_authenticated_intent().await.unwrap();
     };
     let client = TestConfig {
         username,
         private_key_pem: identity.private_key_to_pem().unwrap(),
-        proxy_public_key_pem: proxy_key.public_key_to_pem().unwrap(),
     };
     let client_task = async move {
         AuthenticatedConnection::establish_speed_test(

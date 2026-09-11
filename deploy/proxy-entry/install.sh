@@ -24,10 +24,6 @@ validate_entry_id_for_instances "$ENTRY_ID" "$INSTANCE_COUNT"
 "$bundle/validate-registry-url.sh" "$REGISTRY_URL"
 validate_advertised_address "$ADVERTISED_ADDRESS"
 case "$RUNTIME_ROOT" in /opt/*|/srv/*) ;; *) echo "Unsafe RUNTIME_ROOT" >&2; exit 2 ;; esac
-[ -s "$bundle/auth-connect-private-key.pem" ] || {
-    echo "Missing AuthConnect private key in deployment bundle." >&2
-    exit 2
-}
 if [ "$(id -u)" -ne 0 ]; then
     echo "Entry installation must run as root." >&2
     exit 1
@@ -124,8 +120,6 @@ install -d -o "$service_user" -g "$service_user" -m 0750 \
 install -m 0755 "$bundle/proxy-entry" "$release_root/proxy-entry"
 install -o "$service_user" -g "$service_user" -m 0600 \
     "$bundle/control-token" "$secret_root/registry-control-token"
-install -o "$service_user" -g "$service_user" -m 0600 \
-    "$bundle/auth-connect-private-key.pem" "$secret_root/auth-connect-private-key.pem"
 
 for instance in $(seq 1 "$INSTANCE_COUNT"); do
     instance_port="$(proxy_instance_port "$instance")"
@@ -146,7 +140,6 @@ for instance in $(seq 1 "$INSTANCE_COUNT"); do
         -e "s|^advertised_address = .*|advertised_address = \"$instance_address\"|" \
         -e "s|^registry_url = .*|registry_url = \"$REGISTRY_URL\"|" \
         -e "s|^registry_control_token_path = .*|registry_control_token_path = \"$secret_root/registry-control-token\"|" \
-        -e "s|^auth_connect_private_key_path = .*|auth_connect_private_key_path = \"$secret_root/auth-connect-private-key.pem\"|" \
         -e "s|^authorization_database_path = .*|authorization_database_path = \"$authorization_database\"|" \
         "$bundle/proxy-entry.toml" >"$instance_release/proxy-entry.toml"
     chmod 0644 "$instance_release/proxy-entry.toml"

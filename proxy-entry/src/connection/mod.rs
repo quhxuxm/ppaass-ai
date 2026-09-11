@@ -44,9 +44,9 @@ use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use protocol::{
+    use protocol::{
     Address, AuthConnectIntent, AuthConnectRequest, AuthFailureCode, CipherState, CompressionMode,
-    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, RsaKeyPair,
+    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse,
     TransportProtocol, UdpRelayPacket,
 };
 use std::io;
@@ -88,8 +88,6 @@ pub struct ServerConnection {
     cipher_state: Arc<CipherState>,
     // 首帧在查询用户前已经读走，认证阶段继续校验其签名与密文。
     pending_auth_connect: Option<AuthConnectRequest>,
-    pending_initial_intent: Option<AuthConnectIntent>,
-    auth_connect_key: Arc<RsaKeyPair>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
@@ -101,7 +99,6 @@ impl ServerConnection {
         stream: S,
         compression_mode: CompressionMode,
         proxy_config: Arc<ProxyConfig>,
-        auth_connect_key: Arc<RsaKeyPair>,
         user_manager: Arc<UserManager>,
         egress_state: Arc<EgressState>,
         access_recorder: AccessRecorder,
@@ -122,8 +119,6 @@ impl ServerConnection {
             authorization: None,
             cipher_state,
             pending_auth_connect: None,
-            pending_initial_intent: None,
-            auth_connect_key,
             proxy_config,
             egress_state,
             access_recorder,

@@ -72,12 +72,10 @@ registry_url = "http://127.0.0.1:8797"
 registry_control_token_path = "data/proxy-control-token"
 ```
 
-Before starting an Entry, generate an RSA key pair dedicated to AuthConnect. Deploy the
-private PEM to every Entry that an Agent may be assigned (mode `0600`, readable only by the
-`proxy-entry` service account), and distribute the matching public PEM with each Agent build.
-The private key only unwraps a newly generated per-connection AES-256-GCM key; it is not an
-Agent credential. The supplied GitHub deployment workflow reads the private PEM from the
-`ENTRY_PRODUCTION_AUTH_CONNECT_PRIVATE_KEY` environment secret.
+AuthConnect uses each user's existing RSA identity key. The Agent keeps its private PEM locally;
+the Entry reads the matching public PEM from its authorization snapshot and encrypts a newly
+generated per-connection AES-256-GCM key back to that user. No AuthConnect private key is
+deployed to the Entry or stored in GitHub Actions.
 
 2. Start Proxy Entry:
 
@@ -115,7 +113,7 @@ Edit `config/agent.toml` with the Proxy Registry endpoint, then sign in from the
 assigns the runtime Proxy addresses; they are not stored in `agent.toml`. The Agent downloads and
 applies the approved managed credential automatically.
 
-Set `proxy_encryption_public_key_path` to the matching trusted AuthConnect public PEM before
+Use the user's existing RSA private PEM before
 starting the Agent. The Agent refuses traffic when this key is missing: it must be supplied by
 the package or a protected local deployment channel, never by the unauthenticated data path.
 

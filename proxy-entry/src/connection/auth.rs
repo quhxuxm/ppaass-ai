@@ -1,16 +1,14 @@
 //! AuthConnect handshake and initial-operation dispatch.
 //!
-//! The Agent proves its identity with RSA-PSS, sends a per-request secret
-//! wrapped to the Proxy RSA key, and carries the target intent only as AEAD
-//! ciphertext. No post-auth ConnectRequest is accepted by protocol v6.
+//! The Agent proves its identity with RSA-PSS. The Proxy returns a newly
+//! generated session secret encrypted to that user's registered RSA public key.
 
 use super::*;
-use protocol::crypto::{parse_public_key_pem_cached, verify_pss_sha256};
+use protocol::crypto::{encrypt_oaep_sha256_labelled, parse_public_key_pem_cached, verify_pss_sha256};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_OAEP_LABEL, TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN,
     TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN, TcpSessionCipher, TcpSessionRole,
-    open_auth_connect_intent, tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
-    tcp_auth_connect_transcript_hash,
+    tcp_auth_connect_request_transcript, tcp_auth_connect_transcript_hash,
 };
 use protocol::{AuthConnectResponse, ProxyRequest, ProxyResponse};
 use rand::Rng;
@@ -70,11 +68,6 @@ impl ServerConnection {
         .await
     }
 
-    async fn reject_authentication(&mut self, detail: &str) -> Result<()> {
-        self.send_auth_error().await?;
-        Err(ProxyError::Authentication(detail.to_string()))
-    }
-
     async fn send_terminal_auth_error(
         &mut self,
         code: AuthFailureCode,
@@ -98,19 +91,13 @@ impl ServerConnection {
         request
             .validate_shape()
             .map_err(|_| ProxyError::Authentication("Invalid AuthConnect request".to_string()))?;
-        let intent_aad = tcp_auth_connect_intent_aad(
+        let transcript = tcp_auth_connect_request_transcript(
             request.version,
             &request.username,
             request.timestamp,
             &request.client_nonce,
-            &request.encrypted_request_secret,
-            &request.intent_nonce,
         )
         .map_err(|_| ProxyError::Authentication("Invalid AuthConnect request".to_string()))?;
-        let transcript =
-            tcp_auth_connect_request_transcript(&intent_aad, &request.encrypted_intent).map_err(
-                |_| ProxyError::Authentication("Invalid AuthConnect request".to_string()),
-            )?;
         let transcript_hash = tcp_auth_connect_transcript_hash(&transcript);
 
         if request.username != user_config.username {
@@ -163,51 +150,21 @@ impl ServerConnection {
             return Err(ProxyError::Authentication("User expired".to_string()));
         }
 
-        let request_secret = match self.auth_connect_key.decrypt_oaep_sha256_labelled(
-            TCP_AUTH_CONNECT_OAEP_LABEL,
-            &request.encrypted_request_secret,
-        ) {
-            Ok(secret) => secret,
-            Err(_) => {
-                return self
-                    .reject_authentication("Invalid AuthConnect secret")
-                    .await;
-            }
-        };
-        let request_secret: [u8; TCP_MASTER_SECRET_LEN] = match request_secret.try_into() {
-            Ok(secret) => secret,
-            Err(_) => {
-                return self
-                    .reject_authentication("Invalid AuthConnect secret length")
-                    .await;
-            }
-        };
-        let encoded_intent = match open_auth_connect_intent(
-            &request_secret,
-            &request.intent_nonce,
-            &intent_aad,
-            &request.encrypted_intent,
-        ) {
-            Ok(intent) => intent,
-            Err(_) => {
-                return self
-                    .reject_authentication("Invalid encrypted target intent")
-                    .await;
-            }
-        };
-        let initial_intent: AuthConnectIntent = match bitcode::deserialize(&encoded_intent) {
-            Ok(intent) => intent,
-            Err(_) => {
-                return self
-                    .reject_authentication("Invalid encrypted target intent")
-                    .await;
-            }
-        };
-
+        let mut request_secret = [0_u8; TCP_MASTER_SECRET_LEN];
         let mut server_nonce = [0_u8; TCP_SERVER_NONCE_LEN];
         let mut session_id = [0_u8; TCP_SESSION_ID_LEN];
-        rand::rng().fill_bytes(&mut server_nonce);
-        rand::rng().fill_bytes(&mut session_id);
+        {
+            let mut rng = rand::rng();
+            rng.fill_bytes(&mut request_secret);
+            rng.fill_bytes(&mut server_nonce);
+            rng.fill_bytes(&mut session_id);
+        }
+        let encrypted_session_secret = encrypt_oaep_sha256_labelled(
+            &user_public_key,
+            TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL,
+            &request_secret,
+        )
+        .map_err(|_| ProxyError::Authentication("Failed to encrypt session secret".to_string()))?;
         let session_cipher = TcpSessionCipher::new(
             TcpSessionRole::Proxy,
             request_secret,
@@ -222,6 +179,7 @@ impl ServerConnection {
         let authorization = ConnectionAuthorization::new(self.user_manager.clone(), &user_config)?;
 
         self.send_response(ProxyResponse::AuthConnect(AuthConnectResponse::success(
+            encrypted_session_secret,
             server_nonce,
             session_id,
         )))
@@ -230,7 +188,6 @@ impl ServerConnection {
             .set_session_cipher(Arc::new(session_cipher))?;
         self.user_config = Some(user_config);
         self.authorization = Some(authorization);
-        self.pending_initial_intent = Some(initial_intent);
         debug!(version = TCP_HANDSHAKE_VERSION, "AuthConnect 认证成功");
         Ok(())
     }
@@ -242,12 +199,17 @@ impl ServerConnection {
             .map_err(|error| ProxyError::Connection(format!("Failed to send response: {error}")))
     }
 
-    pub async fn handle_initial_intent(&mut self) -> Result<()> {
-        let intent = self.pending_initial_intent.take().ok_or_else(|| {
+    pub async fn handle_authenticated_intent(&mut self) -> Result<()> {
+        let request = self.read_request().await?.ok_or_else(|| {
             ProxyError::Authentication(
-                "Authenticated stream is missing its initial intent".to_string(),
+                "Authenticated stream closed before its initial intent".to_string(),
             )
         })?;
+        let ProxyRequest::AuthConnectIntent(intent) = request else {
+            return Err(ProxyError::Authentication(
+                "Expected encrypted AuthConnect intent".to_string(),
+            ));
+        };
         match intent {
             AuthConnectIntent::Connect(request) => self.handle_connect(request).await,
             AuthConnectIntent::SpeedTest(request) => self.handle_speed_test(request).await,

@@ -38,6 +38,7 @@ impl Decoder for ProxyCodec {
                     })?;
                 let expected_type = match &request {
                     ProxyRequest::AuthConnect(_) => MessageType::AuthConnectRequest,
+                    ProxyRequest::AuthConnectIntent(_) => MessageType::AuthConnectIntent,
                     ProxyRequest::Data(_) => MessageType::Data,
                 };
                 if message.message_type != expected_type {

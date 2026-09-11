@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum MessageType {
     AuthConnectRequest = 1,
     AuthConnectResponse = 2,
+    AuthConnectIntent = 3,
     ConnectResponse = 4,
     Data = 5,
     Error = 6,

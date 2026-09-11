@@ -89,10 +89,9 @@ App 会校验账号状态、密钥版本和有效期，从 Proxy Registry 下载
 复制登录密码、托管私钥及配置。旧版本留在 SharedPreferences 中的 username 和明文私钥
 会在升级启动时清除。
 
-同一文件还必须包含 `proxy_encryption_public_key_pem`：这是与全部已分配 Proxy Entry
-共享的 AuthConnect RSA 公钥 PEM。PEM 的换行在 properties 中写为 `\n`。它只用于 RSA-OAEP
-封装每次连接随机生成的 AES-256-GCM 密钥；目标地址和端口本身由 AES-256-GCM 加密。该公钥
-必须由已签名的安装包或受保护的部署渠道提供，不能从未经认证的数据连接下载。
+AuthConnect 直接使用用户已有的 RSA 密钥：Entry 从授权快照读取用户公钥，生成每次连接专用的
+AES-256-GCM 会话密钥并用该公钥加密回传；Agent 仅在本地使用其托管私钥解密。无需在安装包、
+properties、Entry 主机或 GitHub Actions 中配置共享的 Entry 私钥或公钥。
 
 Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 `http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Registry 端口>`

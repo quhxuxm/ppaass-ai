@@ -28,10 +28,6 @@ impl ClientConnectionConfig for KeyConfig {
         Ok(self.0.clone())
     }
 
-    fn proxy_encryption_public_key_pem(&self) -> Result<String, String> {
-        Ok("unused-test-proxy-key".to_string())
-    }
-
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(1)
     }

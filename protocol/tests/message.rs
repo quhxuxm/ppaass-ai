@@ -52,7 +52,7 @@ fn structured_and_generic_failures_have_safe_shapes() {
 
 #[test]
 fn successful_response_cannot_carry_a_failure_code() {
-    let mut response = AuthConnectResponse::success([1; 32], [2; 16]);
+    let mut response = AuthConnectResponse::success(vec![1; 256], [1; 32], [2; 16]);
     response.failure_code = Some(AuthFailureCode::UserExpired);
     assert!(response.validate_shape().is_err());
 }

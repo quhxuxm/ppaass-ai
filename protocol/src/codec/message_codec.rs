@@ -71,6 +71,7 @@ impl MessageCodec {
         let message_type = match frame[1] {
             1 => MessageType::AuthConnectRequest,
             2 => MessageType::AuthConnectResponse,
+            3 => MessageType::AuthConnectIntent,
             4 => MessageType::ConnectResponse,
             5 => MessageType::Data,
             6 => MessageType::Error,

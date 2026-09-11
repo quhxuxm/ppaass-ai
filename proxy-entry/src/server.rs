@@ -14,8 +14,7 @@ use common::{
     spawn_guarded,
 };
 use futures::StreamExt;
-use protocol::{CompressionMode, RsaKeyPair};
-use std::fs;
+use protocol::CompressionMode;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +42,6 @@ pub struct ProxyServer {
     access_recorder: AccessRecorder,
     // Registry 控制面在监听成功后启动注册心跳和授权事件后台任务。
     control_plane: Arc<RemoteControlPlane>,
-    auth_connect_key: Arc<RsaKeyPair>,
 }
 
 #[derive(Clone)]
@@ -54,14 +52,12 @@ struct ConnectionContext {
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
     compression_mode: CompressionMode,
-    auth_connect_key: Arc<RsaKeyPair>,
 }
 
 impl ProxyServer {
     #[instrument(skip(config))]
     pub async fn new(config: ProxyConfig) -> Result<Self> {
         let config = Arc::new(config);
-        let auth_connect_key = Arc::new(load_auth_connect_key(&config)?);
         let control_plane = RemoteControlPlane::new(&config).await?;
         info!(
             entry_id = config.entry_id,
@@ -84,7 +80,6 @@ impl ProxyServer {
             egress_state,
             access_recorder,
             control_plane,
-            auth_connect_key,
         })
     }
 
@@ -127,7 +122,6 @@ impl ProxyServer {
                                 egress_state: self.egress_state.clone(),
                                 access_recorder: self.access_recorder.clone(),
                                 compression_mode: self.config.get_compression_mode(),
-                                auth_connect_key: self.auth_connect_key.clone(),
                             };
                             spawn_guarded("proxy inbound connection", async move {
                                 if let Err(e) = handle_connection(context, stream).await {
@@ -266,7 +260,6 @@ where
         egress_state,
         access_recorder,
         compression_mode,
-        auth_connect_key,
     } = context;
 
     // ServerConnection 持有共享 EgressState，后续 TCP/UDP 请求都通过它出站。
@@ -274,7 +267,6 @@ where
         stream,
         compression_mode,
         proxy_config.clone(),
-        auth_connect_key,
         user_manager.clone(),
         egress_state,
         access_recorder,
@@ -330,22 +322,5 @@ where
     };
 
     debug!(username, "AuthConnect 已完成，执行初始请求");
-    connection.handle_initial_intent().await
-}
-
-fn load_auth_connect_key(config: &ProxyConfig) -> Result<RsaKeyPair> {
-    let path = config.auth_connect_private_key_path.trim();
-    if path.is_empty() {
-        return Err(crate::error::ProxyError::Configuration(
-            "auth_connect_private_key_path is required".to_string(),
-        ));
-    }
-    let pem = fs::read_to_string(path).map_err(|error| {
-        crate::error::ProxyError::Configuration(format!(
-            "failed to read auth_connect_private_key_path: {error}"
-        ))
-    })?;
-    RsaKeyPair::from_private_key_pem(&pem).map_err(|error| {
-        crate::error::ProxyError::Configuration(format!("invalid AuthConnect RSA key: {error}"))
-    })
+    connection.handle_authenticated_intent().await
 }

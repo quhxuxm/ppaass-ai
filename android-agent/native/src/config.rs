@@ -23,9 +23,6 @@ pub struct AndroidAgentConfig {
     pub username: String,
     pub private_key_pem: String,
     #[serde(default)]
-    pub proxy_encryption_public_key_pem: String,
-
-    #[serde(default)]
     pub transport_mode: TransportMode,
 
     /// UDP manager 维护的原生加密 UDP 会话数。每个会话拥有独立
@@ -73,7 +70,6 @@ impl fmt::Debug for AndroidAgentConfig {
             .field("proxy_address_count", &self.proxy_addrs.len())
             .field("username", &self.username)
             .field("private_key_pem", &RedactedPrivateKey)
-            .field("proxy_encryption_public_key_pem", &RedactedPrivateKey)
             .field("transport_mode", &self.transport_mode)
             .field("udp_session_pool_size", &self.udp_session_pool_size)
             .field(
@@ -149,11 +145,6 @@ impl AndroidAgentConfig {
                 "private_key_pem must not be empty".to_string(),
             ));
         }
-        if self.proxy_encryption_public_key_pem.trim().is_empty() {
-            return Err(AndroidAgentError::Connection(
-                "proxy_encryption_public_key_pem must not be empty".to_string(),
-            ));
-        }
         Ok(())
     }
 
@@ -187,10 +178,6 @@ impl ClientConnectionConfig for AndroidAgentConfig {
 
     fn private_key_pem(&self) -> std::result::Result<String, String> {
         Ok(self.private_key_pem.clone())
-    }
-
-    fn proxy_encryption_public_key_pem(&self) -> std::result::Result<String, String> {
-        Ok(self.proxy_encryption_public_key_pem.clone())
     }
 
     fn timeout_duration(&self) -> Duration {

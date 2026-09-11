@@ -3,11 +3,9 @@ use std::time::Duration;
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
-use protocol::crypto::{encrypt_oaep_sha256_labelled, parse_public_key_pem_cached};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_INTENT_NONCE_LEN, TCP_AUTH_CONNECT_OAEP_LABEL, TCP_AUTH_NONCE_LEN,
-    TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TcpSessionCipher, TcpSessionRole,
-    seal_auth_connect_intent, tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION,
+    TCP_MASTER_SECRET_LEN, TcpSessionCipher, TcpSessionRole, tcp_auth_connect_request_transcript,
     tcp_auth_connect_transcript_hash,
 };
 use protocol::{
@@ -63,41 +61,16 @@ where
         let identity = config
             .private_key_pair()
             .map_err(invalid_configuration_error)?;
-        let proxy_public_key = parse_public_key_pem_cached(
-            &config
-                .proxy_encryption_public_key_pem()
-                .map_err(invalid_configuration_error)?,
-        )
-        .map_err(|error| invalid_configuration_error(error.to_string()))?;
         let timestamp = crate::current_timestamp();
         let mut client_nonce = [0_u8; TCP_AUTH_NONCE_LEN];
-        let mut request_secret = [0_u8; TCP_MASTER_SECRET_LEN];
-        let mut intent_nonce = [0_u8; TCP_AUTH_CONNECT_INTENT_NONCE_LEN];
         rand::rng().fill_bytes(&mut client_nonce);
-        rand::rng().fill_bytes(&mut request_secret);
-        rand::rng().fill_bytes(&mut intent_nonce);
-        let encrypted_request_secret = encrypt_oaep_sha256_labelled(
-            &proxy_public_key,
-            TCP_AUTH_CONNECT_OAEP_LABEL,
-            &request_secret,
-        )
-        .map_err(|_| std::io::Error::other("无法加密 AuthConnect 会话密钥"))?;
-        let intent_aad = tcp_auth_connect_intent_aad(
+        let transcript = tcp_auth_connect_request_transcript(
             TCP_HANDSHAKE_VERSION,
             &username,
             timestamp,
             &client_nonce,
-            &encrypted_request_secret,
-            &intent_nonce,
         )
         .map_err(protocol_input_error)?;
-        let encoded_intent = bitcode::serialize(&intent)
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "初始请求无效"))?;
-        let encrypted_intent =
-            seal_auth_connect_intent(&request_secret, &intent_nonce, &intent_aad, &encoded_intent)
-                .map_err(protocol_input_error)?;
-        let transcript = tcp_auth_connect_request_transcript(&intent_aad, &encrypted_intent)
-            .map_err(protocol_input_error)?;
         let transcript_hash = tcp_auth_connect_transcript_hash(&transcript);
         let signature = identity
             .sign_pss_sha256(&transcript)
@@ -109,9 +82,6 @@ where
                 username: username.clone(),
                 timestamp,
                 client_nonce,
-                encrypted_request_secret,
-                intent_nonce,
-                encrypted_intent,
                 signature,
             }))
             .await
@@ -146,6 +116,14 @@ where
             ));
         }
 
+        let request_secret: [u8; TCP_MASTER_SECRET_LEN] = identity
+            .decrypt_oaep_sha256_labelled(
+                TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL,
+                &response.encrypted_session_secret,
+            )
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥无效"))?
+            .try_into()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥长度无效"))?;
         let session_cipher = TcpSessionCipher::new(
             TcpSessionRole::Agent,
             request_secret,
@@ -158,6 +136,10 @@ where
         cipher_state
             .set_session_cipher(Arc::new(session_cipher))
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话重复初始化"))?;
+        writer
+            .send(ProxyRequest::AuthConnectIntent(intent))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
         publish_verified_active_status(&auth_status_attempt, &username);
         info!("已通过远端 Proxy AuthConnect 认证");
         Ok(Self {

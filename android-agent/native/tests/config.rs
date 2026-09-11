@@ -11,7 +11,7 @@ fn tun_allows_quic_by_default() {
 #[test]
 fn agent_transport_defaults_to_udp() {
     let config: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key"}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
     )
     .unwrap();
     assert_eq!(config.transport_mode, TransportMode::Udp);
@@ -20,7 +20,7 @@ fn agent_transport_defaults_to_udp() {
 #[test]
 fn agent_debug_redacts_private_key() {
     let config: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"super-secret-private-key","proxy_encryption_public_key_pem":"key"}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"super-secret-private-key"}"#,
     )
     .unwrap();
 
@@ -34,7 +34,7 @@ fn agent_debug_redacts_private_key() {
 #[test]
 fn proxy_address_stays_sticky_until_failover_succeeds() {
     let config: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["proxy-a:8080","proxy-b:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key"}"#,
+        r#"{"proxy_addrs":["proxy-a:8080","proxy-b:8080"],"username":"u","private_key_pem":"key"}"#,
     )
     .unwrap();
 
@@ -59,7 +59,7 @@ fn proxy_address_stays_sticky_until_failover_succeeds() {
 #[test]
 fn agent_transport_accepts_auto() {
     let config: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key","transport_mode":"auto"}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","transport_mode":"auto"}"#,
     )
     .unwrap();
     assert_eq!(config.transport_mode, TransportMode::Auto);
@@ -68,19 +68,19 @@ fn agent_transport_accepts_auto() {
 #[test]
 fn udp_session_pool_defaults_to_four_and_is_bounded() {
     let default_config: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key"}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key"}"#,
     )
     .unwrap();
     assert_eq!(default_config.effective_udp_session_pool_size(), 4);
 
     let disabled: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key","udp_session_pool_size":0}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":0}"#,
     )
     .unwrap();
     assert_eq!(disabled.effective_udp_session_pool_size(), 1);
 
     let excessive: AndroidAgentConfig = serde_json::from_str(
-        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","proxy_encryption_public_key_pem":"key","udp_session_pool_size":64}"#,
+        r#"{"proxy_addrs":["127.0.0.1:8080"],"username":"u","private_key_pem":"key","udp_session_pool_size":64}"#,
     )
     .unwrap();
     assert_eq!(excessive.effective_udp_session_pool_size(), 8);

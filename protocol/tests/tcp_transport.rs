@@ -1,10 +1,9 @@
 use protocol::MessageType;
 use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_INTENT_NONCE_LEN, TCP_AUTH_CONNECT_OAEP_LABEL, TCP_AUTH_NONCE_LEN,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_AUTH_NONCE_LEN,
     TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN,
-    TcpDirectionalKeyMaterial, TcpSessionCipher, TcpSessionRole, open_auth_connect_intent,
-    seal_auth_connect_intent, tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
+    TcpDirectionalKeyMaterial, TcpSessionCipher, TcpSessionRole, tcp_auth_connect_request_transcript,
     tcp_auth_connect_transcript_hash,
 };
 use std::sync::Arc;
@@ -46,58 +45,37 @@ fn cipher_pair() -> (TcpSessionCipher, TcpSessionCipher) {
 }
 
 #[test]
-fn auth_connect_signature_and_aead_bind_all_clear_and_secret_fields() {
+fn auth_connect_signature_binds_cleartext_identity_fields() {
     let agent = RsaKeyPair::generate(2048).unwrap();
-    let proxy = RsaKeyPair::generate(2048).unwrap();
-    let proxy_public =
-        RsaKeyPair::from_public_key_pem(&proxy.public_key_to_pem().unwrap()).unwrap();
     let client_nonce = [7; TCP_AUTH_NONCE_LEN];
-    let intent_nonce = [8; TCP_AUTH_CONNECT_INTENT_NONCE_LEN];
-    let secret = [9; TCP_MASTER_SECRET_LEN];
-    let wrapped =
-        encrypt_oaep_sha256_labelled(&proxy_public, TCP_AUTH_CONNECT_OAEP_LABEL, &secret).unwrap();
-    let aad = tcp_auth_connect_intent_aad(
-        TCP_HANDSHAKE_VERSION,
-        "alice",
-        1234,
-        &client_nonce,
-        &wrapped,
-        &intent_nonce,
-    )
-    .unwrap();
-    let ciphertext =
-        seal_auth_connect_intent(&secret, &intent_nonce, &aad, b"target.example:443").unwrap();
-    let transcript = tcp_auth_connect_request_transcript(&aad, &ciphertext).unwrap();
+    let transcript =
+        tcp_auth_connect_request_transcript(TCP_HANDSHAKE_VERSION, "alice", 1234, &client_nonce)
+            .unwrap();
     let signature = agent.sign_pss_sha256(&transcript).unwrap();
     let agent_public =
         RsaKeyPair::from_public_key_pem(&agent.public_key_to_pem().unwrap()).unwrap();
     verify_pss_sha256(&agent_public, &transcript, &signature).unwrap();
-    assert_eq!(
-        open_auth_connect_intent(&secret, &intent_nonce, &aad, &ciphertext).unwrap(),
-        b"target.example:443"
-    );
-    assert!(open_auth_connect_intent(&secret, &[0; 12], &aad, &ciphertext).is_err());
     assert!(verify_pss_sha256(&agent_public, b"changed", &signature).is_err());
     assert_ne!(tcp_auth_connect_transcript_hash(&transcript), [0; 32]);
 }
 
 #[test]
-fn oaep_wrapped_request_secret_can_only_be_opened_by_proxy_key() {
-    let proxy = RsaKeyPair::generate(2048).unwrap();
+fn oaep_wrapped_session_secret_can_only_be_opened_by_user_key() {
+    let user = RsaKeyPair::generate(2048).unwrap();
     let other = RsaKeyPair::generate(2048).unwrap();
-    let public = RsaKeyPair::from_public_key_pem(&proxy.public_key_to_pem().unwrap()).unwrap();
+    let public = RsaKeyPair::from_public_key_pem(&user.public_key_to_pem().unwrap()).unwrap();
     let secret = [3; TCP_MASTER_SECRET_LEN];
     let wrapped =
-        encrypt_oaep_sha256_labelled(&public, TCP_AUTH_CONNECT_OAEP_LABEL, &secret).unwrap();
+        encrypt_oaep_sha256_labelled(&public, TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &secret).unwrap();
     assert_eq!(
-        proxy
-            .decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_OAEP_LABEL, &wrapped)
+        user
+            .decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &wrapped)
             .unwrap(),
         secret
     );
     assert!(
         other
-            .decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_OAEP_LABEL, &wrapped)
+            .decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &wrapped)
             .is_err()
     );
 }

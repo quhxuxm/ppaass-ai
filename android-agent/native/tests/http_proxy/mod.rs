@@ -309,7 +309,6 @@ fn test_config() -> AndroidAgentConfig {
         proxy_affinity: Default::default(),
         username: "test".to_string(),
         private_key_pem: "test".to_string(),
-        proxy_encryption_public_key_pem: "test".to_string(),
         transport_mode: common::TransportMode::Udp,
         udp_session_pool_size: 4,
         async_runtime_stack_size_mb: 4,

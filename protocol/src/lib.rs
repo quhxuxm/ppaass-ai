@@ -20,8 +20,7 @@ pub use message::{
 };
 pub use tcp_transport::{
     AuthFailureCode, TcpDirectionalKeyMaterial, TcpFrameDirection, TcpSessionCipher,
-    TcpSessionRole, open_auth_connect_intent, seal_auth_connect_intent,
-    tcp_auth_connect_intent_aad, tcp_auth_connect_request_transcript,
+    TcpSessionRole, tcp_auth_connect_request_transcript,
     tcp_auth_connect_transcript_hash,
 };
 pub use udp_transport::{
