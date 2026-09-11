@@ -11,8 +11,8 @@ use super::dns_proxy::DnsProxy;
 use super::dns_proxy::parse_dns_query;
 use super::network::{address_for_tun_target, is_tun_local_udp_target, reject_tun_target};
 use super::tcp::handle_tun_tcp;
-use super::udp::UdpSessionContext;
 use super::udp::handle_tun_udp;
+use super::udp::{DirectDnsQuery, UdpSessionContext};
 use super::udp_relay::UdpRelay;
 use super::udp_writer::UdpWriter;
 use common::{QuicPolicy, QuicUdpStats, dns::is_dns_query_packet, spawn_guarded};
@@ -126,10 +126,13 @@ pub(super) fn spawn_udp_sessions(
                     // 送进 DNS ID 改写/缓存逻辑，最终表现为 UDP 会话无响应或被错误关闭。
                     let is_dns_query =
                         target_addr.port() == 53 && is_dns_query_packet(&data);
+                    let parsed_dns_query = is_dns_query
+                        .then(|| parse_dns_query(&data))
+                        .flatten();
                     let is_dns_proxy_query = context.proxy_dns && is_dns_query;
                     let mut force_dns_direct = false;
                     if is_dns_proxy_query {
-                        let direct_domain = parse_dns_query(&data).is_some_and(|(domain, _)| {
+                        let direct_domain = parsed_dns_query.as_ref().is_some_and(|(domain, _)| {
                             context.direct_checker.is_direct_domain(&domain)
                         });
                         if direct_domain {
@@ -244,13 +247,15 @@ pub(super) fn spawn_udp_sessions(
                     if target_addr.port() == 443 {
                         quic_stats.record_direct();
                     }
+                    let direct_dns_query = parsed_dns_query.and_then(|(query, _)| {
+                        super::dns_proxy::dns_id(&data).map(|id| DirectDnsQuery { id, query })
+                    });
                     // 新会话先入表，再发送首包，避免首包在任务启动前丢失。
                     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(
                         DIRECT_UDP_SESSION_CHANNEL_SIZE,
                     );
                     sessions.insert(key, tx.clone());
                     let _ = tx.try_send(data);
-
                     let session_closed_tx = session_closed_tx.clone();
                     let context = UdpSessionContext {
                         tun_networks: context.tun_networks,
@@ -264,6 +269,7 @@ pub(super) fn spawn_udp_sessions(
                         // socket。无论这次 DNS 是按域名规则直连，还是因系统路由
                         // 回退到直连，均不能在 60 秒空闲期内累积 FD。
                         close_after_response: is_dns_query,
+                        direct_dns_query,
                         quic_policy,
                         netstack_tx: udp_tx.clone(),
                         tcp_sessions: context.tcp_sessions.clone(),

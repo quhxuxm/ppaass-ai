@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::AgentError;
+use crate::tun_handler::dns_proxy::record_direct_dns_response;
 use common::{BindInterface, bind_socket_to_interface};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -33,6 +34,8 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
         udp_sessions,
         tun_networks,
         close_after_response,
+        direct_dns_query,
+        direct_domain_cache,
         shutdown,
     } = context;
 
@@ -108,6 +111,21 @@ pub(super) async fn relay_direct_udp(context: DirectUdpRelayContext) -> Result<(
                 match received {
                     Ok(n) => {
                         let pkt = buf[..n].to_vec();
+                        if let Some(request) = direct_dns_query.as_ref()
+                            && let Some(summary) = record_direct_dns_response(
+                                direct_domain_cache.as_ref(),
+                                request.id,
+                                &request.query,
+                                &pkt,
+                            )
+                        {
+                            debug!(
+                                query = %request.query,
+                                status = %summary.status,
+                                answers = ?summary.answers,
+                                "已缓存直连 DNS 应答，后续 IP 流将沿用域名规则"
+                            );
+                        }
                         if let Err(e) = netstack_tx.send((pkt, original_target, client)).await {
                             debug!("UDP 直连回复错误：{e}");
                             break;

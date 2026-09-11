@@ -18,16 +18,7 @@ pub(super) async fn try_send_cached_dns_response(
         return false;
     };
 
-    let response_summary = parse_dns_response(&response).unwrap_or_else(|| DnsResponseSummary {
-        status: "INVALID".to_string(),
-        answers: Vec::new(),
-        min_ttl: None,
-    });
-    direct_domain_cache.record_resolution_with_ttl(
-        &query,
-        &response_summary.answers,
-        response_summary.min_ttl,
-    );
+    let response_summary = record_dns_response(direct_domain_cache, &query, &response);
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),
         resolver: "agent-cache".to_string(),
@@ -119,21 +110,12 @@ pub(super) async fn handle_dns_response(
         return Ok(());
     };
 
-    let response_summary = parse_dns_response(response).unwrap_or_else(|| DnsResponseSummary {
-        status: "INVALID".to_string(),
-        answers: Vec::new(),
-        min_ttl: None,
-    });
+    let response_summary = record_dns_response(direct_domain_cache, &request.query, response);
     response_cache.insert(
         &request.query,
         &request.record_type,
         &response_summary,
         response,
-    );
-    direct_domain_cache.record_resolution_with_ttl(
-        &request.query,
-        &response_summary.answers,
-        response_summary.min_ttl,
     );
     telemetry::emit_dns_resolution(DnsResolutionRecord {
         timestamp_ms: telemetry::current_time_millis(),

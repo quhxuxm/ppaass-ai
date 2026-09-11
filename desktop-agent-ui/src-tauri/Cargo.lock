@@ -717,6 +717,7 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bytes",
  "config",
  "futures",
@@ -3941,6 +3942,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "arc-swap",
  "base64 0.23.1",
  "bitcode",
  "bytes",

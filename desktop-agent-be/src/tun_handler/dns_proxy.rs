@@ -38,6 +38,40 @@ const DNS_PROXY_CONNECTION_IDLE: Duration = Duration::from_secs(15);
 const DNS_RESPONSE_CACHE_MAX_ENTRIES: usize = 4096;
 const DNS_RESPONSE_CACHE_MAX_TTL: Duration = Duration::from_secs(300);
 
+/// Parses a DNS response and makes its IP answers available to subsequent TUN
+/// TCP/UDP rule decisions. Both proxy DNS and direct DNS must use this path:
+/// after the DNS response leaves the TUN, later flows only carry its IP.
+pub fn record_dns_response(
+    direct_domain_cache: &DirectDomainCache,
+    query: &str,
+    response: &[u8],
+) -> DnsResponseSummary {
+    let response_summary = parse_dns_response(response).unwrap_or_else(|| DnsResponseSummary {
+        status: "INVALID".to_string(),
+        answers: Vec::new(),
+        min_ttl: None,
+    });
+    direct_domain_cache.record_resolution_with_ttl(
+        query,
+        &response_summary.answers,
+        response_summary.min_ttl,
+    );
+    response_summary
+}
+
+/// Records a direct DNS response only when it belongs to the original query.
+/// Direct UDP sockets are per query, but preserving the transaction-ID check
+/// prevents malformed or unrelated datagrams from changing route decisions.
+pub fn record_direct_dns_response(
+    direct_domain_cache: &DirectDomainCache,
+    request_id: u16,
+    query: &str,
+    response: &[u8],
+) -> Option<DnsResponseSummary> {
+    (dns_id(response) == Some(request_id))
+        .then(|| record_dns_response(direct_domain_cache, query, response))
+}
+
 pub(super) struct DnsProxy {
     tx: mpsc::Sender<DnsProxyRequest>,
 }

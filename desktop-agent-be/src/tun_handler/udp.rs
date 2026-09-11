@@ -36,6 +36,7 @@ pub(super) struct UdpSessionContext {
     pub(super) proxy_dns: bool,
     pub(super) force_direct: bool,
     pub(super) close_after_response: bool,
+    pub(super) direct_dns_query: Option<DirectDnsQuery>,
     pub(super) quic_policy: QuicPolicy,
     pub(super) netstack_tx: UdpWriter,
     pub(super) tcp_sessions: Arc<YamuxSessionManager>,
@@ -44,6 +45,12 @@ pub(super) struct UdpSessionContext {
     pub(super) direct_domain_cache: Arc<DirectDomainCache>,
     pub(super) direct_egress: Arc<super::TunDirectEgress>,
     pub(super) shutdown: CancellationToken,
+}
+
+#[derive(Clone)]
+pub(super) struct DirectDnsQuery {
+    pub(super) id: u16,
+    pub(super) query: String,
 }
 
 struct DirectUdpRelayContext {
@@ -58,6 +65,8 @@ struct DirectUdpRelayContext {
     udp_sessions: Arc<YamuxSessionManager>,
     tun_networks: TunNetworks,
     close_after_response: bool,
+    direct_dns_query: Option<DirectDnsQuery>,
+    direct_domain_cache: Arc<DirectDomainCache>,
     shutdown: CancellationToken,
 }
 
@@ -73,6 +82,7 @@ pub(super) async fn handle_tun_udp(
         proxy_dns,
         force_direct,
         close_after_response,
+        direct_dns_query,
         quic_policy,
         netstack_tx,
         tcp_sessions,
@@ -166,6 +176,8 @@ pub(super) async fn handle_tun_udp(
             udp_sessions,
             tun_networks,
             close_after_response,
+            direct_dns_query,
+            direct_domain_cache,
             shutdown,
         })
         .await?;
