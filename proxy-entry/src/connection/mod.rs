@@ -44,10 +44,10 @@ use futures::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-    use protocol::{
+use protocol::{
     Address, AuthConnectIntent, AuthConnectRequest, AuthFailureCode, CipherState, CompressionMode,
-    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse,
-    TransportProtocol, UdpRelayPacket,
+    ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
+    UdpRelayPacket,
 };
 use std::io;
 use std::sync::Arc;

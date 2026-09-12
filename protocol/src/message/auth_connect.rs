@@ -24,9 +24,7 @@ impl AuthConnectRequest {
             return Err(crate::ProtocolError::VersionMismatch);
         }
         validate_tcp_username(&self.username)?;
-        if self.signature.is_empty()
-            || self.signature.len() > TCP_MAX_RSA_FIELD_LEN
-        {
+        if self.signature.is_empty() || self.signature.len() > TCP_MAX_RSA_FIELD_LEN {
             return Err(crate::ProtocolError::InvalidMessage(
                 "invalid auth-connect request field length".to_string(),
             ));

@@ -3,8 +3,8 @@ use common::client_connection::authenticated::{AuthenticatedConnection, auth_fai
 use futures::{SinkExt, StreamExt};
 use protocol::crypto::{RsaKeyPair, verify_pss_sha256};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_MASTER_SECRET_LEN, TcpSessionCipher,
-    TcpSessionRole, tcp_auth_connect_request_transcript, tcp_auth_connect_transcript_hash,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_MASTER_SECRET_LEN, TcpSessionCipher, TcpSessionRole,
+    tcp_auth_connect_request_transcript, tcp_auth_connect_transcript_hash,
 };
 use protocol::{
     Address, AuthConnectIntent, AuthConnectResponse, AuthFailureCode, CipherState, CompressionMode,
@@ -65,8 +65,12 @@ async fn auth_connect_returns_a_session_secret_to_the_authenticated_user() {
             panic!("expected AuthConnect")
         };
         let transcript = tcp_auth_connect_request_transcript(
-            request.version, &request.username, request.timestamp, &request.client_nonce,
-        ).unwrap();
+            request.version,
+            &request.username,
+            request.timestamp,
+            &request.client_nonce,
+        )
+        .unwrap();
         let public =
             RsaKeyPair::from_public_key_pem(&identity.public_key_to_pem().unwrap()).unwrap();
         verify_pss_sha256(&public, &transcript, &request.signature).unwrap();
@@ -76,8 +80,11 @@ async fn auth_connect_returns_a_session_secret_to_the_authenticated_user() {
         writer
             .send(ProxyResponse::AuthConnect(AuthConnectResponse::success(
                 protocol::crypto::encrypt_oaep_sha256_labelled(
-                    &public, TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &secret,
-                ).unwrap(),
+                    &public,
+                    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL,
+                    &secret,
+                )
+                .unwrap(),
                 server_nonce,
                 session_id,
             )))
@@ -94,7 +101,10 @@ async fn auth_connect_returns_a_session_secret_to_the_authenticated_user() {
         .unwrap();
         state.set_session_cipher(Arc::new(cipher)).unwrap();
         let ProxyRequest::AuthConnectIntent(AuthConnectIntent::Connect(intent)) =
-            reader.next().await.unwrap().unwrap() else { panic!("expected protected intent") };
+            reader.next().await.unwrap().unwrap()
+        else {
+            panic!("expected protected intent")
+        };
         assert_eq!(intent.address, server_expected);
         writer
             .send(ProxyResponse::Connect(ConnectResponse {

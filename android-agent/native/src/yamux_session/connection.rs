@@ -75,42 +75,7 @@ impl AndroidYamuxSessionManager {
         slot_index: usize,
     ) -> Result<AndroidYamuxTargetStream> {
         for attempt in 0..2 {
-            let handle = {
-                let mut current = self.udp_sessions[slot_index].lock().await;
-                if self.config.transport_mode.automatically_falls_back_to_tcp()
-                    && current
-                        .as_ref()
-                        .is_some_and(|handle| handle.connection.timed_out())
-                {
-                    return Err(AndroidAgentError::Io(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "原生 UDP 会话保活响应超时",
-                    )));
-                }
-                if current
-                    .as_ref()
-                    .is_none_or(|handle| handle.connection.is_closed())
-                {
-                    let connection = UdpClientConnection::connect(self.config.as_ref())
-                        .await
-                        .map_err(AndroidAgentError::Io)?;
-                    let connection_id = self.udp_next_session_id.fetch_add(1, Ordering::AcqRel);
-                    debug!(
-                        manager = self.manager_name,
-                        slot = slot_index,
-                        connection_id,
-                        "Android native encrypted UDP session pool slot established"
-                    );
-                    *current = Some(AndroidUdpSession {
-                        id: connection_id,
-                        connection,
-                    });
-                }
-                current
-                    .as_ref()
-                    .expect("Android UDP session initialized")
-                    .clone()
-            };
+            let handle = self.ensure_udp_session(slot_index).await?;
             match handle
                 .connection
                 .connect_to_target(address.clone(), transport)
@@ -118,15 +83,11 @@ impl AndroidYamuxSessionManager {
             {
                 Ok((stream, _)) => return Ok(AndroidYamuxTargetStream::Udp(stream)),
                 Err(err) if attempt == 0 && handle.connection.is_closed() => {
-                    let mut current = self.udp_sessions[slot_index].lock().await;
-                    // 只移除本次失败的旧连接。并发任务可能已在该 slot 建立了
-                    // 新连接，不能无条件清空它。
-                    if current
-                        .as_ref()
-                        .is_some_and(|current| current.id == handle.id)
-                    {
-                        *current = None;
-                    }
+                    // 只移除本次失败的旧连接。singleflight 初始化完成后，其他
+                    // 并发任务可能已经取得了新 handle，不能无条件清空 slot。
+                    self.udp_sessions[slot_index]
+                        .invalidate_if(|current| current.id == handle.id)
+                        .await;
                     warn!(
                         manager = self.manager_name,
                         slot = slot_index,
@@ -147,6 +108,67 @@ impl AndroidYamuxSessionManager {
         Err(AndroidAgentError::Connection(
             "Android native UDP proxy session failed".into(),
         ))
+    }
+
+    async fn ensure_udp_session(&self, slot_index: usize) -> Result<AndroidUdpSession> {
+        let config = self.config.clone();
+        let shutdown = self.shutdown.clone();
+        let manager_name = self.manager_name;
+        let next_session_id = self.udp_next_session_id.clone();
+        let handle = self.udp_sessions[slot_index]
+            .get_or_initialize(
+                |handle| !handle.connection.is_closed(),
+                move || async move {
+                    let connection = tokio::select! {
+                        _ = shutdown.cancelled() => {
+                            return Err(AndroidAgentError::Connection(
+                                "Android agent is stopping".into(),
+                            ));
+                        }
+                        result = UdpClientConnection::connect(config.as_ref()) => {
+                            result.map_err(AndroidAgentError::Io)?
+                        }
+                    };
+                    let connection_id = next_session_id.fetch_add(1, Ordering::AcqRel);
+                    debug!(
+                        manager = manager_name,
+                        slot = slot_index,
+                        connection_id,
+                        "Android native encrypted UDP session pool slot established"
+                    );
+                    Ok::<AndroidUdpSession, AndroidAgentError>(AndroidUdpSession {
+                        id: connection_id,
+                        connection,
+                    })
+                },
+            )
+            .await?;
+        if self.config.transport_mode.automatically_falls_back_to_tcp()
+            && handle.connection.timed_out()
+        {
+            return Err(AndroidAgentError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "原生 UDP 会话保活响应超时",
+            )));
+        }
+        Ok(handle)
+    }
+
+    /// Background authentication avoids charging the first UDP flow for the
+    /// AuthInit/AuthOk round trip. It ends immediately during shutdown.
+    pub fn prewarm_native_udp_sessions(self: &Arc<Self>) {
+        for slot_index in 0..self.udp_sessions.len() {
+            let manager = Arc::clone(self);
+            tokio::spawn(async move {
+                if let Err(error) = manager.ensure_udp_session(slot_index).await {
+                    debug!(
+                        manager = manager.manager_name,
+                        slot = slot_index,
+                        "Android native UDP session pool prewarm failed; the first flow will retry: {error}"
+                    );
+                }
+            });
+        }
     }
 
     #[doc(hidden)]

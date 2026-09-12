@@ -10,7 +10,7 @@ use crate::config::AgentConfig;
 use crate::error::{AgentError, Result};
 use arc_swap::ArcSwap;
 use common::{
-    BindInterface, ProxyEndpointAffinity, UdpClientConnection,
+    BindInterface, ProxyEndpointAffinity, UdpClientConnection, UdpSessionSlot,
     YAMUX_SESSION_STREAM_CAPACITY_EXHAUSTED_MESSAGE, YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
     YamuxClientConnection,
 };
@@ -65,12 +65,12 @@ pub struct YamuxSessionManager {
     manager_name: &'static str,
     yamux_transport: TransportProtocol,
     yamux_sessions: Arc<Mutex<Vec<YamuxSessionHandle>>>,
-    // 每个 slot 拥有独立原生 UDP socket/会话密钥/序号空间。slot 级锁使首次
-    // 并发建连可以平行进行，不会被一把全局锁串行化。
-    udp_sessions: Vec<Mutex<Option<UdpSessionHandle>>>,
+    // 每个 slot 拥有独立原生 UDP socket/会话密钥/序号空间。初始化采用
+    // singleflight，认证等待期间不占用 mutex，也不阻塞其他 slot。
+    udp_sessions: Vec<UdpSessionSlot<UdpSessionHandle>>,
     yamux_refill_lock: Arc<Mutex<()>>,
     udp_next_index: AtomicUsize,
-    udp_next_session_id: AtomicUsize,
+    udp_next_session_id: Arc<AtomicUsize>,
     yamux_next_index: AtomicUsize,
     yamux_next_session_id: AtomicUsize,
     // 自动模式按原生 UDP pool slot 独立记录回退状态。一个 session 超时不会
@@ -145,10 +145,10 @@ impl YamuxSessionManager {
             manager_name,
             yamux_transport,
             yamux_sessions: Arc::new(Mutex::new(Vec::new())),
-            udp_sessions: (0..udp_pool_size).map(|_| Mutex::new(None)).collect(),
+            udp_sessions: (0..udp_pool_size).map(|_| UdpSessionSlot::new()).collect(),
             yamux_refill_lock: Arc::new(Mutex::new(())),
             udp_next_index: AtomicUsize::new(0),
-            udp_next_session_id: AtomicUsize::new(0),
+            udp_next_session_id: Arc::new(AtomicUsize::new(0)),
             yamux_next_index: AtomicUsize::new(0),
             yamux_next_session_id: AtomicUsize::new(0),
             auto_udp_fallback_to_yamux: (0..udp_pool_size)

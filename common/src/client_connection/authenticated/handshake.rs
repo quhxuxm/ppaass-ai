@@ -123,7 +123,9 @@ where
             )
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥无效"))?
             .try_into()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥长度无效"))?;
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥长度无效")
+            })?;
         let session_cipher = TcpSessionCipher::new(
             TcpSessionRole::Agent,
             request_secret,

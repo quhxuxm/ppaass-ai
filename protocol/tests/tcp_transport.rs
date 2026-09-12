@@ -1,9 +1,9 @@
 use protocol::MessageType;
 use protocol::crypto::{RsaKeyPair, encrypt_oaep_sha256_labelled, verify_pss_sha256};
 use protocol::tcp_transport::{
-    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_AUTH_NONCE_LEN,
-    TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN, TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN,
-    TcpDirectionalKeyMaterial, TcpSessionCipher, TcpSessionRole, tcp_auth_connect_request_transcript,
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION,
+    TCP_MASTER_SECRET_LEN, TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN, TcpDirectionalKeyMaterial,
+    TcpSessionCipher, TcpSessionRole, tcp_auth_connect_request_transcript,
     tcp_auth_connect_transcript_hash,
 };
 use std::sync::Arc;
@@ -66,10 +66,10 @@ fn oaep_wrapped_session_secret_can_only_be_opened_by_user_key() {
     let public = RsaKeyPair::from_public_key_pem(&user.public_key_to_pem().unwrap()).unwrap();
     let secret = [3; TCP_MASTER_SECRET_LEN];
     let wrapped =
-        encrypt_oaep_sha256_labelled(&public, TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &secret).unwrap();
+        encrypt_oaep_sha256_labelled(&public, TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &secret)
+            .unwrap();
     assert_eq!(
-        user
-            .decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &wrapped)
+        user.decrypt_oaep_sha256_labelled(TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, &wrapped)
             .unwrap(),
         secret
     );

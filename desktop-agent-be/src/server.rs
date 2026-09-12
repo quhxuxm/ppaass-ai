@@ -79,6 +79,8 @@ impl AgentServer {
 
     #[instrument(skip(self))]
     pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
+        self.udp_sessions
+            .prewarm_native_udp_sessions(shutdown.clone());
         // 本地 HTTP/SOCKS 入口始终启动。TUN 打开时作为额外入口并行运行，
         // 这样手动配置浏览器代理和系统 TUN 两种模式不会互相挤掉。
         let listener = bind_tcp_listener_with_backlog(

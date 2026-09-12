@@ -4,7 +4,9 @@
 //! generated session secret encrypted to that user's registered RSA public key.
 
 use super::*;
-use protocol::crypto::{encrypt_oaep_sha256_labelled, parse_public_key_pem_cached, verify_pss_sha256};
+use protocol::crypto::{
+    encrypt_oaep_sha256_labelled, parse_public_key_pem_cached, verify_pss_sha256,
+};
 use protocol::tcp_transport::{
     TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_HANDSHAKE_VERSION, TCP_MASTER_SECRET_LEN,
     TCP_SERVER_NONCE_LEN, TCP_SESSION_ID_LEN, TcpSessionCipher, TcpSessionRole,
