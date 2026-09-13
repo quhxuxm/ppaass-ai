@@ -67,7 +67,7 @@ flowchart LR
 
 ### 前置条件
 
-- Rust `1.98.0`（与主要 CI 和发布工作流一致）。
+- Rust `1.98.1`（与主要 CI 和发布工作流一致）。
 - C/C++ 构建工具、`pkg-config` 和 OpenSSL 开发库。
 - Registry 前端需要 Node.js `24`；桌面 UI 在 CI 使用 Node.js `22`。
 - Android 构建还需要 JDK 17、Android Platform 35、Build Tools 35.0.0 和 NDK

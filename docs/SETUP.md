@@ -9,7 +9,7 @@
 
 | 项目 | 用途 |
 | --- | --- |
-| Rust 1.98.0 | 与主要 CI 和发布工作流一致的 Rust 工具链 |
+| Rust 1.98.1 | 与主要 CI 和发布工作流一致的 Rust 工具链 |
 | C/C++ 编译工具、`pkg-config`、OpenSSL 开发库 | 构建 Rust 网络与加密依赖 |
 | Node.js 24 | 构建 Proxy Registry Vue 前端 |
 | Node.js 22 + Tauri 平台依赖 | 运行 Desktop UI；macOS/Windows 使用各自系统依赖 |

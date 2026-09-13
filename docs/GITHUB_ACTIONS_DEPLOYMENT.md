@@ -47,7 +47,7 @@ sequenceDiagram
 
 ### 2.1 Registry 工作流
 
-Registry 工作流使用 Rust `1.98.0` 和 Node.js `24`，依次执行：
+Registry 工作流使用 Rust `1.98.1` 和 Node.js `24`，依次执行：
 
 1. 对启动脚本和 Registry 安装器执行 `bash -n`。
 2. 运行 `npm ci --prefix proxy-registry/frontend --no-audit --no-fund` 与前端构建。
@@ -61,7 +61,7 @@ Registry 工作流使用 Rust `1.98.0` 和 Node.js `24`，依次执行：
 
 ### 2.2 Entry 工作流
 
-Entry 工作流使用 Rust `1.98.0`，并先对安装、实例布局、防火墙和 Registry URL 校验脚本
+Entry 工作流使用 Rust `1.98.1`，并先对安装、实例布局、防火墙和 Registry URL 校验脚本
 执行 `bash -n`。随后构建 `proxy-entry` release，并将以下内容打包：二进制、安装及辅助
 脚本、配置模板、Control Token 和 `deploy.env`。
 
