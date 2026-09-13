@@ -72,7 +72,7 @@ npm run tauri build
 
 | 任务 | 环境与工具链 | 实际检查 |
 | --- | --- | --- |
-| Rust workspace | Debian Bookworm、Rust 1.98.0 | 结构/部署布局检查、`cargo build --workspace --all-targets --release --locked`、`cargo test --workspace --locked` |
+| Rust workspace | Debian Bookworm、Rust 1.98.1 | 结构/部署布局检查、`cargo build --workspace --all-targets --release --locked`、`cargo test --workspace --locked` |
 | Registry frontend | Debian Bookworm、Node 24 | `npm ci`、`npm test`、`npm run build` |
 | Desktop build | Windows 与 macOS、Node 22、Rust 1.95.0 | 桌面前端测试、Tauri Rust 测试、Tauri 打包；Windows 安装包保留为 14 天 artifact |
 | Android agent | Debian Bookworm、JDK 17、Android API 35、NDK 28.2.13676358、Rust 1.95.0 | Gradle 单元测试/lint、native Rust 测试、三种 ABI 的 native build、debug APK artifact |
@@ -92,7 +92,7 @@ Desktop Agent integration harness (:7080)
 integration-tests 客户端
 ```
 
-工作流使用 Rust 1.98.0 与 Node 20；Node 仅用于 `npx wait-on` 等待服务端口就绪。最后它会
+工作流使用 Rust 1.98.1 与 Node 20；Node 仅用于 `npx wait-on` 等待服务端口就绪。最后它会
 运行 `integration-tests integration`，覆盖通过 Agent 的 HTTP、CONNECT、SOCKS5 TCP 与
 SOCKS5 UDP 通路，以及大响应、Range 分片、HTTP/2 多路复用、取消、慢读、背压、目标失败
 和会话恢复等回归场景。
@@ -115,7 +115,7 @@ SOCKS5 UDP 通路，以及大响应、Range 分片、HTTP/2 多路复用、取�
 
 ### 4.1 前置条件
 
-- 安装与锁文件兼容的 Rust 工具链；CI 的集成测试使用 Rust 1.98.0。
+- 安装与锁文件兼容的 Rust 工具链；CI 的集成测试使用 Rust 1.98.1。
 - 本地端口 `7080`、`8080`、`9090`、`9091`、`9092`、`9093` 未被占用。
 - 使用测试 fixture 的 Entry 与测试专用 Agent harness；不要把 harness 用作生产启动方式。
 - 测试会创建本地输出报告；运行目录需要可写。
