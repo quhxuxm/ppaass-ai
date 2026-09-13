@@ -58,8 +58,8 @@ Write-Host @"
 ╚══════════════════════════════════════════════════════════════╝
 
 📖 README.md  - Comprehensive documentation
-📖 SETUP.md   - Detailed setup guide
-📖 SUMMARY.md - Project overview
+📖 docs/SETUP.md   - Detailed setup guide
+📖 docs/SUMMARY.md - Project overview
 
 ╔══════════════════════════════════════════════════════════════╗
 ║                    Quick Commands                            ║

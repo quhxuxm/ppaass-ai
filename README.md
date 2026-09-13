@@ -1,325 +1,217 @@
-# PPAASS - Secure Proxy Application
+# PPAASS
 
-A high-performance, secure proxy application built with Rust, featuring HTTP and SOCKS5 protocol support with end-to-end
-encryption.
+PPAASS 是一个以 Rust 实现的受管加密代理系统。它提供桌面和 Android Agent、本地
+HTTP/SOCKS5/TUN/VPN 入口、Proxy Entry 数据面，以及用于账户、设备、密钥审批、授权和
+Entry 目录的 Proxy Registry 控制面。
 
-## Features
+TCP 目标始终使用独立的 framed PPAASS TCP 连接；代理 UDP 可选择原生认证加密 UDP、
+TCP/Yamux，或在原生 UDP 控制连接超时时按 session slot 自动回退到 TCP/Yamux。Proxy
+Entry 负责认证与目标中继，Proxy Registry 不承载代理数据。
 
-- **Dual Protocol Support**: Automatically detects and handles both HTTP and SOCKS5 protocols
-- **End-to-End Encryption**: RSA for key exchange, AES-256-GCM for data encryption
-- **Multi-User Support**: Each user has their own RSA key pair
-- **User Management Console**: Axum API and Vue/PrimeVue UI backed by Registry-owned persistence; Proxy Entry reads public authorization snapshots through the authenticated control API
-- **Selectable UDP Transport**: TCP targets always use the original independent framed TCP path. Proxied UDP can use native encrypted UDP (`udp`), TCP/Yamux (`tcp`), or per-session automatic fallback from encrypted UDP to TCP/Yamux after a control timeout (`auto`).
-- **Authenticated Native UDP**: Each native UDP session uses RSA identity authentication and session establishment, HKDF-separated send/receive keys, and independently authenticated AES-256-GCM datagrams with replay protection and bounded fragmentation
-- **Secure DNS Resolution**: DNS resolution performed on proxy side
-- **Production Ready**: Built with tokio and graceful shutdown
+## 文档导航
 
-## Architecture
+| 文档 | 内容 |
+| --- | --- |
+| [功能需求与现有能力](docs/REQUIREMENTS.md) | 当前可用功能、用户与管理员能力、代理、TUN、平台和部署范围 |
+| [本地搭建指南](docs/SETUP.md) | 本机 Registry、Entry、Desktop UI、TUN 权限与连接验证 |
+| [项目摘要](docs/SUMMARY.md) | 当前组件、边界、关键技术与开发/发布入口的简明概览 |
+| [技术架构与实现细节](docs/TECHNICAL_DETAILS.md) | crate 架构、协议、关键技术与算法、时序图、SQLite 表结构与 ER 图 |
+| [项目学习导览](docs/PROJECT_WALKTHROUGH.md) | 从入口流量到控制面、转发、TUN、桌面/Android、测试和部署的 Mermaid 流程图导览 |
+| [测试指南](docs/TESTING.md) | CI 矩阵、本地验证、集成测试、性能/QUIC 测试和 Android 测试 |
+| [GitHub Actions 部署](docs/GITHUB_ACTIONS_DEPLOYMENT.md) | Environment 配置、Secrets/Variables、构建发布、Caddy、Entry 扩缩容、验收与回滚边界 |
+| [安全策略](docs/SECURITY.md) | 支持版本与安全问题报告策略 |
 
-The application consists of six main components:
+子项目的专用说明：
 
-1. **Agent**: Runs on client machine, forwards traffic to proxy
-2. **Proxy**: Server-side component that connects to target servers
-3. **Proxy Registry**: Axum API and Vue/PrimeVue user management console
-4. **Proxy User Store**: Database-independent user CRUD contract with a SQLite adapter
-5. **Protocol**: Shared protocol definition and crypto implementation
-6. **Common**: Shared utilities and error types
+- [Proxy Registry 本地开发与 API](proxy-registry/README.md)
+- [Android Agent](android-agent/README.md)
+- [集成与性能测试工具](tests/README.md)
 
-## Quick Start
+历史测试基线：
 
-### Prerequisites
+- [最高吞吐历史基线与复测说明](docs/MAX_THROUGHPUT_REPORT.md)
 
-- Rust 1.93.0 or later with edition 2024
-- OpenSSL or compatible crypto library
+## 核心能力
 
-### Build
+- 本地 HTTP、HTTPS CONNECT、SOCKS5 CONNECT/BIND，以及桌面 SOCKS5 UDP ASSOCIATE。
+- 桌面 TUN 与 Android `VpnService`，支持 TCP、UDP、代理 DNS、direct-access 规则与
+  应用层 QUIC 策略。
+- 管理端账户注册/登录、设备授权、密钥申请和审批、用户与管理员权限、Proxy Entry 选择。
+- 每用户的 RSA 身份认证；framed TCP/TCP-Yamux 与原生 UDP 分别使用对应的安全状态机。
+- 原生 UDP 使用 RSA 身份证明、RSA 保护的 session secret、HKDF 双向密钥派生、
+  AES-256-GCM、AAD、序号防重放及有界分片/重组。
+- Registry 作为权威数据源；Entry 通过受 Token 保护的 HTTP/SSE 控制面原子同步公开
+  授权快照，并以幂等批次回传访问记录。
+- Registry 可由 Caddy 代理为双实例；Entry 可按单机 `1–100` 个实例扩缩容。
+
+## 架构概览
+
+```mermaid
+flowchart LR
+    App["浏览器 / 应用"] -->|"HTTP / SOCKS5"| Agent["Desktop / Android Agent"]
+    Tun["桌面 TUN / Android VPN"] --> Agent
+    Agent -->|"认证后的 TCP 或 UDP"| Entry["Proxy Entry"]
+    Entry --> Target["目标 TCP/UDP 服务"]
+
+    UI["Desktop UI / Android 登录"] -->|"账户、设备、密钥、地址"| Registry["Proxy Registry"]
+    Entry -->|"注册、心跳、授权快照、访问批次"| Registry
+    Registry --> DB[("Registry SQLite")]
+    Entry --> Snapshot[("本地公开授权 SQLite")]
+```
+
+完整的分支、状态机、认证时序和部署拓扑见
+[项目学习导览](docs/PROJECT_WALKTHROUGH.md) 与
+[技术架构与实现细节](docs/TECHNICAL_DETAILS.md)。
+
+## 快速开始：开发环境
+
+### 前置条件
+
+- Rust `1.98.0`（与主要 CI 和发布工作流一致）。
+- C/C++ 构建工具、`pkg-config` 和 OpenSSL 开发库。
+- Registry 前端需要 Node.js `24`；桌面 UI 在 CI 使用 Node.js `22`。
+- Android 构建还需要 JDK 17、Android Platform 35、Build Tools 35.0.0 和 NDK
+  `28.2.13676358`，详见[测试指南](docs/TESTING.md#6-android-本地验证)。
+
+### 构建核心 workspace
 
 ```bash
-# Build all components
-cargo build --release
+# 以锁定依赖构建全部 Rust crate
+cargo build --workspace --all-targets --release --locked
 
-# Build specific component
-cargo build --release -p desktop-agent-be
-cargo build --release -p proxy-entry
-cargo build --release -p proxy-registry
+# 单独构建数据面与控制面
+cargo build -p proxy-entry --release --locked
+cargo build -p proxy-registry --release --locked
 
-# Build the Vue + PrimeVue console
+# 构建 Registry 管理前端
 cd proxy-registry/frontend
-npm install
+npm ci --no-audit --no-fund
 npm run build
 ```
 
-### Configuration
+### 启动本地 Registry
 
-1. Review the checked-in local configurations:
+首次启动空数据库时，Registry 使用环境变量创建固定用户名 `admin` 的管理员账号。密钥
+加密主密钥和 Control Token 都必须至少 32 字节；主密钥一旦用于生产数据库，之后必须保持
+完全一致。
 
 ```bash
-${EDITOR:-vi} config/agent.toml
-${EDITOR:-vi} config/proxy-entry.toml
+export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD='replace-with-a-strong-password'
+export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET='replace-with-at-least-32-random-bytes'
+export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN='replace-with-at-least-32-random-bytes'
+
+cargo run -p proxy-registry
 ```
 
-2. Start Proxy Registry with a control token, then start Proxy Entry with the
-   same token stored in the configured token file:
+本地开发、前端热更新、API 和管理员流程见
+[Proxy Registry 文档](proxy-registry/README.md)。生产环境不要把这些秘密写入仓库、配置
+文件或命令行历史；应采用受控的 Secret 管理方式。
+
+### 启动 Proxy Entry 与 Desktop UI
+
+先为 Entry 准备有效的 `registry_url`、Control Token 文件、稳定 `entry_id`、公告地址和
+本地授权 SQLite 路径；可从 [`config/proxy-entry.toml`](config/proxy-entry.toml) 开始。Entry
+在启动后向 Registry 注册，并同步公开授权快照。
 
 ```bash
-export PPAASS_PROXY_REGISTRY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
-export PPAASS_PROXY_REGISTRY_KEY_ENCRYPTION_SECRET="replace-with-at-least-32-random-bytes"
-export PPAASS_PROXY_REGISTRY_CONTROL_TOKEN="replace-with-at-least-32-random-bytes"
-umask 077
-mkdir -p data
-printf '%s' "$PPAASS_PROXY_REGISTRY_CONTROL_TOKEN" > data/proxy-control-token
-cargo run --release -p proxy-registry
+cargo run -p proxy-entry -- --config config/proxy-entry.toml
 
-cargo run --release -p proxy-entry -- --config config/proxy-entry.toml
-```
-
-3. Register a user and approve the user's key request. Proxy Registry remains
-   the only owner of the authoritative user and access databases. Proxy Entry
-   replicates only the public authorization snapshot into its own local SQLite
-   database through the authenticated control API.
-
-4. Sign in from the Agent UI. It obtains the approved managed credential from Proxy Registry.
-
-5. Start the Agent from the authenticated Desktop Agent UI. The standalone
-   `desktop-agent` product binary intentionally refuses normal proxy traffic because it has no
-   authenticated profile/session.
-
-6. Configure your applications to use the proxy at `127.0.0.1:1080`
-
-### Desktop Agent Login
-
-The Tauri desktop app requires a Proxy Registry login once per application process before it
-loads the Agent workspace. Its authentication endpoint is read only by the Rust backend
-from the top-level `proxy_registry_url` field in the active `agent.toml`; it is not returned
-to or editable by the Vue webview. Loopback endpoints may use HTTP, while remote
-endpoints must use HTTPS.
-
-After authentication, the Rust backend—not the Vue webview—checks the approved key
-state and expiry, downloads the user's private key, verifies it against the public key,
-stores it under the per-user application data directory, and updates
-`username`/`private_key_path` in the active `agent.toml`. On Unix, the credential
-directory is mode `0700` and the private-key file is mode `0600`. Passwords, session
-cookies, CSRF tokens, and PEM contents are never returned to Vue or written to tracing
-logs. Logging out stops the Agent before clearing the in-memory desktop login state.
-
-```bash
+# 另一个终端：启动 Desktop Tauri 应用并在 UI 中登录
 cd desktop-agent-ui
-npm install
+npm ci
 npm run tauri dev
 ```
 
-### Desktop TUN Helper Mode
+生产 Agent 从登录后的受管 profile 取得用户名、私钥和 Entry 地址。产品 `desktop-agent`
+命令行不会接受旧的公开 Proxy 地址参数；需要固定地址的端到端测试必须使用测试专用
+`desktop-agent-integration-harness`，参见[测试指南](docs/TESTING.md#4-本地端到端测试)。
 
-macOS TUN mode can run the existing `desktop-agent` binary in a privileged helper mode so the normal agent does not need to ask for sudo on every start. `start-agent.sh` and `start-agent.command` install the already-built `desktop-agent` automatically when `[tun] enabled = true` and `macos_helper_enabled = true`, then expose `/var/run/ppaass-ai/tun-helper.sock` to the current UID. No separate helper binary is built. On Windows, `start-agent.bat` creates a highest-privilege scheduled task the first time TUN mode is started, then uses that task for later starts.
+## 配置要点
 
-### GitHub Actions Deployment
+[`config/agent.toml`](config/agent.toml) 包含桌面 Agent 的本地配置；用户名、私钥路径和
+Proxy 地址由登录后的受管 profile 提供，不应手工把生产私钥提交到仓库。
 
-See [`docs/GITHUB_ACTIONS_DEPLOYMENT.md`](docs/GITHUB_ACTIONS_DEPLOYMENT.md) for
-the complete Secrets and Variables checklist, environment examples, and
-password-based remote deployment details.
+| 配置 | 说明 |
+| --- | --- |
+| `listen_addr` | 本地 HTTP/SOCKS5 监听地址；示例配置为 `0.0.0.0:10080`。 |
+| `proxy_registry_url` | Registry 登录地址；回环地址可用 HTTP，远程地址应使用 HTTPS。 |
+| `transport_mode` | `udp` 为原生加密 UDP，`tcp` 为 TCP/Yamux，`auto` 为每个 UDP session slot 从原生 UDP 自动回退 TCP/Yamux；TCP 目标始终是 direct framed TCP。 |
+| `udp_session_pool_size` | 原生 UDP/`auto` 的 session 数，范围 `1–8`；`tcp` 模式不使用它。 |
+| `compression_mode` | `none`、`lz4`、`gzip`、`zstd`；仅用于 framed TCP/TCP-Yamux，不压缩原生 UDP 数据报。 |
+| `[tun]`、`[direct_access]` | 分别控制 TUN、代理 DNS/UDP/QUIC，以及绕过代理的域名/IP/CIDR 规则。 |
 
-## Configuration
+`transport_mode = "quic"` 和 `quic_connection_pool_size` 已移除，会被明确拒绝；应迁移为
+`udp`、`tcp` 或 `auto`，并使用 `udp_session_pool_size`。
 
-### Agent Configuration (`config/agent.toml`)
+Proxy Entry 的主要配置为：
 
-```toml
-listen_addr = "127.0.0.1:1080"      # Local proxy address
-username = "local-test"                    # Managed account identity written by the authenticated UI
-private_key_path = "keys/local-test.pem"  # Local-only private key; never commit it
-transport_mode = "udp"               # auto: each UDP session falls back to TCP/Yamux on timeout; udp: native encrypted UDP (default); tcp: TCP/Yamux
-udp_session_pool_size = 4             # 1-8; stateful native UDP sessions used only by proxied UDP
-connect_timeout_secs = 30             # Connection timeout
-compression_mode = "none"             # Framed TCP/TCP-Yamux only; native UDP datagrams are not compressed
+| 配置 | 说明 |
+| --- | --- |
+| `listen_addr` | 同一数值端口同时监听 TCP 与原生 UDP；生产防火墙必须同时开放两种协议。 |
+| `entry_id` / `advertised_address` | 稳定的 Entry 身份和下发给 Agent 的公网 `host:port`。 |
+| `registry_url` / `registry_control_token_path` | Registry 根 URL 与控制面 Bearer Token 文件。 |
+| `authorization_database_path` | Entry 的公开授权快照 SQLite；不是 Registry 权威数据库。 |
+| `outbound_interface` | 空值使用系统默认路由；可指定网卡或使用 `auto` 选择原始物理出口。 |
 
-[yamux.udp]
-sessions = 5                         # Max UDP relay raw Yamux outer sessions, grown on demand
-max_streams_per_session = 128        # UDP relay substreams per session
+更完整的配置、授权同步、数据库和安全边界见
+[技术架构与实现细节](docs/TECHNICAL_DETAILS.md)。
 
-[tun]
-proxy_udp = true                     # false: send ordinary UDP directly; proxy DNS and application-layer QUIC policy stay independent
-proxy_dns = false                    # DNS proxying remains independently configurable
-quic_policy = "allow"               # application UDP/443 policy: allow direct/proxied QUIC; block forces application TCP/TLS fallback
+## 测试与质量检查
 
-[tun.packet_capture]
-file = "captures/ppaass-tun.pcap"   # DLT_RAW PCAP; created when runtime capture is enabled
-```
-
-When using the Desktop Agent UI, Proxy addresses are assigned by Proxy Registry after login and are
-kept out of `agent.toml`, the UI, and logs. Product traffic requires an authenticated runtime
-session; the removed `proxy_addrs` TOML field and the old public `--proxy` CLI argument are
-intentionally rejected. The separate headless harness is built only behind the
-`integration-test-harness` feature for CI.
-
-Desktop packet capture is runtime-controlled and defaults to off; toggling or clearing it does not restart the agent. It covers TUN traffic plus local HTTP and SOCKS5 proxy connections, including SOCKS5 UDP, in both directions over IPv4 and IPv6. The output opens directly in Wireshark. TUN packets are recorded at the PPAASS tunnel boundary; explicit proxy streams are represented as valid raw IP packets between the real client and agent listener endpoints. Application-level encryption such as TLS remains encrypted.
-PCAP writes run on a dedicated buffered writer thread. The packet path uses a bounded non-blocking queue; if storage cannot keep up, capture copies are dropped instead of slowing proxy traffic.
-The desktop app's dedicated **Packet Capture** page shows direction, protocol, endpoints, byte counts, packet summaries, filters, and a short payload preview while retaining the PCAP as the source of truth.
-
-Android also provides runtime packet capture for VPN/TUN and explicit HTTP/SOCKS5 TCP ingress, with persistent proxy-protocol labels, safe PCAP append, and an adaptive full-height packet list. Its local SOCKS5 server intentionally does not support UDP ASSOCIATE, so SOCKS5 UDP capture remains a desktop-only capability. Android DNS records can be filtered and selected to add or remove matching direct-access rules; see [android-agent/README.md](android-agent/README.md).
-
-The old `transport_mode = "quic"` and `quic_connection_pool_size` settings are intentionally incompatible and are rejected. Update them explicitly to `transport_mode = "udp"` and `udp_session_pool_size`.
-
-### Proxy Configuration (`config/proxy-entry.toml`)
-
-```toml
-listen_addr = "0.0.0.0:8080"              # Proxy listen address
-entry_id = "entry-local"                   # Stable identity for idempotent batches
-advertised_address = "proxy.example.com:8080" # Public address registered in the node catalog
-registry_url = "http://127.0.0.1:8797"
-registry_control_token_path = "data/proxy-control-token"
-authorization_database_path = "data/proxy-entry-authorizations.sqlite3"
-udp_relay_max_flows = 256                  # Inner target sockets per shared UDP relay
-udp_session_limit = 4096                   # Authenticated native UDP sessions
-udp_session_limit_per_username = 64        # Per-user sessions for multiple devices/restarts
-udp_session_channel_size = 256             # Datagrams queued per native UDP session
-udp_session_max_flows = 256                # Outer flows per native UDP session
-```
-
-Proxy Registry exclusively owns schema migrations, user data and access history. Proxy Entry downloads
-a revision-bound, username-cursor-paginated public-authorization snapshot over the versioned control API.
-It stages each page in local SQLite and atomically replaces its last-known-good snapshot only after every
-page succeeds. Entry fails closed until the first complete snapshot is available; afterwards a control
-outage does not interrupt users in that snapshot.
-Changes made during an outage take effect after Entry reconnects and completes a new snapshot sync.
-Access history is sent to Registry in idempotent batches.
-After TCP and UDP listeners bind successfully, Entry registers `advertised_address` in the shared
-Registry node catalog and refreshes its heartbeat every 30 seconds; startup does not wait for Registry.
-
-See [`proxy-registry/README.md`](proxy-registry/README.md) for local development, administrator authentication, CRUD endpoints, and the Vue console.
-
-The proxy listens on both TCP and raw UDP at the same numeric `listen_addr` port. Allow that port for both protocols in the server firewall when native UDP transport is used.
-Existing flow IDs remain idempotent at capacity, while new flows are rejected before a target socket or worker is created. Fragment reassembly is also bounded independently per authenticated session (64 incomplete messages and 1 MiB by default).
-
-## Security
-
-- **RSA-2048**: Authenticates the user identity and establishes native UDP session material
-- **HKDF Key Separation**: Derives independent Agent-to-Proxy and Proxy-to-Agent keys and nonce prefixes
-- **AES-256-GCM**: Protects every native UDP datagram independently; version, session ID, sequence number, and other header fields are authenticated as AAD
-- **Replay and Fragment Protection**: Per-direction packet sequences and a sliding replay window reject duplicate or stale packets while permitting bounded reordering; oversized payloads use bounded fragments that are each authenticated independently
-- **Stable TCP Security Path**: TCP targets retain the original framed PPAASS Auth/Connect/Data encryption; TCP-mode UDP retains the existing TCP/Yamux business-stream protocol
-- **Timestamp Validation**: Prevents replay attacks (5-minute tolerance)
-- **Secure Key Storage**: Private keys stored securely on disk
-- **Per-User Authentication**: Each user has unique credentials
-
-## Performance
-
-- **Async I/O**: Built on tokio for high concurrency
-- **Native UDP Session Pool**: In UDP mode, proxied UDP flows are mapped stably across 1–8 stateful UDP sessions; the outer transport adds no reliable ordering or retransmission
-- **Stable TCP Path**: HTTP, SOCKS5 TCP, and TUN TCP targets always retain independent framed TCP connections
-- **Full-TCP Option**: UDP relay uses raw TCP/Yamux when `transport_mode = "tcp"`, so both TCP and UDP traffic are carried over TCP
-- **Zero-Copy**: Efficient buffer management with bytes crate
-
-### Performance Testing
-
-The project includes comprehensive performance testing tools:
+在提交 Rust、脚本、部署或前端改动前，至少运行：
 
 ```bash
-# Start mock target servers
-./run-tests.sh mock-target
-
-# Run performance tests (in another terminal)
-./run-tests.sh performance 100 60
-
-# View HTML report with charts
-open performance-report-*.html
-```
-
-See `tests/README.md` for detailed testing documentation.
-
-## Monitoring
-
-### Logging
-
-Set log level via environment variable:
-
-```bash
-RUST_LOG=info cargo run -p proxy-entry
-cd desktop-agent-ui && RUST_LOG=debug npm run tauri dev
-RUST_LOG=proxy_registry=debug,tower_http=info cargo run -p proxy-registry
-```
-
-## Development
-
-### Project Structure
-
-```
-ppaass-ai/
-├── desktop-agent-be/  # Client-side desktop agent backend
-├── desktop-agent-ui/       # Desktop agent UI
-├── proxy-entry/          # Proxy Entry
-├── proxy-registry/      # Control plane, persistence, API and Vue console
-├── proxy-control-protocol/ # Versioned Registry-to-Entry HTTP/SSE contract
-├── protocol/       # Shared protocol definitions
-├── common/         # Shared utilities
-├── tests/          # Integration and performance tests
-├── config/         # Configuration files
-├── keys/           # RSA keys (gitignored)
-└── doc/           # Documentation
-```
-
-### Running Tests
-
-```bash
-# All Rust test targets, including each crate's top-level tests/
+./scripts/check-source-line-limits.sh
+bash ./scripts/test-proxy-deployment-layout.sh
 cargo test --workspace --locked
-
-# Enforce the repository-wide Rust test layout
-sh scripts/check-rust-test-layout.sh
-
-# Integration and performance tests
-./run-tests.sh all
-
-# See tests/README.md for detailed testing documentation
 ```
 
-### Code Quality
+端到端测试需要启动 mock target、Proxy Entry 和测试专用 Agent harness。性能工具还可以测量
+TCP、UDP、QUIC、Range 下载和最大吞吐，并生成 HTML、JSON、Markdown 报告。完整命令、端口
+和 CI 覆盖范围见[测试指南](docs/TESTING.md)。
 
-```bash
-# Format code
-cargo fmt --all
+## 生产部署
 
-# Lint code
-cargo clippy --workspace -- -D warnings
+生产发布由两个手动 GitHub Actions 工作流完成：
 
-# Check for security issues
-cargo audit
+- `deploy-proxy-registry.yml`：构建 Registry/前端，在 `registry_production` Environment
+  部署两个 Registry 实例和 Caddy。
+- `deploy-proxy-entry.yml`：构建 Proxy Entry，在 `entry_production` Environment 部署
+  `1–100` 个数据面实例、systemd 模板单元和本地授权副本。
+
+两个工作流使用独立的 Secrets/Variables；Entry 与 Registry 可分机或同机部署。具体的
+Environment 名称、必填 Secret、Caddy 健康检查、端口/防火墙、发布保留和回滚限制见
+[GitHub Actions 部署文档](docs/GITHUB_ACTIONS_DEPLOYMENT.md)。
+
+## 安全边界
+
+- 用户私钥只由受控 Agent 原生后端领取与保存，不能返回给 Vue WebView 或写入日志。
+- Registry 负责账户、设备、私钥托管、访问审计和权威授权；Entry 只持有可用于认证的公开
+  快照，并在首个完整快照前拒绝认证。
+- 原生 UDP 使用独立 AEAD 数据报、序号和重放窗口，不提供可靠有序语义；TCP 可靠性由其
+  固有的流语义提供。
+- HTTPS、操作系统凭据权限、主机防火墙、云安全组和 GitHub Environment 保护共同构成
+  生产防线；部署的具体边界见[部署文档](docs/GITHUB_ACTIONS_DEPLOYMENT.md)。
+
+## 仓库结构
+
+```text
+ppaass-ai/
+├── desktop-agent-be/       # 桌面 Agent 后端
+├── desktop-agent-ui/       # Tauri 2 + Vue 桌面应用
+├── android-agent/          # Android VpnService 与 Rust native Agent
+├── proxy-entry/            # 代理数据面、认证、目标 relay、授权副本
+├── proxy-registry/         # 控制面、SQLite、API、管理前端
+├── proxy-control-protocol/ # Registry ↔ Entry 控制面协议
+├── protocol/               # Agent ↔ Entry 传输协议与加密
+├── common/                 # 复用连接、传输选择与工具
+├── tests/                  # 集成/性能测试工具
+├── config/                 # 示例与部署配置模板
+├── deploy/                 # Registry/Entry 远端安装器
+├── docs/                   # 本 README 链接的项目文档
+└── .github/workflows/      # CI、扫描与手动部署工作流
 ```
-
-## Troubleshooting
-
-### Connection Issues
-
-1. Check firewall settings
-2. Verify proxy server process is running and listening on the configured proxy port
-3. Check logs for authentication errors
-4. Ensure private key matches user's public key
-
-### Performance Issues
-
-1. Increase `udp_session_pool_size` for native UDP mode, or adjust UDP Yamux sessions for TCP mode
-2. Check Yamux session and stream settings
-3. Review network latency
-
-### Authentication Failures
-
-1. Verify private key format and permissions
-2. Check username matches proxy configuration
-3. Ensure timestamp synchronization between client and server
-4. Review proxy logs for detailed error messages
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please submit pull requests or open issues on GitHub.
-
-## Acknowledgments
-
-Built with these excellent Rust crates:
-
-- tokio - Async runtime
-- hyper - HTTP implementation
-- fast-socks5 - SOCKS5 protocol
-- rsa, aes-gcm - Cryptography
-- deadpool - Connection pooling
