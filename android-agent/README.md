@@ -35,17 +35,17 @@ cargo install cargo-ndk
 ./gradlew assembleDebug
 ```
 
-构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本。
+构建 release APK 时使用 `android-agent/` 中的对应平台脚本。以下命令从仓库根目录执行；
 不设置签名环境变量时，脚本会自动创建并复用已被 Git 忽略的
 `android-agent/local-release.keystore`，最终生成可安装的
 `app-release-signed.apk`：
 
 ```bash
 # Windows
-.\build-release-apk-windows.bat
+.\android-agent\build-release-apk-windows.bat
 
 # macOS
-bash ./build-release-apk-macos.command
+bash ./android-agent/build-release-apk-macos.command
 ```
 
 本地 keystore 是开发发布证书，需要妥善备份；删除或丢失后重新生成的 APK 无法覆盖安装
