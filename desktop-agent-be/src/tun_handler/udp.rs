@@ -133,7 +133,11 @@ pub(super) async fn handle_tun_udp(
                 "TUN UDP 缓存域名规则命中：{} ({}){}，先使用原始 IP 直连",
                 target,
                 domain_match.domain(),
-                if domain_match.is_stale() { " [stale]" } else { "" }
+                if domain_match.is_stale() {
+                    " [stale]"
+                } else {
+                    ""
+                }
             );
             direct_label = format!("{} ({})", target_label, domain_match.domain());
             direct_target = Some(target);
@@ -142,7 +146,8 @@ pub(super) async fn handle_tun_udp(
 
     if direct_target.is_none()
         && !proxy_dns_request
-        && let Some(domain_match) = direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
+        && let Some(domain_match) =
+            direct_domain_cache.matching_domain_for_ip(target.ip(), |_| true)
     {
         let domain = domain_match.into_domain();
         debug!(

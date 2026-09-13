@@ -35,17 +35,17 @@ cargo install cargo-ndk
 ./gradlew assembleDebug
 ```
 
-构建 release APK 时使用对应平台脚本。Windows 也可以在仓库根目录直接运行同名入口脚本。
+构建 release APK 时使用 `android-agent/` 中的对应平台脚本。以下命令从仓库根目录执行；
 不设置签名环境变量时，脚本会自动创建并复用已被 Git 忽略的
 `android-agent/local-release.keystore`，最终生成可安装的
 `app-release-signed.apk`：
 
 ```bash
 # Windows
-.\build-release-apk-windows.bat
+.\android-agent\build-release-apk-windows.bat
 
 # macOS
-bash ./build-release-apk-macos.command
+bash ./android-agent/build-release-apk-macos.command
 ```
 
 本地 keystore 是开发发布证书，需要妥善备份；删除或丢失后重新生成的 APK 无法覆盖安装
@@ -88,6 +88,10 @@ App 会校验账号状态、密钥版本和有效期，从 Proxy Registry 下载
 登出或停止代理。应用同时禁止云备份与设备迁移
 复制登录密码、托管私钥及配置。旧版本留在 SharedPreferences 中的 username 和明文私钥
 会在升级启动时清除。
+
+AuthConnect 直接使用用户已有的 RSA 密钥：Entry 从授权快照读取用户公钥，生成每次连接专用的
+AES-256-GCM 会话密钥并用该公钥加密回传；Agent 仅在本地使用其托管私钥解密。无需在安装包、
+properties、Entry 主机或 GitHub Actions 中配置共享的 Entry 私钥或公钥。
 
 Debug 构建由 `app/src/debug/assets/agent.properties` 覆盖为
 `http://127.0.0.1:8787`，可配合 `adb reverse tcp:8787 tcp:<本机 Proxy Registry 端口>`

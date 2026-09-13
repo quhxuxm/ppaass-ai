@@ -1,6 +1,5 @@
 mod address;
-mod auth_request;
-mod auth_response;
+mod auth_connect;
 mod connect_request;
 mod connect_response;
 mod data_packet;
@@ -13,8 +12,7 @@ mod udp_relay_packet;
 mod values;
 
 pub use address::Address;
-pub use auth_request::AuthRequest;
-pub use auth_response::AuthResponse;
+pub use auth_connect::{AuthConnectIntent, AuthConnectRequest, AuthConnectResponse};
 pub use connect_request::{ConnectRequest, TransportProtocol};
 pub use connect_response::ConnectResponse;
 pub use data_packet::DataPacket;

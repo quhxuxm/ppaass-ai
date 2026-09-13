@@ -109,6 +109,7 @@ pub async fn run_android_agent(
     let direct_checker = Arc::new(DirectAccessChecker::new(&config.direct_access));
     let tcp_sessions = AndroidYamuxSessionManager::new_tcp_direct(config.clone(), shutdown.clone());
     let udp_sessions = AndroidYamuxSessionManager::new_udp(config.clone(), shutdown.clone());
+    udp_sessions.prewarm_native_udp_sessions();
     let context = ForwardContext {
         tcp_sessions,
         udp_sessions,

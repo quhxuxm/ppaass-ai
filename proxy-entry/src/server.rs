@@ -321,5 +321,6 @@ where
         }
     };
 
-    connection.handle_connect_request(&username).await
+    debug!(username, "AuthConnect 已完成，执行初始请求");
+    connection.handle_authenticated_intent().await
 }

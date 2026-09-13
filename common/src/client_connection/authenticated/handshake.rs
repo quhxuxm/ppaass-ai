@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
+use protocol::tcp_transport::{
+    TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL, TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION,
+    TCP_MASTER_SECRET_LEN, TcpSessionCipher, TcpSessionRole, tcp_auth_connect_request_transcript,
+    tcp_auth_connect_transcript_hash,
+};
 use protocol::{
-    Address, AgentCodec, AuthRequest, CipherState, ConnectRequest, ProxyRequest, ProxyResponse,
-    SPEED_TEST_STREAM_ID, SpeedTestRequest, TransportProtocol,
-    tcp_transport::{
-        TCP_AUTH_NONCE_LEN, TCP_HANDSHAKE_VERSION, TCP_OAEP_LABEL, TcpSessionCipher,
-        TcpSessionRole, decode_tcp_session_secret, tcp_auth_request_transcript,
-        tcp_auth_transcript_hash,
-    },
+    Address, AgentCodec, AuthConnectIntent, AuthConnectRequest, CipherState, ConnectRequest,
+    ProxyRequest, ProxyResponse, SpeedTestRequest, TransportProtocol,
 };
 use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -29,13 +29,11 @@ use crate::client_connection::yamux::YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSA
 type FramedWriter<S> = SplitSink<Framed<S, AgentCodec>, ProxyRequest>;
 type FramedReader<S> = SplitStream<Framed<S, AgentCodec>>;
 
-/// 已认证的客户端连接，用于连接远端代理
-/// 可用于发送连接请求到远端代理，或转换为流
+/// Authenticated PPAASS stream after its initial AuthConnect operation.
 pub struct AuthenticatedConnection<S = TcpStream>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // 认证成功后保留下来的 framed writer/reader；后续 Connect 和 Data 继续复用同一 TCP 连接。
     writer: FramedWriter<S>,
     reader: FramedReader<S>,
     timeout: Duration,
@@ -45,143 +43,107 @@ impl<S> AuthenticatedConnection<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// 在一条已经建立的双向流上执行 PPAASS 认证。
-    ///
-    /// 这套逻辑运行在 Yamux 子 stream 内，AuthResponse 成功并完成上下文
-    /// 校验后才启用 v4 方向独立的记录层密钥。
-    pub async fn authenticate_stream<C>(stream: S, config: &C) -> Result<Self, std::io::Error>
+    async fn establish<C>(
+        stream: S,
+        config: &C,
+        intent: AuthConnectIntent,
+    ) -> Result<Self, std::io::Error>
     where
         C: ClientConnectionConfig,
     {
         let username = config.username();
         let auth_status_attempt = VerifiedAuthAttempt::begin(username.clone());
         let timeout = config.timeout_duration();
-
-        // 2. 设置编解码器。认证成功前 cipher_state 尚未安装 v4 记录层。
         let cipher_state = Arc::new(CipherState::with_compression(config.compression_mode()));
         let framed = Framed::new(stream, AgentCodec::new(cipher_state.clone()));
         let (mut writer, mut reader) = framed.split();
 
-        // 3. 准备认证。
-        let rsa_keypair = config
+        let identity = config
             .private_key_pair()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            .map_err(invalid_configuration_error)?;
         let timestamp = crate::current_timestamp();
         let mut client_nonce = [0_u8; TCP_AUTH_NONCE_LEN];
         rand::rng().fill_bytes(&mut client_nonce);
-        let transcript =
-            tcp_auth_request_transcript(TCP_HANDSHAKE_VERSION, &username, timestamp, &client_nonce)
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
-                })?;
-        let transcript_hash = tcp_auth_transcript_hash(&transcript);
-        let signature = rsa_keypair
-            .sign_pss_sha256(&transcript)
-            .map_err(|_| std::io::Error::other("无法生成认证签名"))?;
-
-        let auth_request = AuthRequest {
-            version: TCP_HANDSHAKE_VERSION,
-            username: username.clone(),
+        let transcript = tcp_auth_connect_request_transcript(
+            TCP_HANDSHAKE_VERSION,
+            &username,
             timestamp,
-            client_nonce,
-            signature,
-        };
+            &client_nonce,
+        )
+        .map_err(protocol_input_error)?;
+        let transcript_hash = tcp_auth_connect_transcript_hash(&transcript);
+        let signature = identity
+            .sign_pss_sha256(&transcript)
+            .map_err(|_| std::io::Error::other("无法生成 AuthConnect 签名"))?;
 
-        // 4. 发送认证请求
         writer
-            .send(ProxyRequest::Auth(auth_request))
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-        // 5. 读取认证响应
-        let response = match tokio::time::timeout(timeout, reader.next()).await {
-            Ok(Some(Ok(resp))) => resp,
-            Ok(Some(Err(e))) => return Err(e),
-            Ok(None) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
-                    "认证期间远端关闭了连接",
-                ));
-            }
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "认证响应超时",
-                ));
-            }
-        };
-
-        if let ProxyResponse::Auth(auth_resp) = response {
-            auth_resp.validate_shape().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "认证服务返回了无效响应")
-            })?;
-            if !auth_resp.success {
-                let Some(failure_code) = auth_resp.failure_code else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "认证失败",
-                    ));
-                };
-                let failure = AuthenticationFailure {
-                    username,
-                    code: failure_code,
-                    message: auth_resp.message,
-                };
-                publish_verified_failure_status(&auth_status_attempt, &failure);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    failure,
-                ));
-            }
-            let encoded_secret = rsa_keypair
-                .decrypt_oaep_sha256_labelled(TCP_OAEP_LABEL, &auth_resp.encrypted_session)
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "无法解密认证服务返回的会话响应",
-                    )
-                })?;
-            let secret = decode_tcp_session_secret(&encoded_secret).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "认证服务返回的会话响应格式无效",
-                )
-            })?;
-            secret
-                .validate_handshake_context(&transcript_hash, &client_nonce)
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "认证服务返回的会话响应与本次登录不匹配",
-                    )
-                })?;
-            let session_cipher = TcpSessionCipher::new(
-                TcpSessionRole::Agent,
-                secret.master_secret,
-                transcript_hash,
+            .send(ProxyRequest::AuthConnect(AuthConnectRequest {
+                version: TCP_HANDSHAKE_VERSION,
+                username: username.clone(),
+                timestamp,
                 client_nonce,
-                secret.server_nonce,
-                secret.session_id,
-            )
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "无法初始化认证会话记录层")
-            })?;
-            info!("已通过远端代理认证");
-            // 必须在解密并核对成功 AuthResponse 后再启用记录层，否则会把
-            // 认证响应本身当成受保护帧读取。
-            cipher_state
-                .set_session_cipher(Arc::new(session_cipher))
-                .map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "认证会话记录层重复初始化")
-                })?;
-            publish_verified_active_status(&auth_status_attempt, &username);
-        } else {
+                signature,
+            }))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+        let response = read_response(&mut reader, timeout, "AuthConnect 响应超时").await?;
+        let ProxyResponse::AuthConnect(response) = response else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "期望收到 AuthResponse",
+                "期望收到 AuthConnectResponse",
+            ));
+        };
+        response.validate_shape().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "AuthConnect 响应无效")
+        })?;
+        if !response.success {
+            let Some(code) = response.failure_code else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "认证失败",
+                ));
+            };
+            let failure = AuthenticationFailure {
+                username,
+                code,
+                message: response.message,
+            };
+            publish_verified_failure_status(&auth_status_attempt, &failure);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                failure,
             ));
         }
 
+        let request_secret: [u8; TCP_MASTER_SECRET_LEN] = identity
+            .decrypt_oaep_sha256_labelled(
+                TCP_AUTH_CONNECT_RESPONSE_OAEP_LABEL,
+                &response.encrypted_session_secret,
+            )
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥无效"))?
+            .try_into()
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "会话密钥长度无效")
+            })?;
+        let session_cipher = TcpSessionCipher::new(
+            TcpSessionRole::Agent,
+            request_secret,
+            transcript_hash,
+            client_nonce,
+            response.server_nonce,
+            response.session_id,
+        )
+        .map_err(protocol_input_error)?;
+        cipher_state
+            .set_session_cipher(Arc::new(session_cipher))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "会话重复初始化"))?;
+        writer
+            .send(ProxyRequest::AuthConnectIntent(intent))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        publish_verified_active_status(&auth_status_attempt, &username);
+        info!("已通过远端 Proxy AuthConnect 认证");
         Ok(Self {
             writer,
             reader,
@@ -189,60 +151,70 @@ where
         })
     }
 
-    /// 通过已认证的连接连接到目标
-    pub async fn connect_to_target(
-        mut self,
+    pub async fn establish_target<C>(
+        stream: S,
+        config: &C,
         address: Address,
         transport: TransportProtocol,
-    ) -> Result<(ClientStream<S>, String), std::io::Error> {
-        // 6. 发送连接请求。request_id 后续就是 DataPacket 的 stream_id。
+    ) -> Result<(ClientStream<S>, String), std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
         let request_id = crate::generate_id();
-        let connect_request = ConnectRequest {
+        let intent = AuthConnectIntent::Connect(ConnectRequest {
             request_id: request_id.clone(),
-            address: address.clone(),
+            address,
             transport,
-        };
+        });
+        let connection = Self::establish(stream, config, intent).await?;
+        connection.await_connect_response(request_id).await
+    }
 
-        debug!("向远端代理发送连接请求：{connect_request:?}");
-        let response = match tokio::time::timeout(self.timeout, async {
-            self.writer
-                .send(ProxyRequest::Connect(connect_request))
-                .await
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-            self.reader.next().await.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
-                    "连接期间远端关闭了连接",
-                )
-            })?
-        })
+    pub async fn establish_speed_test<C>(
+        stream: S,
+        config: &C,
+        download_bytes: u32,
+    ) -> Result<Self, std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
+        Self::establish(
+            stream,
+            config,
+            AuthConnectIntent::SpeedTest(SpeedTestRequest { download_bytes }),
+        )
         .await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
-                ));
-            }
-        };
-        debug!("已通过远端代理连接到目标: {response:?}");
-        if let ProxyResponse::Connect(connect_resp) = response {
-            if !connect_resp.success {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    format!("连接失败: {}", connect_resp.message),
-                ));
-            }
-            info!("已通过远端代理连接到目标");
-        } else {
+    }
+
+    async fn await_connect_response(
+        mut self,
+        request_id: String,
+    ) -> Result<(ClientStream<S>, String), std::io::Error> {
+        let response = read_response(
+            &mut self.reader,
+            self.timeout,
+            YAMUX_TARGET_CONNECT_RESPONSE_TIMEOUT_MESSAGE,
+        )
+        .await?;
+        let ProxyResponse::Connect(response) = response else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "期望收到 ConnectResponse",
             ));
+        };
+        if response.request_id != request_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ConnectResponse 请求标识不匹配",
+            ));
         }
-
+        if !response.success {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("连接失败: {}", response.message),
+            ));
+        }
+        debug!("已通过远端代理连接目标");
         Ok((
             ClientStream {
                 writer: self.writer,
@@ -256,63 +228,90 @@ where
         ))
     }
 
-    /// 在认证连接上请求 Proxy Entry 直接下发一段不可压缩测试数据。
-    ///
-    /// 该路径不连接第三方目标，测量的是 Agent 与当前 Entry 之间的真实加密 TCP 吞吐。
-    pub async fn download_speed_test(mut self, download_bytes: u32) -> Result<u64, std::io::Error> {
-        let request = SpeedTestRequest { download_bytes };
-        request
-            .validate_shape()
-            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-        self.writer
-            .send(ProxyRequest::SpeedTest(request))
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-        let receive = async {
-            let mut received = 0_u64;
-            loop {
-                let response = self.reader.next().await.ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "Proxy Entry 在测速完成前关闭了连接",
-                    )
-                })??;
-                match response {
-                    ProxyResponse::Data(packet) if packet.stream_id == SPEED_TEST_STREAM_ID => {
-                        received = received
-                            .checked_add(packet.data.len() as u64)
-                            .ok_or_else(|| std::io::Error::other("测速字节数溢出"))?;
-                        if received > u64::from(download_bytes) {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "Proxy Entry 返回了过量测速数据",
-                            ));
-                        }
-                        if packet.is_end {
-                            if received != u64::from(download_bytes) {
-                                return Err(std::io::Error::new(
-                                    std::io::ErrorKind::UnexpectedEof,
-                                    "Proxy Entry 返回的测速数据不完整",
-                                ));
-                            }
-                            return Ok(received);
-                        }
-                    }
-                    ProxyResponse::Error { message } => {
-                        return Err(std::io::Error::other(message));
-                    }
-                    _ => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Proxy Entry 返回了无效测速响应",
-                        ));
+    /// Read speed-test bytes from a dedicated AuthConnect stream.
+    pub async fn download_speed_test(mut self, bytes: u64) -> Result<u64, std::io::Error> {
+        let mut received = 0_u64;
+        loop {
+            let response = read_response(&mut self.reader, self.timeout, "测速响应超时").await?;
+            match response {
+                ProxyResponse::Data(packet)
+                    if packet.stream_id == protocol::SPEED_TEST_STREAM_ID =>
+                {
+                    received = received.saturating_add(packet.data.len() as u64);
+                    if packet.is_end {
+                        return (received == bytes).then_some(received).ok_or_else(|| {
+                            std::io::Error::new(std::io::ErrorKind::InvalidData, "测速字节数不匹配")
+                        });
                     }
                 }
+                ProxyResponse::Error { message } => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        message,
+                    ));
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "测速响应无效",
+                    ));
+                }
             }
-        };
-        tokio::time::timeout(self.timeout.max(Duration::from_secs(20)), receive)
-            .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "测速超时"))?
+        }
     }
+}
+
+impl AuthenticatedConnection<TcpStream> {
+    pub async fn connect_target<C>(
+        config: &C,
+        address: Address,
+        transport: TransportProtocol,
+    ) -> Result<(ClientStream<TcpStream>, String), std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
+        let stream = super::tcp::connect_tcp_stream(config).await?;
+        Self::establish_target(stream, config, address, transport).await
+    }
+
+    pub async fn connect_for_speed_test<C>(
+        config: &C,
+        download_bytes: u32,
+    ) -> Result<Self, std::io::Error>
+    where
+        C: ClientConnectionConfig,
+    {
+        let stream = super::tcp::connect_tcp_stream(config).await?;
+        Self::establish_speed_test(stream, config, download_bytes).await
+    }
+}
+
+async fn read_response<S>(
+    reader: &mut FramedReader<S>,
+    timeout: Duration,
+    timeout_message: &str,
+) -> Result<ProxyResponse, std::io::Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    match tokio::time::timeout(timeout, reader.next()).await {
+        Ok(Some(Ok(response))) => Ok(response),
+        Ok(Some(Err(error))) => Err(error),
+        Ok(None) => Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "远端在响应前关闭了连接",
+        )),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            timeout_message,
+        )),
+    }
+}
+
+fn invalid_configuration_error(message: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+}
+
+fn protocol_input_error(error: protocol::ProtocolError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }

@@ -141,11 +141,7 @@ pub(super) async fn new_direct_tcp_target_stream(
         bind_interface,
         proxy_affinity,
     );
-    let connection = AuthenticatedConnection::connect(&config_adapter)
-        .await
-        .map_err(|e| AgentError::Connection(e.to_string()))?;
-    connection
-        .connect_to_target(address, TransportProtocol::Tcp)
+    AuthenticatedConnection::connect_target(&config_adapter, address, TransportProtocol::Tcp)
         .await
         .map_err(|e| AgentError::Connection(e.to_string()))
 }

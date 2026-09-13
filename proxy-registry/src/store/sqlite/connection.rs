@@ -58,9 +58,11 @@ impl SqliteUserRepository {
             )));
         }
         // A zero-row query validates the read-only user projection without loading key data.
-        sqlx::query(sqlx::AssertSqlSafe(format!("SELECT {USER_SELECT} FROM users LIMIT 0")))
-            .execute(&pool)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {USER_SELECT} FROM users LIMIT 0"
+        )))
+        .execute(&pool)
+        .await?;
 
         let store = Self {
             pool,

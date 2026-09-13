@@ -1,6 +1,7 @@
 use super::*;
 use crate::yamux_session::proxy_connection::new_direct_tcp_target_stream;
 use common::TransportMode;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyStreamRoute {
@@ -108,47 +109,7 @@ impl YamuxSessionManager {
         slot_index: usize,
     ) -> Result<YamuxTargetStream> {
         for attempt in 0..2 {
-            let handle = {
-                let mut current = self.udp_sessions[slot_index].lock().await;
-                if self.config.transport_mode.automatically_falls_back_to_tcp()
-                    && current
-                        .as_ref()
-                        .is_some_and(|handle| handle.connection.timed_out())
-                {
-                    return Err(AgentError::Io(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "原生 UDP 会话保活响应超时",
-                    )));
-                }
-                if current
-                    .as_ref()
-                    .is_none_or(|handle| handle.connection.is_closed())
-                {
-                    let route = self.current_proxy_route();
-                    let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new_with_affinity(
-                        &self.config,
-                        &route.addrs,
-                        route.bind_ip,
-                        route.bind_interface,
-                        self.proxy_affinity.clone(),
-                    );
-                    let connection = UdpClientConnection::connect(&adapter)
-                        .await
-                        .map_err(AgentError::Io)?;
-                    let connection_id = self.udp_next_session_id.fetch_add(1, Ordering::AcqRel);
-                    debug!(
-                        manager = self.manager_name,
-                        slot = slot_index,
-                        connection_id,
-                        "原生加密 UDP 会话池 slot 已建立"
-                    );
-                    *current = Some(UdpSessionHandle {
-                        id: connection_id,
-                        connection,
-                    });
-                }
-                current.as_ref().expect("UDP session initialized").clone()
-            };
+            let handle = self.ensure_udp_session(slot_index, None).await?;
 
             match handle
                 .connection
@@ -159,15 +120,11 @@ impl YamuxSessionManager {
                     return Ok(YamuxTargetStream::new_udp(stream, stream_id));
                 }
                 Err(err) if attempt == 0 && handle.connection.is_closed() => {
-                    let mut current = self.udp_sessions[slot_index].lock().await;
-                    // 只移除本次失败的旧连接。并发任务可能已经在该 slot 建立了
-                    // 新连接，不能像旧实现那样无条件清空它。
-                    if current
-                        .as_ref()
-                        .is_some_and(|current| current.id == handle.id)
-                    {
-                        *current = None;
-                    }
+                    // 只移除本次失败的旧连接。singleflight 初始化完成后，其他
+                    // 并发任务可能已经取得了新 handle，不能无条件清空 slot。
+                    self.udp_sessions[slot_index]
+                        .invalidate_if(|current| current.id == handle.id)
+                        .await;
                     warn!(
                         manager = self.manager_name,
                         slot = slot_index,
@@ -181,6 +138,85 @@ impl YamuxSessionManager {
         Err(AgentError::Connection(
             "原生 UDP proxy 会话失败".to_string(),
         ))
+    }
+
+    async fn ensure_udp_session(
+        &self,
+        slot_index: usize,
+        shutdown: Option<CancellationToken>,
+    ) -> Result<UdpSessionHandle> {
+        let route = self.current_proxy_route();
+        let config = self.config.clone();
+        let proxy_affinity = self.proxy_affinity.clone();
+        let manager_name = self.manager_name;
+        let next_session_id = self.udp_next_session_id.clone();
+        let handle = self.udp_sessions[slot_index]
+            .get_or_initialize(
+                |handle| !handle.connection.is_closed(),
+                move || async move {
+                    let adapter = crate::yamux_session::proxy_connection::AgentClientConfig::new_with_affinity(
+                        &config,
+                        &route.addrs,
+                        route.bind_ip,
+                        route.bind_interface,
+                        proxy_affinity,
+                    );
+                    let connection = match shutdown {
+                        Some(shutdown) => tokio::select! {
+                            _ = shutdown.cancelled() => {
+                                return Err(AgentError::Connection(
+                                    "Agent is stopping".to_string(),
+                                ));
+                            }
+                            result = UdpClientConnection::connect(&adapter) => {
+                                result.map_err(AgentError::Io)?
+                            }
+                        },
+                        None => UdpClientConnection::connect(&adapter)
+                            .await
+                            .map_err(AgentError::Io)?,
+                    };
+                    let connection_id = next_session_id.fetch_add(1, Ordering::AcqRel);
+                    debug!(
+                        manager = manager_name,
+                        slot = slot_index,
+                        connection_id,
+                        "原生加密 UDP 会话池 slot 已建立"
+                    );
+                    Ok::<UdpSessionHandle, AgentError>(UdpSessionHandle {
+                        id: connection_id,
+                        connection,
+                    })
+                },
+            )
+            .await?;
+        if self.config.transport_mode.automatically_falls_back_to_tcp()
+            && handle.connection.timed_out()
+        {
+            return Err(AgentError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "原生 UDP 会话保活响应超时",
+            )));
+        }
+        Ok(handle)
+    }
+
+    /// Start the configured native UDP session pool in the background so the
+    /// first user datagram normally does not pay the AuthInit/AuthOk RTT.
+    pub fn prewarm_native_udp_sessions(self: &Arc<Self>, shutdown: CancellationToken) {
+        for slot_index in 0..self.udp_sessions.len() {
+            let manager = Arc::clone(self);
+            let shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                if let Err(error) = manager.ensure_udp_session(slot_index, Some(shutdown)).await {
+                    debug!(
+                        manager = manager.manager_name,
+                        slot = slot_index,
+                        "原生 UDP 会话池预热失败，将在首个 UDP flow 时重试：{error}"
+                    );
+                }
+            });
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use super::{TCP_AUTH_NONCE_LEN, TCP_MASTER_SECRET_LEN, TCP_SERVER_NONCE_LEN, TCP
 
 const KEY_LEN: usize = 32;
 const NONCE_PREFIX_LEN: usize = 4;
-const FRAME_AAD_DOMAIN: &[u8] = b"ppaass/tcp-yamux/frame/v4\0";
+const FRAME_AAD_DOMAIN: &[u8] = b"ppaass/tcp-yamux/frame/v6\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -61,7 +61,7 @@ impl TcpDirectionalKeyMaterial {
         session_id: &[u8; TCP_SESSION_ID_LEN],
     ) -> Result<Self> {
         let mut salt_hasher = Sha256::new();
-        salt_hasher.update(b"ppaass/tcp-yamux/hkdf-salt/v4\0");
+        salt_hasher.update(b"ppaass/tcp-yamux/hkdf-salt/v6\0");
         salt_hasher.update([PROTOCOL_VERSION]);
         salt_hasher.update(auth_transcript_hash);
         salt_hasher.update(client_nonce);
@@ -78,22 +78,22 @@ impl TcpDirectionalKeyMaterial {
         };
         expand(
             &hkdf,
-            b"ppaass/tcp-yamux/v4/client-to-server/key",
+            b"ppaass/tcp-yamux/v6/client-to-server/key",
             &mut material.client_to_server_key,
         )?;
         expand(
             &hkdf,
-            b"ppaass/tcp-yamux/v4/server-to-client/key",
+            b"ppaass/tcp-yamux/v6/server-to-client/key",
             &mut material.server_to_client_key,
         )?;
         expand(
             &hkdf,
-            b"ppaass/tcp-yamux/v4/client-to-server/nonce-prefix",
+            b"ppaass/tcp-yamux/v6/client-to-server/nonce-prefix",
             &mut material.client_to_server_nonce_prefix,
         )?;
         expand(
             &hkdf,
-            b"ppaass/tcp-yamux/v4/server-to-client/nonce-prefix",
+            b"ppaass/tcp-yamux/v6/server-to-client/nonce-prefix",
             &mut material.server_to_client_nonce_prefix,
         )?;
 

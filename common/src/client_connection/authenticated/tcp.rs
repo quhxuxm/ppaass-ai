@@ -4,20 +4,9 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{debug, warn};
 
-use super::AuthenticatedConnection;
 use crate::client_connection::config::{BindInterface, ClientConnectionConfig};
 use crate::client_connection::socket_bind::bind_socket_to_interface;
 use crate::configure_proxy_tcp_socket;
-
-impl AuthenticatedConnection<TcpStream> {
-    pub async fn connect<C>(config: &C) -> Result<Self, std::io::Error>
-    where
-        C: ClientConnectionConfig,
-    {
-        let stream = connect_tcp_stream(config).await?;
-        Self::authenticate_stream(stream, config).await
-    }
-}
 
 // ---------------------------------------------------------------------------
 // 辅助函数

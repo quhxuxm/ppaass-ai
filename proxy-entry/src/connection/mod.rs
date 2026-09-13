@@ -45,7 +45,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use protocol::{
-    Address, AuthFailureCode, AuthRequest, AuthResponse, CipherState, CompressionMode,
+    Address, AuthConnectIntent, AuthConnectRequest, AuthFailureCode, CipherState, CompressionMode,
     ConnectRequest, ConnectResponse, ProxyCodec, ProxyRequest, ProxyResponse, TransportProtocol,
     UdpRelayPacket,
 };
@@ -57,7 +57,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::codec::Framed;
 use tokio_util::io::{SinkWriter, StreamReader};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 
 pub trait AgentStreamIo: AsyncRead + AsyncWrite + Send + Unpin {}
 
@@ -83,11 +83,11 @@ pub struct ServerConnection {
     // 握手身份与共享用户源组成的持续授权上下文；active relay 以它处理
     // 停用、撤权、提前过期与密钥轮换。
     authorization: Option<ConnectionAuthorization>,
-    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v4 Auth，
+    // 每条 TCP/Yamux 子流独立一份加密状态：认证前仅允许 v6 AuthConnect，
     // 认证后一次性设置方向独立的 AEAD 记录层。
     cipher_state: Arc<CipherState>,
-    // `peek_auth_username` 会先读走 AuthRequest，这里暂存给后续 authenticate 继续校验。
-    pending_auth_request: Option<AuthRequest>,
+    // 首帧在查询用户前已经读走，认证阶段继续校验其签名与密文。
+    pending_auth_connect: Option<AuthConnectRequest>,
     proxy_config: Arc<ProxyConfig>,
     egress_state: Arc<EgressState>,
     access_recorder: AccessRecorder,
@@ -118,7 +118,7 @@ impl ServerConnection {
             user_config: None,
             authorization: None,
             cipher_state,
-            pending_auth_request: None,
+            pending_auth_connect: None,
             proxy_config,
             egress_state,
             access_recorder,

@@ -2,7 +2,7 @@ use android_agent::netstack::{proxy_target_address, should_prefetch_tls_sni};
 use protocol::Address;
 
 #[test]
-fn cached_domain_replaces_android_ipv4_proxy_target() {
+fn tls_sni_replaces_android_ipv4_proxy_target() {
     assert_eq!(
         proxy_target_address(
             Address::Ipv4 {
@@ -16,6 +16,16 @@ fn cached_domain_replaces_android_ipv4_proxy_target() {
             port: 443,
         }
     );
+}
+
+#[test]
+fn whitespace_only_tls_sni_keeps_original_android_proxy_target() {
+    let original = Address::Ipv4 {
+        addr: [203, 0, 113, 7],
+        port: 443,
+    };
+
+    assert_eq!(proxy_target_address(original.clone(), Some("  ")), original);
 }
 
 #[test]

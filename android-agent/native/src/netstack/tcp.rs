@@ -65,7 +65,7 @@ async fn handle_tcp(
         target.to_string()
     };
     let mut direct_target = None;
-    let mut proxy_address = address.clone();
+    let proxy_address = address.clone();
     let mut proxy_reason = None;
     // proxy_dns=false 时 DNS 查询由 agent 直连上游 DNS 服务器。
     if !proxy_dns_request
@@ -88,7 +88,11 @@ async fn handle_tcp(
             "Android TUN TCP cached direct domain matched: {} ({}){}",
             target,
             domain_match.domain(),
-            if domain_match.is_stale() { " [stale]" } else { "" }
+            if domain_match.is_stale() {
+                " [stale]"
+            } else {
+                ""
+            }
         );
         direct_target = Some(target);
     }
@@ -100,12 +104,16 @@ async fn handle_tcp(
             .matching_domain_for_ip(target.ip(), |_| true)
     {
         let domain = domain_match.into_domain();
+        // 一个 CDN IP 可能同时对应多个域名。DNS 缓存只能说明该 IP 曾经解析到
+        // 某个域名，不能证明它就是当前 TLS 流的目标；将其作为 CONNECT 目标会
+        // 跳过下面的 ClientHello SNI 恢复，并可能把 Play 等共享 Google IP 的
+        // 请求送到错误域名。缓存只用于诊断标签，目标仍保留为 IP，随后再由
+        // 当前连接中读取到的 SNI 精确替换。
         debug!(
-            "Android TUN TCP uses cached domain as proxy target: {} ({})",
+            "Android TUN TCP cached proxy domain kept as label only: {} ({})",
             target, domain
         );
-        proxy_address = proxy_target_address(proxy_address, Some(&domain));
-        proxy_reason = Some(format!("cached domain {domain}"));
+        proxy_reason = Some(format!("cached domain {domain}, target kept as IP"));
     }
 
     if let Some(connect_target) = direct_target {

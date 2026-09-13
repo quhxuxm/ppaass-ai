@@ -1,6 +1,6 @@
 //! legacy `ClientStream` 适配器。
 //!
-//! `AuthenticatedConnection::connect_to_target` 成功后返回它。上层写入裸字节时，
+//! `AuthenticatedConnection::connect_target` 成功后返回它。上层写入裸字节时，
 //! 它会封装成 `ProxyRequest::Data`；读取时，它从 `ProxyResponse::Data` 中拆出 payload。
 
 use futures::stream::{SplitSink, SplitStream};

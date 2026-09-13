@@ -166,8 +166,9 @@ impl SqliteUserRepository {
 
     pub(super) async fn list_managed_users(&self) -> Result<Vec<ManagedUser>> {
         let mut connection = self.pool.acquire().await?;
-        let account_query =
-           sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts ORDER BY login_name COLLATE BINARY"));
+        let account_query = sqlx::AssertSqlSafe(format!(
+            "SELECT {ACCOUNT_SELECT} FROM web_accounts ORDER BY login_name COLLATE BINARY"
+        ));
         let accounts = sqlx::query(account_query)
             .fetch_all(&mut *connection)
             .await?
@@ -179,7 +180,7 @@ impl SqliteUserRepository {
             users.push(fetch_managed_for_account(&mut connection, account).await?);
         }
 
-        let legacy_query  = sqlx::AssertSqlSafe(format!(
+        let legacy_query = sqlx::AssertSqlSafe(format!(
             "SELECT {USER_SELECT} FROM users u \
              WHERE NOT EXISTS (\
                  SELECT 1 FROM web_accounts a WHERE a.linked_username = u.username\
@@ -230,7 +231,9 @@ impl SqliteUserRepository {
         let Some(profile) = fetch_profile(&mut connection, &username).await? else {
             return Ok(None);
         };
-        let account_query = sqlx::AssertSqlSafe(format!("SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?"));
+        let account_query = sqlx::AssertSqlSafe(format!(
+            "SELECT {ACCOUNT_SELECT} FROM web_accounts WHERE linked_username = ?"
+        ));
         let account = sqlx::query(account_query)
             .bind(&username)
             .fetch_optional(&mut *connection)

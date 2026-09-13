@@ -39,10 +39,8 @@ pub(super) async fn table_columns(
     transaction: &mut Transaction<'_, Sqlite>,
     table: &str,
 ) -> std::result::Result<Vec<String>, sqlx::Error> {
-    let query  = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
-    let rows = sqlx::query(query)
-        .fetch_all(&mut **transaction)
-        .await?;
+    let query = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+    let rows = sqlx::query(query).fetch_all(&mut **transaction).await?;
     rows.into_iter()
         .map(|row| row.try_get::<String, _>("name"))
         .collect()

@@ -40,7 +40,7 @@ impl AuthorizationProvider for TestAuthorizationProvider {
 }
 
 pub fn proxy_config(extra: &str) -> ProxyConfig {
-    toml::from_str(&format!(
+    let config: ProxyConfig = toml::from_str(&format!(
         r#"
 listen_addr = "127.0.0.1:0"
 entry_id = "entry-test"
@@ -51,5 +51,6 @@ authorization_database_path = "authorization.sqlite3"
 {extra}
 "#
     ))
-    .unwrap()
+    .unwrap();
+    config
 }

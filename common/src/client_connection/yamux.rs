@@ -294,10 +294,13 @@ impl YamuxClientConnection {
 
         let (client_stream, request_id) = tokio::time::timeout(self.connect_response_timeout, async {
             debug!("通过 Yamux 子流执行 PPAASS 认证并连接目标：address={address:?}, transport={transport:?}");
-            let auth_conn =
-                AuthenticatedConnection::authenticate_stream(stream, self.auth_config.as_ref())
-                    .await?;
-            auth_conn.connect_to_target(address, transport).await
+            AuthenticatedConnection::establish_target(
+                stream,
+                self.auth_config.as_ref(),
+                address,
+                transport,
+            )
+            .await
         })
         .await
         .map_err(|_| {

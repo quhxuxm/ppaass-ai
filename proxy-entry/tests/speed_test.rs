@@ -11,31 +11,28 @@ use std::time::Duration;
 use support::TestAuthorizationProvider;
 
 #[derive(Debug)]
-struct TestClientConfig {
+struct TestConfig {
     username: String,
     private_key_pem: String,
 }
 
-impl ClientConnectionConfig for TestClientConfig {
+impl ClientConnectionConfig for TestConfig {
     fn remote_addr(&self) -> String {
         "unused.invalid:1".to_string()
     }
-
     fn username(&self) -> String {
         self.username.clone()
     }
-
     fn private_key_pem(&self) -> Result<String, String> {
         Ok(self.private_key_pem.clone())
     }
-
     fn timeout_duration(&self) -> Duration {
         Duration::from_secs(5)
     }
 }
 
 #[tokio::test]
-async fn authenticated_speed_test_returns_exact_requested_bytes() {
+async fn auth_connect_speed_test_returns_exact_requested_bytes() {
     let result = run_speed_test(true).await.unwrap();
     assert_eq!(result, u64::from(MIN_SPEED_TEST_DOWNLOAD_BYTES));
 }
@@ -47,23 +44,21 @@ async fn speed_test_requires_tcp_connect_permission() {
 }
 
 async fn run_speed_test(allowed: bool) -> std::io::Result<u64> {
-    let key = RsaKeyPair::generate(2048).unwrap();
+    let identity = RsaKeyPair::generate(2048).unwrap();
     let username = "speed-user".to_string();
-    let permissions = if allowed {
-        vec![PERMISSION_PROXY_CONNECT_TCP.to_string()]
-    } else {
-        vec![]
-    };
     let user = UserConfig {
         username: username.clone(),
-        public_key_pem: key.public_key_to_pem().unwrap(),
+        public_key_pem: identity.public_key_to_pem().unwrap(),
         expires_at: Some(i64::MAX.to_string()),
-        permissions,
+        permissions: allowed
+            .then(|| vec![PERMISSION_PROXY_CONNECT_TCP.to_string()])
+            .unwrap_or_default(),
         enabled: true,
         key_version: Some(1),
     };
-    let provider = Arc::new(TestAuthorizationProvider::new([user]));
-    let users = Arc::new(UserManager::new(provider));
+    let users = Arc::new(UserManager::new(Arc::new(TestAuthorizationProvider::new(
+        [user],
+    ))));
     let proxy_config = Arc::new(support::proxy_config("auth_timeout_secs = 5"));
     let (client_io, server_io) = tokio::io::duplex(256 * 1024);
     let mut server = ServerConnection::new(
@@ -75,30 +70,27 @@ async fn run_speed_test(allowed: bool) -> std::io::Result<u64> {
         AccessRecorder::default(),
     );
     let server_task = async move {
-        let authenticated_username = server.peek_auth_username().await.unwrap();
-        let user = users
-            .get_user(&authenticated_username)
-            .await
-            .unwrap()
-            .unwrap();
+        let name = server.peek_auth_username().await.unwrap();
+        let user = users.get_user(&name).await.unwrap().unwrap();
         server
             .authenticate(proxy_config.as_ref(), user)
             .await
             .unwrap();
-        server
-            .handle_connect_request(&authenticated_username)
-            .await
-            .unwrap();
+        server.handle_authenticated_intent().await.unwrap();
     };
-    let client_config = TestClientConfig {
+    let client = TestConfig {
         username,
-        private_key_pem: key.private_key_to_pem().unwrap(),
+        private_key_pem: identity.private_key_to_pem().unwrap(),
     };
     let client_task = async move {
-        AuthenticatedConnection::authenticate_stream(client_io, &client_config)
-            .await?
-            .download_speed_test(MIN_SPEED_TEST_DOWNLOAD_BYTES)
-            .await
+        AuthenticatedConnection::establish_speed_test(
+            client_io,
+            &client,
+            MIN_SPEED_TEST_DOWNLOAD_BYTES,
+        )
+        .await?
+        .download_speed_test(u64::from(MIN_SPEED_TEST_DOWNLOAD_BYTES))
+        .await
     };
     let (_, result) = tokio::join!(server_task, client_task);
     result

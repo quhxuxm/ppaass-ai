@@ -117,4 +117,3 @@ async fn validate_table_shape(pool: &SqlitePool, path: &Path, table: &str) -> Re
         .map_err(|error| database_config_error(path, "校验 staging schema", error))?;
     Ok(())
 }
-

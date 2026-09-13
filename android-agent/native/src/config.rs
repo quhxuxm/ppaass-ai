@@ -22,7 +22,6 @@ pub struct AndroidAgentConfig {
     pub proxy_affinity: Arc<ProxyEndpointAffinity>,
     pub username: String,
     pub private_key_pem: String,
-
     #[serde(default)]
     pub transport_mode: TransportMode,
 

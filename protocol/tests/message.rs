@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use protocol::message::PROTOCOL_VERSION;
 use protocol::tcp_transport::{AuthFailureCode, TCP_HANDSHAKE_VERSION};
 use protocol::{
-    Address, AuthResponse, CipherState, MAX_SPEED_TEST_DOWNLOAD_BYTES,
+    Address, AuthConnectResponse, CipherState, MAX_SPEED_TEST_DOWNLOAD_BYTES,
     MIN_SPEED_TEST_DOWNLOAD_BYTES, MessageCodec, MessageType, SpeedTestRequest,
 };
 use std::collections::HashMap;
@@ -41,28 +41,30 @@ fn address_port_is_part_of_equality_and_hashing() {
 
 #[test]
 fn structured_and_generic_failures_have_safe_shapes() {
-    let structured = AuthResponse::terminal_failure(AuthFailureCode::UserExpired, "User expired");
+    let structured =
+        AuthConnectResponse::terminal_failure(AuthFailureCode::UserExpired, "User expired");
     structured.validate_shape().unwrap();
 
-    let generic = AuthResponse::failure("Authentication failed");
+    let generic = AuthConnectResponse::failure("Authentication failed");
     generic.validate_shape().unwrap();
     assert_eq!(generic.failure_code, None);
 }
 
 #[test]
 fn successful_response_cannot_carry_a_failure_code() {
-    let mut response = AuthResponse::success(vec![1_u8; 256]);
+    let mut response = AuthConnectResponse::success(vec![1; 256], [1; 32], [2; 16]);
     response.failure_code = Some(AuthFailureCode::UserExpired);
     assert!(response.validate_shape().is_err());
 }
 
 #[test]
 fn serde_default_keeps_code_less_failures_generic() {
-    let response: AuthResponse = serde_json::from_value(serde_json::json!({
+    let response: AuthConnectResponse = serde_json::from_value(serde_json::json!({
         "version": TCP_HANDSHAKE_VERSION,
         "success": false,
         "message": "legacy failure",
-        "encrypted_session": []
+        "server_nonce": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "session_id": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     }))
     .unwrap();
     assert_eq!(response.failure_code, None);
@@ -80,7 +82,11 @@ fn oversized_preauth_length_prefix_is_rejected_immediately() {
 
 #[test]
 fn previous_tcp_protocol_envelope_has_no_fallback() {
-    let mut encoded = vec![PROTOCOL_VERSION - 1, MessageType::AuthRequest as u8, 0];
+    let mut encoded = vec![
+        PROTOCOL_VERSION - 1,
+        MessageType::AuthConnectRequest as u8,
+        0,
+    ];
     encoded.extend_from_slice(&0_u64.to_be_bytes());
     let mut input = BytesMut::new();
     input.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
