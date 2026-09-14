@@ -1,4 +1,5 @@
 use super::connect_with_tun_prefetch;
+use crate::direct_access::DirectAccessChecker;
 use crate::error::Result;
 use crate::yamux_session::{YamuxSessionManager, YamuxTargetStream};
 pub use common::tls_client_hello_server_name;
@@ -15,8 +16,13 @@ pub(super) async fn connect_proxy_stream_with_tun_prefetch(
     tcp_sessions: &YamuxSessionManager,
     proxy_address: Address,
     label: &str,
+    initial_prefetched: Vec<u8>,
 ) -> Result<(YamuxTargetStream, Vec<u8>)> {
-    let sni_prefetch = prefetch_tls_sni_for_ip(client, &proxy_address).await?;
+    let sni_prefetch = if initial_prefetched.is_empty() {
+        prefetch_tls_sni_for_ip(client, &proxy_address).await?
+    } else {
+        initial_prefetched
+    };
     let proxy_address = proxy_target_address(
         proxy_address,
         tls_client_hello_server_name(&sni_prefetch).as_deref(),
@@ -31,6 +37,16 @@ pub(super) async fn connect_proxy_stream_with_tun_prefetch(
     Ok((stream, prefetched))
 }
 
+/// 从 TLS ClientHello 恢复域名，作为 Windows DoH 未进入 TUN DNS 缓存时的
+/// 受限直连判定依据。调用方必须把预读字节原样补写到最终远端。
+pub fn direct_rule_tls_server_name(
+    packet: &[u8],
+    direct_checker: &DirectAccessChecker,
+) -> Option<String> {
+    let host = tls_client_hello_server_name(packet)?;
+    direct_checker.is_direct_domain(&host).then_some(host)
+}
+
 pub fn proxy_target_address(original: Address, cached_domain: Option<&str>) -> Address {
     match cached_domain.map(str::trim).filter(|host| !host.is_empty()) {
         Some(host) => Address::Domain {
@@ -41,7 +57,7 @@ pub fn proxy_target_address(original: Address, cached_domain: Option<&str>) -> A
     }
 }
 
-async fn prefetch_tls_sni_for_ip(
+pub(super) async fn prefetch_tls_sni_for_ip(
     client: &mut netstack_smoltcp::TcpStream,
     address: &Address,
 ) -> Result<Vec<u8>> {

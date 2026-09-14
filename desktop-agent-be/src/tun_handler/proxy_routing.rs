@@ -48,7 +48,11 @@ pub(super) async fn configure_proxy_routing(
     tcp_sessions: &YamuxSessionManager,
     udp_sessions: &YamuxSessionManager,
     shutdown: &CancellationToken,
-) -> (Option<common::BindInterface>, Vec<String>) {
+) -> (
+    Option<std::net::IpAddr>,
+    Option<common::BindInterface>,
+    Vec<String>,
+) {
     // 通过 OS 路由决策探测物理出口 IP/接口，用于后续 proxy 连接 bind。
     // macOS 登录项开机自启时，默认路由和网络服务常常晚于进程启动才可用。
     let started = Instant::now();
@@ -142,7 +146,7 @@ pub(super) async fn configure_proxy_routing(
         config.name, config.ipv4, config.mtu
     );
 
-    (bind_interface, pinned_proxy_addrs.as_ref().clone())
+    (bind_ip, bind_interface, pinned_proxy_addrs.as_ref().clone())
 }
 
 fn proxy_endpoint_matches_ip_family(endpoint: &str, local_ip: std::net::IpAddr) -> bool {

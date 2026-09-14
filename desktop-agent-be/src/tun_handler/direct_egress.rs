@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
-use std::net::IpAddr;
+use socket2::{SockAddr, Socket};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -23,6 +24,8 @@ pub(super) struct TunDirectEgress {
     proxy_addrs: Arc<Vec<String>>,
     // IPv4/IPv6 可能使用不同物理出口，必须按目标地址族选择绑定。
     bind_interfaces: ArcSwap<TunDirectBindInterfaces>,
+    #[cfg(windows)]
+    direct_source_ip: Option<IpAddr>,
     #[cfg(target_os = "macos")]
     helper_socket: Option<String>,
     refresh_lock: tokio::sync::Mutex<()>,
@@ -70,9 +73,39 @@ pub fn select_initial_direct_bind_interface(
     }
 }
 
+pub fn select_direct_source_ip(
+    captured_physical_ip: Option<IpAddr>,
+    target_ip: IpAddr,
+) -> Option<IpAddr> {
+    captured_physical_ip.filter(|source_ip| source_ip.is_ipv6() == target_ip.is_ipv6())
+}
+
+pub(super) fn bind_direct_socket_source(
+    socket: &Socket,
+    source_ip: Option<IpAddr>,
+    target: SocketAddr,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        let source_ip = source_ip.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!("TUN 直连缺少 {target} 的物理源地址"),
+            )
+        })?;
+        socket.bind(&SockAddr::from(SocketAddr::new(source_ip, 0)))?;
+    }
+
+    #[cfg(not(windows))]
+    let _ = (socket, source_ip, target);
+
+    Ok(())
+}
+
 impl TunDirectEgress {
     pub(super) fn new(
         proxy_addrs: Vec<String>,
+        proxy_bind_ip: Option<IpAddr>,
         bind_interface: Option<common::BindInterface>,
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
@@ -88,6 +121,8 @@ impl TunDirectEgress {
         Self {
             proxy_addrs: Arc::new(proxy_addrs),
             bind_interfaces: ArcSwap::from_pointee(TunDirectBindInterfaces { ipv4, ipv6 }),
+            #[cfg(windows)]
+            direct_source_ip: proxy_bind_ip,
             #[cfg(target_os = "macos")]
             helper_socket,
             refresh_lock: tokio::sync::Mutex::new(()),
@@ -102,6 +137,32 @@ impl TunDirectEgress {
             interfaces.ipv6.clone()
         } else {
             interfaces.ipv4.clone()
+        }
+    }
+
+    pub(super) fn can_direct(&self, target_ip: IpAddr) -> bool {
+        #[cfg(windows)]
+        {
+            self.bind_source_ip(target_ip).is_some()
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = target_ip;
+            true
+        }
+    }
+
+    pub(super) fn bind_source_ip(&self, target_ip: IpAddr) -> Option<IpAddr> {
+        #[cfg(windows)]
+        {
+            select_direct_source_ip(self.direct_source_ip, target_ip)
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = target_ip;
+            None
         }
     }
 

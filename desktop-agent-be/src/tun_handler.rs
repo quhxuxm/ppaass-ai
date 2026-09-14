@@ -23,7 +23,7 @@ pub mod proxy_routing;
 pub mod route;
 pub mod tasks;
 mod tcp;
-pub use tcp::{proxy_target_address, tls_client_hello_server_name};
+pub use tcp::{direct_rule_tls_server_name, proxy_target_address, tls_client_hello_server_name};
 mod udp;
 pub mod udp_relay;
 mod udp_writer;
@@ -150,7 +150,7 @@ pub(crate) async fn run_tun_mode(
     // DNS 捕获规则安装后，运行期再解析 proxy 域名会形成循环依赖：proxy
     // 重连等待 DNS，而 DNS proxy 又等待 proxy 会话。必须先固定 IP endpoint。
     let resolved_proxy_addrs = route::resolve_proxy_endpoints_checked(&proxy_addrs)?;
-    let (proxy_bind_interface, pinned_proxy_addrs) = configure_proxy_routing(
+    let (proxy_bind_ip, proxy_bind_interface, pinned_proxy_addrs) = configure_proxy_routing(
         &config,
         &resolved_proxy_addrs,
         &tcp_sessions,
@@ -203,6 +203,7 @@ pub(crate) async fn run_tun_mode(
     let device = Arc::new(device);
     let direct_egress = Arc::new(TunDirectEgress::new(
         pinned_proxy_addrs,
+        proxy_bind_ip,
         proxy_bind_interface.clone(),
         #[cfg(target_os = "macos")]
         helper_managed_network.then(|| config.macos_helper_socket.clone()),

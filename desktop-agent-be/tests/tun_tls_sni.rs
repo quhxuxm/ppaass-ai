@@ -1,4 +1,5 @@
-use desktop_agent_be::tun_handler::tls_client_hello_server_name;
+use desktop_agent_be::direct_access::{DirectAccessChecker, DirectAccessConfig, DirectAccessMode};
+use desktop_agent_be::tun_handler::{direct_rule_tls_server_name, tls_client_hello_server_name};
 
 fn client_hello_with_sni(host: &str) -> Vec<u8> {
     let host = host.as_bytes();
@@ -33,6 +34,22 @@ fn extracts_server_name_from_tls_client_hello() {
     assert_eq!(
         tls_client_hello_server_name(&packet),
         Some("chatgpt.com".to_string())
+    );
+}
+
+#[test]
+fn recognizes_teams_sni_when_dns_mapping_is_unavailable() {
+    let checker = DirectAccessChecker::new(&DirectAccessConfig {
+        mode: DirectAccessMode::Rules,
+        rules: vec!["*.teams.microsoft.com".to_string()],
+    });
+
+    assert_eq!(
+        direct_rule_tls_server_name(
+            &client_hello_with_sni("config.teams.microsoft.com"),
+            &checker
+        ),
+        Some("config.teams.microsoft.com".to_string())
     );
 }
 

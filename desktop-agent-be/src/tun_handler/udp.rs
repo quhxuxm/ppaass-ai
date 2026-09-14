@@ -166,7 +166,9 @@ pub(super) async fn handle_tun_udp(
         return Ok(());
     }
 
-    if let Some(connect_target) = direct_target {
+    if let Some(connect_target) =
+        direct_target.filter(|target| direct_egress.can_direct(target.ip()))
+    {
         // 直连 UDP 使用本地 UDP socket 与目标通信，回复写回 netstack。
         debug!("TUN UDP 直连 -> {}", target_label);
         relay_direct_udp(DirectUdpRelayContext {
@@ -187,6 +189,13 @@ pub(super) async fn handle_tun_udp(
         })
         .await?;
         return Ok(());
+    }
+
+    if direct_target.is_some() {
+        debug!(
+            "TUN UDP 直连缺少同地址族物理源地址，回退 proxy：{}",
+            target_label
+        );
     }
 
     // 代理 UDP 路径通过 Yamux session manager 建立一个 UDP 语义的 proxy stream。

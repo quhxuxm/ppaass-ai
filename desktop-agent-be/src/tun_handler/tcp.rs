@@ -6,6 +6,7 @@
 //! 3. 命中直连则连真实目标，否则从 proxy session manager 打开目标流并双向中继。
 
 use super::TunForwardContext;
+use super::direct_egress::bind_direct_socket_source;
 use super::network::{address_for_tun_target, reject_tun_target};
 use crate::error::{AgentError, Result};
 use crate::tcp_relay::{TcpRelayOptions, relay_tcp_bidirectional};
@@ -37,8 +38,10 @@ const TUN_TCP_PREFETCH_CHUNK: usize = 16 * 1024;
 
 mod proxy_connect;
 
-use proxy_connect::connect_proxy_stream_with_tun_prefetch;
-pub use proxy_connect::{proxy_target_address, tls_client_hello_server_name};
+use proxy_connect::{connect_proxy_stream_with_tun_prefetch, prefetch_tls_sni_for_ip};
+pub use proxy_connect::{
+    direct_rule_tls_server_name, proxy_target_address, tls_client_hello_server_name,
+};
 
 pub(super) async fn handle_tun_tcp(
     mut client: netstack_smoltcp::TcpStream,
@@ -79,10 +82,6 @@ pub(super) async fn handle_tun_tcp(
         direct_target = Some(target);
     }
 
-    // 2. 缓存中已知 IP -> 域名映射且命中域名规则：仍然使用原始 IP 直连。
-    //    这里的域名只来自 proxy DNS 缓存，不触发 agent 本机 DNS 解析，也不再
-    //    从 TCP payload 读取 TLS SNI/HTTP Host。这样 TUN 数据面不会因为首包
-    //    嗅探和补发逻辑影响视频分片下载。
     if direct_target.is_none()
         && !proxy_dns_request
         && direct_checker.has_domain_direct_rules()
@@ -115,7 +114,30 @@ pub(super) async fn handle_tun_tcp(
         proxy_reason = Some(format!("缓存域名 {domain}"));
     }
 
-    if let Some(connect_target) = direct_target {
+    // Windows Teams/WebView2 可用 DoH，DNS 映射缺失时按 TLS SNI 判定直连。
+    let mut sni_prefetched = Vec::new();
+    if direct_target.is_none()
+        && !proxy_dns_request
+        && direct_checker.has_domain_direct_rules()
+        && address.port() == 443
+        && matches!(
+            address,
+            protocol::Address::Ipv4 { .. } | protocol::Address::Ipv6 { .. }
+        )
+    {
+        sni_prefetched = prefetch_tls_sni_for_ip(&mut client, &address).await?;
+        if let Some(host) = direct_rule_tls_server_name(&sni_prefetched, &direct_checker) {
+            debug!(
+                "TUN TCP TLS SNI 域名规则命中：{} ({host})，改为直连",
+                target
+            );
+            direct_target = Some(target);
+        }
+    }
+
+    if let Some(connect_target) =
+        direct_target.filter(|target| direct_egress.can_direct(target.ip()))
+    {
         // 直连规则命中时绕过 proxy，直接连接真实目标。
         let target_str = target_label.as_str();
         let direct_connect = connect_direct_tcp_with_refresh(DirectTcpRefreshContext {
@@ -126,8 +148,12 @@ pub(super) async fn handle_tun_tcp(
             udp_sessions: udp_sessions.as_ref(),
             tun_networks,
         });
-        let (mut target_stream, prefetched) =
+        let (mut target_stream, mut prefetched) =
             connect_with_tun_prefetch(&mut client, direct_connect, target_str).await?;
+        if !sni_prefetched.is_empty() {
+            sni_prefetched.append(&mut prefetched);
+            prefetched = sni_prefetched;
+        }
         write_prefetched(&mut target_stream, &prefetched).await?;
         match relay_tcp_bidirectional(
             &mut client,
@@ -150,6 +176,13 @@ pub(super) async fn handle_tun_tcp(
         return Ok(());
     }
 
+    if direct_target.is_some() {
+        debug!(
+            "TUN TCP 直连缺少同地址族物理源地址，回退 proxy：{}",
+            target_label
+        );
+    }
+
     // 默认路径通过 proxy session manager 获取已认证 proxy 流，再做双向拷贝。
     if proxy_dns_request {
         debug!("TUN TCP DNS -> 代理 -> {}", target_label);
@@ -160,13 +193,12 @@ pub(super) async fn handle_tun_tcp(
     if !proxy_dns_request {
         debug!("TUN TCP 代理目标：{}", proxy_label);
     }
-    // TUN TCP 不再抢读首包做 SNI/Host 嗅探。proxy 路径直接把原始字节流交给
-    // copy_bidirectional，中间没有“已读首段再补发”的状态，减少短连接分片卡顿点。
     let (connected, prefetched) = connect_proxy_stream_with_tun_prefetch(
         &mut client,
         tcp_sessions.as_ref(),
         proxy_address,
         &proxy_label,
+        sni_prefetched,
     )
     .await?;
     let mut proxy_io = connected.into_async_io();
@@ -267,6 +299,7 @@ where
 async fn connect_direct_tcp(
     target: SocketAddr,
     bind_interface: Option<&BindInterface>,
+    source_ip: Option<std::net::IpAddr>,
 ) -> std::io::Result<TcpStream> {
     // TUN 直连也要绑定物理接口，否则系统默认路由已指向 TUN 时会出现自回环。
     let socket = Socket::new(
@@ -275,6 +308,7 @@ async fn connect_direct_tcp(
         Some(Protocol::TCP),
     )?;
     bind_socket_to_interface(&socket, bind_interface, target)?;
+    bind_direct_socket_source(&socket, source_ip, target)?;
     tune_direct_tcp_socket(&socket, target);
     enable_direct_tcp_keepalive(&socket, target);
     socket.set_nonblocking(true)?;
@@ -311,7 +345,8 @@ async fn connect_direct_tcp_with_refresh(
         tun_networks,
     } = context;
     let initial_bind_interface = direct_egress.bind_interface(target.ip());
-    match connect_direct_tcp(target, initial_bind_interface.as_ref()).await {
+    let source_ip = direct_egress.bind_source_ip(target.ip());
+    match connect_direct_tcp(target, initial_bind_interface.as_ref(), source_ip).await {
         Ok(stream) => Ok(stream),
         Err(first_err) => {
             debug!(
@@ -321,7 +356,7 @@ async fn connect_direct_tcp_with_refresh(
             let refreshed_bind_interface = direct_egress
                 .refresh_after_direct_failure(target.ip(), tcp_sessions, udp_sessions, tun_networks)
                 .await;
-            match connect_direct_tcp(target, refreshed_bind_interface.as_ref()).await {
+            match connect_direct_tcp(target, refreshed_bind_interface.as_ref(), source_ip).await {
                 Ok(stream) => Ok(stream),
                 Err(retry_err) => {
                     // 这里刻意不做 agent 侧域名解析兜底。
