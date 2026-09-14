@@ -1,5 +1,7 @@
 use arc_swap::ArcSwap;
-use socket2::{SockAddr, Socket};
+#[cfg(windows)]
+use socket2::SockAddr;
+use socket2::Socket;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -109,6 +111,9 @@ impl TunDirectEgress {
         bind_interface: Option<common::BindInterface>,
         #[cfg(target_os = "macos")] helper_socket: Option<String>,
     ) -> Self {
+        #[cfg(not(windows))]
+        let _ = proxy_bind_ip;
+
         let fallback = bind_interface.filter(bind_interface_is_usable);
         let ipv4 = select_initial_direct_bind_interface(
             fallback.clone(),
