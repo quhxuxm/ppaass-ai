@@ -17,7 +17,7 @@ stream_window_size_kb = 8192
 [tun]
 enabled = false
 name = "ppaass-tun"
-ipv4 = "10.10.10.1/24"
+ipv4 = "198.18.0.1/15"
 mtu = 1500
 proxy_udp = true
 proxy_dns = true
@@ -50,7 +50,7 @@ const defaultFieldValues = {
   udp_yamux_stream_window_size_kb: 8192,
   tun_enabled: false,
   tun_name: "ppaass-tun",
-  tun_ipv4: "10.10.10.1/24",
+  tun_ipv4: "198.18.0.1/15",
   tun_mtu: 1500,
   tun_proxy_udp: true,
   tun_proxy_dns: true,

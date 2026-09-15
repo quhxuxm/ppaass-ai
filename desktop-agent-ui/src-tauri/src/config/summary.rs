@@ -73,7 +73,7 @@ pub fn summarize_config(raw: &str) -> Result<AgentConfigSummary, String> {
             .unwrap_or(8192) as usize,
         tun_enabled: bool_at(&value, &["tun", "enabled"]).unwrap_or(false),
         tun_name: string_or(&value, &["tun", "name"], default_tun_name()),
-        tun_ipv4: string_or(&value, &["tun", "ipv4"], "10.10.10.1/24"),
+        tun_ipv4: string_or(&value, &["tun", "ipv4"], "198.18.0.1/15"),
         tun_mtu: int_at(&value, &["tun", "mtu"]).unwrap_or(1500),
         tun_proxy_udp: bool_at(&value, &["tun", "proxy_udp"]).unwrap_or(true),
         tun_proxy_dns: bool_at(&value, &["tun", "proxy_dns"]).unwrap_or(true),

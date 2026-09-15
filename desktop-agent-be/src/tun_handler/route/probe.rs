@@ -174,33 +174,42 @@ fn proxy_addrs_resolve_to_loopback_only(proxy_addrs: &[String]) -> bool {
     })
 }
 
-/// 记录所有已安装的路由，以便在 drop 时删除。
-/// 在 `routes` 中找到第一条非 TUN 的默认路由。
+/// 在 `routes` 中找到可用的物理默认路由。
 /// 返回 (网关, if_index) 以供安装旁路路由使用。
 /// `want_v6 == true` 时查找 ::/0 而非 0.0.0.0/0。
-pub(super) fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpAddr>, Option<u32>) {
+pub fn find_default_route(routes: &[Route], want_v6: bool) -> (Option<IpAddr>, Option<u32>) {
     default_route(routes, want_v6)
         .map(|route| (route.gateway(), route.if_index()))
         .unwrap_or((None, None))
 }
 
 fn default_route(routes: &[Route], want_v6: bool) -> Option<&Route> {
-    routes
-        .iter()
-        .filter(|route| {
-            if route.prefix() != 0 {
-                return false;
-            }
-            let is_v6 = matches!(route.destination(), IpAddr::V6(_));
-            if is_v6 != want_v6 {
-                return false;
-            }
-            match route.destination() {
-                IpAddr::V4(v4) => v4.is_unspecified(),
-                IpAddr::V6(v6) => v6.is_unspecified(),
-            }
-        })
+    let candidates = routes.iter().filter(|route| {
+        if route.prefix() != 0 {
+            return false;
+        }
+        let is_v6 = matches!(route.destination(), IpAddr::V6(_));
+        if is_v6 != want_v6 {
+            return false;
+        }
+        match route.destination() {
+            IpAddr::V4(v4) => v4.is_unspecified(),
+            IpAddr::V6(v6) => v6.is_unspecified(),
+        }
+    });
+    // VMware 在 macOS 上会为每个 vmnet bridge 注入带 RTF_IFSCOPE 的
+    // 0/0 路由。这些路由只服务于对应 bridge；把它们作为全局默认路由
+    // 会使 Proxy 旁路错误地指向 vmnet，进而令整个 TUN 回环。
+    #[cfg(target_os = "macos")]
+    let candidates = candidates.filter(|route| !route.if_scope());
+
+    // bridge 或点对点接口可有无网关的 0/0 路由。只要系统还有带网关的
+    // 默认路由，应优先它，因为该路由才可作为 host bypass 的真实下一跳。
+    candidates
+        .clone()
+        .filter(|route| route.gateway().is_some())
         .max_by(|left, right| left.cmp(right))
+        .or_else(|| candidates.max_by(|left, right| left.cmp(right)))
 }
 
 #[cfg(not(target_os = "macos"))]

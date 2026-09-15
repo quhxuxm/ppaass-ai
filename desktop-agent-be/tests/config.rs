@@ -118,6 +118,13 @@ fn tun_proxies_udp_by_default() {
 }
 
 #[test]
+fn tun_uses_a_low_collision_ipv4_range_by_default() {
+    let config: AgentConfig = toml::from_str(MINIMAL_AGENT_CONFIG).unwrap();
+
+    assert_eq!(config.tun.ipv4, "198.18.0.1/15");
+}
+
+#[test]
 fn tun_proxies_dns_by_default() {
     let config: AgentConfig = toml::from_str(
         &(MINIMAL_AGENT_CONFIG.to_owned()

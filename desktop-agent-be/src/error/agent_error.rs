@@ -11,6 +11,9 @@ pub enum AgentError {
     #[error("Connection error: {0}")]
     Connection(String),
 
+    #[error("TUN restart required: {0}")]
+    TunRestart(String),
+
     #[error("Authentication error: {0}")]
     #[allow(dead_code)]
     Authentication(String),

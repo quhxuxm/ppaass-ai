@@ -210,7 +210,7 @@ fn default_tun_name() -> String {
 }
 
 fn default_tun_ipv4() -> String {
-    "10.10.10.1/24".to_string()
+    "198.18.0.1/15".to_string()
 }
 
 fn default_tun_ipv6() -> Option<String> {

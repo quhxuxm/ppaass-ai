@@ -49,17 +49,43 @@ pub fn proxy_bypass_next_hop_from_routes(
     fallback_if_index: Option<u32>,
 ) -> (Option<IpAddr>, Option<u32>) {
     let host_prefix = if destination.is_ipv4() { 32 } else { 128 };
-    routes
+    let candidates = routes
         .iter()
         .filter(|route| {
             route.destination().is_ipv4() == destination.is_ipv4()
                 && route.contains(&destination)
                 && !(route.destination() == destination && route.prefix() == host_prefix)
                 && !route_is_split_default(route)
+                && !route_is_interface_scoped(route)
         })
+        .collect::<Vec<_>>();
+    let Some(longest_prefix) = candidates.iter().map(|route| route.prefix()).max() else {
+        return (fallback_gateway, fallback_if_index);
+    };
+
+    // 对公网 Proxy，候选通常都是 0/0。优先真实网关，避免 bridge 的
+    // on-link 默认项成为 host bypass；对局域网 Proxy，仍保留最长前缀的
+    // 直连路由，确保不经由不必要的网关。
+    let candidates = candidates
+        .into_iter()
+        .filter(|route| route.prefix() == longest_prefix);
+    candidates
+        .clone()
+        .filter(|route| route.gateway().is_some())
         .max_by(|left, right| left.cmp(right))
+        .or_else(|| candidates.max_by(|left, right| left.cmp(right)))
         .map(|route| (route.gateway(), route.if_index()))
         .unwrap_or((fallback_gateway, fallback_if_index))
+}
+
+#[cfg(target_os = "macos")]
+fn route_is_interface_scoped(route: &Route) -> bool {
+    route.if_scope()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn route_is_interface_scoped(_route: &Route) -> bool {
+    false
 }
 
 pub fn route_is_split_default(route: &Route) -> bool {

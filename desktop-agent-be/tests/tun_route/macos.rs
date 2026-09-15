@@ -8,6 +8,59 @@ fn macos_uses_pf_instead_of_dns_capture_host_routes() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn macos_default_route_ignores_vmware_scoped_bridges() {
+    let physical_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        .with_gateway(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1)))
+        .with_if_index(12);
+    let vmware_bridge_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        .with_if_index(24)
+        .with_if_scope(true);
+
+    assert_eq!(
+        find_default_route(&[physical_default, vmware_bridge_default], false),
+        (Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))), Some(12))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_default_route_prefers_gateway_over_unscoped_on_link_default() {
+    let physical_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        .with_gateway(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1)))
+        .with_if_index(12);
+    let on_link_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0).with_if_index(24);
+
+    assert_eq!(
+        find_default_route(&[physical_default, on_link_default], false),
+        (Some(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1))), Some(12))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_proxy_bypass_ignores_vmware_scoped_default() {
+    let proxy = IpAddr::V4(Ipv4Addr::new(140, 82, 30, 214));
+    let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 31, 1));
+    let physical_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        .with_gateway(gateway)
+        .with_if_index(12);
+    let vmware_bridge_default = Route::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        .with_if_index(24)
+        .with_if_scope(true);
+
+    assert_eq!(
+        proxy_bypass_next_hop_from_routes(
+            &[physical_default, vmware_bridge_default],
+            proxy,
+            Some(gateway),
+            Some(12),
+        ),
+        (Some(gateway), Some(12))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn parses_macos_route_get_gateway_even_when_interface_is_unknown() {
     let output = r#"
    route to: 140.82.30.214

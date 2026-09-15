@@ -6,7 +6,7 @@
 
 use crate::config::AgentConfig;
 use crate::direct_access::DirectAccessChecker;
-use crate::error::Result;
+use crate::error::{AgentError, Result};
 use crate::http_handler::handle_http_connection;
 use crate::socks5_handler::handle_socks5_connection;
 use crate::tun_handler::{PacketCaptureController, TunModeResources, run_tun_mode};
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 const TUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
+const TUN_NETWORK_RESTART_DELAY: Duration = Duration::from_millis(250);
 
 pub struct AgentServer {
     // 全局只读配置；连接处理任务通过 Arc 克隆读取。
@@ -77,6 +78,22 @@ impl AgentServer {
         })
     }
 
+    fn spawn_tun_task(&self, tun_tasks: &mut JoinSet<Result<()>>, shutdown: CancellationToken) {
+        let tun_resources = TunModeResources {
+            tcp_sessions: self.tcp_sessions.clone(),
+            udp_sessions: self.udp_sessions.clone(),
+            direct_access_checker: self.direct_access_checker.clone(),
+            packet_capture: self.packet_capture.clone(),
+        };
+        tun_tasks.spawn(run_tun_mode(
+            self.config.tun.clone(),
+            self.config.transport_mode,
+            self.proxy_addrs.as_ref().clone(),
+            tun_resources,
+            shutdown,
+        ));
+    }
+
     #[instrument(skip(self))]
     pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
         self.udp_sessions
@@ -89,34 +106,14 @@ impl AgentServer {
         )?;
         info!("Agent 服务器正在监听 {}", self.config.listen_addr);
 
-        let mut tun_tasks = JoinSet::new();
+        let mut tun_tasks: JoinSet<Result<()>> = JoinSet::new();
         let mut tun_task_running = false;
         if self.config.tun.enabled {
             info!(
                 "TUN 模式已启用 — {} 上的 SOCKS5/HTTP 监听器保持可用",
                 self.config.listen_addr
             );
-            let tun_cfg = self.config.tun.clone();
-            let transport_mode = self.config.transport_mode;
-            let proxy_addrs = self.proxy_addrs.as_ref().clone();
-            let tcp_sessions = self.tcp_sessions.clone();
-            let udp_sessions = self.udp_sessions.clone();
-            let direct_access_checker = self.direct_access_checker.clone();
-            let packet_capture = self.packet_capture.clone();
-            let tun_shutdown = shutdown.clone();
-            let tun_resources = TunModeResources {
-                tcp_sessions,
-                udp_sessions,
-                direct_access_checker,
-                packet_capture,
-            };
-            tun_tasks.spawn(run_tun_mode(
-                tun_cfg,
-                transport_mode,
-                proxy_addrs,
-                tun_resources,
-                tun_shutdown,
-            ));
+            self.spawn_tun_task(&mut tun_tasks, shutdown.clone());
             tun_task_running = true;
         }
 
@@ -132,6 +129,17 @@ impl AgentServer {
                         Some(Ok(Ok(()))) if shutdown.is_cancelled() => break,
                         Some(Ok(Ok(()))) => {
                             error!("TUN 模式转发器提前退出，HTTP/SOCKS 监听器继续运行");
+                        }
+                        Some(Ok(Err(AgentError::TunRestart(reason)))) => {
+                            info!("{reason}");
+                            self.tcp_sessions.invalidate_cached_proxy_sessions().await;
+                            self.udp_sessions.invalidate_cached_proxy_sessions().await;
+                            tokio::select! {
+                                _ = shutdown.cancelled() => break,
+                                _ = tokio::time::sleep(TUN_NETWORK_RESTART_DELAY) => {}
+                            }
+                            self.spawn_tun_task(&mut tun_tasks, shutdown.clone());
+                            tun_task_running = true;
                         }
                         Some(Ok(Err(e))) => {
                             error!("TUN 模式转发器异常停止，HTTP/SOCKS 监听器继续运行：{}", e);

@@ -16,6 +16,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod topology;
+
 fn record(
     destination: IpAddr,
     prefix: u8,

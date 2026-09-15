@@ -84,6 +84,11 @@ const emit = defineEmits<{
               <span><AppIcon name="monitor" />名称</span>
               <InputText :model-value="summary.tun_name" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_name', $event)" />
             </label>
+            <label class="field">
+              <span><AppIcon name="route" />IPv4 地址</span>
+              <InputText :model-value="summary.tun_ipv4" :disabled="configLocked" @update:model-value="emit('set-field', 'tun_ipv4', $event)" />
+              <small class="field-help">使用不与局域网或 VMware vmnet 重叠的 CIDR；默认 198.18.0.1/15。</small>
+            </label>
           </template>
         </Card>
 

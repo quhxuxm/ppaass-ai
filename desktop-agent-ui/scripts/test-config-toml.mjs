@@ -53,6 +53,7 @@ try {
   assert.equal(udpSummary.transport_mode, "udp");
   assert.equal(autoSummary.transport_mode, "auto");
   assert.equal(udpSummary.udp_session_pool_size, 4);
+  assert.equal(udpSummary.tun_ipv4, "198.18.0.1/15");
   assert.equal(fullTcpSummary.transport_mode, "tcp");
   assert.throws(() => coerceField("transport_mode", "unknown"), /auto、udp 或 tcp/);
   assert.throws(() => summarizeRaw('transport_mode = "quic"\n'), /auto、udp 或 tcp/);
@@ -101,6 +102,9 @@ try {
 
   const captureUpdated = applyFieldToToml(updated, "tun_packet_capture_file", "captures/debug.pcap");
   assert.equal(summarizeRaw(captureUpdated).tun_packet_capture_file, "captures/debug.pcap");
+
+  const tunNetworkUpdated = applyFieldToToml(updated, "tun_ipv4", "198.19.0.1/16");
+  assert.equal(summarizeRaw(tunNetworkUpdated).tun_ipv4, "198.19.0.1/16");
 } finally {
   await server.close();
 }

@@ -27,6 +27,7 @@ pub mod guard;
 pub mod macos_dns;
 mod probe;
 mod state;
+mod topology;
 
 const ROUTE_STATE_VERSION: u8 = 1;
 const ROUTE_STATE_FILE_NAME: &str = "tun-routes.json";
@@ -50,7 +51,7 @@ pub(super) use macos_dns::cleanup_macos_pf_dns_capture_with_token;
 pub use macos_dns::macos_pf_dns_rules;
 #[cfg(target_os = "macos")]
 use macos_dns::{MacosPfDnsGuard, command_output_message, macos_default_dns_interfaces};
-use probe::find_default_route;
+pub use probe::find_default_route;
 #[cfg(target_os = "macos")]
 use probe::interface_name_for_index;
 #[cfg(target_os = "macos")]
@@ -68,6 +69,11 @@ use state::is_unspecified_gateway;
 #[cfg(target_os = "macos")]
 use state::now_unix_secs;
 pub use state::{RouteKind, RouteLease, RouteRecord, RouteState};
+pub use topology::ipv4_networks_overlap;
+#[cfg(target_os = "macos")]
+pub(crate) use topology::{
+    MacosTunTopologyChange, MacosTunTopologyMonitor, ensure_macos_tun_network_available,
+};
 
 pub(super) fn refresh_macos_scoped_default_bypass() {
     guard::refresh_macos_scoped_default_bypass();

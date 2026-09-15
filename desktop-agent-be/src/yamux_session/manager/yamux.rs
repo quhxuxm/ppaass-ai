@@ -6,6 +6,25 @@
 use super::*;
 
 impl YamuxSessionManager {
+    /// Discard cached proxy transports after the host network path changes.
+    /// Existing streams retain their handles; subsequent flows establish a
+    /// session using the latest proxy bind route.
+    pub async fn invalidate_cached_proxy_sessions(&self) {
+        let sessions = {
+            let mut sessions = self.yamux_sessions.lock().await;
+            std::mem::take(&mut *sessions)
+        };
+        for session in sessions {
+            session.connection.close().await;
+        }
+        for slot in &self.udp_sessions {
+            slot.invalidate_if(|_| true).await;
+        }
+        for fallback in &self.auto_udp_fallback_to_yamux {
+            fallback.store(false, Ordering::Release);
+        }
+    }
+
     pub(super) async fn open_target_stream(
         &self,
         address: Address,

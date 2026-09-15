@@ -47,6 +47,8 @@ use netstack::{spawn_netstack_supervisor, wait_tun_task};
 use netstack_smoltcp::StackBuilder;
 use network::{TunNetworks, parse_cidr_v4, parse_cidr_v6};
 use proxy_routing::{ProxySessionBindGuard, configure_proxy_routing, install_route_guard};
+#[cfg(target_os = "macos")]
+use route::{MacosTunTopologyChange, MacosTunTopologyMonitor, ensure_macos_tun_network_available};
 use route::{RouteGuard, cleanup_stale_routes, detect_proxy_route};
 use std::panic::AssertUnwindSafe;
 #[cfg(windows)]
@@ -62,6 +64,8 @@ use tun_rs::DeviceBuilder;
 const PROXY_ROUTE_DETECT_MAX_WAIT: Duration = Duration::from_secs(60);
 const PROXY_ROUTE_DETECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 const DIRECT_EGRESS_REFRESH_COOLDOWN: Duration = Duration::from_secs(2);
+#[cfg(target_os = "macos")]
+const MACOS_NETWORK_TOPOLOGY_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) struct TunModeResources {
     pub(crate) tcp_sessions: Arc<YamuxSessionManager>,
@@ -138,6 +142,8 @@ pub(crate) async fn run_tun_mode(
     // 先解析 TUN 网段，后续会用它识别异常回环目标。
     let (ipv4, ipv4_prefix) = parse_cidr_v4(&config.ipv4)?;
     let ipv6_config = config.ipv6.as_deref().map(parse_cidr_v6).transpose()?;
+    #[cfg(target_os = "macos")]
+    ensure_macos_tun_network_available(ipv4, ipv4_prefix)?;
     let tun_networks = TunNetworks::new(ipv4, ipv4_prefix, ipv6_config);
     warn_legacy_dns_state(config.dns_state_file.as_deref());
 
@@ -218,16 +224,25 @@ pub(crate) async fn run_tun_mode(
         proxy_udp,
         direct_egress,
     };
+    #[cfg(target_os = "macos")]
+    let mut topology_monitor = MacosTunTopologyMonitor::new(ipv4, ipv4_prefix, tun_if_index)?;
+    let tun_runtime_shutdown = shutdown.child_token();
     let netstack_task = spawn_netstack_supervisor(
         device.clone(),
         config.mtu as usize,
         forward_context,
         quic_policy,
         packet_capture,
-        shutdown.clone(),
+        tun_runtime_shutdown.clone(),
     )?;
-    shutdown.cancelled().await;
-    info!("收到 TUN 模式关闭请求");
+    let stop_error = wait_for_tun_stop(
+        &shutdown,
+        #[cfg(target_os = "macos")]
+        &mut topology_monitor,
+    )
+    .await;
+    tun_runtime_shutdown.cancel();
+    info!("TUN 模式开始停止，恢复系统网络状态");
 
     // 先恢复系统网络状态，再等待内部任务退出。否则任一任务卡住都会延迟路由恢复。
     proxy_session_bind_guard.clear();
@@ -240,5 +255,41 @@ pub(crate) async fn run_tun_mode(
     let _ = tokio::join!(wait_tun_task("netstack_supervisor", netstack_task),);
 
     info!("TUN 模式转发器已停止");
-    Ok(())
+    match stop_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn wait_for_tun_stop(
+    shutdown: &CancellationToken,
+    topology_monitor: &mut MacosTunTopologyMonitor,
+) -> Option<AgentError> {
+    let mut ticker = tokio::time::interval(MACOS_NETWORK_TOPOLOGY_POLL_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return None,
+            _ = ticker.tick() => match topology_monitor.poll() {
+                Ok(MacosTunTopologyChange::Stable) => {}
+                Ok(MacosTunTopologyChange::DefaultRouteChanged) => {
+                    return Some(AgentError::TunRestart(
+                        "macOS 默认路由已变化，正在重建 TUN 路由与 DNS 捕获".to_string(),
+                    ));
+                }
+                Ok(MacosTunTopologyChange::TunNetworkConflict(message)) => {
+                    return Some(AgentError::Connection(message));
+                }
+                Err(error) => warn!("检查 macOS 网络拓扑失败，将在下个周期重试：{error}"),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn wait_for_tun_stop(shutdown: &CancellationToken) -> Option<AgentError> {
+    shutdown.cancelled().await;
+    None
 }
