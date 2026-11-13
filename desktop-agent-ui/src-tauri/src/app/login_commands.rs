@@ -241,7 +241,6 @@ pub(crate) async fn poll_agent_device_login(
     };
     match poll {
         DeviceAuthorizationPoll::Pending {
-            slow_down,
             retry_after_seconds,
         } => {
             let still_pending = runtime
@@ -252,11 +251,7 @@ pub(crate) async fn poll_agent_device_login(
             }
             Ok(device_login_progress(
                 &challenge,
-                if slow_down {
-                    "slow_down"
-                } else {
-                    "authorization_pending"
-                },
+                "authorization_pending",
                 retry_after_seconds,
                 None,
             ))

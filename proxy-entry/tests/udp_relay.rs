@@ -158,6 +158,43 @@ fn closed_response_queue_stops_the_flow() {
     );
 }
 
+#[tokio::test]
+async fn consecutive_new_flows_all_forward_datagrams_and_responses() {
+    let repository = counting_repository();
+    let (mut flows, mut responses, _done) = authorized_flow_set(128, repository);
+    let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = Address::Ipv4 {
+        addr: [127, 0, 0, 1],
+        port: target.local_addr().unwrap().port(),
+    };
+    let echo = tokio::spawn(async move {
+        let mut data = [0; 64];
+        for _ in 0..128 {
+            let (size, peer) = target.recv_from(&mut data).await.unwrap();
+            assert_eq!(&data[..size], &[1, 2, 3]);
+            target.send_to(&data[..size], peer).await.unwrap();
+        }
+    });
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        for flow_id in 0..128 {
+            flows
+                .dispatch(relay_packet(flow_id, address.clone()))
+                .await
+                .unwrap();
+        }
+        let mut received = std::collections::HashSet::new();
+        for _ in 0..128 {
+            let packet = responses.recv().await.unwrap().packet;
+            assert_eq!(packet.data, [1, 2, 3]);
+            assert!(received.insert(packet.flow_id));
+        }
+        assert_eq!(received.len(), 128);
+    })
+    .await;
+    echo.abort();
+    result.expect("all newly created flows must forward their first packet and response");
+}
+
 #[tokio::test(start_paused = true)]
 async fn authorization_queries_only_for_new_flows_and_coalesces_bursts() {
     let repository = counting_repository();

@@ -23,7 +23,6 @@ pub async fn run_session(
     let (channel_event_tx, mut channel_event_rx) = mpsc::unbounded_channel::<ChannelEvent>();
     let mut channel_tasks = JoinSet::new();
     let mut channels = HashMap::<u64, ChannelState>::new();
-    let mut flow_creation_budget = FlowCreationBudget::new(Instant::now());
     let mut authorization_freshness = AuthorizationFreshness::default();
     let idle_timeout = udp_idle_timeout(&context.config);
     let idle = tokio::time::sleep(idle_timeout);
@@ -124,7 +123,6 @@ pub async fn run_session(
                         );
                         let decision = decide_flow_open(
                             admission,
-                            &mut flow_creation_budget,
                             &mut authorization_freshness,
                             Instant::now(),
                             || revalidate_authorization(&context),
@@ -163,23 +161,6 @@ pub async fn run_session(
                                             "native UDP session flow limit reached ({})",
                                             context.config.udp_session_max_flows
                                         )),
-                                    ),
-                                )
-                                .await?;
-                                continue;
-                            }
-                            FlowOpenDecision::RateLimited => {
-                                debug!(
-                                    flow_id,
-                                    session = %session_label(&codec.session_id()),
-                                    "原生 UDP flow 创建速率超过会话预算，拒绝新 flow"
-                                );
-                                send_session_message(
-                                    &context,
-                                    &mut codec,
-                                    &connect_response(
-                                        flow_id,
-                                        Some("native UDP flow creation rate limited".to_string()),
                                     ),
                                 )
                                 .await?;

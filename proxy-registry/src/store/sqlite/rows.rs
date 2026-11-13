@@ -239,7 +239,6 @@ pub(super) fn row_to_agent_device_authorization(
         expires_at: row.try_get("expires_at")?,
         authorized_at: row.try_get("authorized_at")?,
         consumed_at: row.try_get("consumed_at")?,
-        last_polled_at: row.try_get("last_polled_at")?,
     };
     let valid = match authorization.status {
         AgentDeviceAuthorizationStatus::Pending => {

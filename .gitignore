@@ -14,9 +14,9 @@
 .DS_Store
 package-lock.json
 Cargo.lock
-!/Cargo.lock
-!/desktop-agent-ui/package-lock.json
-!/desktop-agent-ui/src-tauri/Cargo.lock
+/Cargo.lock
+/desktop-agent-ui/package-lock.json
+/desktop-agent-ui/src-tauri/Cargo.lock
 /node_modules
 /desktop-agent-ui/node_modules
 /desktop-agent-ui/dist
@@ -32,3 +32,6 @@ Cargo.lock
 /android-agent/*.jks
 /keys/*.pem
 *~
+/desktop-agent-ui/src-tauri/Cargo.lock
+/desktop-agent-ui/src-tauri/gen
+/desktop-agent-ui/package-lock.json

@@ -13,8 +13,6 @@ use tokio::time::Instant;
 // 这个上限避免高回包流量下每个 UDP 包都触发一次 flush，同时也避免单次 drain
 // 过久导致上行读取和 flow_done 清理被饿住。
 pub const UDP_RELAY_RESPONSE_BATCH_LIMIT: usize = 32;
-const FLOW_CREATION_BURST: f64 = 64.0;
-const FLOW_CREATION_REFILL_PER_SECOND: f64 = 16.0;
 pub const FLOW_AUTHORIZATION_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 pub(super) struct UdpRelayFlow {
@@ -64,13 +62,7 @@ pub struct UdpRelayFlowSet {
     options: UdpRelayFlowOptions,
     context: UdpRelayFlowContext,
     flow_authorization: Option<ConnectionAuthorization>,
-    flow_creation_budget: FlowCreationBudget,
     authorization_freshness: AuthorizationFreshness,
-}
-
-struct FlowCreationBudget {
-    tokens: f64,
-    updated_at: Instant,
 }
 
 #[derive(Default)]
@@ -96,27 +88,6 @@ pub fn classify_udp_relay_flow_admission(
         UdpRelayFlowAdmission::AtCapacity
     } else {
         UdpRelayFlowAdmission::Create
-    }
-}
-
-impl FlowCreationBudget {
-    fn new(now: Instant) -> Self {
-        Self {
-            tokens: FLOW_CREATION_BURST,
-            updated_at: now,
-        }
-    }
-
-    fn try_take_at(&mut self, now: Instant) -> bool {
-        let elapsed = now.saturating_duration_since(self.updated_at);
-        self.tokens = (self.tokens + elapsed.as_secs_f64() * FLOW_CREATION_REFILL_PER_SECOND)
-            .min(FLOW_CREATION_BURST);
-        self.updated_at = now;
-        if self.tokens < 1.0 {
-            return false;
-        }
-        self.tokens -= 1.0;
-        true
     }
 }
 
@@ -159,7 +130,6 @@ impl UdpRelayFlowSet {
                 flow_task_name,
             },
             flow_authorization: None,
-            flow_creation_budget: FlowCreationBudget::new(Instant::now()),
             authorization_freshness: AuthorizationFreshness::default(),
         }
     }
@@ -208,13 +178,6 @@ impl UdpRelayFlowSet {
             UdpRelayFlowAdmission::Create => {
                 if let Some(authorization) = self.flow_authorization.as_ref() {
                     let now = Instant::now();
-                    if !self.flow_creation_budget.try_take_at(now) {
-                        debug!(
-                            "{} 新 flow 创建速率过高，丢弃 flow {flow_id}",
-                            self.context.relay_label
-                        );
-                        return Ok(());
-                    }
                     if self.authorization_freshness.requires_recheck(now) {
                         authorization.validate(PERMISSION_PROXY_CONNECT_UDP).await?;
                         // 从查询开始时计时会缩短而不会延长合并窗口。

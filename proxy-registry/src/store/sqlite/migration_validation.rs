@@ -139,7 +139,6 @@ pub(super) async fn validate_schema(transaction: &mut Transaction<'_, Sqlite>) -
             "expires_at",
             "authorized_at",
             "consumed_at",
-            "last_polled_at",
         ],
     )
     .await?;

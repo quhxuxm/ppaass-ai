@@ -242,7 +242,7 @@ impl From<UserRepositoryError> for ApiError {
             }
             UserRepositoryError::AgentDeviceAuthorizationCapacity => {
                 Self::device_authorization_error(
-                    StatusCode::TOO_MANY_REQUESTS,
+                    StatusCode::SERVICE_UNAVAILABLE,
                     "device_authorization_capacity",
                     "当前设备授权请求过多，请稍后重试",
                     Some(30),

@@ -11,13 +11,7 @@ pub enum FlowAdmission {
 pub enum FlowOpenDecision {
     Existing,
     AtCapacity,
-    RateLimited,
     Create,
-}
-
-pub struct FlowCreationBudget {
-    tokens: f64,
-    updated_at: Instant,
 }
 
 #[derive(Default)]
@@ -39,27 +33,6 @@ pub fn classify_flow_admission(
     }
 }
 
-impl FlowCreationBudget {
-    pub fn new(now: Instant) -> Self {
-        Self {
-            tokens: FLOW_CREATION_BURST,
-            updated_at: now,
-        }
-    }
-
-    fn try_take_at(&mut self, now: Instant) -> bool {
-        let elapsed = now.saturating_duration_since(self.updated_at);
-        self.tokens = (self.tokens + elapsed.as_secs_f64() * FLOW_CREATION_REFILL_PER_SECOND)
-            .min(FLOW_CREATION_BURST);
-        self.updated_at = now;
-        if self.tokens < 1.0 {
-            return false;
-        }
-        self.tokens -= 1.0;
-        true
-    }
-}
-
 impl AuthorizationFreshness {
     pub fn requires_recheck(&self, now: Instant) -> bool {
         self.last_success_at.is_none_or(|last_success_at| {
@@ -74,7 +47,6 @@ impl AuthorizationFreshness {
 
 pub async fn decide_flow_open<F, Fut>(
     admission: FlowAdmission,
-    budget: &mut FlowCreationBudget,
     freshness: &mut AuthorizationFreshness,
     now: Instant,
     validate: F,
@@ -87,9 +59,6 @@ where
         FlowAdmission::Existing => return Ok(FlowOpenDecision::Existing),
         FlowAdmission::AtCapacity => return Ok(FlowOpenDecision::AtCapacity),
         FlowAdmission::Create => {}
-    }
-    if !budget.try_take_at(now) {
-        return Ok(FlowOpenDecision::RateLimited);
     }
     if freshness.requires_recheck(now) {
         validate().await?;

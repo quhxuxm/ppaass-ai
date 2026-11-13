@@ -112,10 +112,7 @@ impl StartedDeviceAuthorization {
 }
 
 pub enum DeviceAuthorizationPoll {
-    Pending {
-        slow_down: bool,
-        retry_after_seconds: u32,
-    },
+    Pending { retry_after_seconds: u32 },
     Authorized(Box<DownloadedCredential>),
 }
 

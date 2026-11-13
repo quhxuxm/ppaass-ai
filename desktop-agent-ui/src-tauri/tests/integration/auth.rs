@@ -204,17 +204,10 @@ async fn starts_windows_device_authorization_without_exposing_endpoint_overrides
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn device_authorization_poll_honors_pending_and_slow_down_retry_after() {
-    for (status, code, retry_after, expected_slow_down) in [
-        (
-            "428 Precondition Required",
-            "authorization_pending",
-            "7",
-            false,
-        ),
-        ("429 Too Many Requests", "slow_down", "11", true),
-        ("429 Too Many Requests", "rate_limited", "13", true),
-    ] {
+async fn device_authorization_poll_honors_pending_retry_after() {
+    for retry_after in ["7", "11", "13"] {
+        let status = "428 Precondition Required";
+        let code = "authorization_pending";
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -236,10 +229,8 @@ async fn device_authorization_poll_honors_pending_and_slow_down_retry_after() {
             .unwrap();
         match result {
             DeviceAuthorizationPoll::Pending {
-                slow_down,
                 retry_after_seconds,
             } => {
-                assert_eq!(slow_down, expected_slow_down);
                 assert_eq!(retry_after_seconds, retry_after.parse::<u32>().unwrap());
             }
             DeviceAuthorizationPoll::Authorized(_) => {

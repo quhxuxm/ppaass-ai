@@ -91,7 +91,10 @@ flowchart LR
 | DNS 代理与缓存 | TUN / Entry | Agent 识别 DNS 请求；直连规则命中时经受保护 socket 查询，否则以 `ProxyDns` 发往 Entry。DNS 回应摘要和域名映射可用于界面与路由判断。 |
 | QUIC UDP/443 策略 | TUN | 独立于外层 transport：允许时按直连规则或 UDP relay 分流，阻断时让应用回退 TCP/TLS。 |
 
-### 3.4 一致性、限流与可观测性算法
+### 3.4 一致性、资源调度与可观测性算法
+
+系统不对请求或 UDP flow 创建频率实施限制。UDP session、flow 和队列仍按同时占用的
+资源容量准入；容量释放后即可继续创建，无需等待时间窗口或额度补充。
 
 | 技术/算法 | 使用位置 | 作用与实现要点 |
 | --- | --- | --- |
@@ -101,7 +104,7 @@ flowchart LR
 | 幂等键与 UPSERT 聚合 | Entry 访问历史上报 | `(entry_id, batch_id)` 阻止 HTTP 重试重复计数；`(username, target_host)` 聚合访问次数和最近端口/协议/时间。 |
 | SSE publish/subscribe + 指数退避 | Agent 与 Entry 同步 | Registry 发送失效事件和 keep-alive；客户端遇断线按 1–60 秒退避，lagged subscriber 通过 reset/sync 恢复一致状态。 |
 | 有界 queue、容量准入与超时 | Entry relay / capture writer | 对 UDP session、flow、目标 socket、channel 和分片重组预先检查预算；拥塞时按 UDP 语义丢弃新包或新 flow，而非无界分配。 |
-| PCAP 尾部修复与 TCP 流重组 | Desktop/Android 抓包 | 追加前扫描到最后一条完整记录；解析侧按五元组、TCP sequence 和重叠区间重组有限流，再识别 HTTP/TLS/DNS/QUIC 摘要。 |
+| PCAP 尾部修复与 TCP 流重组 | Desktop/Android 抓包 | 追加前扫描到最后一条完整记录；解析侧按五元组、TCP sequence 和重叠区间重组有限数量的 TCP 流，再识别 HTTP/TLS/DNS/QUIC 摘要。 |
 
 ## 4. 客户端运行结构
 
@@ -553,7 +556,7 @@ erDiagram
 | `proxy_addresses` | `proxy_address_id` PK；`address`、`entry_id` UNIQUE | `label`, `address`, `enabled`, `entry_version`, `entry_first_registered_at`, `entry_last_heartbeat_at` | 管理员目录与 Entry 心跳状态；按 heartbeat 和 Entry ID 建索引。 |
 | `account_proxy_addresses` | `(account_id, proxy_address_id)` PK；两端 FK | `assigned_at` | 账号与管理员分配地址的多对多关系；反向 `(proxy_address_id,account_id)` 索引支持删除/状态校验。 |
 | `account_proxy_entry_selections` | `(account_id, proxy_address_id)` PK；两端 FK | `selected_at` | 有选择权限用户的地址子集；删除账号或地址会 cascade。 |
-| `agent_device_authorizations` | `device_code_hash` PK；`user_code_hash` UNIQUE；`authorized_account_id → web_accounts` | `client_name`, `platform`, `status`, `authorized_auth_version`, `created_at`, `expires_at`, `authorized_at`, `consumed_at`, `last_polled_at` | 一次性设备授权 challenge；状态和时间字段由 CHECK 约束组合校验，按有效期索引清理。 |
+| `agent_device_authorizations` | `device_code_hash` PK；`user_code_hash` UNIQUE；`authorized_account_id → web_accounts` | `client_name`, `platform`, `status`, `authorized_auth_version`, `created_at`, `expires_at`, `authorized_at`, `consumed_at` | 一次性设备授权 challenge；状态和时间字段由 CHECK 约束组合校验，按有效期索引清理。 |
 | `agent_web_session_handoffs` | `code_hash` PK；`account_id → web_accounts` | `account_auth_version`, `expires_at` | Agent 打开已认证 Web 管理页面的一次性交接码；按账号/到期时间索引。 |
 | `registry_agent_events` | `event_id` INTEGER PK AUTOINCREMENT | `kind`, `account_id`（可空），`created_at` | 两个 Registry 进程共享的事件日志；`event_id` 同时作为授权 snapshot revision，按时间/ID 索引。 |
 | `operation_audits` | `audit_id` INTEGER PK | `action`, actor/target 快照、`context_id`, `reason`, `previous_value`, `new_value`, `created_at` | 管理员敏感操作审计。关键身份字段是快照文本，刻意不做 FK，删除账号后仍能审计。 |

@@ -161,18 +161,7 @@ final class AgentAuthClient {
         if (response.status == 428 && "authorization_pending".equals(code)) {
             return AgentDeviceAuthModels.PollResult.pending(devicePollDelaySeconds(
                     currentIntervalSeconds,
-                    response.retryAfterSeconds,
-                    false));
-        }
-        int rateLimitDelay = devicePollRateLimitDelaySeconds(
-                response.status,
-                code,
-                currentIntervalSeconds,
-                response.retryAfterSeconds);
-        if (rateLimitDelay > 0) {
-            return "slow_down".equals(code)
-                    ? AgentDeviceAuthModels.PollResult.slowDown(rateLimitDelay)
-                    : AgentDeviceAuthModels.PollResult.pending(rateLimitDelay);
+                    response.retryAfterSeconds));
         }
         if (response.status == 403 && "access_denied".equals(code)) {
             throw new AuthException("你已拒绝这次 Agent 登录");
@@ -195,19 +184,9 @@ final class AgentAuthClient {
 
     static int devicePollDelaySeconds(
             int currentIntervalSeconds,
-            int retryAfterSeconds,
-            boolean slowDown) {
-        return AgentDevicePollPolicy.delaySeconds(
-                currentIntervalSeconds, retryAfterSeconds, slowDown);
-    }
-
-    static int devicePollRateLimitDelaySeconds(
-            int status,
-            String code,
-            int currentIntervalSeconds,
             int retryAfterSeconds) {
-        return AgentDevicePollPolicy.rateLimitDelaySeconds(
-                status, code, currentIntervalSeconds, retryAfterSeconds);
+        return AgentDevicePollPolicy.delaySeconds(
+                currentIntervalSeconds, retryAfterSeconds);
     }
 
     private static String errorCode(byte[] body) {

@@ -18,8 +18,6 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 use tracing::{debug, trace, warn};
 
-pub const FLOW_CREATION_BURST: f64 = 64.0;
-const FLOW_CREATION_REFILL_PER_SECOND: f64 = 16.0;
 const FLOW_AUTHORIZATION_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]

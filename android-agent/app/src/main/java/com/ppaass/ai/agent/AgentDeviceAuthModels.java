@@ -23,7 +23,7 @@ final class AgentDeviceAuthModels {
     }
 
     static final class PollResult {
-        enum Status { AUTHORIZED, PENDING, SLOW_DOWN }
+        enum Status { AUTHORIZED, PENDING }
 
         final Status status;
         final int nextPollDelaySeconds;
@@ -44,10 +44,6 @@ final class AgentDeviceAuthModels {
 
         static PollResult pending(int delay) {
             return new PollResult(Status.PENDING, delay, null);
-        }
-
-        static PollResult slowDown(int delay) {
-            return new PollResult(Status.SLOW_DOWN, delay, null);
         }
     }
 }

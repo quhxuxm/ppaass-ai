@@ -21,7 +21,6 @@ pub(super) async fn create_v5_tables(transaction: &mut Transaction<'_, Sqlite>) 
             expires_at INTEGER NOT NULL CHECK(expires_at > created_at),
             authorized_at INTEGER,
             consumed_at INTEGER,
-            last_polled_at INTEGER,
             FOREIGN KEY(authorized_account_id) REFERENCES web_accounts(account_id)
                 ON DELETE CASCADE,
             CHECK (

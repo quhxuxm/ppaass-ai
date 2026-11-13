@@ -5,6 +5,40 @@ const PASSWORD: &str = "handoff-user-password";
 const HANDOFF_PREFIX: &str = "/api/v1/auth/agent-handoff?code=";
 
 #[tokio::test]
+async fn handoff_capacity_is_service_unavailable_and_consumption_frees_a_slot() {
+    let (_directory, app) = test_app().await;
+    let (admin_cookie, admin_csrf) = login_admin(&app).await;
+    create_approved_user(&app, &admin_cookie, &admin_csrf, USERNAME, PASSWORD).await;
+    let token = agent_access_token(&app, USERNAME, PASSWORD).await;
+    let first = issue_handoff(&app, &token).await;
+    for _ in 1..4 {
+        issue_handoff(&app, &token).await;
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agent/web-session-handoffs")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "web_session_handoff_capacity"
+    );
+    assert_eq!(
+        consume_handoff(&app, &first).await.status(),
+        StatusCode::SEE_OTHER
+    );
+    issue_handoff(&app, &token).await;
+}
+
+#[tokio::test]
 async fn handoff_path_is_the_exact_account_management_endpoint() {
     let (_directory, app) = test_app().await;
     let (admin_cookie, admin_csrf) = login_admin(&app).await;

@@ -263,7 +263,7 @@ impl YamuxClientConnection {
         permit: OwnedSemaphorePermit,
         open_permit: Option<OwnedSemaphorePermit>,
     ) -> std::io::Result<(YamuxClientStream, String)> {
-        // open_stream 本身也限流，避免短时间大量并发 open 卡住 session control。
+        // 限制同时进行的 open_stream 操作数量，避免并发打开子流卡住 session control。
         let open_permit = match open_permit {
             Some(permit) => permit,
             None => self

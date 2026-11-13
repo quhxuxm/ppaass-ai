@@ -1,6 +1,32 @@
 use super::common::*;
 
 #[tokio::test]
+async fn repeated_invalid_logins_keep_the_credentials_error() {
+    let (_directory, app) = test_app().await;
+    for _ in 0..12 {
+        let response = login_from_peer(
+            &app,
+            "missing-user",
+            "incorrect-password",
+            "203.0.113.101:32001",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
+async fn device_authorization_capacity_is_service_unavailable() {
+    let response =
+        ApiError::from(UserRepositoryError::AgentDeviceAuthorizationCapacity).into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "device_authorization_capacity"
+    );
+}
+
+#[tokio::test]
 async fn registration_and_admin_creation_share_the_eight_character_password_minimum() {
     let (_directory, app) = test_app().await;
 

@@ -239,11 +239,6 @@ pub(crate) async fn decode_device_authorization_error(
         .map_err(|_| format!("Proxy Registry 返回 HTTP {}", status.as_u16()))?;
     match envelope.error.code.as_str() {
         "authorization_pending" => Ok(DeviceAuthorizationPoll::Pending {
-            slow_down: false,
-            retry_after_seconds,
-        }),
-        "slow_down" | "rate_limited" => Ok(DeviceAuthorizationPoll::Pending {
-            slow_down: true,
             retry_after_seconds,
         }),
         "access_denied" => Err("你已在浏览器中拒绝这次设备登录".to_string()),

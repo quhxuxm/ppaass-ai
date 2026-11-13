@@ -1,12 +1,10 @@
 use proxy_entry::error::ProxyError;
 use proxy_entry::native_udp::listener::username_session_limit_reached;
 use proxy_entry::native_udp::session::admission::{
-    AuthorizationFreshness, FlowAdmission, FlowCreationBudget, FlowOpenDecision,
-    classify_flow_admission, decide_flow_open,
+    AuthorizationFreshness, FlowAdmission, FlowOpenDecision, classify_flow_admission,
+    decide_flow_open,
 };
-use proxy_entry::native_udp::session::{
-    FLOW_CREATION_BURST, duration_until_expiry, session_expired_at,
-};
+use proxy_entry::native_udp::session::{duration_until_expiry, session_expired_at};
 use std::cell::Cell;
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::time::Instant;
@@ -64,12 +62,11 @@ fn zero_flow_limit_disables_new_flow_creation() {
 #[tokio::test]
 async fn only_create_admission_revalidates_and_successes_are_coalesced() {
     let start = Instant::now();
-    let mut budget = FlowCreationBudget::new(start);
     let mut freshness = AuthorizationFreshness::default();
     let queries = Cell::new(0_u32);
 
     for admission in [FlowAdmission::Existing, FlowAdmission::AtCapacity] {
-        let decision = decide_flow_open(admission, &mut budget, &mut freshness, start, || async {
+        let decision = decide_flow_open(admission, &mut freshness, start, || async {
             queries.set(queries.get() + 1);
             Ok::<(), ProxyError>(())
         })
@@ -85,16 +82,10 @@ async fn only_create_admission_revalidates_and_successes_are_coalesced() {
         (start + Duration::from_secs(1), 2),
     ] {
         assert_eq!(
-            decide_flow_open(
-                FlowAdmission::Create,
-                &mut budget,
-                &mut freshness,
-                now,
-                || async {
-                    queries.set(queries.get() + 1);
-                    Ok::<(), ProxyError>(())
-                },
-            )
+            decide_flow_open(FlowAdmission::Create, &mut freshness, now, || async {
+                queries.set(queries.get() + 1);
+                Ok::<(), ProxyError>(())
+            })
             .await
             .unwrap(),
             FlowOpenDecision::Create
@@ -104,66 +95,30 @@ async fn only_create_admission_revalidates_and_successes_are_coalesced() {
 }
 
 #[tokio::test]
-async fn flow_creation_budget_has_a_bounded_burst_and_refill() {
-    let start = Instant::now();
-    let mut budget = FlowCreationBudget::new(start);
+async fn new_flows_can_open_repeatedly_at_the_same_instant() {
+    let now = Instant::now();
     let mut freshness = AuthorizationFreshness::default();
-    for _ in 0..FLOW_CREATION_BURST as usize {
+    for _ in 0..128 {
         assert_eq!(
-            decide_flow_open(
-                FlowAdmission::Create,
-                &mut budget,
-                &mut freshness,
-                start,
-                || async { Ok(()) },
-            )
+            decide_flow_open(FlowAdmission::Create, &mut freshness, now, || async {
+                Ok(())
+            })
             .await
             .unwrap(),
             FlowOpenDecision::Create
         );
     }
-    assert_eq!(
-        decide_flow_open(
-            FlowAdmission::Create,
-            &mut budget,
-            &mut freshness,
-            start,
-            || async { Ok(()) },
-        )
-        .await
-        .unwrap(),
-        FlowOpenDecision::RateLimited
-    );
-    assert_eq!(
-        decide_flow_open(
-            FlowAdmission::Create,
-            &mut budget,
-            &mut freshness,
-            start + Duration::from_secs(1),
-            || async { Ok(()) },
-        )
-        .await
-        .unwrap(),
-        FlowOpenDecision::Create
-    );
 }
 
 #[tokio::test]
 async fn failed_flow_revalidation_is_not_cached_and_fails_closed() {
     let start = Instant::now();
-    let mut budget = FlowCreationBudget::new(start);
     let mut freshness = AuthorizationFreshness::default();
-    let result = decide_flow_open(
-        FlowAdmission::Create,
-        &mut budget,
-        &mut freshness,
-        start,
-        || async {
-            Err(ProxyError::Authentication(
-                "revoked during test".to_string(),
-            ))
-        },
-    )
+    let result = decide_flow_open(FlowAdmission::Create, &mut freshness, start, || async {
+        Err(ProxyError::Authentication(
+            "revoked during test".to_string(),
+        ))
+    })
     .await;
     assert!(result.is_err());
     assert!(freshness.requires_recheck(start + Duration::from_millis(1)));

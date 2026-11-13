@@ -48,7 +48,6 @@ pub struct AgentDeviceAuthorization {
     pub expires_at: i64,
     pub authorized_at: Option<i64>,
     pub consumed_at: Option<i64>,
-    pub last_polled_at: Option<i64>,
 }
 
 /// 创建 Agent 设备授权 challenge 的数据库无关输入。

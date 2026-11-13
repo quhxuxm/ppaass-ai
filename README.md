@@ -30,6 +30,7 @@ Entry 负责认证与目标中继，Proxy Registry 不承载代理数据。
 历史测试基线：
 
 - [最高吞吐历史基线与复测说明](docs/MAX_THROUGHPUT_REPORT.md)
+- [移除 rate limit 的本机吞吐对比](docs/RATE_LIMIT_THROUGHPUT_COMPARISON.md)
 
 ## 核心能力
 

@@ -92,7 +92,7 @@ public final class ManagedProxyAddressesTest {
                 AgentSyncFailurePolicy.forResponse(409, "other_conflict"));
         assertEquals(
                 AgentAuthClient.SyncFailure.SERVICE_REJECTED,
-                AgentSyncFailurePolicy.forResponse(429, "rate_limited"));
+                AgentSyncFailurePolicy.forResponse(400, "invalid_request"));
         assertEquals(
                 AgentAuthClient.SyncFailure.TRANSIENT,
                 AgentSyncFailurePolicy.forResponse(503, ""));

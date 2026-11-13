@@ -134,7 +134,7 @@ const ACCESS_RECORD_SELECT: &str = "record_id, username, protocol, target_host, 
 const DEVICE_AUTHORIZATION_SELECT: &str = "device_code_hash, user_code_hash, client_name, \
                                            platform, status, authorized_account_id, \
                                            authorized_auth_version, created_at, expires_at, \
-                                           authorized_at, consumed_at, last_polled_at";
+                                           authorized_at, consumed_at";
 
 #[derive(Debug, Clone)]
 pub struct SqliteUserRepository {

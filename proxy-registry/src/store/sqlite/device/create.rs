@@ -51,8 +51,8 @@ impl SqliteUserRepository {
             "INSERT INTO agent_device_authorizations \
              (device_code_hash, user_code_hash, client_name, platform, status, \
               authorized_account_id, authorized_auth_version, created_at, expires_at, \
-              authorized_at, consumed_at, last_polled_at) \
-             VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL, NULL, NULL) \
+              authorized_at, consumed_at) \
+             VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL, NULL) \
              ON CONFLICT DO NOTHING",
         )
         .bind(device_code_hash)

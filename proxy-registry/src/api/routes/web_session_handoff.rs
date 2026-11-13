@@ -16,7 +16,7 @@ pub(crate) async fn create_agent_web_session_handoff(
         .await
         .map_err(|error| match error {
             AgentWebSessionHandoffIssueError::Capacity => ApiError::device_authorization_error(
-                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "web_session_handoff_capacity",
                 "当前账户管理交接请求过多，请稍后重试",
                 Some(30),

@@ -233,6 +233,7 @@ mod account_creation;
 mod account_security;
 mod coordination;
 mod device_authorization;
+mod device_authorization_schema;
 mod key_binding;
 mod key_requests;
 mod key_requests_admin;
