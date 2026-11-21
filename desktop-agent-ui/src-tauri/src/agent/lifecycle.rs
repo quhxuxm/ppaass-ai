@@ -59,7 +59,7 @@ pub(crate) fn start_agent_inner(
         return agent_state(runtime);
     }
 
-    if allow_elevation {
+    if allow_elevation || cfg!(target_os = "linux") {
         ensure_start_privileges(&config_path)?;
     }
     #[cfg(target_os = "macos")]

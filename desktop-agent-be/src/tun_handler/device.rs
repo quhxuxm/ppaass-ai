@@ -114,8 +114,8 @@ pub(super) fn create_tun_device_legacy(
     ipv4_prefix: u8,
     ipv6_config: Option<(std::net::Ipv6Addr, u8)>,
 ) -> Result<CreatedTunDevice> {
-    cleanup_stale_routes(config.route_state_file.as_deref());
     ensure_tun_privileges_or_relaunch()?;
+    cleanup_stale_routes(config.route_state_file.as_deref());
 
     // DeviceBuilder 负责设置地址、MTU 和平台相关参数。
     let mut builder = DeviceBuilder::new()

@@ -1,13 +1,15 @@
 use crate::error::{AgentError, Result};
+#[cfg(not(target_os = "linux"))]
 use tracing::info;
 
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Command;
 
+#[cfg(not(target_os = "linux"))]
 pub fn ensure_tun_privileges_or_relaunch() -> Result<()> {
     if is_elevated() {
         return Ok(());
@@ -22,12 +24,12 @@ fn is_elevated() -> bool {
     unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn is_elevated() -> bool {
     current_uid() == Some(0)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn current_uid() -> Option<u32> {
     let output = Command::new("id").arg("-u").output().ok()?;
     let uid = String::from_utf8(output.stdout).ok()?;
@@ -74,7 +76,7 @@ fn relaunch_elevated() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn relaunch_elevated() -> Result<()> {
     let exe = std::env::current_exe().map_err(|e| {
         AgentError::Connection(format!("请求 root 权限失败：无法定位当前程序：{e}"))
@@ -143,4 +145,9 @@ fn quote_windows_arg(arg: OsString) -> String {
     } else {
         raw.into_owned()
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn ensure_tun_privileges_or_relaunch() -> Result<()> {
+    crate::linux::ensure_tun_privileges().map_err(AgentError::Connection)
 }

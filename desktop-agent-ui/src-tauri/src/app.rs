@@ -54,10 +54,9 @@ use crate::runtime::{
 use crate::telemetry::{get_dns_resolution_records_inner, get_network_traffic_snapshot_inner};
 use crate::tray::restore_main_window;
 #[cfg(any(windows, target_os = "macos"))]
-use crate::tray::{
-    hide_window_to_tray, hide_window_to_tray_after_minimize, setup_system_tray,
-    sync_tray_tun_checked,
-};
+use crate::tray::{hide_window_to_tray, hide_window_to_tray_after_minimize};
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+use crate::tray::{setup_system_tray, sync_tray_tun_checked};
 #[cfg(windows)]
 use crate::windows_service::{
     activate_windows_service_session, install_and_start_windows_service,

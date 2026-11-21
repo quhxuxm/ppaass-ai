@@ -12,7 +12,7 @@
 | Rust 1.98.1 | 与主要 CI 和发布工作流一致的 Rust 工具链 |
 | C/C++ 编译工具、`pkg-config`、OpenSSL 开发库 | 构建 Rust 网络与加密依赖 |
 | Node.js 24 | 构建 Proxy Registry Vue 前端 |
-| Node.js 22 + Tauri 平台依赖 | 运行 Desktop UI；macOS/Windows 使用各自系统依赖 |
+| Node.js 22.12+ + Tauri 平台依赖 | 运行 Desktop UI；支持 macOS、Windows 和 Linux |
 | 浏览器或 Desktop UI | 注册、登录、密钥审批和启动受管 Agent |
 
 Android 开发还需要 JDK 17、Android Platform 35、Build Tools 35.0.0 和 NDK
@@ -143,6 +143,55 @@ Entry 在同一数值端口同时监听 TCP 与原生 UDP。它会使用 Control
 
 产品 `desktop-agent` 命令行不会接受旧的公开 Proxy 地址参数，也不会在未认证状态下启动
 正常代理流量。若目的是集成测试，使用测试专用 harness，见[测试指南](TESTING.md#4-本地端到端测试)。
+
+### Linux Desktop
+
+Linux 桌面端支持登录、受管 Agent、本地 HTTP/SOCKS5 代理、TUN 和托盘菜单。
+以下以 Ubuntu 24.04 / Debian 为例；其他发行版按
+[Tauri 官方前置依赖](https://v2.tauri.app/start/prerequisites/)安装对应开发包。
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libssl-dev \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+  libxdo-dev patchelf rpm iproute2 curl xdg-utils libcap2-bin
+
+cd desktop-agent-ui
+npm ci
+npm run tauri dev
+# 构建 deb、rpm 和 AppImage，输出位于 src-tauri/target/release/bundle/
+npm run tauri build
+```
+
+GitHub Actions 的 Desktop build 同时构建 Windows、macOS、Ubuntu 24.04；Linux
+安装包上传到 `ppaass-desktop-agent-linux` artifact。`wintun.dll` 仅打入 Windows 包。
+Linux UI 的默认配置与受管凭据位于用户数据目录
+`${XDG_DATA_HOME:-$HOME/.local/share}/com.ppaass.agent/`。
+
+[Tauri 的 Linux 托盘鼠标事件不可用](https://v2.tauri.app/learn/system-tray/)，
+使用托盘菜单中的“显示”“启用 TUN 模式”“退出”。为兼容没有托盘扩展的桌面环境，
+Linux 最小化保留在任务栏；关闭主窗口会先停止 Agent、恢复路由再退出。
+托盘初始化失败时仍可使用主窗口。
+
+HTTP/SOCKS5 模式无需管理员权限。TUN 默认关闭；开启前，安装 deb/rpm 包，退出应用，
+为系统安装的可执行文件授予网络 capabilities，再以普通桌面用户重新打开：
+
+```bash
+sudo modprobe tun
+sudo setcap cap_net_admin,cap_net_raw+ep /usr/bin/desktop-agent-ui
+getcap /usr/bin/desktop-agent-ui
+```
+
+若发行版安装路径不同，将上面的路径替换为实际安装的 `desktop-agent-ui`。
+`CAP_NET_ADMIN` 用于创建网卡和管理路由，`CAP_NET_RAW` 用于绑定物理出口网卡。
+应用在启动 TUN 前检查有效 capabilities 和 `/dev/net/tun` 访问权限，缺少权限会显示
+操作提示。不会自动通过 sudo 重启整个桌面应用。
+
+每次升级替换可执行文件后需重新授予 capabilities；卸载前如需撤销，可执行
+`sudo setcap -r /usr/bin/desktop-agent-ui`。开发构建重新编译后也需重新授权并直接启动
+编译好的二进制。AppImage 本身位于只读挂载中，TUN 模式请使用安装后的 deb/rpm 版本。
+容器、受限 capability bounding set 或 `nosuid` 挂载可能阻止 capabilities 生效，
+以应用读取的有效权限为准。
 
 ## 6. 验证代理
 

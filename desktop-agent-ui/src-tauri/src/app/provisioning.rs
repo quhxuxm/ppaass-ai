@@ -110,7 +110,7 @@ pub(crate) fn provision_downloaded_credential(
         config_path = %loaded.path,
         "Agent 登录凭据已安全下载并应用"
     );
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     sync_tray_tun_checked(app, loaded.summary.tun_enabled);
 
     Ok(AgentAuthState {

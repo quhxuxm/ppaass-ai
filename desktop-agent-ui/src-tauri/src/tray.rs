@@ -1,50 +1,50 @@
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use serde::Serialize;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use std::path::{Path, PathBuf};
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
 #[cfg(any(windows, target_os = "macos"))]
 use std::time::Duration;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use tauri::Emitter;
 use tauri::Manager;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::agent::{get_agent_state_inner, start_agent_command, stop_agent_inner_command};
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::config::{
     apply_managed_credentials_to_config, load_config_from_path, locate_config_path,
     prepare_config_for_account, remember_trusted_config_baseline, toggle_tun_enabled_in_config,
     validate_config_candidate_against_trusted_baseline,
 };
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::runtime::AgentRuntime;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 const TRAY_ID: &str = "main";
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 const TRAY_SHOW_ID: &str = "show";
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 const TRAY_TUN_ID: &str = "tun-enabled";
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 const TRAY_EXIT_ID: &str = "exit";
 #[cfg(target_os = "macos")]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 static TRAY_TUN_ITEM: OnceLock<tauri::menu::CheckMenuItem<tauri::Wry>> = OnceLock::new();
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 static TRAY_TUN_TOGGLE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 static TRAY_EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) fn setup_system_tray(
     app: &tauri::App,
     runtime: Arc<AgentRuntime>,
@@ -76,7 +76,7 @@ pub(crate) fn setup_system_tray(
         .icon(icon)
         .tooltip("PPAASS Desktop Agent")
         .menu(&menu)
-        .show_menu_on_left_click(cfg!(target_os = "macos"))
+        .show_menu_on_left_click(cfg!(any(target_os = "macos", target_os = "linux")))
         .on_menu_event(move |app, event| match event.id().as_ref() {
             TRAY_SHOW_ID => restore_main_window(app),
             TRAY_TUN_ID => {
@@ -109,7 +109,7 @@ pub(crate) fn setup_system_tray(
     Ok(())
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub(crate) fn sync_tray_tun_checked(app: &tauri::AppHandle, enabled: bool) {
     if app.tray_by_id(TRAY_ID).is_some() {
         if let Some(item) = TRAY_TUN_ITEM.get() {
@@ -118,8 +118,8 @@ pub(crate) fn sync_tray_tun_checked(app: &tauri::AppHandle, enabled: bool) {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
-fn handle_exit_menu_event(app: &tauri::AppHandle, runtime: Arc<AgentRuntime>) {
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+pub(crate) fn handle_exit_menu_event(app: &tauri::AppHandle, runtime: Arc<AgentRuntime>) {
     if TRAY_EXIT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         emit_to_main(app, "agent-tray-info", "正在退出，请稍候");
         return;
@@ -157,25 +157,25 @@ fn handle_exit_menu_event(app: &tauri::AppHandle, runtime: Arc<AgentRuntime>) {
     });
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn initial_tun_enabled() -> bool {
     tun_enabled_for_path(None)
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn tun_enabled_for_path(path: Option<&Path>) -> bool {
     let config_path = path.map(Path::to_path_buf).or_else(locate_config_path);
     load_tun_enabled(config_path).unwrap_or(false)
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn load_tun_enabled(path: Option<PathBuf>) -> Option<bool> {
     let path = path?;
     let config = load_config_from_path(&path).ok()?;
     Some(config.summary.tun_enabled)
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn handle_tun_menu_event(
     app: &tauri::AppHandle,
     item: &tauri::menu::CheckMenuItem<tauri::Wry>,
@@ -218,7 +218,7 @@ fn handle_tun_menu_event(
     });
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn toggle_tun_mode_and_restart(
     app: &tauri::AppHandle,
     item: &tauri::menu::CheckMenuItem<tauri::Wry>,
@@ -273,7 +273,7 @@ fn toggle_tun_mode_and_restart(
     Ok(())
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn emit_to_main<S>(app: &tauri::AppHandle, event: &str, payload: S)
 where
     S: Serialize + Clone,
@@ -282,20 +282,20 @@ where
     let _ = app.emit(event, payload);
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn remember_current_ui_config_path(runtime: &AgentRuntime, path: &str) {
     if let Ok(mut config_path) = runtime.ui_config_path.lock() {
         *config_path = Some(PathBuf::from(path));
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn current_ui_config_path(runtime: &AgentRuntime) -> Option<PathBuf> {
     cloned_path_from_lock(&runtime.ui_config_path)
         .or_else(|| cloned_path_from_lock(&runtime.config_path))
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn cloned_path_from_lock(lock: &std::sync::Mutex<Option<PathBuf>>) -> Option<PathBuf> {
     let path = lock.lock().ok()?;
     path.clone()

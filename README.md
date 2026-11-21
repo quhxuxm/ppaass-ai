@@ -123,6 +123,9 @@ npm ci
 npm run tauri dev
 ```
 
+Desktop UI 支持 Windows、macOS 和 Linux。Linux 构建依赖、安装包与 TUN 权限设置见
+[Linux 桌面运行说明](docs/SETUP.md#linux-desktop)。
+
 生产 Agent 从登录后的受管 profile 取得用户名、私钥和 Entry 地址。产品 `desktop-agent`
 命令行不会接受旧的公开 Proxy 地址参数；需要固定地址的端到端测试必须使用测试专用
 `desktop-agent-integration-harness`，参见[测试指南](docs/TESTING.md#4-本地端到端测试)。

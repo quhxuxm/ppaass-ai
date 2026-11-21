@@ -10,6 +10,8 @@ pub mod tun_handler;
 pub mod yamux_session;
 
 mod http_handler;
+#[cfg(target_os = "linux")]
+pub mod linux;
 mod privilege;
 mod tun_helper_client;
 

@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-24.04]
     defaults:
       run:
         working-directory: desktop-agent-ui
@@ -108,6 +108,14 @@ jobs:
         with:
           workspaces: desktop-agent-ui/src-tauri -> target
 
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev patchelf rpm iproute2 curl xdg-utils
+
       - name: Install desktop dependencies
         run: npm ci
 
@@ -128,6 +136,18 @@ jobs:
           path: |
             desktop-agent-ui/src-tauri/target/release/bundle/msi/*.msi
             desktop-agent-ui/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux installers
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppaass-desktop-agent-linux
+          path: |
+            desktop-agent-ui/src-tauri/target/release/bundle/deb/*.deb
+            desktop-agent-ui/src-tauri/target/release/bundle/rpm/*.rpm
+            desktop-agent-ui/src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 14
 

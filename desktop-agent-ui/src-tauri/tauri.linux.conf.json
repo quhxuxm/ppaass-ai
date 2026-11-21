@@ -1,0 +1,28 @@
+{
+  "bundle": {
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "category": "Network",
+    "linux": {
+      "deb": {
+        "depends": [
+          "iproute2",
+          "curl",
+          "xdg-utils",
+          "libayatana-appindicator3-1"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "iproute",
+          "curl",
+          "xdg-utils",
+          "libayatana-appindicator-gtk3"
+        ]
+      }
+    }
+  }
+}

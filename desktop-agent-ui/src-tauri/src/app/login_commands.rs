@@ -203,7 +203,7 @@ pub(crate) async fn start_agent_device_login(
     }
     info!(
         expires_at = challenge.expires_at,
-        "已在系统默认浏览器中打开 Windows Agent 设备登录"
+        "已在系统默认浏览器中打开 Desktop Agent 设备登录"
     );
     Ok(device_login_progress(
         &challenge,
@@ -281,7 +281,7 @@ pub(crate) async fn cancel_agent_device_login(
     runtime: tauri::State<'_, Arc<AgentRuntime>>,
 ) -> Result<(), String> {
     runtime.cancel_pending_device_authorization()?;
-    info!("已取消 Windows Agent 浏览器设备登录");
+    info!("已取消 Desktop Agent 浏览器设备登录");
     Ok(())
 }
 

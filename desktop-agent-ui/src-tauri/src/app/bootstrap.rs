@@ -62,12 +62,24 @@ pub fn run() {
             );
             #[cfg(any(windows, target_os = "macos"))]
             setup_system_tray(app, setup_runtime.clone()).map_err(io::Error::other)?;
+            #[cfg(target_os = "linux")]
+            if let Err(error) = setup_system_tray(app, setup_runtime.clone()) {
+                setup_logs.push(format!("系统托盘不可用：{error}；可继续使用主窗口"));
+            }
             #[cfg(target_os = "macos")]
             check_macos_tun_helper_on_startup(&setup_logs);
             Ok(())
         })
         .on_window_event(|window, event| {
-            #[cfg(not(any(windows, target_os = "macos")))]
+            #[cfg(target_os = "linux")]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let runtime = window.state::<Arc<AgentRuntime>>().inner().clone();
+                    crate::tray::handle_exit_menu_event(window.app_handle(), runtime);
+                }
+            }
+            #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
             let _ = (window, event);
             #[cfg(any(windows, target_os = "macos"))]
             if window.label() == "main"

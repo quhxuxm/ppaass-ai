@@ -24,6 +24,10 @@ pub(crate) fn last_agent_error(runtime: &AgentRuntime) -> Option<String> {
 pub(crate) fn ensure_start_privileges(config_path: &Path) -> Result<(), String> {
     let raw = fs::read_to_string(config_path).map_err(|err| format!("读取配置失败：{err}"))?;
     let summary = summarize_config(&raw)?;
+    #[cfg(target_os = "linux")]
+    if summary.tun_enabled {
+        desktop_agent_be::linux::ensure_tun_privileges()?;
+    }
     if !summary.tun_enabled || is_elevated_for_tun() {
         return Ok(());
     }

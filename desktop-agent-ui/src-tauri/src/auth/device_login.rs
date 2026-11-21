@@ -11,8 +11,10 @@ pub async fn start_device_authorization(
     let response = client
         .post(endpoint(&base_url, "api/v1/agent/device-authorizations")?)
         .json(&AgentDeviceAuthorizationStartPayload {
+            // Existing registries group desktop device authorizations under
+            // the legacy "windows" wire value, including Linux and macOS.
             platform: "windows",
-            client_name: "PPAASS Windows Agent",
+            client_name: "PPAASS Desktop Agent",
         })
         .send()
         .await
@@ -37,7 +39,7 @@ pub async fn start_device_authorization(
     info!(
         expires_at,
         interval_seconds = response.interval,
-        "已创建 Windows Agent 浏览器设备登录"
+        "已创建 Desktop Agent 浏览器设备登录"
     );
     Ok(StartedDeviceAuthorization {
         device_code,
@@ -86,7 +88,7 @@ pub async fn poll_device_authorization(
     info!(
         username = %downloaded.account.username,
         key_version = downloaded.account.key_version,
-        "Windows Agent 浏览器设备登录授权成功"
+        "Desktop Agent 浏览器设备登录授权成功"
     );
     Ok(DeviceAuthorizationPoll::Authorized(Box::new(downloaded)))
 }

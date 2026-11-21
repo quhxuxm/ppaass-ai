@@ -22,11 +22,11 @@ pub(in crate::tun_handler::route) fn install_ipv4_split_routes(
                 installed.push(route);
             }
             Err(e) => {
-                #[cfg(any(target_os = "macos", windows))]
+                #[cfg(any(target_os = "macos", target_os = "linux", windows))]
                 return Err(AgentError::Connection(format!(
                     "安装必要的 IPv4 split-default 路由 {route} 失败：{e}"
                 )));
-                #[cfg(not(any(target_os = "macos", windows)))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
                 warn!("安装 split-default 路由 {} 失败：{e}", route);
             }
         }
@@ -84,11 +84,11 @@ pub(in crate::tun_handler::route) fn install_ipv6_split_routes(
                 installed.push(route);
             }
             Err(e) => {
-                #[cfg(any(target_os = "macos", windows))]
+                #[cfg(any(target_os = "macos", target_os = "linux", windows))]
                 return Err(AgentError::Connection(format!(
                     "安装必要的 IPv6 split-default 路由 {route} 失败：{e}"
                 )));
-                #[cfg(not(any(target_os = "macos", windows)))]
+                #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
                 warn!("安装 IPv6 split-default 路由 {} 失败：{e}", route);
             }
         }

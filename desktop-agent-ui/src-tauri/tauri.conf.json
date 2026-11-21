@@ -30,8 +30,7 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../config/agent.toml": "config/agent.toml",
-      "../../wintun.dll": "wintun.dll"
+      "../../config/agent.toml": "config/agent.toml"
     },
     "icon": [
       "icons/32x32.png",

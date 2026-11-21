@@ -53,7 +53,8 @@ npm test
 cargo test --manifest-path src-tauri/Cargo.toml --locked
 ```
 
-桌面应用的完整打包（Windows 或 macOS）还需要相应平台上的 Tauri 依赖：
+桌面应用的完整打包（Windows、macOS 或 Linux）还需要相应平台上的 Tauri 依赖；
+Linux 依赖与 TUN 权限设置见[Linux 桌面运行说明](SETUP.md#linux-desktop)：
 
 ```bash
 cd desktop-agent-ui
@@ -74,7 +75,7 @@ npm run tauri build
 | --- | --- | --- |
 | Rust workspace | Debian Bookworm、Rust 1.98.1 | 结构/部署布局检查、`cargo build --workspace --all-targets --release --locked`、`cargo test --workspace --locked` |
 | Registry frontend | Debian Bookworm、Node 24 | `npm ci`、`npm test`、`npm run build` |
-| Desktop build | Windows 与 macOS、Node 22、Rust 1.95.0 | 桌面前端测试、Tauri Rust 测试、Tauri 打包；Windows 安装包保留为 14 天 artifact |
+| Desktop build | Windows、macOS 与 Ubuntu 24.04、Node 22、Rust 1.95.0 | 桌面前端测试、Tauri Rust 测试、Tauri 打包；Windows 与 Linux 安装包保留为 14 天 artifact |
 | Android agent | Debian Bookworm、JDK 17、Android API 35、NDK 28.2.13676358、Rust 1.95.0 | Gradle 单元测试/lint、native Rust 测试、三种 ABI 的 native build、debug APK artifact |
 
 ### 3.2 端到端集成工作流

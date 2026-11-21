@@ -169,7 +169,7 @@ fn account_management_page_url_uses_the_validated_proxy_registry_root() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn starts_windows_device_authorization_without_exposing_endpoint_overrides() {
+async fn starts_desktop_device_authorization_without_exposing_endpoint_overrides() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -177,7 +177,7 @@ async fn starts_windows_device_authorization_without_exposing_endpoint_overrides
         let request = read_http_request(&mut stream).await;
         assert!(request.starts_with("POST /api/v1/agent/device-authorizations HTTP/1.1"));
         assert!(request.contains(r#""platform":"windows""#));
-        assert!(request.contains(r#""client_name":"PPAASS Windows Agent""#));
+        assert!(request.contains(r#""client_name":"PPAASS Desktop Agent""#));
         let body = serde_json::json!({
             "device_code": "A".repeat(43),
             "user_code": "ABCD-EFGH-JKMN",

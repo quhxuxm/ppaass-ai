@@ -12,7 +12,7 @@ pub(crate) async fn load_agent_config(
         load_agent_config_inner(&runtime, path)
     })
     .await?;
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
     Ok(loaded)
 }
@@ -30,7 +30,7 @@ pub(crate) async fn save_agent_config(
         save_agent_config_inner(&runtime, path, raw)
     })
     .await?;
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
     Ok(loaded)
 }
@@ -47,7 +47,7 @@ pub(crate) async fn save_agent_config_summary(
         save_agent_config_summary_inner(&runtime, path, summary)
     })
     .await?;
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     sync_tray_tun_checked(&app, loaded.summary.tun_enabled);
     Ok(loaded)
 }
