@@ -5,7 +5,7 @@
       "rpm",
       "appimage"
     ],
-    "category": "Network",
+    "category": "Utility",
     "linux": {
       "deb": {
         "depends": [

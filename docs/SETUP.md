@@ -152,7 +152,7 @@ Linux 桌面端支持登录、受管 Agent、本地 HTTP/SOCKS5 代理、TUN 和
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev \
+sudo apt-get install -y build-essential pkg-config file libssl-dev \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
   libxdo-dev patchelf rpm iproute2 curl xdg-utils libcap2-bin
 
@@ -162,6 +162,11 @@ npm run tauri dev
 # 构建 deb、rpm 和 AppImage，输出位于 src-tauri/target/release/bundle/
 npm run tauri build
 ```
+
+首次构建前必须先安装上面的系统开发包；仅有 Node.js、Rust 或系统运行库不足以编译。
+可先执行 `pkg-config --modversion gtk+-3.0 webkit2gtk-4.1` 检查依赖是否可用。
+若出现 `pango.pc`、`gtk+-3.0.pc`、`webkit2gtk-4.1.pc` 找不到的错误，先重新执行
+上面的安装命令，再运行 `npm run tauri build`。
 
 GitHub Actions 的 Desktop build 同时构建 Windows、macOS、Ubuntu 24.04；Linux
 安装包上传到 `ppaass-desktop-agent-linux` artifact。`wintun.dll` 仅打入 Windows 包。
